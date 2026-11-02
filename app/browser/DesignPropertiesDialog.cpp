@@ -17,7 +17,7 @@
 
 namespace mitcad {
 
-DesignPropertiesDialog::DesignPropertiesDialog(Query query, QWidget* parent) : QDialog(parent) {
+DesignPropertiesDialog::DesignPropertiesDialog(Query query, bool editable, QWidget* parent) : QDialog(parent) {
   setObjectName(QStringLiteral("designPropertiesDialog"));
   setWindowTitle(tr("Design Properties"));
   QJsonObject answer;
@@ -36,10 +36,11 @@ DesignPropertiesDialog::DesignPropertiesDialog(Query query, QWidget* parent) : Q
   // Summary: the root's property set Summary, also in Property Sets….
   auto* summaryPage = new QWidget;
   auto* summaryForm = new QFormLayout(summaryPage);
-  const auto line = [this](const char* key) {
+  const auto line = [this, editable](const char* key) {
     auto* edit = new QLineEdit(m_summary.value(QString::fromLatin1(key)).toString());
     edit->setObjectName(QStringLiteral("designProperties_%1").arg(QString::fromLatin1(key)));
     edit->setMinimumWidth(320);
+    edit->setReadOnly(!editable);
     return edit;
   };
   m_title = line("title");
@@ -51,6 +52,7 @@ DesignPropertiesDialog::DesignPropertiesDialog(Query query, QWidget* parent) : Q
   // Tab moves on, as in the fields above; Enter starts a new line.
   m_comments->setTabChangesFocus(true);
   m_comments->setMinimumHeight(90);
+  m_comments->setReadOnly(!editable);
   summaryForm->addRow(tr("&Title:"), m_title);
   summaryForm->addRow(tr("&Subject:"), m_subject);
   summaryForm->addRow(tr("&Author:"), m_author);
@@ -83,8 +85,18 @@ DesignPropertiesDialog::DesignPropertiesDialog(Query query, QWidget* parent) : Q
   statisticsForm->addRow(tr("Last saved by:"), m_lastSavedBy);
   statisticsForm->addRow(tr("Last saved with:"), m_lastSavedWith);
   tabs->addTab(statisticsPage, tr("Statistics"));
+  connect(tabs, &QTabWidget::currentChanged, this, [this, tabs, statisticsPage](int index) {
+    const bool statisticsShown = tabs->widget(index) == statisticsPage;
+    qDebug().noquote() << QStringLiteral("Design Properties tab: %1%2")
+                              .arg(tabs->tabText(index),
+                                   statisticsShown ? QStringLiteral(" (%1)").arg(statisticsText()) : QString());
+  });
 
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+  // Not editable: nothing to apply, Close only (Esc too).
+  const QDialogButtonBox::StandardButtons shown =
+      editable ? QDialogButtonBox::StandardButtons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel)
+               : QDialogButtonBox::StandardButtons(QDialogButtonBox::Close);
+  auto* buttons = new QDialogButtonBox(shown, this);
   connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   layout->addWidget(buttons);

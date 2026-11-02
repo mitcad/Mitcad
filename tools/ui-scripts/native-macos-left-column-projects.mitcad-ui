@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# The AppKit left column with the Projects card shown above Configuration
+# (tools/ui-macos-native-left-column-test.sh), its projects folder empty:
+# Projects is as high as its two empty rows and Configuration as its
+# options. The boundary between them dragged down, past the Projects rows,
+# moves no card (mitcad#1152: Configuration shrank and Browser grew, as
+# the shares give a card at its content's height exactly that).
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle
+native-resize 1280 820
+native-appearance light
+native-expand native.modelTree
+expect-native-visible native.projectsCard true
+expect-native-visible native.configurationCard true
+expect-native-card-height native.configurationCard 100 190
+expect-native-card-height native.sidebar bottom
+mark
+native-column-split native.columnSplit.projects.configuration 400
+expect-log '^Native split remembered: projects [0-9]+, configuration 1[0-9][0-9], browser [0-9]+$'
+expect-native-card-height native.configurationCard 100 190
+expect-native-card-height native.sidebar bottom
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/left-column-projects.png'

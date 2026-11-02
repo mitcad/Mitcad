@@ -58,13 +58,20 @@ struct StoreOptions {
 };
 
 // Opens a design file, follows its links and recomputes it; with a store,
-// its line goes to `log`.
+// its line goes to `log`. BUILD connectors of the first rule are placed by
+// the current one in the opened document (build_upgrade, mitcad#1115); a
+// refused upgrade is a warning on stderr and the design opens as loaded.
 rust::Box<mitcad::Document> open_document(const std::string& path, const StoreOptions& store = {},
                                           std::ostream* log = nullptr);
 
+// A warning on stderr when saving the document to `path` drops top-level
+// fields a newer MitCad wrote and this one did not read (mitcad#1132): the
+// file they were read from. The command line saves without asking.
+void warn_dropped_fields(const mitcad::Document& document, const std::string& path);
+
 // Writes the design file whole or not at all: version 3 in a project
-// (P12a; the B-rep data in the project's store), else a single file. Throws
-// rust::Error when it cannot be written.
+// (P12a; the B-rep data in the project's store), else a single file, after
+// warn_dropped_fields. Throws rust::Error when it cannot be written.
 void save_document(const mitcad::Document& document, const std::string& path);
 
 // `mitcad-cli import ...` (args[0] is the mode, as for the others); the exit

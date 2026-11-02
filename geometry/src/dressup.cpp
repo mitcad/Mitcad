@@ -115,18 +115,20 @@ double face_width(const TopoDS_Face& face) {
 }
 
 // A dressup built with its sizes scaled by kShrink (`smaller`, of the body
-// `input`, its largest size `size`) without the strips it left where the
-// faces it takes away at its exact size were (mitcad#1106): the faces of
-// the input that are narrower than 2e-3 of the size in it and were not
-// in the input, beside a face the dressup made, removed by OCCT's
+// `input`) without the strips it left where the faces it takes away at its
+// exact size were (mitcad#1106): `contact` is how far from its edges the
+// dressup touches its faces at most, so a strip is (1 - kShrink) of it wide
+// (mitcad#1150: a fillet across a sharp angle touches its faces far beyond
+// its radius). The faces of the smaller one narrower than twice that and
+// not in the input, beside a face the dressup made, removed by OCCT's
 // defeaturing, which extends the faces round each strip to meet. The
 // dressup's faces then meet the faces beyond the strips at one edge, as at
 // the exact size, and take the strips' names, as a face the dressup takes
 // away gives its names to the dressup's face there (name_consumed_faces).
 // Null where it leaves no strip, or the defeaturing fails or gives no
 // valid solid of nearly the same volume.
-ShapePtr without_strips(const Shape& smaller, const Shape& input, double size) {
-  const double narrow = 2.0e-3 * size;
+ShapePtr without_strips(const Shape& smaller, const Shape& input, double contact) {
+  const double narrow = 2.0 * (1.0 - kShrink) * contact;
   const detail::EdgeFaces edge_faces(smaller);
   // The dressup's faces: those whose names the input has not.
   const auto made = [&](int f) {
@@ -222,11 +224,12 @@ ShapePtr without_strips(const Shape& smaller, const Shape& input, double size) {
 // Runs `attempt` with the sizes as given (scale 1), then, when it fails
 // (not for invalid arguments), with the sizes scaled by kShrink, without
 // the strips that leaves (without_strips; `input` the body it dresses,
-// `size` its largest size) and with an info saying it is that much smaller
-// (mitcad#1106: 0.1 % is no reason for a warning); throws the first error
-// when both fail. `what`: "fillet" or "chamfer".
-template <class Attempt>
-ShapePtr with_shrink_retry(const char* what, const Shape& input, double size, Attempt&& attempt) {
+// `contact()` how far from its edges it touches its faces at most, asked
+// only then) and with an info saying it is that much smaller (mitcad#1106:
+// 0.1 % is no reason for a warning); throws the first error when both
+// fail. `what`: "fillet" or "chamfer".
+template <class Contact, class Attempt>
+ShapePtr with_shrink_retry(const char* what, const Shape& input, Contact&& contact, Attempt&& attempt) {
   std::exception_ptr first;
   try {
     OCC_CATCH_SIGNALS
@@ -241,7 +244,7 @@ ShapePtr with_shrink_retry(const char* what, const Shape& input, double size, At
   try {
     OCC_CATCH_SIGNALS
     ShapePtr smaller = attempt(kShrink);
-    if (ShapePtr whole = without_strips(*smaller, input, size)) {
+    if (ShapePtr whole = without_strips(*smaller, input, contact())) {
       smaller = whole;
     }
     smaller->add_info(std::string("the ") + what +
@@ -2932,6 +2935,43 @@ ShapePtr canonical(const Shape& input, ShapePtr result) {
   return result;
 }
 
+// How far from its edges a rounding of the edges `owner` selects (a set
+// per edge, -1 for none) touches its faces at most: r tan(a / 2), a the
+// angle between the faces' normals (as over_cutouts takes it), r tan(a / 2)
+// far beyond the radius where the faces meet at a sharp angle; at least the
+// largest size (mitcad#1150).
+double largest_contact(const Shape& input, const std::vector<FilletSet>& sets, const std::vector<int>& owner) {
+  double contact = largest_size(sets);
+  const detail::EdgeFaces edge_faces(input);
+  const int edges = std::min(input.edge_count(), static_cast<int>(owner.size()));
+  for (int e = 0; e < edges; ++e) {
+    const int s = owner[static_cast<std::size_t>(e)];
+    if (s < 0 || s >= static_cast<int>(sets.size())) {
+      continue;
+    }
+    const std::vector<int> faces = edge_faces.at(e);
+    if (faces.size() != 2) {
+      continue;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      double largest_angle = 0.0;
+      for (const double t : {0.0, 0.5, 1.0}) {
+        largest_angle = std::max(
+            largest_angle, detail::normal_angle(input.edge(e), input.face(faces[0]), input.face(faces[1]), t));
+      }
+      // Faces folding back on each other: no finite contact.
+      if (!(largest_angle < 2.0 * kHalfPi - 1.0e-3)) {
+        continue;
+      }
+      const double radius = largest_radius(input, sets[static_cast<std::size_t>(s)], e);
+      contact = std::max(contact, radius * std::tan(largest_angle / 2.0));
+    } catch (const Standard_Failure&) {
+    }
+  }
+  return contact;
+}
+
 } // namespace
 
 ShapePtr fillet(const std::string& feature, const Shape& given, const std::vector<FilletSet>& sets,
@@ -2956,7 +2996,8 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     const auto build = [&](const Shape& target, const std::vector<int>& own_edges) {
       const auto rings = [&](const Shape& body) { return ring_fillet(feature, body, sets, own_edges); };
       return or_rings("fillet", target, [&] {
-        return with_shrink_retry("fillet", target, largest_size(sets), [&](double scale) {
+        const auto contact = [&] { return largest_contact(target, sets, own_edges); };
+        return with_shrink_retry("fillet", target, contact, [&](double scale) {
           const auto rounded = [&] {
             return dress(target, sets, own_edges, scale, feature, "fillet", true,
                          [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
@@ -3044,7 +3085,9 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
   return canonical(input, with_own_chains("chamfer", input, sets, owner, [&](const std::vector<int>& selected) {
     const auto rings = [&](const Shape& body) { return ring_chamfer(feature, body, sets, selected); };
     return or_rings("chamfer", input, [&] {
-      return with_shrink_retry("chamfer", input, largest_size(sets), [&](double scale) {
+      // A chamfer's distances are along its faces.
+      const auto contact = [&] { return largest_size(sets); };
+      return with_shrink_retry("chamfer", input, contact, [&](double scale) {
         return dress(input, sets, selected, scale, feature, "chamfer", false,
                      [&](const Shape& body, const std::vector<int>& own, double size_scale, bool) {
                        return bevel(feature, body, sets, own, corner, size_scale);

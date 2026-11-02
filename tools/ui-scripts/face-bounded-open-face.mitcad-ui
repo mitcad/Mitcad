@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# The supporting 10 x 10 Patch is an open surface. Pick its outside region
+# from the active Profiles input and explicitly choose New Body, never Join.
+wait-idle
+command view.top
+command view.fit
+expect-profiles 2
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+mark
+click-pick '@OPEN_PICK@'
+wait-log '^Extrude Profiles: 1 profile '
+qt-choice input_operation 'New Body'
+mark
+type-in '^Panel Extrude input distance at ' '3 mm'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/open-face-profile-preview.png'
+mark
+key Return
+wait-log '^Added extrude \(New Body\), distance 3' 30
+expect-model-bodies 2 @OPEN_VOLUME@
+screenshot '${MITCAD_TEST_WORK}/open-face-profile-extruded.png'
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

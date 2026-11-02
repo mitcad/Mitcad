@@ -464,6 +464,38 @@ QString axisAlong(const gp_Dir& direction) {
   return x >= y && x >= z ? QStringLiteral("x") : y >= z ? QStringLiteral("y") : QStringLiteral("z");
 }
 
+// A definition's reference as an item: a fixed plane as an item of its own
+// (mitcad#1137), seen in `occurrence`; anything else as itemOf gives it.
+SelectionItem placeItemOf(const QJsonValue& ref, const CommandContext& context,
+                          const QString& occurrence = QString()) {
+  return isFixedPlaneRef(ref) ? fixedPlaneItem(ref.toObject(), occurrence) : itemOf(ref, context);
+}
+
+// What the placement row and the log say of a fixed plane (mitcad#1137):
+// "Plane at Z 36 mm (fixed)" square to an origin axis, else the point it
+// runs through and its normal.
+QString fixedPlaneText(const SelectionItem& item, const CommandContext& context) {
+  const QJsonObject ref = item.reference().toObject();
+  const auto origin = pointIn(ref.value(QStringLiteral("origin")));
+  const auto normal = dirOf(ref.value(QStringLiteral("normal")));
+  if (!origin || !normal) {
+    return QObject::tr("Fixed plane");
+  }
+  // Rounded, and never "-0 mm".
+  const auto length = [&context](double value) { return lengthText(roundTo(value, 1e-6) + 0.0, context); };
+  const QString axis = axisAlong(*normal);
+  const bool alongX = axis == QStringLiteral("x");
+  const bool alongY = axis == QStringLiteral("y");
+  if (std::abs(alongX ? normal->X() : alongY ? normal->Y() : normal->Z()) >= 1.0 - 1e-9) {
+    return QObject::tr("Plane at %1 %2 (fixed)")
+        .arg(axis.toUpper(), length(alongX ? origin->X() : alongY ? origin->Y() : origin->Z()));
+  }
+  const auto component = [](double value) { return number(roundTo(value, 1e-4) + 0.0); };
+  return QObject::tr("Plane through (%1, %2, %3), normal (%4, %5, %6) (fixed)")
+      .arg(length(origin->X()), length(origin->Y()), length(origin->Z()), component(normal->X()),
+           component(normal->Y()), component(normal->Z()));
+}
+
 // The two origin axes most nearly square to a normal, the one more so first.
 std::pair<QString, QString> originAxesAcross(const gp_Dir& normal) {
   std::array<std::pair<double, QString>, 3> axes{
@@ -705,7 +737,9 @@ void logPlace(const CommandState& state, const PlacePanel& panel, const CommandC
     qDebug().noquote() << QStringLiteral("Place %1: none").arg(panel.command);
     return;
   }
-  QString text = QStringLiteral("Place %1: %2 %3").arg(panel.command, formName(form), item.describe());
+  QString text = QStringLiteral("Place %1: %2 %3")
+                     .arg(panel.command, formName(form),
+                          isFixedPlane(item) ? fixedPlaneText(item, context) : item.describe());
   if (form == PlaceForm::Face && !state.items(kEdge1).isEmpty() && !state.items(kEdge2).isEmpty()) {
     text += QStringLiteral(", %1 from %2, %3 from %4")
                 .arg(state.text(kOffset1), state.items(kEdge1).first().describe(), state.text(kOffset2),
@@ -1034,6 +1068,11 @@ QVector<InputDef> placeInputs(const PlacePanel& panel) {
     }
     return item.kind == SelectKind::SketchCurve ? QObject::tr("Sketch line") : QObject::tr("Edge");
   };
+  // A definition's fixed plane by where it lies (mitcad#1137), kept until
+  // a face or a plane is picked in its place; other picks by their count.
+  const auto fixedText = [](const Selection& items, const CommandState&, const CommandContext& context) {
+    return items.size() == 1 && isFixedPlane(items.first()) ? fixedPlaneText(items.first(), context) : QString();
+  };
   InputDef first = selectionInput(kEdge1, QObject::tr("Reference 1"), kLineKinds, 0, 1)
                        .withAccepts(isLineItem)
                        .withOnChange([panel](CommandState& state, const CommandContext& context) {
@@ -1078,6 +1117,7 @@ QVector<InputDef> placeInputs(const PlacePanel& panel) {
               logPlace(state, panel, context);
             }
           })
+          .withItemsText(fixedText)
           .withVisible(offered),
       // A point's plane (mitcad#656), the guess shown and re-picked at will.
       selectionInput(kOnPlane, QObject::tr("Plane"), SelectKind::Plane | SelectKind::Face, 0, 1)
@@ -1097,6 +1137,7 @@ QVector<InputDef> placeInputs(const PlacePanel& panel) {
             }
             logPlace(state, panel, context);
           })
+          .withItemsText(fixedText)
           .withVisible([panel](const CommandState& state) {
             return placeForm(state, panel) == PlaceForm::Point && !state.object(kPlane).isEmpty();
           }),
@@ -1444,6 +1485,9 @@ bool loadPlace(const QJsonObject& feature, CommandState& state, const CommandCon
   state.setObject(kAlignAuto, QJsonObject());
   state.setObject(kLegacy, QJsonObject());
   const auto ownItem = [&context, &seen](const QJsonValue& ref) {
+    if (isFixedPlaneRef(ref)) {
+      return placeItemOf(ref, context, seen); // a fixed `face` or `plane` (mitcad#1137)
+    }
     SelectionItem item = itemOf(ref, context);
     if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex) {
       item.occurrence = seen;
@@ -1563,8 +1607,9 @@ bool loadPlace(const QJsonObject& feature, CommandState& state, const CommandCon
     state.setChecked(kFlip, seat.value(QStringLiteral("flip")).toBool());
   } else if (feature.contains(QStringLiteral("plane"))) {
     // A plane and a centre in its coordinates: the same point on the
-    // plane, from its origin axes.
-    const SelectionItem plane = itemOf(feature.value(QStringLiteral("plane")), context);
+    // plane, from its origin axes. A fixed plane (mitcad#1137) is shown as
+    // it is and kept until a face or a plane is picked in its place.
+    const SelectionItem plane = placeItemOf(feature.value(QStringLiteral("plane")), context, seen);
     const auto frame = frameOf(plane, context);
     const QJsonArray centre = feature.value(cornerKey).toArray();
     if (!plane.isValid() || !frame) {
@@ -1582,6 +1627,11 @@ bool loadPlace(const QJsonObject& feature, CommandState& state, const CommandCon
     const double y = coordinate(centre.at(1));
     const gp_Pnt point = frame->origin.Translated(gp_Vec(frame->x) * x + gp_Vec(frame->y) * y);
     placeOnFace(state, context, plane, point, false, Refs::OriginAxes, std::nullopt);
+    if (isFixedPlane(plane)) {
+      // Moved on it, saved as `at` on the same plane without `align`: the
+      // part keeps the plane's own x axis, as its centre had it.
+      state.setObject(kNoAlign, {{QStringLiteral("on"), true}});
+    }
     // The distances show the coordinates' expressions where they are the
     // same distances (from the origin axes), negated across an axis.
     const std::pair<QString, double> distances[] = {{kOffset1, x}, {kOffset2, y}};
@@ -1662,14 +1712,19 @@ bool placeShowable(const QJsonObject& feature, const CommandContext& context) {
   const auto showable = [&context](const QJsonValue& ref) {
     return ref.isUndefined() || ref.isNull() || itemOf(ref, context).isValid();
   };
+  // A fixed plane (`{"origin", "normal"}`, as agents and importers write
+  // it) is shown as an item of its own (mitcad#1137) where a plane is
+  // placed on; a fixed axis or point is not shown.
+  const auto planeShowable = [&showable](const QJsonValue& ref) { return isFixedPlaneRef(ref) || showable(ref); };
   const QJsonObject at = feature.value(QStringLiteral("at")).toObject();
-  for (const char* key : {"axis", "point", "face", "plane", "edge1", "edge2", "align"}) {
+  for (const char* key : {"axis", "point", "edge1", "edge2", "align"}) {
     if (!showable(at.value(QLatin1String(key)))) {
       return false;
     }
   }
-  return showable(feature.value(QStringLiteral("seat")).toObject().value(QStringLiteral("shaft"))) &&
-         showable(feature.value(QStringLiteral("plane")));
+  return planeShowable(at.value(QStringLiteral("face"))) && planeShowable(at.value(QStringLiteral("plane"))) &&
+         showable(feature.value(QStringLiteral("seat")).toObject().value(QStringLiteral("shaft"))) &&
+         planeShowable(feature.value(QStringLiteral("plane")));
 }
 
 std::optional<PlaneFrame> placeFrame(const CommandState& state, const CommandContext& context,
@@ -1884,7 +1939,7 @@ std::optional<BuiltFrame> builtFrame(const QJsonObject& def, const QString& uid,
     return std::nullopt;
   }
   if (def.contains(QStringLiteral("plane"))) {
-    const auto plane = frameOf(itemOf(def.value(QStringLiteral("plane")), context), context);
+    const auto plane = frameOf(placeItemOf(def.value(QStringLiteral("plane")), context), context);
     if (!plane) {
       return std::nullopt;
     }
@@ -1940,8 +1995,9 @@ QString originPlaneAlong(const gp_Dir& normal) {
 } // namespace
 
 bool placeAtFrame(CommandState& state, const CommandContext& context, const BuiltFrame& frame) {
-  SelectionItem plane = frame.plane.isUndefined() || frame.plane.isNull() ? SelectionItem()
-                                                                           : itemOf(frame.plane, context);
+  SelectionItem plane = frame.plane.isUndefined() || frame.plane.isNull()
+                            ? SelectionItem()
+                            : placeItemOf(frame.plane, context, seenPath(state));
   double along = 0.0;
   bool flip = false;
   if (!plane.isValid()) {

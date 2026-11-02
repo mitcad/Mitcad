@@ -23,7 +23,10 @@ class OcctViewer;
 // that drags a distance along its direction, a ring that turns an angle
 // about its axis. Drawn with QPainter in view
 // pixels; the mouse goes through to the view except on a handle, which a
-// left drag moves. The values come from the command's value inputs and go
+// left drag moves. A press that starts on a handle stays with it: without
+// a drag it does nothing, and it never reaches the view or the
+// orientation cube as a click (mitcad#1105). The values come from the
+// command's value inputs and go
 // back to them as numbers rounded to a step that fits the zoom.
 class ManipulatorOverlay : public QWidget {
   Q_OBJECT
@@ -94,7 +97,8 @@ private:
   // Where each value box goes (m_boxes, by handle): off the others and
   // out of the panels floating over the view (mitcad#656).
   void layoutBoxes();
-  // The value boxes' places to the view, which offers no picks there.
+  // The value boxes' places to the view, which offers no picks there, and
+  // where the handles take the mouse (mitcad#1105).
   void publishBoxes();
   bool viewerEvent(QEvent* event);
   Drawn draw(const Handle& handle) const;
@@ -126,8 +130,6 @@ private:
   std::vector<QRectF> m_boxes; // layoutBoxes(), by handle; empty: none shown
   std::vector<std::vector<gp_Pnt>> m_lines; // setLines()
   QPointF m_pressAt;
-  Qt::KeyboardModifiers m_pressModifiers;
-  bool m_forwarding = false; // a click passed on to the view
   double m_dragStart = 0.0; // the value when the drag began
   QPointF m_grab;           // an arrow: the cursor from the handle then
   double m_angleLast = 0.0; // a ring: the cursor's last angle

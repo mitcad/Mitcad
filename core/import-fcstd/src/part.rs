@@ -1100,7 +1100,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 .doc
                 .sketch_output(sketch.uid)
                 .ok_or("the sketch did not solve")?;
-            let depths = super::features::region_depths(&output.region_info);
+            let depths = self.sketch_region_depths(sketch.uid, output);
             if simple && depths.iter().any(|(_, depth)| *depth > 0) {
                 // FreeCAD's overlapping faces, one filling each wire: each
                 // region's outline filled (below).
@@ -1108,6 +1108,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .region_info
                     .iter()
                     .map(|r| (r.profile.key.to_string(), r.holes.len()))
+                    .filter(|(key, _)| depths.iter().any(|(k, _)| k == key))
                     .collect();
                 nested.push((sketch.uid.to_string(), regions));
                 continue;

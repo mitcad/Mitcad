@@ -805,7 +805,7 @@ public:
       auto call = actions().checkChanged;
       if (call) { call(key, checked); }
     } else if (kind == QStringLiteral("button")) {
-      // The button beside a choice (InputDef::onButton: 3D Print's Edit).
+      // The button beside a choice (InputDef::onButton).
       auto call = actions().buttonClicked;
       if (call) { call(key); }
     } else if (kind == QStringLiteral("add")) {
@@ -1282,8 +1282,9 @@ private:
         [controls addArrangedSubview:row.popup];
       }
       if (input.onButton) {
-        // The button beside the drop-down (3D Print's Edit, mitcad#655): its
-        // small icon, its text the accessible name.
+        // The button beside the drop-down (InputDef::onButton; mitcad#655:
+        // its small icon when it has one, its text the accessible name).
+        // Send to Slicer's Printer and Process have none (mitcad#1134).
         NSImage* image = input.buttonIcon.isEmpty() ? nil : iconImage(themeIcon(input.buttonIcon), 16, input.buttonText);
         const QString kind = QStringLiteral("button|") + key;
         row.button = image != nil ? iconButton(image, input.buttonText, kind) : button(input.buttonText, kind);
@@ -1570,6 +1571,8 @@ private:
       entry.value = option.first;
       entry.name = detail.shortLabel.isEmpty() ? option.second : detail.shortLabel;
       entry.section = detail.heading;
+      // The option's picture as its swatch (mitcad#1141).
+      entry.swatch = row->input->choiceImage ? row->input->choiceImage(option.first) : QImage();
       entry.tooltip = option.second;
       entry.tag = detail.tag;
       entry.search = QStringList{option.second, detail.heading, detail.search}.join(QLatin1Char(' '));

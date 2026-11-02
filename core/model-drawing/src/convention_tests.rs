@@ -842,5 +842,281 @@ fn another_bodys_lines_over_a_thread_stay() {
     assert_eq!(drawn.len(), 4 + 1 + 4 + 1, "{drawn:?}");
 }
 
+/// An M8 thread along X from 10 to 30, of shape 0, as `threaded_shaft`
+/// has it.
+fn shaft_thread() -> ThreadInput {
+    ThreadInput {
+        start: [10.0, 0.0, 0.0],
+        end: [30.0, 0.0, 0.0],
+        major: MAJOR,
+        minor: MINOR,
+        internal: false,
+        taper: 0.0,
+        source: Some(0),
+    }
+}
+
+/// Whether a line of `kind` runs at height `y` from x 10 (where the
+/// thread starts) to at least `to`.
+fn runs(edges: &[ViewEdge], kind: ViewEdgeKind, y: f64, to: f64) -> bool {
+    edges.iter().any(|e| match e.curve {
+        ViewCurve::Line(a, b) => {
+            e.kind == kind
+                && same(a[1], y)
+                && same(b[1], y)
+                && same(a[0].min(b[0]), 10.0)
+                && a[0].max(b[0]) >= to - 1e-6
+        }
+        _ => false,
+    })
+}
+
+#[test]
+fn a_cross_hole_through_a_thread_stays() {
+    // The threaded shaft (shape 0) with a hole of 3 through it across the
+    // thread at x 20, seen along the hole: its circle lies within the
+    // thread's outline, but on no helix (mitcad#1145).
+    let hole = of(0, arc([20.0, 0.0], 1.5, 0.0, TAU));
+    let mut edges: Vec<ViewEdge> = threaded_shaft().into_iter().map(|e| of(0, e)).collect();
+    edges.push(hole.clone());
+    let projection = ViewProjection {
+        edges,
+        ..ViewProjection::default()
+    };
+    let drawn = with_threads(&projection, &front(), &[shaft_thread()]).edges;
+    assert!(drawn.contains(&hole), "{drawn:?}");
+    // The thread's own geometry is gone, and the thread drawn by convention.
+    assert!(
+        drawn
+            .iter()
+            .all(|e| !matches!(e.curve, ViewCurve::Polyline(..))),
+        "{drawn:?}"
+    );
+    for side in [-1.0, 1.0] {
+        assert!(
+            runs(&drawn, ViewEdgeKind::Sharp, side * MAJOR / 2.0, 30.0),
+            "{drawn:?}"
+        );
+        assert!(
+            runs(&drawn, ViewEdgeKind::ThreadRoot, side * MINOR / 2.0, 30.0),
+            "{drawn:?}"
+        );
+    }
+    assert_eq!(drawn.len(), 4 + 1 + 4 + 1, "{drawn:?}");
+}
+
+#[test]
+fn a_cross_hole_in_pieces_a_flat_and_a_socket_stay() {
+    // The threaded shaft (shape 0) with, within the thread's outline: a
+    // cross hole's circle in eight pieces (where the thread's faces cut
+    // its edge), a flat 3.5 from the axis seen edge on, and a hex socket in
+    // the shaft's end at 30, hidden: its sides 2 from the axis and its
+    // drill point's cone.
+    let pieces: Vec<ViewEdge> = (0..8)
+        .map(|k| {
+            let points = (0..=8)
+                .map(|i| {
+                    let a = (f64::from(k) + f64::from(i) / 8.0) * TAU / 8.0;
+                    [20.0 + 1.5 * a.cos(), 1.5 * a.sin()]
+                })
+                .collect();
+            of(0, polyline(ViewEdgeKind::Sharp, points))
+        })
+        .collect();
+    let flat = of(0, line([12.0, 3.5], [28.0, 3.5]));
+    let socket: Vec<ViewEdge> = [
+        ([25.0, 2.0], [30.0, 2.0]),
+        ([25.0, -2.0], [30.0, -2.0]),
+        ([25.0, 2.0], [24.0, 0.0]),
+        ([25.0, -2.0], [24.0, 0.0]),
+    ]
+    .into_iter()
+    .map(|(a, b)| of(0, kind_line(ViewEdgeKind::Sharp, false, a, b)))
+    .collect();
+    let mut edges: Vec<ViewEdge> = threaded_shaft().into_iter().map(|e| of(0, e)).collect();
+    edges.extend(pieces.iter().cloned());
+    edges.push(flat.clone());
+    edges.extend(socket.iter().cloned());
+    let projection = ViewProjection {
+        edges,
+        ..ViewProjection::default()
+    };
+    let drawn = with_threads(&projection, &front(), &[shaft_thread()]).edges;
+    for kept in pieces.iter().chain([&flat]).chain(&socket) {
+        assert!(drawn.contains(kept), "{kept:?} in {drawn:?}");
+    }
+    // The helices and the crests' outlines are gone all the same.
+    assert_eq!(
+        drawn
+            .iter()
+            .filter(|e| matches!(e.curve, ViewCurve::Polyline(..)))
+            .count(),
+        pieces.len(),
+        "{drawn:?}"
+    );
+    assert!(runs(&drawn, ViewEdgeKind::Sharp, MAJOR / 2.0, 30.0));
+}
+
+#[test]
+fn a_triangulated_threads_straight_pieces_go_with_it() {
+    // The threaded shaft as a triangulated view gives it: each half turn of
+    // its helices as twelve straight pieces; a cross hole's circle and a
+    // hex socket's hidden lines (sides and drill point) within its outline.
+    let mut edges = vec![
+        line([0.0, 4.0], [10.0, 4.0]),
+        line([0.0, -4.0], [10.0, -4.0]),
+        line([0.0, -4.0], [0.0, 4.0]),
+        line([30.0, -4.0], [30.0, 4.0]),
+    ];
+    let mut helices = Vec::new();
+    for k in 0..16 {
+        for radius in [MAJOR / 2.0, MINOR / 2.0] {
+            let at = |i: i32| {
+                let a = f64::from(i) / 12.0 * std::f64::consts::PI;
+                [10.0 + PITCH * (f64::from(k) + a / TAU), radius * a.cos()]
+            };
+            for i in 0..12 {
+                helices.push(line(at(i), at(i + 1)));
+            }
+        }
+    }
+    let hole = arc([20.0, 0.0], 1.5, 0.0, TAU);
+    let socket: Vec<ViewEdge> = [
+        ([25.0, 2.0], [30.0, 2.0]),
+        ([25.0, -2.0], [30.0, -2.0]),
+        ([25.0, 2.0], [24.0, 0.0]),
+        ([25.0, -2.0], [24.0, 0.0]),
+    ]
+    .into_iter()
+    .map(|(a, b)| kind_line(ViewEdgeKind::Sharp, false, a, b))
+    .collect();
+    edges.extend(helices.iter().cloned());
+    edges.push(hole.clone());
+    edges.extend(socket.iter().cloned());
+    let projection = ViewProjection {
+        edges,
+        polygonal: true,
+        ..ViewProjection::default()
+    };
+    let thread = ThreadInput {
+        source: None,
+        ..shaft_thread()
+    };
+    let drawn = with_threads(&projection, &front(), &[thread]).edges;
+    assert!(helices.iter().all(|h| !drawn.contains(h)), "{drawn:?}");
+    assert!(drawn.contains(&hole), "{drawn:?}");
+    for kept in &socket {
+        assert!(drawn.contains(kept), "{kept:?} in {drawn:?}");
+    }
+    // Drawn by convention over the half turns, from 10 to 29.375.
+    for side in [-1.0, 1.0] {
+        assert!(
+            runs(&drawn, ViewEdgeKind::Sharp, side * MAJOR / 2.0, 29.0),
+            "{drawn:?}"
+        );
+        assert!(
+            runs(&drawn, ViewEdgeKind::ThreadRoot, side * MINOR / 2.0, 29.0),
+            "{drawn:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bore_below_a_tapped_hole_stays_end_on() {
+    // A block (shape 0) with an M8 hole tapped along X from its face at 30
+    // to 15 and drilled on with 6 below it, seen from that face: the tapped
+    // hole's bore (the thread's minor diameter), the narrower bore's circle
+    // at the bottom of the thread (mitcad#1145) and the block's outline.
+    let tapped = of(0, arc([0.0, 0.0], MINOR / 2.0, 0.0, TAU));
+    let below = of(0, arc([0.0, 0.0], 3.0, 0.0, TAU));
+    let outline: Vec<ViewEdge> = [
+        ([-10.0, -10.0], [10.0, -10.0]),
+        ([10.0, -10.0], [10.0, 10.0]),
+        ([10.0, 10.0], [-10.0, 10.0]),
+        ([-10.0, 10.0], [-10.0, -10.0]),
+    ]
+    .into_iter()
+    .map(|(a, b)| of(0, line(a, b)))
+    .collect();
+    let mut edges = vec![tapped.clone(), below.clone()];
+    edges.extend(outline.iter().cloned());
+    let thread = ThreadInput {
+        start: [30.0, 0.0, 0.0],
+        end: [15.0, 0.0, 0.0],
+        major: MAJOR,
+        minor: MINOR,
+        internal: true,
+        taper: 0.0,
+        source: Some(0),
+    };
+    let projection = ViewProjection {
+        edges,
+        ..ViewProjection::default()
+    };
+    let drawn = with_threads(&projection, &right(), &[thread]).edges;
+    assert!(drawn.contains(&below), "{drawn:?}");
+    assert!(!drawn.contains(&tapped), "{drawn:?}");
+    for kept in &outline {
+        assert!(drawn.contains(kept), "{kept:?} in {drawn:?}");
+    }
+    // The crest circle (the minor diameter) whole and wide, the root (the
+    // major) a narrow three-quarter arc.
+    let arcs: Vec<(f64, f64, Pen)> = drawn
+        .iter()
+        .filter(|e| e.source.is_none())
+        .filter_map(|e| match e.curve {
+            ViewCurve::Arc {
+                radius, start, end, ..
+            } => Some((radius, end - start, edge_pen(e.visible, e.kind))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arcs.len(), 2, "{arcs:?}");
+    assert!(
+        arcs.iter()
+            .any(|a| same(a.0, MINOR / 2.0) && same(a.1, TAU) && a.2 == Pen::Thick),
+        "{arcs:?}"
+    );
+    assert!(
+        arcs.iter()
+            .any(|a| same(a.0, MAJOR / 2.0) && a.1 < 0.76 * TAU && a.2 == Pen::Thin),
+        "{arcs:?}"
+    );
+}
+
+#[test]
+fn a_flat_on_a_thread_stays_end_on() {
+    // The M8 shaft from its threaded end with a flat 3.5 from the axis:
+    // what the flat leaves of the crest circle, the root circle, and the
+    // flat's chord across the crest circle, which dips inside the thread's
+    // circles but is none of them.
+    let half_chord = (MAJOR * MAJOR / 4.0 - 3.5 * 3.5).sqrt();
+    let cut = half_chord.atan2(3.5);
+    let crest = arc([0.0, 0.0], MAJOR / 2.0, cut, TAU - cut);
+    let chord = line([3.5, -half_chord], [3.5, half_chord]);
+    let edges = vec![
+        crest.clone(),
+        arc([0.0, 0.0], MINOR / 2.0, 0.0, TAU),
+        chord.clone(),
+    ];
+    let thread = ThreadInput {
+        start: [30.0, 0.0, 0.0],
+        end: [10.0, 0.0, 0.0],
+        major: MAJOR,
+        minor: MINOR,
+        internal: false,
+        taper: 0.0,
+        source: None,
+    };
+    let projection = ViewProjection {
+        edges,
+        ..ViewProjection::default()
+    };
+    let drawn = with_threads(&projection, &right(), &[thread]).edges;
+    assert!(drawn.contains(&chord), "{drawn:?}");
+    assert!(!drawn.contains(&crest), "{drawn:?}");
+    assert_eq!(drawn.len(), 1 + 2, "{drawn:?}");
+}
+
 const FRAC_1_SQRT_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 const FRAC_1_SQRT_3: f64 = 0.577_350_269_189_625_8;

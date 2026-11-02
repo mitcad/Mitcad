@@ -81,6 +81,8 @@ if scenario == 'measure':
         "expect-log '^Measure history row 1: .*: Distance 70 mm$'")
     # One line a row: its number, its main value and the picks' kinds.
     if native:
+        # A folded history has no visible AppKit row to inspect.
+        unfold_history()
         add("expect-native-text measureHistory.row.1 '^1[.] +70 mm +Vertex ↔ Vertex$'")
     else:
         add('expect-widget-property measureHistoryRows count 1')
@@ -198,5 +200,10 @@ else:
     add("screenshot-screen '${MITCAD_TEST_WORK}/sketch-result.png'",
         'native-pointer-click paletteFinish' if native else 'command sketch.finish',
         "expect-log 'Sketch finished'", 'expect-model-bodies 1 1000')
-add("menu 'File/Save'", "expect-log '^Saved '")
+if scenario == 'measure':
+    # Both kept dimensions were undone: the original saved model is clean.
+    add('expect-native-enabled native.quickAccess.file.save false' if native else
+        'expect-widget-property quickAccess_file.save enabled false')
+else:
+    add("menu 'File/Save'", "expect-log '^Saved '")
 print('\n'.join(lines))

@@ -5,6 +5,8 @@
 #include <cmath>
 
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
 #include <QStringList>
@@ -89,6 +91,10 @@ QJsonValue SelectionItem::reference() const {
   case SelectKind::Sketch:
     return QJsonObject{{QStringLiteral("sketch"), owner}};
   case SelectKind::Plane:
+    if (isFixedPlane(*this)) {
+      return QJsonDocument::fromJson(name.toUtf8()).object();
+    }
+    return owner;
   case SelectKind::Axis:
   case SelectKind::Point:
   case SelectKind::Component:
@@ -98,6 +104,22 @@ QJsonValue SelectionItem::reference() const {
     break;
   }
   return QJsonValue();
+}
+
+SelectionItem fixedPlaneItem(const QJsonObject& plane, const QString& occurrence) {
+  return {SelectKind::Plane, QStringLiteral("fixed"),
+          QString::fromUtf8(QJsonDocument(plane).toJson(QJsonDocument::Compact)), QStringLiteral("plane"),
+          occurrence};
+}
+
+bool isFixedPlane(const SelectionItem& item) {
+  return item.kind == SelectKind::Plane && item.owner == QStringLiteral("fixed") && !item.name.isEmpty();
+}
+
+bool isFixedPlaneRef(const QJsonValue& ref) {
+  const QJsonObject o = ref.toObject();
+  return o.value(QStringLiteral("origin")).toArray().size() == 3 &&
+         o.value(QStringLiteral("normal")).toArray().size() == 3;
 }
 
 QString SelectionItem::kindName(SelectKind kind, int count) {

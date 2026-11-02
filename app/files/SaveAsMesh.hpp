@@ -66,6 +66,14 @@ MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instan
                         const QHash<QString, MeshBody>& bodies, const QHash<QString, QString>& components,
                         const QString& design);
 
+// The name of one file for `items`, without the extension (owner
+// 26.10.2026; File › Export too since mitcad#1164): one body's name (the
+// same body picked twice is one), one component's name where an occurrence
+// places it, else `design`; `bodyNames` the bodies' names by uid. An empty
+// name is the design's.
+QString meshItemsName(const QVector<MeshItem>& items, const QHash<QString, QString>& bodyNames,
+                      const QHash<QString, QString>& components, const QString& design);
+
 // The file names Save As Mesh proposes, with the extension: one file named
 // after the plan's `name`, or with `perBody` a file per body named after
 // it, unique ignoring case ("Body1.stl", "Body1_2.stl"); characters a file

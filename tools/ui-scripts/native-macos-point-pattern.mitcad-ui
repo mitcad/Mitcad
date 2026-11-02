@@ -34,9 +34,11 @@ click-logged 'Datum xy'
 expect-log 'Sketch started on xy'
 native-action sketch.point
 sketch-click 30 0
-expect-log 'Added point p1 at' 30
+expect-log 'Added point p1 at \(30, 0\)' 30
+# The first point's automatic x-axis constraint creates the axis entities.
+# The next actual user point is p5, with its original target coordinates.
 sketch-click 0 40
-expect-log 'Added point p2 at' 30
+expect-log 'Added point p5 at \(0, 40\)' 30
 key Escape
 native-click native.ribbon.sketch.finish
 expect-log 'Sketch finished' 30
@@ -56,7 +58,7 @@ expect-native-text input_anchor_mode '^Automatic$'
 expect-native-visible input_anchor false
 expect-native-enabled commandOk false
 click-logged 'Sketch entity F2/p1'
-click-logged 'Sketch entity F2/p2'
+click-logged 'Sketch entity F2/p5'
 expect-native-text input_targets '^2 selected$'
 expect-log 'Preview marker Pattern at Points Automatic anchor world 5,5,5 at' 30
 expect-native-enabled commandOk true

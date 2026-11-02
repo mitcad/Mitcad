@@ -37,8 +37,9 @@ use crate::ids::{EntityUid, FeatureUid, parse_number, string_serde};
 
 /// A curve a segment lies on: a sketch curve `c<n>`, or a contour of a
 /// text's glyph `t<n>.g<k>.c<j>` (the text, the character's index in it,
-/// the contour's index in the glyph).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// the contour's index in the glyph), or a supporting face boundary edge
+/// `b{E{...}}` or `b{O{...}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CurveId {
     Curve(EntityUid),
     Glyph {
@@ -46,23 +47,58 @@ pub enum CurveId {
         glyph: u32,
         contour: u32,
     },
+    /// A supporting face's boundary, by its canonical topological edge
+    /// name. It bounds profiles without being a stored sketch entity.
+    FaceEdge(Box<FaceBoundaryRef>),
+}
+
+/// Persistent identity of an implicit supporting-face boundary. Named
+/// two-face edges retain their existing identity. An eligible open edge
+/// instead names the actual profile face and source sketch segment from
+/// which the geometry kernel constructed it, never a geometric index.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FaceBoundaryRef {
+    Named(EdgeName),
+    Profile {
+        face: Box<FaceName>,
+        segment: Box<SegmentKey>,
+    },
+}
+
+impl From<EdgeName> for FaceBoundaryRef {
+    fn from(edge: EdgeName) -> Self {
+        Self::Named(edge)
+    }
+}
+
+impl fmt::Display for FaceBoundaryRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Named(edge) => edge.fmt(f),
+            Self::Profile { face, segment } => write!(f, "O{{{face}|{segment}}}"),
+        }
+    }
 }
 
 impl CurveId {
     /// The sketch curve, for a curve.
-    pub fn entity(self) -> Option<EntityUid> {
+    pub fn entity(&self) -> Option<EntityUid> {
         match self {
-            Self::Curve(uid) => Some(uid),
-            Self::Glyph { .. } => None,
+            Self::Curve(uid) => Some(*uid),
+            Self::Glyph { .. } | Self::FaceEdge(_) => None,
         }
     }
 
     /// The text, for a glyph contour.
-    pub fn text(self) -> Option<EntityUid> {
+    pub fn text(&self) -> Option<EntityUid> {
         match self {
-            Self::Glyph { text, .. } => Some(text),
-            Self::Curve(_) => None,
+            Self::Glyph { text, .. } => Some(*text),
+            Self::Curve(_) | Self::FaceEdge(_) => None,
         }
+    }
+
+    pub fn is_face_edge(&self) -> bool {
+        matches!(self, Self::FaceEdge(_))
     }
 }
 
@@ -81,6 +117,7 @@ impl fmt::Display for CurveId {
                 glyph,
                 contour,
             } => write!(f, "t{}.g{glyph}.c{contour}", text.0),
+            Self::FaceEdge(edge) => write!(f, "b{{{edge}}}"),
         }
     }
 }
@@ -140,11 +177,11 @@ impl SegmentKey {
 
     /// The curves this segment names: its own and those at its ends.
     pub fn curves(&self) -> impl Iterator<Item = CurveId> + '_ {
-        std::iter::once(self.curve).chain(
+        std::iter::once(self.curve.clone()).chain(
             self.ends
                 .iter()
                 .flat_map(|ends| ends.0.iter().chain(&ends.1))
-                .copied(),
+                .cloned(),
         )
     }
 }
@@ -583,8 +620,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `c<n>`, or `t<n>.g<k>.c<j>` for a glyph contour.
+    /// A sketch curve, glyph contour or implicit face boundary.
     fn curve(&mut self) -> Result<CurveId, TopoError> {
+        if self.eat("b{") {
+            let edge = self.face_boundary()?;
+            self.expect("}", "'}' after a face boundary edge")?;
+            return Ok(CurveId::FaceEdge(Box::new(edge)));
+        }
         if self.peek() == Some(b't') {
             let text = EntityUid(self.number("t", "a text 't<number>'")?);
             let glyph = self.number(".g", "'.g<number>' after the text")?;
@@ -690,7 +732,9 @@ impl<'a> Parser<'a> {
             Ok(RoleKey::Vertex(Box::new(self.vertex()?)))
         } else if rest.starts_with("r{") {
             Ok(RoleKey::Region(self.region()?))
-        } else if (rest.starts_with('c') || rest.starts_with('t')) && second_is_digit {
+        } else if rest.starts_with("b{")
+            || ((rest.starts_with('c') || rest.starts_with('t')) && second_is_digit)
+        {
             Ok(RoleKey::Segment(self.segment()?))
         } else if rest.starts_with('F') && second_is_digit {
             Ok(RoleKey::Face(Box::new(self.face()?)))
@@ -710,6 +754,21 @@ impl<'a> Parser<'a> {
         let mut edge = EdgeName::new(a, b);
         edge.index = self.index()?;
         Ok(edge)
+    }
+
+    fn face_boundary(&mut self) -> Result<FaceBoundaryRef, TopoError> {
+        if self.rest().starts_with("E{") {
+            return self.edge().map(FaceBoundaryRef::Named);
+        }
+        self.expect("O{", "an edge 'E{...}' or profile boundary 'O{...}'")?;
+        let face = self.face()?;
+        self.expect("|", "'|' after a profile boundary's source face")?;
+        let segment = self.segment()?;
+        self.expect("}", "'}' after a profile boundary's source segment")?;
+        Ok(FaceBoundaryRef::Profile {
+            face: Box::new(face),
+            segment: Box::new(segment),
+        })
     }
 
     fn vertex(&mut self) -> Result<VertexName, TopoError> {
@@ -751,6 +810,7 @@ parse_with!(SegmentKey, segment);
 parse_with!(RegionKey, region);
 parse_with!(FaceName, face);
 parse_with!(EdgeName, edge);
+parse_with!(FaceBoundaryRef, face_boundary);
 parse_with!(VertexName, vertex);
 
 impl FromStr for TopoName {
@@ -770,6 +830,10 @@ impl FromStr for TopoName {
 string_serde!(SegmentKey, "a segment key like \"c3[c2,c4]\"");
 string_serde!(RegionKey, "a region key like \"r{c5}\"");
 string_serde!(FaceName, "a face name like \"F3:side(c1[c4,c2])\"");
+string_serde!(
+    FaceBoundaryRef,
+    "a named edge or source-profile face boundary"
+);
 string_serde!(
     EdgeName,
     "an edge name like \"E{F3:end(r{c5})|F3:side(c5)}\""
@@ -868,6 +932,84 @@ mod tests {
         assert_eq!(parsed, TopoName::Edge(edge.clone()));
         assert!(matches!("F3:top".parse(), Ok(TopoName::Face(_))));
         assert!(matches!("V{F3:top}".parse(), Ok(TopoName::Vertex(_))));
+    }
+
+    #[test]
+    fn source_profile_boundaries_round_trip_without_changing_named_edges() {
+        let face: FaceName = "F2:patch(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"
+            .parse()
+            .unwrap();
+        let source: SegmentKey = "c1[c4,c2]".parse().unwrap();
+        let open = FaceBoundaryRef::Profile {
+            face: Box::new(face.clone()),
+            segment: Box::new(source),
+        };
+        let text = format!("O{{{face}|c1[c4,c2]}}");
+        assert_eq!(open.to_string(), text);
+        round_trip::<FaceBoundaryRef>(&text);
+        let stored = serde_json::to_string(&open).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FaceBoundaryRef>(&stored).unwrap(),
+            open
+        );
+        let mut other_owner = open.clone();
+        if let FaceBoundaryRef::Profile { face, .. } = &mut other_owner {
+            face.feature = FeatureUid(3);
+        }
+        assert_ne!(open, other_owner);
+        let curve = CurveId::FaceEdge(Box::new(open.clone()));
+        assert!(curve.entity().is_none());
+        assert!(curve.text().is_none());
+        assert!(curve.is_face_edge());
+        let key = SegmentKey::with_ends(curve, vec![c(9).into()], Vec::new());
+        round_trip::<SegmentKey>(&key.to_string());
+        let region = RegionKey::new([key.clone()]).unwrap();
+        round_trip::<RegionKey>(&region.to_string());
+        round_trip::<FaceName>(&FaceName::side(FeatureUid(7), key).to_string());
+        // A source face may itself contain a profile boundary or a named
+        // edge with nested pipes; parsing must not split those payloads.
+        let nested = FaceBoundaryRef::Profile {
+            face: Box::new(FaceName::end(FeatureUid(8), region)),
+            segment: Box::new(SegmentKey::closed(c(3))),
+        };
+        round_trip::<FaceBoundaryRef>(&nested.to_string());
+        let named = "E{F2:end(r{c2})|F2:side(c2)}";
+        round_trip::<FaceBoundaryRef>(named);
+        round_trip::<RegionKey>(&format!("r{{b{{{named}}}}}"));
+        let mixed = FaceBoundaryRef::Profile {
+            face: Box::new(FaceName::end(
+                FeatureUid(9),
+                RegionKey::new([SegmentKey::closed(CurveId::FaceEdge(Box::new(
+                    nested.clone(),
+                )))])
+                .unwrap(),
+            )),
+            segment: Box::new(format!("b{{{named}}}[c1,c3]").parse().unwrap()),
+        };
+        round_trip::<FaceBoundaryRef>(&mixed.to_string());
+        assert!(text.parse::<EdgeName>().is_err());
+        assert!(text.parse::<TopoName>().is_err());
+        assert_ne!(open, nested);
+    }
+
+    #[test]
+    fn source_profile_boundaries_reject_unknown_or_incomplete_references() {
+        for text in [
+            "O{}",
+            "O{F2:patch(r{c1})}",
+            "O{F2:patch(r{c1})|}",
+            "O{F2:patch(r{c1})|r{c1}}",
+            "O{F2:patch(r{c1})|q1}",
+            "O{F2:patch(r{c1})|c1}#0",
+            "Q{F2:patch(r{c1})|c1}",
+            "O{F2:patch(r{c1})|c1[c2]}",
+        ] {
+            assert!(text.parse::<FaceBoundaryRef>().is_err(), "accepted {text}");
+            assert!(
+                format!("b{{{text}}}").parse::<SegmentKey>().is_err(),
+                "accepted {text}"
+            );
+        }
     }
 
     #[test]

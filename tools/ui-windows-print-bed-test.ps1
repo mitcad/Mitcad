@@ -2,7 +2,7 @@
 # check-all sources: app/MainWindowContextMenu.cpp app/MainWindow.cpp app/files/MainWindowPrint.cpp
 # check-all sources: app/commands/InspectCommands.cpp app/browser core/model/src/document/print_bed.rs
 # check-all sources: core/model/src/exchange core/3mf tools/cli
-# check-all sources: app/files/Print3d.cpp app/framework/CommandSession.cpp
+# check-all sources: app/files/Print3d.cpp app/framework/CommandSession.cpp app/framework/DocumentSession.cpp
 # Input-driven Windows UI test of a body's print bed face (mitcad#731) in
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-print-bed-test.sh does on Linux, on a 40 x 20 x 10 box (Plate,
@@ -33,6 +33,10 @@
 #      open; picking the top in Bed Face stores it as the body's print bed
 #      face (one undo step), the highlight follows, and Send turns the box
 #      onto it.
+#   9. The bed plan in the background (mitcad#1121), made slow
+#      (MITCAD_TEST_JOB_SLEEP_MS="bed plan=2500"): Bed Face says Planning,
+#      Enter posted while the plan runs sends as soon as it is done (one
+#      log line says it waited), and no progress dialog shows meanwhile.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-print-bed-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -325,5 +329,38 @@ Write-Host 'ok   the top stored as the body''s print bed face'
 Ui-Mark
 Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
 Ui-ExpectNew 'Undo: Set Print Bed Face of Plate' 'one undo step'
+
+Write-Host '--- 9. The bed plan in the background (mitcad#1121)'
+# The panel's bed plan made 2.5 s longer; Enter posted at once, while it
+# runs (not a Ui-Step: that waits for the job), sends once it is done.
+$env:MITCAD_TEST_JOB_SLEEP_MS = 'bed plan=2500'
+Ui-StartApp 'print-bed-plan' @('--open', $fresh)
+Remove-Item Env:MITCAD_TEST_JOB_SLEEP_MS -ErrorAction SilentlyContinue
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-ExpectLog 'Bodies shown: F1.b0' 'the box shown'
+Remove-Item -Force $slicerArgs -ErrorAction SilentlyContinue
+Ui-Mark
+Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
+Ui-ExpectNew 'Computing bed plan started' 'the bed plan runs as a job of its own'
+# "Planning" and its ellipsis: the script stays ASCII.
+Ui-ExpectNew '3D Print bed face: Planning' 'Bed Face says Planning meanwhile'
+if (@(Ui-NewLines | Where-Object { $_ -match 'Computing bed plan done in [0-9]+ ms' }).Count -gt 0) {
+  Ui-Fail 'the plan was done before Enter was typed'
+}
+Ui-Key 'Return'
+Ui-ExpectNew '3D Print: Send waited for the bed plan (' 'Enter waited for the plan' 30
+$waited = @(Ui-NewLines | Where-Object { $_.Contains('3D Print: Send waited for the bed plan (') }).Count
+if ($waited -ne 1) { Ui-Fail "the wait was logged $waited times" }
+Ui-ExpectNew '3D Print bed face: Plate: print bed face; Plate F1:top' 'the plan done: Bed Face shows the top'
+Ui-ExpectNew '3D Print bed: Plate on F1:top, plate 128.000,128.000' 'then sent, on the top' 30
+Slicer-Ran
+# No progress dialog while the plan ran: nothing took the Enter.
+foreach ($line in @(Ui-NewLines)) {
+  if ($line.Contains('3D Print: Send waited for the bed plan')) { break }
+  if ($line.Contains('Progress dialog shown')) { Ui-Fail "a progress dialog showed while the bed plan ran: $line" }
+}
+Expect-NoNew 'Progress dialog shown: bed plan' 'the bed plan shows no progress dialog'
+Expect-NoNew 'The document was read while a job computes it' 'nothing read the design during the plan'
+Write-Host 'ok   no progress dialog while the plan ran'
 
 Ui-Finish 'UI Windows print bed test'

@@ -3,6 +3,7 @@
 # check-all sources: app/browser/ConfigurationBar.cpp app/browser/MainWindowConfigurationPanel.cpp
 # check-all sources: app/browser/BrowserController.cpp app/browser/BrowserPanel.cpp app/framework/FloatingLayout.cpp
 # check-all sources: app/framework/GlassCard.cpp app/MainWindow.cpp app/projects/MainWindowProjectsPanel.cpp tools/cli
+# check-all sources: app/projects/ProjectsPanel.cpp
 # The Configuration panel and the left column (mitcad#1020) through the real
 # UI, on two designs mitcad-cli makes: a 10 mm cube without options, and a
 # design with three range options (SizeX, SizeY and Height, as a bin's
@@ -20,6 +21,10 @@
 #      the browser's card; remembered at the next start; expanded again.
 #   6. Docked: the Configuration dock above the browser's, the bar in it;
 #      opening the design without options hides it.
+#   7. Floating with the Projects card shown (an empty projects folder):
+#      its boundary with the Configuration card dragged 50 px down, past
+#      the Projects rows, moves no card (mitcad#1152: the boundary below
+#      jumped and the browser's card grew); the same after a restart.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-configuration-panel-test.sh
@@ -82,8 +87,9 @@ dock_rect() {
     sed "s/^; $1 //; s/[,x]/ /g"
 }
 
-# logged_place "text": "x y" of the last "<text> at x,y" line.
-logged_place() { sed -n "s/^$1 at \([0-9]*\),\([0-9]*\)\$/\1 \2/p" "$UI_LOG" | tail -1; }
+# logged_place "text": "x y" of the last "<text> at x,y" line. (The text
+# may hold a slash, as a Browser path does: not sed's delimiter.)
+logged_place() { sed -n "s|^$1 at \([0-9]*\),\([0-9]*\)\$|\1 \2|p" "$UI_LOG" | tail -1; }
 
 # inside "x y" "x y w h": the point is in the rectangle.
 inside() {
@@ -307,6 +313,93 @@ ui_focus_main
 ui_expect_new "Opened $PLAIN" "the design without options opened" 20
 ui_expect_new "Configuration panel: hidden" "the dock is hidden without options"
 ui_expect_new "Configuration bar: none" "the bar has nothing to show"
+quit
+
+echo "--- 7. The Projects card above them: its boundary dragged past the rows moves nothing (mitcad#1152)"
+# The Projects panel shown, as for a user who turned it on, with an empty
+# projects folder: a short card at its content's height, above the
+# Configuration card, which is at its content's height too.
+export MITCAD_PROJECTS_DIR=$WORK/projects
+mkdir -p "$MITCAD_PROJECTS_DIR" "$UI_CONFIG/Mitcad"
+CONF=$UI_CONFIG/Mitcad/Mitcad.conf
+if grep -q '^\[projects\]$' "$CONF" 2> /dev/null; then
+  sed -i '/^\[projects\]$/,/^\[/{/^panel=/d}' "$CONF"
+  sed -i 's/^\[projects\]$/[projects]\npanel=true/' "$CONF"
+else
+  printf '[projects]\npanel=true\n' >> "$CONF"
+fi
+# The heights of the three cards: PH (Projects), CH and BH (heights).
+three_heights() {
+  heights
+  PH=$(card_rect projectsDock | cut -d' ' -f4)
+}
+three_heights_are() {
+  three_heights
+  near "$PH" "$1" && near "$CH" "$2" && near "$BH" "$3"
+}
+projects_above_config() {
+  local px py pw ph cx cy cw ch
+  read -r px py pw ph <<< "$(card_rect projectsDock)"
+  read -r cx cy cw ch <<< "$(card_rect configurationDock)"
+  [ -n "$px" ] && [ -n "$cx" ] && [ "$px" = "$cx" ] && [ $((py + ph)) -le "$cy" ]
+}
+# The Bodies folder's arrow logged where the browser's card is now.
+arrow_in_browser() { inside "$(logged_place "Browser arrow Root/Bodies")" "$(card_rect browserDock)"; }
+# start_below_projects: start_tall with the Projects card shown. That card
+# takes its rows' height when its folder is read, after the window shows:
+# the cards below it move down then, and a click at the arrow's place
+# logged before that misses it. The rows' scroll range tells whether the
+# 30 body rows are shown, as Body1's row may be below a low browser card
+# while they are. The tree scrolls by rows here as on Windows, not by
+# pixels: the range counts the rows out of sight (23-31 open in a 1400x980
+# window, 0 folded).
+OPEN_RANGE=20
+start_below_projects() {
+  ui_start_app --chrome=floating --open "$FILE" --no-native-dialogs
+  UI_MARK=0
+  ui_expect_log "Opened $FILE" "the design with options opened"
+  ui_expect_log "Configuration bar: SizeX = 42 mm" "the bar shows the options"
+  ui_step "a tall window"                  xdotool windowsize "$UI_WINDOW" 1400 980
+  ui_sync
+  ui_expect_log "Projects panel: 0 projects" "the empty projects folder is read"
+  ui_expect_log "Browser arrow Root/Bodies at" "the Bodies folder's arrow"
+  ui_wait_idle
+  ui_sync
+  wait_for "the Bodies folder's arrow is logged in the browser's card" arrow_in_browser
+  if [ "$(scroll_range)" -lt "$OPEN_RANGE" ] 2> /dev/null; then
+    ui_mark
+    ui_step "open Bodies"                  ui_click_logged "Browser arrow Root/Bodies"
+    wait_for "the 30 body rows are shown" eval '[ "$(scroll_range)" -ge "$OPEN_RANGE" ] 2> /dev/null'
+  fi
+}
+start_below_projects
+ui_expect_log "Projects panel at the start: shown (as chosen)" "the Projects panel is shown"
+wait_for "the Projects card is above the Configuration card" projects_above_config
+wait_for "the browser's card reaches the timeline's" browser_reaches_timeline
+ui_wait_idle
+ui_sync
+three_heights
+PH0=$PH
+CH0=$CH
+BH0=$BH
+echo "ok   at the start: Projects $PH0 px, Configuration $CH0 px, browser $BH0 px high"
+ui_expect_log "Floating split projectsDock/configurationDock at " "the boundary's place is logged"
+ui_mark
+ui_step "drag the boundary 50 px down"   ui_drag_from "Floating split projectsDock/configurationDock" 0 50
+ui_expect_new "Floating split remembered: projectsDock " "the split is remembered"
+ui_wait_idle
+ui_sync
+# The Projects card is at its rows' height and the Configuration card at
+# its content's: the boundary stays, and the other one with it.
+three_heights_are "$PH0" "$CH0" "$BH0" ||
+  ui_fail "the cards moved: Projects $PH, Configuration $CH, browser $BH (were $PH0, $CH0, $BH0)"
+echo "ok   the three cards keep their heights"
+SPLIT=$(sed -n 's/^Floating split remembered: //p' "$UI_LOG" | tail -1)
+quit
+start_below_projects
+ui_expect_log "Floating split restored: $SPLIT" "the split is read at the start"
+wait_for "the browser's card reaches the timeline's" browser_reaches_timeline
+wait_for "the three cards are as high as before the drag" three_heights_are "$PH0" "$CH0" "$BH0"
 quit
 
 ui_finish "UI configuration panel test"

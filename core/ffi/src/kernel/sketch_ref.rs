@@ -47,6 +47,13 @@ pub mod ffi {
         faces: Vec<String>,
     }
 
+    /// A planar face's boundary edge and persistent reference: a named
+    /// two-face edge E{...}, or source-profile boundary O{face|segment}.
+    struct NamedBoundaryCurve {
+        name: String,
+        curve: ModelCurve,
+    }
+
     unsafe extern "C++" {
         include!("bridge/sketch_ref.hpp");
         include!("bridge/trycatch.hpp");
@@ -56,6 +63,9 @@ pub mod ffi {
 
         /// The curves of a named edge, face (its boundary) or vertex.
         fn model_curves(shape: &Shape, name: &str) -> Result<Vec<ModelCurve>>;
+
+        /// Named edges of every piece of a planar face, each edge once.
+        fn face_boundary(shape: &Shape, face: &str) -> Result<Vec<NamedBoundaryCurve>>;
 
         /// The face (`b'F'`), edge (`b'E'`) or vertex (`b'V'`) `index` in
         /// OCCT's order.

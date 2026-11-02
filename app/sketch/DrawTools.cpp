@@ -1834,6 +1834,17 @@ public:
                                             : QObject::tr("Circumscribed Polygon");
   }
 
+  void press(const Snap& snap) override {
+    // Edge Polygon's length field is gone when the third click chooses
+    // the side, so keep its typed expression for the dimension.
+    if (clicked() == 0) {
+      m_length.clear();
+    } else if (clicked() == 1 && m_mode == QStringLiteral("edge")) {
+      m_length = m_c.typed(QStringLiteral("length")) ? m_c.fieldExpression(QStringLiteral("length")) : QString();
+    }
+    StepTool::press(snap);
+  }
+
   void paint(ToolPreview& preview) const override {
     if (clicked() == 0) {
       return;
@@ -1972,31 +1983,67 @@ protected:
       return;
     }
     const SketchModel& model = op.model();
+    QString sizeCurve;
     if (m_mode == QStringLiteral("edge")) {
+      // The model orders the corners counter-clockwise. The clicked edge
+      // can therefore be the first or last side, depending on the third
+      // click; find it by both ends rather than by the returned order.
+      for (const QString& id : made(result)) {
+        const CurveData* c = model.curve(id);
+        if (c != nullptr && c->isLine() &&
+            ((dist(c->curve.a, click(0)) < 1e-6 && dist(c->curve.b, click(1)) < 1e-6) ||
+             (dist(c->curve.b, click(0)) < 1e-6 && dist(c->curve.a, click(1)) < 1e-6))) {
+          sizeCurve = id;
+          break;
+        }
+      }
       // The edge's two ends, where the cursor snapped onto geometry
       // (mitcad#353): the polygon starts at the first click.
       holdPoint(op, result, click(0), snapOf(0), false);
       holdPoint(op, result, click(1), snapOf(1), false);
     }
-    if (m_mode != QStringLiteral("edge") && snapOf(0).onGeometry()) {
-      // The polygon's construction circle has its centre.
+    if (m_mode != QStringLiteral("edge")) {
+      // The first construction circle is the one measured by Radius:
+      // the inner circle for Circumscribed, the outer one for Inscribed.
       for (const QString& id : entities(result)) {
         const CurveData* c = model.curve(id);
         if (c != nullptr && c->isCircle()) {
-          op.constrain(c->center, snapOf(0));
+          sizeCurve = id;
+          if (snapOf(0).onGeometry()) {
+            op.constrain(c->center, snapOf(0));
+          }
           break;
         }
       }
     }
+    QString dimensionLog;
+    const bool edge = m_mode == QStringLiteral("edge");
+    const QString expression = edge ? m_length
+                                   : (m_c.typed(QStringLiteral("radius"))
+                                          ? m_c.fieldExpression(QStringLiteral("radius")) : QString());
+    if (!expression.isEmpty() && !sizeCurve.isEmpty()) {
+      const auto before = op.model().dimensions.size();
+      op.addDimension({{QStringLiteral("type"), edge ? QStringLiteral("length") : QStringLiteral("radius")},
+                       {edge ? QStringLiteral("line") : QStringLiteral("curve"), sizeCurve}},
+                      expression);
+      const auto& dimensions = op.model().dimensions;
+      if (dimensions.size() > before) {
+        const DimensionData& dimension = dimensions.back();
+        dimensionLog = QStringLiteral(", dimension %1 = %2 mm")
+                           .arg(dimension.parameter)
+                           .arg(dimension.measured, 0, 'g', 8);
+      }
+    }
     op.commit();
-    qDebug().noquote() << QStringLiteral("Added polygon (%1 sides) at %2 [%3]")
+    qDebug().noquote() << QStringLiteral("Added polygon (%1 sides) at %2 [%3]%4")
                               .arg(sides())
                               .arg(text(place->first))
-                              .arg(made(result).join(QStringLiteral(", ")));
+                              .arg(made(result).join(QStringLiteral(", ")), dimensionLog);
   }
 
 private:
   QString m_mode;
+  QString m_length;
   mutable int m_sides = 6;
 };
 

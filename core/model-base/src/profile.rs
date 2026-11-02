@@ -168,6 +168,14 @@ pub struct ProfileRegion {
 }
 
 impl ProfileRegion {
+    /// Whether an implicit supporting-face edge participates in a loop.
+    pub fn face_bounded(&self) -> bool {
+        self.loops
+            .iter()
+            .flat_map(|l| &l.segments)
+            .any(|s| s.key.curve.is_face_edge())
+    }
+
     /// Approximate bounds in sketch coordinates (minimum, maximum).
     pub fn bounds(&self) -> ([f64; 2], [f64; 2]) {
         let mut min = [f64::INFINITY; 2];

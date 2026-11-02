@@ -8,6 +8,8 @@
 #include <QJsonDocument>
 #include <QStringList>
 
+#include "../framework/Numbers.hpp"
+
 namespace mitcad::drawings {
 namespace {
 
@@ -801,6 +803,36 @@ QList<QPair<QString, QString>> scaleChoices(bool fit) {
     out.append({QString::fromLatin1(scale), QString::fromLatin1(scale)});
   }
   return out;
+}
+
+std::optional<double> scaleRatio(const QString& text, QString* normalized) {
+  const QStringList sides = text.split(QLatin1Char(':'));
+  if (sides.size() != 2) {
+    return std::nullopt;
+  }
+  const std::optional<double> a = parsePlainNumber(sides[0]);
+  const std::optional<double> b = parsePlainNumber(sides[1]);
+  if (!a || !b || !(*a > 0.0) || !(*b > 0.0) || !std::isfinite(*a / *b) || !(*a / *b > 0.0)) {
+    return std::nullopt;
+  }
+  if (normalized != nullptr) {
+    *normalized = QString::number(*a, 'g', 12) + QLatin1Char(':') + QString::number(*b, 'g', 12);
+  }
+  return *a / *b;
+}
+
+std::optional<QString> scaleEntry(const QString& text, const QList<QPair<QString, QString>>& choices) {
+  const QString typed = text.trimmed();
+  for (const auto& [value, label] : choices) {
+    if (typed.compare(label, Qt::CaseInsensitive) == 0 || typed.compare(value, Qt::CaseInsensitive) == 0) {
+      return value;
+    }
+  }
+  QString ratio;
+  if (!scaleRatio(typed, &ratio)) {
+    return std::nullopt;
+  }
+  return ratio;
 }
 
 QList<QPair<QString, QString>> sideChoices() {

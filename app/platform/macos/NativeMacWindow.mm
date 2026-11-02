@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #include <QApplication>
@@ -871,12 +872,21 @@ struct NativeMacWindowState {
           if (item && item->enabled) {
             if (key == Qt::Key_F2) {
               if (item->editable) [tree editColumn:0 row:tree.selectedRow withEvent:nil select:YES];
-            } else if (callbacks.treeDelete) callbacks.treeDelete(item->id);
+            } else if (callbacks.treeDelete) {
+              QStringList selected;
+              for (NSUInteger row = tree.selectedRowIndexes.firstIndex; row != NSNotFound;
+                   row = [tree.selectedRowIndexes indexGreaterThanIndex:row]) {
+                MITCADTreeNode* selectedNode = [tree itemAtRow:NSInteger(row)];
+                const auto* selectedItem = selectedNode ? treeItem(selectedNode.key) : nullptr;
+                if (selectedItem) selected.append(selectedItem->id);
+              }
+              callbacks.treeDelete(selected);
+            }
           }
         } else if (historyFocus && !selectedHistory.isEmpty()) {
           const QString uid = selectedHistory.back();
           if (key == Qt::Key_F2) { if (callbacks.historyRename) callbacks.historyRename(uid); }
-          else if (callbacks.historyDelete) callbacks.historyDelete(uid);
+          else if (callbacks.historyDelete) callbacks.historyDelete(selectedHistory);
         }
         return true;
       }
@@ -2453,10 +2463,20 @@ struct NativeMacWindowState {
       }
       return height;
     };
+    // A card's height for its content (mitcad#1152): the shares give a card
+    // whose weight reaches it exactly that height and the rest to all the
+    // other cards, so a drag past it would move the other boundaries.
+    const auto want = [this](const QString& name) {
+      for (const NativeColumnCard& card : columnCards) {
+        if (card.name == name && card.want > 0) return int(std::floor(card.want));
+      }
+      return std::numeric_limits<int>::max() / 4;
+    };
     const int total = above->second + below->second;
-    const int lowest = least(above->first, above->second);
-    const int highest = std::max(lowest, total - least(below->first, below->second));
-    const int upper = std::clamp(above->second + int(std::lround(down)), lowest, highest);
+    const int lowest = std::max(least(above->first, above->second), total - want(below->first));
+    const int highest = std::min(total - least(below->first, below->second), want(above->first));
+    const int upper = std::clamp(above->second + int(std::lround(down)), std::min(lowest, above->second),
+                                 std::max(highest, above->second));
     splitMoved = splitMoved || std::lround(down) != 0;
     columnSplit = splitDragStart;
     for (auto& [name, height] : columnSplit) {

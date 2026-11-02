@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files app/projects
+# check-all sources: app/browser/DesignPropertiesDialog.cpp app/browser/BrowserController.cpp
 # check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/diff.rs core/ffi/src/live.rs tools/cli
 # Edit locks of a Cloud project's designs (mitcad#89) with two (and three)
 # instances of Mitcad on clones of one bare repository in a folder (no
@@ -26,7 +27,8 @@
 #      before sending a file someone else holds (Cancel, then Send
 #      Anyway); Save As makes a copy (named in the project picker) that
 #      opens with a lock of its own; Open Read-Only opens a design without
-#      a lock.
+#      a lock, where Design Properties opens read-only and its Statistics
+#      tab reads (mitcad#1149).
 #   6. The lock's details from the indicator's menu; Project Settings: the
 #      remote accepts lock refs; edit locks turned off release the
 #      session's lock.
@@ -473,6 +475,17 @@ ui_focus_main
 ui_expect_new "Edit lock released: copy.mitcad" "the copy's lock released" 20
 ui_expect_new "Edit lock: part.mitcad opened read-only, without an edit lock" "opened without a lock" 20
 ui_expect_new "Lock banner: Read-only: part.mitcad was opened without an edit lock. [Edit]" "the banner"
+# Design Properties in the read-only window (mitcad#1149): the summary
+# without editing, the Statistics tab read.
+ui_mark
+ui_step "design properties (search)"    ui_command "Design Properties"
+ui_expect_new "Design Properties opened read-only: Created " "opened read-only, with its statistics"
+ui_focus_dialog '^Design Properties$'
+ui_step "the Statistics tab (Ctrl+Tab)" ui_key ctrl+Tab
+ui_expect_new "Design Properties tab: Statistics (Created " "the Statistics tab reads"
+ui_step "close (Esc)"                   ui_key Escape
+ui_expect_new "Design Properties closed" "closed, nothing to apply"
+ui_focus_main
 expect_holder "$TEAM" ada@example.invalid "the other window's lock stays"
 quit ada
 

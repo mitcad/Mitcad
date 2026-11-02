@@ -12,6 +12,9 @@
 #      Linux desktop has (glibc, X11 and xcb, OpenGL, fontconfig,
 #      FreeType, ...) stays the system's: linuxdeploy's exclude list. Then
 #      the ELF files are stripped.
+#      The AppImage's entry point is packaging/linux/AppRun (mitcad#1170):
+#      `MitCad.AppImage cli <arguments>` runs the bundled mitcad-cli,
+#      anything else MitCad.
 #   3. appimagetool packs the AppDir behind the AppImage runtime of
 #      tools/dev-env/install-appimage-tools.sh (it downloads nothing).
 #
@@ -120,6 +123,23 @@ linuxdeploy --appdir "$APPDIR" \
   --plugin qt
 # Qt's own translations: Mitcad's interface is English and loads none.
 rm -rf "$APPDIR/usr/translations"
+
+# The AppImage's entry point (mitcad#1170): packaging/linux/AppRun, which
+# runs the bundled mitcad-cli for `MitCad.AppImage cli <arguments>` and
+# MitCad for anything else, in place of linuxdeploy's AppRun (a link to
+# usr/bin/mitcad). Where linuxdeploy wrapped that link in a script that
+# sets up its plugins' hooks first (AppRun.wrapped), the wrapped link is
+# replaced, so the hooks still run.
+if [ -e "$APPDIR/AppRun.wrapped" ] || [ -L "$APPDIR/AppRun.wrapped" ]; then
+  ENTRY=$APPDIR/AppRun.wrapped
+elif [ -L "$APPDIR/AppRun" ]; then
+  ENTRY=$APPDIR/AppRun
+else
+  echo "linuxdeploy's AppRun is not the link to usr/bin/mitcad this script replaces" >&2
+  exit 1
+fi
+rm -f "$ENTRY"
+install -m 755 "$(dirname "$0")/AppRun" "$ENTRY"
 
 # OpenSSL's run-time folders in the bundled libcrypto (see the header).
 # openssl_dir name file: the folder that OpenSSL's version text names (the

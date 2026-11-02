@@ -8,6 +8,7 @@
 // Basic ▸ Black, picked by hovering, assigns the material and that
 // appearance.
 #include <exception>
+#include <utility>
 
 #include <QAction>
 #include <QColor>
@@ -16,6 +17,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMenu>
+#include <QPair>
 #include <QVariant>
 #include <QVector>
 #include <QtLogging>
@@ -188,17 +190,16 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
   }
 
   QStringList entries;
-  QString checkedName;
-  const auto addEntry = [this, submenu, more, &bodies, &component, &entries, &checked, &checkedName,
+  // Each entry's action with its material's name: the log's checked entry
+  // is read from the actions as shown (mitcad#1149).
+  QVector<QPair<QAction*, QString>> entryActions;
+  const auto addEntry = [this, submenu, more, &bodies, &component, &entries, &entryActions, &checked,
                          &checkedLook, &designMaterials, &appearances](const LibraryItem& item) {
     // Without a color of its own: a body's default look (the view's role).
     const QIcon icon =
         swatchIcon(item.displayColor.isValid() ? item.displayColor : viewColor(ColorRole::Body, false));
     const QStringList offered = offeredAppearances(item, designMaterials);
     const bool isChecked = item.key() == checked;
-    if (isChecked) {
-      checkedName = item.name;
-    }
     entries << item.name;
     if (offered.size() >= 2) {
       // Its appearances (mitcad#1055): Material ▸ PLA Basic ▸ Black, the
@@ -206,6 +207,13 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
       auto* looks = new QMenu(menuLabel(item.name), submenu);
       looks->menuAction()->setIcon(icon);
       looks->menuAction()->setIconVisibleInMenu(true);
+      // The targets' material is checked as a plain entry is
+      // (mitcad#1149), with its appearance checked inside.
+      if (isChecked) {
+        looks->menuAction()->setCheckable(true);
+        looks->menuAction()->setChecked(true);
+      }
+      entryActions.append({looks->menuAction(), item.name});
       const QString checkedHere = isChecked ? checkedLook : QString();
       // A library's item names and colours the appearances it carries,
       // which the design may not have yet (mitcad#1067).
@@ -253,6 +261,7 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
       action->setCheckable(true);
       action->setChecked(true);
     }
+    entryActions.append({action, item.name});
     connect(action, &QAction::triggered, submenu,
             [this, item, bodies, component] { assignMaterialFromMenu(item, bodies, component); });
     submenu->insertAction(more, action);
@@ -276,6 +285,14 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
   // (mitcad#1055), logged as "Context menu Material <name>: ..." when it
   // opens.
   qDebug().noquote() << QStringLiteral("Context menu Material: %1").arg(entries.join(QStringLiteral(" | ")));
+  // The entry the menu shows checked, a plain one or a material's submenu
+  // (mitcad#1149).
+  QString checkedName;
+  for (const auto& [action, name] : std::as_const(entryActions)) {
+    if (action->isCheckable() && action->isChecked()) {
+      checkedName = name;
+    }
+  }
   qDebug().noquote() << QStringLiteral("Context menu Material checked: %1")
                             .arg(checkedName.isEmpty() ? QStringLiteral("none") : checkedName);
   if (!rows.recent.isEmpty()) {

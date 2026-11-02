@@ -722,6 +722,45 @@ void printTests() {
   }
   CHECK(mitcad::slicerDialect(Slicer{QStringLiteral("viewer"), QStringLiteral("/usr/bin/viewer"), {}, {}}).isEmpty());
 
+  // Use the open slicer window (mitcad#1162): how each slicer's window
+  // takes a newer file, and the command line that hands it over.
+  if (found.size() == 6) {
+    using mitcad::SlicerHandOver;
+    CHECK(mitcad::slicerHandOver(found[0]) == SlicerHandOver::OwnPreference);        // Bambu Studio
+    CHECK(mitcad::slicerHandOver(found[1]) == SlicerHandOver::OwnPreference);        // OrcaSlicer
+    CHECK(mitcad::slicerHandOver(found[2]) == SlicerHandOver::SingleInstanceSwitch); // PrusaSlicer
+    CHECK(mitcad::slicerHandOver(found[3]) == SlicerHandOver::SingleInstanceSwitch); // UltiMaker Cura
+    // A Flatpak: the switch before the file forwarding's "@@".
+    CHECK(mitcad::slicerArguments(found[4], {QStringLiteral("/t/a.3mf")}, true) ==
+          QStringList({QStringLiteral("run"), QStringLiteral("--file-forwarding"),
+                       QStringLiteral("com.bambulab.BambuStudio"), QStringLiteral("--single-instance"),
+                       QStringLiteral("@@"), QDir::toNativeSeparators(QStringLiteral("/t/a.3mf")),
+                       QStringLiteral("@@")}));
+    // Already there (the AppImage's desktop file): not twice.
+    CHECK(mitcad::slicerArguments(found[5], {}, true) == QStringList{QStringLiteral("--single-instance")});
+    // A Flatpak's own settings file comes first.
+    const QStringList settingsFiles = mitcad::slicerSettingsFiles(found[4]);
+    CHECK(!settingsFiles.isEmpty() &&
+          settingsFiles.first().endsWith(
+              QStringLiteral("/.var/app/com.bambulab.BambuStudio/config/BambuStudio/BambuStudio.conf")));
+    CHECK(mitcad::slicerSettingsFiles(found[2]).isEmpty());
+  }
+  CHECK(mitcad::slicerHandOver(qidiFound.value(0)) == mitcad::SlicerHandOver::OwnPreference);
+  CHECK(mitcad::slicerHandOver(Slicer{QStringLiteral("viewer"), QStringLiteral("/usr/bin/viewer"), {}, {}}) ==
+        mitcad::SlicerHandOver::BringForward);
+  CHECK(mitcad::slicerArguments(Slicer{QStringLiteral("viewer"), QStringLiteral("/usr/bin/viewer"), {}, {}},
+                                {QStringLiteral("/t/a.stl"), QStringLiteral("/t/b.stl")}, false) ==
+        QStringList({QDir::toNativeSeparators(QStringLiteral("/t/a.stl")),
+                     QDir::toNativeSeparators(QStringLiteral("/t/b.stl"))}));
+  // The single-instance preference of a slicer's settings file: a string
+  // or a boolean in "app", the checksum's comment line skipped.
+  CHECK(mitcad::slicerSingleInstanceSetting(
+      QByteArrayLiteral("{\n  \"app\": {\n    \"single_instance\": \"true\"\n  }\n}\n# MD5 checksum 0123\n")));
+  CHECK(mitcad::slicerSingleInstanceSetting(QByteArrayLiteral("{\"app\": {\"single_instance\": true}}")));
+  CHECK(!mitcad::slicerSingleInstanceSetting(QByteArrayLiteral("{\"app\": {\"single_instance\": \"false\"}}")));
+  CHECK(!mitcad::slicerSingleInstanceSetting(QByteArrayLiteral("{\"app\": {}}")));
+  CHECK(!mitcad::slicerSingleInstanceSetting(QByteArrayLiteral("not json")));
+
   // Application bundles (macOS): started with `open -a`, the bundle shown.
   QDir().mkpath(dir + QStringLiteral("/Applications/OrcaSlicer.app/Contents"));
   QDir().mkpath(dir + QStringLiteral("/Applications/Original Prusa Drivers/PrusaSlicer.app"));
@@ -2619,6 +2658,10 @@ int messageLogTests();
 int profilePickerRowsTests();
 int centerOfMassTests();
 int quickAccessTests();
+int slicerMaterialRowsTests();
+int browserRolesTests();
+int saveComponentTargetTests();
+int lengthUnitsTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2743,6 +2786,10 @@ int main(int argc, char* argv[]) {
     failures += profilePickerRowsTests();
     failures += centerOfMassTests();
     failures += quickAccessTests();
+    failures += slicerMaterialRowsTests();
+    failures += browserRolesTests();
+    failures += saveComponentTargetTests();
+    failures += lengthUnitsTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

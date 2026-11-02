@@ -29,6 +29,7 @@
 #include <QMessageBox>
 #include <QLocale>
 #include <QMimeData>
+#include <QPushButton>
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
@@ -49,6 +50,7 @@
 #include "FileFormats.hpp"
 #include "F3dImport.hpp"
 #include "ImportDeviations.hpp"
+#include "Print3d.hpp"
 #include "mitcad/io/mesh.hpp"
 
 namespace mitcad {
@@ -276,6 +278,10 @@ void MainWindow::registerFileCommands() {
           tr("Edits the design's summary and shows when and by whom it was saved"),
           [this] { m_controller->openDesignProperties(); });
   designProperties.tab.clear(); // the File menu
+  // Its statistics read in any window and mode (mitcad#1149): read-only,
+  // during a command or a sketch the summary shows without editing.
+  designProperties.mode = CommandDef::Mode::Any;
+  designProperties.duringCommands = true;
   designProperties.keywords = {QStringLiteral("summary"),    QStringLiteral("title"),
                                QStringLiteral("author"),     QStringLiteral("subject"),
                                QStringLiteral("keywords"),   QStringLiteral("comments"),
@@ -1159,8 +1165,10 @@ void MainWindow::exportFile() {
   }
   const QStringList selected = selectedBodies(m_selection);
   const QString base = m_filePath.isEmpty() ? documentName() : QFileInfo(m_filePath).completeBaseName();
-  const QString suggested = QDir(dialogFolder(DialogGroup::Export))
-                                .filePath(base + (sketch.isEmpty() ? QStringLiteral(".step") : QStringLiteral(".dxf")));
+  // Named as Save As Mesh names its file (mitcad#1164): the selected body,
+  // the selected component, else the design; askExport adds the extension
+  // of the type it starts with (the last export's, or DXF for a sketch).
+  const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(safeFileName(exportName(m_selection)));
   const std::optional<ExportChoice> choice = askExport(this, suggested, static_cast<int>(selected.size()), sketches,
                                                        sketch, !m_snapshot.occurrences.isEmpty());
   if (!choice) {
@@ -1280,6 +1288,77 @@ void MainWindow::exportSketch(const QString& sketch) {
   qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities")
                            .arg(path)
                            .arg(result.value(QStringLiteral("entities")).toInt());
+}
+
+// The top-level fields a newer MitCad wrote that this one did not read
+// (mitcad#1132): all of them, or with a path those saving there drops.
+QStringList MainWindow::unknownFields(const QString& path) const {
+  QJsonObject request{{QStringLiteral("query"), QStringLiteral("unknown_fields")}};
+  if (!path.isEmpty()) {
+    request.insert(QStringLiteral("path"), path);
+  }
+  QStringList fields;
+  try {
+    for (const QJsonValue& field : queryObject(request).value(QStringLiteral("fields")).toArray()) {
+      fields << field.toString();
+    }
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Unknown fields not read: %1").arg(errorText(e));
+  }
+  return fields;
+}
+
+void MainWindow::warnUnknownFields() {
+  const QStringList fields = unknownFields(QString());
+  if (fields.isEmpty()) {
+    return;
+  }
+  const QString list = fields.join(QStringLiteral(", "));
+  qInfo().noquote() << QStringLiteral("Unknown fields of %1 not read: %2").arg(m_filePath, list);
+  // A warning on every surface (the status bar of Docked, the message band
+  // of Floating), not a dialog: the design opens as this MitCad reads it.
+  showWarning(tr("This design was written by a newer MitCad: %1 not read. Saving over it drops them.").arg(list));
+}
+
+std::optional<bool> MainWindow::askDropUnknownFields(const QString& path) {
+  const QStringList fields = unknownFields(path);
+  if (fields.isEmpty()) {
+    return true;
+  }
+  const QString name = QFileInfo(path).fileName();
+  const QString list = fields.join(QStringLiteral(", "));
+  qInfo().noquote() << QStringLiteral("Save drops unknown fields: %1: %2").arg(path, list);
+  // An agent cannot answer a question (MCP's document_save): refused, the
+  // file as it is.
+  if (m_mcpRequestActive) {
+    showError(tr("%1 was written by a newer MitCad: saving over it would drop %2, which this MitCad did not "
+                 "read. Save it in the application, which asks first, or give another path.")
+                  .arg(name, list));
+    return std::nullopt;
+  }
+  QMessageBox box(QMessageBox::Warning, tr("MitCad"),
+                  tr("%1 was written by a newer MitCad. Saving over it drops what this MitCad did not read: %2.")
+                      .arg(name, list),
+                  QMessageBox::NoButton, this);
+  box.setInformativeText(tr("Cancel keeps the file as it is. Save As writes the design to a new file and leaves "
+                            "this one as it is."));
+  QPushButton* drop = box.addButton(tr("&Save and Drop Them"), QMessageBox::DestructiveRole);
+  QPushButton* another = box.addButton(tr("Save &As…"), QMessageBox::AcceptRole);
+  box.addButton(QMessageBox::Cancel);
+  box.setDefaultButton(another);
+  prepareModal(&box);
+  execDialog(&box);
+  if (box.clickedButton() == drop) {
+    qInfo().noquote() << QStringLiteral("Save drops unknown fields: save");
+    return true;
+  }
+  if (box.clickedButton() == another) {
+    qInfo().noquote() << QStringLiteral("Save drops unknown fields: save as");
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Save drops unknown fields: cancelled");
+  showHint(tr("Save canceled: %1 is as it was.").arg(name));
+  return std::nullopt;
 }
 
 } // namespace mitcad

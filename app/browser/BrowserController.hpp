@@ -185,6 +185,9 @@ public:
   void deleteBodies(const Selection& items);
   void deleteOccurrences(const Selection& items);
   void deleteFeature(const QString& uid);
+  void deleteFeatures(const QStringList& uids);
+  // An unhandled Delete in the view/window uses the same feature selection.
+  void deleteSelection(const Selection& items);
   // Find in Design (mitcad#350): the window that finds components and
   // bodies by name and shows, hides, selects or gives them an appearance
   // all at once; opened by the magnifier button (on the browser's title
@@ -291,11 +294,14 @@ private:
   void rename(const BrowserNode& node, const QString& name);
   void renameFeature(const QString& uid, const QString& name);
   void deleteNode(const BrowserNode& node);
+  void deleteNodes(const QVector<BrowserNode>& nodes);
+  void deleteTargets(const QStringList& features, const QJsonArray& otherCommands,
+                     const QStringList& otherNames, const QStringList& skipped);
   // The Delete key in the browser and the timeline: as deleteNode and
   // deleteFeature, except of model items while a drawing is open.
   bool keyDeletesModel();
-  void deleteKeyed(const BrowserNode& node);
-  void deleteFeatureKeyed(const QString& uid);
+  void deleteKeyed(const QVector<BrowserNode>& nodes);
+  void deleteFeatureKeyed(const QStringList& uids);
   // Opens Flat Pattern on a sheet-metal body: its settings, or a new one
   // (mitcad#210).
   void editFlatPattern(const QString& body);

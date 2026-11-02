@@ -292,7 +292,9 @@ impl<P> SketchPattern<P> {
 
 /// What the solver takes besides the stored constraints: how a copy point is
 /// bound to its original, or the tangency of two results of an offset at
-/// the corner they share (`TangentAt`, [`crate::offset::tangent_corners`]).
+/// the corner they share (`TangentAt`, [`crate::offset::tangent_corners`]),
+/// or where an offset's helper line lies (`Midpoint`, `HorizontalPoints`,
+/// [`crate::offset::independent`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BindingKind {
     Translated {
@@ -319,6 +321,16 @@ pub enum BindingKind {
         a: EntityUid,
         b: EntityUid,
         at: EntityUid,
+    },
+    /// The point is at the middle of the arc.
+    Midpoint {
+        point: EntityUid,
+        curve: EntityUid,
+    },
+    /// The points lie on one horizontal line.
+    HorizontalPoints {
+        a: EntityUid,
+        b: EntityUid,
     },
 }
 

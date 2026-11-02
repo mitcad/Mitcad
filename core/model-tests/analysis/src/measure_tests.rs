@@ -142,6 +142,9 @@ fn measure_places_each_selection_by_its_occurrence() {
     );
     near(&placed["angle"], 0.0);
     near(&placed["offset"], 41.0);
+    assert_eq!(placed["main"], "offset");
+    near_point(&placed["main_points"][0], [10.0, 10.0, 20.0]);
+    near_point(&placed["main_points"][1], [10.0, 10.0, 61.0]);
     // Its only occurrence when none is given.
     assert_eq!(
         between(&doc, top.clone(), face("F4.b0", &block_top)),
@@ -160,6 +163,11 @@ fn measure_places_each_selection_by_its_occurrence() {
         "{text}"
     );
     assert!(text.contains("Offset: 41.000000 mm"), "{text}");
+    assert!(
+        text.contains("Distance: 41.000000 mm (main: offset)"),
+        "{text}"
+    );
+    assert!(text.contains("Minimum distance:"), "{text}");
     // A datum of the Block is placed likewise.
     let datum = between(
         &doc,
@@ -270,6 +278,8 @@ fn parallel_planes_report_their_offset() {
     near(&over["distance"], 30.0);
     near(&over["angle"], PI);
     near(&over["offset"], 30.0);
+    assert_eq!(over["main"], "offset");
+    assert_eq!(over["main_points"], json!([over["on_a"], over["on_b"]]));
     // Faces that do not overlap: the closest distance is longer.
     let apart = between(&doc, top.clone(), face_in("F4.b0", &bottom, "O2"));
     near_point(&apart["on_a"], [20.0, 10.0, 20.0]);
@@ -279,6 +289,9 @@ fn parallel_planes_report_their_offset() {
         length([20.0, 10.0, 20.0], [100.0, 10.0, 50.0]),
     );
     near(&apart["offset"], 30.0);
+    assert_eq!(apart["main"], "offset");
+    near_point(&apart["main_points"][0], [10.0, 10.0, 20.0]);
+    near_point(&apart["main_points"][1], [10.0, 10.0, 50.0]);
     // Faces of two occurrences of one component.
     let both = between(
         &doc,
@@ -288,6 +301,12 @@ fn parallel_planes_report_their_offset() {
     near_point(&both["on_a"], [25.0, 12.5, 50.0]);
     near_point(&both["on_b"], [100.0, 12.5, 60.0]);
     near(&both["offset"], 10.0);
+    assert_eq!(both["main"], "offset");
+    let points = &both["main_points"];
+    near(&points[0][0], points[1][0].as_f64().unwrap());
+    near(&points[0][1], points[1][1].as_f64().unwrap());
+    near(&points[0][2], 50.0);
+    near(&points[1][2], 60.0);
     // A face against construction planes: the root's, a Plate's in each of
     // its occurrences, and the origin's.
     near(
@@ -319,6 +338,9 @@ fn parallel_planes_report_their_offset() {
         46.0,
     );
     near(&between(&doc, top.clone(), json!("xy"))["offset"], 20.0);
+    let datum = between(&doc, top.clone(), json!({"datum": "F6"}));
+    assert_eq!(datum["main"], "offset");
+    near(&datum["main_points"][1][2], 7.0);
 
     // No offset for planes that are not parallel, nor for a body.
     let side = doc
@@ -332,11 +354,17 @@ fn parallel_planes_report_their_offset() {
     let across = between(&doc, top.clone(), face("F2.b0", &side));
     near(&across["angle"], FRAC_PI_2);
     assert!(across.get("offset").is_none(), "{across}");
+    assert_eq!(across["main"], "distance");
+    assert_eq!(
+        across["main_points"],
+        json!([across["on_a"], across["on_b"]])
+    );
     let upright = between(&doc, top.clone(), json!({"datum": "yz"}));
     assert!(upright.get("offset").is_none(), "{upright}");
     let body = between(&doc, top, json!({"body": "F4.b0", "occurrence": "O1"}));
     near(&body["distance"], 30.0);
     assert!(body.get("offset").is_none(), "{body}");
+    assert_eq!(body["main"], "distance");
 }
 
 // Axes (mitcad#647): the mock kernel describes the faces and edges of the

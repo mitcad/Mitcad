@@ -40,9 +40,14 @@
 #  10. A hidden body's row when the theme switches (mitcad#1104): the demo in
 #      the Floating layout, Body1 hidden by its light bulb in the light theme
 #      (its name in TextHidden #4c525c), then the test driver's color-scheme
-#      dark after the row was styled: its name in the dark theme's #b4b8be
+#      dark after the row was styled: its name in the dark theme's #d0d4da
 #      ("Browser row colours: ..."), the light one's again after the switch
 #      back.
+#  11. A panel's error box when the theme switches (mitcad#1152): Box on
+#      the XY plane with its length 0, its error box in the light theme;
+#      after color-scheme dark the box's fill and text are the dark
+#      theme's (the message widget's style sheet), the light ones' again
+#      after the switch back.
 # The app renders into an offscreen framebuffer and --screenshot reads it
 # back, so this works over SSH, in session 0 without a desktop.
 #
@@ -338,7 +343,7 @@ click-logged 'Browser eye Root/Bodies/Body1 at'
 expect-log 'Browser row colours: light, hidden #4c525c: [^;]*Root/Bodies/Body1' 10
 mark
 color-scheme dark
-expect-log 'Browser row colours: dark, hidden #b4b8be: [^;]*Root/Bodies/Body1' 10
+expect-log 'Browser row colours: dark, hidden #d0d4da: [^;]*Root/Bodies/Body1' 10
 mark
 color-scheme light
 expect-log 'Browser row colours: light, hidden #4c525c: [^;]*Root/Bodies/Body1' 10
@@ -347,8 +352,52 @@ $log = Invoke-Mitcad 'hidden-row' @('--chrome=floating', '--demo') @{ 'MITCAD_TE
 $rowColours = @($log -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -like 'Browser row colours: *' })
 $rowColours | Select-Object -Last 4 | ForEach-Object { Write-Host "     $_" }
 Expect-Log $log 'TestDriver: done' "Hidden row: the script ran"
-Expect-Log $log 'Browser row colours: dark, hidden #b4b8be: [^;\r\n]*Root/Bodies/Body1' `
+Expect-Log $log 'Browser row colours: dark, hidden #d0d4da: [^;\r\n]*Root/Bodies/Body1' `
   "Hidden row: Body1's name in the dark theme's TextHidden after the switch"
+
+Write-Host "--- A panel's error box when the theme switches (mitcad#1152)"
+# Box placed on the XY plane by its row in the browser, its length 0: the
+# panel's error box in the light theme (#b00020 on #fbe3e3); after the
+# switch to dark the dark theme's box (#ff9c9c on #4a2025), not the light
+# fill under the dark text; the light one's again after a switch back.
+$errorBoxScript = Join-Path $Out 'error-box.script'
+@'
+expect-ever 'Browser arrow Root/Origin at' 30
+color-scheme light
+expect-ever 'Timeline colours: light, ' 30
+sleep 500
+mark
+command solid.box
+expect-log 'Command Box started' 30
+click-logged '^Browser arrow Root/Origin at '
+wait-idle 60
+expect-log '^Browser Root/Origin/XY at ' 10
+mark
+click-logged '^Browser Root/Origin/XY at '
+expect-log 'Place Box: face plane xy, ' 30
+mark
+type-in '^Panel Box input length at ' 0
+expect-log '^Panel Box message box: error: ' 30
+wait-idle
+expect-widget-property commandMessage styleSheet 'QTextEdit { color: #b00020; background: #fbe3e3; border-radius: 6px; padding: 5px 6px; }'
+mark
+color-scheme dark
+expect-log 'Timeline colours: dark, ' 10
+wait-idle
+sleep 1000
+expect-widget-property commandMessage styleSheet 'QTextEdit { color: #ff9c9c; background: #4a2025; border-radius: 6px; padding: 5px 6px; }'
+mark
+color-scheme light
+expect-log 'Timeline colours: light, ' 10
+wait-idle
+sleep 1000
+expect-widget-property commandMessage styleSheet 'QTextEdit { color: #b00020; background: #fbe3e3; border-radius: 6px; padding: 5px 6px; }'
+'@ | Set-Content -Encoding ascii $errorBoxScript
+$log = Invoke-Mitcad 'error-box' @('--chrome=floating', '--demo') @{ 'MITCAD_TEST_INPUT' = $errorBoxScript }
+@($log -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -like 'TestDriver: *' }) |
+  Select-Object -Last 3 | ForEach-Object { Write-Host "     $_" }
+Expect-Log $log 'Panel Box message box: error: ' 'Error box: the panel shows its error in the box'
+Expect-Log $log 'TestDriver: done' "Error box: the box's fill and text follow the switches to dark and back"
 
 Write-Host '--- Component colors and appearance restoration'
 $colorScript = Join-Path $Out 'component-colors.script'

@@ -16,3 +16,5 @@ mod reorient_tests;
 mod tables_tests;
 // The design's summary and statistics (mitcad#1088).
 mod design_properties_tests;
+// Top-level fields a newer MitCad wrote (mitcad#1132).
+mod unknown_fields_tests;

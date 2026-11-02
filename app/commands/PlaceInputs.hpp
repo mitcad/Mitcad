@@ -32,7 +32,11 @@
 // occurrence link, as the model takes it. Definitions written before
 // (`plane` and `center`, a box's `corner`, `seat`) load into the same
 // inputs: a plane with distances from the origin axes; saving keeps them
-// as they were until the placement changes, then writes `at`.
+// as they were until the placement changes, then writes `at`. A fixed
+// plane (`{"origin", "normal"[, "x_axis"]}`, written by importers and
+// agents) is Place On's item of its own, "Plane at Z 36 mm (fixed)", drawn
+// in the view (mitcad#1137): saved unchanged while the placement is, moved
+// on it as `at` on the same plane, replaced by a face or a plane picked.
 
 #include <functional>
 #include <optional>
@@ -118,7 +122,9 @@ bool placeOnPlaneAt(CommandState& state, const CommandContext& context, const QJ
 // and loadPlace do: for a placement set otherwise (placeAtFrame,
 // placeOnPlaneAt).
 void logPlacement(const CommandState& state, const CommandContext& context, const PlacePanel& panel);
-// Whether the panel can show a definition's placement (none counts).
+// Whether the panel can show a definition's placement (none counts): its
+// references, a fixed plane among them (mitcad#1137); not a fixed axis or
+// point.
 bool placeShowable(const QJsonObject& feature, const CommandContext& context);
 // Where the placement puts the part: its frame at the timeline marker
 // (the model's `place_frame`, with the inputs' values as numbers); none

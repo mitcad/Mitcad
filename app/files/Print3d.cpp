@@ -218,6 +218,97 @@ Slicer slicerForProgram(const QString& name, const QString& program) {
   return Slicer{name, QDir::toNativeSeparators(program), {}, {}};
 }
 
+SlicerHandOver slicerHandOver(const Slicer& slicer) {
+  // An application bundle: `open -a` exits at once, and macOS gives the
+  // running application the files itself.
+  if (slicer.program == kOpen) {
+    return SlicerHandOver::BringForward;
+  }
+  const QString dialect = slicerDialect(slicer);
+  if (dialect == QStringLiteral("prusaslicer") || dialect == QStringLiteral("cura")) {
+    return SlicerHandOver::SingleInstanceSwitch;
+  }
+  if (dialect == QStringLiteral("bambu_studio") || dialect == QStringLiteral("orcaslicer") ||
+      dialect == QStringLiteral("qidi_studio")) {
+    return SlicerHandOver::OwnPreference;
+  }
+  return SlicerHandOver::BringForward;
+}
+
+QStringList slicerArguments(const Slicer& slicer, const QStringList& files, bool singleInstance) {
+  QStringList arguments = slicer.arguments;
+  if (singleInstance && !arguments.contains(QStringLiteral("--single-instance"))) {
+    // A Flatpak's arguments end with the file forwarding's "@@": the
+    // switch goes before it, to the application.
+    const qsizetype at =
+        !arguments.isEmpty() && arguments.constLast() == QStringLiteral("@@") ? arguments.size() - 1 : arguments.size();
+    arguments.insert(at, QStringLiteral("--single-instance"));
+  }
+  for (const QString& file : files) {
+    arguments << QDir::toNativeSeparators(file);
+  }
+  arguments << slicer.argumentsAfter;
+  return arguments;
+}
+
+bool slicerSingleInstanceSetting(const QByteArray& text) {
+  // The JSON without the comment lines ("# MD5 checksum …").
+  QByteArray json;
+  for (const QByteArray& line : text.split('\n')) {
+    if (!line.trimmed().startsWith('#')) {
+      json += line + '\n';
+    }
+  }
+  const QJsonObject app = QJsonDocument::fromJson(json).object().value(QStringLiteral("app")).toObject();
+  const QJsonValue value = app.value(QStringLiteral("single_instance"));
+  if (value.isBool()) {
+    return value.toBool();
+  }
+  const QString setting = value.toString().trimmed().toLower();
+  return setting == QStringLiteral("true") || setting == QStringLiteral("1");
+}
+
+QStringList slicerSettingsFiles(const Slicer& slicer) {
+  if (slicerHandOver(slicer) != SlicerHandOver::OwnPreference) {
+    return {};
+  }
+  // The slicer's folder and file: BambuStudio/BambuStudio.conf, ….
+  const QString dialect = slicerDialect(slicer);
+  const QString name = dialect == QStringLiteral("bambu_studio") ? QStringLiteral("BambuStudio")
+                       : dialect == QStringLiteral("orcaslicer") ? QStringLiteral("OrcaSlicer")
+                                                                 : QStringLiteral("QIDIStudio");
+  const QString file = QStringLiteral("/%1/%1.conf").arg(name);
+  QStringList files;
+  // A Flatpak keeps its own: ~/.var/app/<id>/config.
+  const qsizetype forwarding = slicer.arguments.indexOf(QStringLiteral("--file-forwarding"));
+  if (forwarding >= 0 && forwarding + 1 < slicer.arguments.size()) {
+    files << QDir::homePath() + QStringLiteral("/.var/app/") + slicer.arguments.at(forwarding + 1) +
+                 QStringLiteral("/config") + file;
+  }
+#ifdef _WIN32
+  const QString appData = qEnvironmentVariable("APPDATA");
+  if (!appData.isEmpty()) {
+    files << QDir::fromNativeSeparators(appData) + file;
+  }
+#elif defined(__APPLE__)
+  files << QDir::homePath() + QStringLiteral("/Library/Application Support") + file;
+#else
+  const QString config = qEnvironmentVariable("XDG_CONFIG_HOME");
+  files << (config.isEmpty() ? QDir::homePath() + QStringLiteral("/.config") : config) + file;
+#endif
+  return files;
+}
+
+bool slicerKeepsOneInstance(const Slicer& slicer) {
+  for (const QString& path : slicerSettingsFiles(slicer)) {
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly)) {
+      return slicerSingleInstanceSetting(file.readAll());
+    }
+  }
+  return false;
+}
+
 SlicerSearch SlicerSearch::system() {
   SlicerSearch search;
   search.path = qEnvironmentVariable("PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts);
@@ -331,6 +422,7 @@ PrintSettings PrintSettings::load() {
   }
   print.deviation = std::clamp(settings.value(QStringLiteral("deviation"), print.deviation).toDouble(), 0.001, 10.0);
   print.angle = std::clamp(settings.value(QStringLiteral("angle"), print.angle).toDouble(), 0.5, 90.0);
+  print.reuseWindow = settings.value(QStringLiteral("reuseWindow"), print.reuseWindow).toBool();
   return print;
 }
 
@@ -345,6 +437,7 @@ void PrintSettings::save() const {
   settings.setValue(QStringLiteral("refinement"), refinement);
   settings.setValue(QStringLiteral("deviation"), deviation);
   settings.setValue(QStringLiteral("angle"), angle);
+  settings.setValue(QStringLiteral("reuseWindow"), reuseWindow);
 }
 
 namespace {
@@ -664,10 +757,23 @@ QString preparePrintFolder(const QString& root, const QString& design, QString* 
   if (QFileInfo(folder).isSymLink()) {
     QFile::remove(folder);
   }
+  // Emptied, not removed (mitcad#1162): on Windows a slicer still open
+  // from the last send has the folder as its working folder, which keeps
+  // the folder itself from being removed.
   QDir dir(folder);
-  if (dir.exists() && !dir.removeRecursively()) {
-    *error = QObject::tr("The files of the last send in %1 could not be removed.").arg(QDir::toNativeSeparators(folder));
-    return QString();
+  if (dir.exists()) {
+    bool emptied = true;
+    for (const QFileInfo& entry :
+         dir.entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot)) {
+      const bool removed = entry.isDir() && !entry.isSymLink() ? QDir(entry.filePath()).removeRecursively()
+                                                               : QFile::remove(entry.filePath());
+      emptied = emptied && removed;
+    }
+    if (!emptied) {
+      *error =
+          QObject::tr("The files of the last send in %1 could not be removed.").arg(QDir::toNativeSeparators(folder));
+      return QString();
+    }
   }
   if (!QDir().mkpath(folder)) {
     *error = QObject::tr("The folder %1 could not be made.").arg(QDir::toNativeSeparators(folder));

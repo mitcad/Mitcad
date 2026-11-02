@@ -140,6 +140,23 @@ public:
   bool previewAsync(const QByteArray& request, const QString& name, QObject* context, Completion completion);
   bool inspectionAsync(const QString& name, QObject* context, InspectionTask task,
                        InspectionCompletion completion);
+  // Model commands that change nothing (an export's plan) as one job named
+  // `label`, off the UI thread and without a progress dialog or a wait
+  // (mitcad#1121: Send to Slicer's bed plan while its panel is open):
+  // `task` runs on the worker, gets each command's answer from `command`
+  // (which throws as the model refuses) and returns the job's answer.
+  // Nothing is meshed for the view. As commandAsync otherwise.
+  using CommandRunner = std::function<QJsonObject(const QJsonObject&)>;
+  using CommandTask = std::function<QJsonObject(const CommandRunner& command)>;
+  bool commandTaskAsync(const QString& label, const QString& stage, CommandTask task, QObject* context,
+                        Completion completion);
+  // Such a job gives way to what the UI thread must do at once while it
+  // runs (a window beside Send to Slicer's panel that changes or reads the
+  // design, mitcad#1121): cancelled and waited for, its end handled now
+  // ("Computing <label> cancelled after …"), its completion queued after
+  // the caller's work (cancelled; the caller plans again). Any other job
+  // stays. True when no job runs afterwards. runJob gives way so too.
+  bool yieldBackgroundJob();
   // Meshes `bodies` (refinableShapes of a preview's stand-ins) in the
   // view's final tier in a job of their own, which computes nothing in the
   // model and changes no revision and no undo step (DisplayMeshes.hpp,
@@ -178,6 +195,9 @@ private:
   bool startAsync(const QString& label, const QString& stage, Job job,
                   std::shared_ptr<AsyncResult> result, QObject* context, Completion completion);
   void completeAsync();
+  // completeAsync's work; with `queueCompletion` the completion runs later,
+  // queued (yieldBackgroundJob).
+  void finishAsync(bool queueCompletion);
   void runIdleCalls();
   void scheduleIdleCalls();
   void finishJob(const QString& label, bool cancelled, const QString& error);

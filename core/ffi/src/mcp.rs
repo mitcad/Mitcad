@@ -23,12 +23,53 @@ const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A pure edit plan: the UI retains consent, policy, backups and atomic writes.
-pub fn plan_codex_mcp_config(current: &str, bridge: &str, replace_existing: bool) -> String {
-    mitcad_mcp::assistant_setup::plan_codex_config(current, bridge, replace_existing).to_string()
+pub fn plan_codex_mcp_config(
+    current: &str,
+    bridge: &str,
+    leading: &str,
+    replace_existing: bool,
+) -> String {
+    match connect_arguments(leading) {
+        Some(arguments) => {
+            let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            mitcad_mcp::assistant_setup::plan_codex_launch(
+                current,
+                bridge,
+                &arguments,
+                replace_existing,
+            )
+            .to_string()
+        }
+        None => json!({"status": "invalid", "error": "The bridge's arguments are not a list of strings.",
+            "backup_required": false})
+        .to_string(),
+    }
 }
 
-pub fn verify_codex_mcp_config(before: &str, after: &str, bridge: &str) -> String {
-    mitcad_mcp::assistant_setup::verify_codex_config(before, after, bridge).to_string()
+pub fn verify_codex_mcp_config(before: &str, after: &str, bridge: &str, leading: &str) -> String {
+    match connect_arguments(leading) {
+        Some(arguments) => {
+            let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            mitcad_mcp::assistant_setup::verify_codex_launch(before, after, bridge, &arguments)
+                .to_string()
+        }
+        None => {
+            json!({"valid": false, "error": "The bridge's arguments are not a list of strings."})
+                .to_string()
+        }
+    }
+}
+
+/// The bridge's arguments to connect: `leading` (a JSON array of strings,
+/// or empty for none), then `mcp --connect`.
+fn connect_arguments(leading: &str) -> Option<Vec<String>> {
+    let mut arguments: Vec<String> = if leading.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(leading).ok()?
+    };
+    arguments.extend(["mcp".to_owned(), "--connect".to_owned()]);
+    Some(arguments)
 }
 
 /// Package only the application's installed native launcher, without executing it.

@@ -579,10 +579,10 @@ Part sweeps (mitcad#548) through several sections of which one is an
 open wire or a wire in no plane (MitCad's loft of curve sections takes no
 centre line), and of a section of several wires; Part extrusions
 (mitcad#548) of a spline in no plane that does not start at its first
-pole (a swept line needs the path's start); binders (skipped: sketches
-project their geometry, see stage 2; features take the sketch one binds, see
-above); Draft and
-Python objects (`Part::Part2DObjectPython`). The Part extrusions FreeCAD
+pole (a swept line needs the path's start); binders (no separate binder
+feature: sketches project their geometry, see stage 2; features take the
+sketch one binds, see above; reported as information when their use is
+carried, as described below); Draft and Python objects (`Part::Part2DObjectPython`). The Part extrusions FreeCAD
 fails itself (a curved face, a helix or non-planar edges along the
 base's normal, tapered or with Solid on) fall back with that reason.
 
@@ -767,9 +767,28 @@ models leave these out.
   (`sketch_points`), so it follows the sketch. Edges that are not circles
   of one imported sketch fall back.
 - A `ShapeBinder` with an empty `Support` holds only a stored copy of a
-  shape; like every binder it is skipped (MitCad has no binder), and a
+  shape; it is skipped with a warning (no bound sketch to carry), and a
   sketch attached to its face comes in where FreeCAD placed it, on an
   origin plane parallel to it.
+
+## Carried binders in the report (mitcad#1100)
+
+A binder is `included`, at information level, when every geometric use
+survives in an imported sketch's linked projections or in a replayed
+feature that actually refers to the bound sketch. The report and a named
+information notice identify the binder and how its sketch was carried.
+Within the same component a feature can use the original sketch directly;
+in another component it uses the linked projecting sketch made for the
+binder. This does not add a second object to the report or its counts.
+
+Classification follows accepted definitions and checks their final
+projection sources, occurrence links and feature references. Preparing a
+binder's sketch while trying a feature is insufficient if that feature
+falls back. An unused binder, a failed consumer, an unrecognised geometric
+use, or any external link kept only as fixed geometry retains the normal
+`skipped` warning, even if another use of the same binder was linked.
+An attachment's copied origin plane alone is not evidence that the
+binder's geometry was carried. Bodies-only import is unchanged.
 
 ## Tests
 

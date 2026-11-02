@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 
 #include <QDir>
 #include <QFileInfo>
@@ -735,6 +736,39 @@ void addChamfer(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
+// Where the points of sketch entities are, each point once, in the order
+// the entities name them: "p2 (-20.000, 0.000), p3 (20.000, 10.000)";
+// "none" without points.
+QString pointPositions(const sketch::SketchModel& model, const QStringList& entities) {
+  // No "-0.000" for a coordinate the solver left a hair below zero.
+  const auto coordinate = [](double v) { return QString::number(std::abs(v) < 5e-4 ? 0.0 : v, 'f', 3); };
+  QStringList seen;
+  QStringList shown;
+  const auto add = [&model, &coordinate, &seen, &shown](const QString& id) {
+    if (seen.contains(id)) {
+      return;
+    }
+    seen << id;
+    if (const sketch::PointData* p = model.point(id)) {
+      shown << QStringLiteral("%1 (%2, %3)").arg(id, coordinate(p->at.x), coordinate(p->at.y));
+    }
+  };
+  for (const QString& id : entities) {
+    if (const sketch::CurveData* curve = model.curve(id)) {
+      for (const QString& point : curve->points) {
+        add(point);
+      }
+    } else {
+      add(id);
+    }
+  }
+  return shown.isEmpty() ? QStringLiteral("none") : shown.join(QStringLiteral(", "));
+}
+
+// Move/Copy starts at 0 (mitcad#1163): X and Y Distance 0 mm, so the
+// preview that runs as the panel opens leaves the objects where they are
+// until a distance is typed. Rotate's Angle keeps its 90 deg (a separate
+// type the user chooses).
 void addMove(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.move", QObject::tr("Move/Copy"), "move", "MODIFY",
                                  CommandDef::Kind::Feature);
@@ -752,9 +786,9 @@ void addMove(CommandRegistry& registry, SketchController& c) {
                      SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
           .withAccepts(ofSketch(c)),
       choiceInput(QStringLiteral("type"), QObject::tr("Move Type"), types, QStringLiteral("translate")),
-      valueInput(QStringLiteral("dx"), QObject::tr("X Distance"), ValueKind::Length, QStringLiteral("10"))
+      valueInput(QStringLiteral("dx"), QObject::tr("X Distance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(translating),
-      valueInput(QStringLiteral("dy"), QObject::tr("Y Distance"), ValueKind::Length, QStringLiteral("0"))
+      valueInput(QStringLiteral("dy"), QObject::tr("Y Distance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(translating),
       selectionInput(QStringLiteral("center"), QObject::tr("Pivot Point"), SelectKind::SketchPoint, 0, 1)
           .withAccepts(ofSketch(c))
@@ -763,9 +797,16 @@ void addMove(CommandRegistry& registry, SketchController& c) {
           .withVisible(rotating),
       checkInput(QStringLiteral("copy"), QObject::tr("Create Copy"), false),
   };
-  def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
+  // The objects of the last definition built, for the preview's log line.
+  const auto objects = std::make_shared<QStringList>();
+  def.build = [&c, objects](const CommandState& s, const CommandContext&) -> Built {
     QJsonObject cmd = base(c, "sketch.move");
-    cmd.insert(QStringLiteral("entities"), names(s.items(QStringLiteral("entities"))));
+    const Selection& entities = s.items(QStringLiteral("entities"));
+    objects->clear();
+    for (const SelectionItem& item : entities) {
+      *objects << item.name;
+    }
+    cmd.insert(QStringLiteral("entities"), names(entities));
     if (s.choice(QStringLiteral("type")) == QStringLiteral("rotate")) {
       const Selection& center = s.items(QStringLiteral("center"));
       cmd.insert(QStringLiteral("rotate"),
@@ -777,6 +818,17 @@ void addMove(CommandRegistry& registry, SketchController& c) {
     }
     cmd.insert(QStringLiteral("copy"), s.checked(QStringLiteral("copy")));
     return Built::of(cmd);
+  };
+  // Where the objects' points are once a preview is shown (the sketch read
+  // again), for UI tests: "Preview Move/Copy positions: p2 (-20.000,
+  // 0.000), p3 (20.000, 10.000)". Not when a preview is taken back or
+  // failed (an empty answer).
+  const QString commandName = def.name;
+  def.sketchPreviewShown = [&c, objects, commandName](const QJsonObject& answer) {
+    if (answer.isEmpty()) {
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("Preview %1 positions: %2").arg(commandName, pointPositions(c.model(), *objects));
   };
   registry.add(def);
 }

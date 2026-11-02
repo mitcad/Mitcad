@@ -210,7 +210,8 @@ bool Shape::take_derived(DerivedNames& derived) {
   const int faces = m_faces.Extent();
   const auto face_ok = [faces](int f) { return f >= -1 && f < faces; };
   if (derived.edge_faces.size() != edges || derived.edge_names.size() != edges ||
-      derived.vertex_faces.size() != vertices || derived.vertex_names.size() != vertices) {
+      derived.vertex_faces.size() != vertices || derived.vertex_names.size() != vertices ||
+      (!derived.open_edge_names.empty() && derived.open_edge_names.size() != edges)) {
     return false;
   }
   for (const std::array<int, 2>& pair : derived.edge_faces) {
@@ -229,7 +230,33 @@ bool Shape::take_derived(DerivedNames& derived) {
   m_edgeNames = std::move(derived.edge_names);
   m_vertexFaces = std::move(derived.vertex_faces);
   m_vertexNames = std::move(derived.vertex_names);
+  if (std::any_of(derived.open_edge_names.begin(), derived.open_edge_names.end(),
+                  [](const NameList& names) { return !names.empty(); })) {
+    m_openEdgeNames = std::move(derived.open_edge_names);
+  }
   return true;
+}
+
+void Shape::set_open_edge_names(const std::vector<NamedOpenEdge>& names) {
+  m_openEdgeNames.clear();
+  for (const NamedOpenEdge& named : names) {
+    const int edge = edge_index(named.edge);
+    if (edge < 0 || named.names.empty()) continue;
+    if (m_openEdgeNames.empty()) m_openEdgeNames.resize(static_cast<std::size_t>(edge_count()));
+    NameList& own = m_openEdgeNames[static_cast<std::size_t>(edge)];
+    own.insert(own.end(), named.names.begin(), named.names.end());
+    std::sort(own.begin(), own.end());
+    own.erase(std::unique(own.begin(), own.end()), own.end());
+  }
+}
+
+std::vector<Shape::NamedOpenEdge> Shape::named_open_edges() const {
+  std::vector<NamedOpenEdge> result;
+  if (!has_open_edge_names()) return result;
+  for (int i = 0; i < edge_count(); ++i) {
+    if (!open_edge_names(i).empty()) result.push_back({edge(i), open_edge_names(i)});
+  }
+  return result;
 }
 
 Shape::~Shape() {

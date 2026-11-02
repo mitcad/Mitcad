@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -17,9 +18,11 @@
 #include <sstream>
 #include <thread>
 
+#include <QByteArray>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QString>
 
 #include "mitcad/geometry/persist.hpp"
 
@@ -122,8 +125,13 @@ rust::Box<mitcad::Document> open_document(const std::string& path, const StoreOp
   const std::chrono::duration<double, std::milli> recompute_ms = std::chrono::steady_clock::now() - start;
   // Slot connectors and their nuts and screws placed by the first BUILD
   // rule are placed by the current one, as the application opens them
-  // (mitcad#1115).
-  document->command(R"({"cmd": "build_upgrade"})");
+  // (mitcad#1115). A refused upgrade leaves them as they are and the
+  // design opens as loaded (mitcad#1151).
+  try {
+    document->command(R"({"cmd": "build_upgrade"})");
+  } catch (const std::exception& e) {
+    std::cerr << "warning: connectors of the first rule were not placed again: " << e.what() << "\n";
+  }
   if (!store.dir.empty()) {
     const std::string persisted(document->persist_results(store.min_ms));
     if (log != nullptr) {
@@ -138,7 +146,24 @@ rust::Box<mitcad::Document> open_document(const std::string& path, const StoreOp
   return document;
 }
 
+void warn_dropped_fields(const mitcad::Document& document, const std::string& path) {
+  // A design a newer MitCad wrote (mitcad#1132): a save over the file it
+  // was read from drops the fields this MitCad did not read. The command
+  // line asks nothing (a script must not wait for an answer): it saves and
+  // says so on stderr.
+  const std::string answer(
+      document.query(R"({"query": "unknown_fields", "path": )" + json_string(path) + "}"));
+  const QString message = QJsonDocument::fromJson(QByteArray::fromStdString(answer))
+                              .object()
+                              .value(QStringLiteral("message"))
+                              .toString();
+  if (!message.isEmpty()) {
+    std::cerr << "warning: " << path << ": " << message.toStdString() << "\n";
+  }
+}
+
 void save_document(const mitcad::Document& document, const std::string& path) {
+  warn_dropped_fields(document, path);
   document.save_design(path, "auto");
 }
 

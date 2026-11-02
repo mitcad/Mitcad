@@ -992,11 +992,44 @@ named_enum! {
         // The design's summary and statistics (mitcad#1088,
         // `design_properties.rs`).
         "design_properties" => DesignProperties,
+        // The top-level fields of the design file a newer MitCad wrote
+        // and this build did not read, and whether saving to `path` drops
+        // them (mitcad#1132).
+        "unknown_fields" => UnknownFields {
+            #[serde(default)]
+            path: Option<String>,
+        },
     }
 }
 
 fn names(names: &[String]) -> Value {
     json!(names)
+}
+
+/// The `unknown_fields` query (mitcad#1132): the top-level fields of the
+/// design file the document was read from that this build did not read,
+/// with that file; with `path`, only those saving to `path` drops (none
+/// for another file). `message` says it in words when there are any.
+fn unknown_fields_json<K: Kernel>(doc: &Document<K>, path: Option<&str>) -> Value {
+    let unknown = doc.unknown_fields();
+    let (fields, message) = match path {
+        Some(path) => {
+            let fields = doc.fields_dropped_by_saving(std::path::Path::new(path));
+            let message = mitcad_model::file::dropped_fields_warning(&fields);
+            (fields, message)
+        }
+        None => {
+            let message = mitcad_model::file::unknown_fields_warning(&unknown.fields);
+            (unknown.fields, message)
+        }
+    };
+    let file = unknown.file.map(|f| f.display().to_string());
+    let any = !fields.is_empty();
+    let mut value = json!({"fields": fields, "file": file});
+    if any {
+        value["message"] = json!(message);
+    }
+    value
 }
 
 /// The JSON api of a document: commands, previews and queries
@@ -1151,6 +1184,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                         let sketch_name = self.feature(p.sketch).map(|f| f.name.clone());
                         let mut value = json!({"sketch": p.sketch, "sketch_name": sketch_name,
                                                "region": p.region, "consumed": p.consumed});
+                        if p.face_bounded {
+                            value["face_bounded"] = json!(true);
+                        }
                         if hashes {
                             let hash = self
                                 .profile_region(p.sketch, &p.region)
@@ -1463,6 +1499,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::CenterOfMass => self.center_of_mass_json()?,
             // The design's summary and statistics (mitcad#1088).
             Query::DesignProperties => self.design_properties_json(),
+            // The fields of a newer MitCad's design that were not read
+            // (mitcad#1132).
+            Query::UnknownFields { path } => unknown_fields_json(self, path.as_deref()),
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

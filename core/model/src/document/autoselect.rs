@@ -77,9 +77,10 @@ impl<K: Kernel> Document<K> {
             // original curve of each split segment, not its intersecting
             // neighbours or the outer-loop-only region key.
             for segment in region.loops.iter().flat_map(|boundary| &boundary.segments) {
-                let is_projected = match segment.key.curve {
-                    CurveId::Curve(uid) => projected.contains(&uid),
+                let is_projected = match &segment.key.curve {
+                    CurveId::Curve(uid) => projected.contains(uid),
                     CurveId::Glyph { .. } => false,
+                    CurveId::FaceEdge(_) => true,
                 };
                 has_projected |= is_projected;
                 has_drawn |= !is_projected;

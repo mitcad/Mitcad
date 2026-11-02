@@ -20,4 +20,5 @@ mod projection_tests;
 mod regular_polygon_tests;
 mod section_curve_tests;
 // Project of another sketch's curves and points (mitcad#904).
+mod face_bounded_profiles_tests;
 mod sketch_projection_tests;

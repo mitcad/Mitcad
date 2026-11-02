@@ -29,6 +29,7 @@
 #include "DisplayMeshes.hpp"
 #include "HybridAssembly.hpp"
 #include "Json.hpp"
+#include "LengthUnits.hpp"
 #include "ManipulatorOverlay.hpp"
 #include "ModelShapes.hpp"
 #include "ModelWorker.hpp"
@@ -269,6 +270,11 @@ void CommandSession::setDefaults(const InputDef& input, const QString& key) {
   case InputDef::Type::Text:
     if (!m_state.hasText(key)) {
       QString initial = input.defaultText;
+      if (input.type == InputDef::Type::Value && input.valueKind == ValueKind::Length && !input.exactDefault) {
+        // A length default in the design's unit (mitcad#1165): "10 mm" is
+        // 0.5 in in a design in inches.
+        initial = defaultLengthText(initial, m_host.lengthUnit());
+      }
       if (input.remembered && input.type == InputDef::Type::Value && !isEditing() && m_analysis.isEmpty() &&
           panelValuesRemembered()) {
         // A new feature's panel starts with the value given on the last OK
@@ -673,6 +679,12 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
       qDebug().noquote() << QStringLiteral("%1: %2 = %3")
                                 .arg(m_def.name, slot->def->label,
                                      on ? QStringLiteral("on") : QStringLiteral("off"));
+      // A check's own reaction (InputDef::onChange), as a choice's and an
+      // object's: Send to Slicer keeps Center on Plate, Drop to Bed and
+      // Use the open slicer window as soon as they change (mitcad#1162).
+      if (slot->def->onChange) {
+        slot->def->onChange(m_state, m_host);
+      }
     }
     inputsChanged();
   };
@@ -2060,8 +2072,10 @@ void CommandSession::acceptInspection(const Inspection& result) {
   m_failed = !result.error.isEmpty();
   m_presenter->setInspection(result);
   m_presenter->setMessage(result.error, m_failed ? NoticeLevel::Error : NoticeLevel::Information);
-  m_host.viewer().setPreview(result.shape, result.red ? OcctViewer::PreviewStyle::Interference
-                                                      : OcctViewer::PreviewStyle::Add);
+  const auto style = result.red ? OcctViewer::PreviewStyle::Interference
+                   : result.measurementWire ? OcctViewer::PreviewStyle::MeasurementWire
+                                            : OcctViewer::PreviewStyle::Add;
+  m_host.viewer().setPreview(result.shape, style);
   if (m_def.keepsSection || !result.section.isNull()) {
     m_host.showSection(result.section);
   }
@@ -2130,7 +2144,12 @@ void CommandSession::runPreview() {
   if (motionDeferred()) {
     return; // the drag's pause or its end asks again (mitcad#838)
   }
-  if (m_host.modelBusy()) {
+  // An application panel that reads nothing of the model gets its OK also
+  // while a job computes it (CommandDef::okWhileBusy, mitcad#1121); OK then
+  // waits for the job (commit).
+  const bool readyWhileBusy = m_def.okWhileBusy && m_def.accept && !m_def.acceptPreview && !m_def.modelCommand &&
+                              !m_def.inspect && !m_def.sketchCommand;
+  if (m_host.modelBusy() && !readyWhileBusy) {
     if (!m_previewWaiting) {
       m_previewWaiting = true;
       m_host.whenIdle(this, [this] {
@@ -4611,6 +4630,7 @@ void CommandSession::finish(bool committed) {
   viewer.setPlanesByDepth(false);
   viewer.setSketchesBehind(false);
   viewer.setHandleBoxes({}); // the handles' value boxes went with them
+  viewer.setHandleAreas(nullptr, {}); // and the handles (mitcad#1105)
   viewer.setHighlights({});
   viewer.setGhosts({});
   viewer.setHoverChain(TopoDS_Shape());
@@ -4631,6 +4651,14 @@ void CommandSession::refreshInputs() {
     m_def.modelChanged(m_state, m_host);
   }
   m_presenter->refresh(m_state);
+}
+
+void CommandSession::showInputsAgain() {
+  if (m_done || m_presenter == nullptr) {
+    return;
+  }
+  m_presenter->refresh(m_state);
+  updateHighlights(); // waits for an idle model by itself
 }
 
 void CommandSession::previewAgain() {

@@ -87,6 +87,13 @@
 //   expect-timeline-tooltip <regex>  actual visible tooltip plain text
 //   capture-view-image <path>  save only the OCCT framebuffer
 //   expect-view-image <path> same|changed  compare the actual framebuffer
+//   capture-view-pixel <var> <regex>  the OCCT framebuffer's colour
+//                           (#rrggbb) where the newest "Pick places:" logs
+//                           the place the regex matches, into ${var}
+//                           (mitcad#1166)
+//   expect-view-pixel <regex> <#rrggbb> <tolerance>  wait until that
+//                           colour there is within the tolerance (the sum
+//                           of the channels' differences)
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
 //   expect-formula-builder          the open expression editor's real controls
@@ -118,6 +125,9 @@
 //                           fixes navigation in this test process only
 //   click-pick <regex>      like click-logged, among the "Pick <kind> <name>
 //                           at x,y" lines after the last "Pick places:"
+//   native-viewport-click-pick <regex>  the same current logged CAD pick,
+//                           through AppKit hit-testing and NSApp mouse input
+//                           on the existing embedded Qt root (native only)
 //   expect-pick-offset <regex> <dx> <dy> <item-regex>
 //                           probe fresh viewport picks plus logical pixels
 //   click-pick-offset <regex> <dx> <dy> <item-regex>   probe, then click there
@@ -145,7 +155,8 @@
 //   qt-choice <id> <label> open a Qt combo (or a wrapper's child combo),
 //                           then click its displayed enabled popup row
 //   expect-input-text <id> <regex> check the actual Qt or AppKit field text
-//   expect-model-parameter <name> <value|absent> check a user parameter in mm
+//   expect-model-parameter <name> <value|absent> [user|model|reference]
+//                           check a parameter in mm; kind defaults to user
 //   command <id>            trigger the command's action (objectName
 //                           "command_<id>": "sketch.create", "file.export")
 //   open-file <path>        open through the external-file document host
@@ -164,6 +175,7 @@
 //                           exact control in the target window
 //   native-action <id>      dispatch the native AppKit menu command
 //   native-click <id>       click a native control by accessibilityIdentifier
+//   native-focus <id>       focus a native control without invoking/selecting it
 //   native-hover <id> enter|leave send an AppKit tracking event through the
 //                           control's registered hover owner
 //   native-type <id> <text> replace an AppKit field editor's text

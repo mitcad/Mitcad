@@ -33,13 +33,28 @@ struct ExportChoice {
 
 // Export: the file type, the bodies (all or the selected ones),
 // the unit of a STEP or IGES file (millimetres unless chosen otherwise,
-// P11), the mesh refinement or the sketch, and the file. `selectedBodies`: how
-// many bodies the selection stands for; `sketches`: (uid, name); `sketch`
-// the one to offer first; `occurrences`: the design places bodies by
+// P11), the mesh refinement or the sketch, and the file. `stem`: the file
+// proposed, without its extension (the folder and the name); the type's
+// extension is added. The type, the refinement and the STL format start as
+// the last export chose them (mitcad#1164, settings `export/*`); a sketch's
+// DXF does not replace the type remembered for the bodies. `selectedBodies`:
+// how many bodies the selection stands for; `sketches`: (uid, name);
+// `sketch` the one to offer first, which starts the dialog as DXF (a sketch
+// edited or selected); `occurrences`: the design places bodies by
 // occurrences, so that the bodies' coordinates can be chosen.
-std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int selectedBodies,
+std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
                                       const QString& sketch, bool occurrences);
+
+// The type Export starts with (mitcad#1164): an index into its list of
+// types (STEP AP214, STEP AP242, IGES, STL, OBJ, BRep, DXF, 3MF, USDZ, web
+// page). `remembered`: the type the bodies were last exported as ("step",
+// "step-ap242", "3mf", …; empty or unknown: STEP AP214); with `sketch` (a
+// sketch edited or selected) DXF, which only holds sketches; a remembered
+// DXF only while the design has `sketches`.
+int exportStartType(const QString& remembered, bool sketch, bool sketches);
+// The settings key of a type index ("step", "step-ap242", "3mf", …).
+QString exportTypeKey(int index);
 
 // Insert DXF: the plane of the new sketch (`planes`: value, label; none:
 // into the edited sketch), the unit of a drawing that names none, and

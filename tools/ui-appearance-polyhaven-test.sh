@@ -186,8 +186,8 @@ ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
 ui_expect_new "Appearances item steel_satin at" "the library is listed"
 ui_focus_dialog '^Appearances$'
 ui_mark
-ui_step "the list"                      ui_click_logged "Appearances item steel_satin"
-ui_step "the design's last (End)"       ui_key End
+# The design's own appearances are first in the list (mitcad#1133).
+ui_step "the design's appearance"       ui_click_logged "Appearances item custom1"
 ui_expect_new "Appearance selected: custom1" "the design's appearance selected"
 ui_expect_new "Appearance custom1 texture: embedded, maps normal roughness, source polyhaven red_tiles_01 2k" \
   "with its maps embedded"

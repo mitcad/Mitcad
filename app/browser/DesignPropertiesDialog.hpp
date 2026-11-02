@@ -20,12 +20,17 @@ namespace mitcad {
 // saved with), read-only, from the model's `design_properties` query.
 // Nothing changes until OK, which the caller turns into one
 // `set_design_summary` command with the fields edited (changes()).
+// Switching tabs is logged: "Design Properties tab: Statistics (Created
+// ..., Last saved ...)".
 class DesignPropertiesDialog : public QDialog {
   Q_OBJECT
 
 public:
   using Query = std::function<QJsonObject(const QJsonObject&)>;
-  explicit DesignPropertiesDialog(Query query, QWidget* parent = nullptr);
+  // Not editable (a read-only window, or one whose model cannot change
+  // now): the summary shows read-only and the dialog only closes; the
+  // statistics read as ever (mitcad#1149).
+  explicit DesignPropertiesDialog(Query query, bool editable = true, QWidget* parent = nullptr);
 
   // The summary's fields that differ from the design's (`title`, ...: the
   // fields of set_design_summary); empty when nothing was edited.

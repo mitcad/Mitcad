@@ -62,6 +62,12 @@ script="$UI_OUT/render.script"
 cat > "$script" <<'DRIVER'
 expect-ever 'View area'
 window-resize 1280 800
+# Frame the body in the final viewport with room for the zoom-out check.
+expect-viewport
+command view.fit
+capture-view-height fitted_height
+wheel-burst 50 50 1 1
+expect-view-zoom ${fitted_height} in
 command view.rendered
 expect-log 'Rendered view on'
 wait-log 'Render frame view [0-9]+ [0-9]+x[0-9]+ samples 16 ' 150
@@ -164,15 +170,16 @@ wait-log 'Render scene [0-9]+: 1 bodies' 30
 wait-log 'Render frame view [0-9]+ [0-9]+x[0-9]+ samples 16 ' 120
 
 # A real appearance assignment updates the material in the live scene:
-# the Appearance tool on the body picked in the view, Glass - Clear chosen
-# in its picker (the AppKit frontend's popover), OK (mitcad#1059,
-# mitcad#1066).
+# the Appearance tool on Body1 selected through the Browser, Glass - Clear
+# chosen in its picker (the AppKit frontend's popover), OK (mitcad#1059,
+# mitcad#1066). Its Bodies input takes bodies; face picking and its actual
+# rendered selection overlay were verified above.
 key Escape
+click-logged '^Browser Root/Bodies/Body1 at '
 mark
 command solid.appearance
 expect-log 'Command Appearance started'
-wait-log '^Pick places:' 30
-click-pick 'face '
+expect-log '^Appearance Bodies: 1 body \[body F2.b0\]$'
 expect-log '^Panel Appearance input value at '
 click-logged '^Panel Appearance input value at '
 expect-log '^Appearance picker opened: '
@@ -258,6 +265,10 @@ if [ "$frontend" = native ] && [ "${MITCAD_RENDER_ACCEPTANCE:-0}" = 1 ]; then
 import json, pathlib, shlex, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
+text = text.replace("click-logged 'Browser eye Root/Origin'",
+                    "native-expand native.modelTree\nnative-click native.model.eye.origin")
+text = text.replace("click-logged '^Browser Root/Bodies/Body1 at '",
+                    "native-expand native.modelTree\nnative-select native.model.body:F2.b0@")
 devices = json.load(open(sys.argv[2]))["devices"]
 cpu = next(d for d in devices if d["type"] == "CPU")
 metal = next(d for d in devices if d["type"] == "METAL")
@@ -269,7 +280,7 @@ for field, value in (("width", 320), ("height", 240), ("samples", 16), ("samples
     text = text.replace(f"focus-widget renderImage_{field}\nkey ctrl+a\ntype {value}",
                         f"native-type renderImage_{field} {value}")
 text = text.replace("focus-widget renderImage_aspect\nkey End", "native-choice renderImage_aspect Fixed")
-for field, value in (("x", 80), ("y", 0), ("length", 10), ("width", 10), ("height", 10)):
+for field, value in (("at_offset1", 80), ("at_offset2", 0), ("length", 10), ("width", 10), ("height", 10)):
     text = text.replace(f"focus-widget input_{field}\nkey ctrl+a\ntype {value}\nkey Tab",
                         f"native-type input_{field} {value}")
 path.write_text(text)

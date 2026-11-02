@@ -122,6 +122,10 @@ struct Edge {
     /// None for a closed curve that is a loop by itself.
     v0: Option<usize>,
     v1: Option<usize>,
+    /// A stored sketch curve bounds this piece, including one coincident
+    /// with an implicit face edge. Both roles survive overlap deduplication.
+    sketch_boundary: bool,
+    face_boundary: bool,
     alive: bool,
 }
 
@@ -161,6 +165,91 @@ pub fn regions_and_layout(curves: &[RegionCurve]) -> (Vec<Region>, Layout) {
     let mut arrangement = Arrangement::new(curves, bounds, tol);
     arrangement.clean();
     arrangement.regions()
+}
+
+/// Regions bounded by the sketch and its supporting face. Face edges
+/// split the arrangement without becoming sketch entities. Keep material
+/// inside the face (including its islands, excluding its holes), together
+/// with the sketch's own bounded regions outside it.
+pub fn face_bounded_regions(curves: &[RegionCurve]) -> (Vec<Region>, Layout) {
+    let (regions, mut layout) = regions_and_layout(curves);
+    let outside = regions.len();
+    let mut adjacent = vec![Vec::new(); outside + 1];
+    for edge in &layout.edges {
+        let a = edge.sides[0].map_or(outside, |s| s.region);
+        let b = edge.sides[1].map_or(outside, |s| s.region);
+        if a != b {
+            let boundary = edge.face_boundary;
+            adjacent[a].push((b, boundary, edge.sketch_boundary));
+            adjacent[b].push((a, boundary, edge.sketch_boundary));
+        }
+    }
+    // Crossing a face edge changes material parity. Crossing a sketch
+    // curve just moves to another piece of the same face material.
+    let mut material = vec![None; outside + 1];
+    material[outside] = Some(false);
+    let mut todo = vec![outside];
+    while let Some(at) = todo.pop() {
+        for &(next, boundary, _) in &adjacent[at] {
+            if material[next].is_none() {
+                material[next] = Some(material[at].unwrap_or(false) ^ boundary);
+                todo.push(next);
+            }
+        }
+    }
+    // With the implicit face edges removed, regions reachable from the
+    // outside are not bounded by the sketch's own curves. This also
+    // rejects off-face pieces made by an otherwise dangling open line.
+    let mut unbounded = vec![false; outside + 1];
+    unbounded[outside] = true;
+    todo.push(outside);
+    while let Some(at) = todo.pop() {
+        for &(next, _, sketch_boundary) in &adjacent[at] {
+            if !sketch_boundary && !unbounded[next] {
+                unbounded[next] = true;
+                todo.push(next);
+            }
+        }
+    }
+    let mut indices = vec![None; regions.len()];
+    let mut kept = Vec::new();
+    for (i, mut region) in regions.into_iter().enumerate() {
+        if material[i].unwrap_or(false) || !unbounded[i] {
+            // A face edge in a hole still belongs to this region's
+            // identity. Losing that face must not turn an outside ring
+            // into the sketch's whole original region under the same key.
+            if region.profile.face_bounded() {
+                region.profile.key = RegionKey::new(
+                    region.profile.key.segments().cloned().chain(
+                        region
+                            .profile
+                            .loops
+                            .iter()
+                            .flat_map(|l| &l.segments)
+                            .filter(|s| s.key.curve.is_face_edge())
+                            .map(|s| s.key.clone()),
+                    ),
+                )
+                .expect("a region has a boundary");
+            }
+            kept.push((i, region));
+        }
+    }
+    kept.sort_by(|a, b| a.1.profile.key.cmp(&b.1.profile.key));
+    for (index, (before, _)) in kept.iter().enumerate() {
+        indices[*before] = Some(index);
+    }
+    for edge in &mut layout.edges {
+        for side in &mut edge.sides {
+            *side = side.and_then(|s| {
+                Some(LayoutSide {
+                    region: indices[s.region]?,
+                    outer: s.outer,
+                })
+            });
+        }
+    }
+    (kept.into_iter().map(|(_, region)| region).collect(), layout)
 }
 
 /// Whether `t` is an end of an open curve.
@@ -312,6 +401,8 @@ impl<'a> Arrangement<'a> {
                         t1: hi,
                         v0: None,
                         v1: None,
+                        sketch_boundary: !curves[i].uid.is_face_edge(),
+                        face_boundary: curves[i].uid.is_face_edge(),
                         alive: true,
                     }),
                     m => {
@@ -328,6 +419,8 @@ impl<'a> Arrangement<'a> {
                                 t1,
                                 v0: Some(v0),
                                 v1: Some(v1),
+                                sketch_boundary: !curves[i].uid.is_face_edge(),
+                                face_boundary: curves[i].uid.is_face_edge(),
                                 alive: true,
                             });
                         }
@@ -341,6 +434,8 @@ impl<'a> Arrangement<'a> {
                         t1: w[1].0,
                         v0: Some(w[0].1),
                         v1: Some(w[1].1),
+                        sketch_boundary: !curves[i].uid.is_face_edge(),
+                        face_boundary: curves[i].uid.is_face_edge(),
                         alive: true,
                     });
                 }
@@ -429,19 +524,28 @@ impl<'a> Arrangement<'a> {
                 let Some(mf) = mids[f] else { continue };
                 if self.edges[f].alive && (dist(me, mf) <= 100.0 * self.tol || self.run_along(e, f))
                 {
-                    // Keep the lower curve id; of a spline and another curve that
-                    // run along each other the spline (a projected edge, which the
-                    // faces next to it follow exactly).
+                    // A coincident stored curve keeps its identity. Of
+                    // other overlapping curves prefer the spline (a
+                    // projected edge) and then the lower curve id.
                     let (ue, uf) = (
-                        self.curves[self.edges[e].curve].uid,
-                        self.curves[self.edges[f].curve].uid,
+                        &self.curves[self.edges[e].curve].uid,
+                        &self.curves[self.edges[f].curve].uid,
                     );
                     let spline = |x: usize| matches!(self.curve(x), Curve2::Nurbs(_));
-                    let drop_e = if spline(e) != spline(f) {
+                    let drop_e = if ue.is_face_edge() != uf.is_face_edge() {
+                        ue.is_face_edge()
+                    } else if spline(e) != spline(f) {
                         spline(f)
                     } else {
                         uf < ue
                     };
+                    let sketch_boundary =
+                        self.edges[e].sketch_boundary || self.edges[f].sketch_boundary;
+                    let face_boundary = self.edges[e].face_boundary || self.edges[f].face_boundary;
+                    self.edges[e].sketch_boundary = sketch_boundary;
+                    self.edges[f].sketch_boundary = sketch_boundary;
+                    self.edges[e].face_boundary = face_boundary;
+                    self.edges[f].face_boundary = face_boundary;
                     if drop_e {
                         self.edges[e].alive = false;
                         break;
@@ -467,15 +571,111 @@ impl<'a> Arrangement<'a> {
                     continue;
                 }
                 let (ue, uf) = (
-                    self.curves[self.edges[e].curve].uid,
-                    self.curves[self.edges[f].curve].uid,
+                    &self.curves[self.edges[e].curve].uid,
+                    &self.curves[self.edges[f].curve].uid,
                 );
-                if uf < ue {
+                let drop_e = (ue.is_face_edge() && !uf.is_face_edge())
+                    || (uf.is_face_edge() == ue.is_face_edge() && uf < ue);
+                let sketch_boundary =
+                    self.edges[e].sketch_boundary || self.edges[f].sketch_boundary;
+                let face_boundary = self.edges[e].face_boundary || self.edges[f].face_boundary;
+                self.edges[e].sketch_boundary = sketch_boundary;
+                self.edges[f].sketch_boundary = sketch_boundary;
+                self.edges[e].face_boundary = face_boundary;
+                self.edges[f].face_boundary = face_boundary;
+                if drop_e {
                     self.edges[e].alive = false;
                 } else {
                     self.edges[f].alive = false;
                 }
             }
+        }
+        self.drop_face_pieces_along_sketch();
+    }
+
+    /// Pieces of a supporting face's edges that together run along a
+    /// sketch piece from one of its ends to the other, within a micron
+    /// (mitcad#1159): the sketch's projection of those very edges, whose
+    /// spline deviates that much from them. A corner where two such edges
+    /// meet lies off the sketch curve, so nothing cuts the curve there and
+    /// the pieces are not repeats of it; kept, they bound a sliver between
+    /// the two curves (of no area, or sampled inside out) that makes no
+    /// profile. The sketch piece stands for them as the face's boundary.
+    fn drop_face_pieces_along_sketch(&mut self) {
+        let face = |a: &Self, e: usize| a.curves[a.edges[e].curve].uid.is_face_edge();
+        let pieces: Vec<usize> = (0..self.edges.len())
+            .filter(|&e| self.edges[e].alive && self.edges[e].v0.is_some())
+            .collect();
+        if !pieces.iter().any(|&e| face(self, e)) {
+            return;
+        }
+        let reach = 1000.0 * self.tol;
+        let near = |a: (P2, P2), b: (P2, P2)| {
+            (0..2).all(|k| a.0[k] <= b.1[k] + reach && b.0[k] <= a.1[k] + reach)
+        };
+        for &f in &pieces {
+            if face(self, f) || !self.edges[f].alive {
+                continue;
+            }
+            let (Some(start), Some(end)) = (self.edges[f].v0, self.edges[f].v1) else {
+                continue;
+            };
+            let along: Vec<usize> = pieces
+                .iter()
+                .copied()
+                .filter(|&e| {
+                    self.edges[e].alive
+                        && face(self, e)
+                        && near(
+                            self.bounds[self.edges[e].curve],
+                            self.bounds[self.edges[f].curve],
+                        )
+                        && self.lies_along(e, f)
+                })
+                .collect();
+            // A chain of them from the sketch piece's start to its end, each
+            // end of the chain at the piece's or within a micron of it (where
+            // the face's edge crosses another sketch curve beside the
+            // corner).
+            let close = |a: usize, b: usize| dist(self.vertices[a], self.vertices[b]) <= reach;
+            let other = |e: usize, v: usize| {
+                let edge = &self.edges[e];
+                if edge.v0 == Some(v) { edge.v1 } else { edge.v0 }.expect("a piece")
+            };
+            let mut chain = Vec::new();
+            let mut at = start;
+            if let Some(&first) = along.iter().find(|&&e| {
+                [self.edges[e].v0, self.edges[e].v1]
+                    .into_iter()
+                    .flatten()
+                    .any(|v| close(v, start))
+            }) {
+                let v0 = self.edges[first].v0.expect("a piece");
+                let v = if close(v0, start) {
+                    v0
+                } else {
+                    self.edges[first].v1.expect("a piece")
+                };
+                chain.push(first);
+                at = other(first, v);
+                while !close(at, end) {
+                    let Some(&next) = along.iter().find(|&&e| {
+                        !chain.contains(&e)
+                            && (self.edges[e].v0 == Some(at) || self.edges[e].v1 == Some(at))
+                    }) else {
+                        break;
+                    };
+                    chain.push(next);
+                    at = other(next, at);
+                }
+            }
+            if chain.is_empty() || !close(at, end) {
+                continue;
+            }
+            for e in chain {
+                self.edges[e].alive = false;
+            }
+            self.edges[f].face_boundary = true;
         }
     }
 
@@ -605,7 +805,10 @@ impl<'a> Arrangement<'a> {
                     }
                     [a, b] => {
                         let (a, b) = (*a, *b);
-                        if self.edges[a].curve != self.edges[b].curve {
+                        if self.edges[a].curve != self.edges[b].curve
+                            || self.edges[a].sketch_boundary != self.edges[b].sketch_boundary
+                            || self.edges[a].face_boundary != self.edges[b].face_boundary
+                        {
                             continue;
                         }
                         let (first, second) = if self.edges[a].v1 == Some(v)
@@ -839,12 +1042,12 @@ impl<'a> Arrangement<'a> {
         let mut curves_at: Vec<Vec<CurveId>> = vec![Vec::new(); self.vertices.len()];
         for edge in self.edges.iter().filter(|e| e.alive) {
             for v in [edge.v0, edge.v1].into_iter().flatten() {
-                curves_at[v].push(self.curves[edge.curve].uid);
+                curves_at[v].push(self.curves[edge.curve].uid.clone());
             }
         }
-        let others = |v: usize, own: CurveId| -> Vec<CurveId> {
+        let others = |v: usize, own: &CurveId| -> Vec<CurveId> {
             let mut list: Vec<CurveId> =
-                curves_at[v].iter().copied().filter(|c| *c != own).collect();
+                curves_at[v].iter().filter(|c| *c != own).cloned().collect();
             list.sort_unstable();
             list.dedup();
             list
@@ -854,12 +1057,12 @@ impl<'a> Arrangement<'a> {
             if !edge.alive {
                 continue;
             }
-            let uid = self.curves[edge.curve].uid;
+            let uid = &self.curves[edge.curve].uid;
             keys[e] = Some(match (edge.v0, edge.v1) {
                 (Some(v0), Some(v1)) => {
-                    SegmentKey::with_ends(uid, others(v0, uid), others(v1, uid))
+                    SegmentKey::with_ends(uid.clone(), others(v0, uid), others(v1, uid))
                 }
-                _ => SegmentKey::closed(uid),
+                _ => SegmentKey::closed(uid.clone()),
             });
         }
         // Repeats of a curve between the same curves: numbered along it.
@@ -1272,7 +1475,7 @@ impl<'a> Arrangement<'a> {
         for &e in &live {
             let edge = &self.edges[e];
             for v in [edge.v0, edge.v1].into_iter().flatten() {
-                curves_at[v].push(self.curves[edge.curve].uid);
+                curves_at[v].push(self.curves[edge.curve].uid.clone());
             }
         }
         for list in &mut curves_at {
@@ -1298,7 +1501,9 @@ impl<'a> Arrangement<'a> {
                 let samples = self.samples(e);
                 let area = samples.windows(2).map(|w| cross(w[0], w[1]) / 2.0).sum();
                 LayoutEdge {
-                    curve: self.curves[edge.curve].uid,
+                    curve: self.curves[edge.curve].uid.clone(),
+                    face_boundary: edge.face_boundary,
+                    sketch_boundary: edge.sketch_boundary,
                     ends: edge.v0.zip(edge.v1),
                     next,
                     area,
@@ -1324,6 +1529,8 @@ pub struct Layout {
 #[derive(Debug, Clone, PartialEq)]
 struct LayoutEdge {
     curve: CurveId,
+    face_boundary: bool,
+    sketch_boundary: bool,
     /// The vertices at its start and end, in the curve's direction; None
     /// for a closed curve that is a loop by itself.
     ends: Option<(usize, usize)>,
@@ -1406,8 +1613,8 @@ impl Layout {
         let others = |v: usize| -> Vec<CurveId> {
             self.curves_at[v]
                 .iter()
-                .copied()
-                .filter(|c| *c != segment.curve)
+                .filter(|c| **c != segment.curve)
+                .cloned()
                 .collect()
         };
         let meets = |v: usize, wanted: &[CurveId]| {
@@ -1633,12 +1840,12 @@ pub fn best_match<'a>(
     regions: impl IntoIterator<Item = &'a Region>,
     key: &RegionKey,
 ) -> Option<&'a Region> {
-    let wanted: Vec<CurveId> = key.segments().map(|s| s.curve).collect();
+    let wanted: Vec<CurveId> = key.segments().map(|s| s.curve.clone()).collect();
     let wanted_segments: Vec<&SegmentKey> = key.segments().collect();
     regions
         .into_iter()
         .map(|r| {
-            let curves: Vec<CurveId> = r.profile.key.segments().map(|s| s.curve).collect();
+            let curves: Vec<CurveId> = r.profile.key.segments().map(|s| s.curve.clone()).collect();
             let common = curves.iter().filter(|c| wanted.contains(c)).count();
             let exact = r
                 .profile

@@ -613,7 +613,8 @@ millimetres, angles radians. Build sketches with the
     followed its face farther than the distance) keeps them on their side;
     a shared corner starts where the two offset curves cross, an arc's
     free ends at the source's angles, and each helper across an arc's gap
-    on its radius as it lay (mitcad#890).
+    where the solve holds it (mitcad#890, mitcad#1171: across the arc's
+    middle, a circle's level with its centre).
   - Where the source curves touch at a corner by their definition (fixed
     curves, a linked projection's, that touch at their shared point;
     curves tangent by a constraint; results of an offset whose corner is
@@ -631,6 +632,32 @@ millimetres, angles radians. Build sketches with the
     corners held: the held tangencies restate what the offsets' own
     constraints imply, and counted in the failed solve's explanation they
     named every constraint of the offsets.
+  - **An independent set** (mitcad#1171, `offset::independent`): with its
+    corners held, an offset's stored constraints held each tangent corner
+    three times (the line at its distance, the arc's radius by its
+    helper's length, the tangency), so half of its dimensions were listed
+    in `redundant`, and each helper slid along its arc (a degree of
+    freedom per arc). The solve now leaves out what the held corners
+    imply: the distance dimension of a result line that touches a result
+    arc at a held corner (that arc's circle places it), also its parallel
+    when it touches one at both ends, and the helper length of a result
+    arc that touches the previous result arc at a held corner (along the
+    chain from an arc whose own length holds its radius; a closed chain
+    of arcs alone keeps its first arc's length only, and its arcs and
+    held corners, which close the loop by themselves, are the offset's
+    own and not listed). Each helper's end on an arc
+    source is held at the arc's middle, on a circle level with the centre
+    (a helper something else constrains too is left as it is). An exact
+    offset of a tangent chain, and an offset of that offset, then has
+    nothing in `redundant` and adds no degrees of freedom. Nothing is
+    stored: the definition keeps all of the offset's constraints and
+    dimensions (the dimensions show the distance as before), an older
+    design solves the same way when it is opened, and where a source
+    corner no longer touches by its definition the line keeps its own
+    constraints. Tests: `core/sketch/src/offset_tests.rs`,
+    `core/model-tests/sketch/src/sketch_offset_tangent_corners_890_tests.rs`,
+    `redundant_constraints_are_grouped_by_their_origin`
+    (`core/model-api/src/sketch.rs`).
   - A chain with an ellipse, an elliptical arc or a spline is `derived`:
     its curves are computed from the solved source after every solve
     (lines and arcs exactly, an ellipse or spline as a C1 cubic B-spline
@@ -994,6 +1021,38 @@ their sketch (mitcad#199), the same in a preview and in the feature:
   regions: squares A, B and C, each inside the one before, make the ring
   between A and B (B its hole), the ring between B and C and the square C;
   two overlapping shapes make each one's own part and their overlap.
+- A sketch whose plane is a planar body face also uses that face's named
+  boundary edges in the arrangement (mitcad#1138). They are transient
+  profile geometry, not sketch entities or projections. A line across the
+  face splits it; an octagon inside a circular face adds the region between
+  them. Construction curves do not split profiles, face holes stay holes,
+  and closed sketch regions outside the face remain selectable.
+  Such regions carry `"face_bounded": true` in `profiles` and the `sketch`
+  query's `regions`. Their keys use `b{<edge>}` for a boundary curve, for
+  example `r{b{E{F2:end(r{c2})|F2:side(c2)}}}`. A one-sided open edge
+  constructed from a sketch profile instead uses
+  `b{O{<source profile face>|<source segment>}}`, for example
+  `b{O{F2:patch(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|c1[c4,c2]}}`
+  (mitcad#1142). This names the actual source profile segment in its
+  creating face's namespace; a profile Patch accepts regions of one
+  sketch only. It is not an edge index, a coordinate-derived identity or
+  a fictitious pair of adjacent faces. Existing `b{E{...}}` names do not
+  change. Intersection ends use the
+  same curve names; face edges in a hole also participate in the region's
+  key. These are ordinary profile references accepted by Extrude, Revolve
+  and the other profile consumers, including previews and joins or cuts.
+  Boundaries follow the supporting body on recompute. Redefining the
+  sketch onto another plane, or offsetting it off its face, removes them;
+  a feature using one then reports `has no profile`, rather than falling
+  back to a remaining region sharing only a sketch curve. Source-profile
+  boundary provenance follows explicit operation history and survives
+  stored results and save/reopen. Ordinary face and edge selections keep
+  their existing names; `O{...}` is a profile-boundary reference only.
+  A boundary without a usable named edge or unambiguous source-profile
+  provenance retains the sketch's own regions and reports a warning that
+  face-bounded profiles are unavailable. History that merges distinct
+  provenance references or splits one into ambiguous boundary pieces is
+  diagnosed rather than numbered by geometry.
 - The selected area is the odd/even (XOR) composition of the selected
   regions: covered by an odd number of them, it is extruded. Regions of one
   sketch never overlap, so that is each selected region once: the outer
@@ -3632,10 +3691,19 @@ the design file. A body names its appearance by id
   `chrome`, `gold_polished`, `steel_polished`, `plastic_red`,
   `plastic_white`, `plastic_blue`, `plastic_clear`, `glass_clear`,
   `glass_frosted`, `wood_walnut`, `wood_maple`, `emissive_white`,
-  `resin_grey`, `resin_white`, `resin_clear` (mitcad#1102). Their classes
+  `resin_grey`, `resin_white`, `resin_clear` (mitcad#1102), and the basic
+  colours of generic filaments (mitcad#1133, named `Filament - <Colour>`,
+  the look of a printed thermoplastic: dielectric, roughness 0.55,
+  specular 0.5, no coat): `filament_white`, `filament_black`,
+  `filament_grey`, `filament_silver`, `filament_red`, `filament_orange`,
+  `filament_yellow`, `filament_green`, `filament_blue`,
+  `filament_light_blue`, `filament_purple`, `filament_pink`,
+  `filament_brown`, `filament_beige` (natural) and `filament_translucent`
+  (natural, transmission 0.7); their ids are stable. Their classes
   (mitcad#1102): the steels, `aluminum_anodized`, `brass_polished`,
   `copper`, `cast_iron`, `chrome` and `gold_polished` `metal`; the
-  `plastic_*` ones `plastic` (General Plastic); the `resin_*` ones
+  `plastic_*` ones `plastic` (General Plastic); the `filament_*` ones
+  `fdm_plastic` (FDM Plastic); the `resin_*` ones
   `resin`; the paints, `rubber`, the glasses, the woods and
   `emissive_white` `other`. An appearance of the design or a library
   without a `class` is `other`, as are those of the `.f3d`, `.FCStd` and
@@ -3651,6 +3719,23 @@ the design file. A body names its appearance by id
   parameters...}]` (left out when there are none; parameters left out of
   a file are the defaults; files without it have none), and the
   comparison of versions lists them by id.
+- **A library id taken since** (mitcad#1133): a design file whose own
+  appearance has another library id is refused (no design can save
+  one), but one with an id the library took only later (one of the
+  `filament_*` colours) opens; that appearance keeps its values under a
+  free id, the first of `<id>_2`, `<id>_3`, … (and a free name,
+  `<name> (2)`, when the library's has its name), and every reference
+  follows: the bodies' and faces' appearances, the materials' default and
+  list, the components' appearances and the bindings' quoted texts
+  (`'filament_red'`). The document's load warnings say so once per
+  appearance (`appearance filament_red of this design is now
+  filament_red_2: …`); a parameter's text that spells the old id names
+  the library's from then on.
+- **A component's unknown appearance** (mitcad#1150): a component's
+  appearance in `component_materials` that neither the design nor the
+  library has is dropped when the file opens, with a load warning
+  (`component_materials[0]: there is no appearance …; the component
+  shows its material's`); the component keeps its material.
 - **Older versions** (before mitcad#1102) open a design or a library
   file unless it holds an appearance with a `class` (an unknown field, as
   embedded images); one is written only when set.
@@ -3900,7 +3985,7 @@ timeline marker.
 | `appearance_image` | `id`, `map` (`base_color` default, `normal`, `roughness`, `metalness`, `occlusion`) | an embedded image of an appearance's texture set: `data` (base64), `format`, `sha256` ([Textures](#textures), [Texture map sets](#texture-map-sets)) |
 | `render_settings` | | the document's render settings, every section and field ([Render settings](#render-settings)) |
 | `bodies` | `properties`, `volumes`, `versions`, `bbox` | `uid`, `name`, `component` (when not the root's), `visible`, `material`, `appearance`, `face_appearances` ([Appearances of faces](#appearances-of-faces)) (when set), `mesh`: true for a mesh body ([Mesh bodies in surface operations](#mesh-bodies-in-surface-operations)); with `"properties": true` also `kind` (`solid`, `sheet`: faces or open shells, `mesh`, `empty`), `volume`, `area`, `center`, `bbox` {`min`, `max`} (in the component's coordinates), `faces`, `edges` (counts); with `"volumes": true` only `volume` (cheaper); with `"versions": true` also `version`, the shape's version as 32 hexadecimal digits, which changes whenever the body's shape does (mitcad#689: MCP's command results list the bodies a command changed); with `"bbox": true` also `bbox` without the other properties (mitcad#714: the boxes in MCP's `changes`) |
-| `profiles` | `hashes` | `sketch`, `sketch_name`, `region`, `consumed` (an extrude uses it); with `"hashes": true` also `hash` (16 hex digits of the region's geometry and sketch frame: the same while the profile's face would be the same) |
+| `profiles` | `hashes` | `sketch`, `sketch_name`, `region`, `consumed` (an extrude uses it), `face_bounded`: true when an implicit supporting-face boundary participates; with `"hashes": true` also `hash` (16 hex digits of the region's geometry and sketch frame: the same while the profile's face would be the same) |
 | `faces` | `body`; `geometry`, filters `surface`, `min_area`, `max_area`, `normal`, `normal_tolerance`, and `offset`, `limit` ([Faces and edges with geometry](#faces-and-edges-with-geometry)) | per face: `names`, `surface` (`plane`, `cylinder`, …), `area`; with `"geometry": true` also its surface's geometry and `bbox`; with a filter, `offset` or `limit` an object: `total`, `offset`, `faces` (each also with `index`) |
 | `edges` | `body`; `geometry`, filters `curve`, `min_length`, `max_length`, and `offset`, `limit` ([Faces and edges with geometry](#faces-and-edges-with-geometry)) | per edge: `name`, `curve` (`line`, `circle`, …), `length`; with `"geometry": true` also its curve's geometry and `bbox`; with a filter, `offset` or `limit` an object: `total`, `offset`, `edges` (each also with `index`) |
 | `dependents` | `uid` | `dependents`: `uid`, `name` of the features that refer to it, directly or through others, in timeline order (what `delete_feature` with `dependents` deletes too) |
@@ -3987,7 +4072,7 @@ The `faces` and `edges` queries tell where each face and edge is
 | `datums` | `origin` (also the origin datums) | per datum: `uid`, `name`, `type` and its geometry |
 | `datum` | `uid` (`F3` or `xy`) | `type` `plane`: `origin`, `normal`, `x_axis`, `y_axis`; `axis`: `origin`, `direction`; `point`: `point` |
 | `properties` | `bodies` (default all), `components` ([Physical Properties' extent](#physical-properties-extent-mitcad1095)), `density`, `densities` {uid: g/cm³} | `bodies`, one entry per placement of a body ([placed bodies](#physical-properties-extent-mitcad1095)): `uid`, `name`, `occurrence` (a body of a component), `material`, `density`, `volume`, `area`, `mass`, `center_of_mass` (design coordinates), `inertia` (3 × 3, at the centre of mass, along the design's axes), `principal_moments`, `principal_axes`, `bbox` {`min`, `max`, `size`} along the design's axes, `faces`, `edges`, `vertices`; `total`: `volume`, `area`, `mass`, `center_of_mass`, `inertia`, `bbox`, `faces`, `edges`, `vertices`; with `components` also `components`: `uid`, `name`, `occurrence` |
-| `measure` | `a`, `b` (optional) selections | `a`, `b`: `kind` and `volume`, `area`, `length`, `point`, `circle` {`center`, `axis`, `radius`, `sweep`}, `axis` {`origin`, `direction`} (*Measure with axes*), `plane` {`origin`, `normal`} of a planar face or a datum plane (the middle of the face on its plane, the normal out of the material; mitcad#714) as they apply; with `b` also `between`: `distance`, `on_a`, `on_b`, `inside`, `angle` (null unless both have a normal, a direction or an axis), `offset` (only for two parallel planes, *Measure in the design*), `axis_distance`, `axis_points`, `center_distance` (*Measure with axes*) |
+| `measure` | `a`, `b` (optional) selections | `a`, `b`: `kind` and `volume`, `area`, `length`, `point`, `circle` {`center`, `axis`, `radius`, `sweep`}, `axis` {`origin`, `direction`} (*Measure with axes*), `plane` {`origin`, `normal`} of a planar face or a datum plane (the middle of the face on its plane, the normal out of the material; mitcad#714) as they apply; with `b` also `between`: `main` (`"offset"` or `"distance"`), `main_points` (the main dimension's two endpoints), `distance` (the finite shapes' minimum), `on_a`, `on_b`, `inside`, `angle` (null unless both have a normal, a direction or an axis), `offset` (only for two parallel planes, *Measure in the design*), `axis_distance`, `axis_points`, `center_distance` (*Measure with axes*) |
 | `interference` | `bodies` (default all), `min_volume` (mm³, default 1e-6) | `bodies` (count), `pairs`: `a`, `b`, `names`, `volume` |
 | `section` | `plane`, `bodies` (default all), `world` (default false) | `plane`, per body `edges`, `faces`, `length`, `area`, `clip`, and the totals with `cut`, `kept` and `removed` ([Section Analysis past every body](#section-analysis-past-every-body-mitcad824)) |
 | `compare_step` | `file`, `bodies`, `step_body` (name or index), `samples`, `fuzzy`, `max_deviation`, `max_relative` | `step_bodies`, `volume`, `step_volume`, `volume_only_mitcad`, `volume_only_step`, `relative_difference`, `max_deviation`, `mitcad_to_step` and `step_to_mitcad` {`max`, `rms`, `at`, `samples`}, `bounds_difference`; with limits `pass` and `exceeded` |
@@ -4373,7 +4458,14 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
   did not evaluate),
   `solved`, `error`;
 - `warnings`: the sketch evaluation's (as the timeline's), such as linked
-  projections that could not follow their sources;
+  projections that could not follow their sources; then the solve's
+  redundant constraints (mitcad#1171), one warning per offset, pattern
+  and the sketch's own that has any, counted by kind: `Offset k1: 2
+  dimensions follow from the others`, `Pattern k8: 1 constraint follows
+  from the others`, `Redundant: 1 dimension and 1 fixed entity follow
+  from the others` (an offset's own are its lines' distances and
+  parallels, its helpers' lengths and point-on-curve constraints, and its
+  held corners; a pattern's its bindings);
 - `warning_entities` (mitcad#264): one list of entity ids per warning, in
   the order of `warnings`, of what the warning is about, so that a client
   need not read the text: a linked projection's warning lists all of its
@@ -4381,7 +4473,9 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
   any, else its `unfollowed` entities; the warning about collapsed curves
   (mitcad#365: a line of no length, a circle or arc of no radius, which make
   no region) lists those curves, also as `degenerate` beside `dof` and
-  `redundant`; a warning about anything else (a
+  `redundant`; a warning about redundant constraints lists the entities
+  they name (an offset's or a pattern's own bindings: its results or
+  entities; a fixed entity itself); a warning about anything else (a
   font replaced) has an empty list. The `warnings` entries stay strings
   (the `timeline` and `feature` queries' are the same strings), so their
   readers are unchanged;
@@ -4415,8 +4509,9 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
   first); a glyph's region also `text` and `letter` (false for a
   counter);
 - `dof`, `fully_constrained` (entity ids), `redundant` (constraint ids
-  implied by the others) and `conflicts` (sets of ids that contradict
-  each other);
+  implied by the others, all of them; the `warnings` group them, and
+  fixes that follow only from other fixes are not listed, mitcad#1171)
+  and `conflicts` (sets of ids that contradict each other);
 - `unmet_inactive` (only when not empty): the inactive constraints and
   dimensions the geometry does not meet ([Inactive constraints and
   dimensions](#inactive-constraints-and-dimensions)).
@@ -4979,7 +5074,10 @@ the new file's folder.
     before the feature, in a base feature of the feature's component
     just before it; the feature reads the copies, and the references to
     their faces, edges and vertices (in it and in the features after it)
-    name the copies' faces (`<base>:import(<k>)`). A body transfer from
+    name the copies' faces (`<base>:import(<k>)`). A later feature that
+    reads the same body as it was (the same link, the same feature's
+    result) reads the same copy (mitcad#1150); one that reads it after
+    another component's feature changed it gets a copy of its own. A body transfer from
     outside becomes such a base feature of the bodies it moved in,
     shown, and the transfer goes;
   - the bodies a feature of another component made in it (a
@@ -5033,11 +5131,26 @@ the new file's folder.
   Components from Bodies), and so does a body transfer's source. Its
   occurrences, their placements, grounding and visibility stay. What
   refers to its bodies from outside (joints and their origins, links of
-  other components' sketches and features) follows: body ids become the
+  other components' sketches and features, the picks of annotations,
+  mitcad#1150) follows: body ids become the
   base feature's, face, edge and vertex names its faces', and an
-  occurrence path through it ends at its occurrence. Refused while a
-  feature of it is after the timeline marker, for a component a combine
-  made, and for one without bodies to show. The link's path is relative
+  occurrence path through it ends at its occurrence. The body link maps
+  of features outside it (`object_links`, `body_links`, `tool_links`, a
+  derive's and a construction feature's `links`) are re-keyed to the
+  base feature's bodies where their link is seen in it, and their links'
+  `source` and `target` through it end at its occurrence too
+  (mitcad#1144). Refused while a feature of it is after the timeline
+  marker, for a component a combine made, for one without bodies to
+  show, while a component inside it is placed in it more than once (`Box
+  cannot be replaced by a link while Pin is placed in it more than once`:
+  the references to its body name no placement, so they could not follow
+  the right base body), and while a construction plane, axis or point
+  outside it is on its sketches or construction geometry or those of the
+  components in it (`datum_links` seen in it: `Box cannot be replaced by a
+  link while Plane4 is on Plane2 in it: …`), since a linked component
+  keeps none; nothing is written then. The links of linked components
+  inside it are read from `base` as well (mitcad#1150: a design never
+  saved has no folder of its own). The link's path is relative
   to `base` when the file is in the design's project (or, for a design
   in no project, in its folder), so that it is followed when the design
   opens ([Components and occurrences](#components-and-occurrences)).
@@ -11088,7 +11201,7 @@ points*).
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
 | `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them) and `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths); the parts placed on it keep where they are; undo step `Remove <name>` |
-| `build_upgrade` | | `upgraded` (the connectors and fasteners placed again) and `count`: the slot connectors and their fasteners that the first placing rule placed, placed by the current one (*Where a connector goes*, mitcad#1115); undo step `Place connectors by the current rule`, none when nothing changes. The application runs it when it opens a design |
+| `build_upgrade` | | `upgraded` (the connectors and fasteners placed again) and `count`: the slot connectors and their fasteners that the first placing rule placed, placed by the current one (*Where a connector goes*, mitcad#1115); undo step `Place connectors by the current rule`, none when nothing changes. The application and `mitcad-cli` run it when they open a design; a refusal leaves the design as loaded, with a warning (mitcad#1151) |
 
 `at` says where the part goes: `{"occurrence", "geometry", "point",
 "place", "offset", "from", "direction", "snap"}`.
@@ -13373,7 +13486,23 @@ crest circle is drawn whole and the root circle as a narrow three-quarter
 arc (open at the upper right). The thread's own lines (crests, helices,
 flanks, the curves where its end chamfers cut them) are left out; the
 faces' edges across the thread stay (its end faces, a groove's), and in
-a pictorial view the circles about its axis. Only the threaded body's own
+a pictorial view the circles about its axis. Only lines on the thread's
+own surface are left out, not everything of the threaded body that its
+outline covers (mitcad#1145): across the axis, a straight line goes when
+both its ends lie on a crest's or a root's radius on one side of the axis,
+and a curve when it runs like a helix (it turns back across the axis only
+on the thread's outline, between the root's and the crest's radius, and
+in a view square to the axis runs one way along it); curves that lie on
+one circle and together go a quarter of the way round or more (a cross
+hole's edge, in pieces where the thread's faces cut it) stay. In a
+triangulated view, which gives a helix as straight pieces and arcs, a
+straight piece goes when it starts on a crest's or a root's radius or
+continues the thread's lines end to end. Looking along the axis, circles
+(and the spirals where an end chamfer cuts the flanks) from the root's
+radius to the crest's go, and an external thread's end chamfer circle a
+thread's depth inside the minor diameter; a narrower bore below a tapped
+hole and a flat's chord stay. So a cross hole, a socket, a flat or a
+keyway on the threaded body is drawn as the kernel drew it. Only the threaded body's own
 lines are left out and replaced: the kernel's projection records each
 line's body (`ViewEdge::source`, the index of the shape among those
 projected; OCCT's hidden-line removal is asked for each shape's lines on
@@ -14271,6 +14400,12 @@ the first time something refers to them:
   fixed (an axis line, a projected line) is held in the solve by its
   points' fixes alone, so the sketch's `redundant` does not list it; the
   line stays `"fixed": true` in the definition and the `sketch` query.
+  So is every fixed curve made only of fixed points (mitcad#1171): an arc
+  with its centre and ends, a spline with its control or fit points (as a
+  projection makes them). A circle or an ellipse keeps its own fix (its
+  radius), and a set of fixes that only repeat each other (a projected
+  arc's three points, which its own equation ties; a projected circle's
+  centre) is not listed either.
 
 Code: `core/sketch/src/axes.rs`. Tests:
 `core/model-tests/sketch/src/sketch_axes_tests.rs`, Mirror about an axis
@@ -15532,7 +15667,7 @@ occurrence (`world`):
   (`"Body1/…"`, `"F5"`) take the only placement the same way. The root's bodies
   and datums are measured as before, without a copy.
 - **Design coordinates.** `point`, `circle.center` and `circle.axis` of
-  each selection and `between`'s `on_a`, `on_b`, `distance` and `angle`
+  each selection and `between`'s `on_a`, `on_b`, `main_points`, `distance` and `angle`
   are in the design's coordinates; lengths, areas and volumes do not
   change with the placement.
 - **Offset.** When both selections are planes — planar faces (the face's
@@ -15542,11 +15677,23 @@ occurrence (`world`):
   distance between the two planes along the normal, in mm and never
   negative. The closest `distance` stays: it is longer than the offset
   when the faces do not overlap across the normal. Planes that are not
-  parallel, and bodies, edges and vertices, have no `offset`. The text
-  form (`mitcad-cli analysis`) adds `Offset: <d> mm`.
-- **The app.** Measure sends each pick's occurrence and shows `Offset:
-  <d> mm` beside the distance and the angle (`app/COMMANDS.md`); the
-  selection card sends the occurrence too.
+  parallel, and bodies, edges and vertices, have no `offset`.
+- **Main result (mitcad#1161).** `between.main` is `"offset"` for these
+  parallel planar pairs, otherwise `"distance"`. The original `distance`
+  and `on_a`/`on_b` remain the finite shapes' closest-point measurement;
+  existing callers do not lose the minimum. `main_points: [[x,y,z],
+  [x,y,z]]` gives the main dimension's endpoints in design coordinates.
+  For a plane gap they are perpendicular to the planes: the closest
+  common projection when minimum and gap agree within 1e-6 mm, otherwise
+  the first face's middle (or datum origin) and its foot on the second
+  plane. `mitcad-cli measure` and text analysis label the selected value
+  `Distance: … mm (main: offset|distance)` and add `Minimum distance`
+  only when it differs by more than 1e-6 mm; the raw Offset remains in
+  the text output for callers that read that field.
+- **The app.** Measure sends each pick's occurrence, labels the main
+  value **Distance**, adds **Minimum distance** immediately below only
+  when distinct, and draws the line between `main_points`. The selection
+  card sends the occurrence too.
 
 A side placement's Offset is measured this way: a profile placed on the
 side of an upright one from end A or end B with Offset 100 (a typed `100`
@@ -15563,7 +15710,11 @@ from end A, end B and the middle, turned, typed without a unit), on the
 mock kernel's measure of the selections' boxes
 (`MockKernel::measures_selections`); `tools/cli/tests/construction.json`
 (the offset of two faces and of a face and a construction plane on the
-OCCT kernel); `tools/ui-inspect-test.sh` (the panel's offset line).
+OCCT kernel); `tools/cli/tests/measure_planar.json` and `geometry.analysis`
+(a synthetic stepped shell's gaps 16/48/58 mm and distinct exact minima);
+the shared `tools/ui-scripts/measure-planar.mitcad-ui` on Linux, Windows
+and macOS Qt (the primary Distance, distinct Minimum distance, the
+perpendicular dimension and the equal-distance case).
 
 ## Selections by names and as entities
 
@@ -18906,7 +19057,13 @@ in a parallel plane, 2 text heights past the extent, after a landing of
 lines hang below), and moves on up past the leaders' texts laid out
 before it (their size estimated from their words) and on past the
 lengths' dimension lines laid out before it as seen in its plane;
-without a body four along and three across from its point. A datum
+without a body four along and three across from its point. A leader's
+text moved (`text_offset`) nearer its point along the text than its
+landing is long takes a landing of at most half that way back, so that
+the leader meets it at an obtuse bend, and none right above its point
+(mitcad#1168); the application draws the landing in proportion to its
+text as drawn (longer where the text is held to its least height on
+screen). A datum
 label on a face stands on a stem 3 text heights long square to that
 face (its normal in the label's plane), its square centred past the
 stem's end (`"align": "middle"`, no landing); on a planar face its
@@ -19444,7 +19601,9 @@ follow from the printer and nozzle in use.
   `@` (any case: "Shop PLA @Bench X", "Shop PLA @Bench Y 0.6 nozzle") and
   the same colour. A preset is for the printers it is compatible with
   (its slicer's `compatible_printers`), else for the printer its name's
-  `@` part names ("@Bench X 0.6 nozzle", "@MK4 0.6"), else for any. A
+  `@` part names ("@Bench X 0.6 nozzle", "@MK4 0.6"; a bare last number
+  is a nozzle only when it has a decimal point and is 0.1 to 2 mm, so
+  "@Ender 3" is the printer Ender 3), else for any. A
   preset for any printer is the base and the others its variants with
   the values that differ from it; without one the base is the values all
   of them share and each preset's other values its variants. A preset for
@@ -19570,8 +19729,11 @@ pending, driven) are no level.
   the sheet an error, what blocks it a warning, each about its feature.
 - **Sketches.** The `sketch` query's `notices`: a solve that did not
   converge or conflicting constraints (its `error`) an error, redundant
-  constraints a warning (`Redundant constraints (they follow from the
-  others): k3`), unmet inactive constraints information (`Inactive
+  constraints a warning per offset, pattern and the sketch's own
+  (mitcad#1171: `Offset k1: 2 dimensions follow from the others`,
+  `Redundant: 1 constraint follows from the others`; also in its
+  `warnings`, with their entities in `warning_entities`, and the ids in
+  `redundant`), unmet inactive constraints information (`Inactive
   constraints the geometry does not meet: k5`); the sketch's warnings as
   warnings.
 
@@ -19670,8 +19832,10 @@ their component's. The query `{"query": "make_differences"}` lists them:
 ```
 
 - `material`: the name of the body's own material when it is not the one
-  its component gives (its component's default, else the root's, else
-  the built-in default); null when it has none of its own or the same.
+  its components give it in one of its placements (the nearest
+  component's default up the occurrence path, else the root's, else the
+  built-in default, as `body_material` takes it; mitcad#1150); null when
+  it has none of its own or the same.
 - `print`: what the body itself sets of its print settings, in its
   property sets' order: a printer or process value by its plain name
   (`Walls`), a profile choice as `Printer profile` or `Process profile`,
@@ -19732,7 +19896,13 @@ has a material and one of its appearances.
   `appearance_id` too: the appearance of the component's default material
   that its bodies without one of their own print with (left out: the
   material's default; refused without a material). The design file keeps
-  it in the component's `component_materials` entry (`appearance`); the
+  it in the component's `component_materials` entry (`appearance`). A
+  file whose entry names an appearance neither the design nor the library
+  has (edited by hand) still opens: that appearance is dropped, the
+  component keeps its material and shows the material's appearance, and
+  `load_warnings` says so (`component_materials[0]: there is no
+  appearance no_such_look; the component shows its material's`;
+  mitcad#1150). The
   `materials` query gives a material's `component_appearances`
   (`{"C2": "plastic_black"}`, only the components that chose one).
 - **Outside the list.** An appearance a body gets outside the list of the
@@ -19910,3 +20080,45 @@ created at its first save), `template_tests::a_title_block_falls_back_to_the_des
 `tools/ui-property-sets-test.sh` and `app.ui-windows-property-sets`
 (Design Properties… sets Title and Author, Property Sets shows them on
 the root).
+
+## Fields of a newer MitCad's design
+
+A design file's top-level fields that this build does not know
+(mitcad#1132) are ignored when it is read: a newer MitCad wrote them
+(comments, say), and a field added later must not keep this build from
+opening the design. Builds before this rule refuse such a design
+(`unknown field …`). Unknown fields inside the known ones (a feature's, a
+parameter's) and a newer `version` are still errors
+(`core/model/src/file/mod.rs`).
+
+- Opening names them in the first of `load_warnings` (and the `document`
+  query's `warnings`): ``this design was written by a newer MitCad: the
+  fields `comments`, `next_comment` were not read`` (`the field … was`
+  for one).
+- The document keeps them with the file it was read from
+  (`Document::unknown_fields`; none for text read without a path: a
+  version's, recovered work). This build cannot write them back: a save
+  over that file drops them, and then clears them; a save to another
+  file keeps them, so a later save over the first file still drops them
+  (`Document::fields_dropped_by_saving(path)`).
+- The application warns on opening (a warning in the status bar or the
+  message band, "This design was written by a newer MitCad: comments,
+  next_comment not read. Saving over it drops them.") and asks before it
+  writes over the file: **Save and Drop Them**, **Save As…** (a new file;
+  the old one stays as it is) or **Cancel** (nothing written). An MCP
+  `document_save` that would write over it is refused, naming the
+  fields, and asks nothing (`docs/mcp.md`). `mitcad-cli` (`--save`,
+  `convert`) writes without asking and says on stderr
+  `warning: <path>: saving over this design drops the fields …`.
+
+| Query | Fields | Result |
+|---|---|---|
+| `unknown_fields` | optional `path` | `fields` (names, sorted): the top-level fields of the design file read that this build did not read; with `path`, those a save to `path` drops (all of them when `path` is that file, by any spelling of its path; none for another file). `file`: the file they were read from (null for none). `message`, when `fields` has any: the open warning, or with `path` the save's (``saving over this design drops the fields `comments`, … that a newer MitCad wrote and this MitCad did not read``). Class file IO: it is about the saved file |
+
+Tests: `core/model-tests/files/src/unknown_fields_tests.rs` (ignored and
+named, the saved file without them, unknown feature fields still refused;
+the save path's flag kept by a save to another file and cleared by a save
+over the file read), `tools/ui-unknown-fields-test.sh` (mitcad-cli's
+warnings; Floating: the warning, Cancel and Save As; Docked: Save and Drop
+Them) and `app.ui-windows-unknown-fields`
+(`tools/ui-windows-unknown-fields-test.ps1`).

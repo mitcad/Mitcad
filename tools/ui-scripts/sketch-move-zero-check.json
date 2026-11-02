@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved Sketch1 after one Move/Copy of the line by the typed 10 mm in X (mitcad#1163): the line moved once, the framing points where they were."},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"entities":[
+    {"at":[-40,-30]},
+    {"at":[40,30]},
+    {"at":[-10,0]},
+    {"at":[30,10]},
+    {"type":"line"}
+  ]},"tolerance":0.000001}}
+]

@@ -72,6 +72,17 @@ rust::Vec<ModelCurve> model_curves(const geometry::Shape& shape, rust::Str name)
   return result;
 }
 
+rust::Vec<NamedBoundaryCurve> face_boundary(const geometry::Shape& shape, rust::Str face) {
+  rust::Vec<NamedBoundaryCurve> result;
+  for (const geometry::NamedBoundaryCurve& c : geometry::face_boundary(shape, std::string(face))) {
+    NamedBoundaryCurve edge{};
+    edge.name = rust::String(c.name);
+    edge.curve = convert(c.curve);
+    result.push_back(std::move(edge));
+  }
+  return result;
+}
+
 IndexedElement indexed_element(const geometry::Shape& shape, std::uint8_t kind, std::size_t index) {
   const geometry::IndexedElement element =
       geometry::indexed_element(shape, static_cast<char>(kind), static_cast<int>(index));

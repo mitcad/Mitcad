@@ -11,6 +11,36 @@ enum class AssistantClient { ClaudeDesktop, ClaudeCode, Codex, Other };
 
 QString installedBridge(const QString& applicationDirectory);
 
+// MitCad's bridge, mitcad-cli, beside the running executable (mitcad#1170):
+// the one lookup of Connect AI Assistant, the chat panel, the assistant
+// indicator and the UI tests' driver.
+//
+// The folder of the running executable. On Linux the real executable's
+// (/proc/self/exe), as the render worker is found: for an AppImage, Qt names
+// the AppImage file's folder as the application's, while the executables are
+// in the AppImage's mount folder. Elsewhere QCoreApplication's
+// applicationDirPath.
+QString executableDirectory();
+// installedBridge of executableDirectory(): the bundled mitcad-cli (a path
+// inside a running AppImage's mount folder, valid while MitCad runs).
+QString bundledBridge();
+// How an assistant's settings start the bridge: the program, and the
+// arguments before `mcp --connect` (`cli` for an AppImage).
+struct BridgeLaunch {
+  QString program;
+  QStringList leading;
+};
+// The launch an assistant registers. For an AppImage (`appImage`, the
+// runtime's APPIMAGE: an absolute path of an existing file) the AppImage file
+// itself with `cli`, whose AppRun then starts the bundled mitcad-cli: the
+// mount folder changes on each start and is gone once MitCad closes. Else the
+// bridge, with no leading arguments.
+BridgeLaunch registeredBridge(const QString& bridge, const QString& appImage);
+// The same for this process: bundledBridge() and, on Linux, APPIMAGE.
+BridgeLaunch registeredBridge();
+// The bridge's arguments to connect: `leading`, then `mcp --connect`.
+QStringList bridgeConnectArguments(const QStringList& leading = {});
+
 // Finding Claude Code (`claude`) and Codex (`codex`), the one lookup that
 // Connect AI Assistant and the chat panel (mitcad#947) share (mitcad#956):
 // PATH first, then the folders their installers use, which a PATH may not
@@ -56,8 +86,10 @@ QString assistantShellWord(const QString& value, bool windows, bool always = fal
 // arguments, each quoted only when it needs it; PowerShell's call operator
 // only before a quoted program.
 QString assistantCommand(const QString& program, const QStringList& arguments, bool windows);
-QStringList assistantRegistration(AssistantClient client, const QString& bridge);
-QJsonObject assistantJsonConfiguration(const QString& bridge);
+// The registration's arguments and the JSON configuration start `bridge`
+// with `leading`, then `mcp --connect` (BridgeLaunch).
+QStringList assistantRegistration(AssistantClient client, const QString& bridge, const QStringList& leading = {});
+QJsonObject assistantJsonConfiguration(const QString& bridge, const QStringList& leading = {});
 QJsonObject assistantBundleManifest(const QString& bridge, bool windows, const QString& platform);
 // The largest settings file read: Codex's TOML (and a file chosen under
 // Advanced) is small; Claude Code keeps its projects' state and history in

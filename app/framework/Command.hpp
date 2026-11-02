@@ -162,7 +162,7 @@ struct InputNote {
   // 3D Print's Materials summary); else wrapped.
   bool oneLine = false;
   // A notice under the text and its icon buttons, at its level
-  // (mitcad#1062: 3D Print's Materials row says which materials name no
+  // (mitcad#1062: 3D Print's note under its material rows says which materials name no
   // preset of the slicer, a warning): an error or a warning in the level's
   // highlight box with its icon and word, as the panel's message
   // (docs/ui-conventions.md, "Messages and severity"); any other level
@@ -213,7 +213,12 @@ struct ChoicePickerRow {
 // A choice whose value starts with this is a heading of the options after
 // it (mitcad#655: 3D Print's places, Built-in, My library, ...), shown as
 // a small disabled line that cannot be chosen; a frontend without headings
-// lists it, and choosing it changes nothing.
+// lists it, and choosing it changes nothing. A heading may be the input's
+// value, as a state rather than an option: the closed field then shows
+// its label (with a picker, its row's short label, the label the
+// tooltip), and a picker does not list it (mitcad#1141: Send to Slicer's
+// material rows show what their bodies print with; a material chosen is
+// given to them, and the row shows them again).
 inline QString choiceHeadingPrefix() { return QStringLiteral("__heading/"); }
 
 // A choice whose value starts with this is a separator line between the
@@ -350,6 +355,11 @@ struct InputDef {
   // For a list's input, the first row's value is kept. Editing a feature
   // and Cancel keep nothing.
   bool remembered = false;
+  // Value: a length default that is a standard size (a thread's pitch, a
+  // gear's module, a filament's diameter) keeps its text in every design;
+  // other length defaults are shown in the design's unit, as a sensible
+  // value of it (mitcad#1165, framework/LengthUnits.hpp).
+  bool exactDefault = false;
   // A handle in the view that drags the value; none when it returns none.
   std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)>
       manipulator;
@@ -408,14 +418,15 @@ struct InputDef {
   QString buttonTooltip;
   std::function<void(const CommandState&, const CommandContext&)> onButton;
   // The button as a small icon (its name in app/icons) instead of its text,
-  // the text then its accessible name (mitcad#655: 3D Print's Edit).
+  // the text then its accessible name (mitcad#655; Send to Slicer's Edit
+  // pencil until mitcad#1134).
   QString buttonIcon;
   // A note row without a label in the field column, under the fields
   // above it, not across the panel (mitcad#655: 3D Print's Import from
   // slicer… and Overrides under Process).
   bool fieldColumn = false;
-  // The button enabled only while this holds (mitcad#655: Edit on Slicer
-  // default is disabled); always when unset.
+  // The button enabled only while this holds (mitcad#655: Send to
+  // Slicer's Edit on Slicer default, until mitcad#1134); always when unset.
   std::function<bool(const CommandState&)> buttonEnabled;
   // Choice: shown as a tile instead of the drop-down and its button
   // (BUILD's part, mitcad#427): the chosen option's picture, name and a
@@ -443,7 +454,9 @@ struct InputDef {
   // options in their order with the rows' headings, short labels and tags
   // (an option without a row by its label, without a heading); the closed
   // field shows the chosen row's short label, its whole label the
-  // tooltip. A frontend without such a picker shows the drop-down.
+  // tooltip. The options' pictures (choiceImage) are its rows' swatches
+  // (mitcad#1141: Send to Slicer's materials). A frontend without such a
+  // picker shows the drop-down.
   std::function<QVector<ChoicePickerRow>(const CommandState&)> choicePicker;
   // Note (mitcad#655): what the row shows in a state, and what a click on
   // its button `action` (the index in InputNote::actions) does, with the
@@ -505,6 +518,13 @@ struct InputDef {
   // Measure's Selection Filter). A frontend without such lines shows the
   // label beside the field.
   bool fieldBelow = false;
+  // Check: its label is the box's own text, on a row across the panel, so
+  // that a long label does not widen the labels' column and squeeze every
+  // field beside it (mitcad#1162: Send to Slicer's Use the open slicer
+  // window took 69 pixels from each field, and Send as assembled went past
+  // the panel's edge). A frontend without such rows shows the label
+  // beside the box.
+  bool textBeside = false;
   // Value: its handle stays in the view while the input is hidden (folded
   // away under More, mitcad#656: a placement's Offset and Angle).
   bool handleWhenHidden = false;
@@ -534,6 +554,10 @@ struct InputDef {
   }
   InputDef& withRemembered() {
     remembered = true;
+    return *this;
+  }
+  InputDef& withExactDefault() {
+    exactDefault = true;
     return *this;
   }
   InputDef& withHeading(const QString& text) {
@@ -734,6 +758,10 @@ struct InputDef {
     fieldColumn = true;
     return *this;
   }
+  InputDef& withTextBeside() {
+    textBeside = true;
+    return *this;
+  }
   InputDef& withButtonEnabled(std::function<bool(const CommandState&)> on) {
     buttonEnabled = std::move(on);
     return *this;
@@ -888,6 +916,8 @@ struct Inspection {
   QString error;      // the model could not answer
   TopoDS_Shape shape; // drawn over the view (overlaps, the section plane)
   bool red = false;   // the shape is a problem (interference)
+  // Measurement guide edges, opaque and visible through the measured body.
+  bool measurementWire = false;
   QJsonValue section; // a plane reference: the bodies are shown cut there
   // Items highlighted besides the inputs' (orange; a component's bodies for
   // a Component item): BUILD's auto-length target (mitcad#375).
@@ -1073,6 +1103,12 @@ struct CommandDef {
   // shows it as its error, OK disabled), empty when the preview is shown.
   // Not with asynchronous commands (no preview there).
   std::function<QString(const QJsonObject& def)> acceptPreview;
+  // An application panel whose `build` and inputs read nothing of the
+  // model (Send to Slicer, mitcad#1121): its OK is ready also while a job
+  // computes the model (the panel's bed plan in the background), and OK
+  // or Enter pressed then waits for the job's end and runs `accept`.
+  // Not with `acceptPreview` (that reads the model).
+  bool okWhileBusy = false;
   // The OK button's text when it is not "OK" (3D Print: Send).
   QString okLabel;
   // Commands that run model commands of their own (BUILD, mitcad#375),

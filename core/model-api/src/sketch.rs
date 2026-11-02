@@ -1414,10 +1414,13 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                             .collect();
                         let mut value = json!({"key": r.profile.key, "area": r.area,
                                                "centroid": r.centroid, "loops": loops});
+                        if r.profile.face_bounded() {
+                            value["face_bounded"] = json!(true);
+                        }
                         // A region bounded by one glyph contour belongs to
                         // its text.
                         let outer: Vec<mitcad_model::topo::CurveId> =
-                            r.profile.key.segments().map(|s| s.curve).collect();
+                            r.profile.key.segments().map(|s| s.curve.clone()).collect();
                         if let [curve @ mitcad_model::topo::CurveId::Glyph { text, .. }] =
                             outer.as_slice()
                         {
@@ -1584,9 +1587,9 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             .collect();
         // What each warning is about (mitcad#264): a linked projection's
         // warning carries its entities, the others none.
-        let warnings = self.warnings(uid);
+        let mut warnings = self.warnings(uid).to_vec();
         let collapsed = status.degenerate_warning();
-        let warning_entities: Vec<Vec<String>> = warnings
+        let mut warning_entities: Vec<Vec<String>> = warnings
             .iter()
             .map(|warning| {
                 if collapsed.as_deref() == Some(warning.as_str()) {
@@ -1607,6 +1610,14 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                     .unwrap_or_default()
             })
             .collect();
+        // The solve's redundant constraints as warnings, one per offset,
+        // pattern or the sketch's own, each with the entities its
+        // constraints name (mitcad#1171); their ids stay in `redundant`.
+        let redundant = redundant_groups(&status, Some(def));
+        for (message, entities) in &redundant {
+            warnings.push(message.clone());
+            warning_entities.push(entities.clone());
+        }
         let mut result = json!({
             "uid": uid,
             "name": entry.name,
@@ -1645,7 +1656,7 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
         // (conflicting, not converged) an error, redundant constraints a
         // warning, unmet inactive ones information; its warnings are added
         // as warnings with the query's other results.
-        let notices = solve_notices(result["error"].as_str(), &status);
+        let notices = solve_notices(result["error"].as_str(), &status, &redundant);
         if !notices.is_empty() {
             result["notices"] = notice::to_json(&notices);
         }
@@ -1655,19 +1666,20 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
 
 /// A sketch solve's notices (mitcad#1040, `docs/ui-conventions.md`): the
 /// solve's error (conflicting constraints, a solve that did not converge),
-/// redundant constraints as a warning, and the inactive constraints the
+/// redundant constraints as warnings, one per group of
+/// [`redundant_groups`] (mitcad#1171), and the inactive constraints the
 /// geometry does not meet as information.
-pub(crate) fn solve_notices(error: Option<&str>, status: &SketchStatus) -> Vec<Notice> {
+pub(crate) fn solve_notices(
+    error: Option<&str>,
+    status: &SketchStatus,
+    redundant: &[(String, Vec<String>)],
+) -> Vec<Notice> {
     let mut notices = Vec::new();
     if let Some(error) = error {
         notices.push(Notice::error(error));
     }
-    if !status.redundant.is_empty() {
-        let items: Vec<String> = status.redundant.iter().map(item).collect();
-        notices.push(Notice::warning(format!(
-            "Redundant constraints (they follow from the others): {}",
-            items.join(", ")
-        )));
+    for (message, _) in redundant {
+        notices.push(Notice::warning(message.as_str()));
     }
     if !status.unmet_inactive.is_empty() {
         let items: Vec<String> = status
@@ -1681,6 +1693,108 @@ pub(crate) fn solve_notices(error: Option<&str>, status: &SketchStatus) -> Vec<N
         )));
     }
     notices
+}
+
+/// The solve's redundant constraints grouped by where they come from
+/// (mitcad#1171): an offset's own (its lines' distances and parallels, its
+/// helpers' lengths, its tangent corners), a pattern's, then the sketch's,
+/// each group a message that counts them ("Offset k1: 2 dimensions follow
+/// from the others", "Redundant: 1 constraint follows from the others")
+/// with the entities they name (an offset's results, a pattern's entities
+/// for what they hold themselves), for the Sketch Palette to select. The
+/// ids themselves are the query's `redundant`. Without the definition every
+/// item is the sketch's own and a constraint.
+pub(crate) fn redundant_groups(
+    status: &SketchStatus,
+    def: Option<&SketchDef>,
+) -> Vec<(String, Vec<String>)> {
+    use mitcad_model::sketch::offset::constraints_of;
+    // Who holds what: (the name, its constraints and dimensions, what it
+    // is about), offsets then patterns.
+    let owners: Vec<(String, BTreeSet<ConstraintUid>, Vec<String>)> = def
+        .map(|def| {
+            let offsets = def.offsets.iter().map(|o| {
+                let own = constraints_of(o, &def.entities, &def.constraints, &def.dimensions);
+                let made = o.results.iter().map(|r| Ref::Curve(*r).to_string());
+                (format!("Offset {}", o.id), own, made.collect())
+            });
+            let patterns = def.patterns.iter().map(|p| {
+                let made = p.entities.iter().map(ToString::to_string);
+                (
+                    format!("Pattern {}", p.id),
+                    BTreeSet::from([p.id]),
+                    made.collect(),
+                )
+            });
+            offsets.chain(patterns).collect()
+        })
+        .unwrap_or_default();
+    // Per owner and the sketch's own (last): dimensions, constraints,
+    // fixed entities and the entities they name.
+    let mut groups: Vec<([usize; 3], Vec<String>)> = vec![([0; 3], Vec::new()); owners.len() + 1];
+    for redundant in &status.redundant {
+        let (group, kind, about): (usize, usize, Vec<String>) = match redundant {
+            SolverItem::Fixed(entity) => (owners.len(), 2, vec![entity.to_string()]),
+            SolverItem::Constraint(id) => {
+                let group = owners
+                    .iter()
+                    .position(|(_, own, _)| own.contains(id))
+                    .unwrap_or(owners.len());
+                let constraint = def.and_then(|d| d.constraints.iter().find(|c| c.id == *id));
+                let dimension = def.and_then(|d| d.dimensions.iter().find(|d| d.id == *id));
+                let refs = match (constraint, dimension) {
+                    (Some(c), _) => c.kind.refs(),
+                    (None, Some(d)) => d.kind.refs(),
+                    (None, None) => Vec::new(),
+                };
+                let about = if refs.is_empty() {
+                    owners.get(group).map(|o| o.2.clone()).unwrap_or_default()
+                } else {
+                    refs.iter().map(ToString::to_string).collect()
+                };
+                (group, usize::from(dimension.is_none()), about)
+            }
+        };
+        let (counts, entities) = &mut groups[group];
+        counts[kind] += 1;
+        for e in about {
+            if !entities.contains(&e) {
+                entities.push(e);
+            }
+        }
+    }
+    groups
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (counts, _))| counts.iter().sum::<usize>() > 0)
+        .map(|(i, (counts, entities))| {
+            let names = [
+                ("dimension", "dimensions"),
+                ("constraint", "constraints"),
+                ("fixed entity", "fixed entities"),
+            ];
+            let parts: Vec<String> = counts
+                .iter()
+                .zip(names)
+                .filter(|(n, _)| **n > 0)
+                .map(|(n, (one, many))| format!("{n} {}", if *n == 1 { one } else { many }))
+                .collect();
+            let counted = match parts.as_slice() {
+                [rest @ .., last] if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+                _ => parts.join(""),
+            };
+            let verb = if counts.iter().sum::<usize>() == 1 {
+                "follows"
+            } else {
+                "follow"
+            };
+            let origin = owners.get(i).map_or("Redundant", |o| o.0.as_str());
+            (
+                format!("{origin}: {counted} {verb} from the others"),
+                entities,
+            )
+        })
+        .collect()
 }
 
 /// The document's methods used only in this module, as an
@@ -3242,7 +3356,8 @@ mod notice_tests {
             unmet_inactive: vec![ConstraintUid(5)],
             ..SketchStatus::default()
         };
-        let notices = solve_notices(Some("the sketch cannot be solved"), &status);
+        let redundant = redundant_groups(&status, None);
+        let notices = solve_notices(Some("the sketch cannot be solved"), &status, &redundant);
         let levels: Vec<_> = notices.iter().map(|n| n.level).collect();
         assert_eq!(
             levels,
@@ -3252,8 +3367,71 @@ mod notice_tests {
                 notice::NoticeLevel::Info
             ]
         );
-        assert!(notices[1].message.ends_with(": k3"), "{notices:?}");
+        assert_eq!(
+            notices[1].message, "Redundant: 1 constraint follows from the others",
+            "{notices:?}"
+        );
         assert!(notices[2].message.ends_with(": k5"), "{notices:?}");
-        assert!(solve_notices(None, &SketchStatus::default()).is_empty());
+        assert!(solve_notices(None, &SketchStatus::default(), &[]).is_empty());
+    }
+
+    /// The redundant constraints by where they come from (mitcad#1171): an
+    /// offset's own, counted and with its curves, then the sketch's with
+    /// the entities they name.
+    #[test]
+    fn redundant_constraints_are_grouped_by_their_origin() {
+        use mitcad_model::ParamId;
+        use mitcad_model::sketch::offset::SketchOffset;
+        use mitcad_model::sketch::{Constraint, Dimension};
+        let c = |n: u32| EntityUid(n);
+        let mut def = SketchDef::default();
+        // Offset k2 of c1, c2 its result: parallel k3, distance k4.
+        def.offsets.push(SketchOffset {
+            id: ConstraintUid(2),
+            curves: vec![c(1)],
+            distance: ParamId::from_raw(0),
+            left: false,
+            results: vec![c(2)],
+            corners: Vec::new(),
+            helpers: Vec::new(),
+            derived: false,
+        });
+        def.constraints.push(Constraint::new(
+            ConstraintUid(3),
+            ConstraintKind::Parallel { a: c(1), b: c(2) },
+        ));
+        def.dimensions.push(Dimension::new(
+            ConstraintUid(4),
+            DimensionKind::LineDistance { a: c(1), b: c(2) },
+            Some(ParamId::from_raw(0)),
+        ));
+        // The sketch's own parallel k9 of c5 and c6.
+        def.constraints.push(Constraint::new(
+            ConstraintUid(9),
+            ConstraintKind::Parallel { a: c(5), b: c(6) },
+        ));
+        let status = SketchStatus {
+            redundant: vec![
+                SolverItem::Constraint(ConstraintUid(3)),
+                SolverItem::Constraint(ConstraintUid(4)),
+                SolverItem::Constraint(ConstraintUid(9)),
+                SolverItem::Fixed(Ref::Point(c(7))),
+            ],
+            ..SketchStatus::default()
+        };
+        let strings = |v: &[&str]| v.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            redundant_groups(&status, Some(&def)),
+            [
+                (
+                    "Offset k2: 1 dimension and 1 constraint follow from the others".to_owned(),
+                    strings(&["c1", "c2"])
+                ),
+                (
+                    "Redundant: 1 constraint and 1 fixed entity follow from the others".to_owned(),
+                    strings(&["c5", "c6", "p7"])
+                ),
+            ]
+        );
     }
 }

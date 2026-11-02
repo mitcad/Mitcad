@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use super::library_items::library_item;
 use super::{Document, ModelError, invalid};
+use crate::appearance::Appearance;
 use crate::kernel::Kernel;
 use crate::material::{self, Material, MaterialChange};
 use crate::print_files::filaments;
@@ -177,18 +178,38 @@ impl<K: Kernel> Document<K> {
             return Err(invalid("merge_materials needs two materials or more"));
         }
         let mut items: Vec<&Material> = Vec::new();
+        // The appearances the items' files carry (mitcad#1067).
+        let mut carried: Vec<Appearance> = Vec::new();
         for id in ids {
             let found = library_item(libraries, library, ItemKind::Material, id)?;
-            let ItemData::Material { material, .. } = &found.data else {
+            let ItemData::Material {
+                material,
+                appearances,
+            } = &found.data
+            else {
                 unreachable!("a material's folder")
             };
             if items.iter().any(|m| m.id == material.id) {
                 return Err(invalid(format!("material {id} is named twice")));
             }
             items.push(material);
+            for look in appearances {
+                if !carried.iter().any(|a| a.id == look.id) {
+                    carried.push(look.clone());
+                }
+            }
         }
         let merged = filaments::merge_kept(&items).ok_or_else(|| invalid(NOT_ONE_FILAMENT))?;
         let first = items[0];
+        // It offers the appearances of them all, as the design's merge does
+        // (mitcad#1055), and its file carries the others' too (mitcad#1150):
+        // theirs go with their files.
+        let mut listed = first.clone();
+        for m in &items {
+            for look in m.appearance_list() {
+                listed.add_appearance(&look);
+            }
+        }
         // The first item's values become the merged ones: a key it has and
         // the merge has not goes.
         let mut filament: BTreeMap<String, Value> = first
@@ -237,13 +258,15 @@ impl<K: Kernel> Document<K> {
             filament: Some(filament),
             slicer: Some(slicer),
             variants: Some(merged.variants.clone()),
+            appearances: Some(listed.appearance_list()),
             ..MaterialChange::default()
         };
         let first_id = ids[0].clone();
         let others: Vec<String> = ids[1..].to_vec();
         self.as_one_step(|doc| {
-            let (path, version) =
-                doc.edit_library_material(libraries, library, &first_id, &change)?;
+            let (path, version) = doc.edit_library_material_carrying(
+                libraries, library, &first_id, &change, None, &carried,
+            )?;
             for id in &others {
                 doc.delete_library_material(libraries, library, id)?;
             }

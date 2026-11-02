@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# The AppImage's entry point (packaging/linux/make-appimage.sh, mitcad#1170).
+# `MitCad.AppImage cli <arguments>` runs the bundled mitcad-cli with the
+# arguments, so that an AI assistant can register the AppImage file itself
+# ("$APPIMAGE" cli mcp --connect): the folder the AppImage is mounted in
+# changes on each start and goes away when MitCad closes. Anything else
+# starts MitCad with its arguments, as before.
+here=$(dirname "$(readlink -f "$0")")
+if [ "$#" -gt 0 ] && [ "$1" = cli ]; then
+  shift
+  exec "$here/usr/bin/mitcad-cli" "$@"
+fi
+exec "$here/usr/bin/mitcad" "$@"

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files/MainWindowSaveAsMesh.cpp app/files/SaveAsMesh.cpp app/files/Print3d.cpp
 # check-all sources: app/MainWindowContextMenu.cpp app/browser core/model/src/exchange core/3mf geometry/io tools/cli
+# check-all sources: app/files/FileDialogs.cpp app/files/MainWindowFiles.cpp
 # Input-driven Windows UI test of Save As Mesh (mitcad#734) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-save-as-mesh-test.sh does on Linux, on a design that mitcad-cli
@@ -15,6 +16,10 @@
 #   3. The root's row: Skin left out; OBJ, a file per body, Custom with a
 #      1 mm longest edge, into a folder: Plate.obj and Lid.obj.
 #   4. Skin's row: Save As Mesh... disabled with the reason.
+#   5. File > Export remembers (mitcad#1164): Plate selected, the dialog
+#      starts as STEP named Plate in the last folder; 3MF with refinement
+#      High chosen and written. Lid selected next: the dialog starts with
+#      3MF, High and Lid's name, and Enter writes Lid.3mf.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-save-as-mesh-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -25,7 +30,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{} -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'file.export' = 'F9' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -187,5 +192,39 @@ Row-Menu 'Browser Root/Bodies/Skin'
 Ui-ExpectNew 'Save As Mesh disabled: Surface and empty bodies are not saved as meshes' 'disabled, the reason given'
 Expect-Last $entry
 Ui-Step 'close the menu (Esc)'           { Ui-Key 'Escape' }
+
+Write-Host '--- 5. File > Export remembers the type and the refinement, names the body (mitcad#1164)'
+Ui-FocusMain
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'click Plate''s row'             { Ui-ClickLogged 'Browser Root/Bodies/Plate' }
+Ui-ExpectNew 'Browser selected: Root/Bodies/Plate' 'Plate selected'
+Ui-Mark
+Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
+Ui-ExpectNew ", type step-ap214, refinement medium, file $workLogged/meshes/Plate.step" 'STEP at first, the selected body''s name in the last folder'
+Ui-Mark
+Ui-Step '3MF (Alt+T, Down x7), High (Alt+R, Down), OK' {
+  Ui-FocusDialog '^Export$'
+  Ui-Key 'alt+t'
+  foreach ($i in 1..7) { Ui-Key 'Down' }
+  Ui-Key 'alt+r', 'Down', 'Return'
+  Ui-FocusMain
+}
+Ui-ExpectNew "Export dialog: 3MF for 3D printing (*.3mf) to $workLogged/meshes/Plate.3mf, refinement high" '3MF with refinement High, the name''s extension follows the type'
+Ui-ExpectNew "Exported $workLogged/meshes/Plate.3mf: 3mf, 1 body(ies)" 'Plate written as 3MF' 60
+if (-not (Test-Path (Join-Path $meshes 'Plate.3mf'))) { Ui-Fail 'no Plate.3mf' }
+Ui-ExpectLog 'Browser Root/Lid:1/Bodies/Lid at' 'the browser lists Lid''s body in Lid:1'
+Ui-Mark
+Ui-Step 'click Lid''s row'               { Ui-ClickLogged 'Browser Root/Lid:1/Bodies/Lid' }
+Ui-ExpectNew 'Browser selected: Root/Lid:1/Bodies/Lid' 'Lid selected'
+Ui-Mark
+Ui-Step 'export again (F9)'              { Ui-Key 'F9' }
+Ui-ExpectNew ", type 3mf, refinement high, file $workLogged/meshes/Lid.3mf" 'the next export starts with 3MF, High and the selected body''s name'
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-FocusDialog '^Export$'; Ui-Key 'Return'; Ui-FocusMain }
+Ui-ExpectNew "Export dialog: 3MF for 3D printing (*.3mf) to $workLogged/meshes/Lid.3mf, refinement high" 'taken as proposed'
+Ui-ExpectNew "Exported $workLogged/meshes/Lid.3mf: 3mf, 1 body(ies)" 'Lid written as 3MF' 60
+if (-not (Test-Path (Join-Path $meshes 'Lid.3mf'))) { Ui-Fail 'no Lid.3mf' }
+Write-Host 'ok   both files written'
 
 Ui-Finish 'UI Windows save as mesh test'

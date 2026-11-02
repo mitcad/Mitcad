@@ -178,11 +178,14 @@ CommandDef bearingCommand(const CommandContext& context) {
           .withChoices([&context, sizes](const CommandState&) { return sizeChoices(context, sizes); })
           .withHeading(QObject::tr("Size")),
       valueInput(QStringLiteral("bore"), QObject::tr("Bore"), ValueKind::Length, QStringLiteral("8 mm"))
+          .withExactDefault()
           .withVisible(custom),
       valueInput(QStringLiteral("outside_diameter"), QObject::tr("Outside Diameter"), ValueKind::Length,
                  QStringLiteral("22 mm"))
+          .withExactDefault()
           .withVisible(custom),
       valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("7 mm"))
+          .withExactDefault()
           .withVisible(custom),
       checkInput(QStringLiteral("flange"), QObject::tr("Flange"), false),
       valueInput(QStringLiteral("flange_diameter"), QObject::tr("Flange Diameter"), ValueKind::Length,

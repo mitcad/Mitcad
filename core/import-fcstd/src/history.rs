@@ -27,7 +27,7 @@
 //!   replayed and suppressed.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use mitcad_freecad::Object;
 use mitcad_model::{
@@ -91,6 +91,8 @@ pub(super) struct Replay<S> {
     pub features: HashMap<String, Vec<FeatureUid>>,
     pub main: HashMap<String, FeatureUid>,
     pub sketches: HashMap<String, SketchMade>,
+    /// Binder uses retained by a successful consumer, by (object, property).
+    pub binder_uses: HashMap<String, BTreeMap<(String, String), super::binders::BinderUse>>,
     pub datums: HashMap<String, FeatureUid>,
     /// How many more objects use each Part workbench operand.
     pub uses: HashMap<String, usize>,
@@ -110,6 +112,7 @@ impl<S> Default for Replay<S> {
             features: HashMap::new(),
             main: HashMap::new(),
             sketches: HashMap::new(),
+            binder_uses: HashMap::new(),
             datums: HashMap::new(),
             uses: HashMap::new(),
             parametric: HashSet::new(),
@@ -596,6 +599,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         self.finish_roots();
+        self.finish_binders();
     }
 
     // Shared steps.
@@ -661,7 +665,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     && let Some(output) = self.doc.sketch_output(*uid)
                 {
                     let profiles: Vec<Value> =
-                        super::features::region_depths(&output.region_info)
+                        self.sketch_region_depths(*uid, output)
                             .into_iter()
                             .filter(|(_, depth)| depth % 2 == 0)
                             .map(|(key, _)| {
@@ -1080,6 +1084,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     pub(super) fn push_feature(&mut self, object: &Object, report: FeatureReport) {
+        self.feature_binder_uses(object, &report);
         let note = match report.outcome {
             ObjectOutcome::Parametric | ObjectOutcome::Partial => Some(format!(
                 "{} ({})",

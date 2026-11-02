@@ -192,9 +192,20 @@ pub struct Extra<'a> {
     /// point (by id) and each circle's radius and ellipse's minor radius is
     /// taken from here where it has one of the same kind.
     pub oriented: Option<&'a [Entity]>,
+    /// Stored constraints and dimensions the solve leaves out: those of the
+    /// offsets made by constraints that their tangent corners and helper
+    /// anchors (in `bindings`) imply (mitcad#1171,
+    /// [`crate::offset::independent`]). They stay in the definition.
+    pub left_out: &'a BTreeSet<ConstraintUid>,
+    /// The owners of bindings that only restate their own definition (the
+    /// offsets made by constraints, mitcad#1171): a dependent set of their
+    /// bindings and fixes alone is theirs, not redundant to the user (the
+    /// closing corner of a closed chain of tangent arcs).
+    pub restating: &'a BTreeSet<ConstraintUid>,
 }
 
 static NOTHING: BTreeSet<EntityUid> = BTreeSet::new();
+static NONE_LEFT_OUT: BTreeSet<ConstraintUid> = BTreeSet::new();
 
 impl Default for Extra<'_> {
     fn default() -> Self {
@@ -202,6 +213,8 @@ impl Default for Extra<'_> {
             bindings: &[],
             skip: &NOTHING,
             oriented: None,
+            left_out: &NONE_LEFT_OUT,
+            restating: &NONE_LEFT_OUT,
         }
     }
 }
@@ -228,6 +241,8 @@ struct Built {
     spacings: BTreeMap<ConstraintUid, (Vec<Ref>, SpacingMode, Option<EntityUid>)>,
     /// The curves the last converged solve left collapsed.
     degenerate: Vec<EntityId>,
+    /// [`Extra::restating`].
+    restating: BTreeSet<ConstraintUid>,
 }
 
 fn list(items: &[SolverItem]) -> String {
@@ -386,21 +401,37 @@ impl Built {
             anchors,
             spacings,
             degenerate: Vec::new(),
+            restating: extra.restating.clone(),
         };
         // A fixed line whose both end points are fixed (the sketch's axis
         // lines, mitcad#500) is held by its points' fixes; fixing the line
         // too would only repeat them and be reported redundant
-        // (mitcad#877). The line stays fixed in the definition.
+        // (mitcad#877). So is a spline made only of fixed control or fit
+        // points (mitcad#1171). A circle or an ellipse has a radius of its
+        // own and keeps its fix. An arc keeps its fix too, even with its
+        // centre and ends fixed (a projected one): its own equation puts its
+        // end on the circle through its start, and without the fix the solve
+        // takes another path through the fixed points' equations, which
+        // moves a point that a sketch puts where two tangent circles meet
+        // (where only the solve's last steps place it) by micrometres. A
+        // linked profile of an imported design moved that much no longer
+        // joined its body (mitcad#1171, found by a FreeCAD document). That
+        // its fix only repeats the points' is not reported: a redundant set
+        // of fixes alone is left out (`Built::analyze`). The curve stays fixed
+        // in the definition.
         let fixed_points: BTreeSet<EntityUid> = entities
             .iter()
             .filter(|e| e.fixed && e.is_point())
             .map(|e| e.id)
             .collect();
-        let held_by_points = |e: &Entity| match e.kind {
-            EntityKind::Line { start, end, .. } => {
-                fixed_points.contains(&start) && fixed_points.contains(&end)
+        let held_by_points = |e: &Entity| {
+            let all = |points: &[EntityUid]| points.iter().all(|p| fixed_points.contains(p));
+            match &e.kind {
+                EntityKind::Line { start, end, .. } => all(&[*start, *end]),
+                EntityKind::Spline { control, .. } => all(control),
+                EntityKind::FittedSpline { points, .. } => all(points),
+                _ => false,
             }
-            _ => false,
         };
         for e in entities.iter().filter(|e| e.fixed && !held_by_points(e)) {
             let c = if e.is_point() {
@@ -410,7 +441,10 @@ impl Built {
             };
             built.add(c, SolverItem::Fixed(e.as_ref()))?;
         }
-        for c in constraints {
+        for c in constraints
+            .iter()
+            .filter(|c| !extra.left_out.contains(&c.id))
+        {
             let item = SolverItem::Constraint(c.id);
             for s in built
                 .constraint(&c.kind)
@@ -419,7 +453,10 @@ impl Built {
                 built.add(s, item)?;
             }
         }
-        for d in dimensions {
+        for d in dimensions
+            .iter()
+            .filter(|d| !extra.left_out.contains(&d.id))
+        {
             if let Some(value) = d.value {
                 let s = built
                     .dimension(d.kind, value)
@@ -509,6 +546,8 @@ impl Built {
                 b: c(b)?,
                 at: p(at)?,
             },
+            BindingKind::Midpoint { point, curve } => S::Midpoint(p(point)?, c(curve)?),
+            BindingKind::HorizontalPoints { a, b } => S::HorizontalPoints(p(a)?, p(b)?),
         })
     }
 
@@ -930,12 +969,35 @@ impl Built {
             )
             .copied()
             .collect();
-        status.redundant = self.items(&a.redundant_constraints());
-        status.redundant_sets = a
+        // Fixed geometry that follows from other fixed geometry is not
+        // redundant to the user (mitcad#1171): the three fixed points of a
+        // projected arc, whose end the arc's own equation puts on the
+        // circle through its start; a projected circle's fixed centre and
+        // its own fix. A set that only fixes take part in is left out, and
+        // so is one of fixes and an offset's own bindings, which restate
+        // what the offset holds (the closing corner of a closed chain of
+        // tangent arcs, whose arcs' equations and corners close the loop).
+        let restating = &self.restating;
+        let internal = |s: &[SolverItem]| {
+            s.iter().all(|i| match i {
+                SolverItem::Fixed(_) => true,
+                SolverItem::Constraint(k) => restating.contains(k),
+            })
+        };
+        let dependent: Vec<_> = a
             .redundant
             .iter()
-            .map(|d| self.items(&d.involved))
+            .map(|d| (self.items(&[d.constraint]), self.items(&d.involved)))
+            .filter(|(_, set)| !internal(set))
             .collect();
+        let mut redundant: Vec<SolverItem> = dependent
+            .iter()
+            .flat_map(|(item, _)| item.iter().copied())
+            .collect();
+        redundant.sort();
+        redundant.dedup();
+        status.redundant = redundant;
+        status.redundant_sets = dependent.into_iter().map(|(_, set)| set).collect();
         status.conflicts = a
             .conflicts
             .iter()

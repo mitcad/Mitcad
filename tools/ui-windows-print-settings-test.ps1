@@ -24,6 +24,11 @@
 #      design's and My library's, under their vendor; "X1" typed, Enter
 #      chooses the first X1 row, shown without the vendor: the design's
 #      printer is set.
+#   4. No button beside Printer or Process (mitcad#1134; the same in
+#      tools/ui-print-picker-test.sh and ui-print-settings-test.sh on
+#      Linux): Edit printers and processes..., the pickers' last row,
+#      opens Printers and Processes on the chosen printer, then on the
+#      chosen process; the choices stay.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-print-settings-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -181,6 +186,13 @@ Write-Host '--- 3. The Printer picker: "X1" typed, Enter chooses the first X1 ro
 Ui-Mark
 Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
 Ui-ExpectNew 'Panel Send to Slicer input printer at ' 'the Printer row'
+Ui-ExpectNew 'Panel Send to Slicer input process at ' 'the Process row'
+# The panel's places, logged together: the fields only, no pencil beside
+# them (mitcad#1134).
+Ui-Sync
+$pencil = @(Ui-NewLines) | Where-Object { $_ -match 'Panel Send to Slicer button_(printer|process) at ' } | Select-Object -Last 1
+if ($pencil) { Ui-Fail "a button beside Printer or Process: $pencil" }
+Write-Host 'ok   no button beside Printer or Process'
 Ui-Mark
 Ui-Step 'open Printer'                   { Ui-ClickLogged 'Panel Send to Slicer input printer' }
 Ui-ExpectNew 'Printer picker opened: ' 'the picker opened'
@@ -201,6 +213,43 @@ Ui-ExpectNew 'Printer picker chose: X1 Carbon' 'Enter chose the first X1 row'
 Ui-FocusMain
 Ui-ExpectNew '3D Print printer: design/acme-lab-x1-carbon-0-4-nozzle' 'the design''s printer is set'
 Ui-ExpectNew 'Panel Send to Slicer input printer shows: X1 Carbon' 'the field shows the model and the nozzle'
+
+Write-Host '--- 4. Edit printers and processes..., the pickers'' last row (mitcad#1134)'
+# The box's options as logged: New printer... and last Edit printers and
+# processes... (the log's ellipses matched as \S*).
+$listed = Ui-LastLineWith 'Panel Send to Slicer options printer: '
+if ("$listed" -notmatch '\| --- \| New printer\S*\s\| Edit printers and processes\S*$') {
+  Ui-Fail "the Printer box lists '$listed'"
+}
+Write-Host 'ok   Edit printers and processes... last, below New printer...'
+foreach ($kind in @('Printer', 'Process')) {
+  $key = $kind.ToLowerInvariant()
+  Ui-Mark
+  Ui-Step "open $kind"                   { Ui-ClickLogged "Panel Send to Slicer input $key" }
+  Ui-ExpectNew "$kind picker opened: " 'the picker opened'
+  Ui-FocusDialog "^$kind Picker$"
+  Ui-Step 'type Edit printers'           { Ui-Type 'Edit printers' }
+  Ui-ExpectNew "$kind picker search: Edit printers, first Edit printers and processes" 'the search finds the row'
+  Ui-Step 'choose (Enter)'               { Ui-Key 'Return' }
+  Ui-ExpectNew "$kind picker chose: Edit printers and processes" 'Edit printers and processes... chosen'
+  Ui-ExpectNew "3D Print $key edit: " "on the design's $key"
+  Ui-ExpectNew 'Printers and processes opened' 'Printers and Processes opened'
+  if ($kind -eq 'Printer') {
+    Ui-ExpectNew '3D Print printer edit: design/acme-lab-x1-carbon-0-4-nozzle' 'the chosen printer'
+    Ui-ExpectNew 'Profile selected: printer Acme Lab X1 Carbon 0.4 nozzle (design)' 'selected in the window'
+  } elseif (-not "$(Ui-LastLineWith '3D Print process edit: ')".EndsWith('slicer default')) {
+    # (On Slicer default the window opens with none selected.)
+    Ui-ExpectNew 'Profile selected: process ' 'the chosen process selected in the window'
+  }
+  Ui-Step 'close it (Escape)'            { Ui-FocusDialog '^Printers and Processes$'; Ui-Key 'Escape'; Ui-FocusMain }
+  Ui-Sync
+  $changed = @(Ui-NewLines) | Where-Object { $_.Contains("3D Print ${key}: ") } | Select-Object -Last 1
+  if ($changed) { Ui-Fail "Edit printers and processes... changed the ${key}: $changed" }
+  Write-Host "ok   the $key stays"
+}
+$shown = Ui-LastLineWith 'Panel Send to Slicer input printer shows: '
+if (-not "$shown".Contains('X1 Carbon')) { Ui-Fail "the Printer field shows '$shown'" }
+Write-Host 'ok   the Printer field still shows X1 Carbon'
 Ui-Mark
 Ui-Step 'cancel the panel (Esc)'         { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Send to Slicer cancelled' 'the panel closed; the choice stays'

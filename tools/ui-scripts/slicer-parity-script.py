@@ -65,12 +65,11 @@ add("command make.print3d", "expect-log '^Command Send to Slicer started$'", "wa
 for depth, (kind, label) in enumerate([("process", "Process"), ("printer", "Printer")], start=1):
     add("mark")
     if native:
-        add(f"native-pointer-click input_{kind}", f"focus-dialog '^{label} Picker$'",
-            f"type 'New {kind}'", "key Return")
+        add(f"native-pointer-click input_{kind}")
     else:
-        # Resolve the wrapper's actual NoFocus combo and click its displayed
-        # popup item; Return sent to the main window would export 3D Print.
-        add(f"qt-choice input_{kind} 'New {kind}…'")
+        # The command field opens the searchable picker, not a combo popup.
+        add(f"click-logged '^Panel Send to Slicer input {kind} at '")
+    add(f"focus-dialog '^{label} Picker$'", f"type 'New {kind}'", "key Return")
     add(f"expect-log '3D Print {kind} new: {label} 1'", "focus-dialog '^Printers and Processes$'",
         f"expect-log 'Profile selected: {kind} {label} 1'", "expect-model-bodies 1 4000",
         f"expect-undo-depth ${{profilesBaseline}} {depth}")
@@ -191,8 +190,11 @@ add("expect-log 'Profiles import: Fine imported'", "focus-dialog '^Printers and 
     "expect-undo-depth ${baseline} 2",
     "screenshot-dialog '${MITCAD_TEST_WORK}/slicer-preset-" + ("native" if native else "qt") + "-${MITCAD_TEST_COLOR_SCHEME}.png'")
 press("Close")
-add("focus-main", "command edit.undo", "command edit.undo", "expect-undo-depth ${baseline} 0",
-    "expect-model-bodies 1 4000", "menu 'File/Save'", "expect-log '^Saved '")
+# Save the imported profiles first, so undoing them changes the file on disk.
+# Returning to the original saved baseline alone leaves native Save disabled.
+add("focus-main", "mark", "menu 'File/Save'", "expect-log '^Saved '",
+    "command edit.undo", "command edit.undo", "expect-undo-depth ${baseline} 0",
+    "expect-model-bodies 1 4000", "mark", "menu 'File/Save'", "expect-log '^Saved '")
 
 # My Library uses the same production chooser, with its separate target.
 add("command tools.my_library", "focus-dialog '^My Library$'")

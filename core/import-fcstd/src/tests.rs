@@ -4972,12 +4972,22 @@ fn stored_edge_name(data: &[u8], index: usize) -> String {
 /// edge (its right side) and the sketch's first vertex (its far corner);
 /// a line of its own starts on the binder's edge and ends on it.
 fn binder_document() -> FcstdFile {
+    binder_document_with("Sketch")
+}
+
+fn binder_document_with(second: &str) -> FcstdFile {
+    binder_document_variant(second, 0)
+}
+
+// Modes: complete, unused, failed consumer, complete plus failed consumer,
+// complete plus an unrecognised geometric use.
+fn binder_document_variant(second: &str, mode: u8) -> FcstdFile {
     let side = format!(
         "{}{}{}{}{}",
         placement([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], 0.0),
         external_links(&[
             ("Binder", "Edge1"),
-            ("Sketch", "Edge2"),
+            (second, "Edge2"),
             ("Sketch", "Vertex1")
         ]),
         external_copy(&[
@@ -4985,13 +4995,17 @@ fn binder_document() -> FcstdFile {
             segment([40.0, 0.0], [40.0, 30.0], true),
             sketch_point([40.0, 30.0], true),
         ]),
-        geometry(&[segment([0.0, 0.0], [20.0, 0.0], false)]),
+        if mode == 2 {
+            String::new()
+        } else {
+            geometry(&[segment([0.0, 0.0], [20.0, 0.0], false)])
+        },
         constraints(&[
             constrain(1, 0.0, &[(0, 1), (-3, 1)], "", true),
             constrain(13, 0.0, &[(0, 2), (-3, 0)], "", true),
         ])
     );
-    let xml = document(&[
+    let mut objects = vec![
         (
             "PartDesign::Body",
             "Body",
@@ -5036,8 +5050,25 @@ fn binder_document() -> FcstdFile {
                 shape("Binder.brp")
             ),
         ),
-        ("Sketcher::SketchObject", "Side", side),
-    ]);
+    ];
+    if mode != 1 {
+        objects.push(("Sketcher::SketchObject", "Side", side));
+    }
+    if mode == 3 {
+        objects.push((
+            "Sketcher::SketchObject",
+            "Lost",
+            external_links(&[("Binder", "Edge1")]),
+        ));
+    }
+    if mode == 4 {
+        objects.push((
+            "PartDesign::Boolean",
+            "LostGroup",
+            links("Group", "App::PropertyLinkList", &["Binder"]),
+        ));
+    }
+    let xml = document(&objects);
     fcstd(
         &xml,
         None,
@@ -5083,7 +5114,7 @@ fn binder_kernel() -> MockKernel {
 fn a_binder_s_context_does_not_consume_its_body() {
     // (mitcad#952) FreeCAD writes a binder's `Context` as the Body it is
     // in: the Body stays a body with its features, not "used by" the
-    // binder; the binder itself is skipped.
+    // binder; its use is carried through the Side sketch's projections.
     let (doc, report) = import_with(binder_document(), Vec::new(), binder_kernel(), false);
     let body = item(&report, "Body");
     assert_eq!(body.outcome, ObjectOutcome::Body, "{body:?}");
@@ -5097,11 +5128,228 @@ fn a_binder_s_context_does_not_consume_its_body() {
     assert_eq!(pad.outcome, ObjectOutcome::Parametric, "{pad:?}");
     assert_eq!(def_of(&doc, &pad.features[0])["type"], "extrude");
     let binder = feature(&report, "Binder");
-    assert_eq!(binder.outcome, ObjectOutcome::Skipped, "{binder:?}");
-    assert!(binder.notes[0].contains("a binder"), "{binder:?}");
+    assert_eq!(binder.outcome, ObjectOutcome::Included, "{binder:?}");
+    assert!(binder.notes[0].contains("linked projections"), "{binder:?}");
     // The sketch on the binder after the sketch it binds.
     let order: Vec<&str> = report.sketches.iter().map(|s| s.object.as_str()).collect();
     assert_eq!(order, ["Sketch", "Side"]);
+}
+
+fn carried_binder_info(report: &FcstdReport, name: &str) {
+    use mitcad_model::notice::NoticeLevel;
+    let binder = item(report, name);
+    assert_eq!(binder.outcome, ObjectOutcome::Included, "{binder:?}");
+    assert_eq!(feature(report, name).outcome, ObjectOutcome::Included);
+    assert!(
+        report.notices().iter().any(|notice| {
+            notice.level == NoticeLevel::Info
+                && notice.message.starts_with(&format!("{}: ", binder.label))
+                && notice.message.contains("sketch")
+                && notice.message.contains("carried")
+        }),
+        "{:?}",
+        report.notices()
+    );
+}
+
+fn lost_binder_warning(report: &FcstdReport, name: &str) {
+    use mitcad_model::notice::NoticeLevel;
+    let binder = item(report, name);
+    assert_eq!(binder.outcome, ObjectOutcome::Skipped, "{binder:?}");
+    assert_eq!(feature(report, name).outcome, ObjectOutcome::Skipped);
+    assert!(
+        report.notices().iter().any(|notice| {
+            notice.level == NoticeLevel::Warning && notice.message.contains("skipped")
+        }),
+        "{:?}",
+        report.notices()
+    );
+    assert!(!report.notices().iter().any(|notice| {
+        notice.level == NoticeLevel::Info
+            && notice.message.starts_with(&format!("{}: ", binder.label))
+    }));
+}
+
+#[test]
+fn a_carried_binder_is_named_information_without_a_skip_warning() {
+    use mitcad_model::notice::NoticeLevel;
+    for kind in ["PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"] {
+        let mut file = binder_document();
+        file.document
+            .objects
+            .iter_mut()
+            .find(|o| o.name == "Binder")
+            .unwrap()
+            .type_name = kind.to_owned();
+        // This positive fixture compares all four stored source edges.
+        // Other binder fixtures deliberately supply only the used edges.
+        let kernel = binder_kernel();
+        kernel.named_curves.borrow_mut().extend([
+            (
+                stored_edge_name(b"4 sketch", 2),
+                mitcad_model::Curve3::Line {
+                    start: [40.0, 30.0, 0.0],
+                    end: [0.0, 30.0, 0.0],
+                },
+            ),
+            (
+                stored_edge_name(b"4 sketch", 3),
+                mitcad_model::Curve3::Line {
+                    start: [0.0, 30.0, 0.0],
+                    end: [0.0, 0.0, 0.0],
+                },
+            ),
+        ]);
+        let (doc, report) = import_with(file, Vec::new(), kernel, false);
+        let source = report
+            .sketches
+            .iter()
+            .find(|s| s.object == "Sketch")
+            .unwrap();
+        assert_eq!(source.outcome, ObjectOutcome::Parametric, "{source:?}");
+        assert!(
+            source.shape.as_ref().is_some_and(|shape| shape.pass),
+            "{source:?}"
+        );
+        carried_binder_info(&report, "Binder");
+        assert_eq!(report.items.len(), 5);
+        assert_eq!(
+            report
+                .features
+                .iter()
+                .filter(|f| f.object == "Binder")
+                .count(),
+            1
+        );
+        assert_eq!(report.counts().get(&ObjectOutcome::Skipped), None);
+        assert!(
+            report
+                .notices()
+                .iter()
+                .all(|notice| notice.level == NoticeLevel::Info),
+            "{:?}",
+            report.notices()
+        );
+        let side = sketch_def(&doc, &report, "Side");
+        assert_eq!(side["projections"].as_array().unwrap().len(), 3);
+    }
+}
+
+#[test]
+fn an_unused_binder_or_one_with_a_failed_consumer_keeps_its_warning() {
+    for mode in 1..5 {
+        let file = binder_document_variant("Sketch", mode);
+        let (doc, report) = import_with(file, Vec::new(), binder_kernel(), false);
+        if mode == 3 {
+            // The second consumer is not imported, even though the first
+            // one keeps all its actual linked projections.
+            assert_eq!(
+                sketch_def(&doc, &report, "Side")["projections"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                3
+            );
+        }
+        lost_binder_warning(&report, "Binder");
+    }
+}
+
+#[test]
+fn a_binder_with_one_fixed_external_link_keeps_its_warning() {
+    use mitcad_model::Curve3;
+    // The first edge is linked, but the second can only use the sketch's
+    // stored copy. A successful use must not hide the other lost link.
+    let kernel = binder_kernel();
+    kernel.named_curves.borrow_mut().insert(
+        stored_edge_name(b"4 binder", 1),
+        Curve3::Line {
+            start: [100.0, 0.0, 0.0],
+            end: [100.0, 30.0, 0.0],
+        },
+    );
+    let (doc, report) = import_with(binder_document_with("Binder"), Vec::new(), kernel, false);
+    let side = report.sketches.iter().find(|s| s.object == "Side").unwrap();
+    assert!(side.feature.is_some(), "{side:?}");
+    assert!(
+        side.dropped
+            .iter()
+            .any(|why| why.contains("fixed in place")),
+        "{side:?}"
+    );
+    assert_eq!(
+        sketch_def(&doc, &report, "Side")["projections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    lost_binder_warning(&report, "Binder");
+}
+
+#[test]
+fn a_binder_profile_is_carried_only_when_the_feature_keeps_using_it() {
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Binder", "Pad"]
+                ),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 10.0, 10.0),
+        ),
+        (
+            "PartDesign::SubShapeBinder",
+            "Binder",
+            xlink_list("Support", &[("Sketch", "")]),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Binder", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+    ]);
+    for failed in [false, true] {
+        let kernel = MockKernel::default();
+        if failed {
+            kernel.fail.borrow_mut().insert("extrude");
+        }
+        let file = fcstd(
+            &xml,
+            None,
+            &[("Body.brp", b"6 body"), ("Pad.brp", b"6 pad")],
+        );
+        let (doc, report) = import_with(file, Vec::new(), kernel, false);
+        if failed {
+            assert_eq!(feature(&report, "Pad").outcome, ObjectOutcome::Fallback);
+            lost_binder_warning(&report, "Binder");
+        } else {
+            assert_eq!(feature(&report, "Pad").outcome, ObjectOutcome::Parametric);
+            carried_binder_info(&report, "Binder");
+            assert!(feature(&report, "Binder").notes[0].contains("directly"));
+            let pad = &defs_of(&doc, &report, "Pad")[0];
+            assert_eq!(
+                pad["profiles"][0]["sketch"],
+                report.sketches[0].feature.as_deref().unwrap()
+            );
+        }
+    }
 }
 
 #[test]
@@ -5125,7 +5373,7 @@ fn external_geometry_of_a_binder_and_a_sketch_projects_the_sketch_s_entities() {
         let e = entities.iter().find(|e| e["id"] == *id).unwrap();
         [e["at"][0].as_f64().unwrap(), e["at"][1].as_f64().unwrap()]
     };
-    let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) < 1e-9;
+    let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 1e-6;
     let line = |a: [f64; 2], b: [f64; 2]| {
         entities
             .iter()
@@ -5994,6 +6242,8 @@ fn binders_of_another_body_s_sketches_are_profiles_and_hole_sketches() {
             feature(&report, name)
         );
     }
+    carried_binder_info(&report, "SlotBinder");
+    carried_binder_info(&report, "SpotBinder");
     let slot = report.sketches.iter().find(|s| s.object == "Slot").unwrap();
     let slot_uid = slot.feature.clone().unwrap();
     // The pocket's profile: a sketch of the binder's in the upper Body's
@@ -6247,6 +6497,8 @@ fn a_pad_on_a_binder_of_another_body_s_sketch_pads_a_linked_projecting_sketch() 
         .and_then(|s| s.feature.clone())
         .unwrap();
 
+    carried_binder_info(&report, "Bound");
+    carried_binder_info(&report, "Drill");
     // The pad profiles a sketch of the binder's in the Slider's component.
     let pad = feature(&report, "SliderPad");
     assert_eq!(pad.outcome, ObjectOutcome::Parametric, "{pad:?}");

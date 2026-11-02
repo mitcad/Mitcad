@@ -42,6 +42,9 @@ struct DocumentSession::AsyncJob {
   std::shared_ptr<AsyncResult> result;
   QPointer<QObject> context;
   Completion completion;
+  // A job in the background that gives way to the UI thread's own work
+  // (commandTaskAsync, yieldBackgroundJob; mitcad#1121).
+  bool yields = false;
 };
 
 rust::Box<Document> newDesignDocument() {
@@ -145,7 +148,8 @@ DocumentSession::Snapshot DocumentSession::snapshot() const {
 }
 
 bool DocumentSession::runJob(const QString& label, const QString& stage, const Job& job, JobLog log) {
-  if (busy()) {
+  // A job in the background gives way (mitcad#1121).
+  if (busy() && !yieldBackgroundJob()) {
     throw ModelBusy();
   }
   QString startupError;
@@ -406,6 +410,45 @@ bool DocumentSession::inspectionAsync(const QString& name, QObject* context, Ins
   });
 }
 
+bool DocumentSession::commandTaskAsync(const QString& label, const QString& stage, CommandTask task,
+                                       QObject* context, Completion completion) {
+  auto result = std::make_shared<AsyncResult>();
+  Document* document = &*m_state.document;
+  const bool started = startAsync(label, stage, [document, task = std::move(task), result](ModelJob& job) {
+    {
+      const AttachedJob attached(*document, job);
+      result->answer = task([document](const QJsonObject& request) {
+        const QByteArray json = compactJson(request);
+        return parseObject(document->command(rustStr(json)));
+      });
+    }
+    // A task that went on past a command the cancel stopped: cancelled all
+    // the same (yieldBackgroundJob).
+    if (job.control().is_cancelled()) {
+      throw ComputationCancelled();
+    }
+  }, result, context, std::move(completion));
+  if (started && m_async) {
+    m_async->yields = true;
+  }
+  return started;
+}
+
+bool DocumentSession::yieldBackgroundJob() {
+  if (!m_async || !m_async->yields || m_job != &m_async->job) {
+    return !busy();
+  }
+  qDebug().noquote() << QStringLiteral("Computing %1: gives way after %2 ms").arg(m_async->label)
+                           .arg(m_async->clock.elapsed());
+  m_async->job.control().cancel();
+  // The worker stops at the cancel (the test's job sleep too); the UI
+  // thread waits for it without an event loop, as runJob's first 50 ms.
+  while (!m_worker->waitFor(std::chrono::milliseconds(20))) {
+  }
+  finishAsync(true);
+  return !busy();
+}
+
 bool DocumentSession::startAsync(const QString& label, const QString& stage, Job job,
                                  std::shared_ptr<AsyncResult> result, QObject* context, Completion completion) {
   if (busy()) {
@@ -440,11 +483,18 @@ bool DocumentSession::startAsync(const QString& label, const QString& stage, Job
   m_job = &m_async->job;
   ModelJob* state = m_job;
   const auto hold = label == QStringLiteral("preview") ? m_testHoldPreview : nullptr;
-  m_worker->post([job = std::move(job), state, hold] {
+  // For tests, a job made longer after its work, as runJob's
+  // (MITCAD_TEST_JOB_SLEEP_MS, mitcad#1121: "bed plan=…").
+  const int extraMs = testJobSleep(label);
+  m_worker->post([job = std::move(job), state, hold, extraMs] {
     while (hold && hold->load() && !state->control().is_cancelled()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     job(*state);
+    // Cut short by a cancel (a job that gives way, yieldBackgroundJob).
+    for (int slept = 0; slept < extraMs && !state->control().is_cancelled(); slept += 10) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   });
   m_progressTimer.start();
   qDebug().noquote() << QStringLiteral("Computing %1 started").arg(label);
@@ -453,7 +503,9 @@ bool DocumentSession::startAsync(const QString& label, const QString& stage, Job
   return true;
 }
 
-void DocumentSession::completeAsync() {
+void DocumentSession::completeAsync() { finishAsync(false); }
+
+void DocumentSession::finishAsync(bool queueCompletion) {
   if (!m_async || !m_worker->waitFor(std::chrono::milliseconds(0))) {
     return;
   }
@@ -483,6 +535,18 @@ void DocumentSession::completeAsync() {
                              .arg(static_cast<qulonglong>(finished->job.control().progress().evaluated));
   }
   finishJob(finished->label, finished->result->cancelled, finished->result->error);
+  if (queueCompletion) {
+    // Given way to work the UI thread is doing now: the completion after it.
+    QMetaObject::invokeMethod(
+        this,
+        [context = finished->context, completion = std::move(finished->completion), result = finished->result] {
+          if (context && completion) {
+            completion(*result);
+          }
+        },
+        Qt::QueuedConnection);
+    return;
+  }
   if (finished->context && finished->completion) {
     finished->completion(*finished->result);
   }

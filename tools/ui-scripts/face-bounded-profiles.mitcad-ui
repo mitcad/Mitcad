@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# The fixture resolves its own face-bounded key through the model query.
+wait-idle
+command view.top
+command view.fit
+expect-profiles 3
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+# Extrude may preselect an available profile. Clear it so the real click
+# below adds the tested region instead of toggling an automatic pick off.
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+mark
+# Pick places are logged for the active Profiles input, not in idle mode.
+click-pick '@OUTSIDE_PICK@'
+wait-log '^Extrude Profiles: 1 profile '
+mark
+type-in '^Panel Extrude input distance at ' '2 mm'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/outside-profile-preview.png'
+mark
+key Return
+wait-log '^Added extrude \(Join\), distance 2' 30
+expect-model-bodies 1 @JOINED_VOLUME@
+screenshot '${MITCAD_TEST_WORK}/outside-profile-joined.png'
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

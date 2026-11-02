@@ -35,6 +35,10 @@ RIGHT='F2:side(c2[c1,c3])'
 TOP_FRONT="E{$TOP|$FRONT}"
 TOP_RIGHT="E{$TOP|$RIGHT}"
 RIGHT_BOTTOM="E{$RIGHT|$BOTTOM}"
+# Two edges away from the arrows, to follow a zoom: the left upright edge
+# and the top back edge.
+LEFT_UP="E{$FRONT|F2:side(c4[c3,c1])}"
+TOP_BACK="E{$TOP|F2:side(c3[c2,c4])}"
 
 # Part:1 (O1): the block of the demo in a component, turned a quarter
 # clockwise about Z and moved 100 mm along X, so that its right face
@@ -57,13 +61,50 @@ newest() {
   grep -F -- "$1 at " "$UI_LOG" | tail -1 | sed -n 's/.* at \([0-9-]*\),\([0-9-]*\)$/\1 \2/p'
 }
 
+# The edges' middles as the view shows them (window pixels), by edge.
+# A click on a handle stays with it (mitcad#1105), so the pick places
+# logged while an arrow stands on an edge keep off the arrow, away from
+# the edge's middle: the middle is the edge's pick place before its pick
+# made the arrow (where that pick clicked), followed through a zoom.
+declare -A MIDDLE
+REFERENCE=""
+
+# remember edge: the edge's pick place now as its middle, before the
+# click that picks it, with the places of two edges away from the arrows.
+remember() {
+  local start
+  ui_wait_idle
+  ui_sync
+  # From the places logged last, where ui_click_pick clicks.
+  start=$(grep -n "Pick places:" "$UI_LOG" | tail -1 | cut -d: -f1)
+  MIDDLE[$1]=$(tail -n +"${start:-1}" "$UI_LOG" | grep -F -- "Pick edge F2.b0/$1 at " | tail -1 |
+    sed -n 's/.* at \([0-9-]*\),\([0-9-]*\)$/\1 \2/p')
+  [ -n "${MIDDLE[$1]}" ] || ui_fail "no pick place of $1 logged"
+  REFERENCE="$(newest "Pick edge F2.b0/$LEFT_UP") $(newest "Pick edge F2.b0/$TOP_BACK")"
+}
+
+# follow_zoom edge: the edge's middle where the view now shows it, after
+# a zoom (orthographic: a scale and a shift of the view's pixels), from
+# where the two edges away from the arrows were and are now.
+follow_zoom() {
+  local now
+  now="$(newest "Pick edge F2.b0/$LEFT_UP") $(newest "Pick edge F2.b0/$TOP_BACK")"
+  MIDDLE[$1]=$(echo "${MIDDLE[$1]} $REFERENCE $now" | awk '{
+    if (NF != 10) { exit 1 }
+    s = sqrt(($9 - $7) ^ 2 + ($10 - $8) ^ 2) / sqrt(($5 - $3) ^ 2 + ($6 - $4) ^ 2)
+    x = $7 + s * ($1 - $3); y = $8 + s * ($2 - $4)
+    printf "%d %d\n", (x < 0 ? x - 0.5 : x + 0.5), (y < 0 ? y - 0.5 : y + 0.5) }') ||
+    ui_fail "no places of $LEFT_UP and $TOP_BACK to follow the zoom with"
+  REFERENCE=$now
+}
+
 # aligned edge key description: the handle of the input `key` is grabbed
-# within 45 pixels of the edge's middle, where the edge's pick place is
-# (the knob is a millimetre or so off the edge, the grab point 17 pixels
-# beyond it): the arrow stands on the edge as the view shows it.
+# within 45 pixels of the edge's middle (the knob is a millimetre or so
+# off the edge, the grab point 17 pixels beyond it): the arrow stands on
+# the edge as the view shows it.
 aligned() {
   local ex ey hx hy
-  read -r ex ey <<< "$(newest "Pick edge F2.b0/$1")"
+  read -r ex ey <<< "${MIDDLE[$1]:-}"
   read -r hx hy <<< "$(newest "Manipulator Chamfer $2")"
   [ -n "${ex:-}" ] && [ -n "${hx:-}" ] || ui_fail "$3: no places logged"
   awk -v a="$ex" -v b="$ey" -v c="$hx" -v d="$hy" 'BEGIN { exit !((a - c) ^ 2 + (b - d) ^ 2 < 45 ^ 2) }' ||
@@ -76,7 +117,7 @@ aligned() {
 # back towards the edge).
 drag_out() {
   local ex ey hx hy
-  read -r ex ey <<< "$(newest "Pick edge F2.b0/$1")"
+  read -r ex ey <<< "${MIDDLE[$1]:-}"
   read -r hx hy <<< "$(newest "Manipulator Chamfer $2")"
   [ -n "${ex:-}" ] && [ -n "${hx:-}" ] || ui_fail "no places logged to drag $2 by"
   ui_drag_from "Manipulator Chamfer $2" $(((hx - ex) * $3 / 100)) $(((hy - ey) * $3 / 100))
@@ -91,7 +132,7 @@ drag_out() {
 # height fails the preview ("the distance may be too large").
 drag_mm() {
   local ex ey hx hy step
-  read -r ex ey <<< "$(newest "Pick edge F2.b0/$1")"
+  read -r ex ey <<< "${MIDDLE[$1]:-}"
   read -r hx hy <<< "$(newest "Manipulator Chamfer $2")"
   [ -n "${ex:-}" ] && [ -n "${hx:-}" ] || ui_fail "no places logged to drag $2 by"
   step=$(awk -v a="$ex" -v b="$ey" -v c="$hx" -v d="$hy" -v v="$3" -v m="$4" 'BEGIN {
@@ -159,6 +200,7 @@ equal_distance_round() {
   ui_step "fit (F6)"                       ui_key F6
   ui_step "chamfer (search)"               ui_command "Chamfer"
   ui_mark
+  remember "$TOP_FRONT"
   ui_step "pick the top front edge"        ui_click_pick "edge F2.b0/$TOP_FRONT"
   ui_expect_new "Chamfer Edges: 1 edge" "the edge picked"
   ui_expect_new "Manipulator Chamfer sets.0.distance at" "Distance has an arrow"
@@ -173,6 +215,7 @@ equal_distance_round() {
   ui_expect_new "Manipulator Chamfer sets.0.distance at" "the arrow followed the camera"
   ui_step "the Edges input again"          ui_click_logged "Panel Chamfer input sets.0.edges"
   ui_sync
+  follow_zoom "$TOP_FRONT"
   aligned "$TOP_FRONT" sets.0.distance "the arrow still stands on the edge"
 
   echo "--- Dragged out"
@@ -243,11 +286,13 @@ echo "=== Two sets, each its own arrow"
 ui_start_app --demo
 ui_step "fit (F6)"                         ui_key F6
 ui_step "chamfer (search)"                 ui_command "Chamfer"
+remember "$TOP_FRONT"
 ui_step "pick the top front edge"          ui_click_pick "edge F2.b0/$TOP_FRONT"
 ui_expect_log "Manipulator Chamfer sets.0.distance at" "the first set's arrow"
 ui_step "add a set"                        ui_click_logged "Panel Chamfer add sets"
 ui_expect_log "Chamfer: added sets row 2" "a second set"
 ui_mark
+remember "$RIGHT_BOTTOM"
 ui_step "pick the right bottom edge"       ui_click_pick "edge F2.b0/$RIGHT_BOTTOM"
 ui_expect_new "Manipulator Chamfer sets.1.distance at" "the second set's arrow"
 ui_sync
@@ -269,6 +314,7 @@ ui_expect_new "Undo: Add Chamfer1" "the chamfer taken back"
 
 echo "=== Two Distances, Distance and Angle"
 ui_step "chamfer (search)"                 ui_command "Chamfer"
+remember "$TOP_FRONT"
 ui_step "pick the top front edge"          ui_click_pick "edge F2.b0/$TOP_FRONT"
 ui_mark
 ui_step "Two Distances"                    ui_choose "Panel Chamfer input sets.0.type" 1
@@ -322,6 +368,7 @@ ui_step "activate Part (radio)"            ui_click_logged "Browser radio Root/P
 ui_expect_new "Activated Part" "Part is active"
 ui_step "chamfer (search)"                 ui_command "Chamfer"
 ui_mark
+remember "$TOP_RIGHT"
 ui_step "pick the top right edge"          ui_click_pick "edge F2.b0/$TOP_RIGHT"
 ui_expect_new "Chamfer Edges: 1 edge" "the edge picked"
 ui_expect_new "Manipulator Chamfer sets.0.distance at" "Distance has an arrow"

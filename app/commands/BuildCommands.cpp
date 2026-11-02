@@ -69,6 +69,7 @@
 #include "../framework/Theme.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
+#include "../framework/LengthUnits.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../library/PartFavourites.hpp"
 #include "../library/PartPicker.hpp"
@@ -289,6 +290,17 @@ struct Shared {
   bool previewBound() const {
     const std::lock_guard<std::mutex> lock(mutex);
     return bound;
+  }
+  // Nothing previewed (the tool waits for a pick, or the model could not
+  // place the part): no handle stays where the part shown before was, such
+  // as the length's at the free end of a part just placed, which would take
+  // a click on that end (mitcad#1105) though nothing is shown there.
+  void clearPreview() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    frame = build::Frame();
+    length = kNaN;
+    bound = false;
+    foot = Foot();
   }
   // Whether the design has parts a part of `role` goes on (mitcad#394):
   // profiles for a profile, profiles and linear parts (a rail for its
@@ -1482,6 +1494,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
   Part part;
   if (!chosenPart(*shared, state, part)) {
     result.error = noPartsText(*shared, role);
+    shared->clearPreview();
     return result;
   }
   const build::Host host = build::buildHost(context);
@@ -1500,6 +1513,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     result.text = QStringLiteral("<b>%1</b><br>%2").arg(part.name.toHtmlEscaped(), addsTo.toHtmlEscaped());
     result.error = placed.problem;
     result.log = QStringLiteral("waiting: %1; adds to %2; part %3").arg(placed.problem, host.name, part.name);
+    shared->clearPreview(); // nothing shown: no handles where the last part was
     return result;
   }
   // A set: the model answers its first member and lays out the others.
@@ -1514,6 +1528,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     answer = context.queryObject(request);
   } catch (const std::exception& error) {
     result.error = errorText(error);
+    shared->clearPreview();
     return result;
   }
   const build::Frame frame = build::frameOf(answer.value(QStringLiteral("frame")));
@@ -2806,6 +2821,12 @@ QString defaultFrameSpacing(const QString& kind) {
 }
 QString defaultFrameLength(const QString& kind) {
   return kind == kFloor ? QStringLiteral("4000 mm") : QStringLiteral("3600 mm");
+}
+// A default as the panel shows it, in the design's unit (mitcad#1165): a
+// value that follows a choice while it is the other choice's default
+// compares with and writes these.
+QString shownDefault(const QString& text, const CommandContext& context) {
+  return defaultLengthText(text, context.lengthUnit());
 }
 
 // A value input's millimetres: its value, else its text (or the default)
@@ -4285,15 +4306,15 @@ CommandDef floorRoofCommand(const SharedPtr& shared, DocumentHost& host) {
   def.inputs = pickerInputs(shared, kTimberRole, def.id);
   def.inputs.append(choiceInput(kFrameKind, QObject::tr("Kind"), kFloorRoofKinds, kFloor)
                         .withChoiceIcons(kFloorRoofIcons)
-                        .withOnChange([shared](CommandState& state, const CommandContext&) {
+                        .withOnChange([shared](CommandState& state, const CommandContext& context) {
                           // The spacing follows the kind while it is the
                           // other kind's default: joists at 400, rafters at
                           // 600.
                           const QString kind = frameKindOf(state);
                           const QString spacing = state.text(kFrameSpacing).trimmed();
-                          if (spacing.isEmpty() || spacing == defaultFrameSpacing(kRoof) ||
-                              spacing == defaultFrameSpacing(kFloor)) {
-                            state.setText(kFrameSpacing, defaultFrameSpacing(kind));
+                          if (spacing.isEmpty() || spacing == shownDefault(defaultFrameSpacing(kRoof), context) ||
+                              spacing == shownDefault(defaultFrameSpacing(kFloor), context)) {
+                            state.setText(kFrameSpacing, shownDefault(defaultFrameSpacing(kind), context));
                             state.setValue(kFrameSpacing, kNaN);
                           }
                           shared->timber.floorRoofKind = kind;
@@ -4366,7 +4387,7 @@ CommandDef floorRoofCommand(const SharedPtr& shared, DocumentHost& host) {
       }
     }
     state.setChoice(kFrameKind, kind);
-    state.setText(kFrameSpacing, defaultFrameSpacing(kind));
+    state.setText(kFrameSpacing, shownDefault(defaultFrameSpacing(kind), context));
     state.setValue(kFrameSpacing, kNaN);
     qInfo().noquote() << QStringLiteral("BUILD floor_roof kind %1%2")
                              .arg(kind, picked.isEmpty() ? QString()
@@ -4473,12 +4494,14 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
                                                  "wider (Tab turns it)")));
   def.inputs.append(choiceInput(kSpacingMode, QObject::tr("Spacing"), kSpacingModes, kCentre)
                         .withVisible(how(kSpacing))
-                        .withOnChange([](CommandState& state, const CommandContext&) {
+                        .withOnChange([](CommandState& state, const CommandContext& context) {
                           // The distance follows the mode while it is the other's default.
                           const bool gap = state.choice(kSpacingMode) == kGap;
                           const QString typed = state.text(kDistance).trimmed();
-                          if (typed.isEmpty() || typed == (gap ? QStringLiteral("400 mm") : QStringLiteral("5 mm"))) {
-                            state.setText(kDistance, gap ? QStringLiteral("5 mm") : QStringLiteral("400 mm"));
+                          const QString centre = shownDefault(QStringLiteral("400 mm"), context);
+                          const QString between = shownDefault(QStringLiteral("5 mm"), context);
+                          if (typed.isEmpty() || typed == (gap ? centre : between)) {
+                            state.setText(kDistance, gap ? between : centre);
                             state.setValue(kDistance, kNaN);
                           }
                         })

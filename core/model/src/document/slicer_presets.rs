@@ -695,6 +695,7 @@ impl<K: Kernel> Document<K> {
                                 ..MaterialChange::default()
                             },
                             carried.as_ref(),
+                            &[],
                         )?
                     }
                 };

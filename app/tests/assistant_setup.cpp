@@ -64,8 +64,43 @@ int assistantSetupTests() {
   CHECK(!assistantLabelMatches(AssistantClient::Codex, QStringLiteral("example-client")));
   CHECK(json.value(QStringLiteral("command")) == bridge);
   CHECK(json.value(QStringLiteral("args")) == QJsonArray({QStringLiteral("mcp"), QStringLiteral("--connect")}));
+  // An AppImage registers its own file with `cli` (mitcad#1170): the mount
+  // folder's mitcad-cli is gone once MitCad closes.
+  {
+    QTemporaryDir apps;
+    CHECK(apps.isValid());
+    const QString image = apps.filePath(QStringLiteral("MitCad.AppImage"));
+    CHECK(put(image, "AppImage"));
+    const QString mounted = QStringLiteral("/tmp/.mount_MitCad1/usr/bin/mitcad-cli");
+    const BridgeLaunch appImage = registeredBridge(mounted, image);
+    CHECK(appImage.program == QFileInfo(image).absoluteFilePath());
+    CHECK(appImage.leading == QStringList{QStringLiteral("cli")});
+    const QStringList connect{QStringLiteral("cli"), QStringLiteral("mcp"), QStringLiteral("--connect")};
+    CHECK(bridgeConnectArguments(appImage.leading) == connect);
+    const auto claudeImage = assistantRegistration(AssistantClient::ClaudeCode, appImage.program, appImage.leading);
+    CHECK(claudeImage.mid(6) == QStringList{appImage.program} + connect);
+    const auto codexImage = assistantRegistration(AssistantClient::Codex, appImage.program, appImage.leading);
+    CHECK(codexImage.mid(4) == QStringList{appImage.program} + connect);
+    const auto imageJson = assistantJsonConfiguration(appImage.program, appImage.leading)
+        .value(QStringLiteral("mcpServers")).toObject().value(QStringLiteral("mitcad")).toObject();
+    CHECK(imageJson.value(QStringLiteral("command")) == appImage.program);
+    CHECK(imageJson.value(QStringLiteral("args")) == QJsonArray::fromStringList(connect));
+    // A path with a space is one quoted word of the command, in the
+    // platform's native separators as assistantCommand writes them.
+    const QString spaced = QStringLiteral("/home/user/My Apps/MitCad.AppImage");
+    CHECK(assistantCommand(spaced, connect, false) ==
+          QLatin1Char('\'') + QDir::toNativeSeparators(spaced) + QStringLiteral("' cli mcp --connect"));
+    // Not an AppImage (no APPIMAGE, a relative path or a missing file): the bridge itself.
+    const QStringList notImages{QString(), QStringLiteral("MitCad.AppImage"), apps.filePath(QStringLiteral("gone.AppImage"))};
+    for (const QString& none : notImages) {
+      const BridgeLaunch plain = registeredBridge(mounted, none);
+      CHECK(plain.program == mounted);
+      CHECK(plain.leading.isEmpty());
+    }
+    CHECK(bridgeConnectArguments() == QStringList({QStringLiteral("mcp"), QStringLiteral("--connect")}));
+  }
   for (bool win : {false, true}) {
-    const auto manifest = assistantBundleManifest(bridge, win, win ? QStringLiteral("win32") : QStringLiteral("darwin"));
+    const auto manifest =assistantBundleManifest(bridge, win, win ? QStringLiteral("win32") : QStringLiteral("darwin"));
     const auto server = manifest.value(QStringLiteral("server")).toObject();
     CHECK(manifest.value(QStringLiteral("manifest_version")) == QStringLiteral("0.3"));
     CHECK(server.value(QStringLiteral("type")) == QStringLiteral("binary"));

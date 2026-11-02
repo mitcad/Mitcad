@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/browser/BrowserMaterialMenu.cpp app/framework/TestDriver.cpp tools/cli
+# check-all sources: app/print app/browser/BrowserMaterialMenu.cpp app/framework/TestDriver.cpp tools/cli app/browser/AppearanceDialog.cpp app/commands/MaterialCommands.cpp
 # check-all sources: core/model/src/material.rs core/model/src/document/materials.rs core/model/src/document/print_settings.rs
 # check-all sources: core/model-base/src/material_class.rs core/model-base/src/appearance.rs
 # A filament's colour is its appearance (mitcad#1055), on a private Xvfb
@@ -10,7 +10,9 @@
 # appearance for bodies and the root, a long material name shown in full in
 # the Materials window's list, General's list of a material's appearances
 # with Add… (the appearance library's popover, the material's class first,
-# mitcad#1102), Make Default and Remove, a filament's Class fixed)
+# mitcad#1102), Make Default and Remove, a filament's Class fixed, the
+# Appearances window grouped by class with the filament colours under FDM
+# Plastic and the Appearance tool's picker on a PLA body, mitcad#1133)
 # on a design mitcad-cli makes from
 # tools/ui-scripts/filament-appearance.json, once in the light and once in
 # the dark color scheme (Qt's GTK platform theme, as tools/ui-theme-test.sh).

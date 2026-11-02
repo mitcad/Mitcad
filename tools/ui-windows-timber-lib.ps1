@@ -442,6 +442,10 @@ function Keeps-Place([string]$Cmd, [int[]]$At, [string]$OtherBody, [string]$Othe
   No-Inspect $Cmd 'no preview and no inspection while the mouse moves after the click'
   if ((Last-EndA $Cmd) -ne $endA) { Ui-Fail "the preview's end A moved from $endA" }
   Write-Host "ok   the preview's end A still at $endA"
+  # The places a click picks logged again with the preview's handles shown:
+  # a click on a handle stays with it (mitcad#1105), and the places logged
+  # before the click knew none (the tilt's ring lay over the other face).
+  Ui-Step "$Cmd's at again, the handles shown" { Ui-ClickLogged "Panel $Cmd input at" }
   Ui-Mark
   Ui-Step "a click on $OtherBody's $OtherFace" { Pick-Face $OtherBody $OtherFace }
   Moved-Once $Cmd $endA 'a click on another face moves the preview once'

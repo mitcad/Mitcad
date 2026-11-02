@@ -857,6 +857,24 @@ occ::handle<AIS_Shape> makeBody(const geometry::Shape& named, BodyDisplay::Style
   return body;
 }
 
+// How far a point is from a line of pixels (one point: from it).
+double distanceToLine(const QPointF& position, const QPolygonF& line) {
+  if (line.isEmpty()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  QPointF d = line.front() - position;
+  double nearest = std::hypot(d.x(), d.y());
+  for (int i = 0; i + 1 < line.size(); ++i) {
+    const QPointF a = line[i];
+    const QPointF ab = line[i + 1] - a;
+    const double length2 = QPointF::dotProduct(ab, ab);
+    const double t = length2 > 1e-12 ? std::clamp(QPointF::dotProduct(position - a, ab) / length2, 0.0, 1.0) : 0.0;
+    d = a + ab * t - position;
+    nearest = std::min(nearest, std::hypot(d.x(), d.y()));
+  }
+  return nearest;
+}
+
 } // namespace
 
 // The rendered view's image as a rectangle over the whole view (2D
@@ -1284,8 +1302,13 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_viewer->InsertLayerAfter(m_edgeLayer, inSight, m_hiddenLayer);
   // The halos of sketch entities (mitcad#302): drawn just before the top
   // layer that holds the entities, against the scene's depth as they are.
+  // Immediate, as the top layer is: OCCT blends the see-through faces of
+  // the layers that are not immediate (a sketch's profiles) after all of
+  // them, so a halo there was washed out by the profile it borders, and on
+  // a face every curve borders one (mitcad#1138, mitcad#1159).
   Graphic3d_ZLayerSettings sketchHalos;
   sketchHalos.SetName("sketch halos");
+  sketchHalos.SetImmediate(true);
   sketchHalos.SetClearDepth(false);
   m_viewer->InsertLayerBefore(m_sketchHaloLayer, sketchHalos, Graphic3d_ZLayerId_Top);
   // The sketch points and their selection highlights (mitcad#897): just
@@ -3028,8 +3051,15 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
     if (hasAnyTriangulation(shape)) {
       m_preview->Attributes()->SetAutoTriangulation(false);
     }
-    m_previewMode = style == PreviewStyle::Failed ? AIS_WireFrame : AIS_Shaded;
-    if (style == PreviewStyle::Failed) {
+    m_previewMode = style == PreviewStyle::Failed || style == PreviewStyle::MeasurementWire ? AIS_WireFrame : AIS_Shaded;
+    if (style == PreviewStyle::MeasurementWire) {
+      // A plane-gap dimension can lie entirely inside a stepped solid.
+      // Keep this temporary, non-selectable guide above the body's depth.
+      setEdgeStyle(m_preview, viewRole(ColorRole::SketchDimension, m_backgroundDark), 2.0);
+      m_preview->SetTransparency(0.0);
+      m_context->Display(m_preview, AIS_WireFrame, -1, false);
+      m_context->SetZLayer(m_preview, Graphic3d_ZLayerId_Topmost);
+    } else if (style == PreviewStyle::Failed) {
       // The error's dashed outline, never the cut's fill (mitcad#1041).
       setEdgeStyle(m_preview, viewRole(ColorRole::PreviewFailed, m_backgroundDark), 2.0, Aspect_TOL_DASH);
       m_context->Display(m_preview, AIS_WireFrame, -1, false);
@@ -3079,6 +3109,12 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
     if (!m_provisional.IsNull()) {
       // A provisional drag presentation stands in for it (mitcad#636).
       m_context->Erase(m_preview, false);
+    }
+    if (style == PreviewStyle::MeasurementWire) {
+      qDebug().noquote() << QStringLiteral("Preview measurement wire: displayed wireframe %1, transparency %2, topmost %3")
+          .arg(m_context->IsDisplayed(m_preview, AIS_WireFrame))
+          .arg(m_preview->Transparency())
+          .arg(m_preview->ZLayer() == Graphic3d_ZLayerId_Topmost);
     }
   }
   sceneChanged();
@@ -3421,11 +3457,15 @@ OcctViewer::pickedPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const {
   return std::nullopt;
 }
 
+bool OcctViewer::pickPointsReady() const {
+  return !m_pointerInputPending && !isNavigating() && PressedMouseButtons() == Aspect_VKeyMouse_NONE;
+}
+
 std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilter kinds) {
   std::vector<std::pair<SelectionItem, QPoint>> found;
   // Candidate probes use the command's model-backed filter too. Respect
   // the same worker ownership boundary as hover and actual clicks.
-  if (m_pickingSuspended || m_view->Window().IsNull()) {
+  if (!pickPointsReady() || m_pickingSuspended || m_view->Window().IsNull()) {
     return found;
   }
   // Each owner's test once while the points are tried (accepts()); a
@@ -3527,22 +3567,47 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
   const QRect inside = rect().adjusted(4, 4, -4, -4);
   if (kinds.testFlag(SelectKind::Profile)) {
     for (const auto& [key, profile] : m_profiles) {
-      for (TopExp_Explorer faces(profile->Shape(), TopAbs_FACE); faces.More(); faces.Next()) {
-        const auto middle = middleOf(TopoDS::Face(faces.Current()));
+      // (A structured binding cannot be captured before C++20.)
+      const std::pair<std::string, std::string>& named = key;
+      // Whether a click at the point picks this profile.
+      const auto picksProfile = [&](const QPointF& at) -> std::optional<SelectionItem> {
+        if (!inside.contains(at.toPoint()) || isCovered(at)) {
+          return std::nullopt;
+        }
+        const NCollection_Vec2<int> pixel = toDevicePixels(at);
+        m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
+        auto item = itemFor(m_context->DetectedOwner());
+        if (item && item->kind == SelectKind::Profile && item->owner.toStdString() == named.first &&
+            item->name.toStdString() == named.second && accepts(m_context->DetectedOwner())) {
+          return item;
+        }
+        return std::nullopt;
+      };
+      bool placed = false;
+      for (TopExp_Explorer faces(profile->Shape(), TopAbs_FACE); faces.More() && !placed; faces.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(faces.Current());
+        const auto middle = middleOf(face);
         if (!middle) {
           continue;
         }
         const QPointF at = toWidgetF(*middle);
-        if (!inside.contains(at.toPoint()) || isCovered(at)) {
-          continue;
-        }
-        const NCollection_Vec2<int> pixel = toDevicePixels(at);
-        m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
-        const auto item = itemFor(m_context->DetectedOwner());
-        if (item && item->kind == SelectKind::Profile && item->owner.toStdString() == key.first &&
-            item->name.toStdString() == key.second && accepts(m_context->DetectedOwner())) {
+        if (const auto item = picksProfile(at)) {
           found.emplace_back(*item, at.toPoint());
-          break;
+          placed = true;
+        }
+      }
+      // Its middle under a handle, which keeps a click there (mitcad#1105):
+      // another place of it, whose neighbours pick it too.
+      for (TopExp_Explorer faces(profile->Shape(), TopAbs_FACE); faces.More() && !placed; faces.Next()) {
+        for (const gp_Pnt& point : middlesOf(TopoDS::Face(faces.Current()), 24)) {
+          const QPointF at = QPointF(toWidgetF(point).toPoint());
+          const auto item = picksProfile(at);
+          if (item && picksProfile(at + QPointF(2, 0)) && picksProfile(at + QPointF(-2, 0)) &&
+              picksProfile(at + QPointF(0, 2)) && picksProfile(at + QPointF(0, -2))) {
+            found.emplace_back(*item, at.toPoint());
+            placed = true;
+            break;
+          }
         }
       }
     }
@@ -4598,6 +4663,13 @@ bool OcctViewer::isCovered(const QPointF& position) const {
                   [&position](const QRect& rect) { return QRectF(rect).adjusted(-3, -3, 3, 3).contains(position); })) {
     return true;
   }
+  // The handles of a command, where a press stays with them (mitcad#1105).
+  if (!m_handleAreasOwner.isNull() &&
+      std::any_of(m_handleAreas.begin(), m_handleAreas.end(), [&position](const HandleArea& area) {
+        return distanceToLine(position, area.line) < area.reach;
+      })) {
+    return true;
+  }
   return std::any_of(m_covered.begin(), m_covered.end(), [&position](const QRect& rect) {
     return QRectF(rect).adjusted(-6, -6, 6, 6).contains(position);
   });
@@ -5570,6 +5642,7 @@ std::optional<SelectionItem> OcctViewer::untestedClickItem() {
 }
 
 std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::refusedPickPoints(SelectFilter kinds) {
+  if (!pickPointsReady()) return {};
   const std::vector<std::pair<SelectionItem, QPoint>> taken = pickPoints(kinds);
   m_untestedPicks = true;
   std::vector<std::pair<SelectionItem, QPoint>> all = pickPoints(kinds);
@@ -5835,6 +5908,9 @@ void OcctViewer::paintGL() {
   // a failing view operation is logged and the frame skipped instead.
   try {
     FlushViewEvents(m_context, m_view, true);
+    if (PressedMouseButtons() == Aspect_VKeyMouse_NONE && !m_navigationState.buttons()) {
+      m_pointerInputPending = false;
+    }
   } catch (const Standard_Failure& failure) {
     qWarning() << "OCCT view event failed:" << failure.what();
   } catch (const std::exception& failure) {
@@ -6031,6 +6107,7 @@ void OcctViewer::cancelPointerInteraction() {
   m_windowSelecting = false;
   m_orbitKey = false;
   m_navigationState.setButtons(false);
+  m_pointerInputPending = false;
   if (m_dragItem) {
     endOccurrenceDrag(QPointF(), true);
   }
@@ -6149,9 +6226,13 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
       }
     }
   }
+  const bool wasPending = m_pointerInputPending;
+  m_pointerInputPending = true;
   if (UpdateMouseButtons(toDevicePixels(event->position()), viewButtons(event->buttons()),
                          viewFlags(event->modifiers()), false)) {
     requestFrame();
+  } else {
+    m_pointerInputPending = wasPending; // no new input to flush
   }
 }
 
@@ -6216,10 +6297,10 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
     m_windowPick = false;
     m_clickPosition = m_pressPosition;
     const Aspect_VKeyFlags flags = viewFlags(m_pressModifiers);
+    m_pointerInputPending = true;
     UpdateMouseButtons(toDevicePixels(m_pressPosition), Aspect_VKeyMouse_LeftButton, flags, false);
-    if (UpdateMouseButtons(toDevicePixels(m_pressPosition), Aspect_VKeyMouse_NONE, flags, false)) {
-      requestFrame();
-    }
+    UpdateMouseButtons(toDevicePixels(m_pressPosition), Aspect_VKeyMouse_NONE, flags, false);
+    requestFrame();
     return;
   }
   if (event->button() == Qt::LeftButton) {
@@ -6248,9 +6329,13 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
     m_cubePress = false;
     m_f4Press = false;
   }
+  const bool wasPending = m_pointerInputPending;
+  m_pointerInputPending = true;
   if (UpdateMouseButtons(toDevicePixels(event->position()), viewButtons(event->buttons()), flags,
                          false)) {
     requestFrame();
+  } else {
+    m_pointerInputPending = wasPending;
   }
   // Release the view's gesture before a context menu can take input,
   // including when a caller connects directly to these signals.
@@ -6406,6 +6491,7 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
     m_scrollDragging = true;
     m_navigationState.setScrollDrag(true);
     m_scrollPoint = event->position() * ratio;
+    m_pointerInputPending = true;
     UpdateMouseButtons(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
   }
   // A modest gain for the two-finger orbit; pan and mouse drags retain
@@ -6426,6 +6512,7 @@ void OcctViewer::endScrollDrag() {
   }
   m_scrollDragging = false;
   m_navigationState.setScrollDrag(false); // ends with the next frame or the quiet time
+  m_pointerInputPending = true;
   UpdateMouseButtons(devicePixel(m_scrollPoint), Aspect_VKeyMouse_NONE,
                      mode == ScrollMode::Orbit ? kScrollOrbit : kScrollPan, false);
   requestFrame();

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 
 namespace mitcad::geometry {
 
@@ -51,6 +52,27 @@ std::string make_vertex_name(NameList faces, int index) {
     name += (i == 0 ? "" : "|") + faces[i];
   }
   return with_index(name + '}', index);
+}
+
+std::string make_open_edge_name(const std::string& face, const std::string& segment) {
+  return "O{" + face + '|' + segment + '}';
+}
+
+std::string rename_open_edge_name(const std::string& name, const std::string& rename) {
+  if (rename.empty()) return name;
+  if (name.rfind("O{", 0) == 0 && name.back() == '}') {
+    int depth = 0;
+    for (std::size_t i = 2; i + 1 < name.size(); ++i) {
+      const char c = name[i];
+      if (c == '(' || c == '[' || c == '{') ++depth;
+      else if (c == ')' || c == ']' || c == '}') --depth;
+      else if (c == '|' && depth == 0) {
+        return make_open_edge_name(rename + '(' + name.substr(2, i - 2) + ')',
+                                   name.substr(i + 1, name.size() - i - 2));
+      }
+    }
+  }
+  throw std::invalid_argument("invalid source-profile boundary name");
 }
 
 std::optional<CompositeName> parse_composite_name(const std::string& text) {

@@ -174,7 +174,9 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
     loadOperation(feature, state);
   };
 
-  // A fixed plane (the importer's placement) has no input.
+  // A fixed plane (an importer's or an agent's placement) shows as Place
+  // On's item, kept until a face or a plane is picked in its place
+  // (mitcad#1137); a fixed axis or point still has no input.
   def.canEdit = [&context](const QJsonObject& feature) { return placeShowable(feature, context); };
 
   def.describe = [type](const CommandState& state, const CommandContext&) {

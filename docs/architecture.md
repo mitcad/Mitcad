@@ -468,7 +468,9 @@ design in a project.
   heights. The app paints the reference look: the bundled technical
   lettering (an ISO 3098 type B style font, a file loaded at run time, LGPL-3.0 with the font
   exception), crisp lines on the pixel grid, arrowheads in the
-  annotation's plane, the text between a floor and a ceiling on screen,
+  annotation's plane, the text to the design's scale above a floor on screen
+  (no ceiling since mitcad#1168; a leader's landing in proportion to
+  its text as drawn),
   selection and hover as a recolouring only, Auto's ink chosen over what
   lies behind (the view's frame grabbed once the camera rests,
   `MeasurementBackdrop`; lines and terminators piece by piece, text and
@@ -1446,6 +1448,45 @@ curves (half-edge structure, leftmost turn; islands are separate regions;
 overlapping pieces and curves on each other, such as a circle drawn twice,
 count once).
 
+For a sketch on a planar body face, evaluation additionally obtains the
+face's named boundary curves (`Kernel::face_boundary`) and projects them
+into the current sketch frame, including the plane's occurrence link.
+These transient curves never enter `SketchDef`, its entities or its solve.
+The same arrangement splits the face by the sketch's non-construction
+curves; adjacency and boundary-crossing parity retain the face's material
+(excluding holes) and the sketch's own closed regions outside it.
+Coincident pieces keep both face-boundary and stored-sketch provenance;
+their identity stays that of the stored curve, so a closed sketch region
+sharing an edge with the face also survives removing that face support.
+`CurveId::FaceEdge` holds a `FaceBoundaryRef`: a normal topological edge
+(`Named`, spelled `b{E{…}}`) or an eligible one-sided profile boundary
+(`Profile`, spelled `b{O{<source face>|<source segment>}}`). The latter
+uses the actual `ProfileFace::edges` construction mapping when a planar
+Patch is made, not a geometric match, transient edge index or fabricated
+adjacent face. A profile Patch's references come from one sketch, so its
+creating face and source segment together identify that sketch namespace.
+Geometry stores this provenance separately from ordinary two-face edge
+names, carries it through explicit OCCT history and transformations, and
+persists it with cached shape metadata. Ordinary edge/face selection
+grammars and existing `b{E{…}}` keys remain unchanged. Face edges in hole loops also
+belong to a face-bounded region's key, so removing the supporting face
+cannot accidentally select the sketch's whole former outer region.
+Component/design copies remap the feature owners in bare profile region
+keys as well as nested face, boundary and source-segment references,
+rebuilding canonical edge and segment-neighbour order. Curve and glyph
+ids stay local to the copied sketch, and derived-part source names keep
+their original document's namespace.
+Both profile queries mark these regions with `face_bounded: true`; normal
+profile features, profile shapes, shading, hashing and picking use the
+evaluated regions. An off-face placement or a new non-face plane leaves
+out the boundary curves, and a reference requiring a lost boundary fails
+as a missing profile. Boundary extraction requires a named edge or
+unambiguous source-profile provenance. Missing provenance, distinct
+references merged onto one edge, or a source split into ambiguous pieces
+warns and retains only the sketch's own regions; no guessed piece number
+is used. This does not exclude surface bodies whose boundaries have
+usable references.
+
 A profile feature's `profiles` are a set of these regions: the area they
 select is the odd/even composition of the selected regions, which never
 overlap, so each region once whatever the order or repetition of the list
@@ -1599,6 +1640,10 @@ not recompute.
 - **Sketch mode** (`app/sketch/`): the app keeps the sketch in the form of
   the `sketch` query and does snapping, inference and hit testing itself;
   every change is a `sketch.*` command, one undo step per user action.
+  Drawing tools turn typed sizes into driving dimensions in that same
+  step; a polygon's typed radius dimensions the construction circle it
+  measures, and Edge Polygon's typed length dimensions the clicked edge.
+  A polygon's side count is its geometry, not a dimension.
   Tools use a custom cursor (`app/framework/Cursors`). Body edges and
   vertices in the sketch plane, which the Dimension tool picks and the
   Point tool snaps to, come from the model's `plane_geometry` query (the
@@ -1705,7 +1750,11 @@ not recompute.
   when no job runs, else at the job's end; a change of the edit lock waits
   so too. `MITCAD_COMPUTE_INLINE=1` runs jobs on the UI thread for
   debugging. Feature previews use asynchronous jobs on both
-  frontends (mitcad#634), without modal progress. The first pending input
+  frontends (mitcad#634), without modal progress. So does Send to
+  Slicer's bed plan while its panel is open (mitcad#1121:
+  `DocumentSession::commandTaskAsync`, the job `bed plan`): keys typed
+  into the opening panel stay the panel's, and its Send waits for the
+  plan (`CommandDef::okWhileBusy`). The first pending input
   starts a bounded 150 ms timer; further input does not restart it. While
   a job owns the document, numeric edits replace one pending action per
   field, evaluated only on idle. Structural edits form ordering barriers
@@ -3156,8 +3205,9 @@ preview is the model's `mount_preview`.
 Each document window's live MCP listener publishes its authenticated
 endpoint and a separate token-free, owner-only window state beside it
 (`app/mcp/LocalEndpoint.*`). The state contains the latest UTC activation
-time, title and initialized client names. The CLI authenticates the live
-endpoints before choosing the one active last; an explicit `--instance`
+time, the design title (`TitleBar::documentTitleOf`: without Qt's `[*]`
+placeholder and the application's name, mitcad#1149) and initialized
+client names. The CLI authenticates the live endpoints before choosing the one active last; an explicit `--instance`
 chooses that instance only. The bridge holds that socket for the entire
 session. Connect AI Assistant reads the window states to name local and
 other-window connections; the assistant indicator retains only local

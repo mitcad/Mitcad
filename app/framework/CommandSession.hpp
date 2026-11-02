@@ -308,6 +308,14 @@ public:
   // Print's panel, a note row's button): CommandDef::modelChanged, then the
   // panel shows the inputs again (choices and notes asked anew).
   void refreshInputs();
+  // What the command's own rows show changed without the model changing
+  // (mitcad#1121: Send to Slicer's bed plan done in the background): the
+  // panel shows the inputs again and the highlights (CommandDef::marks)
+  // are drawn again; CommandDef::modelChanged is not called.
+  void showInputsAgain();
+  // OK (or Enter) was pressed while a job computes the model, and runs
+  // once the model is idle (commit).
+  bool commitPending() const { return m_commitRequested && !m_done; }
   // The preview computed again with the inputs as they are, as after a
   // change (mitcad#1097: an Annotate panel's annotation follows the view's
   // direction, which its placement depends on).

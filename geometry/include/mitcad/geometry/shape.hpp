@@ -79,6 +79,14 @@ public:
     NameList names;
   };
 
+  // Exact source-profile provenance for an edge of a newly made shape.
+  // Separate from canonical two-face edge names: several names preserve
+  // an ambiguous history instead of guessing which source survived.
+  struct NamedOpenEdge {
+    TopoDS_Shape edge;
+    NameList names;
+  };
+
   // What the names of the faces give the edges and vertices: each edge's
   // two faces and name, each vertex's faces and name, in TopExp order, as
   // a shape works them out when it is made (persist.cpp keeps them with a
@@ -88,6 +96,7 @@ public:
     std::vector<std::string> edge_names;
     std::vector<std::vector<int>> vertex_faces;
     std::vector<std::string> vertex_names;
+    std::vector<NameList> open_edge_names;
   };
 
   // Faces of `shape` that are not listed have no name. Listed faces that are
@@ -130,6 +139,15 @@ public:
   const TopoDS_Edge& edge(int i) const;
   // Empty when a face at the edge has no name.
   const std::string& edge_name(int i) const { return m_edgeNames[static_cast<std::size_t>(i)]; }
+  const NameList& open_edge_names(int i) const {
+    static const NameList empty;
+    return m_openEdgeNames.empty() ? empty : m_openEdgeNames[static_cast<std::size_t>(i)];
+  }
+  bool has_open_edge_names() const { return !m_openEdgeNames.empty(); }
+  std::vector<NamedOpenEdge> named_open_edges() const;
+  // Construction metadata of a fresh output only; never called on an
+  // operation's input. Unmapped edges remain without provenance.
+  void set_open_edge_names(const std::vector<NamedOpenEdge>& names);
   // The faces at edge i, the one with the smaller primary name first (the
   // face a two-distance chamfer measures its first distance on); -1 when
   // missing. Both are the same face for a seam.
@@ -300,6 +318,7 @@ private:
   std::vector<NameList> m_faceNames;
   std::vector<std::array<int, 2>> m_edgeFaces;
   std::vector<std::string> m_edgeNames;
+  std::vector<NameList> m_openEdgeNames;
   std::vector<std::vector<int>> m_vertexFaces;
   std::vector<std::string> m_vertexNames;
   LazyValue<std::array<double, 5>> m_measured;

@@ -25,6 +25,7 @@
 #include <QTimer>
 
 #include "../framework/CommandRegistry.hpp"
+#include "../framework/LengthUnits.hpp"
 #include "../sketch/SketchController.hpp"
 #include "CommandSupport.hpp"
 
@@ -100,7 +101,9 @@ void loadSketch(CommandState& s, const CommandContext& context) {
     if (placement.contains(id)) {
       s.setText(id, context.valueText(placement.value(id), uid));
     } else {
-      s.setText(id, value.kind == ValueKind::Angle ? QStringLiteral("0 deg") : QStringLiteral("0 mm"));
+      // A length's 0 in the design's unit, as the inputs' defaults (mitcad#1165).
+      s.setText(id, value.kind == ValueKind::Angle ? QStringLiteral("0 deg")
+                                                   : defaultLengthText(QStringLiteral("0 mm"), context.lengthUnit()));
     }
   }
   s.setChecked(kFlip, placement.value(kFlip).toBool());

@@ -49,7 +49,7 @@ use serde_json::Value;
 
 use super::components::{design_digest, file_label, recorded_link_path, resolve_path};
 use super::copy::CopySource;
-use super::{BodyAttributes, ComponentCopy, DocState, Document, ModelError, invalid};
+use super::{Annotation, BodyAttributes, ComponentCopy, DocState, Document, ModelError, invalid};
 use crate::assembly::{Assembly, ExternalLink, inverse};
 use crate::datum::Datum;
 use crate::exchange::ImportBody;
@@ -200,7 +200,7 @@ impl<K: Kernel> Document<K> {
         &self,
         component: ComponentUid,
     ) -> Result<Vec<CutReference>, ModelError> {
-        Ok(self.component_design(component, None)?.references)
+        Ok(self.component_design(component, None, None)?.references)
     }
 
     /// Save Component as Design (mitcad#1057): writes the component as a
@@ -218,7 +218,11 @@ impl<K: Kernel> Document<K> {
     ) -> Result<SavedComponent, ModelError> {
         let absolute = std::path::absolute(path)
             .map_err(|e| invalid(format!("cannot resolve {}: {e}", path.display())))?;
-        let design = self.component_design(component, absolute.parent())?;
+        // Relative link paths are relative to the folder the command gives,
+        // else to the one this design was read from: the same folder for
+        // the links inside the component as for the replace link.
+        let base = options.base.clone().or_else(|| self.source_directory());
+        let design = self.component_design(component, absolute.parent(), base.as_deref())?;
         let linked = if options.replace {
             Some(self.link_plan(component)?)
         } else {
@@ -233,7 +237,6 @@ impl<K: Kernel> Document<K> {
             link: None,
         };
         if let Some(bodies) = linked {
-            let base = options.base.clone().or_else(|| self.source_directory());
             let shown = absolute.to_string_lossy().into_owned();
             let recorded = recorded_link_path(&shown, &absolute, base.as_deref());
             let link = ExternalLink {
@@ -274,11 +277,14 @@ impl<K: Kernel> Document<K> {
     /// root of an empty design, after what it refers to outside itself
     /// was frozen on a copy of this design's state. `folder` is where the
     /// new file goes (the links of linked components inside it are
-    /// recorded relative to it).
+    /// recorded relative to it); `base` is this design's folder, which the
+    /// links it records are relative to (the folder it was read from when
+    /// None).
     fn component_design(
         &self,
         component: ComponentUid,
         folder: Option<&Path>,
+        base: Option<&Path>,
     ) -> Result<ComponentDesign, ModelError> {
         self.check_savable(component)?;
         let a = &self.state.assembly;
@@ -305,7 +311,9 @@ impl<K: Kernel> Document<K> {
         // The library parts BUILD placed (mitcad#375) that a library or
         // derived component inside it may read.
         design.library_sources = self.state.library_sources.clone();
-        let directory = self.source_directory();
+        let directory = base
+            .map(Path::to_path_buf)
+            .or_else(|| self.source_directory());
         let (_, copy) = design
             .copy_component_mapped(
                 &frozen,
@@ -316,6 +324,13 @@ impl<K: Kernel> Document<K> {
             )
             .map_err(|e| invalid(format!("cannot save {name} as a design: {e}")))?;
         keep_names(&mut design, &frozen, &copy);
+        // The bodies keep their names, and with them their attributes in
+        // the file, which keeps a body's material, appearance and
+        // visibility only with its name (mitcad#1150: a hidden copy came
+        // back shown); the frozen copies' as `freeze_bodies` named them.
+        let mut names = super::display_names(&self.state, &self.result);
+        names.extend(frozen.body_names.iter().map(|(b, n)| (*b, n.clone())));
+        keep_body_names(&mut design, &names, &copy);
         keep_links(&mut design, &frozen, &copy, directory.as_deref(), folder);
         design
             .assembly
@@ -348,22 +363,19 @@ impl<K: Kernel> Document<K> {
         if let Some(renames) = self.freeze_made_bodies(state, component, &uids, references)? {
             renames.apply(state, &uids)?;
         }
+        // The hidden copies made so far: a body read again as it was (the
+        // same link, the same feature's result) takes the same copy, so
+        // that two features reading one body leave one copy (mitcad#1150).
+        let mut copies: Vec<(FrozenKey, Renames)> = Vec::new();
         for (i, uid) in uids.iter().enumerate() {
             let Some(position) = state.position(*uid) else {
                 continue;
             };
             let entry = (*state.features[position]).clone();
             let mut def = entry.def.clone();
-            let mut bodies: Vec<(BodyUid, OccurrenceLink)> = Vec::new();
             // A body transfer from outside: its bodies frozen, the transfer
             // gone; a fixed conversion of its own instead of the links'.
-            let mut transfer: Option<Option<Transform>> = None;
-            if let Some((body, link)) = def.seat_link().map(|(b, l)| (b, l.clone()))
-                && outside(&link)
-            {
-                bodies.push((body, link));
-                clear_seat_link(&mut def);
-            }
+            let (bodies, transfer) = take_outside_bodies(&mut def, &outside);
             match &mut def {
                 FeatureDef::Sketch(sketch) => {
                     let output = self.sketch_output(*uid);
@@ -510,7 +522,6 @@ impl<K: Kernel> Document<K> {
                     }
                 }
                 FeatureDef::Extrude(extrude) => {
-                    take_links(&mut extrude.object_links, &outside, &mut bodies);
                     if let Some(scope) = extrude.cut_scope.as_mut() {
                         let mut dropped = Vec::new();
                         match &mut scope.targets {
@@ -546,46 +557,17 @@ impl<K: Kernel> Document<K> {
                         }
                     }
                 }
-                FeatureDef::Revolve(revolve) => {
-                    take_links(&mut revolve.object_links, &outside, &mut bodies);
-                }
-                FeatureDef::Sweep(sweep) => {
-                    take_links(&mut sweep.body_links, &outside, &mut bodies)
-                }
-                FeatureDef::SplitBody(split) => {
-                    take_links(&mut split.tool_links, &outside, &mut bodies);
-                }
-                FeatureDef::Derive(derive) => take_links(&mut derive.links, &outside, &mut bodies),
-                FeatureDef::Combine(combine) => {
-                    take_links(&mut combine.tool_links, &outside, &mut bodies);
-                    for tool in &mut combine.tools {
-                        if let Some(link) = tool.link.clone().filter(|l| outside(l)) {
-                            bodies.push((tool.body, link));
-                            tool.link = None;
-                        }
-                    }
-                }
-                FeatureDef::BodyTransfer(moved) if outside(&moved.link) => {
-                    for body in &moved.bodies {
-                        bodies.push((*body, moved.link.clone()));
-                    }
-                    transfer = Some(moved.transform);
-                }
                 _ => {}
             }
             self.freeze_points(&entry, &mut def, path, references);
-            let renames = if bodies.is_empty() {
-                None
-            } else {
+            // The renames of this feature, and of the copies made for it by
+            // body (for the features after it).
+            let mut renames = Renames::default();
+            let mut fresh: Vec<(BodyUid, Renames)> = Vec::new();
+            if !bodies.is_empty() {
                 let mut shapes = Vec::with_capacity(bodies.len());
+                let mut keys = Vec::with_capacity(bodies.len());
                 for (body, link) in &bodies {
-                    shapes.push(self.frozen_shape(
-                        *uid,
-                        entry.component,
-                        *body,
-                        link,
-                        transfer.flatten(),
-                    )?);
                     note(
                         references,
                         &entry,
@@ -593,20 +575,49 @@ impl<K: Kernel> Document<K> {
                         a.path_name(&link.source.0),
                         true,
                     );
+                    let key = FrozenKey {
+                        body: *body,
+                        link: link.clone(),
+                        component: entry.component,
+                        maker: self.shape_maker(*uid, *body),
+                    };
+                    if transfer.is_none()
+                        && let Some((_, copy)) = copies.iter().find(|(k, _)| *k == key)
+                    {
+                        renames.merge(copy);
+                        continue;
+                    }
+                    shapes.push(self.frozen_shape(
+                        *uid,
+                        entry.component,
+                        *body,
+                        link,
+                        transfer.flatten(),
+                    )?);
+                    keys.push(key);
                 }
-                // The copies of bodies a feature reads are hidden; those a
-                // transfer moved in are the component's own bodies now.
-                let source = format!("bodies {} reads, frozen", entry.name);
-                Some(self.freeze_bodies(
-                    state,
-                    Some(*uid),
-                    entry.component,
-                    &shapes,
-                    transfer.is_none(),
-                    &source,
-                    inside_features(&self.state, inside),
-                )?)
-            };
+                if !shapes.is_empty() {
+                    // The copies of bodies a feature reads are hidden; those
+                    // a transfer moved in are the component's own bodies now.
+                    let source = format!("bodies {} reads, frozen", entry.name);
+                    let made = self.freeze_bodies(
+                        state,
+                        Some(*uid),
+                        entry.component,
+                        &shapes,
+                        transfer.is_none(),
+                        &source,
+                        inside_features(&self.state, inside),
+                    )?;
+                    for (key, copy) in keys.into_iter().zip(made) {
+                        renames.merge(&copy);
+                        fresh.push((key.body, copy.clone()));
+                        if transfer.is_none() {
+                            copies.push((key, copy));
+                        }
+                    }
+                }
+            }
             let position = state
                 .position(*uid)
                 .ok_or_else(|| invalid(format!("{} is gone", entry.name)))?;
@@ -618,11 +629,52 @@ impl<K: Kernel> Document<K> {
             } else if def != entry.def {
                 state.features[position] = Arc::new(FeatureEntry { def, ..entry });
             }
-            if let Some(renames) = renames {
-                renames.apply(state, &uids[i..])?;
+            renames.apply(state, &[*uid])?;
+            // The features after it name the new copies' faces where this
+            // feature's result carries them (a combine's cut faces); one
+            // that reads such a body from outside itself is left to its own
+            // turn, which takes the copy of the body as it reads it.
+            if !fresh.is_empty() {
+                for later in &uids[i + 1..] {
+                    let Some(position) = state.position(*later) else {
+                        continue;
+                    };
+                    let read = outside_bodies(&state.features[position].def, &outside);
+                    let mut renames = Renames::default();
+                    for (body, copy) in &fresh {
+                        if !read.contains(body) {
+                            renames.merge(copy);
+                        }
+                    }
+                    if !renames.is_empty() {
+                        renames.apply(state, &[*later])?;
+                    }
+                }
             }
         }
         Ok(())
+    }
+
+    /// The feature whose result a feature reads a body from: the last one
+    /// before it that set or removed the body, from the last recompute.
+    fn shape_maker(&self, consumer: FeatureUid, body: BodyUid) -> Option<FeatureUid> {
+        let position = self.state.position(consumer)?;
+        self.result
+            .results
+            .iter()
+            .take(position)
+            .rev()
+            .find_map(|result| {
+                let output = result.output.as_deref()?;
+                output
+                    .changes
+                    .iter()
+                    .any(|change| match change {
+                        crate::recompute::Change::Set(changed, _)
+                        | crate::recompute::Change::Remove(changed) => *changed == body,
+                    })
+                    .then_some(result.uid)
+            })
     }
 
     /// A move's points and axes and a point pattern's points picked in
@@ -840,7 +892,8 @@ impl<K: Kernel> Document<K> {
         // Faces named by the component's own features (a fillet's) are the
         // component's; the others are the maker's and those before it.
         let own: BTreeSet<FeatureUid> = uids.iter().copied().collect();
-        let renames = self.freeze_bodies(
+        let mut renames = Renames::default();
+        for made in self.freeze_bodies(
             state,
             uids.first().copied(),
             component,
@@ -848,7 +901,9 @@ impl<K: Kernel> Document<K> {
             false,
             &source,
             own,
-        )?;
+        )? {
+            renames.merge(&made);
+        }
         note(
             references,
             entry,
@@ -900,9 +955,9 @@ impl<K: Kernel> Document<K> {
 
     /// Adds a base feature of `component` holding `shapes` to `state`,
     /// before `before` (at the marker when None), hidden or not; the
-    /// bodies keep their attributes. Returns the renames of the bodies and
-    /// of their faces (those not named by a feature of `own`) to the base
-    /// feature's.
+    /// bodies keep their attributes. Returns, for each body, the renames of
+    /// it and of its faces (those not named by a feature of `own`) to the
+    /// base feature's.
     #[allow(clippy::too_many_arguments)]
     fn freeze_bodies(
         &self,
@@ -913,7 +968,7 @@ impl<K: Kernel> Document<K> {
         hidden: bool,
         source: &str,
         own: BTreeSet<FeatureUid>,
-    ) -> Result<Renames, ModelError> {
+    ) -> Result<Vec<Renames>, ModelError> {
         let uid = state.new_uid();
         let imports: Vec<ImportBody<K::Shape>> = shapes
             .iter()
@@ -924,10 +979,20 @@ impl<K: Kernel> Document<K> {
             })
             .collect();
         let bodies = self.base_bodies(&imports)?;
-        let mut renames = Renames::default();
+        let mut all = Vec::with_capacity(shapes.len());
         let mut first = 0u32;
+        // Names of their own (the file keeps a body's attributes, a hidden
+        // copy's visibility among them, only with its name).
+        let mut taken: BTreeSet<String> = super::display_names(&self.state, &self.result)
+            .into_values()
+            .chain(state.body_names.values().cloned())
+            .collect();
         for (index, (body, shape, name)) in (0u32..).zip(shapes) {
             let frozen = BodyUid::new(uid, index);
+            state
+                .body_names
+                .insert(frozen, crate::exchange::unique_name(name, &mut taken));
+            let mut renames = Renames::default();
             renames.bodies.insert(body.to_string(), frozen.to_string());
             let faces = self
                 .kernel()
@@ -935,6 +1000,7 @@ impl<K: Kernel> Document<K> {
                 .map_err(|e| invalid(format!("cannot freeze {name}: {e}")))?;
             let names: Vec<Vec<String>> = faces.into_iter().map(|f| f.names).collect();
             first = renames.add_faces(uid, first, &names, &|f| !own.contains(&f))?;
+            all.push(renames);
             let mut attributes = self.body_attributes(*body);
             attributes.face_appearances.clear();
             attributes.face_appearance_exprs.clear();
@@ -968,7 +1034,7 @@ impl<K: Kernel> Document<K> {
         if position <= state.marker {
             state.marker += 1;
         }
-        Ok(renames)
+        Ok(all)
     }
 
     /// A body as it is right after the feature `uid`, from the last
@@ -1067,15 +1133,60 @@ impl<K: Kernel> Document<K> {
                 maker.name
             )));
         }
+        // Construction geometry outside on its sketches and datums, or on
+        // those of the components placed in it, would lose them: a link
+        // keeps no sketches or datums (mitcad#1144).
+        let only = only_held(a, component, &inside);
+        let seen_in = |link: &OccurrenceLink| {
+            link.source
+                .0
+                .iter()
+                .any(|o| a.occurrence(*o).is_some_and(|o| o.component == component))
+        };
+        for entry in &self.state.features {
+            if entry.component == component || only.contains(&entry.component) {
+                continue;
+            }
+            let datum_links = match &entry.def {
+                FeatureDef::ConstructionPlane(p) => &p.datum_links,
+                FeatureDef::ConstructionAxis(x) => &x.datum_links,
+                FeatureDef::ConstructionPoint(p) => &p.datum_links,
+                _ => continue,
+            };
+            if let Some((datum, _)) = datum_links.iter().find(|&(_, link)| seen_in(link)) {
+                let datum = self
+                    .state
+                    .entry(*datum)
+                    .map_or_else(|| datum.to_string(), |e| e.name.clone());
+                return Err(invalid(format!(
+                    "{name} cannot be replaced by a link while {} is on {datum} in it: a linked \
+                     component keeps no sketches or construction geometry; edit {} first",
+                    entry.name, entry.name
+                )));
+            }
+        }
         let path = crate::links::first_path(a, component, None).map_err(invalid)?;
         let world = path.iter().fold(Transform::IDENTITY, |t, o| {
             t.after(&self.placement(*o).unwrap_or(Transform::IDENTITY))
         });
         let into = inverse(&world);
         let mut bodies = Vec::new();
+        let mut shown = BTreeSet::new();
         for instance in self.instances() {
             if !instance.visible || !instance.path.starts_with(&path) {
                 continue;
+            }
+            // One body in two places: the outer references to it (joints,
+            // links, annotations) name the body, not the placement, so they
+            // could not follow the right one of its base bodies.
+            if !shown.insert(instance.body) {
+                let twice = self
+                    .body_component(instance.body)
+                    .map_or_else(|| instance.name.clone(), |c| a.name(c));
+                return Err(invalid(format!(
+                    "{name} cannot be replaced by a link while {twice} is placed in it more than \
+                     once"
+                )));
             }
             let Some(shape) = self.body_shape(instance.body) else {
                 continue;
@@ -1143,22 +1254,7 @@ impl<K: Kernel> Document<K> {
         let label = format!("Replace {name} with a Link to {}", file_label(&link.path));
         self.apply(|state| {
             // The components only it holds go with it.
-            let mut only: BTreeSet<ComponentUid> =
-                inside.iter().copied().filter(|c| *c != component).collect();
-            loop {
-                let kept: BTreeSet<ComponentUid> = only
-                    .iter()
-                    .copied()
-                    .filter(|c| {
-                        a.occurrences_of(*c)
-                            .all(|o| o.parent == component || only.contains(&o.parent))
-                    })
-                    .collect();
-                if kept.len() == only.len() {
-                    break;
-                }
-                only = kept;
-            }
+            let only = only_held(&a, component, &inside);
             let mut removed: BTreeSet<FeatureUid> = state
                 .features
                 .iter()
@@ -1274,21 +1370,34 @@ impl<K: Kernel> Document<K> {
                 .map(|f| f.uid)
                 .collect();
             let assembly = state.assembly.clone();
-            let through = |text: &str| -> Option<String> {
-                let path = occurrence_path(text)?;
+            // An occurrence path through the component ends at its
+            // occurrence: the occurrences placed in it are gone.
+            let cut = |path: &[OccurrenceUid]| -> Option<Vec<OccurrenceUid>> {
                 let at = path
                     .iter()
                     .position(|o| a.occurrence(*o).is_some_and(|o| o.component == component))?;
                 if at + 1 == path.len() || assembly.occurrence(path[at]).is_none() {
                     return None;
                 }
-                Some(
-                    path[..=at]
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("/"),
-                )
+                Some(path[..=at].to_vec())
+            };
+            let through = |text: &str| -> Option<String> {
+                cut(occurrence_path(text)?.as_slice()).map(|path| OccurrencePath(path).to_string())
+            };
+            // The body link maps are keyed by body and their links' sources
+            // are no plain texts (mitcad#1144): a link seen in the component
+            // (at or through its occurrence) follows the base feature's body.
+            let seen_in = |link: &OccurrenceLink| {
+                link.source
+                    .0
+                    .iter()
+                    .any(|o| a.occurrence(*o).is_some_and(|o| o.component == component))
+            };
+            let body = |b: BodyUid| {
+                renames
+                    .bodies
+                    .get(&b.to_string())
+                    .and_then(|text| text.parse::<BodyUid>().ok())
             };
             for f in outer {
                 let Some(position) = state.position(f) else {
@@ -1297,19 +1406,49 @@ impl<K: Kernel> Document<K> {
                 let renamed = {
                     let entry = &state.features[position];
                     let rename = |text: &str| through(text).or_else(|| renames.text(text));
-                    match rename_def(&entry.def, &rename)? {
-                        Some(def) => FeatureEntry {
-                            def,
-                            ..(**entry).clone()
-                        },
-                        None => continue,
+                    let mapped = rename_def(&entry.def, &rename)?;
+                    let changed = mapped.is_some();
+                    let mut def = mapped.unwrap_or_else(|| entry.def.clone());
+                    if !relink(&mut def, &seen_in, &body, &cut) && !changed {
+                        continue;
+                    }
+                    FeatureEntry {
+                        def,
+                        ..(**entry).clone()
                     }
                 };
                 state.features[position] = Arc::new(renamed);
             }
+            // The annotations on its bodies follow them too.
+            let rename = |text: &str| through(text).or_else(|| renames.text(text));
+            for annotation in &mut state.annotations {
+                rename_picks(annotation, &rename)?;
+            }
             Ok((label, ()))
         })
     }
+}
+
+/// An annotation's picks (its two and its plane's) with the references
+/// `rename` renames: their bodies, faces, edges, vertices and occurrences.
+fn rename_picks(
+    annotation: &mut Annotation,
+    rename: &dyn Fn(&str) -> Option<String>,
+) -> Result<(), ModelError> {
+    let name = annotation.name.clone();
+    let picks = [
+        Some(&mut annotation.a),
+        annotation.b.as_mut(),
+        annotation.plane.as_mut().and_then(|p| p.pick.as_mut()),
+    ];
+    for pick in picks.into_iter().flatten() {
+        let mut value = serde_json::to_value(&*pick).map_err(|e| invalid(e.to_string()))?;
+        if rename_value(&mut value, rename) {
+            *pick = serde_json::from_value(value)
+                .map_err(|e| invalid(format!("rename {name}: {e}")))?;
+        }
+    }
+    Ok(())
 }
 
 /// The component and every component placed in it, through any depth.
@@ -1324,6 +1463,118 @@ fn subtree(a: &Assembly, component: ComponentUid) -> BTreeSet<ComponentUid> {
         }
     }
     inside
+}
+
+/// The components inside `component` (`inside`, its subtree) that only it
+/// holds, through any depth: they go with it when it is replaced by a link.
+fn only_held(
+    a: &Assembly,
+    component: ComponentUid,
+    inside: &BTreeSet<ComponentUid>,
+) -> BTreeSet<ComponentUid> {
+    let mut only: BTreeSet<ComponentUid> =
+        inside.iter().copied().filter(|c| *c != component).collect();
+    loop {
+        let kept: BTreeSet<ComponentUid> = only
+            .iter()
+            .copied()
+            .filter(|c| {
+                a.occurrences_of(*c)
+                    .all(|o| o.parent == component || only.contains(&o.parent))
+            })
+            .collect();
+        if kept.len() == only.len() {
+            return only;
+        }
+        only = kept;
+    }
+}
+
+/// The links of an outer feature's definition after Replace with a Link
+/// (mitcad#1144), which the text renames cannot reach: the body link maps
+/// are keyed by body, so a link `seen_in` the replaced component is
+/// re-keyed by `body` to the base feature's body, and every link's source
+/// and target through the component end at its occurrence (`cut`). True
+/// when anything changed.
+fn relink(
+    def: &mut FeatureDef,
+    seen_in: &dyn Fn(&OccurrenceLink) -> bool,
+    body: &dyn Fn(BodyUid) -> Option<BodyUid>,
+    cut: &dyn Fn(&[OccurrenceUid]) -> Option<Vec<OccurrenceUid>>,
+) -> bool {
+    let shorten = |link: &mut OccurrenceLink| {
+        let mut changed = false;
+        for path in [&mut link.source, &mut link.target] {
+            if let Some(shorter) = cut(path.0.as_slice()) {
+                path.0 = shorter;
+                changed = true;
+            }
+        }
+        changed
+    };
+    let rekey = |map: &mut BTreeMap<BodyUid, OccurrenceLink>| {
+        let mut changed = false;
+        for (key, mut link) in std::mem::take(map) {
+            let renamed = if seen_in(&link) {
+                body(key).unwrap_or(key)
+            } else {
+                key
+            };
+            changed |= renamed != key;
+            changed |= shorten(&mut link);
+            map.insert(renamed, link);
+        }
+        changed
+    };
+    let datums = |map: &mut BTreeMap<FeatureUid, OccurrenceLink>| {
+        let mut changed = false;
+        for link in map.values_mut() {
+            changed |= shorten(link);
+        }
+        changed
+    };
+    if let Some((_, link)) = def.seat_link_mut() {
+        return shorten(link);
+    }
+    match def {
+        FeatureDef::Extrude(x) => rekey(&mut x.object_links),
+        FeatureDef::Revolve(r) => rekey(&mut r.object_links),
+        FeatureDef::Sweep(s) => rekey(&mut s.body_links),
+        FeatureDef::SplitBody(s) => rekey(&mut s.tool_links),
+        FeatureDef::Derive(d) => rekey(&mut d.links),
+        FeatureDef::Combine(c) => {
+            let mut changed = rekey(&mut c.tool_links);
+            for link in c.tools.iter_mut().filter_map(|t| t.link.as_mut()) {
+                changed |= shorten(link);
+            }
+            changed
+        }
+        FeatureDef::ConstructionPlane(p) => {
+            let changed = rekey(&mut p.links);
+            datums(&mut p.datum_links) || changed
+        }
+        FeatureDef::ConstructionAxis(x) => {
+            let changed = rekey(&mut x.links);
+            datums(&mut x.datum_links) || changed
+        }
+        FeatureDef::ConstructionPoint(p) => {
+            let changed = rekey(&mut p.links);
+            datums(&mut p.datum_links) || changed
+        }
+        FeatureDef::BodyTransfer(t) => shorten(&mut t.link),
+        FeatureDef::Sketch(s) => {
+            let mut changed = false;
+            for link in s
+                .plane_link
+                .iter_mut()
+                .chain(s.projections.iter_mut().filter_map(|p| p.link.as_mut()))
+            {
+                changed |= shorten(link);
+            }
+            changed
+        }
+        _ => false,
+    }
 }
 
 /// The features of the components `inside`.
@@ -1372,6 +1623,76 @@ fn unfreezable(
         }
     }
     left
+}
+
+/// The bodies of other components a definition reads (those whose links
+/// are `outside`), taken out of it: a seat's shaft, an extrusion's or a
+/// revolution's objects, a sweep's bodies, a split's and a combine's tools,
+/// a derive's bodies, and the bodies a body transfer moves in, with that
+/// transfer's own conversion (`Some`).
+fn take_outside_bodies(
+    def: &mut FeatureDef,
+    outside: &dyn Fn(&OccurrenceLink) -> bool,
+) -> (Vec<(BodyUid, OccurrenceLink)>, Option<Option<Transform>>) {
+    let mut bodies: Vec<(BodyUid, OccurrenceLink)> = Vec::new();
+    let mut transfer: Option<Option<Transform>> = None;
+    if let Some((body, link)) = def.seat_link().map(|(b, l)| (b, l.clone()))
+        && outside(&link)
+    {
+        bodies.push((body, link));
+        clear_seat_link(def);
+    }
+    match def {
+        FeatureDef::Extrude(extrude) => take_links(&mut extrude.object_links, outside, &mut bodies),
+        FeatureDef::Revolve(revolve) => {
+            take_links(&mut revolve.object_links, outside, &mut bodies);
+        }
+        FeatureDef::Sweep(sweep) => take_links(&mut sweep.body_links, outside, &mut bodies),
+        FeatureDef::SplitBody(split) => take_links(&mut split.tool_links, outside, &mut bodies),
+        FeatureDef::Derive(derive) => take_links(&mut derive.links, outside, &mut bodies),
+        FeatureDef::Combine(combine) => {
+            take_links(&mut combine.tool_links, outside, &mut bodies);
+            for tool in &mut combine.tools {
+                if let Some(link) = tool.link.clone().filter(|l| outside(l)) {
+                    bodies.push((tool.body, link));
+                    tool.link = None;
+                }
+            }
+        }
+        FeatureDef::BodyTransfer(moved) if outside(&moved.link) => {
+            for body in &moved.bodies {
+                bodies.push((*body, moved.link.clone()));
+            }
+            transfer = Some(moved.transform);
+        }
+        _ => {}
+    }
+    (bodies, transfer)
+}
+
+/// The bodies of other components a definition reads.
+fn outside_bodies(
+    def: &FeatureDef,
+    outside: &dyn Fn(&OccurrenceLink) -> bool,
+) -> BTreeSet<BodyUid> {
+    let mut copy = def.clone();
+    take_outside_bodies(&mut copy, outside)
+        .0
+        .into_iter()
+        .map(|(body, _)| body)
+        .collect()
+}
+
+/// A body of another component as a feature of the saved component reads
+/// it: read the same way again, it takes the same frozen copy.
+#[derive(Debug, PartialEq)]
+struct FrozenKey {
+    body: BodyUid,
+    link: OccurrenceLink,
+    /// The reader's component, whose coordinates the copy is in.
+    component: ComponentUid,
+    /// The feature whose result the reader sees.
+    maker: Option<FeatureUid>,
 }
 
 /// Body links of a definition whose geometry is outside, taken out of it.
@@ -1442,6 +1763,19 @@ fn keep_names(design: &mut DocState, source: &DocState, copy: &ComponentCopy) {
     }
 }
 
+/// The copied bodies keep the names `names` gives them (a copy into a
+/// document is named after its next recompute; the new design is written
+/// from its state).
+fn keep_body_names(design: &mut DocState, names: &BTreeMap<BodyUid, String>, copy: &ComponentCopy) {
+    for (body, name) in names {
+        if let Some(feature) = copy.features.get(&body.feature) {
+            design
+                .body_names
+                .insert(BodyUid::new(*feature, body.index), name.clone());
+        }
+    }
+}
+
 /// Linked and library components inside the saved one stay linked: their
 /// copies keep the link (its path recorded from the new file's folder),
 /// the library record and BUILD's record.
@@ -1498,13 +1832,29 @@ fn occurrence_path(text: &str) -> Option<Vec<OccurrenceUid>> {
 
 /// New names of bodies and faces: bodies by their uid's text, faces by
 /// their canonical name.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Renames {
     bodies: HashMap<String, String>,
     faces: HashMap<String, FaceName>,
 }
 
 impl Renames {
+    fn is_empty(&self) -> bool {
+        self.bodies.is_empty() && self.faces.is_empty()
+    }
+
+    /// Adds the renames of `other` that this one has no rename for.
+    fn merge(&mut self, other: &Renames) {
+        for (old, new) in &other.bodies {
+            self.bodies
+                .entry(old.clone())
+                .or_insert_with(|| new.clone());
+        }
+        for (old, new) in &other.faces {
+            self.faces.entry(old.clone()).or_insert_with(|| new.clone());
+        }
+    }
+
     /// The faces of a body of the base feature `uid`, named from
     /// `first`, by the names they had; names of features `keep` refuses
     /// stay. Returns the next body's first face.

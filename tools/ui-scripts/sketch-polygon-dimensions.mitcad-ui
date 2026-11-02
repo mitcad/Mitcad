@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: MIT
+# All edits go through the drawing tools. The wrapper replaces ENTER_SKETCH
+# with the frontend's ordinary timeline activation on the empty F1 fixture.
+# Every click and move stays within x -45..47, y -40..35 mm: after the fit
+# that is the free part of the view also in session 0's 1024x768 window on
+# Windows, where the browser covers x < -55 mm and the palette x > 60 mm
+# (a click at -70, 30 selected the browser's Sketches row instead).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+expect-profiles 0
+capture-undo-depth baseline
+
+# Owner's exact sequence: first click, Tab to Sides, 8, Tab to Radius,
+# 20, Enter. The count itself must never create a parameter.
+command sketch.polygon
+sketch-click -45 35
+sketch-move -25 35
+key Tab
+type 8
+expect-widget-property sketchField_sides text 8
+key Tab
+type 20
+expect-sketch-field-dimension radius radius 20
+mark
+key Return
+wait-log '^Added polygon \(8 sides\).*dimension d1 = 20 mm$'
+key Escape
+expect-model-parameter d1 20 model
+expect-model-parameter d2 absent model
+expect-profiles 1
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+expect-model-parameter d1 absent model
+expect-profiles 0
+command edit.redo
+expect-undo-depth ${baseline} 1
+expect-model-parameter d1 20 model
+expect-profiles 1
+
+command sketch.polygon_inscribed
+sketch-click 0 30
+sketch-move 20 30
+key Tab
+type 8
+expect-widget-property sketchField_sides text 8
+key Tab
+type 20
+expect-sketch-field-dimension radius radius 20
+mark
+key Return
+wait-log '^Added polygon \(8 sides\).*dimension d2 = 20 mm$'
+key Escape
+expect-model-parameter d2 20 model
+expect-model-parameter d3 absent model
+expect-profiles 2
+expect-undo-depth ${baseline} 2
+command edit.undo
+expect-undo-depth ${baseline} 1
+expect-model-parameter d2 absent model
+expect-profiles 1
+command edit.redo
+expect-model-parameter d2 20 model
+expect-profiles 2
+
+# The length must survive the third-click stage, when only Sides remains.
+# Here the clicked edge is the first counter-clockwise polygon side.
+command sketch.polygon_edge
+sketch-click -45 -40
+sketch-move -25 -40
+key Tab
+type 8
+key Tab
+type 20
+expect-sketch-field-dimension length length 20
+key Return
+mark
+sketch-click -35 -20
+wait-log '^Added polygon \(8 sides\).*dimension d3 = 20 mm$'
+key Escape
+expect-model-parameter d3 20 model
+expect-model-parameter d4 absent model
+expect-profiles 3
+expect-undo-depth ${baseline} 3
+command edit.undo
+expect-undo-depth ${baseline} 2
+expect-model-parameter d3 absent model
+expect-profiles 2
+command edit.redo
+expect-model-parameter d3 20 model
+expect-profiles 3
+
+# The opposite side (right of the edge, drawn upwards here) puts the
+# clicked edge last in the model's ordering.
+# Use an expression too: the dimension still holds the actual first edge.
+command sketch.polygon_edge
+sketch-click 30 5
+sketch-move 30 25
+key Tab
+type 8
+key Tab
+type '10+10'
+expect-sketch-field-dimension length length 20
+key Return
+mark
+sketch-click 40 -30
+wait-log '^Added polygon \(8 sides\).*dimension d4 = 20 mm$'
+key Escape
+expect-model-parameter d4 20 model
+expect-model-parameter d5 absent model
+expect-profiles 4
+expect-undo-depth ${baseline} 4
+command edit.undo
+expect-undo-depth ${baseline} 3
+expect-model-parameter d4 absent model
+expect-profiles 3
+command edit.redo
+expect-model-parameter d4 20 model
+expect-profiles 4
+
+# A size picked with the pointer remains free; typing only Sides does too.
+command sketch.polygon
+sketch-click 5 -35
+mark
+sketch-click 17 -35
+wait-log '^Added polygon \(6 sides\)'
+key Escape
+expect-model-parameter d5 absent model
+expect-profiles 5
+expect-undo-depth ${baseline} 5
+command sketch.polygon
+sketch-click 35 -35
+key Tab
+type 8
+mark
+sketch-click 47 -35
+wait-log '^Added polygon \(8 sides\)'
+key Escape
+expect-model-parameter d5 absent model
+expect-profiles 6
+expect-undo-depth ${baseline} 6
+screenshot '${MITCAD_TEST_WORK}/polygon-dimensions.png'
+command sketch.finish
+wait-log '^Sketch finished'
+capture-sketch F1 '${MITCAD_TEST_WORK}/sketch.json'
+command file.save
+wait-log '^Saved '

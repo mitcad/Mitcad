@@ -6,6 +6,7 @@
 #include <optional>
 
 #include <QFlags>
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
 #include <QStringList>
@@ -85,6 +86,16 @@ struct SelectionItem {
 };
 
 using Selection = QVector<SelectionItem>;
+
+// A fixed plane of a definition (`{"origin", "normal"[, "x_axis"]}`,
+// core/model-api/src/commands.md "References to geometry") as an item
+// (mitcad#1137): a plane owned by "fixed" whose name is its reference as
+// compact JSON, so that `reference()` gives it back unchanged. Nothing in
+// the view picks one; a placement row shows a definition's fixed plane so.
+SelectionItem fixedPlaneItem(const QJsonObject& plane, const QString& occurrence = QString());
+bool isFixedPlane(const SelectionItem& item);
+// Whether a definition's reference is a fixed plane.
+bool isFixedPlaneRef(const QJsonValue& ref);
 
 // Order in which a window selection prefers kinds: it keeps one kind.
 SelectKind preferredKind(const Selection& items);

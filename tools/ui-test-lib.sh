@@ -1097,7 +1097,9 @@ ui_update_test_hooks() {
 }
 
 ui_finish() {
-  if grep -q "OCCT view event failed" "$UI_LOG"; then
+  # The warning itself, at the start of its line: a test driver's logged
+  # step (expect-never 'OCCT view event failed|…') only names it.
+  if grep -q "^OCCT view event failed:" "$UI_LOG"; then
     ui_fail "OCCT reported a failed view operation"
   fi
   echo "PASS: $1"

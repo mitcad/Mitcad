@@ -7,6 +7,7 @@
 // on the system, the settings, file and folder names, the panel's rows and the
 // Preferences group; MainWindowPrint.cpp defines and runs the command.
 
+#include <QByteArray>
 #include <QColor>
 #include <QGroupBox>
 #include <QHash>
@@ -91,10 +92,45 @@ struct PrintSettings {
   QString refinement = "high"; // low, medium, high or custom
   double deviation = 0.01;     // custom: mm
   double angle = 8.0;          // custom: degrees
+  // Use the open slicer window (mitcad#1162): a send of a design whose
+  // slicer MitCad started is still open goes to that window.
+  bool reuseWindow = true;
 
   static PrintSettings load();
   void save() const;
 };
+
+// How a slicer window MitCad started takes a newer file of its design
+// (mitcad#1162, Use the open slicer window):
+// - SingleInstanceSwitch: the slicer started again with --single-instance
+//   hands the file to its running window and exits (PrusaSlicer, UltiMaker
+//   Cura); the first start of the window takes the switch too, so that it
+//   listens (Cura) or can be found (PrusaSlicer on Windows).
+// - OwnPreference: the slicer hands a file over by itself only when its
+//   own preference to keep one instance is on (Bambu Studio, OrcaSlicer,
+//   QIDI Studio: their command lines refuse --single-instance);
+//   slicerKeepsOneInstance reads it.
+// - BringForward: no way to hand a file over (another program, an
+//   application bundle started with `open -a`): MitCad brings the window
+//   to the front and says that the file was updated.
+enum class SlicerHandOver { BringForward, SingleInstanceSwitch, OwnPreference };
+SlicerHandOver slicerHandOver(const Slicer& slicer);
+
+// The slicer's command line for `files`: its arguments, --single-instance
+// when `singleInstance` (before a Flatpak's file forwarding, so that the
+// application gets it), the files, then argumentsAfter.
+QStringList slicerArguments(const Slicer& slicer, const QStringList& files, bool singleInstance);
+
+// Whether an OwnPreference slicer's settings file keeps one instance: its
+// "app" section's single_instance true. `text` is the file's content (a
+// JSON object, with "#" comment lines such as its checksum); false when it
+// cannot be read.
+bool slicerSingleInstanceSetting(const QByteArray& text);
+// The settings files where an OwnPreference slicer keeps its preferences
+// (the user's configuration folder, a Flatpak's own), the first existing
+// one read by slicerKeepsOneInstance; empty for other slicers.
+QStringList slicerSettingsFiles(const Slicer& slicer);
+bool slicerKeepsOneInstance(const Slicer& slicer);
 
 // Send to Slicer's Center on Plate and Drop to Bed (mitcad#1109), kept per
 // design (by its file; designs not saved yet share one pair): both on

@@ -57,7 +57,7 @@ impl TextOutline {
             .iter()
             .filter_map(|c| {
                 Some(RegionCurve {
-                    uid: c.id,
+                    uid: c.id.clone(),
                     curve: composite(&c.parts)?,
                     parts: c.parts.clone(),
                 })
@@ -927,7 +927,7 @@ pub fn letter_contours(outline: &TextOutline) -> std::collections::BTreeSet<Curv
         .filter_map(|c| {
             let curve = composite(&c.parts)?;
             let (lo, hi) = curve.domain();
-            Some((c.id, curve.sample(lo, hi), curve.point(lo + 0.5)))
+            Some((c.id.clone(), curve.sample(lo, hi), curve.point(lo + 0.5)))
         })
         .collect();
     polygons
@@ -942,6 +942,6 @@ pub fn letter_contours(outline: &TextOutline) -> std::collections::BTreeSet<Curv
                 .count();
             depth % 2 == 0
         })
-        .map(|(id, _, _)| *id)
+        .map(|(id, _, _)| id.clone())
         .collect()
 }

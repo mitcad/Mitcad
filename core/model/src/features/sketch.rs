@@ -20,12 +20,12 @@ use super::geom_ref::GeomRef;
 use super::{CheckContext, Evaluate, FeatureInfo, FeatureOutput, References};
 use crate::datum::{DatumKind, DatumPlane};
 use crate::ids::{BodyUid, FeatureUid};
-use crate::kernel::{Curve3, Kernel};
+use crate::kernel::{Curve3, Kernel, KernelError};
 use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
 use crate::profile::SketchFrame;
 use crate::sketch::{Projection, ProjectionSource, SketchEntityRef, project};
-use crate::topo::{FaceName, TopoName};
+use crate::topo::{CurveId, FaceName, TopoName};
 use crate::transform::Transform;
 
 impl FeatureInfo for SketchDef {
@@ -243,7 +243,14 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                 ));
             }
         }
-        let (region_info, layout) = def.regions_and_layout_of(&solved, &texts);
+        let boundary = face_boundary(self, &plane, &frame, ctx)?;
+        let (region_info, layout) = if boundary.is_empty() {
+            def.regions_and_layout_of(&solved, &texts)
+        } else {
+            let mut curves = def.region_curves_of(&solved, &texts);
+            curves.extend(boundary);
+            crate::sketch::regions::face_bounded_regions(&curves)
+        };
         Ok(FeatureOutput {
             sketch: Some(SketchOutput {
                 frame,
@@ -259,6 +266,73 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             ..FeatureOutput::default()
         })
     }
+}
+
+/// Implicit profile boundaries of the supporting face. They follow the
+/// body at every evaluation and never enter the stored sketch or solve.
+fn face_boundary<K: Kernel>(
+    def: &SketchDef,
+    plane: &SketchFrame,
+    frame: &SketchFrame,
+    ctx: &mut super::EvalContext<'_, K>,
+) -> Result<Vec<crate::sketch::regions::RegionCurve>, String> {
+    let SketchPlane::Face { face, body } = &def.plane else {
+        return Ok(Vec::new());
+    };
+    let normal = plane.normal();
+    let displacement = mitcad_vec3::sub(frame.origin, plane.origin);
+    if mitcad_vec3::dot(displacement, normal).abs() > 1e-6
+        || mitcad_vec3::norm(mitcad_vec3::cross(frame.normal(), normal)) > 1e-9
+    {
+        return Ok(Vec::new());
+    }
+    let (component, transform) = match &def.plane_link {
+        Some(link) => {
+            let (component, transform) = ctx.linked(link)?;
+            (component, Some(transform))
+        }
+        None => (ctx.component(), None),
+    };
+    let shapes = match body {
+        Some(body) => vec![(*body, ctx.body_in(component, *body)?)],
+        None => ctx.bodies_in(component),
+    };
+    let (_, shape, renamed) = face_body(ctx.kernel, face, shapes)?;
+    let boundary = match ctx
+        .kernel
+        .face_boundary(&shape, renamed.as_ref().unwrap_or(face))
+    {
+        Ok(boundary) => boundary,
+        // Test kernels and older kernel implementations can still solve
+        // face sketches even when they do not provide boundary geometry.
+        Err(KernelError::Unsupported(_)) => return Ok(Vec::new()),
+        Err(error)
+            if {
+                let message = error.to_string();
+                message.contains("unnamed edge") || message.contains("ambiguous profile boundary")
+            } =>
+        {
+            ctx.warn(format!("face-bounded profiles unavailable: {error}"));
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(format!("the sketch face boundary: {error}")),
+    };
+    let mut curves = Vec::new();
+    for (edge, curve) in boundary {
+        let curve = match &transform {
+            Some(transform) => project::transform_curve(transform, &curve),
+            None => curve,
+        };
+        for projected in project::project(&[curve], frame) {
+            if let project::Projected::Curve(curve) = projected {
+                curves.push(crate::sketch::regions::RegionCurve::new(
+                    CurveId::FaceEdge(Box::new(edge.clone())),
+                    curve,
+                ));
+            }
+        }
+    }
+    Ok(curves)
 }
 
 /// The model curves of a projection's source, in the sketch's component's

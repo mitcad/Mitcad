@@ -175,13 +175,13 @@ bool NoteRow::setNote(const QString& text, const QStringList& actions, const QSt
     // As the panel's message (docs/ui-conventions.md): an error or a
     // warning in the level's box with its icon and word; else plain grey.
     if (isProblem(level)) {
+      // Both colours follow the palette (mitcad#1152).
       const QString format = QStringLiteral("QLabel { color: %1; background: %2; border-radius: 6px; "
-                                            "padding: 4px 6px; }")
-                                 .arg(QStringLiteral("%1"), noticeFill(level, palette()).name());
+                                            "padding: 4px 6px; }");
       if (level == NoticeLevel::Error) {
-        setErrorStyleSheet(m_noticeLabel, format);
+        setErrorStyleSheet(m_noticeLabel, format, ColorRole::ErrorFill);
       } else {
-        setWarningStyleSheet(m_noticeLabel, format);
+        setWarningStyleSheet(m_noticeLabel, format, ColorRole::WarningFill);
       }
       QString shown = notice.toHtmlEscaped();
       shown.replace(QLatin1Char('\n'), QStringLiteral("<br>"));

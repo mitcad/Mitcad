@@ -174,7 +174,13 @@ if native:
 capture("all")
 add("native-key-event Escape" if native else "key Escape",
     "expect-native-dialog-gone '^Configurations$'" if native else "expect-dialog-gone '^Configurations$'",
-    "focus-main", "expect-model-bodies 4 26000", "expect-undo-depth ${beforeCards} 0",
-    "mark", "menu 'File/Save'", "expect-log '^Saved '",
+    "focus-main", "expect-model-bodies 4 26000", "expect-undo-depth ${beforeCards} 0")
+# Every editor was cancelled: the saved model must remain unchanged (also
+# checked on disk by the wrapper), and native Save must stay disabled.
+if native:
+    add("expect-native-enabled native.quickAccess.file.save false")
+else:
+    add("expect-widget-property quickAccess_file.save enabled false")
+add(
     "expect-never 'Native Mac canvas[:]|OCCT view event fail[e]d|Recompute failed|Follow Option'")
 print("\n".join(lines))

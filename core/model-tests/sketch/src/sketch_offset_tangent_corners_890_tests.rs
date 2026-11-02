@@ -182,6 +182,11 @@ fn offsets_of_a_projected_rounded_outline_hold_their_corners_where_the_curves_to
     let s = sketch(&d, "F3");
     let tangent = corners(&s);
     assert_eq!(tangent.len(), 16, "{s}");
+    // Nothing of the projection or the offsets follows from the rest, and
+    // their helpers do not slide (mitcad#1171): no warning.
+    assert_eq!(s["redundant"], json!([]), "{s}");
+    assert_eq!(s["dof"], 0, "{s}");
+    assert_eq!(s["warnings"], json!([]), "{s}");
 
     // Each corner is fixed to the first order by the tangency: the solve
     // finds it fully constrained, as the outline it follows is.
@@ -269,10 +274,11 @@ fn an_over_constrained_sketch_with_held_corners_names_only_what_contradicts() {
         !s.to_string().contains(&format!("\"{}\"", constraints[0])),
         "{message}"
     );
+    // The line's fixed end points (the projected curves made only of fixed
+    // points are held by their points, mitcad#1171).
+    let (a_fixed, b_fixed) = (format!("{a} (fixed)"), format!("{b} (fixed)"));
     assert!(
-        named
-            .iter()
-            .any(|n| *n == "c4 (fixed)" || *n == "c19 (fixed)"),
+        named.iter().any(|n| *n == a_fixed || *n == b_fixed),
         "{message}"
     );
 }

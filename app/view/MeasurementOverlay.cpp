@@ -98,9 +98,12 @@ void OcctViewer::logAnnotationPlaces() {
     }
     // Where a click takes its text: the text's middle, or, where that is
     // past the view's edge (a text in the model's height can reach past it,
-    // mitcad#894), the middle of the part of the text in the view.
+    // mitcad#894) or under a floating card (the Browser over the view's
+    // side, mitcad#1168), the middle of the part of the text in the view's
+    // free area.
     QPointF label = shape.labelAt;
-    const QRectF inside = QRectF(rect()).adjusted(2.0, 2.0, -2.0, -2.0);
+    const QRectF area = freeArea().isEmpty() ? QRectF(rect()) : freeArea();
+    const QRectF inside = area.adjusted(2.0, 2.0, -2.0, -2.0);
     if (!inside.contains(label)) {
       const QPolygonF seen = shape.textArea.intersected(QPolygonF(inside));
       if (seen.size() >= 3) {
@@ -113,6 +116,20 @@ void OcctViewer::logAnnotationPlaces() {
     }
     const QPoint at = mapTo(window(), label.toPoint());
     places << QStringLiteral("%1 label %2 at %3,%4").arg(what, m.name).arg(at.x()).arg(at.y());
+    // Its text's capital height on screen and a leader's landing with its
+    // bend (mitcad#1168: the text to the design's scale, the landing in
+    // proportion to it, the bend obtuse).
+    places << QStringLiteral("%1 text %2 %3 px").arg(what, m.name).arg(shape.textPixels, 0, 'f', 1);
+    if (shape.landingPixels > 0.0) {
+      places << QStringLiteral("%1 landing %2 %3 px, bend %4 deg")
+                    .arg(what, m.name)
+                    .arg(shape.landingPixels, 0, 'f', 1)
+                    .arg(shape.bendDegrees, 0, 'f', 1);
+      const QPoint knee = mapTo(window(), shape.kneeAt.toPoint());
+      const QPoint point = mapTo(window(), shape.pointAt.toPoint());
+      places << QStringLiteral("%1 knee %2 at %3,%4").arg(what, m.name).arg(knee.x()).arg(knee.y());
+      places << QStringLiteral("%1 point %2 at %3,%4").arg(what, m.name).arg(point.x()).arg(point.y());
+    }
     if (!shape.grips.empty() && !shape.grips.front().isEmpty()) {
       const QPolygonF& grip = shape.grips.front();
       // A quarter along it: its middle is under the text.

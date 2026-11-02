@@ -900,9 +900,11 @@ CommandDef jointOriginCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("How the placed component may move: the joint its placement makes"))
           .withVisible([](const CommandState& state) { return mountOn(state) && !mountKindIs(state, {"grid", "foot"}); }),
       valueInput(QStringLiteral("pitch_x"), QObject::tr("Pitch X"), ValueKind::Length, QStringLiteral("42 mm"))
+          .withExactDefault()
           .withTooltip(QObject::tr("A cell's size along the frame's X"))
           .withVisible([](const CommandState& state) { return mountKindIs(state, {"grid", "foot"}); }),
       valueInput(QStringLiteral("pitch_y"), QObject::tr("Pitch Y"), ValueKind::Length, QStringLiteral("42 mm"))
+          .withExactDefault()
           .withTooltip(QObject::tr("A cell's size along the frame's Y"))
           .withVisible([](const CommandState& state) { return mountKindIs(state, {"grid", "foot"}); }),
       valueInput(QStringLiteral("cells_x"), QObject::tr("Cells X"), ValueKind::Unitless, QStringLiteral("3"))

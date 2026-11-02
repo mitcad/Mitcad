@@ -81,6 +81,10 @@ public:
   // deleted face loses them. `source` tags the faces that come from this
   // input (see sources()); negative for none.
   void carry(BRepBuilderAPI_MakeShape& operation, const Shape& input, int source = -1);
+  // Exact open-edge provenance only, through the algorithm's topology
+  // history. Several images/sources are retained to diagnose ambiguity.
+  void carry_open_edges(BRepBuilderAPI_MakeShape& operation, const Shape& input,
+                        const InputCopy* copy = nullptr, const std::string& rename = {});
   // The same for an operation that ran on a copy of the input.
   void carry(BRepBuilderAPI_MakeShape& operation, const Shape& input, const InputCopy& copy,
              int source = -1);
@@ -154,6 +158,7 @@ private:
   ShapeMap m_faces;
   std::vector<NameList> m_names;
   std::vector<std::set<int>> m_sources;
+  std::vector<Shape::NamedOpenEdge> m_openEdges;
   bool m_unified = false;
   bool m_valid = false;
 };

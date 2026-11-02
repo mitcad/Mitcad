@@ -6,7 +6,9 @@
 #include "drawings/DrawingTools.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <optional>
 #include <utility>
 
 #include <QJsonArray>
@@ -275,6 +277,25 @@ int drawingToolsTests() {
   CHECK(scaleChoices().first().first == QStringLiteral("auto"));
   CHECK(scaleChoices().first().second == QStringLiteral("Its Parent's"));
   CHECK(scaleChoices(true).first().first == QStringLiteral("fit"));
+  // Any ratio typed into a scale field (mitcad#1169), as the model takes it.
+  {
+    QString ratio;
+    const std::optional<double> twoThirds = scaleRatio(QStringLiteral(" 2 : 3 "), &ratio);
+    CHECK(twoThirds && std::abs(*twoThirds - 2.0 / 3.0) < 1e-12);
+    CHECK(ratio == QStringLiteral("2:3"));
+    CHECK(scaleRatio(QStringLiteral("1:1,5"), &ratio) == 1.0 / 1.5);
+    CHECK(ratio == QStringLiteral("1:1.5"));
+    for (const char* bad : {"abc", "2", "2:", ":3", "0:1", "1:0", "-1:2", "1:2:3", "1/2", "a:b", "inf:1"}) {
+      CHECK(!scaleRatio(QString::fromLatin1(bad)));
+    }
+    const QList<QPair<QString, QString>> choices = scaleChoices(true);
+    CHECK(scaleEntry(QStringLiteral("fit the sheet"), choices) == QStringLiteral("fit"));
+    CHECK(scaleEntry(QStringLiteral("1:2"), choices) == QStringLiteral("1:2"));
+    CHECK(scaleEntry(QStringLiteral("2:3"), choices) == QStringLiteral("2:3"));
+    CHECK(scaleEntry(QStringLiteral("1 : 2.5"), choices) == QStringLiteral("1:2.5"));
+    CHECK(!scaleEntry(QStringLiteral("abc"), choices));
+    CHECK(!scaleEntry(QString(), choices));
+  }
   // The Detail tool's automatic scale is named as the view panel names
   // it (mitcad#715).
   for (const ToolOption& option : detail->options) {

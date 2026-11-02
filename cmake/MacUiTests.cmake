@@ -222,14 +222,17 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad)
       list(APPEND mitcad_mcp_test_uis native)
     endif()
     foreach(mitcad_mcp_test_ui IN LISTS mitcad_mcp_test_uis)
+      # The output folder is the test's name without "app.", as every other
+      # ui-macos-* folder (mitcad#1151).
       if(mitcad_mcp_test_ui STREQUAL "native")
-        set(mitcad_mcp_test app.ui-macos-native-mcp)
+        set(mitcad_mcp_folder ui-macos-native-mcp)
       else()
-        set(mitcad_mcp_test app.ui-macos-mcp)
+        set(mitcad_mcp_folder ui-macos-mcp)
       endif()
+      set(mitcad_mcp_test app.${mitcad_mcp_folder})
       add_test(NAME ${mitcad_mcp_test}
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-mcp-test.py"
-                "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/${mitcad_mcp_test}"
+                "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/${mitcad_mcp_folder}"
                 "${mitcad_mcp_test_ui}")
       # With the live debugging flow (mitcad#265, tools/ui-mcp-live.py).
       set_tests_properties(${mitcad_mcp_test} PROPERTIES TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop
@@ -684,7 +687,7 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
   add_test(NAME app.ui-macos-native-left-column
     COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-left-column-test.sh"
             "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-left-column")
-  set_tests_properties(app.ui-macos-native-left-column PROPERTIES TIMEOUT 420 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  set_tests_properties(app.ui-macos-native-left-column PROPERTIES TIMEOUT 660 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()
 
 # The AppKit toolbar's quick-access group (mitcad#1113): the default
@@ -696,6 +699,77 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
     COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-quick-access-test.sh"
             "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-quick-access")
   set_tests_properties(app.ui-macos-native-quick-access PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Face-bounded profiles and an unsplit whole face (mitcad#1138), using the
+# same synthetic fixture and viewport input on both frontends.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET test_face_profiles
+   AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-face-bounded-profiles
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-face-bounded-profiles-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:test_face_profiles>"
+            "${CMAKE_BINARY_DIR}/ui-macos-face-bounded-profiles" qt)
+  set_tests_properties(app.ui-macos-face-bounded-profiles PROPERTIES
+    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-face-bounded-profiles
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-face-bounded-profiles-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:test_face_profiles>"
+              "${CMAKE_BINARY_DIR}/ui-macos-native-face-bounded-profiles" native)
+    set_tests_properties(app.ui-macos-native-face-bounded-profiles PROPERTIES
+      TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
+endif()
+
+# Typed polygon sizes become driving dimensions in the drawing transaction
+# (mitcad#1136); both frontends use the same keyboard and model assertions.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
+   AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-sketch-polygon-dimensions
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-sketch-polygon-dimensions-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-sketch-polygon-dimensions" qt)
+  set_tests_properties(app.ui-macos-sketch-polygon-dimensions PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-sketch-polygon-dimensions
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-sketch-polygon-dimensions-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-native-sketch-polygon-dimensions" native)
+    set_tests_properties(app.ui-macos-native-sketch-polygon-dimensions PROPERTIES
+      TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
+endif()
+
+# Selection Delete uses one dependency question and one undo transaction
+# from either collection or the canvas (mitcad#1139).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
+   AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-delete-feature-selection
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-delete-feature-selection-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-delete-feature-selection" qt)
+  set_tests_properties(app.ui-macos-delete-feature-selection PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-delete-feature-selection
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-delete-feature-selection-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-native-delete-feature-selection" native)
+    set_tests_properties(app.ui-macos-native-delete-feature-selection PROPERTIES
+      TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
+endif()
+
+# Parallel planar faces keep their plane gap as Measure's main distance,
+# with the distinct minimum and a perpendicular dimension (mitcad#1161).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli)
+  add_test(NAME app.ui-macos-measure-planar
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-measure-planar-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-measure-planar")
+  set_tests_properties(app.ui-macos-measure-planar PROPERTIES
+    TIMEOUT 180 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()
 
 # The release's native smoke subset (mitcad#1056). macOS releases are built

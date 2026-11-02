@@ -125,7 +125,9 @@ QString AgentIndicator::connectCommand() const {
   }
   const QStringList arguments{QStringLiteral("mcp"), QStringLiteral("--connect"), QStringLiteral("--instance"),
                               m_instance};
-  const QString bridge = installedBridge(QCoreApplication::applicationDirPath());
+  // The mounted bridge of an AppImage too: the command connects to this
+  // window, which runs only while MitCad does (mitcad#1170).
+  const QString bridge = bundledBridge();
   if (bridge.isEmpty()) {
     return QStringLiteral("mitcad-cli ") + arguments.join(QLatin1Char(' '));
   }

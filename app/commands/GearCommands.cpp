@@ -206,7 +206,8 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
                             {QStringLiteral("ring"), QStringLiteral("gear-ring")},
                             {QStringLiteral("rack"), QStringLiteral("gear-rack")},
                             {QStringLiteral("bevel"), QStringLiteral("gear-bevel")}}),
-      valueInput(QStringLiteral("module"), QObject::tr("Module"), ValueKind::Length, QStringLiteral("2 mm")),
+      valueInput(QStringLiteral("module"), QObject::tr("Module"), ValueKind::Length, QStringLiteral("2 mm"))
+          .withExactDefault(),
       valueInput(QStringLiteral("teeth"), QObject::tr("Teeth"), ValueKind::Unitless, QStringLiteral("20")),
       choiceInput(QStringLiteral("pressure_angle"), QObject::tr("Pressure Angle"), kPressureAngles, QStringLiteral("20")),
       valueInput(QStringLiteral("face_width"), QObject::tr("Face Width"), ValueKind::Length, QStringLiteral("10 mm")),

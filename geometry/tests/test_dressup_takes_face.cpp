@@ -14,6 +14,8 @@
 // blind hole's rim bevelled or rounded as deep as the hole is built at its
 // size too, the hole's wall gone, with no note or info: the case behind the
 // port's patch 1110 (mitcad#1117), checked with OCCT's dressups alone too.
+// A wedge of 45 degrees whose knife edge is rounded so that the rounding
+// takes a face 2.4 times its radius wide away leaves no strip (mitcad#1150).
 
 #include <algorithm>
 #include <cmath>
@@ -34,6 +36,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/boolean.hpp"
@@ -479,6 +482,52 @@ void test_hole_rim_with_occt_alone() {
   }
 }
 
+// A region of straight lines c<first>.. through the points (closed).
+Region polygon(int first, const std::vector<gp_Pnt2d>& points) {
+  Region region;
+  Loop loop;
+  std::string name = "r{";
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    Segment segment;
+    segment.name = "c" + std::to_string(first + static_cast<int>(i));
+    segment.start = points[i];
+    segment.end = points[(i + 1) % points.size()];
+    loop.segments.push_back(segment);
+    name += (i == 0 ? "" : ",") + segment.name;
+  }
+  region.loops.push_back(loop);
+  region.name = name + "}";
+  return region;
+}
+
+// A wedge of 45 degrees along z (mitcad#1150): its knife edge on the z axis
+// between the floor y = 0 and a face 2 wide at 45 degrees to it, which meets
+// a wall x = sqrt(2) beyond; 30 x 10 in section, 10 high. Its rounding of
+// 2 tan(22.5 degrees) touches both faces 2 from the edge, so it takes the
+// narrow face away: its contact is 2.4 times its radius, and the strip a
+// retry 0.1 % smaller leaves (1e-3 of the contact) is removed as well, no
+// face of the result narrower than 0.01.
+void test_wedge_of_45_degrees() {
+  const double a = std::sqrt(2.0);
+  const ShapePtr body =
+      extrude("F1", {polygon(1, {gp_Pnt2d(0, 0), gp_Pnt2d(30, 0), gp_Pnt2d(30, 10), gp_Pnt2d(a, 10), gp_Pnt2d(a, a)})},
+              0, 10);
+  const std::string knife = edge_at(*body, gp_Pnt(0, 0, 5));
+  CHECK(!knife.empty());
+  const double r = 2.0 * (std::sqrt(2.0) - 1.0);
+  const ShapePtr rounded = fillet("F2", *body, {knife}, r);
+  CHECK(valid(*rounded));
+  CHECK(narrowest_face(*rounded) > 0.01);
+  for (const std::string& info : rounded->infos()) {
+    std::fprintf(stderr, "wedge of 45 degrees: %s\n", info.c_str());
+  }
+  // The section less the rounding's: r^2 / tan(22.5 degrees) less the
+  // sector of 135 degrees, along 10 (within the retry's 0.1 %).
+  const double section = 301.0 - 10.0 * a;
+  const double taken = r * r * (1.0 / std::tan(kPi / 8) - 3.0 * kPi / 8);
+  CHECK_NEAR_TOL(volume_of(*rounded), 10.0 * (section - taken), 1e-4);
+}
+
 } // namespace
 
 void dressup_takes_face_tests() {
@@ -489,6 +538,7 @@ void dressup_takes_face_tests() {
   guarded("tray corner with OCCT alone", test_tray_corner_with_occt_alone);
   guarded("hole rim at its size", test_hole_rim_at_its_size);
   guarded("hole rim with OCCT alone", test_hole_rim_with_occt_alone);
+  guarded("wedge of 45 degrees", test_wedge_of_45_degrees);
 }
 
 } // namespace test

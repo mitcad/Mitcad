@@ -105,6 +105,10 @@ ChatController::ChatController(ChatHost host, QObject* parent)
       }
     }
   }
+  // The bridge the agents start (mitcad#1170: inside an AppImage too).
+  const QString bridge = mcp::bundledBridge();
+  qInfo().noquote() << (bridge.isEmpty() ? QStringLiteral("Chat: bridge not found")
+                                         : QStringLiteral("Chat: bridge %1").arg(QDir::toNativeSeparators(bridge)));
   qInfo().noquote() << QStringLiteral("Chat: agent %1 (found: %2)")
                            .arg(m_agent->name(), m_detected.isEmpty() ? QStringLiteral("none")
                                                                       : m_detected.join(QStringLiteral(", ")));
@@ -495,7 +499,7 @@ bool ChatController::startAgent(QString* error) {
     *error = reason.isEmpty() ? tr("MitCad's listener for assistants is not running.") : reason;
     return false;
   }
-  const QString bridge = mcp::installedBridge(QCoreApplication::applicationDirPath());
+  const QString bridge = mcp::bundledBridge();
   if (bridge.isEmpty()) {
     *error = tr("MitCad's mitcad-cli was not found beside the application.");
     return false;

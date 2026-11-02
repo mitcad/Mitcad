@@ -431,10 +431,13 @@ filtering and the log lines are the Qt picker's.
 Send to Slicer's Printer and Process choices use the same popover
 (mitcad#1122): the short label on the closed button, the full name as its
 tooltip, vendor or printer headings, source tags at the right, the current
-choice checked, and New printer… or New process… below a separator. The
+choice checked, New printer… or New process… below a separator, and
+Edit printers and processes… last, which opens Printers and Processes on
+the current choice; no button sits beside the field (mitcad#1134). The
 shared command session receives the choice, preserving its undo step.
 `app.ui-macos-native-print-picker` checks search, Return, Down, Escape,
-pointer selection, new-profile creation and undo on synthetic profiles.
+pointer selection, new-profile creation, Edit printers and processes…
+with no button beside the rows, and undo on synthetic profiles.
 The Materials window's
 appearances are one list with Add…, Remove and Make Default beside it
 (mitcad#1083), all ordinary Qt controls: the bridge presents the list as
@@ -763,8 +766,10 @@ The AppKit frontend does the same (`NativeMacWindow.mm`,
   that leaves to the next card. The gap between two open neighbours is an
   accessibility splitter (`native.columnSplit.<above>.<below>`, named like
   "Configuration and Browser height") with the row resize cursor: a drag
-  moves height between the two, each keeping its header and a row; the
-  heights then weigh the shares, kept in `native/leftSplit`
+  moves height between the two, each keeping its header and a row and
+  neither growing past its content's height (mitcad#1152: a weight past it
+  moved the other boundaries instead); the heights then weigh the shares,
+  kept in `native/leftSplit`
   ("configuration=80", ...; logged `Native split remembered:` and
   `Native split restored:`); a double-click returns to the automatic split
   (`Native split: automatic`). A collapsed card keeps its header and gives
@@ -777,7 +782,9 @@ options under 190 points, its controls whole and in view
 free column (`expect-native-card-height native.sidebar bottom`), the
 boundary dragged with AppKit mouse events (`native-column-split`) and its
 split after a relaunch, the double-click, and the disclosure remembered
-across a relaunch, in both appearances. `app.ui-macos-native-configuration-parity`
+across a relaunch, in both appearances; with the Projects card shown, its
+boundary dragged past its rows moves no card (mitcad#1152).
+`app.ui-macos-native-configuration-parity`
 keeps its configuration checks with the card moved.
 
 `app.ui-macos-native-card-widths` drags each edge with AppKit mouse events,
@@ -841,7 +848,7 @@ than 110 points; headings, lists, cut scopes and notes without a label
 across both columns. Hidden inputs hide their grid rows, so no row's
 layout depends on views that AppKit detaches. Selections show their
 colour swatch and a compact clear control, Flip the shared flip artwork
-as a toggle, a choice's `onButton` its small icon (Send to Slicer's Edit), note
+as a toggle, a choice's `onButton` its small icon when it has one, note
 rows their icon buttons, text buttons and links, a value field's mark
 (`markFor`, mitcad#980: a Hole field that no longer follows the screw
 size) an icon button beside the field with the shared mark's icon,

@@ -36,7 +36,7 @@ use mitcad_model_base::sweeps::{
     CoilSpec, LoftSection, LoftSpec, PipeSection, PipeSpec, RibSpec, SweepSpec,
 };
 use mitcad_model_base::sweeps::{LoftEndKind, PathCurve};
-use mitcad_model_base::topo::{EdgeName, FaceName, RoleKey, SegmentKey};
+use mitcad_model_base::topo::{EdgeName, FaceBoundaryRef, FaceName, RoleKey, SegmentKey};
 use mitcad_model_base::transform::{Instance, PrimitiveShape, PrimitiveSpec, Transform};
 
 /// Temporary folders of a test's own (mitcad#1017).
@@ -156,6 +156,9 @@ pub struct MockKernel {
     /// Paths of sweeps (F3): the curve `curves_of` gives for a name, before
     /// `curves`.
     pub named_curves: RefCell<BTreeMap<String, mitcad_model_base::kernel::Curve3>>,
+    /// Implicit supporting-face profile boundaries, keyed by face name.
+    pub face_boundaries:
+        RefCell<BTreeMap<String, Vec<(EdgeName, mitcad_model_base::kernel::Curve3)>>>,
     /// Recompute cancellation (P7): the operation that cancels the monitor
     /// when it is called, as a cancel that comes during an evaluation.
     pub cancel_on: RefCell<Option<(&'static str, Arc<RecomputeMonitor>)>>,
@@ -1414,6 +1417,22 @@ impl Kernel for MockKernel {
         } else {
             self.curves.borrow().clone()
         })
+    }
+
+    fn face_boundary(
+        &self,
+        _shape: &MockShape,
+        face: &FaceName,
+    ) -> Result<Vec<(FaceBoundaryRef, mitcad_model_base::kernel::Curve3)>, KernelError> {
+        Ok(self
+            .face_boundaries
+            .borrow()
+            .get(&face.to_string())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(edge, curve)| (edge.into(), curve))
+            .collect())
     }
 
     // FreeCAD import: faces and edges in the shape's order, their curves as
@@ -2859,6 +2878,7 @@ impl Kernel for MockKernel {
             infos: self.infos.clone(),
             curves: self.curves.clone(),
             named_curves: self.named_curves.clone(),
+            face_boundaries: self.face_boundaries.clone(),
             edge_curves: self.edge_curves.clone(),
             vertex_points: self.vertex_points.clone(),
             middles: self.middles.clone(),

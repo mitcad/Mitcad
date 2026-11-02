@@ -11,6 +11,8 @@
 // design" and "Annotations on drawing views"). Plain Qt Core: app.unit
 // tests it.
 
+#include <optional>
+
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -155,6 +157,16 @@ QString optionValue(const DrawingToolDef& tool, const QHash<QString, QString>& o
 // "auto" (Its Parent's: the parent's, twice it for a detail) first; with
 // `fit`, "fit" (Fit the Sheet, a base view's) in its place.
 QList<QPair<QString, QString>> scaleChoices(bool fit = false);
+
+// A ratio a:b of two positive numbers typed into a scale field
+// (mitcad#1169): "2:3", "1:1.5", "1 : 2,5" (a decimal point or comma, as
+// the app's number fields take them). Its value (a / b), with `normalized`
+// the ratio as the model takes it ("1:2.5"); nothing for anything else.
+std::optional<double> scaleRatio(const QString& text, QString* normalized = nullptr);
+// What a scale field's text chooses: one of its choices ((value, label)
+// pairs) by its label or value, case aside, as the choice's value; else a
+// ratio (scaleRatio), normalized; nothing for anything else.
+std::optional<QString> scaleEntry(const QString& text, const QList<QPair<QString, QString>>& choices);
 
 // The sides a projected view can be on, as the model names them, with
 // their labels.

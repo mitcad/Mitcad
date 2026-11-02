@@ -113,6 +113,7 @@ private:
 
   Host m_host;
   QString m_bridge;
+  QStringList m_leading; // the bridge's arguments before `mcp --connect` (BridgeLaunch)
   QString m_folderPath;
   QString m_ownInstance;
   // Only a listener that authenticated its endpoint may advertise a remote

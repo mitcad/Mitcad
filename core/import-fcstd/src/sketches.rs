@@ -37,7 +37,7 @@
 //!   each a curve of the solution, within 1e-4 mm, of the same length).
 //! - The sketch keeps FreeCAD's visibility.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mitcad_freecad::sketch::{self as fc, Curve, PointPos};
 use mitcad_freecad::{Object, Placement};
@@ -72,6 +72,9 @@ const SKETCH_TOLERANCE: f64 = 1e-4;
 struct External {
     entities: Vec<Value>,
     projections: Vec<Value>,
+    /// Actual linked sketch sources, excluding any binder with a lost link.
+    binders: BTreeMap<String, BTreeSet<String>>,
+    unlinked_binders: BTreeSet<String>,
     maps: Vec<Option<ExternalMap>>,
     /// The next free entity id.
     next: u32,
@@ -369,6 +372,34 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
             // What the history's features refer to.
             let output_frame = self.doc.sketch_output(uid).map_or(frame, |o| o.frame);
+            for (binder, sources) in &external.binders {
+                if !external.unlinked_binders.contains(binder) {
+                    let sources: Vec<String> = sources
+                        .iter()
+                        .map(|uid| {
+                            self.report
+                                .sketches
+                                .iter()
+                                .find(|source| source.feature.as_deref() == Some(uid.as_str()))
+                                .map_or_else(
+                                    || uid.clone(),
+                                    |source| format!("{} ({uid})", source.label),
+                                )
+                        })
+                        .collect();
+                    self.carried_binder_use(
+                        binder,
+                        name,
+                        "ExternalGeometry",
+                        uid,
+                        format!(
+                            "sketch geometry carried through linked projections of {} into {} ({uid})",
+                            sources.join(", "),
+                            object.label()
+                        ),
+                    );
+                }
+            }
             self.replay.sketches.insert(
                 name.to_owned(),
                 SketchMade {
@@ -1677,6 +1708,22 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 match attempt {
                     Ok(pieces) => {
                         if push_pieces(out, sketch, &geos, frame, defining, &pieces) {
+                            if self.sources[0]
+                                .object(&link.object)
+                                .is_some_and(|object| is_binder(&object.type_name))
+                            {
+                                let sources: BTreeSet<String> = pieces
+                                    .iter()
+                                    .filter_map(|(record, _)| record["source"]["sketch"].as_str())
+                                    .map(str::to_owned)
+                                    .collect();
+                                if !sources.is_empty() {
+                                    out.binders
+                                        .entry(link.object.clone())
+                                        .or_default()
+                                        .extend(sources);
+                                }
+                            }
                             linked = true;
                             break;
                         }
@@ -1712,6 +1759,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 return;
             }
         }
+        // A partially carried binder must keep its warning even when
+        // another external link of the same sketch was preserved.
+        out.unlinked_binders.insert(link.object.clone());
         // Fixed: from the stored shape (another component's moved
         // here), else from the sketch's copy.
         let mut projected = None;

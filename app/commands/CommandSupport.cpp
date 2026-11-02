@@ -825,8 +825,14 @@ std::optional<PlaneFrame> frameOf(const SelectionItem& item, const CommandContex
   PlaneFrame frame;
   if (item.kind == SelectKind::Plane) {
     try {
-      const QJsonObject datum = context.queryObject(
-          {{QStringLiteral("query"), QStringLiteral("datum")}, {QStringLiteral("uid"), item.owner}});
+      // A definition's fixed plane has its frame in itself (mitcad#1137).
+      const QJsonObject datum =
+          isFixedPlane(item) ? fixedPlaneDatum(item.reference().toObject())
+                             : context.queryObject({{QStringLiteral("query"), QStringLiteral("datum")},
+                                                    {QStringLiteral("uid"), item.owner}});
+      if (datum.isEmpty()) {
+        return std::nullopt;
+      }
       frame.origin = pointOf(datum.value(QStringLiteral("origin")));
       frame.normal = gp_Dir(vectorOf(datum.value(QStringLiteral("normal"))));
       frame.x = gp_Dir(vectorOf(datum.value(QStringLiteral("x_axis"))));

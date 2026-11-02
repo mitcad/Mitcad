@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <BRepBuilderAPI_GTransform.hxx>
@@ -151,7 +152,17 @@ ShapePtr mapped(const Shape& shape, const Affine& map, const std::string& rename
           faces.push_back({shape.face(i), names});
         }
       }
-      return std::make_shared<Shape>(shape.occt(), faces);
+      auto result = std::make_shared<Shape>(shape.occt(), faces);
+      if (shape.has_open_edge_names()) {
+        std::vector<Shape::NamedOpenEdge> edges;
+        for (int i = 0; i < shape.edge_count(); ++i) {
+          NameList names = shape.open_edge_names(i);
+          for (std::string& name : names) name = rename_open_edge_name(name, rename);
+          if (!names.empty()) edges.push_back({shape.edge(i), std::move(names)});
+        }
+        result->set_open_edge_names(edges);
+      }
+      return result;
     }
     std::unique_ptr<BRepBuilderAPI_ModifyShape> operation;
     if (similarity) {
@@ -182,6 +193,7 @@ ShapePtr mapped(const Shape& shape, const Affine& map, const std::string& rename
         namer.add(image, rename.empty() ? name : rename + '(' + name + ')');
       }
     }
+    namer.carry_open_edges(*operation, shape, nullptr, rename);
     namer.finish();
     // A similarity moves the geometry exactly and keeps the shape as valid
     // as it was, so its result is not checked (the copies of a pattern

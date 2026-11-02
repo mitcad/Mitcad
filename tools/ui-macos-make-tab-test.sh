@@ -68,6 +68,7 @@ for frontend in $frontends; do
       echo "expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'"
       echo "native-appearance '\${MITCAD_TEST_COLOR_SCHEME}'"
       echo 'native-resize 1280 820'
+      echo 'native-choice native.workspaces Make'
     else
       echo 'window-resize 1280 820'
     fi
@@ -96,7 +97,7 @@ for frontend in $frontends; do
       echo 'focus-main'
       echo 'mark'
       echo "click-logged 'Browser Root/Bodies/Body2'"
-      echo "expect-log 'printer Bench (component Root); process Standard (component Root); own: Walls = 5 (body Body2)'"
+      echo "expect-log 'printer Bench \\(component Root\\); process Standard \\(component Root\\); own: Walls = 5 \\(body Body2\\)'"
     fi
     # The picture for the ticket (light and dark, Qt and AppKit).
     echo "screenshot '$MITCAD_TEST_WORK/make-tab-$frontend-$scheme.png'"

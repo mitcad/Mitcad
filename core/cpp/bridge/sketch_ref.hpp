@@ -16,8 +16,11 @@ namespace mitcad::bridge {
 struct ModelCurve;
 struct IndexedElement;
 struct SectionPiece;
+struct NamedBoundaryCurve;
 
 rust::Vec<ModelCurve> model_curves(const geometry::Shape& shape, rust::Str name);
+
+rust::Vec<NamedBoundaryCurve> face_boundary(const geometry::Shape& shape, rust::Str face);
 
 // FreeCAD import: a face, edge or vertex by its index ('F', 'E', 'V').
 IndexedElement indexed_element(const geometry::Shape& shape, std::uint8_t kind, std::size_t index);

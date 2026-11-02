@@ -13,7 +13,8 @@
 # The panel's layout (mitcad#1010), Docked and Floating, at the default
 # width: top to bottom the picks, the result, the history, Close (no Keep
 # as Dimension or Annotate: the Make tab's, mitcad#1049); no control's text clipped,
-# every result row on one line; a value copied from its context menu;
+# every result row on one line; delta x, y and z as rows under the
+# distance (mitcad#1167); a value copied from its context menu;
 # Close and Esc close it. The history (mitcad#648) folded until its header
 # is clicked; a row copied from its context menu, Copy All and Clear from
 # the menu at the end of its header.
@@ -124,7 +125,8 @@ Ui-Mark
 Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1)' }
 Ui-ExpectNew 'axis (30, 40, 10) along (0, 0, ' 'the second axis'
 Ui-ExpectNew 'distance 40, angle 0 deg, axis distance 50, axis lines 2' 'the surfaces 40 apart, the axes parallel and 50 apart'
-Ui-ExpectNew 'Panel Measure result values: Distance = 40 mm, Angle = 0' 'the pair''s values first, the distance first'
+$delta = [char]0x0394
+Ui-ExpectNew "Panel Measure result values: Distance = 40 mm, ${delta}x = 24 mm, ${delta}y = 32 mm, ${delta}z = 0 mm, Angle = 0" 'the pair''s values first, the distance first, its deltas under it'
 Ui-ExpectNew 'Panel Measure result Selection 1: cylindrical face: Diameter = 10 mm, Radius = 5 mm, Area = 628.319 mm' 'then the first pick''s group, titled by its kind'
 Ui-ExpectNew ', Axis through = (0, 0, 10), Axis direction = (0, 0, ' 'its axis as two rows'
 Ui-ExpectNew 'Panel Measure result Selection 2: cylindrical face: Diameter = 10 mm' 'and the second pick''s'
@@ -133,6 +135,18 @@ Ui-ExpectNew 'Measure history at' 'the history under the actions'
 if (-not "$(Ui-LastLineWith 'Measure history at ')".EndsWith('(folded)')) { Ui-Fail 'the history is not folded' }
 Write-Host 'ok   the history folded'
 Expect-Layout
+# Delta x, y and z as rows of their own right under the distance, in sight
+# without hovering (mitcad#1167): from (3, 4) on Body1's face to (27, 36)
+# on Body2's.
+$distance = (Ui-LoggedAt 'Panel Measure result Distance')[1]
+$dx = (Ui-LoggedAt "Panel Measure result ${delta}x")[1]
+$dy = (Ui-LoggedAt "Panel Measure result ${delta}y")[1]
+$dz = (Ui-LoggedAt "Panel Measure result ${delta}z")[1]
+$angle = (Ui-LoggedAt 'Panel Measure result Angle')[1]
+if (-not ($distance -lt $dx -and $dx -lt $dy -and $dy -lt $dz -and $dz -lt $angle)) {
+  Ui-Fail "not under the distance: Distance $distance, dx $dx, dy $dy, dz $dz, Angle $angle"
+}
+Write-Host 'ok   delta x, y and z shown as rows under the distance, above the angle'
 Ui-Mark
 Ui-Step 'right-click the distance'         { Ui-ClickLogged 'Panel Measure result Distance' 3 }
 Ui-ExpectNew 'Context menu: Copy' 'its context menu'

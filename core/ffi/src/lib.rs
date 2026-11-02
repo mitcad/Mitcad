@@ -117,8 +117,20 @@ mod ffi {
         /// Serves local MCP tools on stdin/stdout within the workspace.
         fn run_mcp(workspace: &str, read_only: bool) -> Result<()>;
         /// Plan a preserving local assistant configuration edit; no filesystem IO.
-        fn plan_codex_mcp_config(current: &str, bridge: &str, replace_existing: bool) -> String;
-        fn verify_codex_mcp_config(before: &str, after: &str, bridge: &str) -> String;
+        /// `leading`: a JSON array of the bridge's arguments before
+        /// `mcp --connect` (`["cli"]` for an AppImage, mitcad#1170), or empty.
+        fn plan_codex_mcp_config(
+            current: &str,
+            bridge: &str,
+            leading: &str,
+            replace_existing: bool,
+        ) -> String;
+        fn verify_codex_mcp_config(
+            before: &str,
+            after: &str,
+            bridge: &str,
+            leading: &str,
+        ) -> String;
         /// Build an MCP bundle containing the installed native launcher.
         fn build_mcp_bundle(manifest: &str, launcher_path: &str) -> Result<Vec<u8>>;
 

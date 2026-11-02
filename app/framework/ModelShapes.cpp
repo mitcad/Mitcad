@@ -223,6 +223,40 @@ QString datumText(const QJsonObject& datum) {
   return QStringLiteral("point %1").arg(xyz("point"));
 }
 
+QJsonObject fixedPlaneDatum(const QJsonObject& plane) {
+  const auto origin = pointFrom(plane.value(QStringLiteral("origin")));
+  const auto normalAt = pointFrom(plane.value(QStringLiteral("normal")));
+  if (!origin || !normalAt) {
+    return QJsonObject();
+  }
+  gp_Vec normal(normalAt->XYZ());
+  if (normal.Magnitude() < 1e-12) {
+    return QJsonObject();
+  }
+  normal.Normalize();
+  // As core/model-base's DatumPlane::from_normal and default_x_axis.
+  gp_Vec x(0.0, 0.0, 0.0);
+  if (const auto hint = pointFrom(plane.value(QStringLiteral("x_axis")))) {
+    const gp_Vec along(hint->XYZ());
+    x = along - normal * normal.Dot(along);
+  }
+  if (x.Magnitude() < 1e-12) {
+    const gp_Vec axis = std::abs(normal.X()) < 1.0 - 1e-3 ? gp_Vec(1.0, 0.0, 0.0) : gp_Vec(0.0, 1.0, 0.0);
+    x = axis - normal * normal.Dot(axis);
+  }
+  if (x.Magnitude() < 1e-12) {
+    return QJsonObject();
+  }
+  x.Normalize();
+  const gp_Vec y = normal.Crossed(x);
+  const auto array = [](const gp_XYZ& xyz) { return QJsonArray{xyz.X(), xyz.Y(), xyz.Z()}; };
+  return {{QStringLiteral("type"), QStringLiteral("plane")},
+          {QStringLiteral("origin"), array(origin->XYZ())},
+          {QStringLiteral("normal"), array(normal.XYZ())},
+          {QStringLiteral("x_axis"), array(x.XYZ())},
+          {QStringLiteral("y_axis"), array(y.XYZ())}};
+}
+
 TopoDS_Shape datumShape(const QJsonObject& datum, double size) {
   try {
     const QString type = text(datum, "type");

@@ -22,10 +22,24 @@ fn absolute_executable(path: &str) -> bool {
                 && matches!(bytes[2], b'/' | b'\\')))
 }
 
+/// The bridge's arguments to connect, without a launcher's leading ones.
+const CONNECT_ARGS: [&str; 2] = ["mcp", "--connect"];
+
 /// Adds only the local MitCad entry, preserving other settings and comments.
 /// The caller owns path discovery, policy checks, explicit conflict consent,
 /// backup creation, concurrent-edit detection and atomic file replacement.
 pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) -> Value {
+    plan_codex_launch(current, bridge, &CONNECT_ARGS, replace_existing)
+}
+
+/// plan_codex_config for a bridge started with other arguments: an AppImage
+/// started as `<AppImage> cli mcp --connect` (mitcad#1170).
+pub fn plan_codex_launch(
+    current: &str,
+    bridge: &str,
+    arguments: &[&str],
+    replace_existing: bool,
+) -> Value {
     if current.len() > MAX_CONFIG_BYTES {
         return failure(
             "invalid",
@@ -71,10 +85,11 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
                         .get("args")
                         .and_then(Item::as_array)
                         .is_some_and(|args| {
-                            args.len() == 2
-                                && args.get(0).and_then(toml_edit::Value::as_str) == Some("mcp")
-                                && args.get(1).and_then(toml_edit::Value::as_str)
-                                    == Some("--connect")
+                            args.len() == arguments.len()
+                                && args
+                                    .iter()
+                                    .zip(arguments)
+                                    .all(|(arg, expected)| arg.as_str() == Some(*expected))
                         });
                 let local = !entry.contains_key("url")
                     && !entry.contains_key("experimental_environment")
@@ -111,8 +126,9 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
     }
     entry.insert("command", value(bridge));
     let mut args = Array::new();
-    args.push("mcp");
-    args.push("--connect");
+    for argument in arguments {
+        args.push(*argument);
+    }
     entry.insert("args", value(args));
     let parent = document
         .get_mut("mcp_servers")
@@ -140,7 +156,12 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
 /// Check a supported client's configuration write before reporting setup success.
 /// Differences inside its new MitCad entry are allowed; unrelated text is not.
 pub fn verify_codex_config(before: &str, after: &str, bridge: &str) -> Value {
-    let target = plan_codex_config(after, bridge, false);
+    verify_codex_launch(before, after, bridge, &CONNECT_ARGS)
+}
+
+/// verify_codex_config for a bridge started with `arguments` (plan_codex_launch).
+pub fn verify_codex_launch(before: &str, after: &str, bridge: &str, arguments: &[&str]) -> Value {
+    let target = plan_codex_launch(after, bridge, arguments, false);
     if target["status"] != "unchanged" {
         return json!({"valid": false, "error": "The assistant did not retain the expected local MitCad configuration."});
     }
@@ -420,6 +441,53 @@ mod tests {
         assert_eq!(
             verify_codex_config(parent, &lost, "/opt/tools/bridge")["valid"],
             false
+        );
+    }
+
+    #[test]
+    fn an_appimage_is_registered_with_its_cli_argument() {
+        // mitcad#1170: the AppImage file itself, `cli` before `mcp --connect`.
+        let image = "/home/user/Applications/MitCad.AppImage";
+        let launch = ["cli", "mcp", "--connect"];
+        let plan = plan_codex_launch("", image, &launch, false);
+        assert_eq!(plan["status"], "updated", "{plan}");
+        let content = plan["content"].as_str().unwrap().to_owned();
+        let parsed = content.parse::<DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["mcp_servers"][SERVER]["command"].as_str(),
+            Some(image)
+        );
+        let args: Vec<_> = parsed["mcp_servers"][SERVER]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(args, launch);
+        assert_eq!(
+            plan_codex_launch(&content, image, &launch, false)["status"],
+            "unchanged"
+        );
+        assert_eq!(
+            verify_codex_launch("", &content, image, &launch)["valid"],
+            true
+        );
+        // The same file without `cli` is another entry: setup asks first.
+        assert_eq!(
+            plan_codex_config(&content, image, false)["status"],
+            "conflict"
+        );
+        assert_eq!(verify_codex_config("", &content, image)["valid"], false);
+        // A mount folder's mitcad-cli registered before is replaced only with consent.
+        let mounted = plan_codex_config("", "/tmp/.mount_MitCad1/usr/bin/mitcad-cli", false);
+        let mounted = mounted["content"].as_str().unwrap();
+        assert_eq!(
+            plan_codex_launch(mounted, image, &launch, false)["status"],
+            "conflict"
+        );
+        assert_eq!(
+            plan_codex_launch(mounted, image, &launch, true)["status"],
+            "updated"
         );
     }
 

@@ -164,6 +164,20 @@ are listed, and can be removed, in **Preferences › AI Assistants**.
   connected assistant **in this window** or **in** the other design; the
   assistant indicator belongs only to the connected window.
 
+**The Linux AppImage** (mitcad#1170). The bridge, `mitcad-cli`, is inside
+the AppImage, in a folder that the AppImage mounts anew on each start and
+that goes away when MitCad closes. So the assistant's settings start the
+AppImage file itself: `MitCad.AppImage cli <arguments>` runs the bundled
+`mitcad-cli` with the arguments (anything else starts MitCad), and every
+assistant registers `<AppImage> cli mcp --connect`, the AppImage's path
+quoted where it needs it (the `APPIMAGE` path the AppImage runs from). The
+chat panel and the assistant indicator's **Copy Command for This Window**
+use the mounted `mitcad-cli`, which serves only while MitCad runs anyway.
+After the AppImage file is moved or renamed, connect again. An AppImage
+that updates itself keeps its path, so its setup holds. The assistant then
+starts the AppImage like any program: without FUSE, give the assistant's
+environment `APPIMAGE_EXTRACT_AND_RUN=1`.
+
 A WSL, remote or cloud client is not automatically on the native application's
 host. Browser and mobile conversations cannot launch this stdio bridge;
 setup does not expose a public listener or enable a tunnel.
@@ -263,7 +277,8 @@ On macOS, the installed bundle includes the CLI:
 prints authentication tokens. With several instances open, `--connect`
 selects the window active last. Each instance records its latest activation
 as UTC milliseconds beside its private discovery record, along with its
-design title and connected client names, without a token. The bridge names
+design title (the name its title bar shows, without the modified mark) and
+connected client names, without a token. The bridge names
 its choice and the other designs on stderr; MCP stdout stays JSON-RPC only.
 A connected bridge keeps its chosen window until the session ends.
 If none of the live instances has an activation time (for example, older
@@ -611,6 +626,10 @@ Afterwards, the document is that file. An existing file must have
 - A command panel is open
 - The save would ask the user something. Then MitCad closes the dialog
   of the question and names it.
+- The save would write over the file of a design that a newer MitCad
+  wrote, and drop its fields that this MitCad did not read (mitcad#1132).
+  The error names the fields. Save the design in the application, which
+  asks first, or give another `path`.
 
 **`document_open`** opens a `.mitcad` design from a folder for designs in
 the window, as File > Open does. It replaces the open document. The tool
@@ -905,6 +924,29 @@ such as **Housing**, **Mounting holes** and **Cable clearance**. Use
 `rename_group` with `name` and `new_name` to improve an existing name, or
 `ungroup` with `name` before regrouping a stage. These commands preserve the
 features and their modeling history.
+
+## Place parts on the model
+
+Both servers' instructions ask an assistant to place a part or a sketch
+on a reference to existing geometry where there is one: a face, a
+construction plane, an axis or a point (a primitive's, pulley's or
+gear's `at`, a sketch's `plane`). The part then follows when that
+geometry moves. A fixed plane (`{"origin": [x, y, z], "normal": [x, y,
+z]}`) is valid, but it stays where it is written and does not follow the
+model (mitcad#1137). The application opens such a feature for editing:
+the placement row shows the plane as **Plane at Z 36 mm (fixed)**, kept
+unchanged until the user picks a face or a plane in its place
+([app/COMMANDS.md](../app/COMMANDS.md)).
+
+## Fully constrained sketches
+
+Unless the user asks otherwise, both servers' instructions ask an
+assistant to make every sketch fully constrained and dimensioned:
+dimensions for the sizes that matter (named parameters where a value is
+used again) and constraints for the rest, tied to the origin or to
+existing geometry, until the sketch has no degrees of freedom left (the
+`sketch` query's `dof` is 0). In a live session `ui_state` also shows
+the Sketch Palette's warnings.
 
 ## Example: make, edit, save and export a part
 

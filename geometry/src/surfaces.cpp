@@ -529,8 +529,14 @@ std::vector<ShapePtr> patch_regions(const std::string& feature, const Frame& fra
     for (const Region& region : regions) {
       const ProfileFace profile = make_profile(frame, region);
       const TopoDS_Shell shell = shell_of(profile.face);
-      patches.push_back(std::make_shared<Shape>(
-          shell, std::vector<Shape::NamedFace>{{profile.face, {face_name(feature, "patch", region.name)}}}));
+      const std::string face = face_name(feature, "patch", region.name);
+      auto patch = std::make_shared<Shape>(shell, std::vector<Shape::NamedFace>{{profile.face, {face}}});
+      std::vector<Shape::NamedOpenEdge> sources;
+      for (const auto& [edge, segment] : profile.edges) {
+        sources.push_back({edge, {make_open_edge_name(face, segment)}});
+      }
+      patch->set_open_edge_names(sources);
+      patches.push_back(std::move(patch));
     }
     return patches;
   });

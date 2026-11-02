@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files/MainWindowSaveComponent.cpp app/browser core/model/src/document
-# check-all sources: core/model-api/src/components.rs tools/cli
+# check-all sources: core/model-api/src/components.rs tools/cli app/files/SaveComponentTarget.cpp
 # Save Component as Design (mitcad#1057) through the real UI, on a design
 # that mitcad-cli makes: A:1 (a 10 mm cube at x = 100), Box:1 (a cube and
 # a sketch with a linked projection of A's top face) and part:1 (a design

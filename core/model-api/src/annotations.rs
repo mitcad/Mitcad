@@ -58,9 +58,15 @@ const CIRCLE_SHARE: f64 = 3.0;
 const BARE_LINE_SHARE: f64 = 2.5;
 /// A leader's horizontal landing under its text's start, and how far past
 /// the bodies' extent its text stands when placed automatically: text
-/// heights (mitcad#902).
+/// heights (mitcad#902). The application draws the landing in proportion
+/// to its text as drawn (mitcad#1168: longer where a text held to its
+/// least height on screen is drawn larger than the design's).
 const LANDING_SHARE: f64 = 1.5;
 const LEADER_CLEAR: f64 = 2.0;
+/// A text moved nearer its leader's point than its landing is long: the
+/// landing at most this share of the way back to the point along the
+/// text, so that the leader meets it at an obtuse bend (mitcad#1168).
+const LANDING_REACH: f64 = 0.5;
 /// A datum label's stem from its surface to its letter's square: text
 /// heights.
 const DATUM_STEM: f64 = 3.0;
@@ -2304,6 +2310,10 @@ fn layout_note(
         (Some([u, v]), _) => {
             let text_at = add_scaled(add_scaled(anchor, x, u), y, v);
             let side = if u < 0.0 { -1.0 } else { 1.0 };
+            // Moved near its point, the landing shortens: the knee never
+            // past the point along the text, where the leader would double
+            // back to it at an acute bend (mitcad#1168).
+            let landing = landing.min(LANDING_REACH * u.abs());
             let knee = if annotation.kind == MeasureKind::Datum {
                 text_at
             } else {
@@ -3607,5 +3617,59 @@ mod tests {
         let normal = viewed_normal(diagonal, &[], Z, Some(Y));
         near(dot(normal, diagonal), 0.0);
         near_point(normal, Z);
+    }
+
+    #[test]
+    fn a_leaders_landing_follows_its_text_and_bends_obtusely_when_moved_near() {
+        // mitcad#1168: a note in the plane square to Z, its text along X.
+        let mut note = dimension(MeasureKind::Note);
+        note.text = Some("Deburr".to_owned());
+        let shape = Shape::Note {
+            anchor: [0.0, 0.0, 0.0],
+            normal: Some(Z),
+            surface: None,
+        };
+        let landing = |drawing: &Drawing| {
+            let [text_at, knee] = drawing.dimension_lines[1];
+            distance(text_at, knee)
+        };
+        // The bend at the knee between the leader back to the point and
+        // the landing, in degrees.
+        let bend = |drawing: &Drawing| {
+            let [knee, point] = drawing.dimension_lines[0];
+            let [text_at, _] = drawing.dimension_lines[1];
+            let back = unit(sub(point, knee)).unwrap();
+            let on = unit(sub(text_at, knee)).unwrap();
+            dot(back, on).clamp(-1.0, 1.0).acos().to_degrees()
+        };
+        // Its landing a text height and a half long, whatever the height:
+        // 5 mm and 10 mm texts, twice as long.
+        for height in [5.0, 10.0] {
+            let drawing = layout(&note, &shape, Some(Z), Some(X), &Around::bare(height));
+            near(landing(&drawing), LANDING_SHARE * height);
+            assert!(bend(&drawing) > 90.0, "{drawing:?}");
+        }
+        // Moved far out, the full landing; moved nearer its point along
+        // the text than the landing is long (4 mm, 5 mm text), it shortens
+        // to half the way back, the knee 2 mm out from the point: the bend
+        // stays obtuse, where the full landing's knee 3.5 mm past the point
+        // would bend back acutely.
+        note.text_offset = Some([30.0, 20.0]);
+        let far = layout(&note, &shape, Some(Z), Some(X), &Around::bare(5.0));
+        near(landing(&far), 7.5);
+        assert!(bend(&far) > 90.0, "{far:?}");
+        for [u, v] in [[4.0, 20.0], [-4.0, 20.0], [4.0, -20.0], [1.0, 3.0]] {
+            note.text_offset = Some([u, v]);
+            let near_it = layout(&note, &shape, Some(Z), Some(X), &Around::bare(5.0));
+            near(landing(&near_it), LANDING_REACH * f64::abs(u));
+            near_point(near_it.text[0], [u, v, 0.0]);
+            assert!(bend(&near_it) > 90.0, "{u} {v}: {near_it:?}");
+        }
+        // Right above its point: no landing, the leader straight to the
+        // text's start.
+        note.text_offset = Some([0.0, 20.0]);
+        let above = layout(&note, &shape, Some(Z), Some(X), &Around::bare(5.0));
+        assert_eq!(above.dimension_lines.len(), 1, "{above:?}");
+        near_point(above.dimension_lines[0][0], [0.0, 20.0, 0.0]);
     }
 }

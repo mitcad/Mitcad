@@ -155,8 +155,14 @@ public:
   // of these features (picked in the timeline or here); others are
   // deselected. Emits nothing. With scroll, it scrolls to the newest
   // selected row when none of them is in sight (mitcad#318); a selection
-  // picked in the tree itself does not scroll it.
-  void showSelection(const Selection& items, const QStringList& features = {}, bool scroll = true);
+  // picked in the tree itself does not scroll it. With keepPicked, the rows
+  // selected in the tree stay selected too, also a folder or the origin
+  // that stands for no item: the user's own pick of rows.
+  void showSelection(const Selection& items, const QStringList& features = {}, bool scroll = true,
+                     bool keepPicked = false);
+  QVector<BrowserNode> selectedNodes() const;
+  QStringList selectedPresentationKeys() const;
+  void setPresentationSelection(const QStringList& keys);
   // The rows of a feature: its sketch or datum, or the bodies it made.
   QVector<BrowserNode> nodesOfFeature(const QString& feature) const;
   // Expands to, selects and scrolls to the rows of a feature, its rows under
@@ -253,7 +259,7 @@ signals:
   // A slow second click on a selected row that can be renamed (mitcad#177).
   void renameClicked(const mitcad::BrowserNode& node);
   void doubleClicked(const mitcad::BrowserNode& node);
-  void deleteRequested(const mitcad::BrowserNode& node);
+  void deleteRequested(const QVector<mitcad::BrowserNode>& nodes);
   void contextMenuRequested(const mitcad::BrowserNode& node, const QPoint& globalPosition);
   // Ctrl+F (Cmd+F on macOS) in the rows: the timeline's search (mitcad#179).
   void searchRequested();
@@ -326,7 +332,9 @@ private:
   QString m_loggedMakeMarkers;           // the markers' log line, as last logged
   // Logs the rows whose names have a colour role, by role, with the colour
   // it gives on the rows' palette now (mitcad#1104), when it changed:
-  // "Browser row colours: dark, hidden #b4b8be: Root/Bodies/Body1, Root/Origin".
+  // "Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin".
+  // A value that is no level's role is logged as "unknown <n>: <paths>"
+  // (mitcad#1143), so that a test sees a wrong role.
   void logRowColours();
   QString m_loggedRowColours; // its line, as last logged
   bool revealKeys(const QSet<QString>& keys);

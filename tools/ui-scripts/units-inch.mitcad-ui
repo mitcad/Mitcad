@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Lengths in the design's unit (mitcad#1165) on tools/cli/tests/units_inch.json,
+# a design in inches: the Browser's sheet-rules row in inches, Extrude's
+# default distance 10 mm as 0.5 in, Measure's area and distances in inches.
+# Run by tools/ui-units-inch-test.sh (Linux) and
+# tools/ui-windows-units-inch-test.ps1 (Windows).
+wait-idle
+command view.fit
+# The opened design's body rows are expanded, so the sheet-rules row under
+# Body1 is laid out (and logged once, as places are) before the script's
+# first step: anywhere in the log.
+expect-ever '^Browser Root/Bodies/Body1/SheetRules1 [(]0[.]05 in, R 0[.]1 in, K 0[.]44[)] at '
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+expect-input-text distance '^0[.]5 in$'
+key Escape
+expect-log '^Command Extrude cancelled'
+mark
+command inspect.measure
+expect-log '^Command Measure started'
+# click-pick takes a regular expression: the top faces by their names'
+# start (the profile's brackets and braces would be regex syntax).
+click-pick 'face F5[.]b0/F5:end[(]'
+wait-log '^Panel Measure result Selection 1: planar face: Area = 2 in²'
+mark
+click-pick 'face F7[.]b0/F7:end[(]'
+wait-log '^Panel Measure result values: Distance = 1 in, Δx = 0 in, Δy = 0 in, Δz = 1 in, Minimum distance = 1[.]4142 in'
+expect-log 'distance 25[.]4'
+screenshot '${MITCAD_TEST_WORK}/units-inch-measure.png'
+key Escape
+expect-log '^Command Measure cancelled'

@@ -688,18 +688,32 @@ impl<K: Kernel> AnalysisApi<K> for Document<K> {
                 if let Some(b) = &q.b {
                     measurement_text(&mut text, &b.describe(), &result["b"]);
                     let between = &result["between"];
+                    let main = between["main"].as_str().unwrap_or("distance");
+                    let distance = between[main].as_f64().unwrap_or(0.0);
+                    let minimum = between["distance"].as_f64().unwrap_or(0.0);
+                    let points = &between["main_points"];
                     let _ = writeln!(
                         text,
-                        "Distance: {:.6} mm, from {} to {}{}",
-                        between["distance"].as_f64().unwrap_or(0.0),
-                        point(vec3(&between["on_a"])),
-                        point(vec3(&between["on_b"])),
+                        "Distance: {:.6} mm (main: {}), from {} to {}{}",
+                        distance,
+                        main,
+                        point(vec3(&points[0])),
+                        point(vec3(&points[1])),
                         if between["inside"] == json!(true) {
                             " (inside)"
                         } else {
                             ""
                         }
                     );
+                    if main == "offset" && (minimum - distance).abs() > 1e-6 {
+                        let _ = writeln!(
+                            text,
+                            "Minimum distance: {:.6} mm, from {} to {}",
+                            minimum,
+                            point(vec3(&between["on_a"])),
+                            point(vec3(&between["on_b"]))
+                        );
+                    }
                     if let Some(angle) = between["angle"].as_f64() {
                         let _ = writeln!(text, "Angle: {:.6}°", angle.to_degrees());
                     }
@@ -1089,7 +1103,10 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
             let between = kernel
                 .measure_between(&in_frame_a, &in_frame_b)
                 .map_err(kernel_error("measure"))?;
-            value["between"] = separation_json(&moved_separation(between, &placed));
+            let between = moved_separation(between, &placed);
+            value["between"] = separation_json(&between);
+            value["between"]["main"] = json!("distance");
+            value["between"]["main_points"] = json!([between.on_a, between.on_b]);
             if query.face_range {
                 if value["a"]["kind"] != "face" || value["b"]["kind"] != "face" {
                     return Err(ApiError("face_range needs two faces".into()));
@@ -1107,9 +1124,11 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                 // Two parallel planes (planar faces or datum planes): their
                 // distance along the normal (mitcad#646).
                 if let (Some(pa), Some(pb)) = (element_plane(ea), element_plane(eb))
-                    && let Some(offset) = plane_offset(&pa, &pb)
+                    && let Some((offset, points)) = plane_distance(&pa, &pb, &between)
                 {
                     value["between"]["offset"] = json!(offset);
+                    value["between"]["main"] = json!("offset");
+                    value["between"]["main_points"] = json!(points);
                 }
                 // Axes, directions and normals (mitcad#647): the angle the
                 // kernel has no answer for, and the axes' distances.
@@ -2500,6 +2519,22 @@ pub(super) fn plane_offset(a: &Plane, b: &Plane) -> Option<f64> {
     }
     // + 0.0 turns -0.0 into 0.0.
     Some(dot(sub(b.origin, a.origin), na).abs() + 0.0)
+}
+
+/// The plane gap and its perpendicular dimension. Where the finite faces
+/// overlap, keep the kernel's common projection; otherwise start at the
+/// first face's middle (or datum origin), not at its nearest edge.
+fn plane_distance(a: &Plane, b: &Plane, minimum: &Separation) -> Option<(f64, [Vec3; 2])> {
+    use mitcad_vec3::{add_scaled, dot, sub, unit};
+    let offset = plane_offset(a, b)?;
+    let from = if (minimum.distance - offset).abs() <= 1e-6 {
+        minimum.on_a
+    } else {
+        a.origin
+    };
+    let normal = unit(b.normal)?;
+    let foot = add_scaled(from, normal, -dot(sub(from, b.origin), normal));
+    Some((offset, [from, foot]))
 }
 
 fn vec3(value: &Value) -> Vec3 {

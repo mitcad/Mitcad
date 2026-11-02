@@ -10,9 +10,10 @@
 #      can be picked; Body2 hidden by its light bulb while the plane is
 #      asked for, Body1's top face can be picked and the sketch starts on
 #      it. Transparent (mitcad#1093) on Body2 from its Browser row: the row
-#      shows the half-open eye, a click where Body1 lies inside Body2
-#      selects a face of Body1, the menu has Transparent checked; one undo
-#      step makes Body2 opaque, and the click takes Body2 again.
+#      shows the half-open eye with its name in no colour (mitcad#1143), a
+#      click where Body1 lies inside Body2 selects a face of Body1, the menu
+#      has Transparent checked; one undo step makes Body2 opaque, and the
+#      click takes Body2 again.
 #   2. Extrude of the square, Body1 hidden meanwhile: the preview drawn
 #      again without Body1, not computed again; Cancel keeps Body1 hidden
 #      (the change is the last undo step).
@@ -214,6 +215,15 @@ Ui-Step 'Transparent'                    { Menu-Choose 'Transparent' }
 Ui-ExpectNew 'Transparent: Body2' 'Body2 made transparent'
 Ui-ExpectNew 'Browser eye Root/Bodies/Body2: transparent' 'its row shows the half-open eye'
 Ui-ExpectNew 'View transparent: 1 body' 'the view draws Body2 see-through'
+# Its name keeps no colour (mitcad#1143: the transparency once read as a
+# colour role and painted the name red, logged as "unknown 1: ...").
+Ui-Sync
+$colours = Last-Line 'Browser row colours: '
+if (-not $colours) { Ui-Fail 'no ''Browser row colours'' line logged' }
+if ($colours.Contains('Root/Bodies/Body2') -or $colours.Contains('unknown')) {
+  Ui-Fail "the transparent row's name has a colour: $colours"
+}
+Write-Host 'ok   Body2''s name keeps the plain colour (no colour role on its row)'
 Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
 Ui-Mark
 Ui-Step 'click where Body1 lies inside Body2' { Ui-ClickLogged 'Body F2.b0' }

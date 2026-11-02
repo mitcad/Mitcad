@@ -922,11 +922,13 @@ pub fn seed(
             }
             // The construction line each arc or circle holds its distance
             // with (one per arc, in chain order, from a point on the source
-            // to one on the result through the centre) goes along with it,
-            // in its own direction: left where it was when its arc had
-            // moved, it started a solve of its own once the corners were
-            // held where the curves touch (mitcad#890), and that solve did
-            // not find the arc again from 17 mm away.
+            // to one on the result through the centre) goes along with it:
+            // left where it was when its arc had moved, it started a solve of
+            // its own once the corners were held where the curves touch
+            // (mitcad#890), and that solve did not find the arc again from
+            // 17 mm away. It goes where the solve holds it (mitcad#1171,
+            // [`independent`]): across an arc's middle, level with a
+            // circle's centre on the side it is on.
             if offset.helpers.len() == rounds.len() {
                 for (helper, (center, from, to, range)) in offset.helpers.iter().zip(&rounds) {
                     let Some(EntityKind::Line { start, end, .. }) =
@@ -946,13 +948,12 @@ pub fn seed(
                     } else {
                         [1.0, 0.0]
                     };
-                    // On an arc: within its angles, else across its middle.
-                    if let Some((s, e)) = range {
-                        let angle = radial[1].atan2(radial[0]);
-                        if angle_after(*s, angle) > *e {
+                    match range {
+                        Some((s, e)) => {
                             let middle = (s + e) / 2.0;
                             radial = [middle.cos(), middle.sin()];
                         }
+                        None => radial = [radial[0].signum(), 0.0],
                     }
                     points.push((*start, add(*center, scale(radial, *from))));
                     points.push((*end, add(*center, scale(radial, *to))));
@@ -1163,6 +1164,308 @@ pub fn tangent_corners(
             }
         }
     }
+    out
+}
+
+/// The helper line of a result arc or circle (mitcad#358) as
+/// [`independent`] finds it by its constraints.
+struct Helper {
+    line: EntityUid,
+    /// The source's (and the result's) centre.
+    center: EntityUid,
+    /// The end on the source and its point-on-curve constraint.
+    on_source: EntityUid,
+    held_on_source: ConstraintUid,
+    /// The end on the result.
+    on_result: EntityUid,
+    /// The driving length that holds the result's radius.
+    length: Option<ConstraintUid>,
+}
+
+/// What the solve holds the offsets made by constraints with besides their
+/// stored constraints, and which of those it leaves out (mitcad#1171), so
+/// that an offset adds no constraint that follows from the others and no
+/// degree of freedom its shape does not have. `corners` are the offsets'
+/// tangent corners ([`tangent_corners`]). Of a tangent chain each corner was
+/// held three times (the line at its distance, the arc's radius by its
+/// helper, the tangency), half of an offset's dimensions were reported
+/// redundant, and each helper slid along its arc.
+///
+/// - A result line that touches a result arc at a held corner is placed by
+///   that arc's circle (about the source's centre, its radius held): its
+///   distance dimension is left out. One held so at both ends is the
+///   tangent of two circles: its parallel is left out too.
+/// - A result arc that touches the previous result arc at a held corner
+///   takes its radius from it: its helper's length is left out (along the
+///   chain from an arc whose own helper holds its radius; a closed chain of
+///   arcs alone keeps its first arc's length only). Such a chain's arcs and
+///   corners close the loop by themselves (their equations depend on each
+///   other once); the solve does not report that, as it is the offset's own
+///   ([`crate::solve::Extra::restating`]).
+/// - Each helper's end on an arc source is held at the arc's middle (in
+///   place of its point-on-curve), the one on a circle level with the
+///   centre, so that the helper does not slide. A helper something else
+///   constrains too is left as it is.
+///
+/// Nothing is stored: the stored constraints stay as they are, and older
+/// designs solve the same way. Where a source's corner no longer touches by
+/// its definition (no binding), the line keeps its own constraints.
+pub fn independent<P>(
+    offsets: &[SketchOffset<ParamId>],
+    entities: &[Entity],
+    constraints: &[super::Constraint],
+    dimensions: &[super::Dimension<P>],
+    corners: &[super::pattern::Binding],
+) -> (Vec<super::pattern::Binding>, BTreeSet<ConstraintUid>) {
+    use super::pattern::{Binding, BindingKind};
+    use std::collections::BTreeMap;
+    let index = EntityIndex::new(entities);
+    let kind = |id: EntityUid| index.get(id).map(|e| &e.kind);
+    let pair = |a: EntityUid, b: EntityUid| if a <= b { (a, b) } else { (b, a) };
+    let active: Vec<&super::Constraint> = constraints.iter().filter(|c| c.active).collect();
+    let mut on: BTreeMap<(EntityUid, EntityUid), ConstraintUid> = BTreeMap::new();
+    let mut parallels: BTreeMap<(EntityUid, EntityUid), ConstraintUid> = BTreeMap::new();
+    for c in &active {
+        match c.kind {
+            ConstraintKind::Coincident {
+                point,
+                entity: Ref::Curve(curve),
+            } => {
+                on.insert((point, curve), c.id);
+            }
+            ConstraintKind::Parallel { a, b } => {
+                parallels.insert(pair(a, b), c.id);
+            }
+            _ => {}
+        }
+    }
+    let mut distances: BTreeMap<(EntityUid, EntityUid), ConstraintUid> = BTreeMap::new();
+    let mut lengths: BTreeMap<EntityUid, ConstraintUid> = BTreeMap::new();
+    for d in dimensions.iter().filter(|d| d.active && d.value.is_some()) {
+        match d.kind {
+            DimensionKind::LineDistance { a, b } => {
+                distances.insert(pair(a, b), d.id);
+            }
+            DimensionKind::Length { line } => {
+                lengths.insert(line, d.id);
+            }
+            _ => {}
+        }
+    }
+    // How many active constraints and dimensions name each entity.
+    let mut uses: BTreeMap<Ref, usize> = BTreeMap::new();
+    let refs = active.iter().flat_map(|c| c.kind.refs()).chain(
+        dimensions
+            .iter()
+            .filter(|d| d.active)
+            .flat_map(|d| d.kind.refs()),
+    );
+    for r in refs {
+        *uses.entry(r).or_default() += 1;
+    }
+    let used = |r: Ref| uses.get(&r).copied().unwrap_or(0);
+    let mut bindings = Vec::new();
+    let mut left_out = BTreeSet::new();
+    for offset in offsets.iter().filter(|o| !o.derived) {
+        let n = offset.curves.len();
+        if n == 0 || offset.results.len() != n {
+            continue;
+        }
+        let helper = |source: EntityUid, result: EntityUid| -> Option<Helper> {
+            let center = match kind(source)? {
+                EntityKind::Arc { center, .. } | EntityKind::Circle { center, .. } => *center,
+                _ => return None,
+            };
+            offset.helpers.iter().find_map(|&line| {
+                let Some(EntityKind::Line { start, end, .. }) = kind(line) else {
+                    return None;
+                };
+                if !on.contains_key(&(center, line)) {
+                    return None;
+                }
+                // `a` on the source, `b` on the result.
+                let held = |a: EntityUid, b: EntityUid| {
+                    on.get(&(a, source))
+                        .copied()
+                        .filter(|_| on.contains_key(&(b, result)))
+                };
+                let (on_source, on_result, held_on_source) =
+                    match (held(*start, *end), held(*end, *start)) {
+                        (Some(k), _) => (*start, *end, k),
+                        (None, Some(k)) => (*end, *start, k),
+                        (None, None) => return None,
+                    };
+                Some(Helper {
+                    line,
+                    center,
+                    on_source,
+                    held_on_source,
+                    on_result,
+                    length: lengths.get(&line).copied(),
+                })
+            })
+        };
+        let helpers: Vec<Option<Helper>> = offset
+            .curves
+            .iter()
+            .zip(&offset.results)
+            .map(|(&s, &r)| helper(s, r))
+            .collect();
+        // Whose radius is held: by its helper's length, or by the arc
+        // before it at a held corner.
+        let mut held: Vec<bool> = helpers
+            .iter()
+            .map(|h| h.as_ref().is_some_and(|h| h.length.is_some()))
+            .collect();
+        let bound: BTreeSet<(EntityUid, EntityUid)> = corners
+            .iter()
+            .filter(|b| b.owner == offset.id)
+            .filter_map(|b| match b.kind {
+                BindingKind::TangentAt { a, b, .. } => Some(pair(a, b)),
+                _ => None,
+            })
+            .collect();
+        let results = &offset.results;
+        let arcs_touch = |i: usize| {
+            let j = (i + 1) % n;
+            round(&index, results[i])
+                && round(&index, results[j])
+                && bound.contains(&pair(results[i], results[j]))
+        };
+        // (Two curves share both their ends only where they close a chain
+        // of two, which has no tangent corners.)
+        let closed = n > 2 && shared_end(&index, results[n - 1], results[0]).is_some();
+        // A closed chain of arcs alone has one family of offsets: its
+        // corners pass the radius all the way round, so one arc's own
+        // length holds them all, from it round to the arc before it.
+        let order: Vec<usize> = if closed {
+            match (0..n).find(|&i| !arcs_touch(i)) {
+                Some(k) => (1..=n).map(|t| (k + t) % n).collect(),
+                None => match (0..n).find(|&i| held[i]) {
+                    Some(k) => (0..n - 1).map(|t| (k + t) % n).collect(),
+                    None => Vec::new(),
+                },
+            }
+        } else {
+            (0..n - 1).collect()
+        };
+        for i in order {
+            let j = (i + 1) % n;
+            if arcs_touch(i) && held[i] {
+                if let Some(length) = helpers[j].as_ref().and_then(|h| h.length) {
+                    left_out.insert(length);
+                }
+                held[j] = true;
+            }
+        }
+        // Lines placed by the circles they touch.
+        for (&source, &result) in offset.curves.iter().zip(results) {
+            if !matches!(kind(result), Some(EntityKind::Line { .. })) {
+                continue;
+            }
+            let touching = results
+                .iter()
+                .zip(&held)
+                .filter(|&(&other, &h)| {
+                    h && round(&index, other) && bound.contains(&pair(result, other))
+                })
+                .count();
+            let key = pair(source, result);
+            if touching >= 1
+                && let Some(&k) = distances.get(&key)
+            {
+                left_out.insert(k);
+            }
+            if touching >= 2
+                && let Some(&k) = parallels.get(&key)
+            {
+                left_out.insert(k);
+            }
+        }
+        // Helpers held in place.
+        for (h, &source) in helpers.iter().zip(&offset.curves) {
+            let Some(h) = h else { continue };
+            let own = 1 + usize::from(h.length.is_some());
+            if used(Ref::Curve(h.line)) != own
+                || used(Ref::Point(h.on_source)) != 1
+                || used(Ref::Point(h.on_result)) != 1
+            {
+                continue;
+            }
+            let anchor = match kind(source) {
+                Some(EntityKind::Arc { .. }) => {
+                    left_out.insert(h.held_on_source);
+                    BindingKind::Midpoint {
+                        point: h.on_source,
+                        curve: source,
+                    }
+                }
+                Some(EntityKind::Circle { .. }) => BindingKind::HorizontalPoints {
+                    a: h.center,
+                    b: h.on_source,
+                },
+                _ => continue,
+            };
+            bindings.push(Binding {
+                owner: offset.id,
+                kind: anchor,
+            });
+        }
+    }
+    (bindings, left_out)
+}
+
+/// The constraints and dimensions an offset made by constraints holds its
+/// results with (`modify.rs`): each line's parallel and distance to its
+/// source, each helper's point-on-curve constraints and length; the
+/// offset's own id for its tangent corners and helper anchors (mitcad#1171:
+/// a warning about redundant constraints names the offset they come from).
+pub fn constraints_of<P>(
+    offset: &SketchOffset<ParamId>,
+    entities: &[Entity],
+    constraints: &[super::Constraint],
+    dimensions: &[super::Dimension<P>],
+) -> BTreeSet<ConstraintUid> {
+    let index = EntityIndex::new(entities);
+    let pairs: BTreeSet<(EntityUid, EntityUid)> = offset
+        .curves
+        .iter()
+        .zip(&offset.results)
+        .flat_map(|(&s, &r)| [(s, r), (r, s)])
+        .collect();
+    let ends: BTreeSet<EntityUid> = offset
+        .helpers
+        .iter()
+        .filter_map(|h| index.get(*h)?.kind.ends())
+        .flat_map(|(a, b)| [a, b])
+        .collect();
+    let mut out: BTreeSet<ConstraintUid> = constraints
+        .iter()
+        .filter(|c| match c.kind {
+            ConstraintKind::Parallel { a, b } => pairs.contains(&(a, b)),
+            ConstraintKind::Coincident {
+                point,
+                entity: Ref::Curve(curve),
+            } => {
+                offset.helpers.contains(&curve)
+                    || (ends.contains(&point)
+                        && (offset.curves.contains(&curve) || offset.results.contains(&curve)))
+            }
+            _ => false,
+        })
+        .map(|c| c.id)
+        .collect();
+    out.extend(
+        dimensions
+            .iter()
+            .filter(|d| match d.kind {
+                DimensionKind::LineDistance { a, b } => pairs.contains(&(a, b)),
+                DimensionKind::Length { line } => offset.helpers.contains(&line),
+                _ => false,
+            })
+            .map(|d| d.id),
+    );
+    out.insert(offset.id);
     out
 }
 

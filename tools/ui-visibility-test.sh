@@ -9,9 +9,10 @@
 #     Body2 hidden by its light bulb while the plane is asked for: the pick
 #     goes on, Body1's top face can be picked and the sketch starts on it.
 #   - Transparent (mitcad#1093) on Body2 from its Browser row: the row shows
-#     the half-open eye, and a click where Body1 lies inside Body2 selects
-#     a face of Body1; the menu has Transparent checked; one undo step
-#     makes Body2 opaque, and the click takes Body2 again.
+#     the half-open eye with its name in no colour (mitcad#1143), and a
+#     click where Body1 lies inside Body2 selects a face of Body1; the menu
+#     has Transparent checked; one undo step makes Body2 opaque, and the
+#     click takes Body2 again.
 #   - Extrude of the square, Body1 hidden meanwhile: the preview is drawn
 #     again without Body1, not computed again; Cancel keeps Body1 hidden
 #     (the change is the last undo step).
@@ -165,6 +166,15 @@ ui_step "Transparent"                    ui_menu_choose "Transparent"
 ui_expect_new "Transparent: Body2" "Body2 made transparent"
 ui_expect_new "Browser eye Root/Bodies/Body2: transparent" "its row shows the half-open eye"
 ui_expect_new "View transparent: 1 body" "the view draws Body2 see-through"
+# Its name keeps no colour (mitcad#1143: the transparency once read as a
+# colour role and painted the name red, logged as "unknown 1: ...").
+ui_sync
+colours=$(last_line "Browser row colours: ")
+[ -n "$colours" ] || ui_fail "no 'Browser row colours' line logged"
+case "$colours" in
+  *Root/Bodies/Body2*|*unknown*) ui_fail "the transparent row's name has a colour: $colours" ;;
+esac
+echo "ok   Body2's name keeps the plain colour (no colour role on its row)"
 ui_step "Escape (clear the selection)"   ui_key Escape
 ui_mark
 ui_step "click where Body1 lies inside Body2" ui_click_logged "Body F2.b0"

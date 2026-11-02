@@ -262,6 +262,13 @@ ShapePtr working_copy(const Shape& shape) {
     }
   }
   auto result = std::make_shared<Shape>(copy.shape(), faces);
+  if (shape.has_open_edge_names()) {
+    std::vector<Shape::NamedOpenEdge> edges;
+    for (int i = 0; i < shape.edge_count(); ++i) {
+      if (!shape.open_edge_names(i).empty()) edges.push_back({copy.of(shape.edge(i)), shape.open_edge_names(i)});
+    }
+    result->set_open_edge_names(edges);
+  }
   result->copy_notes(shape);
   return result;
 }
@@ -313,6 +320,25 @@ void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input, i
   for (int i = 0; i < input.face_count(); ++i) {
     carry_face(operation, input.face(i), input.face_names(i), source);
   }
+  carry_open_edges(operation, input);
+}
+
+void FaceNamer::carry_open_edges(BRepBuilderAPI_MakeShape& operation, const Shape& input,
+                                 const InputCopy* copy, const std::string& rename) {
+  if (!input.has_open_edge_names()) return;
+  for (int i = 0; i < input.edge_count(); ++i) {
+    NameList names = input.open_edge_names(i);
+    if (names.empty()) continue;
+    for (std::string& name : names) name = rename_open_edge_name(name, rename);
+    const TopoDS_Shape edge = copy ? copy->of(input.edge(i)) : TopoDS_Shape(input.edge(i));
+    if (!operation.IsDeleted(edge)) m_openEdges.push_back({edge, names});
+    for (const TopoDS_Shape& image : operation.Modified(edge)) {
+      if (image.ShapeType() == TopAbs_EDGE) m_openEdges.push_back({image, names});
+    }
+    for (const TopoDS_Shape& image : operation.Generated(edge)) {
+      if (image.ShapeType() == TopAbs_EDGE) m_openEdges.push_back({image, names});
+    }
+  }
 }
 
 void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
@@ -320,6 +346,7 @@ void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
   for (int i = 0; i < input.face_count(); ++i) {
     carry_face(operation, copy.of(input.face(i)), input.face_names(i), source);
   }
+  carry_open_edges(operation, input, &copy);
 }
 
 void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
@@ -330,6 +357,9 @@ void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
       carry_face(operation, face, input.face_names(i), source);
     }
   }
+  // Stand-ins describe faces only. Preserve unchanged edges or explicit
+  // edge images reported for the original input; never infer a replacement.
+  carry_open_edges(operation, input);
 }
 
 void FaceNamer::add(const TopoDS_Shape& face, const NameList& names, int source) {
@@ -359,6 +389,12 @@ void FaceNamer::adopt(const FaceNamer& other, const std::function<TopoDS_Shape(c
     const auto to = static_cast<std::size_t>(index - 1);
     m_names[to].insert(m_names[to].end(), other.m_names[from].begin(), other.m_names[from].end());
     m_sources[to].insert(other.m_sources[from].begin(), other.m_sources[from].end());
+  }
+  for (const Shape::NamedOpenEdge& edge : other.m_openEdges) {
+    // This callback promises one face image, not complete edge history.
+    // Keep only unchanged edges that survive in the output; guessing a
+    // first image could hide a split's ambiguous provenance.
+    m_openEdges.push_back(edge);
   }
 }
 
@@ -407,6 +443,20 @@ void FaceNamer::carry(const BRepTools_History& history, const Shape& input,
         NameList& names = m_names[static_cast<std::size_t>(index - 1)];
         const NameList& carried = input.face_names(i);
         names.insert(names.end(), carried.begin(), carried.end());
+      }
+    }
+  }
+  if (input.has_open_edge_names()) {
+    for (int i = 0; i < input.edge_count(); ++i) {
+      const NameList& names = input.open_edge_names(i);
+      if (names.empty()) continue;
+      const TopoDS_Edge& edge = input.edge(i);
+      if (!history.IsRemoved(edge)) m_openEdges.push_back({edge, names});
+      for (const TopoDS_Shape& image : history.Modified(edge)) {
+        if (image.ShapeType() == TopAbs_EDGE) m_openEdges.push_back({image, names});
+      }
+      for (const TopoDS_Shape& image : history.Generated(edge)) {
+        if (image.ShapeType() == TopAbs_EDGE) m_openEdges.push_back({image, names});
       }
     }
   }
@@ -582,6 +632,7 @@ std::vector<Shape::NamedFace> FaceNamer::named_faces() const {
 
 ShapePtr FaceNamer::shape() const {
   auto shape = std::make_shared<Shape>(m_result, named_faces());
+  shape->set_open_edge_names(m_openEdges);
   shape->set_unified(m_unified);
   if (m_valid) {
     shape->set_checked_valid(true);
@@ -615,6 +666,7 @@ std::vector<FaceNamer::Piece> FaceNamer::pieces() const {
       }
     }
     auto shape = std::make_shared<Shape>(it.Current(), own);
+    shape->set_open_edge_names(m_openEdges);
     shape->set_unified(m_unified);
     if (m_valid) {
       shape->set_checked_valid(true);

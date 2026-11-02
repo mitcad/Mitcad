@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/files app/browser/BrowserController.cpp app/framework/NoteRow.cpp
+# check-all sources: app/print app/files app/browser/BrowserController.cpp app/browser/LibraryPicker.cpp app/framework/NoteRow.cpp
 # check-all sources: app/framework/CommandPanel.cpp core/model core/3mf core/zip tools/cli
 # Purge volumes on filament changes (mitcad#705) through the real UI, on a
 # design of two boxes, one of a white filament and one of a black one:
@@ -11,9 +11,9 @@
 #   2. A cell typed: the pair's own, marked as set by hand; the row says
 #      1 set by hand.
 #   3. Reset of the selected cell: the computed volume again.
-#   4. The material editor's Filament tab (the Materials row's pencil): the
-#      search finds the two purge fields; Purge into this filament typed,
-#      and the table follows.
+#   4. The material editor's Filament tab (Edit materials… of Filament 1's
+#      picker, mitcad#1141): the search finds the two purge fields; Purge
+#      into this filament typed, and the table follows.
 #   5. The other cell typed, Send to a (fake) Bambu Studio: the 3MF's
 #      project settings (unzipped) carry the table, the filaments' values
 #      and the multiplier; the design file keeps the pair; the edit was one
@@ -130,13 +130,19 @@ ui_expect_new "Panel Send to Slicer note purge: Computed [Edit]" "the row says c
 echo "--- 4. The material editor's Filament tab: the purge fields"
 ui_focus_main
 ui_mark
-ui_step "the Materials row's pencil"       ui_click_logged "Panel Send to Slicer action materials.0"
-ui_expect_new "Materials opened" "Materials opened for the bodies printed"
-ui_expect_new "Materials item White PLA at" "White PLA is listed"
+# Edit materials…, the last row of Filament 1's picker (White PLA's,
+# mitcad#1141).
+ui_expect_log "Panel Send to Slicer input material_1 at" "the Filament 1 row has its place"
+ui_step "open Filament 1"                  ui_click_logged "Panel Send to Slicer input material_1"
+ui_expect_new "Material picker opened: " "its picker opened"
+ui_focus_dialog '^Material Picker$'
+xdotool type --delay 40 -- "Edit materials"
+ui_expect_new "Material picker search: Edit materials, first Edit materials…" "its last row, Edit materials…"
+ui_step "Edit materials… (Enter)"          ui_key Return
+ui_expect_new "Material picker chose: Edit materials…" "Edit materials… chosen"
+ui_expect_new "Materials opened for bodies F1.b0" "Materials opened for Filament 1's body"
+ui_expect_new "Material selected: White PLA (design)" "on White PLA"
 ui_focus_dialog '^Materials$'
-ui_mark
-ui_step "White PLA"                        ui_click_logged "Materials item White PLA"
-ui_expect_new "Material selected: White PLA (design)" "selected"
 ui_expect_new "Materials settings tab filament at" "the print tabs beside General"
 ui_mark
 ui_step "the Filament tab"                 ui_click_logged "Materials settings tab filament"

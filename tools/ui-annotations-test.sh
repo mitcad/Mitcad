@@ -49,10 +49,16 @@
 #   - Hole Callout from the Annotate group (mitcad#902) on a plate with four
 #     counterbored through holes: HoleCallout1 "4x Ø6.6 THRU / ⌴ Ø11 ↧ 6.8"
 #     written from the hole's feature, drawn in the bundled lettering, saved.
+#   - Its text heights to the design's scale (mitcad#1168): at one zoom,
+#     the window's Text Height… 5 mm and 10 mm draw it about twice as high
+#     (no ceiling on screen); at 5 mm its landing is a text height and a
+#     half as drawn, the bend obtuse; dragged toward its hole along the
+#     text, the landing shortens and the bend stays obtuse.
 # tools/ui-windows-annotations-test.ps1 does the editor (Diameter1's
 # without a Plane row too), the drag, the window's changes, the datum
-# label, both frames and a hole callout in the Windows VM (not the picks
-# again: its input reaches the main window's places only).
+# label, both frames and a hole callout with its text heights in the
+# Windows VM (not the picks again: its input reaches the main window's
+# places only).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-annotations-test.sh [screenshot.png] (with it, also
@@ -734,7 +740,9 @@ ui_expect_log "Annotations: none" "the plate opened without annotations"
 ui_step "fit (F6)"                         ui_key F6
 ui_mark
 annotate 5 "Hole Callout"
-ui_step "pick a hole's counterbore wall"   ui_click_pick "face F2.b0/F3:hole0.cbore_wall"
+# The front right hole: its callout's text runs right, into the view (the
+# front left one's ran past the view's left edge, out of reach of a drag).
+ui_step "pick a hole's counterbore wall"   ui_click_pick "face F2.b0/F3:hole1.cbore_wall"
 ui_expect_new "Hole Callout Hole: 1 face" "the hole picked"
 ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: HoleCallout1" "the hole callout added"
@@ -754,6 +762,71 @@ ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_new "Saved $WORK/holes.mitcad" "saved"
 grep -qF '"kind": "hole_callout"' "$WORK/holes.mitcad" || ui_fail "the design file has no hole callout"
 echo "ok   the hole callout in the design file"
+
+echo "--- Text heights to the design's scale, the landing with its text (mitcad#1168)"
+# text_height "keys" mm: the Annotations window's Text Height… set by those
+# keys in its list; the callout's text drawn again.
+text_height() {
+  ui_mark
+  ui_step "Annotations (search)"           ui_command "Annotations"
+  ui_expect_new "Annotations window opened: 1 annotation(s)" "the window opened"
+  wait_enabled "Annotations Text Height"
+  focus_window
+  ui_step "Text Height… (Alt+X)"           ui_key alt+x
+  ui_expect_new "Annotation Text Height dialog opened: " "Text Height asked"
+  ui_focus_dialog '^Annotation Text Height$'
+  # shellcheck disable=SC2086 # the keys one by one
+  ui_step "$2 mm ($1, Enter)"              ui_key $1 Return
+  ui_expect_new "Annotation Text Height dialog: $2" "$2 mm chosen"
+  ui_expect_new "Annotation text HoleCallout1 " "the callout's text drawn again"
+  focus_window
+  ui_step "close the window (Escape)"      ui_key Escape
+  ui_focus_main
+  ui_wait_idle
+}
+# text_pixels: the callout's text's capital height on screen, last logged.
+text_pixels() { grep -F "Annotation text HoleCallout1 " "$UI_LOG" | tail -1 | awk '{ print $4 }'; }
+# The same zoom: 5 mm (Auto, 2.5, 3.5, 5) and 10 mm (7, 10) about twice as
+# high on screen, no longer held to a ceiling.
+text_height "Down Down Down" 5
+five=$(text_pixels)
+text_height "Down Down" 10
+ten=$(text_pixels)
+awk -v a="$five" -v b="$ten" 'BEGIN { exit !(a > 9.5 && b / a > 1.8 && b / a < 2.2) }' ||
+  ui_fail "5 mm drawn $five px high, 10 mm $ten px: not about twice as high"
+echo "ok   5 mm drawn $five px high, 10 mm $ten px"
+text_height "Up Up" 5
+# Its landing a text height and a half as drawn, its bend obtuse.
+read -r landing bend <<< "$(grep -F "Annotation landing HoleCallout1 " "$UI_LOG" | tail -1 | awk '{ print $4, $7 }')"
+text=$(text_pixels)
+awk -v l="$landing" -v t="$text" -v b="$bend" 'BEGIN { exit !(t > 0 && l / t > 1.35 && l / t < 1.65 && b > 90) }' ||
+  ui_fail "the landing $landing px under a $text px text, bend $bend deg"
+echo "ok   the landing $landing px under the $text px text, bend $bend deg"
+# Dragged toward the hole along the text, its start half a landing past
+# the point: the landing shortens, the bend stays obtuse (no knee past the
+# point, mitcad#1168).
+read -r kx ky <<< "$(ui_logged_at "Annotation knee HoleCallout1")"
+read -r px py <<< "$(ui_logged_at "Annotation point HoleCallout1")"
+read -r sx sy <<< "$(ui_logged_at "Annotation label HoleCallout1")"
+dx=$(awk -v k="$kx" -v p="$px" -v l="$landing" -v s="$UI_SCALE" \
+  'BEGIN { side = k >= p ? 1 : -1; d = k - p; if (d < 0) d = -d; printf "%d", -side * (d + 0.5 * l * s) }')
+ui_mark
+ui_apart "$sx" "$sy"
+xdotool mousemove "$sx" "$sy" mousedown 1
+for i in 1 2 3 4 5 6 7 8; do
+  xdotool mousemove $((sx + dx * i / 8)) "$sy"
+  sleep 0.08
+done
+ui_sync
+xdotool mouseup 1
+ui_expect_new "Annotation HoleCallout1 dragged: text by" "the callout's text dragged toward the hole by $dx px"
+ui_expect_new "Annotation HoleCallout1 moved: " "moved, an undo step"
+ui_expect_new "Annotation landing HoleCallout1 " "its landing drawn again"
+ui_wait_idle
+read -r near bent <<< "$(grep -F "Annotation landing HoleCallout1 " "$UI_LOG" | tail -1 | awk '{ print $4, $7 }')"
+awk -v n="$near" -v l="$landing" -v b="$bent" 'BEGIN { exit !(n < 0.75 * l && b > 90) }' ||
+  ui_fail "dragged near: the landing $near px (was $landing), bend $bent deg"
+echo "ok   dragged near: the landing shortened to $near px, bend $bent deg"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI annotations test"

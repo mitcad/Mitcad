@@ -467,6 +467,19 @@ mod tests {
     }
 
     #[test]
+    fn a_model_number_after_the_at_is_part_of_the_printer() {
+        // mitcad#1147: "Ender 3" is a printer, not Ender with a 3 mm nozzle.
+        assert_eq!(
+            preset_printers("Shop PLA @Ender 3", &[]),
+            vec![("Ender 3".to_owned(), None)]
+        );
+        assert_eq!(
+            preset_printers("Shop PLA @MK4 0.6", &[]),
+            vec![("MK4".to_owned(), Some(0.6))]
+        );
+    }
+
+    #[test]
     fn presets_of_one_filament_merge_into_a_base_and_variants() {
         let presets = vec![
             preset(

@@ -17,8 +17,9 @@
 # at the default width: top to bottom the picks, the result, Keep as
 # Dimension and Annotate on one row, the history, Close; no control's text
 # clipped, every result row on one line; the pair's values first (the
-# distance), then a group per pick titled by its kind; a value copied from
-# its context menu; Close and Esc close it.
+# distance, then Δx, Δy and Δz as rows under it, mitcad#1167), then a
+# group per pick titled by its kind; a value copied from its context
+# menu; Close and Esc close it.
 # The history (mitcad#648): folded, unfolded from its header; the three
 # measurements as three rows, newest first, in the next panel; the first
 # shown again (its picks back, its lines drawn, no new row); one row copied
@@ -122,8 +123,8 @@ ui_expect_new "distance 40, angle 0 deg, axis distance 50, axis lines 2" \
   "the surfaces 40 apart, the axes parallel and 50 apart, both drawn"
 
 echo "--- The panel's layout (mitcad#1010)"
-ui_expect_new "Panel Measure result values: Distance = 40 mm, Angle = 0°, Axis distance = 50 mm" \
-  "the pair's values first, the distance first"
+ui_expect_new "Panel Measure result values: Distance = 40 mm, Δx = 24 mm, Δy = 32 mm, Δz = 0 mm, Angle = 0°, Axis distance = 50 mm" \
+  "the pair's values first, the distance first, Δx, Δy and Δz under it"
 ui_expect_new "Panel Measure result Selection 1: cylindrical face: Diameter = 10 mm, Radius = 5 mm, Area = 628.319 mm²" \
   "then the first pick's group, titled by its kind"
 ui_expect_new ", Axis through = (0, 0, 10), Axis direction = (0, 0, " "its axis as two rows"
@@ -133,6 +134,19 @@ ui_expect_new "Measure history at" "the history under the actions"
 grep -F "Measure history at " "$UI_LOG" | tail -1 | grep -q "(folded)$" || ui_fail "the history is not folded"
 echo "ok   the history folded"
 expect_layout
+# Δx, Δy and Δz as rows of their own right under the distance, in sight
+# without hovering (mitcad#1167): from (3, 4) on Body1's face to (27, 36)
+# on Body2's.
+distance=$(logged_y "Panel Measure result Distance")
+dx=$(logged_y "Panel Measure result Δx")
+dy=$(logged_y "Panel Measure result Δy")
+dz=$(logged_y "Panel Measure result Δz")
+angle=$(logged_y "Panel Measure result Angle")
+[ -n "$dx" ] && [ -n "$dy" ] && [ -n "$dz" ] && [ -n "$angle" ] ||
+  ui_fail "Δx, Δy, Δz or Angle is not laid out: Δx $dx, Δy $dy, Δz $dz, Angle $angle"
+[ "$distance" -lt "$dx" ] && [ "$dx" -lt "$dy" ] && [ "$dy" -lt "$dz" ] && [ "$dz" -lt "$angle" ] ||
+  ui_fail "not under the distance: Distance $distance, Δx $dx, Δy $dy, Δz $dz, Angle $angle"
+echo "ok   Δx, Δy and Δz shown as rows under the distance, above the angle"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 ui_mark
 ui_step "right-click the distance"         ui_click_logged "Panel Measure result Distance" 3

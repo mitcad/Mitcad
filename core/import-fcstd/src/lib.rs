@@ -58,6 +58,7 @@ mod fixed_paths;
 mod notes;
 // FreeCAD's colours as document appearances (mitcad#793).
 mod appearances;
+mod binders;
 #[cfg(test)]
 mod tests;
 

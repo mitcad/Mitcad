@@ -23,7 +23,10 @@ use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::library::{LibraryRequest, LinkResolver};
 use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
-use crate::topo::{EdgeName, TopoName};
+use crate::topo::{
+    CurveId, EdgeName, FaceBoundaryRef, FaceName, RegionKey, RoleKey, SegmentKey, TopoName,
+    VertexName,
+};
 use crate::transform::Transform;
 
 /// Marks a parameter in the JSON form of a copied definition.
@@ -1209,7 +1212,7 @@ fn rename_references(
 
 /// A definition with its parameters and feature references mapped. The
 /// references are rewritten in the definition's JSON form, accepting only
-/// feature ids, body ids and parsed topological names. Body-keyed links
+/// feature ids, body ids and parsed topological names or region keys. Body-keyed links
 /// and projection sources are handled in their typed context above.
 fn copy_def(
     def: &FeatureDef,
@@ -1347,15 +1350,102 @@ pub(super) fn remap_reference(text: &str, uids: &HashMap<String, String>) -> Str
     if crate::features::geom_ref::parse_mount(text).is_ok() {
         return remap_text(text, uids);
     }
-    if text.parse::<TopoName>().is_ok() {
-        // Parsing again canonicalises nested edge/vertex face order after
-        // renumbering (F9 sorts differently from F10).
-        return remap_text(text, uids)
-            .parse::<TopoName>()
-            .expect("mapping feature ids preserves a topological name")
-            .to_string();
+    let mapped = TopologyCopy { uids };
+    if text.starts_with("r{")
+        && let Ok(region) = text.parse::<RegionKey>()
+    {
+        return mapped.region(&region).to_string();
+    }
+    if let Ok(name) = text.parse::<TopoName>() {
+        return mapped.name(&name).to_string();
     }
     text.to_owned()
+}
+
+/// Remap typed names recursively, rebuilding every canonical set/order.
+/// Text replacement followed by parsing is insufficient: changing feature
+/// ids can reverse both edge-face order and boundary neighbours in a
+/// segment end, whose parser deliberately requires canonical ordering.
+struct TopologyCopy<'a> {
+    uids: &'a HashMap<String, String>,
+}
+
+impl TopologyCopy<'_> {
+    fn uid(&self, uid: FeatureUid) -> FeatureUid {
+        self.uids
+            .get(&uid.to_string())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(uid)
+    }
+
+    fn curve(&self, curve: &CurveId) -> CurveId {
+        match curve {
+            CurveId::FaceEdge(boundary) => CurveId::FaceEdge(Box::new(match &**boundary {
+                FaceBoundaryRef::Named(edge) => FaceBoundaryRef::Named(self.edge(edge)),
+                FaceBoundaryRef::Profile { face, segment } => FaceBoundaryRef::Profile {
+                    face: Box::new(self.face(face)),
+                    segment: Box::new(self.segment(segment)),
+                },
+            })),
+            // Curve and glyph ids are local to their copied sketch.
+            _ => curve.clone(),
+        }
+    }
+
+    fn segment(&self, segment: &SegmentKey) -> SegmentKey {
+        let curve = self.curve(&segment.curve);
+        let mut mapped = match &segment.ends {
+            Some(ends) => SegmentKey::with_ends(
+                curve,
+                ends.0.iter().map(|c| self.curve(c)).collect(),
+                ends.1.iter().map(|c| self.curve(c)).collect(),
+            ),
+            None => SegmentKey::closed(curve),
+        };
+        mapped.occurrence = segment.occurrence;
+        mapped
+    }
+
+    fn region(&self, region: &RegionKey) -> RegionKey {
+        RegionKey::new(region.segments().map(|s| self.segment(s))).expect("a region has segments")
+    }
+
+    fn face(&self, face: &FaceName) -> FaceName {
+        let mut mapped = face.clone();
+        mapped.feature = self.uid(face.feature);
+        mapped.key = face.key.as_ref().map(|key| match key {
+            RoleKey::Segment(segment) => RoleKey::Segment(self.segment(segment)),
+            RoleKey::Region(region) => RoleKey::Region(self.region(region)),
+            RoleKey::Edge(edge) => RoleKey::Edge(Box::new(self.edge(edge))),
+            RoleKey::Vertex(vertex) => RoleKey::Vertex(Box::new(self.vertex(vertex))),
+            // Derived-part source names keep the source document's ids.
+            RoleKey::Face(_) if face.role == "part" => key.clone(),
+            RoleKey::Face(source) => RoleKey::Face(Box::new(self.face(source))),
+            RoleKey::Index(_) => key.clone(),
+        });
+        mapped
+    }
+
+    fn edge(&self, edge: &EdgeName) -> EdgeName {
+        let mut mapped = EdgeName::new(self.face(&edge.faces()[0]), self.face(&edge.faces()[1]));
+        mapped.index = edge.index;
+        mapped
+    }
+
+    fn vertex(&self, vertex: &VertexName) -> VertexName {
+        let mut mapped = VertexName::new(vertex.faces().iter().map(|f| self.face(f)))
+            .expect("a vertex has faces");
+        mapped.index = vertex.index;
+        mapped
+    }
+
+    fn name(&self, name: &TopoName) -> TopoName {
+        match name {
+            TopoName::Face(face) => TopoName::Face(self.face(face)),
+            TopoName::Edge(edge) => TopoName::Edge(self.edge(edge)),
+            TopoName::Vertex(vertex) => TopoName::Vertex(self.vertex(vertex)),
+        }
+    }
 }
 
 /// Replaces the feature ids `F<n>` in a reference text: an `F` that does
@@ -1456,6 +1546,87 @@ mod tests {
         }
         assert_eq!(value["body"], "F9.b0");
         assert_eq!(value["reference_face"], "F9:end(r{c1})");
+    }
+
+    #[test]
+    fn boundary_region_copies_map_owners_and_resort_nested_neighbours() {
+        let uids = HashMap::from([
+            ("F2".to_owned(), "F9".to_owned()),
+            ("F3".to_owned(), "F10".to_owned()),
+        ]);
+        let named = "b{E{F2:a|F3:b}}";
+        let named_copy = "b{E{F10:b|F9:a}}";
+        assert_eq!(
+            remap_reference(&format!("r{{{named}}}"), &uids),
+            format!("r{{{named_copy}}}")
+        );
+        let a = "b{O{F2:patch(r{c1})|c1}}";
+        let b = "b{O{F3:patch(r{c2})|c2}}";
+        let a_copy = "b{O{F9:patch(r{c1})|c1}}";
+        let b_copy = "b{O{F10:patch(r{c2})|c2}}";
+        let region = format!("r{{c7[{a}+{b},{named}],{a}}}");
+        let expected = format!("r{{c7[{b_copy}+{a_copy},{named_copy}],{a_copy}}}");
+        assert_eq!(remap_reference(&region, &uids), expected);
+        assert!(expected.parse::<RegionKey>().is_ok());
+        assert_eq!(
+            remap_reference(&format!("F3:end({region})"), &uids),
+            format!("F10:end({expected})")
+        );
+        // A source segment can itself name implicit boundary neighbours.
+        let source = format!("b{{O{{F2:patch(r{{c3}})|c5[{a},{named}]}}}}");
+        let copied_source = format!("b{{O{{F9:patch(r{{c3}})|c5[{a_copy},{named_copy}]}}}}");
+        assert_eq!(
+            remap_reference(&format!("r{{{source}}}"), &uids),
+            format!("r{{{copied_source}}}")
+        );
+        // Local curve/glyph ids and references outside the copied set stay.
+        assert_eq!(remap_reference("r{c1,t3.g2.c1}", &uids), "r{c1,t3.g2.c1}");
+        assert_eq!(
+            remap_reference("r{b{O{F20:patch(r{c2})|c2}}}", &uids),
+            "r{b{O{F20:patch(r{c2})|c2}}}"
+        );
+        // A derived-part source keeps its source document's namespace.
+        let part = format!("F3:part(F2:end({region}))");
+        assert_eq!(
+            remap_reference(&part, &uids),
+            format!("F10:part(F2:end({region}))")
+        );
+        assert_eq!(
+            remap_reference(&format!("caption {region}"), &uids),
+            format!("caption {region}")
+        );
+    }
+
+    #[test]
+    fn copied_profile_consumers_use_the_copied_boundary_owners() {
+        let uids = HashMap::from([
+            (FeatureUid(2), FeatureUid(9)),
+            (FeatureUid(3), FeatureUid(10)),
+            (FeatureUid(4), FeatureUid(11)),
+        ]);
+        for (key, expected) in [
+            ("r{b{E{F2:a|F3:b}}}", "r{b{E{F10:b|F9:a}}}"),
+            ("r{b{O{F2:patch(r{c1})|c1}}}", "r{b{O{F9:patch(r{c1})|c1}}}"),
+        ] {
+            let old: FeatureDef<String> = serde_json::from_value(serde_json::json!({
+                "type": "extrude", "profiles": [{"sketch": "F4", "region": key}],
+                "extent": {"type": "distance", "distance": "d1"}, "operation": "new_body",
+            }))
+            .unwrap();
+            let old = old
+                .map_params(&mut |_, _| Ok::<_, ()>(ParamId::from_raw(1)))
+                .unwrap();
+            let parameters = HashMap::from([(ParamId::from_raw(1), ParamId::from_raw(2))]);
+            let FeatureDef::Extrude(copy) = copy_def(&old, &parameters, &uids).unwrap() else {
+                panic!("copied an extrusion");
+            };
+            assert_eq!(copy.profiles[0].sketch, FeatureUid(11));
+            assert_eq!(copy.profiles[0].region.to_string(), expected);
+            let crate::features::Extent::Distance { distance, .. } = copy.extent else {
+                panic!("kept a distance extent");
+            };
+            assert_eq!(distance, ParamId::from_raw(2));
+        }
     }
 
     #[test]

@@ -539,7 +539,8 @@ The ctest `repo.ui-strings` (`tools/ui-strings-check`) reads the
 user-facing strings of `app/` (the literals of `tr()`, `QT_TR_NOOP`,
 `translate` and `QT_TRANSLATE_NOOP`, and the AppKit `@"…"` strings other
 than identifiers), the string literals of the Rust sources in `core/`
-(tests, `src/bin` tools and a file's test module left out) and the prose
+(tests, `src/bin` tools and each item a `#[cfg(test)]` guards left out:
+a test module, a test helper, a field; the scan goes on after it) and the prose
 of the user-facing documents (`docs/user-guide.md`, `README.md`), and
 fails on:
 
@@ -577,10 +578,12 @@ The colors (mitcad#1041):
 - The ctest `repo.ui-colors` (`tools/ui-colors-check`) reads the sources
   of `app/` (comments left out) and fails on a color literal outside the
   role table (`app/framework/Theme.cpp`): a hex color in a string
-  (`"color: #1f7aff"`), a `QColor` of literal channels,
+  (`"color: #1f7aff"`), a style sheet's `rgb()` / `rgba()` of literal
+  channels or color name (`"color: white"`), a `QColor` of literal channels,
   `QColor::fromRgb` or `fromHsv` of literal channels, `qRgb`, an OCCT
-  `Quantity_Color` of literal channels or an AppKit color of a literal
-  red; in the icons' color table (`app/framework/Icons.cpp`) every
+  `Quantity_Color` of literal channels or an OCCT color name
+  (`Quantity_NOC_WHITE`), or an AppKit color of a literal red or white
+  (`colorWithWhite:`); in the icons' color table (`app/framework/Icons.cpp`) every
   six-digit hex integer too. The icons' error, success and warning
   source colors are drawn in their roles (`iconStatusRole`: the error's
   red, the success's green, the warning's yellow). A file may hold as many as its entry in the check's allow-list
@@ -593,7 +596,10 @@ The colors (mitcad#1041):
 - The unit test `app.unit` (`app/tests/color_roles.cpp`) reads the role
   table: every text role at least 4.5:1 and every indicator 3:1 on the
   light and the dark chrome's window, panel and raised surfaces (the
-  status texts also on the Floating card), every fill under its text
+  status texts also on the Floating card; a hidden Browser row's name,
+  `TextHidden` #4c525c / #d0d4da, also on every Floating row card, the
+  window's colour at 80% or 85% over any view background preset, and at
+  least 1.2:1 dimmer than `Text`, mitcad#1101), every fill under its text
   and every badge under its mark at least 4.5:1, in both appearances;
   the domain palettes (components, rule blocks, Print Analysis, the
   search match, the joints) at least 12° of hue from the error's red

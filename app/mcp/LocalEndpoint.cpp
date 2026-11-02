@@ -15,6 +15,7 @@
 #include <cerrno>
 
 #include <signal.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #else
@@ -83,22 +84,28 @@ bool prepareDiscoveryDirectory(QString* error) {
     return fail(error, QStringLiteral("MCP discovery directory must be absolute"));
   }
   const QFileInfo existing(path);
-  if (existing.exists() || existing.isSymLink()) {
-    if (!existing.isDir() || !privatePath(existing)) {
-      return fail(error, QStringLiteral("MCP discovery directory must be a private directory owned by this user"));
+  bool created = false;
+  if (!existing.exists() && !existing.isSymLink()) {
+    if (!QDir().mkpath(existing.absolutePath())) {
+      return fail(error, QStringLiteral("Could not create the MCP discovery directory"));
     }
-    return true;
+    // Private from its first moment: two instances starting together both
+    // get here, and the one that loses the race must never find the other's
+    // directory still open to the parent's permissions (it refused it).
+#ifdef Q_OS_WIN
+    created = createPrivateWindowsDirectory(path);
+#else
+    created = ::mkdir(QFile::encodeName(path).constData(), S_IRWXU) == 0;
+#endif
   }
-  if (!QDir().mkpath(path)) {
+  const QFileInfo directory(path);
+  if (!directory.exists() && !directory.isSymLink()) {
     return fail(error, QStringLiteral("Could not create the MCP discovery directory"));
   }
-#ifdef Q_OS_WIN
-  const bool secured = secureWindowsEndpointPath(path, true);
-#else
-  const bool secured = QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
-#endif
-  if (!secured || !privatePath(QFileInfo(path))) {
-    return fail(error, QStringLiteral("Could not create a private MCP discovery directory"));
+  if (!directory.isDir() || !privatePath(directory)) {
+    return fail(error,
+                created ? QStringLiteral("Could not create a private MCP discovery directory")
+                        : QStringLiteral("MCP discovery directory must be a private directory owned by this user"));
   }
   return true;
 }

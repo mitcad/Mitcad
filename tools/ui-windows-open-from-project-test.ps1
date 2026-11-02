@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/projects app/files/MainWindowProjects.cpp app/files/MainWindowFiles.cpp
 # check-all sources: app/framework/AppSettings.cpp core/vcs tools/cli
+# check-all sources: app/browser/DesignPropertiesDialog.cpp app/browser/BrowserController.cpp
 # Input-driven Windows UI test of File > Open from Project (mitcad#530) in
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted); the
 # Linux counterpart is tools/ui-open-from-project-test.sh. Two projects of
@@ -15,7 +16,9 @@
 #   2. The search finds a design of the other project by part of its name
 #      as it is typed; Enter opens it.
 #   3. The next time it starts in that design's folder; with Read-only
-#      checked the search's design opens read-only.
+#      checked the search's design opens read-only, where Design
+#      Properties (F11, the test's own) opens read-only and its Statistics
+#      tab reads (mitcad#1149).
 #   4. After a restart it starts in the place shown last; Escape cancels.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-open-from-project-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -26,8 +29,8 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-# The command's shortcut of the test's own.
-Ui-Init $App $Out $QtBin @{ 'file.open_from_project' = 'F12' } -StepPause 0
+# The commands' shortcuts of the test's own.
+Ui-Init $App $Out $QtBin @{ 'file.open_from_project' = 'F12'; 'file.design_properties' = 'F11' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -157,6 +160,17 @@ Ui-Step 'open it (Enter)'                { Ui-Key 'Return' }
 Ui-ExpectNew "Project browser Open from Project: chose $shopLogged/parts/gear.mitcad (read-only)" 'chosen read-only'
 Ui-FocusMain
 Ui-ExpectNew "Open Read-Only: $shopLogged/parts/gear.mitcad" 'opened read-only' 20
+# Design Properties in the read-only window (mitcad#1149): the summary
+# without editing, the Statistics tab read.
+Ui-Mark
+Ui-Step 'Design Properties (F11)'        { Ui-Key 'F11' }
+Ui-ExpectNew 'Design Properties opened read-only: Created ' 'opened read-only, with its statistics'
+Ui-FocusDialog '^Design Properties$'
+Ui-Step 'the Statistics tab (Ctrl+Tab)'  { Ui-Key 'ctrl+Tab' }
+Ui-ExpectNew 'Design Properties tab: Statistics (Created ' 'the Statistics tab reads'
+Ui-Step 'close (Esc)'                    { Ui-Key 'Escape' }
+Ui-ExpectNew 'Design Properties closed' 'closed, nothing to apply'
+Ui-FocusMain
 Ui-StopApp
 
 Write-Host '--- 4. After a restart: the place shown last; Escape'

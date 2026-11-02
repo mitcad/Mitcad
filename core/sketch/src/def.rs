@@ -457,6 +457,26 @@ impl SketchOutput {
                 exact: true,
             });
         }
+        // A supporting face that is gone must not fall back to an
+        // unrelated sketch region sharing just the drawn half of its key.
+        let required: Vec<_> = key
+            .segments()
+            .map(|s| s.curve.clone())
+            .filter(|c| c.is_face_edge())
+            .collect();
+        if !required.is_empty() {
+            let available: BTreeSet<_> = self
+                .regions
+                .iter()
+                .flat_map(|r| &r.loops)
+                .flat_map(|l| &l.segments)
+                .flat_map(|s| s.key.curves())
+                .filter(|c| c.is_face_edge())
+                .collect();
+            if required.iter().any(|c| !available.contains(c)) {
+                return None;
+            }
+        }
         let pieces: Vec<&Region> = self
             .layout
             .pieces(key)
@@ -750,6 +770,22 @@ impl SketchDef {
             &self.entities,
             &self.constraints,
         ));
+        // With them, the offsets' helpers held in place and their own
+        // constraints that the corners imply left out (mitcad#1171).
+        let (anchors, left_out) = offset::independent(
+            &self.offsets,
+            &self.entities,
+            &self.constraints,
+            &self.dimensions,
+            &bindings[patterns..],
+        );
+        bindings.extend(anchors);
+        let restating: BTreeSet<ConstraintUid> = self
+            .offsets
+            .iter()
+            .filter(|o| !o.derived)
+            .map(|o| o.id)
+            .collect();
         let index = EntityIndex::new(&self.entities);
         let skip = derived_entities(&self.offsets, &index);
         self.check_derived(&skip).map_err(SolveError::new)?;
@@ -774,6 +810,8 @@ impl SketchDef {
             bindings: &bindings,
             skip: &skip,
             oriented,
+            left_out: &left_out,
+            restating: &restating,
         };
         let run = |extra: &Extra<'_>| {
             if goals.is_empty() {
@@ -790,12 +828,14 @@ impl SketchDef {
             // explanation at the failed solve's least-squares point counted
             // them, so that every constraint was named as contradicting.
             // Should the sketch solve without them, the failure is theirs
-            // and its own explanation stands.
+            // and its own explanation stands. (Without them, with every
+            // constraint of the offsets, mitcad#1171.)
             Err(error) if bindings.len() > patterns => {
                 let plain = Extra {
                     bindings: &bindings[..patterns],
                     skip: &skip,
                     oriented,
+                    ..Extra::default()
                 };
                 return Err(run(&plain).err().unwrap_or(error));
             }
@@ -817,9 +857,8 @@ impl SketchDef {
                 .chain(left_out.iter().map(|d| d.id))
                 .collect();
             let plain = Extra {
-                bindings: &[],
                 skip: &skip,
-                oriented: None,
+                ..Extra::default()
             };
             solved.status.unmet_inactive =
                 crate::solve::unmet(&at, &self.constraints, &left_out, &plain)
@@ -870,6 +909,13 @@ impl SketchDef {
         solved: &Solved,
         texts: &[TextOutline],
     ) -> (Vec<Region>, Layout) {
+        regions_and_layout(&self.region_curves_of(solved, texts))
+    }
+
+    /// Transient profile geometry, without adding entities to the sketch.
+    /// Supporting-face boundaries can be combined with these curves by
+    /// the model before finding the regions.
+    pub fn region_curves_of(&self, solved: &Solved, texts: &[TextOutline]) -> Vec<RegionCurve> {
         let mut curves: Vec<RegionCurve> = self
             .profile_curves()
             .filter_map(|e| Some(RegionCurve::new(e.id, solved.curves.get(&e.id)?.clone())))
@@ -877,7 +923,7 @@ impl SketchDef {
         for t in texts {
             curves.extend(t.region_curves());
         }
-        regions_and_layout(&curves)
+        curves
     }
 
     /// The texts laid out with the kernel's fonts, or with the outlines

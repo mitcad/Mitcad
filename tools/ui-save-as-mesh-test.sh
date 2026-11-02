@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files/MainWindowSaveAsMesh.cpp app/files/SaveAsMesh.cpp app/files/Print3d.cpp
 # check-all sources: app/MainWindowContextMenu.cpp app/browser core/model/src/exchange core/3mf geometry/io tools/cli
+# check-all sources: app/files/FileDialogs.cpp app/files/MainWindowFiles.cpp
 # Save As Mesh (mitcad#734) through the real UI, on a design that
 # mitcad-cli makes: Plate (F1.b0, 40 x 20 x 10, its top the print bed
 # face), Lid (F2.b0, 20 x 20 x 5 at x = 60, in its own component Lid:1)
@@ -19,6 +20,10 @@
 #   4. Skin's row: Save As Mesh… disabled with the reason.
 #   5. The view's context menu on Plate's top offers it too; the dialog is
 #      cancelled.
+#   6. File > Export remembers (mitcad#1164): Plate selected, the dialog
+#      starts as STEP named Plate in the last folder; 3MF with refinement
+#      High chosen and written. Lid selected next: the dialog starts with
+#      3MF, High and Lid's name, and Enter writes Lid.3mf.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-save-as-mesh-test.sh
@@ -181,5 +186,50 @@ ui_expect_new "Save As Mesh dialog opened: bodies Plate; print bed face availabl
 ui_mark
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Save As Mesh dialog cancelled" "nothing written"
+
+echo "--- 6. File > Export remembers the type and the refinement, names the body (mitcad#1164)"
+# export_dialog: File > Export (Alt+F, E) with what is selected.
+export_dialog() {
+  ui_focus_main
+  ui_key alt+f
+  ui_sync
+  ui_key e
+}
+ui_focus_main
+ui_step "Escape (clear the selection)"     ui_key Escape
+ui_mark
+ui_step "click Plate's row"                ui_click_logged "Browser Root/Bodies/Plate"
+ui_expect_new "Browser selected: Root/Bodies/Plate" "Plate selected"
+ui_mark
+ui_step "File > Export"                    export_dialog
+ui_expect_new ", type step-ap214, refinement medium, file $WORK/meshes/Plate.step" \
+  "STEP at first, the selected body's name in the last folder"
+ui_focus_dialog '^Export$'
+ui_mark
+ui_step "3MF (Alt+T, Down x7)"             ui_key alt+t Down Down Down Down Down Down Down
+ui_step "High (Alt+R, Down)"               ui_key alt+r Down
+ui_step "OK (Enter)"                       ui_key Return
+ui_focus_main
+ui_expect_new "Export dialog: 3MF for 3D printing (*.3mf) to $WORK/meshes/Plate.3mf, refinement high" \
+  "3MF with refinement High, the name's extension follows the type"
+ui_expect_new "Exported $WORK/meshes/Plate.3mf: 3mf, 1 body(ies)" "Plate written as 3MF" 30
+[ -s "$WORK/meshes/Plate.3mf" ] || ui_fail "no Plate.3mf"
+ui_expect_log "Browser Root/Lid:1/Bodies/Lid at" "the browser lists Lid's body in Lid:1"
+ui_mark
+ui_step "click Lid's row"                  ui_click_logged "Browser Root/Lid:1/Bodies/Lid"
+ui_expect_new "Browser selected: Root/Lid:1/Bodies/Lid" "Lid selected"
+ui_mark
+ui_step "File > Export again"              export_dialog
+ui_expect_new ", type 3mf, refinement high, file $WORK/meshes/Lid.3mf" \
+  "the next export starts with 3MF, High and the selected body's name"
+ui_focus_dialog '^Export$'
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_focus_main
+ui_expect_new "Export dialog: 3MF for 3D printing (*.3mf) to $WORK/meshes/Lid.3mf, refinement high" \
+  "taken as proposed"
+ui_expect_new "Exported $WORK/meshes/Lid.3mf: 3mf, 1 body(ies)" "Lid written as 3MF" 30
+[ -s "$WORK/meshes/Lid.3mf" ] || ui_fail "no Lid.3mf"
+echo "ok   both files written"
 
 ui_finish "UI save as mesh"

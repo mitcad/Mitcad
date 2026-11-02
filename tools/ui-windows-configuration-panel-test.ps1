@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser/ConfigurationBar.cpp app/browser/MainWindowConfigurationPanel.cpp
 # check-all sources: app/framework/FloatingLayout.cpp app/framework/GlassCard.cpp app/MainWindow.cpp tools/cli
+# check-all sources: app/projects/MainWindowProjectsPanel.cpp app/projects/ProjectsPanel.cpp
 # Input-driven Windows UI test of the Configuration panel and the left
 # column (mitcad#1020) in the build VM (tools/ui-windows-lib.ps1 says how the
 # input is posted), in the Floating layout, on two designs mitcad-cli makes:
@@ -14,7 +15,10 @@
 #     Configuration card to the browser's, remembered, the same after a
 #     restart; a double-click on it gives the automatic split again;
 #   - the Configuration card collapsed by its chevron: its height to the
-#     browser's card; expanded again.
+#     browser's card; expanded again;
+#   - the Projects card shown (an empty projects folder): its boundary
+#     with the Configuration card dragged 50 px down, past the Projects
+#     rows, moves no card (mitcad#1152); the same after a restart.
 # The Linux counterpart is tools/ui-configuration-panel-test.sh (also the
 # Docked layout).
 #
@@ -206,5 +210,97 @@ Ui-Mark
 Ui-Step 'expand the Configuration card'  { Ui-ClickLogged 'Configuration panel chevron' }
 Ui-ExpectNew 'Configuration panel: expanded, remembered' 'expanded, remembered'
 Wait-For 'the heights of the start again' { Heights-Are $config0 $browser0 }
+Ui-StopApp
+
+Write-Host '--- The Projects card above them: its boundary dragged past the rows moves nothing (mitcad#1152)'
+# The Projects panel shown, as for a user who turned it on, with an empty
+# projects folder: a short card at its content's height, above the
+# Configuration card, which is at its content's height too.
+$projects = Join-Path $work 'projects'
+New-Item -ItemType Directory -Force $projects | Out-Null
+$env:MITCAD_PROJECTS_DIR = $projects
+$ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
+$lines = @(if (Test-Path $ini) { Get-Content $ini })
+$kept = New-Object System.Collections.Generic.List[string]
+$group = ''
+foreach ($line in $lines) {
+  if ($line -match '^\[(.*)\]$') { $group = $Matches[1] }
+  elseif ($group -eq 'projects' -and $line -match '^panel=') { continue }
+  $kept.Add($line)
+  if ($line -eq '[projects]') { $kept.Add('panel=true') }
+}
+if (-not $kept.Contains('[projects]')) { $kept.Add('[projects]'); $kept.Add('panel=true') }
+Set-Content -Encoding ascii $ini $kept
+
+function Three-HeightsAre([int]$Projects, [int]$Config, [int]$Browser) {
+  $p = Card-Rect 'projectsDock'
+  return $null -ne $p -and (Near $p[3] $Projects) -and (Heights-Are $Config $Browser)
+}
+
+# Start-BinsBelowProjects: the design with options, Root/Bodies opened, with
+# the Projects card shown. The browser's card is then so low in the build
+# VM's 1024x768 desktop that Body1's row is just below it while Bodies is
+# open (Start-Bins waits for it in sight), so the rows' scroll range tells
+# whether the 30 body rows are shown. The Windows style scrolls the tree by
+# rows, not by pixels as on Linux: the range counts the rows out of sight
+# (31 open, 1 folded in the build VM).
+$OpenRange = 25
+function Scroll-Range {
+  $m = [regex]::Match("$(Ui-LastLineWith 'Browser scroll range ' -Start)", 'range (\d+)$')
+  if (-not $m.Success) { return -1 }
+  return [int]$m.Groups[1].Value
+}
+function Start-BinsBelowProjects([string]$Name) {
+  Ui-StartApp $Name @('--chrome=floating', '--open', $bins)
+  Ui-ExpectLog 'Configuration bar: SizeX = 42 mm' 'the bar shows the options' 20
+  Ui-ExpectLog 'Browser arrow Root/Bodies at' "the Bodies folder's arrow"
+  # The Projects card takes its rows' height when its folder is read, after
+  # the window shows: the cards below it move down then, and a click at the
+  # arrow's place logged before that missed it (the tree stayed folded).
+  Ui-ExpectLog 'Projects panel: 0 projects' 'the empty projects folder is read' 20
+  Ui-WaitIdle
+  Ui-Sync
+  Wait-For "the Bodies folder's arrow is logged in the browser's card" {
+    Inside (Logged-Place 'Browser arrow Root/Bodies') (Card-Rect 'browserDock')
+  }
+  if ((Scroll-Range) -lt $OpenRange) {
+    Ui-Mark
+    Ui-Step 'open Bodies'                { Ui-ClickLogged 'Browser arrow Root/Bodies' }
+    Wait-For 'the 30 body rows are shown' { (Scroll-Range) -ge $OpenRange }
+  }
+}
+
+Start-BinsBelowProjects 'projects'
+Ui-ExpectLog 'Projects panel at the start: shown (as chosen)' 'the Projects panel is shown'
+Wait-For 'the Projects card is above the Configuration card' {
+  $p = Card-Rect 'projectsDock'
+  $c = Card-Rect 'configurationDock'
+  $null -ne $p -and $null -ne $c -and $p[0] -eq $c[0] -and ($p[1] + $p[3]) -le $c[1]
+}
+Wait-For "the browser's card reaches the timeline's" { Browser-ReachesTimeline }
+Ui-WaitIdle
+Ui-Sync
+$projects0 = (Card-Rect 'projectsDock')[3]
+$config0 = (Card-Rect 'configurationDock')[3]
+$browser0 = (Card-Rect 'browserDock')[3]
+Write-Host "ok   at the start: Projects $projects0 px, Configuration $config0 px, browser $browser0 px high"
+$split = Ui-LoggedAt 'Floating split projectsDock/configurationDock'
+Ui-Mark
+Ui-Step 'drag the boundary 50 px down'   { Ui-Drag $split[0] $split[1] $split[0] ($split[1] + 50) }
+Ui-ExpectNew 'Floating split remembered: projectsDock ' 'the split is remembered'
+Ui-WaitIdle
+Ui-Sync
+# The Projects card is at its rows' height and the Configuration card at
+# its content's: the boundary stays, and the other one with it.
+if (-not (Three-HeightsAre $projects0 $config0 $browser0)) {
+  Ui-Fail "the cards moved: $(Ui-LastLineWith 'Floating cards:' -Start) (were Projects $projects0, Configuration $config0, browser $browser0)"
+}
+Write-Host 'ok   the three cards keep their heights'
+$remembered = Ui-LastMatch 'Floating split remembered: (.*)$'
+Ui-StopApp
+
+Start-BinsBelowProjects 'projects-again'
+Ui-ExpectLog "Floating split restored: $remembered" 'the split is read at the start' 20
+Wait-For 'the three cards are as high as before the drag' { Three-HeightsAre $projects0 $config0 $browser0 }
 
 Ui-Finish 'UI Windows configuration panel test'

@@ -21,6 +21,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -28,6 +29,7 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTimer>
@@ -44,6 +46,7 @@
 #include "../platform/NativeDialogs.hpp"
 #include "../materials/TextureBrowser.hpp"
 #include "../materials/TextureUse.hpp"
+#include "../print/AppearancePicker.hpp"
 #include "../print/PrintLibrary.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "DocumentHost.hpp"
@@ -52,6 +55,12 @@ namespace mitcad {
 namespace {
 
 constexpr int kIdRole = Qt::UserRole;
+// A row's group (mitcad#1133): the key of its section, on its heading and
+// its appearances; and the heading's title.
+constexpr int kGroupRole = Qt::UserRole + 1;
+constexpr int kTitleRole = Qt::UserRole + 2;
+// The collapsed groups' keys, comma-separated (mitcad#1133).
+const char* kCollapsedSetting = "appearances/collapsedGroups";
 constexpr int kPreviewSize = 120;
 constexpr double kDegree = 3.14159265358979323846 / 180.0;
 // The largest image the design file embeds (core/model's
@@ -125,7 +134,11 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_list->setIconSize(QSize(kIconSize, kIconSize));
   m_list->setSelectionMode(QAbstractItemView::SingleSelection);
   m_list->setMinimumWidth(300);
+  m_list->installEventFilter(this);
   m_pages->addWidget(m_list);
+  // The groups the user collapsed (mitcad#1133).
+  m_collapsed =
+      QSettings().value(QLatin1String(kCollapsedSetting)).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
   m_textures = new TextureBrowser;
   m_pages->addWidget(m_textures);
 
@@ -277,6 +290,27 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
       qDebug().noquote() << QStringLiteral("Appearance selected: %1").arg(id);
     }
     showCurrent();
+  });
+  // A click on a group's heading collapses or expands it (mitcad#1133).
+  connect(m_list, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
+    const QString key = item != nullptr && item->data(kIdRole).toString().isEmpty()
+                            ? item->data(kGroupRole).toString()
+                            : QString();
+    if (!key.isEmpty()) {
+      setGroupCollapsed(key, !m_collapsed.contains(key));
+      // The click took the current row: the appearance shown stays the
+      // current one, without scrolling away from the heading.
+      for (int i = 0; !m_current.isEmpty() && i < m_list->count(); ++i) {
+        if (m_list->item(i)->data(kIdRole).toString() == m_current) {
+          m_building = true;
+          m_list->setAutoScroll(false);
+          m_list->setCurrentRow(i);
+          m_list->setAutoScroll(true);
+          m_building = false;
+          break;
+        }
+      }
+    }
   });
   connect(m_texturePath, &QLineEdit::editingFinished, this, [this] {
     const Appearance* a = current();
@@ -495,18 +529,36 @@ void AppearanceDialog::filterList() {
   // The appearances whose name has every word typed, in the category.
   const QStringList words = m_search->text().toLower().split(QLatin1Char(' '), Qt::SkipEmptyParts);
   const int category = m_category->currentIndex(); // 0 all, 1 the library, 2 this design
+  // Each group's heading shows while one of its appearances matches, with
+  // the count of those, and ▾ open or ▸ collapsed (mitcad#1133); a
+  // collapsed group hides its rows.
   QListWidgetItem* header = nullptr;
-  bool headerUsed = false;
+  int matches = 0;
+  QStringList groups;
+  const auto closeGroup = [&header, &matches, &groups, this] {
+    if (header == nullptr) {
+      return;
+    }
+    const bool collapsed = m_collapsed.contains(header->data(kGroupRole).toString());
+    const QString title = header->data(kTitleRole).toString();
+    header->setText(QStringLiteral("%1 %2 (%3)")
+                        .arg(collapsed ? QStringLiteral("▸") : QStringLiteral("▾"), title)
+                        .arg(matches));
+    header->setToolTip(collapsed ? tr("Show the %1 appearances").arg(title)
+                                 : tr("Hide the %1 appearances").arg(title));
+    header->setHidden(matches == 0);
+    if (matches > 0) {
+      groups << QStringLiteral("%1 %2").arg(title).arg(matches);
+    }
+  };
   int shown = 0;
   for (int i = 0; i < m_list->count(); ++i) {
     QListWidgetItem* item = m_list->item(i);
     const QString id = item->data(kIdRole).toString();
     if (id.isEmpty()) {
-      if (header != nullptr) {
-        header->setHidden(!headerUsed);
-      }
+      closeGroup();
       header = item;
-      headerUsed = false;
+      matches = 0;
       continue;
     }
     const Appearance* a = findAppearance(m_appearances, id);
@@ -517,19 +569,76 @@ void AppearanceDialog::filterList() {
     } else if (a != nullptr && category == 2) {
       visible = visible && !a->library;
     }
-    item->setHidden(!visible);
-    headerUsed = headerUsed || visible;
+    item->setHidden(!visible || m_collapsed.contains(item->data(kGroupRole).toString()));
+    matches += visible ? 1 : 0;
     shown += visible ? 1 : 0;
   }
-  if (header != nullptr) {
-    header->setHidden(!headerUsed);
-  }
+  closeGroup();
   if (!words.isEmpty() || category != 0) {
     qDebug().noquote() << QStringLiteral("Appearances filtered \"%1\" (%2): %3 shown")
                               .arg(m_search->text().trimmed(), m_category->currentText())
                               .arg(shown);
+    qDebug().noquote() << QStringLiteral("Appearances groups shown: %1")
+                              .arg(groups.isEmpty() ? QStringLiteral("none") : groups.join(QStringLiteral(" | ")));
   }
   TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+void AppearanceDialog::setGroupCollapsed(const QString& key, bool collapsed) {
+  if (key.isEmpty() || m_collapsed.contains(key) == collapsed) {
+    return;
+  }
+  if (collapsed) {
+    m_collapsed << key;
+  } else {
+    m_collapsed.removeAll(key);
+  }
+  m_collapsed.sort();
+  QSettings settings;
+  if (m_collapsed.isEmpty()) {
+    settings.remove(QLatin1String(kCollapsedSetting));
+  } else {
+    settings.setValue(QLatin1String(kCollapsedSetting), m_collapsed.join(QLatin1Char(',')));
+  }
+  QString title = key;
+  for (int i = 0; i < m_list->count(); ++i) {
+    const QListWidgetItem* item = m_list->item(i);
+    if (item->data(kIdRole).toString().isEmpty() && item->data(kGroupRole).toString() == key) {
+      title = item->data(kTitleRole).toString();
+      break;
+    }
+  }
+  qDebug().noquote() << QStringLiteral("Appearances group %1 %2")
+                            .arg(title, collapsed ? QStringLiteral("collapsed") : QStringLiteral("expanded"));
+  filterList();
+}
+
+bool AppearanceDialog::eventFilter(QObject* watched, QEvent* event) {
+  // Space, Return, Left and Right on a group's heading (mitcad#1133).
+  if (watched == m_list && event->type() == QEvent::KeyPress) {
+    const QListWidgetItem* item = m_list->currentItem();
+    const QString key = item != nullptr && item->data(kIdRole).toString().isEmpty()
+                            ? item->data(kGroupRole).toString()
+                            : QString();
+    if (!key.isEmpty()) {
+      switch (static_cast<QKeyEvent*>(event)->key()) {
+      case Qt::Key_Space:
+      case Qt::Key_Return:
+      case Qt::Key_Enter:
+        setGroupCollapsed(key, !m_collapsed.contains(key));
+        return true;
+      case Qt::Key_Left:
+        setGroupCollapsed(key, true);
+        return true;
+      case Qt::Key_Right:
+        setGroupCollapsed(key, false);
+        return true;
+      default:
+        break;
+      }
+    }
+  }
+  return QDialog::eventFilter(watched, event);
 }
 
 void AppearanceDialog::useTexture(const TextureAsset& asset, const QString& resolution) {
@@ -716,31 +825,50 @@ void AppearanceDialog::refresh() {
   }
   m_building = true;
   m_list->clear();
-  const auto header = [this](const QString& text) {
-    auto* item = new QListWidgetItem(text, m_list);
-    item->setFlags(Qt::NoItemFlags);
+  // The design's own first, then the library's by class, each group under
+  // its heading (mitcad#1133; filterList writes the heading's text).
+  const auto header = [this](const AppearanceSection& group) {
+    auto* item = new QListWidgetItem(group.title, m_list);
+    item->setFlags(Qt::ItemIsEnabled); // clicked, never selected
+    item->setData(kGroupRole, group.key);
+    item->setData(kTitleRole, group.title);
+    item->setData(NativeControlIdentifierRole, QStringLiteral("appearance.group.") + group.key);
     QFont font = item->font();
     font.setBold(true);
     item->setFont(font);
   };
   const qreal ratio = devicePixelRatioF();
-  bool custom = false;
-  header(tr("Library"));
-  for (const Appearance& a : std::as_const(m_appearances)) {
-    if (!a.library && !custom) {
-      custom = true;
-      header(tr("This Design"));
+  const QVector<AppearanceSection> groups = appearanceSections(m_appearances, QString(), tr("This Design"));
+  QStringList members;
+  for (const AppearanceSection& group : groups) {
+    header(group);
+    QStringList ids;
+    for (const Appearance* a : group.appearances) {
+      auto* item =
+          new QListWidgetItem(QIcon(QPixmap::fromImage(appearanceSwatch(*a, kIconSize, ratio))), a->name, m_list);
+      item->setData(kIdRole, a->id);
+      item->setData(kGroupRole, group.key);
+      item->setData(NativeControlIdentifierRole, QStringLiteral("appearance.") + a->id);
+      if (!a->bodies.isEmpty() || !a->faces.isEmpty()) {
+        item->setToolTip(tr("Used by %n body(ies)", nullptr, static_cast<int>(a->bodies.size())) +
+                         (a->faces.isEmpty() ? QString()
+                                             : tr(" and %n face(s)", nullptr, static_cast<int>(a->faces.size()))));
+      }
+      ids << a->id;
     }
-    auto* item = new QListWidgetItem(QIcon(QPixmap::fromImage(appearanceSwatch(a, kIconSize, ratio))), a.name, m_list);
-    item->setData(kIdRole, a.id);
-    item->setData(NativeControlIdentifierRole, QStringLiteral("appearance.") + a.id);
-    if (!a.bodies.isEmpty() || !a.faces.isEmpty()) {
-      item->setToolTip(tr("Used by %n body(ies)", nullptr, static_cast<int>(a.bodies.size())) +
-                       (a.faces.isEmpty() ? QString()
-                                          : tr(" and %n face(s)", nullptr, static_cast<int>(a.faces.size()))));
-    }
+    members << QStringLiteral("Appearances group %1: %2").arg(group.title, ids.join(QStringLiteral(", ")));
   }
   m_building = false;
+  // The groups and their appearances, logged when they change.
+  const QString groupsLine = QStringLiteral("Appearances groups: %1").arg(appearanceSectionsText(groups));
+  const QString logged = groupsLine + QLatin1Char('\n') + members.join(QLatin1Char('\n'));
+  if (logged != m_loggedGroups) {
+    m_loggedGroups = logged;
+    qDebug().noquote() << groupsLine;
+    for (const QString& line : std::as_const(members)) {
+      qDebug().noquote() << line;
+    }
+  }
   // The search and the category (mitcad#315) hide what does not match.
   filterList();
   select(m_current);
@@ -1119,9 +1247,16 @@ void AppearanceDialog::logLayout() {
     const QRect rect = m_list->visualItemRect(item);
     // In sight in the list and in the body, which scrolls on a low screen.
     const QPoint inBody = m_list->viewport()->mapTo(m_bodyView, rect.center());
-    if (!id.isEmpty() && !item->isHidden() && m_list->viewport()->rect().contains(rect.center()) &&
-        m_bodyView->rect().contains(inBody)) {
+    if (item->isHidden() || !m_list->viewport()->rect().contains(rect.center()) ||
+        !m_bodyView->rect().contains(inBody)) {
+      continue;
+    }
+    if (!id.isEmpty()) {
       lines << QStringLiteral("Appearances item %1 at %2").arg(id, at(m_list->viewport(), rect.center()));
+    } else {
+      // A group's heading (mitcad#1133), by its key.
+      lines << QStringLiteral("Appearances group %1 at %2")
+                   .arg(item->data(kGroupRole).toString(), at(m_list->viewport(), rect.center()));
     }
   }
   // The browser (mitcad#315).

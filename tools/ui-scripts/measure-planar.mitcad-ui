@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Actual face picks on the shared synthetic stepped-shell CLI fixture.
+wait-idle
+command view.fit
+mark
+command inspect.measure
+expect-log '^Command Measure started'
+click-pick 'face F1.b0/F1:top'
+expect-log '^Measure Selection 1: 1 face'
+mark
+click-pick 'face F1.b0/F4:top'
+wait-log '^Panel Measure result values: Distance = 16 mm, Δx = 0 mm, Δy = 0 mm, Δz = 16 mm, Minimum distance = 21.932 mm'
+expect-log 'plane dimension from [(]-?0, -?0, 42[)] to [(]-?0, -?0, 58[)]'
+expect-log '^Preview measurement wire: displayed wireframe 1, transparency 0, topmost 1$'
+screenshot '${MITCAD_TEST_WORK}/measure-planar-gap.png'
+key Escape
+expect-log '^Command Measure cancelled$'
+mark
+command inspect.measure
+click-pick 'face F1.b0/F1:top'
+mark
+click-pick 'face F1.b0/F3:top'
+wait-log '^Panel Measure result values: Distance = 6 mm, Δx = 0 mm, Δy = 0 mm, Δz = 6 mm, Angle = 0°$'
+expect-no-log '^Panel Measure result values: .*Minimum distance'
+expect-log '^Preview measurement wire: displayed wireframe 1, transparency 0, topmost 1$'
+screenshot '${MITCAD_TEST_WORK}/measure-planar-overlap.png'
+key Escape
+expect-log '^Command Measure cancelled$'

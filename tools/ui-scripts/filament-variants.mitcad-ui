@@ -9,7 +9,7 @@
 # from before. The slicer's folder (MITCAD_TEST_SLICER_FOLDERS) is
 # filament-variants-slicer: Shop PLA's presets for Bench X 0.4, Bench X 0.6
 # and Bench Y 0.4.
-#   1. 3D Print's Materials row names the variant the printer picks, and
+#   1. 3D Print's Material row names the variant the printer picks, and
 #      another printer's when the printer changes (chosen in the Printer
 #      picker, mitcad#1108).
 #   2. Import Presets of Printers and Processes: Shop PLA is one row with
@@ -28,7 +28,7 @@ mark
 # 1. 3D Print: the variant of the design's printer, then of another.
 command make.print3d
 expect-log '^Command Send to Slicer started$'
-expect-log 'Panel Send to Slicer note materials: Bench.PLA.for.Bench.X,.0\.4.mm.nozzle'
+expect-log 'Panel Send to Slicer input material_1 shows: Bench PLA for Bench X, 0\.4 mm nozzle'
 # Printer opens its picker (mitcad#1108): the printer typed in its search,
 # Return chooses the first match.
 expect-log 'Panel Send to Slicer input printer at'
@@ -40,7 +40,7 @@ type 'Bench Y'
 expect-log 'Printer picker search: Bench Y, first Y .* 0\.4 mm nozzle'
 key Return
 expect-log 'Printer picker chose: Y .* 0\.4 mm nozzle'
-expect-log 'Panel Send to Slicer note materials: Bench.PLA.for.Bench.Y,.0\.4.mm.nozzle'
+expect-log 'Panel Send to Slicer input material_1 shows: Bench PLA for Bench Y, 0\.4 mm nozzle'
 focus-main
 mark
 click-logged 'Panel Send to Slicer input printer at'
@@ -50,7 +50,7 @@ type 'Bench X 0.4'
 expect-log 'Printer picker search: Bench X 0\.4, first X .* 0\.4 mm nozzle'
 key Return
 expect-log 'Printer picker chose: X .* 0\.4 mm nozzle'
-expect-log 'Panel Send to Slicer note materials: Bench.PLA.for.Bench.X,.0\.4.mm.nozzle'
+expect-log 'Panel Send to Slicer input material_1 shows: Bench PLA for Bench X, 0\.4 mm nozzle'
 focus-main
 key Escape
 expect-log '^Command Send to Slicer cancelled$'

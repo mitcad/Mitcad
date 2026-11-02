@@ -8,8 +8,8 @@
 #   1. Material > More... of the Lid's row in the browser (the Material
 #      tool, mitcad#1059) with the Lid picked, PETG HF chosen in its
 #      picker, OK: the Lid's default material.
-#   2. Send to Slicer, nothing selected, names the Lid's material as it is,
-#      not as a default, and the Box's default material.
+#   2. Send to Slicer, nothing selected: a row per filament (mitcad#1141),
+#      the Lid's material by its name, the Box's "No material: choose one".
 #   3. Send to a (fake) Bambu Studio: the log names each part's material
 #      and own values; the 3MF's project settings (unzipped) give the Lid's
 #      part a filament of its own with PETG HF's temperatures, the Box's
@@ -33,7 +33,6 @@ export TMPDIR=$WORK/tmp
 mkdir -p "$TMPDIR"
 FOLDER=$TMPDIR/mitcad-print/lid-box
 ARGS=$WORK/slicer-args.txt
-NBSP=$' '
 
 # expect_3mf file filter expected description: a jq filter on the project
 # settings of the 3MF sent.
@@ -97,17 +96,12 @@ echo "--- 2. Send to Slicer names the Lid's material"
 ui_step "Escape (clear the selection)"     ui_key Escape
 ui_mark
 ui_command "Send to Slicer"
-ui_expect_new "Panel Send to Slicer note materials: " "the Materials row"
-line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Panel Send to Slicer note materials: " | tail -1)
-case $line in
-  *"Default${NBSP}(PETG${NBSP}HF)"*) ui_fail "the Lid's material shows as a default: $line" ;;
-  *"PETG${NBSP}HF"*) echo "ok   PETG HF by its name" ;;
-  *) ui_fail "PETG HF is not named: $line" ;;
-esac
-case $line in
-  *"Default${NBSP}(Steel)"*) echo "ok   the Box prints with the default material" ;;
-  *) ui_fail "the Box's default material is not named: $line" ;;
-esac
+# A row per filament (mitcad#1141): the Lid's material by its name, the
+# Box without a material of its own said plainly, not as Steel chosen.
+ui_expect_new "3D Print materials: Filament 1: PETG HF (1 body) | Filament 2: No material: choose one (1 body)" \
+  "the Lid's material by its name, the Box's row asks for one"
+ui_expect_new "Panel Send to Slicer input material_1 shows: PETG HF (1 body)" "Filament 1's field"
+ui_expect_new "Panel Send to Slicer input material_2 shows: No material: choose one (1 body)" "Filament 2's field"
 
 echo "--- 3. Send to Bambu Studio: the Lid's filament carries PETG HF's values"
 rm -f "$ARGS"

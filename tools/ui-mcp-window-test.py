@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/mcp app/framework/TestDriverAssistant.cpp tools/cli
+# check-all sources: app/mcp app/framework/TestDriverAssistant.cpp app/framework/TitleBar.cpp tools/cli
 """Two actual GUI processes: activation-based MCP routing and window labels.
 
 Run only in the approved UI environment (Xvfb or a platform VM):
@@ -26,6 +26,20 @@ def private_record(path):
     subprocess.run(["icacls", str(path), "/setowner", user], capture_output=True, check=True)
     subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", user + ":F",
                     "/grant:r", "*S-1-5-18:F"], capture_output=True, check=True)
+
+
+def remove(path, seconds=10.0):
+    # On Windows a file the application is still reading cannot be removed
+    # (WinError 32); it lets go within moments, so try again until then.
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            path.unlink()
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
 
 
 def run(app, cli, output, binary_path=None):
@@ -61,7 +75,15 @@ def run(app, cli, output, binary_path=None):
                 if predicate():
                     return
                 time.sleep(0.05)
-            raise AssertionError("Timed out: " + what)
+            raise AssertionError("Timed out: " + what + " " + json.dumps(states()))
+
+        def activations(label):
+            # The driver's window-activate steps done so far. A window also
+            # records an activation when it is first shown, so its
+            # activated_at alone does not say that the step has run: under
+            # load the other window's step could come before it.
+            text = (out / (label + ".log")).read_text(encoding="utf-8", errors="replace")
+            return text.count("Assistant window activated")
 
         try:
             for label, title in (("first", "First design"), ("second", "Second design")):
@@ -95,10 +117,17 @@ def run(app, cli, output, binary_path=None):
                 guis.append((gui, log_path))
             wait(lambda: len(list(discovery.glob("*.json"))) == 2, "two real listeners")
             (work / "activate-first").touch()
-            wait(lambda: states().get("First design", {}).get("activated_at", 0) > 0, "first activation")
+            wait(lambda: activations("first") == 1 and
+                 states().get("First design", {}).get("activated_at", 0) > 0, "first activation")
             (work / "activate-second").touch()
-            wait(lambda: states().get("Second design", {}).get("activated_at", 0) >
+            wait(lambda: activations("second") == 1 and states().get("Second design", {}).get("activated_at", 0) >
                  states()["First design"]["activated_at"], "second activation")
+            # The windows are titled as a modified design ("Second design[*]
+            # - MitCad", mitcad#1149): the published title is the design's
+            # name alone, without Qt's "[*]" placeholder.
+            for title in states():
+                live.check("[*]" not in title and "MitCad" not in title,
+                           "A published title kept the raw window title: " + title)
             bridge = live.Bridge(cli, env, out / "bridge.stderr.log")
             bridges.append(bridge)
             response = bridge.request("initialize", {"protocolVersion": live.PROTOCOL, "capabilities": {},
@@ -109,9 +138,12 @@ def run(app, cli, output, binary_path=None):
             wait(lambda: states().get("Second design", {}).get("agents") == ["claude-code"], "selected window client")
             live.check(states()["First design"]["agents"] == [], "The other window displayed the agent")
             live.check("the window active last" in bridge.stderr(), "Bridge did not explain its choice on stderr")
+            live.check("(Second design)," in bridge.stderr() and "[*]" not in bridge.stderr(),
+                       "Bridge did not name the window by its design: " + bridge.stderr())
             # Activating another design does not retarget an initialized session.
             (work / "activate-again").touch()
-            wait(lambda: states()["First design"]["activated_at"] > states()["Second design"]["activated_at"],
+            wait(lambda: activations("first") == 2 and
+                 states()["First design"]["activated_at"] > states()["Second design"]["activated_at"],
                  "first window reactivation")
             live.check(bridge.tool("document_list", {})["documents"][0]["document"] == document,
                        "Activation moved the connected bridge to another design")
@@ -135,8 +167,8 @@ def run(app, cli, output, binary_path=None):
                 live.check("token" not in state_path.read_text(encoding="utf-8"), "Window metadata contains a token")
             wait(lambda: all("Assistant setup UI: window-stale" in path.read_text(encoding="utf-8", errors="replace")
                              for _, path in guis), "stale remote connection rejected")
-            stale.unlink()
-            metadata.unlink()
+            remove(stale)
+            remove(metadata)
             bridge.finish()
             (work / "finish").touch()
             for gui, log_path in guis:

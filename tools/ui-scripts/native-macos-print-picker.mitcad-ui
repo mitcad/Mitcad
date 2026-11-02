@@ -41,6 +41,31 @@ native-pointer-click libraryPickerList.item.Fine
 focus-main
 expect-log '^3D Print process: design/fine-acme-lab-x1-carbon-0-4-nozzle$'
 expect-undo-depth ${baseline} 2
+expect-native-present button_printer false
+expect-native-present button_process false
+native-pointer-click input_printer
+focus-dialog '^Printer Picker$'
+type 'Edit printers'
+expect-log '^Printer picker search: Edit printers, first Edit printers and processes…$'
+key Return
+focus-dialog '^Printers and Processes$'
+expect-log '^Printer picker chose: Edit printers and processes…$'
+expect-log '^3D Print printer edit: design/acme-lab-x1-carbon-0-4-nozzle$'
+expect-log '^Profile selected: printer Acme Lab X1 Carbon 0\.4 nozzle \(design\)$'
+native-pointer-button '^Close$'
+focus-main
+native-pointer-click input_process
+focus-dialog '^Process Picker$'
+type 'Edit printers'
+expect-log '^Process picker search: Edit printers, first Edit printers and processes…$'
+key Return
+focus-dialog '^Printers and Processes$'
+expect-log '^3D Print process edit: design/fine-acme-lab-x1-carbon-0-4-nozzle$'
+expect-log '^Profile selected: process Fine @ Acme Lab X1 Carbon 0\.4 nozzle \(design\)$'
+native-pointer-button '^Close$'
+focus-main
+expect-undo-depth ${baseline} 2
+expect-native-text input_printer '^X1 Carbon · 0.4 mm nozzle$'
 native-click commandCancel
 expect-log '^Command Send to Slicer cancelled$'
 command edit.undo

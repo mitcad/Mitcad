@@ -10,6 +10,7 @@
 
 #include <QJsonArray>
 
+#include "../framework/LengthUnits.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 
@@ -68,8 +69,10 @@ Choices rulesOf(const CommandContext& context) {
   return rules;
 }
 
-// The sizes a new feature of the chosen type starts with.
-void typeDefaults(CommandState& state) {
+// The sizes a new feature of the chosen type starts with, in the design's
+// unit (mitcad#1165).
+void typeDefaults(CommandState& state, const CommandContext& context) {
+  const QString unit = context.lengthUnit();
   const QString type = state.choice(QStringLiteral("type"));
   QVector<QPair<QString, QString>> values;
   if (type == QStringLiteral("boss")) {
@@ -86,7 +89,7 @@ void typeDefaults(CommandState& state) {
               {QStringLiteral("height"), QStringLiteral("3 mm")}};
   }
   for (const auto& [key, text] : values) {
-    state.setText(key, text);
+    state.setText(key, defaultLengthText(text, unit));
     state.setValue(key, std::numeric_limits<double>::quiet_NaN());
   }
 }
@@ -128,7 +131,7 @@ CommandDef plasticCommand(const CommandContext& context) {
   const auto length = [](const char* text) { return QString::fromLatin1(text); };
   def.inputs = {
       choiceInput(QStringLiteral("type"), QObject::tr("Type"), kTypes, QStringLiteral("boss"))
-          .withOnChange([](CommandState& state, const CommandContext&) { typeDefaults(state); }),
+          .withOnChange([](CommandState& state, const CommandContext& context) { typeDefaults(state, context); }),
       selectionInput(QStringLiteral("face"), QObject::tr("Face"), SelectKind::Face, 1, 1)
           .withTooltip(QObject::tr("The face it stands on (a click places it); for a lip or groove the rim face "
                                    "round the opening"))

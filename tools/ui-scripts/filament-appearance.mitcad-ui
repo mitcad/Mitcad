@@ -8,16 +8,25 @@
 # Translucent Blue. Pictures go to ${MITCAD_TEST_WORK}.
 #   1. Material ▸ PLA Basic ▸ Plastic - Black on Body1 and ▸ Translucent
 #      Blue on Body2 assign the material and the appearance, one undo step
-#      each; Body1's menu checks Plastic - Black; the root's Material ▸ PLA
+#      each; Body1's menu checks PLA Basic's submenu entry and Plastic -
+#      Black in it (mitcad#1149); the root's Material ▸ PLA
 #      Basic ▸ Translucent Blue sets its default material and appearance.
 #   2. The Materials window (mitcad#1083): a new FDM plastic with a long
 #      name shows in full in the list at the window's default size; PLA
 #      Basic's Class shows FDM Plastic, fixed by its print settings
 #      (mitcad#1102); General's list of its appearances, the default marked
 #      in its row; Add… opens the appearance library's popover, the FDM
-#      Plastic and then the General Plastic appearances first, Orange typed and
-#      Return adds Plastic - Orange; a row selected and Make Default;
-#      Remove; Make Default on Bright Green again.
+#      Plastic and then the General Plastic appearances first, then the
+#      others by class, Plastic - Orange typed and Return adds it; a row
+#      selected and Make Default; Remove; Make Default on Bright Green
+#      again.
+#   3. The Appearances window groups the appearances by class
+#      (mitcad#1133): This Design first, then Metal, General Plastic, FDM
+#      Plastic (the 15 filament colours), Resin and Other with their
+#      counts; a search narrows them to FDM Plastic; a click on Metal's
+#      heading collapses it (remembered) and another expands it.
+#   4. The Appearance tool's picker on Body1, of PLA Basic: FDM Plastic
+#      first, then General Plastic, then the others by class.
 wait-idle
 window-resize 1280 860
 focus-main
@@ -42,6 +51,8 @@ expect-undo-depth ${start} 2
 wait-idle
 mark
 context-menu-logged '^Browser Root/Bodies/Body1 at ' 'Material/PLA Basic/Plastic - Black'
+# Read from the menu's actions as shown (mitcad#1149): PLA Basic's submenu
+# entry itself is checked, as a plain entry would be.
 expect-log '^Context menu Material checked: PLA Basic$'
 expect-log '^Context menu Material PLA Basic checked: Plastic - Black$'
 expect-undo-depth ${start} 2
@@ -95,12 +106,14 @@ mark
 button '^Add$' materialAppearanceAdd
 expect-log '^Materials add appearance picker opened: [0-9]+ appearances$'
 # The material's class first, then General Plastic, then the design's
-# others and the library's (mitcad#1102): Bright Green is an FDM plastic's
-# look, Translucent Blue the design's other.
-expect-log '^Materials add appearance picker sections: FDM Plastic 1 \| General Plastic 6 \| This design 1 \| Library [0-9]+$'
+# others and the library's by class (mitcad#1102, mitcad#1133): Bright
+# Green is an FDM plastic's look beside the library's 15 filament colours,
+# Translucent Blue the design's other.
+expect-log '^Materials add appearance picker sections: FDM Plastic 16 \| General Plastic 6 \| This Design 1 \| Metal 8 \| Resin 3 \| Other 14$'
 focus-widget appearancePickerSearch
-type 'Orange'
-expect-log '^Materials add appearance picker search: Orange, 1 shown$'
+# Plastic - Orange, not Filament - Orange, which comes first.
+type 'Plastic - Orange'
+expect-log '^Materials add appearance picker search: Plastic - Orange, 1 shown$'
 screenshot-dialog '${MITCAD_TEST_WORK}/appearance-picker-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Return
 expect-log '^Materials add appearance picker chosen: Plastic - Orange \(plastic_orange\)$'
@@ -141,3 +154,66 @@ wait-idle
 screenshot-dialog '${MITCAD_TEST_WORK}/materials-appearances-after-${MITCAD_TEST_COLOR_SCHEME}.png'
 button '^Close$'
 focus-main
+
+# 3. The Appearances window grouped by class (mitcad#1133): the design's
+# own first, then the library's under Metal, General Plastic, FDM Plastic
+# (the filament colours), Resin and Other, each heading with its count.
+wait-idle
+mark
+command solid.appearances
+focus-dialog '^Appearances$'
+expect-log '^Appearances groups: This Design [0-9]+ \| Metal 8 \| General Plastic 6 \| FDM Plastic 15 \| Resin 3 \| Other 14$'
+expect-log '^Appearances group FDM Plastic: filament_white, filament_black, filament_grey, filament_silver, filament_red, filament_orange, filament_yellow, filament_green, filament_blue, filament_light_blue, filament_purple, filament_pink, filament_brown, filament_beige, filament_translucent$'
+expect-log '^Appearances group design at '
+expect-log '^Appearances group metal at '
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/appearances-groups-${MITCAD_TEST_COLOR_SCHEME}.png'
+# The search narrows the groups: only FDM Plastic has a match.
+mark
+focus-widget appearanceSearch
+type 'filament'
+expect-log '^Appearances filtered "filament" \(All Categories\): 15 shown$'
+expect-log '^Appearances groups shown: FDM Plastic 15$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/appearances-search-${MITCAD_TEST_COLOR_SCHEME}.png'
+# Cleared, every group again; Metal's heading collapses its group, which
+# is remembered, and expands it again.
+mark
+key ctrl+a
+key Delete
+expect-log '^Appearances group metal at '
+wait-idle
+mark
+dialog-click-logged '^Appearances group metal at '
+expect-log '^Appearances group Metal collapsed$'
+expect-setting appearances/collapsedGroups metal
+wait-idle
+mark
+dialog-click-logged '^Appearances group metal at '
+expect-log '^Appearances group Metal expanded$'
+wait-idle
+button '^Close$' appearanceClose
+focus-main
+
+# 4. The Appearance tool's picker on Body1, of PLA Basic (an FDM plastic,
+# mitcad#1133): FDM Plastic first (Bright Green and the filament colours),
+# then General Plastic, then the design's other and the library's others
+# by class.
+wait-idle
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+expect-log '^Browser selected: Root/Bodies/Body1$'
+command solid.appearance
+expect-log '^Panel Appearance input value at '
+wait-idle
+mark
+click-logged '^Panel Appearance input value at '
+expect-log '^Appearance picker sections: FDM Plastic 16 \| General Plastic 6 \| This Design [0-9]+ \| Metal 8 \| Resin 3 \| Other 14$'
+expect-log '^Appearance picker opened: '
+focus-dialog '^Appearance Picker$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/appearance-tool-picker-${MITCAD_TEST_COLOR_SCHEME}.png'
+key Escape
+focus-main
+key Escape
+wait-idle

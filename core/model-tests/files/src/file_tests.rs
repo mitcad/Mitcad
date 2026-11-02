@@ -626,8 +626,10 @@ fn malformed_files_are_rejected() {
 #[test]
 fn schema_errors_say_where() {
     type Edit = fn(&mut Value);
-    let cases: [(Edit, &str); 10] = [
-        (|v| v["extra"] = json!(1), "unknown field `extra`"),
+    // An unknown top-level field is ignored with a warning (mitcad#1132,
+    // `unknown_fields_tests.rs`); unknown fields inside the known ones are
+    // errors.
+    let cases: [(Edit, &str); 9] = [
         (
             |v| {
                 v.as_object_mut().unwrap().remove("features");

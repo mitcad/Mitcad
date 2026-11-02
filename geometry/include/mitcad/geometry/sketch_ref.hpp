@@ -47,6 +47,18 @@ struct ModelCurve {
 // lines, circles, ellipses and B-splines become B-splines.
 std::vector<ModelCurve> curves_of(const Shape& shape, const std::string& name);
 
+// A planar face's non-degenerate boundary edges, with canonical edge names
+// and curves in the body's model space (no occurrence transform). Includes
+// all pieces of a split face, omitting their shared internal edges, sorted
+// by name. Selecting just one piece retains its edge against another piece.
+// Empty when the face does not resolve; throws for a non-planar face or a
+// boundary edge without a topological name, as on an open surface body.
+struct NamedBoundaryCurve {
+  std::string name;
+  ModelCurve curve;
+};
+std::vector<NamedBoundaryCurve> face_boundary(const Shape& shape, const std::string& face);
+
 // FreeCAD import: the face ('F'), edge ('E') or vertex ('V') `index`
 // (0-based, TopExp order, which FreeCAD's Face<n>, Edge<n> and Vertex<n>
 // count from 1) with its name (empty when its faces have none) and its

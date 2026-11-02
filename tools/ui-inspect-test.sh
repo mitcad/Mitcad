@@ -8,7 +8,7 @@
 #   - Measure between a face and a vertex, and an edge's length; in sketch
 #     mode between two sketch lines (P9).
 #   - The offset of two parallel faces that do not overlap (mitcad#646):
-#     the panel's Offset line beside the closest distance.
+#     Distance is the plane gap, with the distinct Minimum distance below.
 #   - The radius and diameter of the rod's circular edge and of the sketch
 #     circle, alone and as either item of two (mitcad#194); a straight edge
 #     gets no diameter.
@@ -97,9 +97,10 @@ ui_step "measure (I)"                      ui_key i
 ui_step "pick Body2's top face"            ui_click_pick "face F4.b0/F4:end($R)"
 ui_expect_new "Inspect Measure: area 400" "its area"
 ui_step "pick the tall block's top face"   ui_click_pick "face F7.b0/F7:end($R)"
-ui_expect_new "Inspect Measure: area 400, area 100, distance 61.644" \
-  "the faces' nearest corners are 61.644 apart"
-ui_expect_new "offset 30" "their planes are 30 apart (the panel's Offset line)"
+ui_expect_new "Inspect Measure: area 400, area 100, distance 30, minimum distance 61.644" \
+  "the plane gap is the main distance; the nearest corners are 61.644 apart"
+ui_expect_new "Panel Measure result values: Distance = 30 mm, Δx = 0 mm, Δy = 0 mm, Δz = 30 mm, Minimum distance = 61.644 mm" \
+  "the main plane gap's Δx, Δy and Δz under it (mitcad#1167), then the distinct minimum"
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"
 

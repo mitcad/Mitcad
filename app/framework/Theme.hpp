@@ -204,6 +204,12 @@ QColor cardShadowColor(const QPalette& palette = QGuiApplication::palette());
 inline constexpr char kSemanticTextToneProperty[] = "semanticTextTone";
 void setErrorStyleSheet(QWidget* widget, const QString& format = QStringLiteral("color: %1;"));
 void setWarningStyleSheet(QWidget* widget, const QString& format = QStringLiteral("color: %1;"));
+// The same with a second role's colour where the format says %2, kept in
+// step with the palette too (mitcad#1152: a message box's fill, e.g.
+// "color: %1; background: %2;" with ColorRole::ErrorFill, kept the old
+// theme's fill under the new theme's text).
+void setErrorStyleSheet(QWidget* widget, const QString& format, ColorRole fill);
+void setWarningStyleSheet(QWidget* widget, const QString& format, ColorRole fill);
 // The same with any role's color (mitcad#1041), e.g. the bound state's text.
 void setRoleStyleSheet(QWidget* widget, ColorRole role, const QString& format = QStringLiteral("color: %1;"));
 

@@ -11,8 +11,9 @@
 #      rows show the imported ones, the line at the panel's end says where
 #      the materials went, Details… shows the whole report; Cancel keeps
 #      the import, one undo step.
-#   2. Edit of the Process row: Printers and Processes on the design's
-#      process; the search finds Sparse infill density by its plain name,
+#   2. Edit printers and processes…, the Process picker's last row (no
+#      pencil beside the row, mitcad#1134): Printers and Processes on the
+#      design's process; the search finds Sparse infill density by its plain name,
 #      250 % is refused at the field, 25 typed and Enter is one undo step;
 #      Save to My library puts it there. New › Process makes one in this
 #      design as its process at once; Delete asks first, naming what uses
@@ -23,8 +24,9 @@
 #      printer and process into the design, selected, with Details…; one
 #      undo takes the import back.
 #      3D Print's New process… twice makes Process 1 and Process 2,
-#      listed above a separator and the action; Up from the action skips
-#      the separator (mitcad#828); undone again.
+#      listed above a separator and the action, Edit printers and
+#      processes… after it; Up from the action skips the separator
+#      (mitcad#828); undone again.
 #   3. Edit Materials: Duplicate of PLA makes the user's own copy in this
 #      design (Save to offered), its name and its nozzle temperature
 #      typed; the Material tool (Material ▸ More… of Body1) assigns it.
@@ -224,11 +226,31 @@ ui_expect_new "Undo: Import Print Settings plate.3mf" "one undo step"
 ui_step "redo (Ctrl+Y)"                    ui_key ctrl+y
 ui_expect_new "Redo: Import Print Settings plate.3mf" "redone"
 
-echo "--- 2. Printers and Processes: Edit of the Process row"
+echo "--- 2. Printers and Processes: Edit printers and processes…, the Process picker's last row (mitcad#1134)"
+# open_process_picker: a click on Process opens its picker (mitcad#1108),
+# a window of its own that takes the keyboard.
+open_process_picker() {
+  ui_click_logged "Panel Send to Slicer input process"
+  for _ in $(seq 1 40); do
+    tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Process picker opened: " && break
+    sleep 0.2
+  done
+  ui_focus_dialog '^Process Picker$'
+}
 ui_mark
 ui_command "Send to Slicer"
-ui_expect_new "Panel Send to Slicer button_process at" "Edit beside the Process row"
-ui_step "Edit"                             ui_click_logged "Panel Send to Slicer button_process"
+ui_expect_new "Panel Send to Slicer input process at" "the Process row"
+ui_sync
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Panel Send to Slicer button_process at"; then
+  ui_fail "a button beside the Process row"
+fi
+echo "ok   no button beside the Process row"
+ui_step "Process"                          open_process_picker
+xdotool type --delay 40 -- "Edit printers"
+ui_expect_new "Process picker search: Edit printers, first Edit printers and processes…" "the search finds the row"
+ui_step "Edit printers and processes…"     ui_key Return
+ui_expect_new "Process picker chose: Edit printers and processes…" "the picker's row chosen"
+ui_expect_new "3D Print process edit: design/standard" "on the design's process"
 ui_expect_new "Printers and processes opened" "the window opened"
 ui_expect_new "Profile selected: process Standard (design)" "on the design's process"
 ui_expect_new "Profile Standard value fill_density = 15 %" "the infill density in its own unit"
@@ -343,23 +365,15 @@ ui_step "undo"                             ui_key ctrl+z
 ui_expect_new "Undo: Import Print Settings mount.3mf" "one undo step takes the import back"
 
 echo "--- 2e. 3D Print: New process… twice makes Process 1 and Process 2, the action below a separator (mitcad#828)"
-# new_process n: New process…, the box's last entry (Down past every
-# profile and the separator), makes Process n, the design's at once, and
-# opens it in Printers and Processes, which is closed again.
-# open_process_picker: a click on Process opens its picker (mitcad#1108),
-# a window of its own that takes the keyboard.
-open_process_picker() {
-  ui_click_logged "Panel Send to Slicer input process"
-  for _ in $(seq 1 40); do
-    tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Process picker opened: " && break
-    sleep 0.2
-  done
-  ui_focus_dialog '^Process Picker$'
-}
+# new_process n: New process…, the box's entry before the last (Down past
+# every profile and the separator to Edit printers and processes…, then
+# one up), makes Process n, the design's at once, and opens it in Printers
+# and Processes, which is closed again.
 new_process() {
   ui_mark
   ui_step "Process"                        open_process_picker
   xdotool key --delay 80 --repeat 30 Down
+  xdotool key --delay 80 Up
   ui_step "New process…"                   ui_key Return
   ui_expect_new "3D Print process new: Process $1 (" "New process… made Process $1"
   ui_expect_new "Printers and processes opened" "and opened it"
@@ -372,24 +386,27 @@ ui_command "Send to Slicer"
 ui_expect_new "Panel Send to Slicer input process at" "the Process row"
 new_process 1
 new_process 2
-# The box: the profiles by name, then a separator line, then the action.
+# The box: the profiles by name, then a separator line, then the actions,
+# Edit printers and processes… last (mitcad#1134).
 listed=""
 for _ in $(seq 1 30); do
   listed=$(grep -F "Panel Send to Slicer options process: " "$UI_LOG" | tail -1)
-  case "$listed" in *"| Process 1 | Process 2 "*"| --- | New process…") break ;; esac
+  case "$listed" in *"| Process 1 | Process 2 "*"| --- | New process… | Edit printers and processes…") break ;; esac
   sleep 0.2
 done
 case "$listed" in
-  *"| Process 1 | Process 2 "*"| --- | New process…") echo "ok   Process 1 and Process 2 listed above the separator and New process…" ;;
+  *"| Process 1 | Process 2 "*"| --- | New process… | Edit printers and processes…")
+    echo "ok   Process 1 and Process 2 listed above the separator, New process… and Edit printers and processes…" ;;
   *) ui_fail "the Process box lists '${listed#*: }'" ;;
 esac
 case "$listed" in *"New Process"*) ui_fail "a new profile named New Process: '${listed#*: }'" ;; esac
-# The keyboard skips the separator: one up from New process… is the last
-# profile, chosen at once (no window opens, no separator chosen).
+# The keyboard skips the separator: one up from New process… (two from
+# Edit printers and processes…, the last) is the last profile, chosen at
+# once (no window opens, no separator chosen).
 ui_mark
 open_process_picker
 xdotool key --delay 80 --repeat 30 Down
-xdotool key --delay 80 Up
+xdotool key --delay 80 --repeat 2 Up
 ui_key Return
 ui_focus_main
 ui_expect_new "3D Print process: " "one up from New process… is chosen at once"

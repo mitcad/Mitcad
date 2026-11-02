@@ -94,7 +94,12 @@ mod tests;
 mod spacing_tests;
 // Regions of many loops (mitcad#678).
 #[cfg(test)]
+mod face_bounded_tests;
+#[cfg(test)]
 mod regions_tests;
+// Offsets add an independent set of constraints (mitcad#1171).
+#[cfg(test)]
+mod offset_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;

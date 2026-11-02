@@ -102,6 +102,7 @@ use mitcad_model::datum::{
 use mitcad_model::exchange::{
     ExportBody, ExportFormat, ExportOptions, LengthUnit, ReadOptions, StepSchema,
 };
+use mitcad_model::topo::FaceBoundaryRef;
 use mitcad_model::{BodyKind, ImportBody};
 use mitcad_model::{
     BooleanOp, BooleanOutput, BooleanPiece, BoundingBox, Chamfer, ChamferSize, EdgeInfo, EdgeName,
@@ -1141,6 +1142,24 @@ impl Kernel for OcctKernel {
         let curves =
             sketch_ref::ffi::model_curves(occt(shape)?, &name.to_string()).map_err(failed)?;
         Ok(curves.iter().map(sketch_ref::curve).collect())
+    }
+
+    fn face_boundary(
+        &self,
+        shape: &Self::Shape,
+        face: &FaceName,
+    ) -> Result<Vec<(FaceBoundaryRef, mitcad_model::Curve3)>, KernelError> {
+        let curves =
+            sketch_ref::ffi::face_boundary(occt(shape)?, &face.to_string()).map_err(failed)?;
+        curves
+            .iter()
+            .map(|c| {
+                let name = c.name.parse::<FaceBoundaryRef>().map_err(|error| {
+                    KernelError::failed(format!("invalid face boundary edge name: {error}"))
+                })?;
+                Ok((name, sketch_ref::curve(&c.curve)))
+            })
+            .collect()
     }
 
     // FreeCAD import (.FCStd).

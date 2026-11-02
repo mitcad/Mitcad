@@ -176,6 +176,9 @@ private:
     Anchor anchor;
     Sizing sizing;
     int maxContent = -1; // maximumContentHeight, from the last layout
+    // A left card's height for its content (its column claim's want) in
+    // the last layout: a split drag stops there (mitcad#1152).
+    int want = -1;
   };
   struct Row {
     QPointer<QWidget> widget;

@@ -269,6 +269,9 @@ qt_add_executable(mitcad
   files/MainWindowPrint.cpp
   files/Print3d.cpp
   files/Print3d.hpp
+  # Use the open slicer window: the slicer processes it started (mitcad#1162).
+  files/SlicerProcesses.cpp
+  files/SlicerProcesses.hpp
   # Save As Mesh: a body's or a component's bodies to mesh files (mitcad#734).
   files/MainWindowSaveAsMesh.cpp
   files/SaveAsMesh.cpp
@@ -2326,4 +2329,56 @@ if(BUILD_TESTING)
   # The groups, the short names and the sources: plain Qt Core.
   target_sources(test_app PRIVATE tests/profile_picker_rows.cpp print/ProfilePickerRows.cpp
                  print/ProfilePickerRows.hpp)
+endif()
+
+# Send to Slicer's material rows (mitcad#1141, app/COMMANDS.md "Send to
+# Slicer"): a row per filament, each a searchable material picker with the
+# FDM plastics first, grouped by where the materials live.
+target_sources(mitcad PRIVATE print/SlicerMaterialRows.cpp print/SlicerMaterialRows.hpp)
+if(BUILD_TESTING)
+  # The picker's order and headings, the bodies' groups and the rows'
+  # texts: plain Qt Core.
+  target_sources(test_app PRIVATE tests/slicer_material_rows.cpp print/SlicerMaterialRows.cpp
+                 print/SlicerMaterialRows.hpp)
+endif()
+
+# The browser rows' item data roles (mitcad#1143): a BrowserPanel built from
+# a snapshot, each row's name colour and light bulb as its delegate gives
+# them (a transparent body, a body inside a hidden occurrence).
+if(BUILD_TESTING)
+  # Qt Widgets on the offscreen platform; the panel's own sources and the
+  # ones it calls that test_app has not had (the chrome style, the card it
+  # sits in, the panels' row style, the UI tests' sync, the bound icon).
+  target_sources(test_app PRIVATE tests/browser_roles.cpp browser/BrowserPanel.cpp browser/BrowserPanel.hpp
+                 framework/ChromeStyle.cpp framework/ChromeStyle.hpp framework/GlassCard.cpp
+                 framework/GlassCard.hpp framework/WindowStyle.cpp framework/WindowStyle.hpp
+                 framework/TestSync.cpp framework/TestSync.hpp browser/Bindings.cpp browser/Bindings.hpp)
+  if(WIN32)
+    # WindowStyle's frame and TestSync's sync key, as in the app.
+    target_sources(test_app PRIVATE platform/windows/WindowsFrame.cpp platform/windows/WindowsTestSync.cpp)
+    target_link_libraries(test_app PRIVATE dwmapi)
+  endif()
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The X keyboard mapping in framework/TestSync.cpp.
+    target_link_libraries(test_app PRIVATE X11::xcb)
+  endif()
+endif()
+
+# Save Component as Design's guard (mitcad#1148): the file chosen is not the
+# open design's own or a linked component's, however its path is spelled.
+target_sources(mitcad PRIVATE files/SaveComponentTarget.cpp files/SaveComponentTarget.hpp)
+if(BUILD_TESTING)
+  # A `..` path, a symbolic link, a name that differs in case: plain Qt Core.
+  target_sources(test_app PRIVATE tests/save_component_target.cpp files/SaveComponentTarget.cpp
+                 files/SaveComponentTarget.hpp)
+endif()
+
+# Lengths in the design's unit (mitcad#1165, app/COMMANDS.md "Length
+# defaults in the design's unit"): commands' length defaults as a sensible
+# value of the unit, the Browser's sheet-rules row and Measure's values.
+target_sources(mitcad PRIVATE framework/LengthUnits.cpp framework/LengthUnits.hpp)
+if(BUILD_TESTING)
+  # The conversion and the nice values of mm, cm, m, in and ft, the texts
+  # Measure shows: plain Qt Core. BrowserPanel.cpp in test_app calls it.
+  target_sources(test_app PRIVATE tests/length_units.cpp framework/LengthUnits.cpp framework/LengthUnits.hpp)
 endif()

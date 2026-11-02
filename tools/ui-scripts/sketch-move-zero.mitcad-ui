@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+# Sketch Move/Copy starts at 0 (mitcad#1163): opening it on a selected
+# line leaves the line where it is until a distance is typed. The wrapper
+# replaces ENTER_SKETCH with the frontend's ordinary timeline activation on
+# the fixture's Sketch1: two framing points at (-40, -30) and (40, 30) and
+# a free line from (-20, 0) to (20, 10). The clicks stay near the middle
+# of the fit, clear of the browser and the palette also in session 0's
+# 1024x768 window on Windows.
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+
+# The line selected, Move/Copy opened: X and Y Distance 0 mm, and the
+# preview that runs as the panel opens leaves the line where it is.
+mark
+sketch-click 0 5
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+expect-log '^Move/Copy Objects: 1 sketch curve'
+expect-input-text dx '^0 mm$'
+expect-input-text dy '^0 mm$'
+wait-log '^Preview Move/Copy: ok'
+wait-log '^Preview Move/Copy positions: p[0-9]+ \(-20\.000, 0\.000\), p[0-9]+ \(20\.000, 10\.000\)$'
+expect-no-log '^Preview Move/Copy positions: p[0-9]+ \(-10\.000'
+
+# A distance typed: the preview moves the line by it; OK keeps it.
+mark
+type-in '^Panel Move/Copy input dx at ' '10 mm'
+wait-log '^Preview Move/Copy positions: p[0-9]+ \(-10\.000, 0\.000\), p[0-9]+ \(30\.000, 10\.000\)$'
+mark
+key Return
+wait-log '^Added Move/Copy'
+
+# Opened again: the typed 10 mm is not kept, so the line stays where the
+# first move put it until a distance is typed again; Cancel.
+mark
+sketch-click 10 5
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+expect-input-text dx '^0 mm$'
+expect-input-text dy '^0 mm$'
+wait-log '^Preview Move/Copy: ok'
+wait-log '^Preview Move/Copy positions: p[0-9]+ \(-10\.000, 0\.000\), p[0-9]+ \(30\.000, 10\.000\)$'
+expect-no-log '^Preview Move/Copy positions: p[0-9]+ \(0\.000, 0\.000\)'
+key Escape
+screenshot '${MITCAD_TEST_WORK}/sketch-move-zero.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

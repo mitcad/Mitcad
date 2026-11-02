@@ -485,7 +485,9 @@ void resetToSize(const QString& id, CommandState& state, const CommandContext& m
 }
 
 InputDef sizedValueInput(const QString& id, const QString& label, ValueKind kind, const QString& defaultText) {
+  // The size table's value: kept as written in every design (mitcad#1165).
   return valueInput(id, label, kind, defaultText)
+      .withExactDefault()
       .withOnChange(markTyped(id))
       .withMark([id](const CommandState& state) { return sizeMark(state, id); },
                 [id](CommandState& state, const CommandContext& model) { resetToSize(id, state, model); });

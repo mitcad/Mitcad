@@ -767,6 +767,16 @@ const fn resin(entry: Entry) -> Entry {
     }
 }
 
+/// A filament's look (mitcad#1133): a printed thermoplastic, dielectric,
+/// the layered surface of a print rough, a little specular, no coat.
+const fn filament(id: &'static str, name: &'static str, rgb: u32) -> Entry {
+    Entry {
+        specular: 0.5,
+        class: MaterialClass::FdmPlastic,
+        ..dielectric(id, name, rgb, 0.55)
+    }
+}
+
 /// The library in the order the application lists it. The first sixteen
 /// were colours only before mitcad#46 and keep their colours.
 const ENTRIES: &[Entry] = &[
@@ -829,9 +839,30 @@ const ENTRIES: &[Entry] = &[
         ..dielectric("emissive_white", "Emissive - White", 0xffffff, 0.5)
     },
     // Resin prints (mitcad#1102).
-    resin(dielectric("resin_grey", "Resin - Grey", 0x8c8f93, 0.3)),
+    resin(dielectric("resin_grey", "Resin - Gray", 0x8c8f93, 0.3)),
     resin(dielectric("resin_white", "Resin - White", 0xf2f2ee, 0.3)),
     resin(clear("resin_clear", "Resin - Clear", 0xf2f6f6, 0.08)),
+    // The basic colours of generic filaments (mitcad#1133). Their ids are
+    // stable: never renamed.
+    filament("filament_white", "Filament - White", 0xf4f4f1),
+    filament("filament_black", "Filament - Black", 0x1f2022),
+    filament("filament_grey", "Filament - Gray", 0x8c8f92),
+    filament("filament_silver", "Filament - Silver", 0xb4b7ba),
+    filament("filament_red", "Filament - Red", 0xc8102e),
+    filament("filament_orange", "Filament - Orange", 0xf47b20),
+    filament("filament_yellow", "Filament - Yellow", 0xf5d130),
+    filament("filament_green", "Filament - Green", 0x2e9b48),
+    filament("filament_blue", "Filament - Blue", 0x1f58b5),
+    filament("filament_light_blue", "Filament - Light Blue", 0x6cb2e2),
+    filament("filament_purple", "Filament - Purple", 0x6b3fa0),
+    filament("filament_pink", "Filament - Pink", 0xf28cb6),
+    filament("filament_brown", "Filament - Brown", 0x7a4a2a),
+    filament("filament_beige", "Filament - Beige", 0xe5d4ae),
+    Entry {
+        transmission: 0.7,
+        roughness: 0.45,
+        ..filament("filament_translucent", "Filament - Translucent", 0xeef0ec)
+    },
 ];
 
 fn srgb(rgb: u32) -> Color {
@@ -865,9 +896,18 @@ pub fn library_appearance(id: &str) -> Option<&'static Appearance> {
     library().iter().find(|a| a.id == id)
 }
 
+/// Whether the library took `id` after designs could have used it for an
+/// appearance of their own (mitcad#1133): the `filament_*` colours. A
+/// design file reader gives such an appearance of a design a free id; one
+/// with another library id is refused, as no design could save it.
+pub fn library_id_taken_later(id: &str) -> bool {
+    id.starts_with("filament_") && library_appearance(id).is_some()
+}
+
 /// A library appearance's class by its id (mitcad#1102): Steel, Aluminum,
 /// Brass, Copper, Iron, Chrome and Gold are Metal, the Plastic ones General
-/// Plastic, the Resin ones Resin, the others Other. Never stored.
+/// Plastic, the Filament ones FDM Plastic (mitcad#1133), the Resin ones
+/// Resin, the others Other. Never stored.
 pub fn library_class(id: &str) -> Option<MaterialClass> {
     ENTRIES.iter().find(|e| e.id == id).map(|e| e.class)
 }
@@ -963,6 +1003,99 @@ mod tests {
         assert!(serde_json::to_value(&own).unwrap().get("class").is_none());
         let wood = serde_json::from_value::<AppearanceChange>(serde_json::json!({"class": "wood"}));
         assert!(wood.is_err());
+    }
+
+    /// mitcad#1133: the basic filament colours are FDM Plastic, each with
+    /// its documented colour (docs/user-guide.md, Appearances), and the
+    /// library from before them keeps its ids, order and colours.
+    #[test]
+    fn filament_colours_are_fdm_plastic_and_the_older_library_is_unchanged() {
+        const FILAMENTS: [(&str, &str, u32); 15] = [
+            ("filament_white", "Filament - White", 0xf4f4f1),
+            ("filament_black", "Filament - Black", 0x1f2022),
+            ("filament_grey", "Filament - Gray", 0x8c8f92),
+            ("filament_silver", "Filament - Silver", 0xb4b7ba),
+            ("filament_red", "Filament - Red", 0xc8102e),
+            ("filament_orange", "Filament - Orange", 0xf47b20),
+            ("filament_yellow", "Filament - Yellow", 0xf5d130),
+            ("filament_green", "Filament - Green", 0x2e9b48),
+            ("filament_blue", "Filament - Blue", 0x1f58b5),
+            ("filament_light_blue", "Filament - Light Blue", 0x6cb2e2),
+            ("filament_purple", "Filament - Purple", 0x6b3fa0),
+            ("filament_pink", "Filament - Pink", 0xf28cb6),
+            ("filament_brown", "Filament - Brown", 0x7a4a2a),
+            ("filament_beige", "Filament - Beige", 0xe5d4ae),
+            ("filament_translucent", "Filament - Translucent", 0xeef0ec),
+        ];
+        const BEFORE: [(&str, u32); 31] = [
+            ("steel_satin", 0xb4b8be),
+            ("aluminum_anodized", 0xd2d6dc),
+            ("brass_polished", 0xc8a84b),
+            ("copper", 0xc06c3e),
+            ("cast_iron", 0x5a5c60),
+            ("paint_red", 0xc82828),
+            ("paint_blue", 0x2a5cc0),
+            ("paint_green", 0x3a9a48),
+            ("paint_yellow", 0xe8c420),
+            ("paint_black", 0x2a2c30),
+            ("paint_white", 0xf0f0ec),
+            ("plastic_black", 0x34363a),
+            ("plastic_orange", 0xe87a1e),
+            ("rubber", 0x222224),
+            ("glass", 0xa8d0e0),
+            ("wood_oak", 0xb08450),
+            ("chrome", 0xc4c7ca),
+            ("gold_polished", 0xf5d27a),
+            ("steel_polished", 0xb8bcc2),
+            ("plastic_red", 0xc8201e),
+            ("plastic_white", 0xeeeeea),
+            ("plastic_blue", 0x1f4fb0),
+            ("plastic_clear", 0xf4f6f8),
+            ("glass_clear", 0xf6fafa),
+            ("glass_frosted", 0xf0f4f4),
+            ("wood_walnut", 0x6b4a30),
+            ("wood_maple", 0xd8b888),
+            ("emissive_white", 0xffffff),
+            ("resin_grey", 0x8c8f93),
+            ("resin_white", 0xf2f2ee),
+            ("resin_clear", 0xf2f6f6),
+        ];
+        // The older library first, in its order and with its colours.
+        assert!(library().len() >= BEFORE.len() + FILAMENTS.len());
+        for ((id, rgb), appearance) in BEFORE.iter().zip(library()) {
+            assert_eq!(appearance.id, *id);
+            assert_eq!(appearance.base_color, srgb(*rgb), "{id}");
+            assert_ne!(library_class(id), Some(MaterialClass::FdmPlastic), "{id}");
+            assert!(!library_id_taken_later(id), "{id}");
+        }
+        let filaments: Vec<&Appearance> = library()
+            .iter()
+            .filter(|a| a.id.starts_with("filament_"))
+            .collect();
+        assert_eq!(filaments.len(), FILAMENTS.len());
+        for (id, name, rgb) in FILAMENTS {
+            let a = library_appearance(id).unwrap_or_else(|| panic!("{id} is missing"));
+            assert_eq!(a.name, name);
+            assert_eq!(a.base_color, srgb(rgb), "{id}");
+            assert_eq!(library_class(id), Some(MaterialClass::FdmPlastic), "{id}");
+            assert!(library_id_taken_later(id), "{id}");
+            assert_eq!(a.material_class(), MaterialClass::FdmPlastic, "{id}");
+            // Never written: the id gives it.
+            assert_eq!(a.class, None, "{id}");
+            // A printed thermoplastic's look.
+            assert_eq!(a.metalness, 0.0, "{id}");
+            assert_eq!(a.coat, 0.0, "{id}");
+            assert_eq!(a.emission, 0.0, "{id}");
+            assert!(a.roughness >= 0.4 && a.roughness <= 0.7, "{id}");
+            assert!(a.specular > 0.0 && a.specular < 1.0, "{id}");
+            let translucent = id == "filament_translucent";
+            assert_eq!(a.transmission > 0.0, translucent, "{id}");
+        }
+        // Unique ids and names among the whole library.
+        for a in &filaments {
+            assert_eq!(library().iter().filter(|b| b.id == a.id).count(), 1);
+            assert_eq!(library().iter().filter(|b| b.name == a.name).count(), 1);
+        }
     }
 
     #[test]

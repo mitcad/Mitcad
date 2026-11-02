@@ -1,0 +1,183 @@
+# SPDX-License-Identifier: MIT
+# Qt input script; the macOS native wrapper substitutes the same collection
+# clicks with their stable native IDs. All geometry is synthetic.
+wait-idle
+key F6
+expect-model-bodies 4 4000
+capture-undo-depth baseline
+
+# Ctrl selects the exact three independent features, not just the anchor.
+click-logged '^Timeline A at '
+click-logged '^Timeline B at ' ctrl
+click-logged '^Timeline C at ' ctrl
+expect-selection 3 0
+focus-main
+focus-widget timelineStrip
+screenshot '${MITCAD_TEST_WORK}/selection-before-delete.png'
+mark
+key Delete
+wait-log '^Deleted A, B, C$'
+expect-model-bodies 1 1000
+screenshot '${MITCAD_TEST_WORK}/selection-after-delete.png'
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# Browser bodies map to features. Moving only keyboard focus into the
+# timeline must keep that exact external selection and delete all of it.
+click-logged '^Browser Root/Bodies/Body1 at '
+click-logged '^Browser Root/Bodies/Body2 at ' ctrl
+click-logged '^Browser Root/Bodies/Body3 at ' ctrl
+expect-log '^Timeline selected: F1, F2, F3$'
+focus-main
+focus-widget timelineStrip
+# NATIVE_BROWSER_MIRROR: focus must preserve the live native selection too.
+mark
+key Delete
+wait-log '^Deleted A, B, C$'
+expect-model-bodies 1 1000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# The same rows with the Browser itself retaining keyboard focus.
+click-logged '^Browser Root/Bodies/Body1 at '
+click-logged '^Browser Root/Bodies/Body2 at ' ctrl
+click-logged '^Browser Root/Bodies/Body3 at ' ctrl
+focus-main
+focus-widget modelBrowserTree
+mark
+key Delete
+wait-log '^Deleted A, B, C$'
+expect-model-bodies 1 1000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# Shift selects the inclusive run, and one Undo restores the whole run.
+click-logged '^Timeline A at '
+click-logged '^Timeline C at ' shift
+expect-selection 3 0
+focus-main
+focus-widget timelineStrip
+mark
+key Delete
+wait-log '^Deleted A, B, C$'
+expect-model-bodies 1 1000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# A selected row's context Delete uses the selection in both collections.
+click-logged '^Timeline A at '
+click-logged '^Timeline B at ' ctrl
+click-logged '^Timeline C at ' ctrl
+mark
+context-menu-logged '^Timeline B at ' 'Delete'
+wait-log '^Deleted A, B, C$'
+expect-model-bodies 1 1000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+click-logged '^Browser Root/Bodies/Body1 at '
+click-logged '^Browser Root/Bodies/Body2 at ' ctrl
+click-logged '^Browser Root/Bodies/Body3 at ' ctrl
+mark
+context-menu-logged '^Browser Root/Bodies/Body2 at ' 'Delete'
+wait-log '^Deleted A, B, C$'
+expect-model-bodies 1 1000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# Right-clicking an unselected feature replaces the selection for Delete.
+click-logged '^Timeline A at '
+click-logged '^Timeline B at ' ctrl
+mark
+context-menu-logged '^Timeline C at ' 'Delete'
+wait-log '^Deleted C$'
+expect-model-bodies 3 3000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# The view/window's unhandled Delete follows the same selected features.
+click-logged '^Timeline A at '
+click-logged '^Timeline B at ' ctrl
+focus-main
+focus-widget modelView
+mark
+key Delete
+wait-log '^Deleted A, B$'
+expect-model-bodies 2 2000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# A body's feature row and body row stand for one deletion target.
+click-logged '^Browser Root/Sketches/Source at '
+focus-main
+focus-widget modelBrowserTree
+key Right
+click-logged '^Browser Root/Bodies/Body4 at '
+click-logged '^Browser Root/Sketches/Source/Dependent at ' ctrl
+focus-main
+focus-widget modelBrowserTree
+mark
+key Delete
+wait-log '^Deleted Dependent$'
+expect-model-bodies 3 3000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# The union of dependents is asked once. Cancel changes neither geometry
+# nor undo depth; Delete All commits the two roots and dependent together.
+click-logged '^Timeline C at '
+click-logged '^Timeline Source at ' ctrl
+focus-main
+focus-widget timelineStrip
+mark
+key Delete
+wait-log '^Delete C, Source: also Dependent\?$'
+focus-dialog '^Delete$'
+screenshot '${MITCAD_TEST_WORK}/dependents-question.png'
+key Escape
+expect-log '^Delete C, Source cancelled$'
+focus-main
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+focus-main
+focus-widget timelineStrip
+mark
+key Delete
+wait-log '^Delete C, Source: also Dependent\?$'
+focus-dialog '^Delete$'
+key Return
+expect-log '^Deleted C, Source, Dependent$'
+focus-main
+expect-model-bodies 2 2000
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+
+# An origin row cannot be deleted and is named without changing the model.
+click-logged '^Browser Root/Origin at '
+focus-main
+focus-widget modelBrowserTree
+mark
+key Delete
+wait-log '^Delete skipped: Origin$'
+expect-model-bodies 4 4000
+expect-undo-depth ${baseline} 0
+screenshot '${MITCAD_TEST_WORK}/delete-selection.png'

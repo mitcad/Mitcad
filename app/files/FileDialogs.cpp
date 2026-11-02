@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "FileDialogs.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <initializer_list>
 #include <utility>
@@ -65,6 +66,15 @@ const ExportType kTypes[] = {
     // One self-contained page with the web viewer and the design (mitcad#423).
     {"html", "", "html", QT_TRANSLATE_NOOP("Export", "Web page (*.html)")},
 };
+
+constexpr int kTypeCount = static_cast<int>(sizeof(kTypes) / sizeof(kTypes[0]));
+constexpr char kExportGroup[] = "export";
+const QStringList kRefinements{QStringLiteral("low"), QStringLiteral("medium"), QStringLiteral("high")};
+
+bool isMeshType(const QString& format) {
+  return format == QStringLiteral("stl") || format == QStringLiteral("obj") || format == QStringLiteral("3mf") ||
+         format == QStringLiteral("usdz") || format == QStringLiteral("html");
+}
 
 // The type a file's extension asks for (the first of a format), or -1.
 int typeOfSuffix(const QString& suffix, int current) {
@@ -140,9 +150,49 @@ QDialogButtonBox* okCancel(QDialog& dialog) {
 
 } // namespace
 
-std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int selectedBodies,
+QString exportTypeKey(int index) {
+  if (index < 0 || index >= kTypeCount) {
+    return QString();
+  }
+  const ExportType& entry = kTypes[index];
+  QString key = QLatin1String(entry.format);
+  if (entry.schema[0] != '\0') {
+    key += QLatin1Char('-') + QLatin1String(entry.schema);
+  }
+  return key;
+}
+
+int exportStartType(const QString& remembered, bool sketch, bool sketches) {
+  int dxf = 0;
+  int start = 0;
+  for (int i = 0; i < kTypeCount; ++i) {
+    if (QLatin1String(kTypes[i].format) == QLatin1String("dxf")) {
+      dxf = i;
+    }
+    if (exportTypeKey(i) == remembered) {
+      start = i;
+    }
+  }
+  if (sketch) {
+    return dxf;
+  }
+  return start == dxf && !sketches ? 0 : start;
+}
+
+std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
                                       const QString& sketch, bool occurrences) {
+  // The last export's choices (mitcad#1164).
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kExportGroup));
+  const int start = exportStartType(settings.value(QStringLiteral("type")).toString(), !sketch.isEmpty(),
+                                    !sketches.isEmpty());
+  const int refined = std::max(0, static_cast<int>(kRefinements.indexOf(
+                                      settings.value(QStringLiteral("refinement"), QStringLiteral("medium")).toString())));
+  const bool stlText = settings.value(QStringLiteral("stlText"), false).toBool();
+  settings.endGroup();
+  const QString path = stem + QLatin1Char('.') + QLatin1String(kTypes[start].suffix);
+
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Export"));
   auto* layout = new QVBoxLayout(&dialog);
@@ -161,7 +211,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int 
   for (const ExportType& entry : kTypes) {
     type->addItem(QCoreApplication::translate("Export", entry.label));
   }
-  form->addRow(QObject::tr("Type:"), type);
+  form->addRow(QObject::tr("&Type:"), type);
   auto* bodies = new QComboBox;
   bodies->addItem(QObject::tr("All bodies"));
   if (selectedBodies > 0) {
@@ -181,10 +231,11 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int 
   form->addRow(QObject::tr("Unit:"), unit);
   auto* refinement = new QComboBox;
   refinement->addItems({QObject::tr("Low"), QObject::tr("Medium"), QObject::tr("High")});
-  refinement->setCurrentIndex(1);
-  form->addRow(QObject::tr("Refinement:"), refinement);
+  refinement->setCurrentIndex(refined);
+  form->addRow(QObject::tr("&Refinement:"), refinement);
   auto* stlFormat = new QComboBox;
   stlFormat->addItems({QObject::tr("Binary"), QObject::tr("Text (ASCII)")});
+  stlFormat->setCurrentIndex(stlText ? 1 : 0);
   form->addRow(QObject::tr("STL format:"), stlFormat);
   auto* sketchBox = new QComboBox;
   int current = 0;
@@ -205,9 +256,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int 
   // type the extension typed.
   const auto showRows = [=] {
     const QString format = QLatin1String(kTypes[type->currentIndex()].format);
-    const bool mesh = format == QStringLiteral("stl") || format == QStringLiteral("obj") ||
-                      format == QStringLiteral("3mf") || format == QStringLiteral("usdz") ||
-                      format == QStringLiteral("html");
+    const bool mesh = isMeshType(format);
     // A web page shows the design as the view does: every visible body
     // where the design places it.
     const bool page = format == QStringLiteral("html");
@@ -241,15 +290,15 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int 
       file->setText(chosen);
     }
   });
-  const int start = typeOfSuffix(QFileInfo(path).suffix(), 0);
-  type->setCurrentIndex(start >= 0 ? start : 0);
+  type->setCurrentIndex(start);
   showRows();
   file->setFocus();
   file->selectAll();
   dialog.resize(480, dialog.sizeHint().height());
-  qDebug().noquote() << QStringLiteral("Export dialog opened: unit %1%2")
-                            .arg(unitOffer(unit), occurrences ? QStringLiteral(", coordinates design (design | component)")
-                                                              : QString());
+  qDebug().noquote() << QStringLiteral("Export dialog opened: unit %1%2, type %3, refinement %4, file %5")
+                            .arg(unitOffer(unit),
+                                 occurrences ? QStringLiteral(", coordinates design (design | component)") : QString(),
+                                 exportTypeKey(start), kRefinements[refined], path);
 
   prepareModal(&dialog);
   while (execDialog(&dialog) == QDialog::Accepted) {
@@ -259,8 +308,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int 
     choice.format = QLatin1String(chosen.format);
     choice.schema = QLatin1String(chosen.schema);
     choice.unit = unit->currentText();
-    choice.refinement = QStringList{QStringLiteral("low"), QStringLiteral("medium"),
-                                    QStringLiteral("high")}[refinement->currentIndex()];
+    choice.refinement = kRefinements[refinement->currentIndex()];
     choice.ascii = stlFormat->currentIndex() == 1;
     choice.selectedOnly = bodies->currentIndex() == 1;
     choice.sketch = sketchBox->currentData().toString();
@@ -284,8 +332,21 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& path, int 
             QMessageBox::Yes) {
       continue;
     }
-    qDebug().noquote() << QStringLiteral("Export dialog: %1 to %2")
-                              .arg(QCoreApplication::translate("Export", chosen.label), choice.path);
+    qDebug().noquote() << QStringLiteral("Export dialog: %1 to %2%3")
+                              .arg(QCoreApplication::translate("Export", chosen.label), choice.path,
+                                   isMeshType(choice.format)
+                                       ? QStringLiteral(", refinement %1").arg(choice.refinement)
+                                       : QString());
+    // Remembered for the next export (mitcad#1164); a sketch's DXF keeps
+    // the type the bodies were exported as.
+    settings.beginGroup(QLatin1String(kExportGroup));
+    if (choice.format != QStringLiteral("dxf")) {
+      settings.setValue(QStringLiteral("type"), exportTypeKey(type->currentIndex()));
+    }
+    settings.setValue(QStringLiteral("refinement"), choice.refinement);
+    settings.setValue(QStringLiteral("stlText"), choice.ascii);
+    settings.endGroup();
+    settings.sync();
     return choice;
   }
   return std::nullopt;

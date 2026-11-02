@@ -46,6 +46,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QElapsedTimer;
 class QLabel;
+class QKeyEvent;
 class QMenu;
 class QResizeEvent;
 class QStackedWidget;
@@ -360,6 +361,7 @@ public:
   void calibrateImageReference(const QString& name) override;
 
 protected:
+  void keyPressEvent(QKeyEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
   // Files dropped on the window are opened or imported (U6).
   void dragEnterEvent(QDragEnterEvent* event) override;
@@ -1097,6 +1099,15 @@ private:
   // (unchanged since the document was opened, or Overwrite chosen), false
   // for Save As instead, nothing to cancel.
   std::optional<bool> askOverwriteChanged();
+  // A design a newer MitCad wrote (mitcad#1132, files/MainWindowFiles.cpp):
+  // the top-level fields this MitCad did not read (all, or with a path
+  // those saving there drops), the warning on opening it, and the question
+  // before Save writes over its file: true to write (nothing to drop, or
+  // Save and Drop Them chosen), false for Save As instead, nothing to
+  // cancel. An agent's save (MCP) is refused instead of asked.
+  QStringList unknownFields(const QString& path) const;
+  void warnUnknownFields();
+  std::optional<bool> askDropUnknownFields(const QString& path);
 
   // Component libraries (mitcad#64, mitcad#63, files/MainWindowLibraries.cpp).
   void registerLibraryCommands();
@@ -1186,6 +1197,7 @@ private:
   void logPickPlaces(SelectFilter filter, bool again = false);
   SelectFilter m_pickPlacesFilter;
   bool m_pickPlacesQueued = false;
+  bool m_pickPlacesDeferred = false;
   QAction* m_cutLabelsAction = nullptr;
   // Esc (cancel) while a drawing is open and the keyboard is with no other
   // control: the drawing's Esc; false when it is not the drawing's.
@@ -1240,6 +1252,10 @@ private:
   // What Save As Mesh writes for the items (mitcad#734,
   // files/MainWindowSaveAsMesh.cpp).
   MeshPlan saveAsMeshPlan(const Selection& items) const;
+  // The name File › Export proposes for the items, without the extension,
+  // by Save As Mesh's rule (mitcad#1164): one body's, one component's, else
+  // the design's.
+  QString exportName(const Selection& items) const;
   // The bodies and faces the context menu's Appearance… gives the
   // Appearance tool (mitcad#1059): those the selection stands for (bodies,
   // faces, and the bodies of edges and vertices), each once.

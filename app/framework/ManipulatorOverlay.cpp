@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include <QCoreApplication>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -170,6 +169,47 @@ void ManipulatorOverlay::publishBoxes() {
     }
   }
   m_viewer.setHandleBoxes(boxes);
+  // Nor where a press stays with a handle (mitcad#1105), as handleAt()
+  // measures: within kGrabPixels of an arrow, of a ring or of a knob's edge.
+  // None once hidden (the command ended; deleted later).
+  std::vector<OcctViewer::HandleArea> areas;
+  for (const Handle& handle : m_handles) {
+    if (isHidden()) {
+      break;
+    }
+    if (handle.manipulator.kind == Manipulator::Kind::Marker) {
+      continue;
+    }
+    Drawn drawn;
+    try {
+      drawn = draw(handle);
+    } catch (const std::exception&) {
+      continue; // degenerate: not drawn, takes nothing
+    }
+    if (!drawn.valid) {
+      continue;
+    }
+    OcctViewer::HandleArea knob;
+    knob.line.append(drawn.handle);
+    if (handle.manipulator.kind == Manipulator::Kind::Toggle) {
+      knob.reach = kGrabPixels + 4.0;
+      areas.push_back(knob);
+    } else if (handle.manipulator.kind == Manipulator::Kind::Arrow) {
+      knob.line.append(drawn.tip); // the whole arrow
+      knob.reach = kGrabPixels;
+      areas.push_back(knob);
+    } else {
+      knob.reach = kGrabPixels + 3.0; // a ring's knob
+      areas.push_back(knob);
+      if (drawn.ring.size() > 1) {
+        OcctViewer::HandleArea ring;
+        ring.line = drawn.ring;
+        ring.reach = kGrabPixels;
+        areas.push_back(ring);
+      }
+    }
+  }
+  m_viewer.setHandleAreas(this, std::move(areas));
 }
 
 QStringList ManipulatorOverlay::boxKeys() const {
@@ -438,7 +478,7 @@ double ManipulatorOverlay::ringAngle(const Handle& handle, const QPointF& positi
 }
 
 bool ManipulatorOverlay::eventFilter(QObject* watched, QEvent* event) {
-  if (watched != &m_viewer || m_forwarding) {
+  if (watched != &m_viewer) {
     return QWidget::eventFilter(watched, event);
   }
   // An exception must not leave a Qt event handler: a handle that cannot
@@ -491,10 +531,10 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
     if (at < 0) {
       return false;
     }
-    // A drag once the mouse moves; a click goes on to the view as a pick.
+    // A drag once the mouse moves; a click stays with the handle and does
+    // nothing (mitcad#1105).
     m_pending = at;
     m_pressAt = e->position();
-    m_pressModifiers = e->modifiers();
     m_visualValue.reset();
     m_dragMoves = m_semanticChanges = m_visualUpdates = m_dragPaints = 0;
     return true;
@@ -577,16 +617,14 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
       return true;
     }
     if (m_pending >= 0) {
-      // Not dragged: the view gets the click.
+      // Not dragged: the press was meant for the handle, so the click does
+      // nothing. It never goes on to the view, where it would pick what is
+      // under the handle or turn the view on the orientation cube
+      // (mitcad#1105).
+      const QString key = m_handles[static_cast<std::size_t>(m_pending)].key;
       m_pending = -1;
-      m_forwarding = true;
-      QMouseEvent press(QEvent::MouseButtonPress, m_pressAt, e->globalPosition(), Qt::LeftButton,
-                        Qt::LeftButton, m_pressModifiers);
-      QCoreApplication::sendEvent(&m_viewer, &press);
-      QMouseEvent release(QEvent::MouseButtonRelease, e->position(), e->globalPosition(), Qt::LeftButton,
-                          Qt::NoButton, e->modifiers());
-      QCoreApplication::sendEvent(&m_viewer, &release);
-      m_forwarding = false;
+      qDebug().noquote() << QStringLiteral("Manipulator %1 %2 clicked without a drag: kept by the handle")
+                                .arg(m_command, key);
       return true;
     }
     if (m_drag < 0) {

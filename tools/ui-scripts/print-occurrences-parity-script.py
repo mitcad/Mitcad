@@ -97,7 +97,7 @@ def send(number, selected, count, on_faces, answer=None):
     elif on_faces:
         status += f" {on_faces} " + ("body on its print bed face." if on_faces == 1 else "bodies on their print bed faces.")
     if native:
-        add(f"expect-native-text native.status {shlex.quote('^' + re.escape(status) + '$')}")
+        add(f"expect-native-text native.messageBand.text {shlex.quote('^' + re.escape(status) + '$')}")
     else:
         add(f"expect-widget-property messageBand message {shlex.quote(status)}")
     add("expect-model-bodies 1 1000", f"expect-undo-depth ${{beforeSend{number}}} 0",
@@ -115,7 +115,16 @@ if native:
 # Only Pin:2's body is selected. The other occurrence must not be exported.
 select("body:F1.b0", "O1/O3", "Pair:1/Pin:2/Bodies/Pin")
 send(1, "selected", 1, 0)
-add("menu 'File/Save'", "expect-log '^Saved '", "mark",
+# Exporting occurrences does not edit the document. The wrapper compares
+# both complete saved fixtures after the four sends and cancellation.
+def saved_unchanged():
+    if native:
+        add("expect-native-enabled native.quickAccess.file.save false")
+    else:
+        add("expect-widget-property quickAccess_file.save enabled false")
+
+saved_unchanged()
+add("mark",
     "open-file '${MITCAD_TEST_WORK}/bed.mitcad'", "wait-idle", "focus-main", "key Escape",
     "expect-selection 0 0", "expect-model-bodies 1 1000")
 
@@ -139,6 +148,7 @@ send(4, "selected", 2, 0, "escape")
 # together onto that face, remaining one assembled build object.
 select("component", "O1", "Pair:1")
 send(4, "selected", 2, 1, "face")
-add("menu 'File/Save'", "expect-log '^Saved '",
+saved_unchanged()
+add(
     "expect-never 'Recompute failed|Native Mac canvas[:]|OCCT view event failed'")
 print("\n".join(lines))

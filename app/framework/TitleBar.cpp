@@ -447,13 +447,16 @@ bool TitleBar::eventFilter(QObject* watched, QEvent* event) {
 }
 
 QString TitleBar::documentTitle() const {
-  QString title = window()->windowTitle();
-  title.remove(QStringLiteral("[*]"));
-  const int dash = title.lastIndexOf(QStringLiteral(" - "));
+  return documentTitleOf(window()->windowTitle());
+}
+
+QString TitleBar::documentTitleOf(QString windowTitle) {
+  windowTitle.remove(QStringLiteral("[*]"));
+  const qsizetype dash = windowTitle.lastIndexOf(QStringLiteral(" - "));
   if (dash > 0) {
-    title.truncate(dash);
+    windowTitle.truncate(dash);
   }
-  return title;
+  return windowTitle;
 }
 
 TitleBar::TitleText TitleBar::titleText() const {

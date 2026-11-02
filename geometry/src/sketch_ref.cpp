@@ -3,10 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepBndLib.hxx>
 #include <BRep_Tool.hxx>
@@ -353,6 +356,62 @@ std::vector<ModelCurve> curves_of(const Shape& shape, const std::string& name) {
       curves.push_back(curve_of(shape.edge(e)));
     }
     return curves;
+  });
+}
+
+std::vector<NamedBoundaryCurve> face_boundary(const Shape& shape, const std::string& face) {
+  return detail::run("face boundary", [&] {
+    std::map<std::string, int> sourceImages;
+    if (shape.has_open_edge_names()) {
+      for (int e = 0; e < shape.edge_count(); ++e) {
+        const auto adjacent = shape.edge_faces(e);
+        if (shape.edge_name(e).empty() && adjacent[0] >= 0 && adjacent[1] < 0) {
+          for (const std::string& source : shape.open_edge_names(e)) ++sourceImages[source];
+        }
+      }
+    }
+    std::map<int, int> uses;
+    for (const int f : shape.find_faces(face)) {
+      if (BRepAdaptor_Surface(shape.face(f)).GetType() != GeomAbs_Plane) {
+        throw std::invalid_argument("face " + face + " is not planar");
+      }
+      for (const int e : face_edges(shape, f)) {
+        ++uses[e];
+      }
+    }
+    std::vector<NamedBoundaryCurve> result;
+    std::set<std::string> names;
+    result.reserve(uses.size());
+    for (const auto& [e, count] : uses) {
+      // The edge between two selected face pieces is internal to their
+      // union, not a boundary. Selecting just one piece keeps that edge.
+      if (count != 1) {
+        continue;
+      }
+      std::string name = shape.edge_name(e);
+      if (name.empty()) {
+        const NameList& sources = shape.open_edge_names(e);
+        if (sources.size() > 1) {
+          throw std::invalid_argument("ambiguous profile boundary: an edge has multiple source profiles");
+        }
+        const auto adjacent = shape.edge_faces(e);
+        if (sources.empty() || adjacent[0] < 0 || adjacent[1] >= 0) {
+          throw std::invalid_argument("the face boundary has an unnamed edge without source-profile provenance");
+        }
+        name = sources.front();
+        if (sourceImages[name] != 1) {
+          throw std::invalid_argument("ambiguous profile boundary: a source profile edge has multiple images");
+        }
+      }
+      if (!names.insert(name).second) {
+        throw std::invalid_argument("ambiguous profile boundary: a source profile edge has multiple images");
+      }
+      result.push_back({name, curve_of(shape.edge(e))});
+    }
+    std::sort(result.begin(), result.end(), [](const NamedBoundaryCurve& a, const NamedBoundaryCurve& b) {
+      return a.name < b.name;
+    });
+    return result;
   });
 }
 

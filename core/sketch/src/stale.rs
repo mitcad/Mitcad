@@ -120,7 +120,7 @@ impl SketchEdit<'_> {
             .flat_map(|r| &r.profile.loops)
             .flat_map(|l| &l.segments)
             .flat_map(|s| s.key.curves())
-            .filter_map(CurveId::entity)
+            .filter_map(|curve| curve.entity())
             .collect();
         let mut keep: BTreeMap<EntityUid, Keep> = BTreeMap::new();
         for id in &stale {

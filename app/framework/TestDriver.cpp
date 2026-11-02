@@ -12,6 +12,7 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
+#include <QColor>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDir>
@@ -141,6 +142,7 @@ const StepSpec kSpecs[] = {
     {"dialog-dblclick-logged", 1, 1, kInputOfTarget},
     {"context-menu-logged", 2, 2, kInputOfMain},
     {"click-pick", 1, 2, kInputOfMain},
+    {"native-viewport-click-pick", 1, 1, kInputOfMain},
     {"expect-pick-offset", 4, 4, kInputOfMain},
     {"click-pick-offset", 4, 4, kInputOfMain},
     {"click-visible-face", 0, 0, kInputOfMain},
@@ -165,6 +167,7 @@ const StepSpec kSpecs[] = {
     {"popup", 1, 1, kInputOfTarget},
     {"button", 1, 2, kInputOfTarget},
     {"native-click", 1, 1, kInputOfTarget},
+    {"native-focus", 1, 1, kInputOfTarget},
     {"native-hover", 2, 2, kInputOfTarget},
     {"native-type", 2, 2, kInputOfTarget},
     {"native-choice", 2, 2, kInputOfTarget},
@@ -208,6 +211,8 @@ const StepSpec kSpecs[] = {
     {"capture-view-height", 1, 1, kIdle},
     {"expect-view-zoom", 2, 4, kIdle},
     {"capture-view-target", 1, 1, kIdle},
+    {"capture-view-pixel", 2, 2, kIdle},
+    {"expect-view-pixel", 3, 3, kIdle},
     {"expect-view-pan", 2, 2, kIdle},
     {"expect-viewport", 0, 0, kIdle},
     {"window-state", 1, 1, kIdle},
@@ -247,7 +252,7 @@ const StepSpec kSpecs[] = {
     {"capture-sketch", 2, 2, kIdle},
     {"expect-undo-depth", 2, 2, kIdle},
     {"expect-model-bodies", 2, 2, kIdle},
-    {"expect-model-parameter", 2, 2, kIdle},
+    {"expect-model-parameter", 2, 3, kIdle},
     {"expect-input-text", 2, 2, kIdle},
     {"expect-shown-body", 3, 9, kIdle},
     {"capture-shown-body", 3, 3, kIdle},
@@ -1705,16 +1710,21 @@ void TestDriver::run(const Step& step) {
     }
   } else if (name == QLatin1String("expect-model-parameter")) {
     const QString parameter = a.at(0);
+    const QString kind = a.size() == 3 ? a.at(2) : QStringLiteral("user");
+    if (kind != QLatin1String("user") && kind != QLatin1String("model") && kind != QLatin1String("reference")) {
+      fail(line, QStringLiteral("expect-model-parameter <name> <value|absent> [user|model|reference]"));
+      return;
+    }
     const bool absent = a.at(1) == QStringLiteral("absent");
     double expected = 0;
     if (!absent && !toNumber(a.at(1), expected)) { return; }
-    whenReady([this, parameter, absent, expected] {
+    whenReady([this, parameter, kind, absent, expected] {
       auto* window = qobject_cast<MainWindow*>(m_main.data());
       if (!window || window->modelBusy()) { return false; }
       for (const QJsonValue& value : window->queryArray(QStringLiteral("parameters"))) {
         const QJsonObject current = value.toObject();
         if (current.value(QStringLiteral("name")).toString() != parameter) { continue; }
-        return !absent && current.value(QStringLiteral("kind")).toString() == QStringLiteral("user") &&
+        return !absent && current.value(QStringLiteral("kind")).toString() == kind &&
             std::abs(current.value(QStringLiteral("value")).toDouble() - expected) < 1e-6;
       }
       return absent;
@@ -2254,6 +2264,68 @@ void TestDriver::run(const Step& step) {
     const gp_Pnt target = view->camera().target;
     m_vars[a.at(0)] = QStringLiteral("%1,%2,%3").arg(target.X(), 0, 'g', 17)
         .arg(target.Y(), 0, 'g', 17).arg(target.Z(), 0, 'g', 17);
+  } else if (name == QLatin1String("capture-view-pixel") || name == QLatin1String("expect-view-pixel")) {
+    // The view's own frame (without the widgets over it, such as the
+    // annotations' overlay) at a logged pick place (mitcad#1166): its
+    // colour into a variable, or compared with one.
+    const bool capture = name == QLatin1String("capture-view-pixel");
+    QRegularExpression re;
+    if (!regex(capture ? a.at(1) : a.at(0), re)) {
+      return;
+    }
+    QColor wanted;
+    int tolerance = 0;
+    if (!capture) {
+      wanted = QColor(a.at(1));
+      bool number = false;
+      tolerance = a.at(2).toInt(&number);
+      if (!wanted.isValid() || !number || tolerance < 0) {
+        fail(line, QStringLiteral("expect-view-pixel <regex> <#rrggbb> <tolerance>"));
+        return;
+      }
+    }
+    const QString variable = capture ? a.at(0) : QString();
+    const auto seen = std::make_shared<QColor>();
+    whenReady(
+        [this, re, seen, capture, wanted, tolerance] {
+          auto* view = qobject_cast<OcctViewer*>(viewer());
+          if (view == nullptr || m_main.isNull()) {
+            m_waitDetail = QStringLiteral("no 3D view");
+            return false;
+          }
+          // The newest pick places only, as click-pick reads them.
+          static const QRegularExpression places(QStringLiteral("^Pick places:"));
+          QPoint at;
+          if (!loggedPoint(re, std::max(findLastLine(places, 0), 0), at)) {
+            m_waitDetail = QStringLiteral("no place logged");
+            return false;
+          }
+          view->settleCamera();
+          const QImage frame = view->grabFramebuffer();
+          const QPoint pixel = (QPointF(view->mapFrom(m_main.data(), at)) * view->devicePixelRatioF()).toPoint();
+          if (frame.isNull() || !frame.rect().contains(pixel)) {
+            m_waitDetail = QStringLiteral("%1,%2 is outside the view's frame").arg(pixel.x()).arg(pixel.y());
+            return false;
+          }
+          *seen = frame.pixelColor(pixel);
+          m_waitDetail = QStringLiteral("%1 at %2,%3").arg(seen->name()).arg(pixel.x()).arg(pixel.y());
+          if (capture) {
+            return true;
+          }
+          const int off = std::abs(seen->red() - wanted.red()) + std::abs(seen->green() - wanted.green()) +
+                          std::abs(seen->blue() - wanted.blue());
+          m_waitDetail += QStringLiteral(", wanted %1, off by %2").arg(wanted.name()).arg(off);
+          return off <= tolerance;
+        },
+        6,
+        capture ? QStringLiteral("no view pixel at the place of '%1'").arg(a.at(1))
+                : QStringLiteral("the view's pixel at the place of '%1' is not %2").arg(a.at(0), a.at(1)),
+        [this, variable, seen, capture] {
+          if (capture) {
+            m_vars.insert(variable, seen->name());
+          }
+          qDebug().noquote() << QStringLiteral("TestDriver: view pixel %1").arg(m_waitDetail);
+        });
   } else if (name == QLatin1String("expect-view-pan")) {
     const QStringList coordinates = a.at(0).split(QLatin1Char(','));
     double x = 0, y = 0, z = 0;
@@ -2890,7 +2962,7 @@ void TestDriver::run(const Step& step) {
     });
   } else if (name.startsWith(QLatin1String("native-")) && name != QLatin1String("native-key-now") &&
              name != QLatin1String("native-key-event") && name != QLatin1String("native-system-key") &&
-             name != QLatin1String("native-system-type")) {
+             name != QLatin1String("native-system-type") && name != QLatin1String("native-viewport-click-pick")) {
     if (!mac::test::active()) {
       fail(line, QStringLiteral("'%1' requires the native macOS UI").arg(name));
       return;
@@ -2908,6 +2980,7 @@ void TestDriver::run(const Step& step) {
     const auto perform = [this, line, name, identifier, a, modifiers] {
       QString error;
       const bool ok = (name == QLatin1String("native-click") || name == QLatin1String("native-click-now")) ? mac::test::click(identifier, error) :
+                      name == QLatin1String("native-focus") ? mac::test::focusControl(identifier, error) :
                       name == QLatin1String("native-hover") ? mac::test::hover(identifier, a.at(1) == QStringLiteral("enter"), error) :
                       (name == QLatin1String("native-type") || name == QLatin1String("native-type-now")) ? mac::test::replaceText(identifier, a.at(1), error) :
                       name == QLatin1String("native-choice") ? mac::test::choose(identifier, a.at(1), error) :
@@ -3323,8 +3396,12 @@ void TestDriver::run(const Step& step) {
     }, mainWindow);
   } else if (name == QLatin1String("click-logged") || name == QLatin1String("dblclick-logged") ||
              name == QLatin1String("dialog-click-logged") || name == QLatin1String("dialog-dblclick-logged") ||
-             name == QLatin1String("click-pick")) {
-    const bool pick = name == QLatin1String("click-pick");
+             name == QLatin1String("click-pick") || name == QLatin1String("native-viewport-click-pick")) {
+    const bool nativePick = name == QLatin1String("native-viewport-click-pick");
+    const bool pick = name == QLatin1String("click-pick") || nativePick;
+    if (nativePick && !mac::test::active()) {
+      fail(line, QStringLiteral("native-viewport-click-pick requires the native macOS UI")); return;
+    }
     QRegularExpression re;
     if (!regex(pick ? QStringLiteral("^Pick (?:.*)(?:%1)").arg(a.at(0)) : a.at(0), re)) {
       return;
@@ -3378,8 +3455,21 @@ void TestDriver::run(const Step& step) {
           return loggedPoint(re, from, *at);
         },
         6, QStringLiteral("no place logged for '%1'").arg(a.at(0)),
-        [this, at, button, modifiers, clicks, dialog] {
-          if (dialog) queueDialogClick(*at, clicks);
+        [this, at, button, modifiers, clicks, dialog, nativePick, line] {
+          if (nativePick) {
+            queue([this, at, line] {
+              auto* view = qobject_cast<QOpenGLWidget*>(viewer());
+              if (!view || !m_main) { fail(line, QStringLiteral("the native pick viewport was destroyed")); return; }
+              const QPoint local = view->mapFrom(m_main.data(), *at);
+              // Finish this non-modal CAD pick before another step can run
+              // while NSApp dispatches its down/up event pair.
+              m_timer->stop();
+              QString error;
+              const bool clicked = mac::test::pointerClickViewport(view, local, error);
+              if (!m_finished) m_timer->start();
+              if (!clicked) fail(line, error);
+            });
+          } else if (dialog) queueDialogClick(*at, clicks);
           else queueClick(*at, button, modifiers, clicks);
         }, dialog ? targetWindow() : mainWindow);
   } else if (name == QLatin1String("drag-logged") || name == QLatin1String("drag-from")) {

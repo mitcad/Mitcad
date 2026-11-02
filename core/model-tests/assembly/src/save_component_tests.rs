@@ -6,17 +6,20 @@
 //! and its sketch on that face are listed and frozen, and so are a move's
 //! and a point pattern's points picked on another component (mitcad#1069);
 //! Replace with a Link keeps the design's bodies and placements in one
-//! undo step.
+//! undo step. Review fixes (mitcad#1150): two features reading one outside
+//! body share one frozen copy; links inside an unsaved design are recorded
+//! from the command's folder; a component placed twice inside refuses
+//! Replace; annotations on the replaced bodies follow the base feature.
 
 use serde_json::{Value, json};
 
-use mitcad_model::Document;
-use mitcad_model::features::SketchPlane;
+use mitcad_model::features::{FeatureDef, OccurrencePath, SketchPlane};
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::kernel::{Curve3, Kernel};
 use mitcad_model::test_support::{allow_attachments, def, num};
 use mitcad_model::testing::MockKernel;
 use mitcad_model::transform::Transform;
+use mitcad_model::{Annotation, Document, InsertOptions, MeasureKind, MeasurePick};
 use mitcad_model_api::DocumentApi;
 
 fn query(doc: &Document<MockKernel>, query: Value) -> Value {
@@ -57,6 +60,10 @@ struct Design {
     component: ComponentUid,
     projected: FeatureUid,
     on_face: FeatureUid,
+    /// Box's block: its body and top face.
+    box_block: (BodyUid, String),
+    /// Pin's block: its body and top face.
+    pin_block: (BodyUid, String),
 }
 
 fn design() -> Design {
@@ -69,10 +76,10 @@ fn design() -> Design {
     let (component, _) = doc
         .create_component(Some("Box"), shift(0.0, 50.0, -3.0), true)
         .unwrap();
-    block(&mut doc);
+    let box_block = block(&mut doc);
     doc.create_component(Some("Pin"), Transform::IDENTITY, true)
         .unwrap();
-    block(&mut doc);
+    let pin_block = block(&mut doc);
     doc.activate_component(component).unwrap();
     allow_attachments(&mut doc);
     // A's top face's edges in A's coordinates.
@@ -103,6 +110,8 @@ fn design() -> Design {
         on_face: uid(&on_face),
         doc,
         component,
+        box_block,
+        pin_block,
     };
     for f in design.doc.features() {
         assert!(
@@ -158,6 +167,7 @@ fn a_component_saved_as_a_design_opens_to_the_same_bodies() {
         component,
         projected,
         on_face,
+        ..
     } = design();
     let projected_name = doc.feature(projected).unwrap().name.clone();
     let on_face_name = doc.feature(on_face).unwrap().name.clone();
@@ -494,5 +504,432 @@ fn replace_with_a_link_keeps_the_bodies_and_placements() {
     );
     assert!(doc.assembly().component(component).unwrap().link.is_none());
     assert!(doc.assembly().components.iter().any(|c| c.name == "Pin"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The features of `doc` of the component `component` and type `kind`.
+fn features_of(doc: &Document<MockKernel>, component: ComponentUid, kind: &str) -> Vec<FeatureUid> {
+    doc.features()
+        .filter(|f| f.component == component && f.def.type_name() == kind)
+        .map(|f| f.uid)
+        .collect()
+}
+
+fn component_named(doc: &Document<MockKernel>, name: &str) -> ComponentUid {
+    doc.assembly()
+        .components
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("no component {name}"))
+        .uid
+}
+
+/// Two combines of Box cut its two blocks with A's block, kept
+/// (mitcad#1150): the new design holds one hidden copy of A's block, read
+/// by both, and no orphan copy.
+#[test]
+fn two_features_reading_one_outside_body_share_its_frozen_copy() {
+    let dir = mitcad_model::testing::unique_temp_dir("1150-shared");
+    let mut doc = Document::new(MockKernel::default());
+    doc.add_parameter("height", 10.0, "").unwrap();
+    doc.create_component(Some("A"), shift(100.0, 0.0, 10.0), true)
+        .unwrap();
+    let (tool, _) = block(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let (component, _) = doc
+        .create_component(Some("Box"), shift(0.0, 50.0, -3.0), true)
+        .unwrap();
+    let link = json!({tool.to_string(): {"source": "O1"}});
+    for _ in 0..2 {
+        let (target, _) = block(&mut doc);
+        doc.add_feature(
+            &def(json!({"type": "combine", "target": target, "tools": [tool],
+                "operation": "cut", "keep_tools": true, "tool_links": link})),
+            None,
+        )
+        .unwrap();
+    }
+    for f in doc.features() {
+        assert!(
+            doc.status(f.uid).is_some_and(|s| s.is_ok()),
+            "{}: {:?}",
+            f.name,
+            doc.status(f.uid)
+        );
+    }
+
+    let path = dir.join("Box.mitcad");
+    let saved = command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": component,
+               "path": path, "base": dir}),
+    );
+    let kinds: Vec<&str> = saved["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["body", "body"], "{saved}");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut opened = Document::from_json(&text, MockKernel::default()).unwrap();
+    opened.recompute();
+    for f in opened.features() {
+        assert!(
+            opened.status(f.uid).is_some_and(|s| s.is_ok()),
+            "{}: {:?}",
+            f.name,
+            opened.status(f.uid)
+        );
+    }
+    let frozen: Vec<FeatureUid> = opened
+        .features()
+        .filter(|f| {
+            matches!(&f.def, FeatureDef::Base(b)
+                if b.source.as_deref().is_some_and(|s| s.contains("reads, frozen")))
+        })
+        .map(|f| f.uid)
+        .collect();
+    assert_eq!(frozen.len(), 1, "one hidden copy of A's block");
+    let copy = BodyUid::new(frozen[0], 0);
+    let combines = features_of(&opened, ComponentUid::ROOT, "combine");
+    assert_eq!(combines.len(), 2);
+    for uid in combines {
+        let FeatureDef::Combine(c) = &opened.feature(uid).unwrap().def else {
+            unreachable!();
+        };
+        let tools: Vec<BodyUid> = c.tools.iter().map(|t| t.body).collect();
+        assert_eq!(tools, [copy]);
+        assert!(c.tool_links.is_empty(), "{:?}", c.tool_links);
+    }
+    // The bodies Box shows, the copy hidden: it keeps its name and with it
+    // its visibility in the file. (Not compared by their boxes: the mock
+    // kernel reads a base feature's body back as a 10 mm box wherever it
+    // was, and the cuts with it change accordingly.)
+    let shown = |doc: &Document<MockKernel>, under: &[OccurrenceUid]| {
+        doc.instances()
+            .into_iter()
+            .filter(|i| i.visible && i.path.starts_with(under))
+            .count()
+    };
+    assert_eq!(shown(&doc, &[OccurrenceUid(2)]), 2);
+    assert_eq!(shown(&opened, &[]), 2);
+    let hidden = opened
+        .instances()
+        .into_iter()
+        .find(|i| i.body == copy)
+        .expect("the copy is placed");
+    assert!(!hidden.visible, "the frozen copy is hidden");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A design never saved has no folder of its own: the links of the
+/// linked components inside the saved one are read from the folder the
+/// command gives, as the replace link is (mitcad#1150), and recorded
+/// relative to the new file.
+#[test]
+fn links_inside_an_unsaved_design_are_read_from_the_given_folder() {
+    let dir = mitcad_model::testing::unique_temp_dir("1150-base");
+    std::fs::create_dir_all(dir.join("parts")).unwrap();
+    let mut part = Document::new(MockKernel::default());
+    part.add_feature(
+        &def(
+            json!({"type": "box", "plane": "xy", "corner": [0, 0], "length": 4,
+                    "width": 4, "height": 4, "operation": "new_body"}),
+        ),
+        None,
+    )
+    .unwrap();
+    std::fs::write(dir.join("parts").join("Pin.mitcad"), part.to_json()).unwrap();
+
+    let mut doc = Document::new(MockKernel::default());
+    doc.add_parameter("height", 10.0, "").unwrap();
+    let (component, _) = doc
+        .create_component(Some("Box"), Transform::IDENTITY, true)
+        .unwrap();
+    block(&mut doc);
+    let options = InsertOptions {
+        base: Some(dir.clone()),
+        ..InsertOptions::default()
+    };
+    let (pin, _) = doc.insert_component("parts/Pin.mitcad", &options).unwrap();
+    let recorded = |doc: &Document<MockKernel>, pin: ComponentUid| {
+        doc.assembly()
+            .component(pin)
+            .unwrap()
+            .link
+            .as_ref()
+            .unwrap()
+            .path
+            .clone()
+    };
+    assert_eq!(recorded(&doc, pin), "parts/Pin.mitcad");
+
+    let path = dir.join("Box.mitcad");
+    command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": component,
+               "path": path, "base": dir}),
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    let opened = Document::from_json(&text, MockKernel::default()).unwrap();
+    let copied = component_named(&opened, "Pin");
+    assert_eq!(recorded(&opened, copied), "parts/Pin.mitcad");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Pin placed twice in Box: its two placements' bodies are one body, which
+/// the outer references name without the placement, so Replace with a
+/// Link is refused with Pin named, before anything is written
+/// (mitcad#1150).
+#[test]
+fn replace_is_refused_while_a_component_is_placed_twice_inside() {
+    let dir = mitcad_model::testing::unique_temp_dir("1150-twice");
+    let Design {
+        mut doc, component, ..
+    } = design();
+    let pin = component_named(&doc, "Pin");
+    doc.add_occurrence(pin, component, shift(20.0, 0.0, 0.0))
+        .unwrap();
+    let before = doc.to_json();
+    let path = dir.join("Box.mitcad");
+    let error = doc
+        .command(
+            &json!({"cmd": "save_component_as_design", "component": "Box",
+                    "path": path, "base": dir, "replace": true})
+            .to_string(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Pin is placed in it more than once"),
+        "{error}"
+    );
+    assert!(!path.exists());
+    assert_eq!(doc.to_json(), before);
+    // Saved without Replace, it is a design of its own as before.
+    command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": "Box",
+               "path": path, "base": dir}),
+    );
+    assert!(path.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A distance from a face of Box's block to Pin's body inside Box: after
+/// Replace with a Link both picks name the base feature's bodies, the face
+/// one of its faces, Pin's seen at Box's occurrence (mitcad#1150).
+#[test]
+fn annotations_on_a_replaced_component_follow_its_base_feature() {
+    let dir = mitcad_model::testing::unique_temp_dir("1150-annotation");
+    let Design {
+        mut doc, component, ..
+    } = design();
+    let pin = component_named(&doc, "Pin");
+    let box_body = BodyUid::new(features_of(&doc, component, "extrude")[0], 0);
+    let pin_body = BodyUid::new(features_of(&doc, pin, "extrude")[0], 0);
+    let face = doc.body_shape(box_body).unwrap().faces[0].clone();
+    let mut gap = Annotation::new(
+        "Gap",
+        MeasureKind::Distance,
+        "",
+        MeasurePick {
+            body: Some(box_body),
+            face: Some(face.clone()),
+            occurrence: Some(OccurrencePath(vec![OccurrenceUid(2)])),
+            ..MeasurePick::default()
+        },
+    );
+    gap.b = Some(MeasurePick {
+        body: Some(pin_body),
+        occurrence: Some(OccurrencePath(vec![OccurrenceUid(2), OccurrenceUid(3)])),
+        ..MeasurePick::default()
+    });
+    doc.add_annotation(gap).unwrap();
+
+    let path = dir.join("Box.mitcad");
+    command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": "Box",
+               "path": path, "base": dir, "replace": true}),
+    );
+    let base = doc
+        .assembly()
+        .component(component)
+        .unwrap()
+        .link
+        .as_ref()
+        .unwrap()
+        .feature;
+    let gap = doc.annotations().iter().find(|a| a.name == "Gap").unwrap();
+    let a = gap.a.body.unwrap();
+    let b = gap.b.as_ref().unwrap().body.unwrap();
+    for body in [a, b] {
+        assert_eq!(body.feature, base, "{gap:?}");
+        assert!(doc.body_shape(body).is_some(), "{body} is not there");
+    }
+    assert_ne!(a, b);
+    let renamed = gap.a.face.as_ref().unwrap();
+    assert_eq!(renamed.feature, base, "{gap:?}");
+    assert_ne!(*renamed, face);
+    assert_eq!(
+        gap.a.occurrence,
+        Some(OccurrencePath(vec![OccurrenceUid(2)]))
+    );
+    assert_eq!(
+        gap.b.as_ref().unwrap().occurrence,
+        Some(OccurrencePath(vec![OccurrenceUid(2)])),
+        "Pin's placement inside Box is gone"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every feature of the design builds.
+fn all_ok(doc: &Document<MockKernel>) {
+    for f in doc.features() {
+        assert!(
+            doc.status(f.uid).is_some_and(|s| s.is_ok()),
+            "{}: {:?}",
+            f.name,
+            doc.status(f.uid)
+        );
+    }
+}
+
+/// An extrusion in the root up to `face` of `body`, read in the occurrence
+/// `source` (`object_links`, mitcad#104): its uid.
+fn extrude_up_to(
+    doc: &mut Document<MockKernel>,
+    body: BodyUid,
+    face: &str,
+    source: &str,
+) -> FeatureUid {
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [0.0, 0.0], &num(2.0), &num(2.0))
+        .unwrap()
+        .region;
+    let links = json!({body.to_string(): {"source": source}});
+    let added = command(
+        doc,
+        json!({"cmd": "add_feature", "def": {"type": "extrude",
+               "profiles": [{"sketch": sketch, "region": region}],
+               "extent": {"type": "to_object",
+                          "object": {"type": "face", "body": body, "face": face}},
+               "object_links": links, "operation": "new_body"}}),
+    );
+    let uid: FeatureUid = added["uid"].as_str().unwrap().parse().unwrap();
+    assert!(doc.status(uid).unwrap().is_ok(), "{:?}", doc.status(uid));
+    uid
+}
+
+/// Replace with a Link of Box with an extrusion of the root up to a face
+/// of a body Box shows (mitcad#1144): the extrusion's link map is keyed by
+/// the base feature's body that holds it now, its link's source ends at
+/// Box:1, and every feature builds, also when the design is opened again.
+fn replace_keeps_the_outer_link(source: &str, block: fn(&Design) -> (BodyUid, String), index: u32) {
+    let dir = mitcad_model::testing::unique_temp_dir("1144-links");
+    let design = design();
+    let (body, face) = block(&design);
+    let Design {
+        mut doc, component, ..
+    } = design;
+    let extrusion = extrude_up_to(&mut doc, body, &face, source);
+
+    let saved = command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": "Box",
+               "path": dir.join("Box.mitcad"), "base": dir, "replace": true}),
+    );
+    assert_eq!(saved["replaced"], true, "{saved}");
+    let base: Vec<FeatureUid> = doc
+        .features()
+        .filter(|f| f.component == component)
+        .map(|f| f.uid)
+        .collect();
+    assert_eq!(base.len(), 1);
+    all_ok(&doc);
+    let linked = BodyUid::new(base[0], index).to_string();
+    let def = query(
+        &doc,
+        json!({"query": "feature", "uid": extrusion.to_string()}),
+    );
+    assert_eq!(
+        def["def"]["object_links"],
+        json!({linked.clone(): {"source": "O2"}}),
+        "{def}"
+    );
+    assert_eq!(
+        def["def"]["extent"]["object"]["body"],
+        json!(linked),
+        "{def}"
+    );
+
+    // The design as saved keeps the map: opened again, the extrusion builds.
+    let mut reopened = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+    let messages = reopened.update_links(Some(&dir)).unwrap();
+    assert!(messages.is_empty(), "{messages:?}");
+    reopened.recompute();
+    all_ok(&reopened);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn replace_with_a_link_rekeys_the_outer_body_links() {
+    // Box's own block: the base feature's first body.
+    replace_keeps_the_outer_link("O2", |d| d.box_block.clone(), 0);
+}
+
+#[test]
+fn replace_with_a_link_ends_outer_links_through_it_at_its_occurrence() {
+    // Pin's block, read through Box:1 in Pin:1: the base feature's second
+    // body, read in Box:1.
+    replace_keeps_the_outer_link("O2/O3", |d| d.pin_block.clone(), 1);
+}
+
+/// A construction plane of the root on Box's construction plane
+/// (`datum_links`, mitcad#1035) would lose it, since a linked component
+/// keeps no construction geometry: Replace with a Link is refused, the
+/// plane named, before anything is written (mitcad#1144).
+#[test]
+fn replace_with_a_link_refuses_outer_datums_on_its_datums() {
+    let dir = mitcad_model::testing::unique_temp_dir("1144-datums");
+    let Design { mut doc, .. } = design();
+    let plane = doc
+        .add_feature(
+            &def(json!({"type": "construction_plane",
+                "definition": {"type": "offset", "plane": "xy", "distance": 20}})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let outer = doc
+        .add_feature(
+            &def(json!({"type": "construction_plane",
+                "definition": {"type": "offset", "plane": plane, "distance": 10},
+                "datum_links": {plane.to_string(): {"source": "O2"}}})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    let outer_name = doc.feature(outer).unwrap().name.clone();
+    let path = dir.join("Box.mitcad");
+    let error = doc
+        .command(
+            &json!({"cmd": "save_component_as_design", "component": "Box",
+                    "path": path, "base": dir, "replace": true})
+            .to_string(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("cannot be replaced by a link") && error.contains(&outer_name),
+        "{error}"
+    );
+    assert!(!path.exists());
     let _ = std::fs::remove_dir_all(&dir);
 }

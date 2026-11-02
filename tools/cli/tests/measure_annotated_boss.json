@@ -1,0 +1,14 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Synthetic plate 120 x 70 x 30 with a joined round boss of diameter 18 standing 10 above its top at (60, 35), for Measure on a face that gets an annotation (mitcad#1166, tools/ui-measure-annotated-face-test.sh). No imported model."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 120, "height": 70},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 30}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [60, 35], "diameter": 18},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 40}, "operation": "join"}},
+  {"expect": {"bodies": 1, "body": "Body1", "has_face": "F4:end(r{c1})"}},
+  {"expect": {"bodies": 1, "body": "Body1", "has_face": "F4:side(c1)"}}
+]

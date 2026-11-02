@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+# Measure on a face that gets an annotation (mitcad#1166, GitHub #105): the
+# boss's top face measured, a diameter annotation added on its rim from
+# Make > Dimension, then Measure picks the top face again (its pick logged),
+# and the boss's top and side faces are drawn as before the annotation,
+# not see-through: the view's own frame has the same colours there.
+wait-idle
+command view.fit
+wait-idle
+mark
+command inspect.measure
+expect-log '^Command Measure started'
+# The pointer off the boss: no hover colours the faces whose pixels are kept.
+view-pointer move 3 3 none
+wait-idle
+capture-view-pixel top '^Pick face F2[.]b0/F4:end[(]r[{]c1[}][)] at '
+capture-view-pixel side '^Pick face F2[.]b0/F4:side[(]c1[)] at '
+click-pick 'face F2.b0/F4:end[(]r[{]c1[}][)]'
+expect-log '^Measure Selection 1: 1 face [[]face F4:end[(]r[{]c1[}][)] of F2[.]b0[]]'
+key Escape
+expect-log '^Command Measure cancelled$'
+wait-idle
+mark
+command make.dimension
+expect-log '^Command Dimension started'
+click-pick 'edge F2.b0/E[{]F4:end[(]r[{]c1[}][)][|]'
+expect-log '^Dimension Selection 1: 1 edge'
+key Return
+wait-log '^Annotation kept: Diameter1'
+wait-log '^Done Dimension'
+wait-log '^Annotations drawn: Diameter1 = Ø18 [(]auto[)]'
+wait-idle
+mark
+command inspect.measure
+expect-log '^Command Measure started'
+view-pointer move 3 3 none
+wait-idle
+expect-view-pixel '^Pick face F2[.]b0/F4:end[(]r[{]c1[}][)] at ' '${top}' 24
+expect-view-pixel '^Pick face F2[.]b0/F4:side[(]c1[)] at ' '${side}' 24
+click-pick 'face F2.b0/F4:end[(]r[{]c1[}][)]'
+expect-log '^Measure Selection 1: 1 face [[]face F4:end[(]r[{]c1[}][)] of F2[.]b0[]]'
+wait-log '^Panel Measure result Selection 1: planar face: Area = 254[.]469 mm²'
+key Escape
+expect-log '^Command Measure cancelled$'

@@ -175,6 +175,10 @@ bool BindingsCard::rebuild() {
   const BindingLookup lookup = BindingLookup::read(m_model);
   if (m_content != nullptr) {
     m_content->hide();
+    // A refresh can run before deferred deletion. The native presenter
+    // must only discover the replacement's controls, never both trees.
+    m_layout->removeWidget(m_content);
+    m_content->setParent(nullptr);
     m_content->deleteLater(); // a button of it may be the one clicked
   }
   m_edits.clear();
@@ -326,6 +330,9 @@ bool BindingsCard::rebuild() {
     }
   });
   m_layout->addWidget(m_content);
+  // The native view can refresh synchronously, before Qt's deferred show
+  // of a widget added to an already visible layout.
+  m_content->show();
   adjustSize();
   return true;
 }

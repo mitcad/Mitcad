@@ -83,6 +83,29 @@ constexpr ACCESS_MASK kPrivateRights =
     FILE_DELETE_CHILD | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | DELETE | WRITE_DAC | WRITE_OWNER |
     GENERIC_ALL | GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | MAXIMUM_ALLOWED;
 
+// Full access for the user and SYSTEM only; a directory passes it to its
+// children. The caller frees the ACL with LocalFree; null on failure.
+PACL privateAcl(Identity& identity, bool directory) {
+  EXPLICIT_ACCESSW access[2]{};
+  const PSID trustees[] = {identity.user(), identity.system.data()};
+  for (std::size_t index = 0; index < 2; ++index) {
+    access[index].grfAccessPermissions = FILE_ALL_ACCESS;
+    access[index].grfAccessMode = SET_ACCESS;
+    access[index].grfInheritance = directory ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+    access[index].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    access[index].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    access[index].Trustee.ptstrName = static_cast<LPWSTR>(trustees[index]);
+  }
+  PACL acl = nullptr;
+  if (SetEntriesInAclW(2, access, nullptr, &acl) != ERROR_SUCCESS) {
+    if (acl) {
+      LocalFree(acl);
+    }
+    return nullptr;
+  }
+  return acl;
+}
+
 } // namespace
 
 bool privateWindowsEndpointPath(const QString& path) {
@@ -166,20 +189,8 @@ bool secureWindowsEndpointPath(const QString& path, bool directory) {
   if (status != ERROR_SUCCESS || !identity.trusted(owner)) {
     return false;
   }
-  EXPLICIT_ACCESSW access[2]{};
-  const PSID trustees[] = {identity.user(), identity.system.data()};
-  for (std::size_t index = 0; index < 2; ++index) {
-    access[index].grfAccessPermissions = FILE_ALL_ACCESS;
-    access[index].grfAccessMode = SET_ACCESS;
-    access[index].grfInheritance = directory ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
-    access[index].Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    access[index].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
-    access[index].Trustee.ptstrName = static_cast<LPWSTR>(trustees[index]);
-  }
-  PACL rawAcl = nullptr;
-  const DWORD aclStatus = SetEntriesInAclW(2, access, nullptr, &rawAcl);
-  const LocalAllocation acl(rawAcl);
-  if (aclStatus != ERROR_SUCCESS) {
+  const LocalAllocation acl(privateAcl(identity, directory));
+  if (!acl) {
     return false;
   }
   // Replace inherited permissions, set a protected DACL and ensure that an
@@ -187,10 +198,31 @@ bool secureWindowsEndpointPath(const QString& path, bool directory) {
   if (SetNamedSecurityInfoW(native.data(), SE_FILE_OBJECT,
                            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
                                PROTECTED_DACL_SECURITY_INFORMATION,
-                           identity.user(), nullptr, rawAcl, nullptr) != ERROR_SUCCESS) {
+                           identity.user(), nullptr, static_cast<PACL>(acl.get()), nullptr) != ERROR_SUCCESS) {
     return false;
   }
   return privateWindowsEndpointPath(path);
+}
+
+bool createPrivateWindowsDirectory(const QString& path) {
+  Identity identity;
+  if (!identity.load()) {
+    return false;
+  }
+  const LocalAllocation acl(privateAcl(identity, true));
+  SECURITY_DESCRIPTOR descriptor{};
+  if (!acl || !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorOwner(&descriptor, identity.user(), FALSE) ||
+      !SetSecurityDescriptorDacl(&descriptor, TRUE, static_cast<PACL>(acl.get()), FALSE) ||
+      !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) {
+    return false;
+  }
+  SECURITY_ATTRIBUTES attributes{};
+  attributes.nLength = sizeof(attributes);
+  attributes.lpSecurityDescriptor = &descriptor;
+  attributes.bInheritHandle = FALSE;
+  const std::wstring native = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath()).toStdWString();
+  return CreateDirectoryW(native.c_str(), &attributes) != FALSE;
 }
 
 bool windowsProcessRunning(qint64 pid) {

@@ -523,6 +523,10 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("center_of_mass", Model),
     // The design's summary and statistics (mitcad#1088).
     ("design_properties", Model),
+    // The top-level fields of the design file a newer MitCad wrote, and
+    // whether saving to a path drops them (mitcad#1132): about the saved
+    // file.
+    ("unknown_fields", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

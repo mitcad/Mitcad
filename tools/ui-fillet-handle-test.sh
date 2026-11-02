@@ -135,8 +135,9 @@ pointing() {
 # onto it on the way to the end: the value follows the cursor along the
 # arrow's line only, and a pull of fewer pixels than the overlay's 3-pixel
 # drag threshold (the convex edge's arrow seen nearly end-on, in a view
-# that the bottom cards make smaller) would otherwise be a click, passed
-# on to the view (mitcad#1042, mitcad#1086).
+# that the bottom cards make smaller) would otherwise be a click, which
+# the handle keeps and which changes nothing (mitcad#1042, mitcad#1086,
+# mitcad#1105).
 drag_by() {
   local ux uy ul ppm step side
   read -r ux uy ul <<< "$(screen "$5" "$6" "$7")"

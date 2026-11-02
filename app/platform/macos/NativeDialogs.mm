@@ -5036,6 +5036,12 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
   if (target != nil && target->owner != nullptr) { target->owner->modelContext(self, [self convertPoint:event.locationInWindow fromView:nil]); }
 }
+// Match the outline's Control-click and menuForEvent route for list rows.
+- (NSMenu*)menuForEvent:(NSEvent*)event {
+  MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
+  if (target != nil && target->owner != nullptr) { target->owner->modelContext(self, [self convertPoint:event.locationInWindow fromView:nil]); }
+  return nil;
+}
 // MITCAD_LOG_NATIVE_EDITS: who gives a table the focus (mitcad#814).
 - (BOOL)becomeFirstResponder {
   const BOOL accepted = [super becomeFirstResponder];

@@ -837,6 +837,43 @@ void test_parallel_faces() {
   CHECK(!tilted.parallel_faces && near(tilted.value, 4.0));
 }
 
+// A synthetic stepped shell (mitcad#1161). Its separated annuli and disc
+// must retain the true oblique minimum, independent of the UI's plane gap.
+void test_stepped_shell_face_minima() {
+  const auto cylinder = [](double radius, double z, double height) {
+    return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, z), gp::DZ()), radius, height).Shape();
+  };
+  TopoDS_Shape shell = BRepAlgoAPI_Cut(cylinder(80, 0, 42), cylinder(74, 0, 36)).Shape();
+  shell = BRepAlgoAPI_Fuse(shell, cylinder(49, 42, 6)).Shape();
+  shell = BRepAlgoAPI_Fuse(shell, cylinder(34, 48, 10)).Shape();
+  const auto at_height = [&](double z) {
+    for (TopExp_Explorer it(shell, TopAbs_FACE); it.More(); it.Next()) {
+      const TopoDS_Face face = TopoDS::Face(it.Current());
+      const BRepAdaptor_Surface surface(face);
+      if (surface.GetType() == GeomAbs_Plane &&
+          std::abs(surface.Plane().Location().Z() - z) < 1e-6) return face;
+    }
+    return TopoDS_Face();
+  };
+  const TopoDS_Face bottom = at_height(0);
+  const TopoDS_Face rim = at_height(42);
+  const TopoDS_Face step = at_height(48);
+  const TopoDS_Face end = at_height(58);
+  CHECK(!bottom.IsNull() && !rim.IsNull() && !step.IsNull() && !end.IsNull());
+  const auto check_gap = [](const TopoDS_Face& a, const TopoDS_Face& b, double gap, double radial) {
+    const auto measured = mitcad::analysis::min_distance(a, b);
+    CHECK(std::abs(measured.value - std::hypot(gap, radial)) < 1e-6);
+    const gp_Pln pa = BRepAdaptor_Surface(a).Plane();
+    const gp_Pln pb = BRepAdaptor_Surface(b).Plane();
+    CHECK(std::abs(pa.Distance(pb.Location()) - gap) < 1e-6);
+    CHECK(off_face(measured.on_a, a) < 1e-6 && off_face(measured.on_b, b) < 1e-6);
+  };
+  check_gap(rim, end, 16, 15);
+  check_gap(bottom, step, 48, 25);
+  check_gap(bottom, end, 58, 40);
+  check_gap(rim, step, 6, 0);
+}
+
 void test_angles() {
   using mitcad::analysis::angle;
   const TopoDS_Shape a = box(0, 0, 0, 10, 10, 10);
@@ -1248,6 +1285,7 @@ int main() {
     test_products_and_several_bodies();
     test_distances();
     test_parallel_faces();
+    test_stepped_shell_face_minima();
     test_angles();
     test_lengths_and_circles();
     test_interference();

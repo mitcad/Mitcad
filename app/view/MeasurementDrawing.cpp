@@ -30,8 +30,9 @@ namespace {
 
 // Pixels on screen (times a picture's scale): the only sizes not in text
 // heights (mitcad#902).
-constexpr double kTextFloor = 9.0;    // a text's least capital height (zoomed out)
-constexpr double kTextCeiling = 16.0; // its most (zoomed in), as the reference drawing's proportions
+// A text's least capital height (zoomed out); zoomed in it grows with the
+// design, no ceiling (mitcad#1168).
+constexpr double kTextFloor = 9.0;
 constexpr double kLineWidth = 1.0;    // lines: ISO 128's thin line
 constexpr double kSelectedWidth = 1.5; // a selected or hovered one's lines, at most
 constexpr double kArrowLeast = 5.0;   // an arrowhead's least length
@@ -838,7 +839,7 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
     shape.brackets = m.brackets;
     shape.after = m.after;
   }
-  const std::optional<QPointF> at = project(m.textAt);
+  std::optional<QPointF> at = project(m.textAt);
   if (!at) {
     return;
   }
@@ -866,10 +867,32 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
   // The text the model's height in its plane (mitcad#894; `larger` is the
   // plane's pixels per millimetre at the text), its capitals as seen on
   // screen (foreshortened across the text as the plane turns away) never
-  // under the floor nor over the ceiling (mitcad#902).
+  // under the floor (mitcad#902); zoomed in, as large as the design's
+  // millimetres make it (mitcad#1168: no ceiling).
   const double across = std::max(kLeastAcross, faceOn * larger / std::max(lengthOf(*ex), 1e-12));
-  shape.textPixels =
-      std::clamp(m.textHeight * larger * across, measurementTextFloor(scale), measurementTextCeiling(scale)) / across;
+  shape.textPixels = std::max(m.textHeight * larger * across, measurementTextFloor(scale)) / across;
+  // A leader's landing (its second line, from the text to the knee) as
+  // long against its text as drawn as the model laid it out against the
+  // model's height (mitcad#1168): where the floor draws the text larger,
+  // the text moves on along the landing from the knee, so that the landing
+  // keeps its proportion and the leader its bend.
+  gp_Pnt textAt = m.textAt;
+  std::vector<MeasurementDisplay::Segment> dimensionLines = m.dimensionLines;
+  const double same = 1e-6 * std::max(1.0, m.textHeight);
+  const bool landed = shape.leader && !shape.centred && dimensionLines.size() == 2 &&
+                      dimensionLines[1].from.Distance(m.textAt) < same &&
+                      dimensionLines[1].to.Distance(dimensionLines[0].from) < same;
+  const double modelPixels = m.textHeight * larger;
+  if (landed && modelPixels > 1e-12 && shape.textPixels > modelPixels * (1.0 + 1e-9)) {
+    const gp_Pnt knee = dimensionLines[1].to;
+    textAt = knee.Translated(gp_Vec(knee, m.textAt) * (shape.textPixels / modelPixels));
+    dimensionLines[1].from = textAt;
+    at = project(textAt);
+    if (!at) {
+      shape.valid = false;
+      return;
+    }
+  }
   // The text's axes, a pixel per pixel face on, and readable (ISO 129-1:
   // from the bottom or from the right): never mirrored (the picture's y
   // runs down), running left to right, and one that would then run down
@@ -903,10 +926,10 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
     }
   }
   // The plane's axes per millimetre at the text, for drags.
-  if (const std::optional<QPointF> px = pictureDirection(project, m.textAt, m.planeX, *at)) {
+  if (const std::optional<QPointF> px = pictureDirection(project, textAt, m.planeX, *at)) {
     shape.xPerMillimetre = *px;
   }
-  if (const std::optional<QPointF> py = pictureDirection(project, m.textAt, m.planeY, *at)) {
+  if (const std::optional<QPointF> py = pictureDirection(project, textAt, m.planeY, *at)) {
     shape.yPerMillimetre = *py;
   }
   // Millimetres of the plane per text height on the picture.
@@ -934,7 +957,7 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
   const bool length = !shape.leader && m.kind != QLatin1String("angle") && m.kind != QLatin1String("radius") &&
                       m.kind != QLatin1String("diameter");
   bool first = true;
-  for (const MeasurementDisplay::Segment& segment : m.dimensionLines) {
+  for (const MeasurementDisplay::Segment& segment : dimensionLines) {
     const std::optional<QPointF> p = project(segment.from);
     const std::optional<QPointF> q = project(segment.to);
     if (!p || !q) {
@@ -946,6 +969,21 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
       shape.grips.push_back(QPolygonF{*p, *q});
     }
     first = false;
+  }
+  // The landing as drawn and its bend with the leader to the point, for the
+  // tests' log (mitcad#1168).
+  if (landed) {
+    const std::optional<QPointF> knee = project(dimensionLines[0].from);
+    const std::optional<QPointF> point = project(dimensionLines[0].to);
+    if (knee && point) {
+      shape.kneeAt = *knee;
+      shape.pointAt = *point;
+      shape.landingPixels = lengthOf(*at - *knee);
+      if (shape.landingPixels > 1e-6 && lengthOf(*point - *knee) > 1e-6) {
+        const double cosine = dotOf(unitOf(*point - *knee), unitOf(*at - *knee));
+        shape.bendDegrees = std::acos(std::clamp(cosine, -1.0, 1.0)) * 180.0 / kPi;
+      }
+    }
   }
   for (const MeasurementDisplay::Arc& arc : m.arcs) {
     if (arc.from.Magnitude() < 1e-12 || arc.to.Magnitude() < 1e-12 || arc.normal.Magnitude() < 1e-12) {
@@ -1310,8 +1348,6 @@ QString measurementFontFamily() {
 }
 
 double measurementTextFloor(double scale) { return kTextFloor * scale; }
-
-double measurementTextCeiling(double scale) { return kTextCeiling * scale; }
 
 QPointF measurementSnapped(const QPointF& point, double width) {
   // An odd number of pixels wide: centred on a pixel; an even one: on the

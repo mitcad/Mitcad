@@ -23,7 +23,9 @@
 //!   line across the major diameter where no face ends it; looking along
 //!   its axis: the crest circle, and the root circle as a thin three-quarter
 //!   arc. The thread's own lines (crests, helices, flanks, the curves where
-//!   the end chamfers cut them) are left out. Each part takes the
+//!   the end chamfers cut them) are left out, and only those: what else of
+//!   the threaded body its outline covers (a cross hole, a socket, a flat,
+//!   a narrower bore below a tapped hole) stays (mitcad#1145). Each part takes the
 //!   visibility of the lines it replaces along the axis, as the kernel's
 //!   hidden-line removal gave it, so where a nut or a wall hides a thread
 //!   its lines are hidden (dashed, or left out when the view shows no
@@ -33,7 +35,7 @@
 //!   A taper pipe thread's crest and root lines follow its taper.
 
 use std::collections::{HashMap, HashSet};
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use mitcad_model::datum::Vec3;
 use mitcad_vec3::vec2::{self, cross as cross2, perp};
@@ -754,7 +756,14 @@ pub fn with_threads(
             axis,
             toward_eye: spec.toward_eye,
         };
-        across(&mut edges, &mut added, &frame, thread, spec);
+        across(
+            &mut edges,
+            &mut added,
+            &frame,
+            thread,
+            spec,
+            projection.polygonal,
+        );
     }
     edges.extend(added);
     ViewProjection {
@@ -893,13 +902,57 @@ fn without(spans: &[[f64; 2]], minus: &[[f64; 2]]) -> Vec<[f64; 2]> {
     out
 }
 
+/// What becomes of one of the threaded body's lines in a view that does
+/// not look along the thread's axis.
+enum Fate {
+    /// It stays as the kernel drew it.
+    Kept,
+    /// One of the thread's own lines: left out.
+    Gone,
+    /// A curve within the thread's outline (its points in the axis'
+    /// coordinates): the thread's when it runs like a helix, unless it
+    /// lies on a circle with others (a cross hole's edge).
+    Within(Vec<[f64; 2]>),
+    /// A straight piece within the thread's outline, neither on a crest's
+    /// or root's radius nor along the axis, in a triangulated view: the
+    /// thread's when it continues the thread's lines.
+    Piece,
+}
+
+/// Curves that lie on one circle, and how far round it they go together.
+struct Round {
+    center: P2,
+    radius: f64,
+    angle: f64,
+    members: Vec<usize>,
+}
+
 /// A thread in a view across its axis or at an angle to it (pictorial).
 ///
 /// Only the threaded body's own lines (by their `source`) are looked at;
-/// every other body's stay as the kernel drew them. Of those, what lies on
-/// the thread's cylinder is left out: lines wholly on it, curves also up to
-/// twice the thread's depth beyond its ends (where its end chamfers cut the
-/// flanks). Kept: across the axis, straight lines square to it that end
+/// every other body's stay as the kernel drew them. Of those, only what
+/// lies on the thread's own surface is left out (mitcad#1145), not all
+/// that its outline covers, so that a cross hole, a socket, a flat or a
+/// bore of the same body stays:
+///
+/// - a straight line within the thread's outline whose two ends lie on a
+///   crest's or a root's radius on one side of the axis (a cosmetic
+///   thread's cylinder outline, a flank's outline);
+/// - a curve within the outline (and up to twice the thread's depth beyond
+///   its ends, where its end chamfers cut the flanks) that runs like a
+///   helix: wherever it turns back across the axis it does so on the
+///   thread's outline, at a radius from the root's to the crest's (a curve
+///   on a cylinder turns back in the view only where the line of sight
+///   touches the cylinder, at its radius; a hole's edge turns back inside
+///   it), and across the axis it runs one way along it. Curves that lie
+///   on one circle going a quarter of the way round or more together are a
+///   hole's or a slot's edge, which the thread's faces cut into pieces;
+///   they stay;
+/// - in a triangulated view, which gives a helix as straight pieces and
+///   arcs: a straight piece that starts on a crest's or root's radius or
+///   continues one of the thread's lines.
+///
+/// Kept besides: across the axis, straight lines square to it that end
 /// the thread (an end face, a shoulder, a hole's mouth) or that run right
 /// across it (a groove's face); in a pictorial view, the circles about the
 /// axis (faces' edges square to it). The convention's lines then follow the visibility of what they
@@ -918,6 +971,7 @@ fn across(
     f: &Axial,
     thread: &ThreadInput,
     spec: &ViewSpec,
+    polygonal: bool,
 ) {
     let length = f.length;
     let depth = (thread.major - thread.minor) / 2.0;
@@ -928,20 +982,48 @@ fn across(
     let widest = thread.major / 2.0 + if thread.internal { 0.0 } else { change };
     let narrowest = thread.minor / 2.0 - if thread.internal { change } else { 0.0 };
     let half = widest + tol;
+    // Whether a distance across the axis is a crest's or a root's radius
+    // (on a taper pipe thread, anywhere along its taper).
+    let on_radius = |v: f64| {
+        [thread.major / 2.0, thread.minor / 2.0]
+            .into_iter()
+            .any(|r| {
+                let (lo, hi) = if thread.internal {
+                    (r - change, r)
+                } else {
+                    (r, r + change)
+                };
+                (lo - tol..=hi + tol).contains(&v.abs())
+            })
+    };
+    // Whether a curve within the thread's outline runs like a helix on it.
+    let helical = |points: &[[f64; 2]]| {
+        let along: Vec<f64> = points.iter().map(|q| q[0]).collect();
+        (f.pictorial() || one_way(&along, tol * f.per_length))
+            && turning_points(points).into_iter().all(|(at, v)| {
+                // An external thread's end chamfer cuts its flanks down to
+                // a thread's depth inside the minor diameter.
+                let t = f.t_of([at, 0.0]);
+                let chamfer = !thread.internal && (t <= reach || t >= length - reach);
+                let low = narrowest - tol - if chamfer { depth } else { 0.0 };
+                (low..=half).contains(&v.abs())
+            })
+    };
     let mut spans: [Vec<[f64; 2]>; 2] = [Vec::new(), Vec::new()];
     let mut ended = [false; 2];
     // Radii of what is left out, by where along the axis: the taper's way.
     let mut radii: Vec<(f64, f64)> = Vec::new();
-    let mut kept = Vec::with_capacity(edges.len());
-    for edge in edges.drain(..) {
+    let all = std::mem::take(edges);
+    let mut fates: Vec<Fate> = Vec::with_capacity(all.len());
+    for edge in &all {
         // Another body's lines stay as the kernel drew them, and say
         // nothing of the thread.
-        if !thread.owns(&edge) {
-            kept.push(edge);
+        if !thread.owns(edge) {
+            fates.push(Fate::Kept);
             continue;
         }
         let seen = usize::from(edge.visible);
-        let gone = match &edge.curve {
+        let fate = match &edge.curve {
             ViewCurve::Line(a, b) => {
                 let (la, lb) = (f.local(*a), f.local(*b));
                 let direction = vec2::unit(sub2(*b, *a));
@@ -950,61 +1032,124 @@ fn across(
                 let crosses = low < widest && high > -widest;
                 let right_across = low <= -0.9 * narrowest && high >= 0.9 * narrowest;
                 let t = f.t_of([(la[0] + lb[0]) / 2.0, 0.0]);
-                if square && crosses && t >= -reach && t <= tol {
+                if square && crosses && (-reach..=tol).contains(&t) {
                     // A face that ends the thread where it starts.
                     ended[0] = true;
-                    false
-                } else if square && crosses && t >= length - tol && t <= length + reach {
+                    Fate::Kept
+                } else if square && crosses && (length - tol..=length + reach).contains(&t) {
                     ended[1] = true;
-                    false
+                    Fate::Kept
                 } else if square && right_across {
-                    false
+                    Fate::Kept
                 } else {
                     let inside = f.inside(la, half, tol) && f.inside(lb, half, tol);
                     let lengthwise = direction.is_some_and(|d| dot2(d, f.u).abs() > 0.99);
-                    if !inside && lengthwise && la[1].abs() <= half && lb[1].abs() <= half {
-                        // A cylinder's outline that runs on beyond the
-                        // thread: what of it runs over the thread.
-                        if let Some(span) =
-                            clipped_span([f.t_of(la), la[1]], [f.t_of(lb), lb[1]], length, half)
-                        {
-                            spans[seen].push(span);
+                    // Both ends on a crest's or a root's radius, on one
+                    // side of the axis: on the thread's surface.
+                    let on_surface = la[1] * lb[1] > 0.0 && on_radius(la[1]) && on_radius(lb[1]);
+                    if inside && on_surface {
+                        Fate::Gone
+                    } else {
+                        if !inside && lengthwise && on_surface {
+                            // A cylinder's outline that runs on beyond the
+                            // thread: what of it runs over the thread.
+                            if let Some(span) =
+                                clipped_span([f.t_of(la), la[1]], [f.t_of(lb), lb[1]], length, half)
+                            {
+                                spans[seen].push(span);
+                            }
+                        }
+                        if inside && !lengthwise && polygonal {
+                            Fate::Piece
+                        } else {
+                            Fate::Kept
                         }
                     }
-                    inside
                 }
             }
             curve => {
                 let points: Vec<[f64; 2]> =
                     points_of(curve).into_iter().map(|p| f.local(p)).collect();
                 if let Some(t) = f.circle_at(&points, tol) {
-                    if t >= -reach && t <= tol {
+                    if (-reach..=tol).contains(&t) {
                         ended[0] = true;
-                    } else if t >= length - tol && t <= length + reach {
+                    } else if (length - tol..=length + reach).contains(&t) {
                         ended[1] = true;
                     }
-                    false
+                    Fate::Kept
+                } else if points.iter().all(|q| f.inside(*q, half, reach)) {
+                    Fate::Within(points)
                 } else {
-                    points.iter().all(|q| f.inside(*q, half, reach))
+                    Fate::Kept
                 }
             }
         };
-        if gone {
-            let ts: Vec<f64> = points_of(&edge.curve)
-                .into_iter()
-                .map(|p| {
-                    let q = f.local(p);
-                    radii.push((f.t_of(q), q[1].abs()));
-                    f.t_of(q).clamp(0.0, length)
-                })
-                .collect();
-            let lo = ts.iter().copied().fold(f64::INFINITY, f64::min);
-            let hi = ts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            if lo <= hi {
-                spans[seen].push([lo, hi]);
+        fates.push(fate);
+    }
+    // Curves on one circle that go a quarter of the way round or more
+    // together: a hole's or a slot's edge, in pieces where the thread's
+    // faces cut it. A helix's pieces lie on no common circle that wide
+    // (where it turns, it bends far tighter than half the thread's depth).
+    let mut rounds: Vec<Round> = Vec::new();
+    for (i, (edge, fate)) in all.iter().zip(&fates).enumerate() {
+        if !matches!(fate, Fate::Within(_)) {
+            continue;
+        }
+        let Some((center, radius, angle)) = circle_of(&edge.curve, tol) else {
+            continue;
+        };
+        if radius < depth / 2.0 {
+            continue;
+        }
+        match rounds
+            .iter_mut()
+            .find(|r| vec2::distance(r.center, center) <= tol && (r.radius - radius).abs() <= tol)
+        {
+            Some(round) => {
+                round.angle += angle;
+                round.members.push(i);
             }
-        } else {
+            None => rounds.push(Round {
+                center,
+                radius,
+                angle,
+                members: vec![i],
+            }),
+        }
+    }
+    for round in rounds.iter().filter(|r| r.angle >= FRAC_PI_2 - 1e-9) {
+        for &i in &round.members {
+            fates[i] = Fate::Kept;
+        }
+    }
+    for fate in &mut fates {
+        if let Fate::Within(points) = fate {
+            let gone = helical(points.as_slice());
+            *fate = if gone { Fate::Gone } else { Fate::Kept };
+        }
+    }
+    if fates.iter().any(|x| matches!(x, Fate::Piece)) {
+        joined_pieces(&all, &mut fates, |p| on_radius(f.local(p)[1]), 0.1 * tol);
+    }
+    let mut kept = Vec::with_capacity(all.len());
+    for (edge, fate) in all.into_iter().zip(fates) {
+        if !matches!(fate, Fate::Gone) {
             kept.push(edge);
+            continue;
+        }
+        let seen = usize::from(edge.visible);
+        let ts: Vec<f64> = points_of(&edge.curve)
+            .into_iter()
+            .map(|p| {
+                let q = f.local(p);
+                radii.push((f.t_of(q), q[1].abs()));
+                f.t_of(q).clamp(0.0, length)
+            })
+            .collect();
+        let lo = ts.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = ts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if lo <= hi {
+            spans[seen].push([lo, hi]);
         }
     }
     *edges = kept;
@@ -1151,6 +1296,183 @@ fn clipped_span(a: [f64; 2], b: [f64; 2], length: f64, half: f64) -> Option<[f64
     Some([t0.min(t1), t0.max(t1)])
 }
 
+/// Whether values run one way (the way from the first to the last), never
+/// turning back by more than `tol`.
+fn one_way(values: &[f64], tol: f64) -> bool {
+    let (Some(&first), Some(&last)) = (values.first(), values.last()) else {
+        return true;
+    };
+    let rising = last >= first;
+    let mut best = first;
+    for &x in values {
+        let back = if rising { best - x } else { x - best };
+        if back > tol {
+            return false;
+        }
+        best = if rising { best.max(x) } else { best.min(x) };
+    }
+    true
+}
+
+/// Where a curve (its points in a thread's axis' coordinates: along,
+/// across) turns back across the axis between its ends: each turning
+/// point's place along the axis and its distance across, refined by the
+/// parabola through it and the points either side (a curve's points need
+/// not fall on its turning point).
+fn turning_points(points: &[[f64; 2]]) -> Vec<(f64, f64)> {
+    // The length along the curve to each point.
+    let s: Vec<f64> = std::iter::once(0.0)
+        .chain(points.windows(2).scan(0.0, |run, w| {
+            *run += len2(sub2(w[1], w[0]));
+            Some(*run)
+        }))
+        .collect();
+    // The points where the distance across changes; of a run of points at
+    // one distance, the first.
+    let mut moved: Vec<usize> = Vec::new();
+    for (i, q) in points.iter().enumerate() {
+        if moved
+            .last()
+            .is_none_or(|&k| (q[1] - points[k][1]).abs() > 1e-9)
+        {
+            moved.push(i);
+        }
+    }
+    moved
+        .windows(3)
+        .filter_map(|w| {
+            let (a, b, c) = (w[0], w[1], w[2]);
+            let (y0, y1, y2) = (points[a][1], points[b][1], points[c][1]);
+            if (y1 - y0) * (y2 - y1) >= 0.0 {
+                return None;
+            }
+            // y = y1 + m·x + k·x² through the three, x from b along the
+            // curve: its vertex, where it lies between a and c.
+            let (h0, h2) = (s[a] - s[b], s[c] - s[b]);
+            let mut at = y1;
+            if h0 < 0.0 && h2 > 0.0 {
+                let k = ((y2 - y1) / h2 - (y0 - y1) / h0) / (h2 - h0);
+                let m = (y0 - y1) / h0 - k * h0;
+                if k.abs() > 1e-300 && (h0..=h2).contains(&(-m / (2.0 * k))) {
+                    at = y1 - m * m / (4.0 * k);
+                }
+            }
+            Some((points[b][0], at))
+        })
+        .collect()
+}
+
+/// The circle a curve lies on: its centre, its radius and the angle the
+/// curve goes round it. A polyline's or a spline's when all its points lie
+/// within `tol` of the circle that fits them best; none for a line.
+fn circle_of(curve: &ViewCurve, tol: f64) -> Option<(P2, f64, f64)> {
+    match curve {
+        ViewCurve::Line(..) => None,
+        ViewCurve::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => Some((*center, *radius, (end - start).abs().min(TAU))),
+        ViewCurve::Polyline(points) | ViewCurve::Spline(ViewSpline { points, .. }) => {
+            fitted_circle(points, tol)
+        }
+    }
+}
+
+/// The circle that fits points best (least squares on the circle's
+/// equation), if they all lie within `tol` of it: its centre, its radius
+/// and the angle the points go round it.
+fn fitted_circle(points: &[P2], tol: f64) -> Option<(P2, f64, f64)> {
+    if points.len() < 3 {
+        return None;
+    }
+    let n = points.len() as f64;
+    let mean = mul2(points.iter().fold([0.0, 0.0], |m, p| add2(m, *p)), 1.0 / n);
+    let (mut suu, mut suv, mut svv, mut ru, mut rv) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    for p in points {
+        let [u, v] = sub2(*p, mean);
+        let rr = u * u + v * v;
+        suu += u * u;
+        suv += u * v;
+        svv += v * v;
+        ru += u * rr;
+        rv += v * rr;
+    }
+    let det = suu * svv - suv * suv;
+    // Points on a line (or all at one place) fit no circle.
+    if det.is_nan() || det <= 1e-12 * suu * svv {
+        return None;
+    }
+    let uc = 0.5 * (ru * svv - rv * suv) / det;
+    let vc = 0.5 * (rv * suu - ru * suv) / det;
+    let center = add2(mean, [uc, vc]);
+    let radius = (uc * uc + vc * vc + (suu + svv) / n).sqrt();
+    if points
+        .iter()
+        .any(|p| (vec2::distance(*p, center) - radius).abs() > tol)
+    {
+        return None;
+    }
+    let angle: f64 = points
+        .windows(2)
+        .map(|w| {
+            let (a, b) = (sub2(w[0], center), sub2(w[1], center));
+            cross2(a, b).atan2(dot2(a, b)).abs()
+        })
+        .sum();
+    Some((center, radius, angle.min(TAU)))
+}
+
+/// In a triangulated view, which gives a helix as straight pieces and
+/// arcs: the straight pieces within a thread's outline (`Fate::Piece`)
+/// that carry on its lines are left out with them, the others stay. A
+/// piece carries them on when it starts on a crest's or a root's radius
+/// (`on_radius`) or meets, end to end within `eps`, a line left out or
+/// another such piece.
+fn joined_pieces(all: &[ViewEdge], fates: &mut [Fate], on_radius: impl Fn(P2) -> bool, eps: f64) {
+    let mut nodes = Nodes::new(eps);
+    let mut pieces_at: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut ends: Vec<Option<[usize; 2]>> = vec![None; all.len()];
+    let mut queue: Vec<usize> = Vec::new();
+    for (i, edge) in all.iter().enumerate() {
+        let piece = match fates[i] {
+            Fate::Gone => false,
+            Fate::Piece => true,
+            _ => continue,
+        };
+        let Some([a, b]) = ends_of(&edge.curve) else {
+            continue;
+        };
+        let ids = [nodes.of(a), nodes.of(b)];
+        if !piece {
+            queue.extend(ids);
+            continue;
+        }
+        ends[i] = Some(ids);
+        for id in ids {
+            pieces_at.entry(id).or_default().push(i);
+        }
+        if on_radius(a) || on_radius(b) {
+            fates[i] = Fate::Gone;
+            queue.extend(ids);
+        }
+    }
+    while let Some(node) = queue.pop() {
+        for &i in pieces_at.get(&node).into_iter().flatten() {
+            if matches!(fates[i], Fate::Piece) {
+                fates[i] = Fate::Gone;
+                queue.extend(ends[i].into_iter().flatten());
+            }
+        }
+    }
+    for fate in fates.iter_mut() {
+        if matches!(fate, Fate::Piece) {
+            *fate = Fate::Kept;
+        }
+    }
+}
+
 /// A thread in a view along its axis, about `center`: the diameters where
 /// it starts (a taper pipe thread's change over its `length` widens what
 /// is left out).
@@ -1166,9 +1488,20 @@ fn end_on(
     let depth = outer - inner;
     let tol = 0.1 * depth + 1e-6;
     let change = thread.taper.max(0.0) * length / 2.0;
-    // Down to a thread's depth inside the minor diameter: an end
-    // chamfer's circle, which the convention leaves out.
-    let (from, to) = ((inner - depth - change).max(0.0), outer + change + tol);
+    // The thread's circles lie from its root's radius to its crest's (its
+    // helices seen end on). Below an external thread's minor diameter,
+    // down to a thread's depth inside it, lies its end chamfer's circle,
+    // which the convention leaves out too; inside an internal thread's
+    // crests (its minor diameter) the material ends, so what lies there (a
+    // narrower bore below a tapped hole) is no line of the thread's and
+    // stays (mitcad#1145).
+    let from = if thread.internal {
+        inner - change - tol
+    } else {
+        inner - depth - change
+    }
+    .max(0.0);
+    let to = outer + change + tol;
     let radius = |p: &P2| vec2::distance(*p, center);
     let (crest, root) = if thread.internal {
         (inner, outer)
@@ -1187,10 +1520,11 @@ fn end_on(
             continue;
         }
         let points = dense_points(&edge.curve, depth.max(1e-6), 64);
-        let inside = points.iter().all(|p| {
-            let r = radius(p);
-            r >= from && r <= to
-        });
+        // A circle about the axis or a spiral (where the end chamfer cuts
+        // the flanks) between those radii: its radius runs one way. A flat's
+        // chord across the crest circle dips inside it and stays.
+        let radii: Vec<f64> = points.iter().map(radius).collect();
+        let inside = radii.iter().all(|r| (from..=to).contains(r)) && one_way(&radii, tol);
         if !inside {
             kept.push(edge);
             continue;

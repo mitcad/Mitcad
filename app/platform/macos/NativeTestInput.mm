@@ -2602,6 +2602,22 @@ bool contextMenu(const QString& identifier, const QString& choice, QString& erro
   }, error, onClosed);
 }
 
+bool focusControl(const QString& identifier, QString& error) {
+  NSView* view = findControl(identifier);
+  if ([view isKindOfClass:NSScrollView.class]) view = ((NSScrollView*)view).documentView;
+  if (!view || !viewVisible(view) || !view.acceptsFirstResponder) {
+    error = QStringLiteral("no visible focusable native control '%1'").arg(identifier);
+    return false;
+  }
+  [view scrollRectToVisible:view.bounds];
+  [view.window makeKeyAndOrderFront:nil];
+  if (![view.window makeFirstResponder:view] || view.window.firstResponder != view) {
+    error = QStringLiteral("native control '%1' did not take keyboard focus").arg(identifier);
+    return false;
+  }
+  return true;
+}
+
 bool select(const QString& identifier, QString& error, Qt::KeyboardModifiers modifiers) {
   NSTableView* table = nil;
   NSInteger row = -1;
@@ -3417,7 +3433,11 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
   if (states.value(0) == QLatin1String("pane-icons")) return paneIcons(view, states.value(1), detail);
   // A Browser row's name as the shared row colours it (mitcad#1079):
   // row-failed, row-warning, row-dimmed or row-plain.
-  if (states.size() == 1 && states.front().startsWith(QLatin1String("row-"))) {
+  // Row selection has its own AppKit state assertion below; it is not a
+  // Browser tone even though both commands use the row- prefix.
+  if (states.size() == 1 && (states.front() == QLatin1String("row-failed") ||
+      states.front() == QLatin1String("row-warning") || states.front() == QLatin1String("row-dimmed") ||
+      states.front() == QLatin1String("row-plain"))) {
     NSTableCellView* cell = [view isKindOfClass:NSTableCellView.class] ? (NSTableCellView*)view : nil;
     const QString tone = states.front().mid(4);
     const id value = cell.accessibilityValue;
@@ -5950,6 +5970,46 @@ bool pointerClick(const QString& identifier, QString& error, double x, double y)
   }
   const NSPoint fraction = NSMakePoint(x, y);
   return pointerClickAt(identifier, error, &fraction);
+}
+
+bool pointerClickViewport(QOpenGLWidget* viewport, const QPointF& position, QString& error) {
+  NSWindow* window = documentWindow();
+  if (!active() || qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") || window == nil || !viewport ||
+      !std::isfinite(position.x()) || !std::isfinite(position.y()) ||
+      !QRectF(viewport->rect()).contains(position)) {
+    error = QStringLiteral("native viewport pointer requires a UI script and a point inside the current 3D view");
+    return false;
+  }
+  if (window.attachedSheet != nil || nativeDialogModalActive()) {
+    error = QStringLiteral("the native viewport pointer is blocked by a modal dialog");
+    return false;
+  }
+  // As for native-pinch, use the existing embedded Qt root. Creating an
+  // OpenGL child handle would change the input routing being verified.
+  QWidget* root = viewport->window();
+  const WId rootId = root->internalWinId();
+  if (!rootId) {
+    error = QStringLiteral("native viewport pointer requires an existing embedded Qt root");
+    return false;
+  }
+  NSView* native = (__bridge NSView*)reinterpret_cast<void*>(rootId);
+  if (native.window != window || !viewVisible(native)) {
+    error = QStringLiteral("the native viewport pointer's Qt root is not visible in its document window");
+    return false;
+  }
+  const QPointF rootPosition = viewport->mapTo(root, position);
+  const NSPoint local = NSMakePoint(NSMinX(native.bounds) + rootPosition.x(),
+      native.flipped ? NSMinY(native.bounds) + rootPosition.y() : NSMaxY(native.bounds) - rootPosition.y());
+  if (!NSPointInRect(local, NSIntersectionRect(native.bounds, native.visibleRect))) {
+    error = QStringLiteral("the native viewport pointer leaves the embedded view's visible bounds");
+    return false;
+  }
+  // The shared helper rejects a covering native view, then sends normal
+  // NSEvents through NSApp. Qt chooses its viewport/manipulator receiver.
+  if (!pointerEvents(native, local, local, error)) return false;
+  qInfo().noquote() << QStringLiteral("Native viewport pointer: %1,%2, AppKit hit tested and dispatched")
+                          .arg(position.x(), 0, 'f', 1).arg(position.y(), 0, 'f', 1);
+  return true;
 }
 
 bool pointerDoubleClick(const QString& identifier, QString& error) {

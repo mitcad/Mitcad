@@ -835,7 +835,14 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                     l - d,
                 )
             }
-            (true, None) => (ValueInput::Number(h), h),
+            // A profile without a length parameter (library profiles name
+            // `build.length`; a part of another source may not): its end B is known only by the seat measured from end A, the
+            // connector `h` back from it (mitcad#1150); without a seat it
+            // stays `h` from the slot's origin, as before.
+            (true, None) => {
+                let tx = seat.map_or(h, |s| snap(s - h));
+                (ValueInput::Number(tx), tx)
+            }
             (false, _) => {
                 let d = h + seat.map_or(0.0, snap);
                 (ValueInput::Number(d), d)
@@ -1029,6 +1036,15 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
             .collect();
         if first.is_empty() {
             return Ok(Vec::new());
+        }
+        // A test hook (mitcad#1151): with MITCAD_TEST_BUILD_UPGRADE_REFUSED
+        // set, a design with parts of the first rule is refused as an edit
+        // the document refuses would be, so that the callers' handling of
+        // a refused upgrade (the design still opens) can be tested.
+        if std::env::var_os("MITCAD_TEST_BUILD_UPGRADE_REFUSED").is_some() {
+            return Err(refuse(
+                "placing the connectors again is refused (MITCAD_TEST_BUILD_UPGRADE_REFUSED)",
+            ));
         }
         let connectors: BTreeSet<ComponentUid> = first
             .iter()

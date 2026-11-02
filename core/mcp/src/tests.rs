@@ -591,6 +591,13 @@ fn live_profile_requires_initialization_and_describes_application_ownership() {
     assert!(instructions.contains("document already open"));
     assert!(instructions.contains("document_list"));
     assert!(instructions.contains("Disconnecting leaves"));
+    // References before fixed planes (mitcad#1137).
+    assert!(
+        instructions.contains("a fixed plane ({\"origin\", \"normal\"}) stays where it is written")
+    );
+    // Sketches fully constrained and dimensioned (owner 2.11.2026).
+    assert!(instructions.contains("make every sketch fully constrained and dimensioned"));
+    assert!(instructions.contains("until the sketch query's dof is 0"));
     assert!(!instructions.contains("headless"));
     assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
     assert!(matches!(

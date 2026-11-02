@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/browser/BrowserMaterialMenu.cpp app/framework/TestDriver.cpp core/model/src/material.rs core/model/src/document/materials.rs
+# check-all sources: app/print app/browser/BrowserMaterialMenu.cpp app/framework/TestDriver.cpp core/model/src/material.rs core/model/src/document/materials.rs app/browser/AppearanceDialog.cpp app/commands/MaterialCommands.cpp core/model-base/src/appearance.rs
 # A filament's colour is its appearance (mitcad#1055): the shared driver
 # script tools/ui-scripts/filament-appearance.mitcad-ui (Material ▸ PLA
 # Basic ▸ an appearance for bodies and the root, a long material name shown

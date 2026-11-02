@@ -709,6 +709,7 @@ protected:
     m_pressAt = at;
     m_dragItem = false;
     m_shift = event->modifiers().testFlag(Qt::ShiftModifier);
+    m_toggle = event->modifiers().testFlag(Qt::ControlModifier);
   }
 
   void mouseMoveEvent(QMouseEvent* event) override {
@@ -797,6 +798,20 @@ protected:
       return;
     }
     if (itemAt(event->position().toPoint()) == pressed) {
+      if (m_toggle && !m_shift) {
+        const QStringList before = selectedRun();
+        m_externalSelected = QSet<QString>(before.begin(), before.end());
+        if (m_externalSelected.contains(uid)) m_externalSelected.remove(uid);
+        else m_externalSelected.insert(uid);
+        m_hasExternalSelection = true;
+        m_selected = uid;
+        m_selectedTo = uid;
+        update();
+        const QStringList run = selectedRun();
+        qDebug().noquote() << QStringLiteral("Timeline selected: %1").arg(run.join(QStringLiteral(", ")));
+        emit m_owner.featuresClicked(run);
+        return;
+      }
       if (m_shift && !m_selected.isEmpty()) {
         // Shift+click: a run of features from the one selected.
         m_hasExternalSelection = false;
@@ -857,8 +872,8 @@ protected:
       m_owner.openSearch(); // Ctrl+F, Cmd+F on macOS (mitcad#179)
       return;
     }
-    if (!m_selected.isEmpty() && isDeleteKey(event->key())) {
-      emit m_owner.deleteRequested(m_selected);
+    if (!selectedRun().isEmpty() && isDeleteKey(event->key())) {
+      emit m_owner.deleteRequested(selectedRun());
       return;
     }
     if (!m_selected.isEmpty() && event->key() == Qt::Key_F2) {
@@ -959,6 +974,7 @@ private:
   int m_hover = -1;
   int m_pressGroup = -1; // a press on a group's band or folded cell
   bool m_shift = false;
+  bool m_toggle = false;
   // Dragging the marker.
   bool m_dragMarker = false;
   int m_dragPosition = 0;

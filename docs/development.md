@@ -707,6 +707,17 @@ differ, so docks show the icon
 GTK is bundled, so it uses the `xdgdesktopportal` platform theme unless
 `QT_QPA_PLATFORMTHEME` is set.
 
+The AppImage's entry point is
+[packaging/linux/AppRun](../packaging/linux/AppRun) (mitcad#1170), in place
+of linuxdeploy's link to `usr/bin/mitcad`: `MitCad.AppImage cli
+<arguments>` runs the bundled `mitcad-cli`, anything else MitCad. AI
+assistants register the AppImage file that way (`"$APPIMAGE" cli mcp
+--connect`), since the mount folder changes on each start; inside MitCad
+the bundled executables are found from `/proc/self/exe`
+(`executableDirectory()` in
+[app/mcp/AssistantSetup.cpp](../app/mcp/AssistantSetup.cpp)), as Qt names
+the AppImage file's folder as the application's.
+
 `tools/appimage-test.sh` (ctest `app.appimage` once the AppImage exists)
 checks that every ELF resolves its libraries inside the AppImage or from
 system folders (an ELF on which `ldd` fails fails the test), then two
@@ -720,7 +731,10 @@ through its own `$ORIGIN` RUNPATH and in `ldd`'s view without
 no file may name a library folder of the build machine (vcpkg's install
 trees, the render libraries' prefix, the built executables' RUNPATHs).
 Then it runs the AppImage with an empty environment, renders with its
-render worker when it has one, and updates it to itself from a locally
+render worker when it has one, checks the bundled `mitcad-cli` as
+assistants start it (`cli --version`; the chat panel's bridge; the
+command Connect AI Assistant registers, run with `mcp --list-instances`,
+lists the running window), and updates it to itself from a locally
 signed manifest, over the bundled OpenSSL: the log line
 `Update check: TLS OpenSSL <version> …` names the bundled libcrypto's
 version, and the running MitCad has loaded libssl and libcrypto from the
@@ -1075,6 +1089,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_CORE_DUMPS=1` | Linux: `mitcad-cli`, `mitcad_run_parallel` and the corpus tests may leave core dumps (see *Core dumps* below). |
 | `MITCAD_RENDER_SAMPLES`, `MITCAD_RENDER_TEST_SCENE=1`, `MITCAD_RENDER_WORKER` | The rendered view's samples per pixel; the fixed test scene instead of the document; another render worker than `mitcad-render` next to the app ([rendering.md](rendering.md)). |
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
+| `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
 `--no-recovery`, `--no-native-dialogs` (Qt's file dialogs, so paths can

@@ -15,11 +15,12 @@
 //! The `make_differences` query gives the Make tab's Browser markers: the
 //! bodies whose material or print settings differ from their component's.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
-use mitcad_model::ids::ComponentUid;
+use mitcad_model::ids::{BodyUid, OccurrenceUid};
 use mitcad_model::kernel::Kernel;
-use mitcad_model::material::DEFAULT_MATERIAL;
 use mitcad_model::print_keys::{self, PrintSet};
 use mitcad_model::print_profile::{PROFILE_KEY, PrintPropertySet, print_set_of};
 use mitcad_model::properties::{PropertyOwner, same_name};
@@ -74,17 +75,29 @@ impl<K: Kernel> BodyNotesOps<K> for Document<K> {
 
     fn make_differences_json(&self) -> Value {
         let mut out = Vec::new();
+        // Each body's placements: the occurrence paths its components'
+        // defaults are taken up (mitcad#1150).
+        let mut placements: BTreeMap<BodyUid, Vec<Vec<OccurrenceUid>>> = BTreeMap::new();
+        for instance in self.instances() {
+            placements
+                .entry(instance.body)
+                .or_default()
+                .push(instance.path);
+        }
         for body in self.bodies() {
             let uid = body.uid;
-            // A material of its own, other than its component's default
-            // (else the root's, else the built-in default).
+            // A material of its own, other than the one its components give
+            // it in one of its placements (the nearest default up the
+            // occurrence path, else the root's, else the built-in default),
+            // as `body_material` takes it.
             let material = self.body_attributes(uid).material.and_then(|id| {
-                let component = self.body_component(uid).unwrap_or(ComponentUid::ROOT);
-                let given = [component, ComponentUid::ROOT]
-                    .into_iter()
-                    .find_map(|c| self.component_material(c).map(str::to_owned))
-                    .unwrap_or_else(|| DEFAULT_MATERIAL.to_owned());
-                (id != given).then(|| {
+                let differs = match placements.get(&uid) {
+                    Some(paths) => paths
+                        .iter()
+                        .any(|path| self.inherited_material(uid, Some(path.as_slice())).0.id != id),
+                    None => self.inherited_material(uid, None).0.id != id,
+                };
+                differs.then(|| {
                     self.material(&id)
                         .map_or_else(|| id.clone(), |m| m.name.clone())
                 })

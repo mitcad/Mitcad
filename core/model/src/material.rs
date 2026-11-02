@@ -309,8 +309,18 @@ pub fn split_filament_name(name: &str) -> (String, Option<String>) {
     (name.trim().to_owned(), None)
 }
 
+/// A bare last word of a filament preset's `@` part read as a nozzle: a
+/// decimal number in a nozzle's range, 0.1 to 2 mm ("0.6", "1.0",
+/// "0.4mm"). A whole number is a model number, as the 3 of "Ender 3" or the
+/// 2 of "Kobra 2" (mitcad#1147); a nozzle written as a whole number needs
+/// the "… nozzle" phrase ("Bench X 1 nozzle").
+fn bare_nozzle(word: &str) -> Option<f64> {
+    diameter(word).filter(|n| word.contains('.') && (0.1..=2.0).contains(n))
+}
+
 /// The printer and nozzle a filament preset's `@` part names: "Bench X 0.6
-/// nozzle", "MK4 0.6" (a bare diameter last), "Bench X".
+/// nozzle", "MK4 0.6" (a bare diameter last), "Bench X"; "Ender 3" is a
+/// printer, as a bare whole number is a model number, not a nozzle.
 pub fn suffix_printer(suffix: &str) -> Option<(String, Option<f64>)> {
     let (printer, nozzle) = split_nozzle(suffix);
     if nozzle.is_some() {
@@ -319,7 +329,7 @@ pub fn suffix_printer(suffix: &str) -> Option<(String, Option<f64>)> {
     let words: Vec<&str> = printer.split_whitespace().collect();
     if let [rest @ .., last] = words.as_slice()
         && !rest.is_empty()
-        && let Some(n) = diameter(last)
+        && let Some(n) = bare_nozzle(last)
     {
         return Some((rest.join(" "), Some(n)));
     }
@@ -1165,6 +1175,32 @@ mod tests {
         assert_eq!(
             suffix_printer("Bench X"),
             Some(("Bench X".to_owned(), None))
+        );
+        // A trailing whole number is the printer's model number, not a
+        // nozzle (mitcad#1147); a decimal one in a nozzle's range is.
+        assert_eq!(
+            suffix_printer("Ender 3"),
+            Some(("Ender 3".to_owned(), None))
+        );
+        assert_eq!(
+            suffix_printer("Kobra 2"),
+            Some(("Kobra 2".to_owned(), None))
+        );
+        assert_eq!(
+            suffix_printer("Bench X 1.0"),
+            Some(("Bench X".to_owned(), Some(1.0)))
+        );
+        assert_eq!(
+            suffix_printer("Bench X 0.4mm"),
+            Some(("Bench X".to_owned(), Some(0.4)))
+        );
+        assert_eq!(
+            suffix_printer("Bench X 2.5"),
+            Some(("Bench X 2.5".to_owned(), None))
+        );
+        assert_eq!(
+            suffix_printer("Bench X 1 nozzle"),
+            Some(("Bench X".to_owned(), Some(1.0)))
         );
         assert!(same_printer("Bench  X", "bench x") && !same_printer("", ""));
     }

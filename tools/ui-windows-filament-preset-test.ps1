@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/files/MainWindowPrint.cpp app/framework/NoteRow.cpp
+# check-all sources: app/print app/files/MainWindowPrint.cpp app/framework/NoteRow.cpp app/browser/LibraryPicker.cpp
 # check-all sources: app/framework/CommandPanel.cpp app/framework/Command.hpp core/model core/3mf core/zip tools/cli
 # Input-driven Windows UI test of a material's filament preset per slicer
 # (mitcad#1062) in the build VM (tools/ui-windows-lib.ps1 says how the
@@ -7,13 +7,14 @@
 # a box whose material (Shop PETG HF, made in MitCad) names no slicer
 # preset, with a fake slicer (a PowerShell script that writes the
 # arguments it was started with) of no known dialect:
-#   1. 3D Print (a shortcut of the test's) with 3MF: the Materials row
-#      warns that Shop PETG HF names no Bambu Studio filament preset (the
-#      design's slicer).
-#   2. The row's pencil opens Materials on the body's material; on the
+#   1. 3D Print (a shortcut of the test's) with 3MF: the warning under the
+#      Material row says that Shop PETG HF names no Bambu Studio filament
+#      preset (the design's slicer).
+#   2. Edit materials..., the last row of the Material row's picker
+#      (mitcad#1141), opens Materials on the body's material; on the
 #      Filament tab the search finds the Slicer presets, a row per slicer;
 #      Bambu Studio's typed and Enter: one edit, the name kept for Bambu
-#      Studio. Closed, the row's warning is gone.
+#      Studio. Closed, the warning is gone.
 #   3. Send (Enter): the 3MF's project settings name the filament by the
 #      preset (filament_settings_id) and inherit from it (inherits_group).
 #
@@ -38,6 +39,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 # The user's library of materials and profiles in the test's own folder.
 $env:MITCAD_PRINT_LIBRARY_DIR = Join-Path $work 'print-library'
 $warning = '(warning: Shop PETG HF names no Bambu Studio filament preset'
+$editMaterials = 'Edit materials' + [string][char]0x2026
 
 # The app's temporary folder of the test's own, and a fake slicer in the
 # settings.
@@ -114,18 +116,25 @@ function Project-Settings {
 
 Ui-StartApp 'filament-preset' @('--open', $design)
 
-Write-Host '--- 1. 3D Print: the Materials row warns of the material without a preset'
+Write-Host '--- 1. 3D Print: a warning under the Material row of the material without a preset'
 Ui-Mark
 Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
 Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
 Ui-ExpectNew '; format 3mf, ' 'the panel starts with 3MF'
-Ui-ExpectNew $warning 'the row warns that Shop PETG HF names no Bambu Studio preset'
-Ui-ExpectNew 'Panel Send to Slicer action materials.0 at ' 'its pencil has its place'
+Ui-ExpectNew $warning 'the warning that Shop PETG HF names no Bambu Studio preset'
+Ui-ExpectNew '3D Print materials warning: Shop PETG HF names no Bambu Studio filament preset' 'the warning logged'
+Ui-ExpectNew 'Panel Send to Slicer input material_1 at ' 'the Material row has its place'
 
-Write-Host '--- 2. Materials'' Filament tab: Bambu Studio''s preset typed'
-Ui-PanelReveal 'Panel Send to Slicer input materials'
+Write-Host '--- 2. Edit materials...: Materials'' Filament tab, Bambu Studio''s preset typed'
 Ui-Mark
-Ui-Step 'the Materials row''s pencil'    { Ui-ClickLogged 'Panel Send to Slicer action materials.0' }
+Ui-Step 'open the Material row'          { Ui-ClickLogged 'Panel Send to Slicer input material_1' }
+Ui-ExpectNew 'Material picker opened: ' 'its picker opened'
+Ui-FocusDialog '^Material Picker$'
+Ui-Mark
+Ui-Step 'type Edit materials'            { Ui-Type 'Edit materials' }
+Ui-ExpectNew "Material picker search: Edit materials, first $editMaterials" 'its last row, Edit materials...'
+Ui-Step 'Edit materials... (Enter)'      { Ui-Key 'Return' }
+Ui-ExpectNew "Material picker chose: $editMaterials" 'Edit materials... chosen'
 Ui-ExpectNew 'Materials opened for bodies F1.b0' 'Materials opened for the body printed'
 Ui-ExpectNew 'Material selected: Shop PETG HF (design)' 'on the body''s material'
 Ui-ExpectNew 'Materials settings tab filament at ' 'the print tabs beside General'
@@ -145,11 +154,7 @@ Ui-ExpectNew 'Material Shop PETG HF (design) filament_settings_id = Bambu Studio
   'Enter saved it, for Bambu Studio'
 Ui-Step 'close'                          { Click-InDialog 'Materials close' }
 Ui-FocusMain
-Ui-ExpectNew 'Panel Send to Slicer note materials: ' 'the Materials row again'
-$last = Ui-LogLines | Select-Object -Skip $script:UiMark |
-  Where-Object { $_.Contains('Panel Send to Slicer note materials: ') } | Select-Object -Last 1
-if ("$last".Contains('(warning:')) { Ui-Fail "the row still warns: $last" }
-Write-Host 'ok   the row warns no more'
+Ui-ExpectNew '3D Print materials warning: none' 'the warning is gone'
 
 Write-Host '--- 3. Send: the 3MF names the filament by the preset and inherits from it'
 Remove-Item -Force $slicerArgs -ErrorAction SilentlyContinue

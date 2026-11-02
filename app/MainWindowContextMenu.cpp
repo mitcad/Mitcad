@@ -400,13 +400,13 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
     QStringList features;
     for (const SelectionItem& item : selection) {
       const QString uid = item.kind == SelectKind::Feature ? item.owner : item.creatingFeature();
-      if (!features.contains(uid)) {
+      if (m_snapshot.feature(uid) != nullptr && !features.contains(uid)) {
         features << uid;
       }
     }
-    if (parts.isEmpty() && features.size() == 1 && m_snapshot.feature(features.first()) != nullptr) {
-      const QString uid = features.first();
-      remove.addCall(tr("Delete Feature"), [this, uid] { m_controller->deleteFeature(uid); });
+    if (parts.isEmpty() && !features.isEmpty()) {
+      remove.addCall(features.size() == 1 ? tr("Delete Feature") : tr("Delete %1 Features").arg(features.size()),
+                     [this, features] { m_controller->deleteFeatures(features); });
     }
     if (!remove.isEmpty()) {
       addSubmenu(remove);

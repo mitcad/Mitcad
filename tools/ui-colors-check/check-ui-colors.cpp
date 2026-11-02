@@ -15,13 +15,17 @@
 //                                  checks the scan on planted sources
 //
 // A color literal is, outside comments: a hex color in a string ("#rrggbb"
-// or "#rrggbbaa", as in a style sheet or rich text); a QColor made from
-// literal channels (QColor(0x1f, 0x7a, 0xff), QColor k(255, ...), QColor{...});
-// QColor::fromRgb, fromRgbF, fromHsv, fromHsvF, fromHsl or fromHslF with a
-// literal first channel; qRgb or qRgba with literal channels; an OCCT
-// Quantity_Color with literal channels; an AppKit color made with a literal
-// red channel (colorWithSRGBRed:0.5 …); a braced triple of hex channels
-// ({0x1f, 0x7a, 0xff}). Colors made from a role, a variable or the
+// or "#rrggbbaa", as in a style sheet or rich text); a style sheet's rgb() or
+// rgba() of literal channels ("background: rgba(40, 40, 40, 210)"); a style
+// sheet's color name after color: or background: ("color: white"); a QColor
+// made from literal channels (QColor(0x1f, 0x7a, 0xff), QColor k(255, ...),
+// QColor{...}); QColor::fromRgb, fromRgbF, fromHsv, fromHsvF, fromHsl or
+// fromHslF with a literal first channel; qRgb or qRgba with literal channels;
+// an OCCT Quantity_Color with literal channels or an OCCT color name
+// (Quantity_NOC_WHITE); an AppKit color made with a literal red channel or
+// a literal white (colorWithSRGBRed:0.5 …, colorWithWhite:0 alpha:0.45); a
+// braced triple of hex channels ({0x1f, 0x7a, 0xff}). Colors made from a
+// role, a variable or the
 // palette are not literals. Six-digit hex integers (0x1f7aff) count only in
 // the files of kHexIntegerFiles (the icons' color table, framework/Icons.cpp).
 //
@@ -68,24 +72,30 @@ const Allowed kAllowed[] = {
     {"print/MaterialsDialog.cpp", 1, "a filament without a color: its neutral swatch"},
     {"browser/BrowserMaterialMenu.cpp", 1, "a material without a color: its neutral swatch"},
     {"commands/MaterialCommands.cpp", 1, "a material without a color: its neutral swatch"},
+    {"files/MainWindowPrint.cpp", 1, "Send to Slicer's material without a color: its neutral swatch"},
     {"print/SettingField.cpp", 3, "a color swatch's checkerboard under its transparency and its frame"},
     {"browser/PropertySetsDialog.cpp", 1, "a color swatch's frame"},
     {"platform/macos/NativeTestInput.mm", 1, "a color typed by a UI test"},
     // The view's own artwork and surroundings.
-    {"view/ViewCube.cpp", 16, "the orientation cube's glass, light and sheen: the view's own artwork"},
+    {"view/ViewCube.cpp", 20,
+     "the orientation cube's glass, light and sheen, its materials' black specular and emissive channels, the "
+     "white its face textures are multiplied by and its centre sphere's grey: the view's own artwork"},
     {"view/ViewController.cpp", 10, "the view background presets (View › Background, a user preference)"},
     {"view/ViewController.hpp", 2, "the default view background preset"},
     {"OcctViewer.hpp", 3, "the view's background and the hidden-line paper before the preference is read"},
-    {"OcctViewer.cpp", 3, "the ambient light's intensity and the background before the preference is read"},
+    {"OcctViewer.cpp", 10,
+     "the ambient light's intensity, the key light's white, the background before the preference is read, and "
+     "the white or black channels OCCT multiplies marker images, textures and the emissive highlights by"},
     {"LayoutGrid.hpp", 2, "the layout grid's lines on the view's dark background"},
     {"drawings/DrawingSheetView.cpp", 4, "the drawing sheet's surroundings and shadows around its paper"},
     {"framework/Cursors.cpp", 2, "the cursors' artwork: a dark arm with a white halo"},
-    {"framework/GlassCard.cpp", 2, "the glass cards' neutral grey rim and tint"},
+    {"framework/GlassCard.cpp", 4, "the glass cards' neutral grey rim and tint, their flat buttons' hover and press"},
     {"library/PartPicker.cpp", 1, "a neutral grey tint over a thumbnail"},
     {"materials/TextureBrowser.cpp", 1, "a neutral grey placeholder of a texture still loading"},
     {"print/PurgeVolumesDialog.cpp", 1, "a neutral shadow line"},
     {"report/ReportDialogs.cpp", 1, "the dimming around a crop"},
-    {"view/PrintOverlay.cpp", 1, "the white halo under the thinnest point's marker"},
+    {"view/PrintOverlay.cpp", 2,
+     "the white halo under the thinnest point's marker and the white the overlay's texture is multiplied by"},
     {"framework/Ribbon.cpp", 1, "the selected tab's light text on the dark accent pill"},
     // Recorded exceptions of the color principles.
     {"sketch/PointMarkers.cpp", 10,
@@ -95,7 +105,22 @@ const Allowed kAllowed[] = {
     {"framework/Icons.cpp", 60,
      "the icon artwork's source colors, each the key of an icon role (the error, success and warning ones "
      "drawn in their roles of the role table), the icon roles' own paints, and the masks that read them"},
-    {"platform/macos/NativeCollection.mm", 1, "the favorite star in AppKit: as PartStar.cpp"},
+    {"platform/macos/NativeCollection.mm", 2,
+     "the favorite star in AppKit: as PartStar.cpp; the neutral grey placeholder of a thumbnail not read yet"},
+    // Neutral greys and whites of style sheets, OCCT and AppKit (mitcad#1151).
+    {"framework/CommandPanel.cpp", 16,
+     "the command panel's neutral grey button, field and result tints: translucent greys over either palette"},
+    {"framework/ResultRows.cpp", 1, "the result rows' neutral grey backing, as the command panel's"},
+    {"framework/CommandSession.cpp", 1, "the near-white value box over the 3D view, as ManipulatorOverlay's"},
+    {"sketch/SketchController.cpp", 1, "the near-white value field over the 3D view"},
+    {"sketch/SketchPalette.cpp", 2, "a flat button's neutral grey hover and press tints"},
+    {"view/NavigationBar.cpp", 2, "a flat button's neutral grey hover and press tints"},
+    {"mcp/ConnectAssistantDialog.cpp", 1, "a flat tile's neutral grey hover tint"},
+    {"render/RenderMode.cpp", 2, "the view message's dark card and its white text over the rendered image"},
+    {"print/MaterialVariantsPage.cpp", 1, "the quiet grey of the empty variant list's note"},
+    {"view/CenterOfMassView.cpp", 1, "white as the marker's object color, which OCCT multiplies the marker image by"},
+    {"view/ImageReferenceView.cpp", 1, "white under a reference image, which OCCT multiplies its texture by"},
+    {"platform/macos/NativeDialogs.mm", 1, "the dimming outside a crop, as ReportDialogs.cpp"},
 };
 
 // The source text without its comments: strings (raw strings too) and
@@ -165,6 +190,11 @@ std::vector<int> literalLines(const std::string& source, bool hexIntegers = fals
       "|QColor::from(Rgb|Hsv|Hsl)F?\\s*\\(\\s*[0-9.]"
       "|qRgba?\\s*\\(\\s*[0-9]"
       "|colorWith(SRGB|Calibrated|Device)?Red:\\s*[0-9.]"
+      "|colorWith(Calibrated|Device)?White:\\s*[0-9.]"
+      "|\\brgba?\\s*\\(\\s*[0-9]"
+      "|\\b(color|background(-color)?)\\s*:\\s*(white|black|gr[ae]y|red|green|blue|yellow|orange|lightgr[ae]y|"
+      "darkgr[ae]y)\\b"
+      "|Quantity_NOC_[A-Z0-9_]+"
       "|\\{\\s*0x[0-9A-Fa-f]{2}\\s*,\\s*0x[0-9A-Fa-f]{2}\\s*,\\s*0x[0-9A-Fa-f]{2}");
   std::vector<int> lines;
   std::istringstream in(withoutComments(source));
@@ -268,6 +298,15 @@ int selfTest() {
   expect("OCCT", "const Quantity_Color kBody(0.70, 0.74, 0.80, Quantity_TOC_RGB);", 1);
   expect("AppKit", "f = [NSColor colorWithSRGBRed:0.88 green:0.48 blue:0.1 alpha:1];", 1);
   expect("braced channels", "return {0x2b, 0x86, 0x7e};", 1);
+  expect("rgba in a style sheet", "w->setStyleSheet(\"QLabel { background: rgba(40, 40, 40, 210); }\");", 1);
+  expect("rgb in a style sheet", "s = \"QFrame { border: 1px solid rgb(128,128,128); }\";", 1);
+  expect("a color name in a style sheet", "s = \"QLabel { color: white; } QFrame { background-color: gray; }\";", 2);
+  expect("AppKit white", "[NSColor colorWithWhite:0 alpha:0.45];", 1);
+  expect("AppKit calibrated white", "c = [NSColor colorWithCalibratedWhite:0.5 alpha:1];", 1);
+  expect("OCCT color name", "centre->SetColor(Quantity_Color(Quantity_NOC_GRAY80)); l = Quantity_NOC_WHITE;", 2);
+  expect("a style sheet's role or transparent",
+         "s = QStringLiteral(\"QLabel { color: %1; background: transparent; border: 1px solid rgba(%2); }\");", 0);
+  expect("a QColor's rgba() and qRgba once", "u = c.rgba(); v = qRgba(1, 2, 3, 4);", 1);
   expect("a role", "c = themeColor(ColorRole::Select); d = QColor(Qt::white); e = viewColor(r, dark);", 0);
   expect("a palette's or a variable's", "QColor c(palette.color(QPalette::Window)); QColor d(rgb);", 0);
   expect("AppKit from a variable", "[NSColor colorWithSRGBRed:color.redF() green:0 blue:0 alpha:1];", 0);

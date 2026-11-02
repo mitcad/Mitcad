@@ -137,6 +137,63 @@ void contrastTests() {
   }
 }
 
+// A translucent colour over an opaque one, as the screen shows it.
+QColor over(const QColor& top, const QColor& below) {
+  const float a = top.alphaF();
+  return QColor::fromRgbF(a * top.redF() + (1.0f - a) * below.redF(), a * top.greenF() + (1.0f - a) * below.greenF(),
+                          a * top.blueF() + (1.0f - a) * below.blueF());
+}
+
+// A hidden Browser row's name (mitcad#1101): TextHidden at least 4.5:1 on
+// every card a row is drawn on, Docked and Floating, light and dark, and
+// still dimmer than a shown row's name (Text): less contrast on each card,
+// and at least 1.2:1 apart from it. A Floating row's card is the
+// window's colour at 80% (dark) or 85% (light) over the view
+// (cardFillColor, BrowserTree::paintRowBox), so the view's background
+// shows through: over a white view the dark card is about #5b5b5b, where
+// the secondary grey (#b4b8be) read 3.4:1.
+void hiddenRowTests() {
+  // The view's backgrounds under a card: the presets' extremes (White, the
+  // Gradient's top, the Dark preset's two) and a black one (Custom).
+  const std::vector<QColor> views = {QColor(0xff, 0xff, 0xff), QColor(0xf7, 0xf8, 0xfa), QColor(0x3b, 0x42, 0x4d),
+                                     QColor(0x1c, 0x20, 0x27), QColor(0x00, 0x00, 0x00)};
+  // The windows a Floating card takes its material from, the platform's
+  // palette: Qt's own style's and GTK's dark (#323232, the ticket's picture),
+  // Windows 11's, macOS's; light ones likewise, and white.
+  const std::vector<QColor> darkWindows = {QColor(0x32, 0x32, 0x32), QColor(0x2d, 0x2d, 0x2d),
+                                           QColor(0x20, 0x20, 0x20), QColor(0x1e, 0x1e, 0x1e)};
+  const std::vector<QColor> lightWindows = {QColor(0xef, 0xef, 0xef), QColor(0xf3, 0xf3, 0xf3),
+                                            QColor(0xec, 0xec, 0xec), QColor(0xff, 0xff, 0xff)};
+  for (const bool dark : {false, true}) {
+    // Docked: the window, the panels, the raised controls (and white).
+    std::vector<QColor> cards = surfaces(dark);
+    if (dark) {
+      cards.push_back(QColor(0x46, 0x47, 0x48)); // the Floating card of mitcad#961
+    }
+    // Floating: each window's card material over each view.
+    const std::vector<QColor>& windows = dark ? darkWindows : lightWindows;
+    for (const QColor& window : windows) {
+      QPalette palette;
+      palette.setColor(QPalette::Window, window);
+      CHECK(isDarkPalette(palette) == dark);
+      for (const QColor& view : views) {
+        cards.push_back(over(cardFillColor(palette), view));
+      }
+    }
+    const QColor hidden = themeColor(ColorRole::TextHidden, dark);
+    const QColor shown = themeColor(ColorRole::Text, dark);
+    for (const QColor& card : cards) {
+      check(contrastRatio(hidden, card) >= 4.5, "contrastRatio(hidden, card) >= 4.5", __LINE__,
+            QStringLiteral("%1 on %2").arg(hidden.name(), card.name()));
+      check(contrastRatio(shown, card) > contrastRatio(hidden, card),
+            "contrastRatio(shown, card) > contrastRatio(hidden, card)", __LINE__,
+            QStringLiteral("%1 on %2").arg(hidden.name(), card.name()));
+    }
+    // Visibly dimmer than a shown row's name.
+    CHECK(contrastRatio(hidden, shown) >= 1.2);
+  }
+}
+
 // How far apart two hues are, in degrees (0 to 180).
 double hueDistance(const QColor& a, const QColor& b) {
   const double d = std::abs(a.hsvHueF() - b.hsvHueF()) * 360.0;
@@ -179,6 +236,7 @@ int colorRoleTests() {
   failures = 0;
   tableTests();
   contrastTests();
+  hiddenRowTests();
   reservedHueTests();
   return failures;
 }

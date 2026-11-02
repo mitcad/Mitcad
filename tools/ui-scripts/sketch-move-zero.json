@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY: two free points that frame the view's fit and a free line from (-20, 0) to (20, 10) for Move/Copy (mitcad#1163)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-20,0],"end":[20,10]}
+]

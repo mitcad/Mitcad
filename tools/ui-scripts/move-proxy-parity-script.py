@@ -69,11 +69,10 @@ else:
         add("native-expand native.modelTree", "native-select native.model." +
             ("body:F2.b0@" if case == "body-arrow" else "component@O2"))
     elif case == "body-arrow":
-        # Startup folds this fixture's body folder. Open its visible
-        # disclosure, wait for fresh row geometry, then click the body.
+        # Startup already expands this fixture's body folder. Wait for
+        # the shown body row instead of folding it with its disclosure.
         # Selecting a Browser row returns keyboard focus to the canvas.
-        add("mark", "click-logged '^Browser arrow Root/Bodies at '", "wait-idle 60",
-            "expect-log '^Browser Root/Bodies/Body1 at '",
+        add("expect-ever '^Browser Root/Bodies/Body1 at '",
             "click-logged '^Browser Root/Bodies/Body1 at '",
             "expect-log '^Selected: 1 body \\[body F2.b0\\]$'")
     else:

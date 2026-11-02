@@ -36,10 +36,10 @@ expect-native-toolbar-item mitcad.project false
 native-toolbar-item command.file.open_from_project palette
 native-toolbar-item command.file.open_from_project insert
 expect-native-toolbar-item command.file.open_from_project true
-# File/Open... is an unnamed QAction, identified from its stable menu path.
-native-toolbar-item command.native.menu.887abc3a37a931467873f9b8dddb94d816b70cdf6a35c7485e13d07f551ec4b4 palette
-native-toolbar-item command.native.menu.887abc3a37a931467873f9b8dddb94d816b70cdf6a35c7485e13d07f551ec4b4 insert
-expect-native-toolbar-item command.native.menu.887abc3a37a931467873f9b8dddb94d816b70cdf6a35c7485e13d07f551ec4b4 true
+# File/Open is a registry command; its stable id also survives relaunch.
+native-toolbar-item command.file.open palette
+native-toolbar-item command.file.open insert
+expect-native-toolbar-item command.file.open true
 mark
 native-action file.new_project
 focus-dialog '^New Project$'

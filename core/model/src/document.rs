@@ -1173,6 +1173,7 @@ pub struct ProfileView {
     pub region: RegionKey,
     /// An extrude uses it (the profile is then hidden).
     pub consumed: bool,
+    pub face_bounded: bool,
 }
 
 /// The first failed feature of a recompute.
@@ -1346,6 +1347,11 @@ pub struct Document<K: Kernel> {
     /// so that undo leaves them; a stamped save changes them through a
     /// shared reference ([`Document::save_file_stamped`]).
     statistics: RwLock<crate::file::KeptStatistics>,
+    /// The top-level fields of the design file this document was read
+    /// from that this build did not read (mitcad#1132): beside the state,
+    /// so that undo leaves them; a save over that file clears them
+    /// through a shared reference ([`Document::save_file`]).
+    unknown_fields: RwLock<crate::file::UnknownFields>,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -1407,6 +1413,7 @@ impl<K: Kernel> Document<K> {
             sketch_answers: Default::default(),
             configuration_moves: (0, Vec::new()),
             statistics: RwLock::new(crate::file::KeptStatistics::new_design()),
+            unknown_fields: RwLock::new(Default::default()),
         }
     }
 
@@ -1442,6 +1449,27 @@ impl<K: Kernel> Document<K> {
 
     pub(crate) fn set_kept_statistics(&self, statistics: crate::file::KeptStatistics) {
         *self.statistics.write().unwrap_or_else(|e| e.into_inner()) = statistics;
+    }
+
+    /// The top-level fields a design file had that this build did not
+    /// read (mitcad#1132).
+    pub(crate) fn with_unknown_fields(self, unknown: crate::file::UnknownFields) -> Self {
+        self.set_unknown_fields(unknown);
+        self
+    }
+
+    pub(crate) fn kept_unknown_fields(&self) -> crate::file::UnknownFields {
+        self.unknown_fields
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn set_unknown_fields(&self, unknown: crate::file::UnknownFields) {
+        *self
+            .unknown_fields
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = unknown;
     }
 
     pub(crate) fn source_directory(&self) -> Option<PathBuf> {
@@ -1715,6 +1743,7 @@ impl<K: Kernel> Document<K> {
             sketch_answers: Default::default(),
             configuration_moves: (0, Vec::new()),
             statistics: RwLock::new(self.kept_statistics()),
+            unknown_fields: RwLock::new(self.kept_unknown_fields()),
         })
     }
 
@@ -2046,6 +2075,7 @@ impl<K: Kernel> Document<K> {
                     sketch: entry.uid,
                     region: region.key.clone(),
                     consumed: consumed.contains(&(entry.uid, &region.key)),
+                    face_bounded: region.face_bounded(),
                 });
             }
         }

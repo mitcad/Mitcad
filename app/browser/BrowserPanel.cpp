@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -35,6 +37,7 @@
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/LengthUnits.hpp"
 #include "../framework/NoticeLevel.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
@@ -70,6 +73,39 @@ constexpr int kLinkedRole = Qt::UserRole + 3;
 // A row whose item follows expressions (mitcad#862): how many of its
 // properties do, shown as the fx badge after its name (`fx 3`).
 constexpr int kBindingsRole = Qt::UserRole + 4;
+// The light bulb's tooltip of a row that follows a Show When condition and
+// of a folder that holds such rows (mitcad#863), in place of Hide / Show.
+constexpr int kEyeTipRole = Qt::UserRole + 8;
+// A row that follows a Show When condition itself (mitcad#863): its bulb
+// has the small fx badge; a folder's never has.
+constexpr int kEyeBoundRole = Qt::UserRole + 9;
+// A body row's Make tab marker (mitcad#1049): what of its material and
+// print settings differs from its component's, the marker's tooltip;
+// empty without one.
+constexpr int kMakeRole = Qt::UserRole + 10;
+// A transparent body or component (mitcad#1093): its light bulb, while on,
+// is the half-open eye.
+constexpr int kEyeTransparentRole = Qt::UserRole + 11;
+// A row's name colour role (a ColorRole as an int, mitcad#1104; see
+// setNameRole).
+constexpr int kTextRole = Qt::UserRole + 12;
+// Every item data role of the rows, each a number of its own: two features
+// that once shared one (mitcad#1143) misread each other's values, a
+// transparent row's name painted red. A new role goes in this block and in
+// this list.
+constexpr int kRowRoles[] = {kEyeRole,      kRadioRole, kLinkedRole,         kBindingsRole, kEyeTipRole,
+                             kEyeBoundRole, kMakeRole,  kEyeTransparentRole, kTextRole};
+constexpr bool rowRolesDistinct() {
+  for (std::size_t i = 0; i < std::size(kRowRoles); ++i) {
+    for (std::size_t j = i + 1; j < std::size(kRowRoles); ++j) {
+      if (kRowRoles[i] == kRowRoles[j]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+static_assert(rowRolesDistinct(), "two browser row roles share a number (mitcad#1143)");
 
 // The fx badge's font and text (mitcad#862).
 QFont bindingsFont(const QFont& font) {
@@ -97,19 +133,6 @@ int bindingsWidth(const QFont& font, int count) {
 }
 // The Make tab's marker's side (mitcad#1049): half an icon's.
 int makeMarkSide(int iconSide) { return std::max(6, iconSide / 2); }
-// The light bulb's tooltip of a row that follows a Show When condition and
-// of a folder that holds such rows (mitcad#863), in place of Hide / Show.
-constexpr int kEyeTipRole = Qt::UserRole + 8;
-// A row that follows a Show When condition itself (mitcad#863): its bulb
-// has the small fx badge; a folder's never has.
-constexpr int kEyeBoundRole = Qt::UserRole + 9;
-// A body row's Make tab marker (mitcad#1049): what of its material and
-// print settings differs from its component's, the marker's tooltip;
-// empty without one.
-constexpr int kMakeRole = Qt::UserRole + 10;
-// A transparent body or component (mitcad#1093): its light bulb, while on,
-// is the half-open eye.
-constexpr int kEyeTransparentRole = Qt::UserRole + 11;
 // The space between a light bulb and the icon, and between the name and
 // the radio button.
 constexpr int kGap = 4;
@@ -129,8 +152,7 @@ constexpr int kIndentation = panel::kTreeIndentation;
 // row, by the palette it is painted on (rowsPalette): a colour taken when
 // the row was styled kept that theme's, so that after a switch to the dark
 // theme a hidden row's light-theme grey stayed on the dark card and its
-// name did not show (mitcad#1104).
-constexpr int kTextRole = Qt::UserRole + 11;
+// name did not show (mitcad#1104). The role is kept under kTextRole.
 void setNameRole(QTreeWidgetItem* item, ColorRole role) {
   item->setData(kName, kTextRole, static_cast<int>(role));
 }
@@ -188,7 +210,12 @@ QString rowTone(const QTreeWidgetItem* item) {
 // style lays out and highlights the row as it does any other.
 class EyeIconEngine : public QIconEngine {
 public:
-  EyeIconEngine(QIcon eye, QIcon icon) : m_eye(std::move(eye)), m_icon(std::move(icon)) {}
+  // `bulb`: the bulb's icon name (eye, eye-off, eye-half), which the icon
+  // gives as its name (QIcon::name), for the unit test (mitcad#1143).
+  EyeIconEngine(QIcon eye, QIcon icon, QString bulb)
+      : m_eye(std::move(eye)), m_icon(std::move(icon)), m_bulb(std::move(bulb)) {}
+
+  QString iconName() override { return m_bulb; }
 
   // The bulb of a row that follows a Show When condition (mitcad#863): the
   // whole plain bulb (open or closed eye) with a small fx badge in its lower
@@ -221,7 +248,7 @@ public:
   }
 
   QIconEngine* clone() const override {
-    auto* copy = new EyeIconEngine(m_eye, m_icon);
+    auto* copy = new EyeIconEngine(m_eye, m_icon, m_bulb);
     if (m_badge) {
       copy->setBadge(m_accent, m_base, m_text);
     }
@@ -259,6 +286,7 @@ private:
 
   QIcon m_eye;
   QIcon m_icon;
+  QString m_bulb;
   bool m_badge = false;
   QColor m_accent;
   QColor m_base;
@@ -426,7 +454,7 @@ protected:
       const QString bulb = !eye.toBool()                                ? QStringLiteral("eye-off")
                            : index.data(kEyeTransparentRole).toBool() ? QStringLiteral("eye-half")
                                                                        : QStringLiteral("eye");
-      auto* engine = new EyeIconEngine(themeIcon(bulb), option->icon);
+      auto* engine = new EyeIconEngine(themeIcon(bulb), option->icon, bulb);
       // A row that follows a condition: the fx corner badge (mitcad#863).
       if (index.data(kEyeBoundRole).toBool()) {
         const QColor accent = accentColor(option->palette);
@@ -954,7 +982,7 @@ protected:
         return;
       }
       if (isDeleteKey(event->key())) {
-        emit m_panel.deleteRequested(m_panel.nodeOf(item));
+        emit m_panel.deleteRequested(m_panel.selectedNodes());
         return;
       }
     }
@@ -1048,6 +1076,7 @@ private:
 };
 
 BrowserPanel::BrowserPanel(QWidget* parent) : QWidget(parent), m_tree(new BrowserTree(*this)) {
+  m_tree->setObjectName(QStringLiteral("modelBrowserTree"));
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->addWidget(m_tree);
@@ -1914,9 +1943,11 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
     return;
   }
   const QString rules = sheet.value(QStringLiteral("rules")).toString();
-  const auto mm = [&sheet](const char* key) {
-    return QString::number(sheet.value(QLatin1String(key)).toDouble(), 'g', 6);
+  // The lengths in the design's unit (mitcad#1165), the K-factor as it is.
+  const auto length = [&sheet, &snapshot](const char* key) {
+    return lengthInUnit(sheet.value(QLatin1String(key)).toDouble(), snapshot.lengthUnit);
   };
+  const QString kFactor = QString::number(sheet.value(QStringLiteral("k_factor")).toDouble(), 'g', 6);
   BrowserNode node;
   node.type = BrowserNode::Type::SheetRules;
   node.uid = rules;
@@ -1924,14 +1955,14 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
   node.occurrence = body.occurrence;
   node.component = body.component;
   node.featureType = QStringLiteral("sheet_rules");
-  node.name = QStringLiteral("%1 (%2 mm, R %3 mm, K %4)")
-                  .arg(sheet.value(QStringLiteral("rules_name")).toString(rules), mm("thickness"), mm("bend_radius"),
-                       mm("k_factor"));
+  node.name = QStringLiteral("%1 (%2, R %3, K %4)")
+                  .arg(sheet.value(QStringLiteral("rules_name")).toString(rules), length("thickness"),
+                       length("bend_radius"), kFactor);
   QTreeWidgetItem* row =
       addRow(bodyRow, node, QStringLiteral("sheet-rules"),
-             tr("Sheet rules %1: thickness %2 mm, bend radius %3 mm, K-factor %4")
-                 .arg(sheet.value(QStringLiteral("rules_name")).toString(rules), mm("thickness"), mm("bend_radius"),
-                      mm("k_factor")));
+             tr("Sheet rules %1: thickness %2, bend radius %3, K-factor %4")
+                 .arg(sheet.value(QStringLiteral("rules_name")).toString(rules), length("thickness"),
+                      length("bend_radius"), kFactor));
   if (!shown) {
     setNameRole(row, ColorRole::TextHidden);
   }
@@ -2384,12 +2415,8 @@ void BrowserPanel::logRowColours() {
       paths[role.toInt()] << it.value().path;
     }
   }
-  QStringList groups;
-  for (const auto& [role, word] : roles) {
-    QStringList rows = paths.value(static_cast<int>(role));
-    if (rows.isEmpty()) {
-      continue;
-    }
+  // A group's paths, sorted, at most a dozen.
+  const auto listed = [](QStringList rows) {
     rows.sort();
     constexpr qsizetype kMost = 12;
     if (rows.size() > kMost) {
@@ -2397,8 +2424,29 @@ void BrowserPanel::logRowColours() {
       rows = rows.mid(0, kMost);
       rows << QStringLiteral("%1 more").arg(more);
     }
-    groups << QStringLiteral("%1 %2: %3")
-                  .arg(QLatin1String(word), nameColor(role, m_tree).name(), rows.join(QStringLiteral(", ")));
+    return rows.join(QStringLiteral(", "));
+  };
+  QStringList groups;
+  QList<int> known;
+  for (const auto& [role, word] : roles) {
+    known << static_cast<int>(role);
+    const QStringList rows = paths.value(static_cast<int>(role));
+    if (rows.isEmpty()) {
+      continue;
+    }
+    groups << QStringLiteral("%1 %2: %3").arg(QLatin1String(word), nameColor(role, m_tree).name(), listed(rows));
+  }
+  // A value that is none of these (mitcad#1143: another role's data under
+  // kTextRole once painted a transparent row's name red): "unknown <n>".
+  QList<int> unknown;
+  for (auto it = paths.cbegin(); it != paths.cend(); ++it) {
+    if (!known.contains(it.key())) {
+      unknown << it.key();
+    }
+  }
+  std::sort(unknown.begin(), unknown.end());
+  for (const int value : unknown) {
+    groups << QStringLiteral("unknown %1: %2").arg(value).arg(listed(paths.value(value)));
   }
   const QString line = QStringLiteral("Browser row colours: %1, %2")
                            .arg(isDarkPalette(rowsPalette(m_tree)) ? QStringLiteral("dark") : QStringLiteral("light"),
@@ -2526,7 +2574,8 @@ int BrowserPanel::contentHeight() const {
   return bar + (rows > 0 ? rows * rowHeight() : 0) + 2 * m_tree->frameWidth();
 }
 
-void BrowserPanel::showSelection(const Selection& items, const QStringList& features, bool scroll) {
+void BrowserPanel::showSelection(const Selection& items, const QStringList& features, bool scroll,
+                                 bool keepPicked) {
   QSet<QString> keys;
   for (const SelectionItem& item : items) {
     keys.insert(itemKey(item));
@@ -2557,7 +2606,8 @@ void BrowserPanel::showSelection(const Selection& items, const QStringList& feat
     const SelectionItem item = node.item();
     const bool feature = node.type == BrowserNode::Type::Feature;
     const QString key = feature ? node.uid : item.isValid() ? itemKey(item) : QString();
-    const bool on = feature ? picked.contains(node.uid) : item.isValid() && keys.contains(key);
+    const bool on = (feature ? picked.contains(node.uid) : item.isValid() && keys.contains(key)) ||
+                    (keepPicked && (*it)->isSelected());
     (*it)->setSelected(on);
     if (!on) {
       continue;
@@ -2702,6 +2752,28 @@ void BrowserPanel::startRename(const BrowserNode& node) {
 }
 
 bool BrowserPanel::cancelEditing() { return m_tree->cancelEdit(); }
+
+QVector<BrowserNode> BrowserPanel::selectedNodes() const {
+  QVector<BrowserNode> nodes;
+  for (QTreeWidgetItemIterator it(m_tree, QTreeWidgetItemIterator::Selected); *it; ++it) {
+    nodes.append(nodeOf(*it));
+  }
+  return nodes;
+}
+
+QStringList BrowserPanel::selectedPresentationKeys() const {
+  QStringList keys;
+  for (const BrowserNode& node : selectedNodes()) keys.append(keyOf(node));
+  return keys;
+}
+
+void BrowserPanel::setPresentationSelection(const QStringList& keys) {
+  const QSignalBlocker blocker(m_tree);
+  m_tree->clearSelection();
+  for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+    it.key()->setSelected(keys.contains(keyOf(it.value())));
+  }
+}
 
 void BrowserPanel::selectionChanged() {
   if (m_building) {

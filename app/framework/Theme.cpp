@@ -7,9 +7,12 @@
 #include <optional>
 #include <vector>
 
+#include <QAbstractScrollArea>
 #include <QEvent>
 #include <QObject>
+#include <QPointer>
 #include <QRegularExpression>
+#include <QStyleHints>
 #include <QTimer>
 #include <QVariant>
 #include <QWidget>
@@ -24,39 +27,60 @@ namespace {
 // change on to a child with a style sheet of its own (mitcad#961: a badge
 // stayed the light theme's dark red on a dark window), so the sheet is
 // also checked when the widget shows and paints, and set again after the
-// paint when it is stale.
+// paint when it is stale. A scroll area (the command panel's message, a
+// QTextEdit) paints in its viewport, not itself: the viewport's paints are
+// watched too. And as neither event need reach a widget with a sheet of its
+// own when the colour scheme switches (mitcad#1152: the command panel's
+// error box kept the light theme's colours after a switch to the dark one
+// in the Floating layout on Windows, where the new palette reaches the
+// widgets only after the switch is announced, and a window that is not
+// exposed, as in the build VM's tests, paints nothing), the parent's
+// palette changes are watched too (the parent has no sheet of its own that
+// keeps its palette), and the sheet is also checked after each switch of
+// the colour scheme.
 class ThemeWatcher : public QObject {
 public:
   explicit ThemeWatcher(QWidget* widget) : QObject(widget), m_widget(widget) {
     widget->installEventFilter(this);
+    if (auto* area = qobject_cast<QAbstractScrollArea*>(widget)) {
+      m_viewport = area->viewport();
+      m_viewport->installEventFilter(this);
+    }
+    watchParent();
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { refresh(); });
   }
 
-  void setFormat(const QString& format, ColorRole role) {
+  void setFormat(const QString& format, ColorRole role, std::optional<ColorRole> second) {
     m_format = format;
     m_role = role;
+    m_second = second;
     m_applied.reset();
     apply();
   }
 
   bool eventFilter(QObject* watched, QEvent* event) override {
-    if (watched != m_widget) {
+    if (watched == m_parent.data() && watched != m_widget) {
+      if (event->type() == QEvent::PaletteChange) {
+        refresh();
+      }
+      return false;
+    }
+    if (watched != m_widget && (watched != m_viewport || event->type() != QEvent::Paint)) {
       return false;
     }
     switch (event->type()) {
     case QEvent::ApplicationPaletteChange:
     case QEvent::PaletteChange:
     case QEvent::ParentChange:
+      watchParent();
+      apply();
+      break;
     case QEvent::Show:
       apply();
       break;
     case QEvent::Paint:
-      if (!m_pending && m_applied.has_value() && *m_applied != sheet()) {
-        m_pending = true;
-        QTimer::singleShot(0, this, [this] {
-          m_pending = false;
-          apply();
-          m_widget->update();
-        });
+      if (m_applied.has_value() && *m_applied != sheet()) {
+        refresh();
       }
       break;
     default:
@@ -66,6 +90,20 @@ public:
   }
 
 private:
+  void watchParent() {
+    QWidget* parent = m_widget->parentWidget();
+    if (parent == m_parent.data()) {
+      return;
+    }
+    if (m_parent != nullptr) {
+      m_parent->removeEventFilter(this);
+    }
+    m_parent = parent;
+    if (parent != nullptr) {
+      parent->installEventFilter(this);
+    }
+  }
+
   // The format with the colour for what the widget sits on (mitcad#961): a
   // dark card or window may be on an application palette that is light.
   // The first ancestor with an opaque background (the widget's own sheet
@@ -81,6 +119,11 @@ private:
         break;
       }
     }
+    // A second role where it says %2 (mitcad#1152): a box's fill follows
+    // the palette with its text, not only the text on the old fill.
+    if (m_second.has_value() && m_format.contains(QLatin1String("%2"))) {
+      return m_format.arg(themeColor(m_role, palette).name(), themeColor(*m_second, palette).name());
+    }
     return m_format.arg(themeColor(m_role, palette).name());
   }
 
@@ -92,14 +135,35 @@ private:
     }
   }
 
+  // The sheet set again a moment later (after a paint, or after the colour
+  // scheme's palette has reached the widgets), and painted.
+  void refresh() {
+    if (m_pending) {
+      return;
+    }
+    m_pending = true;
+    QTimer::singleShot(0, this, [this] {
+      m_pending = false;
+      apply();
+      m_widget->update();
+      if (m_viewport != nullptr) {
+        m_viewport->update();
+      }
+    });
+  }
+
   QWidget* m_widget;
   QString m_format;
   ColorRole m_role = ColorRole::ErrorText;
+  std::optional<ColorRole> m_second; // the colour where the format says %2
+  QPointer<QWidget> m_viewport; // a scroll area's, where it paints
+  QPointer<QWidget> m_parent; // whose palette changes are watched
   bool m_pending = false; // a stale sheet seen in a paint, set again after it
   std::optional<QString> m_applied;
 };
 
-void setThemedStyleSheet(QWidget* widget, const QString& format, ColorRole role) {
+void setThemedStyleSheet(QWidget* widget, const QString& format, ColorRole role,
+                         std::optional<ColorRole> second = std::nullopt) {
   if (widget == nullptr) {
     return;
   }
@@ -113,7 +177,7 @@ void setThemedStyleSheet(QWidget* widget, const QString& format, ColorRole role)
   if (watcher == nullptr) {
     watcher = new ThemeWatcher(widget);
   }
-  watcher->setFormat(format, role);
+  watcher->setFormat(format, role, second);
   // The state, not the colour, for presenters without style sheets.
   static const QRegularExpression textColour(QStringLiteral("(^|[\\s;{])color\\s*:\\s*%1"));
   const bool status = role == ColorRole::ErrorText || role == ColorRole::WarningText;
@@ -198,7 +262,12 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(Raised, hex(0xe9ecf1), hex(0x2a2c31), View, Raised),
       MITCAD_ROLE(Text, hex(0x1d2026), hex(0xe6e8ec), Text, Text),
       MITCAD_ROLE(TextSecondary, hex(0x4c525c), hex(0xb4b8be), Text, TextSecondary),
-      MITCAD_ROLE(TextHidden, hex(0x4c525c), hex(0xb4b8be), Text, TextHidden),
+      // A hidden Browser row's name (mitcad#1101): dimmed, yet at least
+      // 4.5:1 also on a Floating row's card, the window's colour at 80%
+      // over the view, which over a white view is about #5b5b5b on a dark
+      // theme (the secondary grey #b4b8be read 3.4:1 there); still about
+      // 1.2:1 dimmer than Text.
+      MITCAD_ROLE(TextHidden, hex(0x4c525c), hex(0xd0d4da), Text, TextHidden),
       MITCAD_ROLE(TitleText, hex(0x5f6670), hex(0x9098a3), Text, TitleText),
       MITCAD_ROLE(Line, hex(0x000000, 22), hex(0xffffff, 18), View, Line),
       MITCAD_ROLE(AccentText, hex(0xffffff), hex(0x0b1220), View, AccentText),
@@ -380,6 +449,14 @@ void setErrorStyleSheet(QWidget* widget, const QString& format) {
 
 void setWarningStyleSheet(QWidget* widget, const QString& format) {
   setThemedStyleSheet(widget, format, ColorRole::WarningText);
+}
+
+void setErrorStyleSheet(QWidget* widget, const QString& format, ColorRole fill) {
+  setThemedStyleSheet(widget, format, ColorRole::ErrorText, fill);
+}
+
+void setWarningStyleSheet(QWidget* widget, const QString& format, ColorRole fill) {
+  setThemedStyleSheet(widget, format, ColorRole::WarningText, fill);
 }
 
 void setRoleStyleSheet(QWidget* widget, ColorRole role, const QString& format) {

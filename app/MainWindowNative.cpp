@@ -230,6 +230,7 @@ void MainWindow::createNativeWindow() {
     return true;
   };
   callbacks.selection = [this](const QStringList& keys) {
+    m_controller->browser()->setPresentationSelection(keys);
     Selection items;
     QStringList features;
     for (const QString& key : keys) {
@@ -293,14 +294,18 @@ void MainWindow::createNativeWindow() {
       emit m_controller->browser()->contextMenuRequested(node, point);
     }
   };
-  callbacks.treeDelete = [this](const QString& key) {
-    const BrowserNode node = m_nativeNodes.value(key);
-    if (node.isValid() && !modelBusy() && canChangeModel()) {
-      emit m_controller->browser()->deleteRequested(node);
+  callbacks.treeDelete = [this](const QStringList& keys) {
+    QVector<BrowserNode> nodes;
+    for (const QString& key : keys) {
+      const BrowserNode node = m_nativeNodes.value(key);
+      if (node.isValid()) nodes.append(node);
+    }
+    if (!nodes.isEmpty() && !modelBusy() && canChangeModel()) {
+      emit m_controller->browser()->deleteRequested(nodes);
     }
   };
-  callbacks.historyDelete = [this](const QString& uid) {
-    if (!modelBusy() && canChangeModel()) emit m_controller->timeline()->deleteRequested(uid);
+  callbacks.historyDelete = [this](const QStringList& uids) {
+    if (!modelBusy() && canChangeModel()) emit m_controller->timeline()->deleteRequested(uids);
   };
   callbacks.historyRename = [this](const QString& uid) {
     QTimer::singleShot(0, this, [this, uid] {
@@ -634,8 +639,10 @@ void MainWindow::createNativeWindow() {
   });
   connect(m_documentSession, &DocumentSession::jobStarted, this,
           [this](const QString& label, const QString& stage) {
+    // Send to Slicer's bed plan runs in the background, its panel saying
+    // Planning… (mitcad#1121): no progress dialog either.
     if (!m_documentSession->asynchronousJob() || label == QStringLiteral("preview") ||
-        (label == QStringLiteral("inspection") && m_session)) {
+        label == QStringLiteral("bed plan") || (label == QStringLiteral("inspection") && m_session)) {
       return;
     }
     const quint64 generation = ++m_nativeJobGeneration;
@@ -1043,14 +1050,7 @@ void MainWindow::refreshNativeWindow() {
     m_nativeCanRename = canRename;
     m_nativeCanToggleVisibility = canToggleVisibility;
   }
-  QStringList selected;
-  for (auto node = m_nativeNodes.cbegin(); node != m_nativeNodes.cend(); ++node) {
-    if (m_selection.contains(node.value().item()) ||
-        (node.value().type == BrowserNode::Type::Feature && m_controller->timeline()->selectedFeatures().contains(node.value().uid))) {
-      selected.append(node.key());
-    }
-  }
-  m_nativeWindow->setSelection(selected);
+  m_nativeWindow->setSelection(m_controller->browser()->selectedPresentationKeys());
   m_nativeWindow->setHistorySelection(m_controller->timeline()->selectedFeatures());
   refreshNativeInspector();
   refreshNativeProjects();

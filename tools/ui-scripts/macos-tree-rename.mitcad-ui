@@ -32,6 +32,8 @@ dblclick-logged '^Browser Root/Bracket:1 at '
 expect-tree-rename Bracket:1
 screenshot ${MITCAD_TEST_SHOTS}/component.png
 key Escape
+# Projects starts hidden until the user requests it.
+command view.projects
 focus-widget projectsTree
 key Home Right End
 key F2

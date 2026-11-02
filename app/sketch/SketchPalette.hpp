@@ -103,6 +103,10 @@ private:
   QLabel* m_solve = nullptr;
   QString m_loggedSolve; // its line last logged (UI tests)
   PaletteWarnings* m_warnings = nullptr; // under the status (mitcad#264)
+  // The warnings' texts and the redundant constraints' ids last logged (UI
+  // tests; mitcad#1171: the warnings group the redundant constraints).
+  QString m_loggedWarnings;
+  QString m_loggedRedundant;
   QLabel* m_tool = nullptr;
   QCheckBox* m_construction = nullptr;
   QCheckBox* m_signed = nullptr; // Signed distances for Sketch Dimension (mitcad#409)

@@ -33,6 +33,13 @@
 #      build (mitcad#202: configured with MITCAD_RENDER_REQUIRED_DEVICES
 #      naming CUDA, or --require-cuda) fails without the CUDA kernels and
 #      cuew's licence, whether or not this machine has a GPU.
+#   2c. The bundled mitcad-cli as an AI assistant starts it (mitcad#1170):
+#      the AppImage's AppRun runs it for `MitCad.AppImage cli ...`
+#      (`cli --version` prints the CLI's version, the AppImage's), and with
+#      the AppImage running, the chat panel logs the AppImage's mitcad-cli
+#      as its bridge, and the command Connect AI Assistant registers (it
+#      logs it) is the AppImage file with `cli mcp --connect`; the same
+#      command with `mcp --list-instances` lists the running window.
 #   3. The automatic update (docs/updates.md): the AppImage, taking itself
 #      for 0.0.0 (MITCAD_TEST_VERSION), finds a release whose manifest signs
 #      this AppImage as the linux-x64 download (mitcad-release, with a key
@@ -154,6 +161,14 @@ for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6XcbQpa lib
   compgen -G "$DIR/usr/lib/$library.so*" > /dev/null || ui_fail "the AppImage has no $library"
 done
 grep -qx 'Exec=mitcad' "$DIR/mitcad.desktop" || ui_fail "the desktop file does not start mitcad"
+# The entry point (packaging/linux/AppRun, mitcad#1170): `cli` runs
+# mitcad-cli, anything else mitcad; behind linuxdeploy's hooks script, if
+# it made one.
+entry=$DIR/AppRun
+[ -e "$DIR/AppRun.wrapped" ] && entry=$DIR/AppRun.wrapped
+[ -f "$entry" ] && [ ! -L "$entry" ] && grep -qF 'usr/bin/mitcad-cli' "$entry" && grep -qF 'usr/bin/mitcad"' "$entry" ||
+  ui_fail "the AppImage's $(basename "$entry") is not packaging/linux/AppRun"
+echo "ok   the entry point runs mitcad-cli for 'cli', else mitcad"
 # The HEIF decoder of image references (mitcad#850) when mitcad links it
 # (MITCAD_HEIF): shared libraries of their own, and their licence texts.
 if readelf -d "$DIR/usr/bin/mitcad" | grep -q 'NEEDED.*libheif'; then
@@ -412,6 +427,45 @@ fi
 echo "ok   ${device:-no render device logged}"
 ui_stop_app
 unset MITCAD_RENDER_SAMPLES
+
+echo "--- 2c. The bundled mitcad-cli for AI assistants (mitcad#1170)"
+cli_version=$(cd "$WORK" && plain "$COPY" cli --version 2>&1) || ui_fail "MitCad.AppImage cli --version failed: $cli_version"
+[ "$cli_version" = "mitcad-cli $VERSION" ] ||
+  ui_fail "MitCad.AppImage cli --version printed '$cli_version', not 'mitcad-cli $VERSION'"
+echo "ok   cli --version: $cli_version"
+UI_GDB=0 UI_APP=$COPY ui_start_app --demo
+ui_expect_log "MCP live instance:" "the AppImage's listener for assistants is up"
+instance=$(grep -o "MCP live instance: [^ ]*" "$UI_LOG" | tail -1)
+instance=${instance#MCP live instance: }
+appdir=$(tr '\0' '\n' < "/proc/$(xdotool getwindowpid "$UI_WINDOW")/environ" | sed -n 's/^APPDIR=//p')
+[ -n "$appdir" ] || ui_fail "MitCad runs without the AppImage's APPDIR"
+# The chat panel's bridge, the mounted one (it serves only while MitCad runs).
+ui_expect_log "Chat: bridge $(readlink -f "$appdir/usr/bin/mitcad-cli")" "the chat panel finds the AppImage's mitcad-cli"
+ui_expect_log "Agent indicator: no agent" "the agent indicator accepts assistants"
+ui_mark
+ui_step "the agent indicator (Connect AI Assistant)" ui_click_logged "Agent indicator"
+ui_expect_new "Agent indicator chose help.connect_assistant" "a click opens Connect AI Assistant"
+ui_expect_new "Connect AI Assistant: bridge command: " "the dialog logs the command assistants register"
+registered=$(grep -o "Connect AI Assistant: bridge command: .*" "$UI_LOG" | tail -1)
+registered=${registered#Connect AI Assistant: bridge command: }
+[ "$registered" = "$COPY cli mcp --connect" ] ||
+  ui_fail "assistants would register '$registered', not the AppImage file with cli mcp --connect"
+echo "ok   assistants register: $registered"
+# That command, listing the live windows instead of connecting: a POSIX
+# shell's words, as the dialog shows them. The window answers the listing's
+# authenticated probe once it is idle (up to 30 s under load).
+listed=""
+for _ in $(seq 1 60); do
+  listed=$(eval "${registered% mcp --connect} mcp --list-instances" 2>&1) &&
+    grep -qF "\"instance\":\"$instance\"" <<< "$listed" && break
+  listed="FAILED: $listed"
+  sleep 0.5
+done
+[[ $listed != FAILED:* ]] || ui_fail "the registered command with mcp --list-instances does not list the running window $instance: $listed"
+echo "ok   the registered command lists the running window $instance"
+ui_focus_dialog '^Connect AI Assistant$'
+ui_step "close Connect AI Assistant (Esc)" ui_key Escape
+ui_stop_app
 
 echo "--- 3. The AppImage updates itself"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj /CN=localhost \

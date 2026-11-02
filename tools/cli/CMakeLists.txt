@@ -4,6 +4,8 @@ add_executable(mitcad-cli main.cpp library.cpp library.hpp projects.cpp projects
 # Paths and arguments as UTF-8 on Windows too (cmake/Utf8CodePage.cmake).
 mitcad_utf8_code_page(mitcad-cli)
 target_link_libraries(mitcad-cli PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_warnings)
+# `mitcad-cli --version` (mitcad#1170).
+target_compile_definitions(mitcad-cli PRIVATE MITCAD_VERSION="${PROJECT_VERSION}")
 
 # mitcad-cli render (mitcad#48, docs/rendering.md "Final render"). It makes
 # the scene and the job as File > Render Image does (the application's
@@ -34,6 +36,17 @@ target_sources(mitcad-cli PRIVATE drawing.cpp drawing.hpp)
 target_sources(mitcad-cli PRIVATE mesh_compare.cpp mesh_compare.hpp)
 
 if(BUILD_TESTING)
+  # Synthetic planar-face profiles with the real model/kernel bridge
+  # (mitcad#1138). The same executable writes queried-key UI fixtures.
+  add_executable(test_face_profiles test-face-profiles.cpp)
+  mitcad_utf8_code_page(test_face_profiles)
+  target_link_libraries(test_face_profiles PRIVATE mitcad_ffi mitcad_geometry Qt6::Core mitcad_warnings)
+  if(APPLE)
+    target_link_libraries(test_face_profiles PRIVATE mitcad_mac_work)
+  endif()
+  add_test(NAME cli.face_bounded_profiles COMMAND test_face_profiles)
+  set_tests_properties(cli.face_bounded_profiles PROPERTIES TIMEOUT 180)
+
   set(scripts "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   # Each script builds a part with commands and checks it with expectations.
   foreach(script block_fillet_chamfer join cut_split names_follow_parameters)
@@ -130,6 +143,12 @@ if(BUILD_TESTING)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json"
                                           --open "${scripts}/build_parts.mitcad")
   endforeach()
+  # A design of the first rule's connectors opens when placing them again
+  # is refused: the report with a warning (mitcad#1151).
+  add_test(NAME cli.build_upgrade_refused
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DSCRIPTS=${scripts}"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/build-upgrade-refused"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/build-upgrade-refused-test.cmake")
   # Explicit move destinations keep real OCCT geometry and external support
   # links in place across nested rotations, undo/redo and save/reopen (#201).
   set(move_destination "${CMAKE_CURRENT_BINARY_DIR}/move-destination.mitcad")
@@ -236,8 +255,10 @@ if(BUILD_TESTING)
   set(bottom "F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})")
   add_test(NAME cli.measure
     COMMAND mitcad-cli measure "${scripts}/holed_block.json" "Body1/${top}" "Body1/${bottom}")
+  # ASCII only: on Windows ctest decodes the output in the console code page,
+  # so the UTF-8 "°" after the angle would not match.
   set_tests_properties(cli.measure PROPERTIES PASS_REGULAR_EXPRESSION
-    "area 1386\\.902.*Distance: 20\\.000000 mm.*Angle: 180\\.000000°")
+    "area 1386\\.902.*Distance: 20\\.000000 mm.*Angle: 180\\.000000")
   set(step "${CMAKE_CURRENT_BINARY_DIR}/holed-block.step")
   add_test(NAME cli.compare_step_file COMMAND mitcad-geomtool make holed-block "${step}")
   set_tests_properties(cli.compare_step_file PROPERTIES FIXTURES_SETUP cli_step)
@@ -1412,6 +1433,32 @@ if(BUILD_TESTING)
   add_test(NAME cli.dressup_takes_face COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/dressup_takes_face.json")
   if(WIN32)
     set_property(TEST cli.dressup_takes_face APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Parallel planes: the main plane gap and the separate closest-point
+# minimum, including a synthetic stepped shell (mitcad#1161).
+if(BUILD_TESTING)
+  add_test(NAME cli.measure_planar COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/measure_planar.json")
+  add_test(NAME cli.measure_planar_text
+    COMMAND mitcad-cli measure "${CMAKE_CURRENT_SOURCE_DIR}/tests/measure_planar.json"
+            "F1.b0/F1:top" "F1.b0/F4:top")
+  set_tests_properties(cli.measure_planar_text PROPERTIES PASS_REGULAR_EXPRESSION
+    "Distance: 16\\.000000 mm \\(main: offset\\).*Minimum distance: 21\\.931712 mm")
+  if(WIN32)
+    set_property(TEST cli.measure_planar cli.measure_planar_text APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A design in inches for the lengths shown in its unit (mitcad#1165): the
+# fixture of tools/ui-units-inch-test.sh and its Windows twin, its bodies'
+# volumes and the 1 in between the blocks' tops.
+if(BUILD_TESTING)
+  add_test(NAME cli.units_inch COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/units_inch.json")
+  if(WIN32)
+    set_property(TEST cli.units_inch APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

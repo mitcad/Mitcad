@@ -448,6 +448,76 @@ fn separate_materials_of_a_library_are_offered_and_merged() {
     assert_eq!(found["merge"], json!([]));
 }
 
+/// Two library items of one filament, each carrying an appearance of its
+/// own inline (mitcad#1150): the merged item offers and carries both, so
+/// the second's is not lost with its file.
+#[test]
+fn a_library_merge_keeps_every_item_s_appearances() {
+    use mitcad_model::appearance::Appearance;
+    let project = mitcad_model::testing::unique_temp_path("filament-variants-merge-looks");
+    let folder = project.join("print-library").join("materials");
+    for (id, name, temperature, printer, look) in [
+        (
+            "shop-pla-bench-x",
+            "Shop PLA @Bench X",
+            220,
+            "Bench X 0.4 nozzle",
+            "shop_red",
+        ),
+        (
+            "shop-pla-bench-y",
+            "Shop PLA @Bench Y",
+            205,
+            "Bench Y 0.4 nozzle",
+            "shop_blue",
+        ),
+    ] {
+        let material: mitcad_model::material::Material = serde_json::from_value(
+            json!({"id": id, "name": name, "density": 1.24, "version": 1, "appearance": look,
+                   "filament": {"filament_type": "PLA", "temperature": temperature},
+                   "slicer": {"bambu_studio": {
+                       "compatible_printers": format!("[\"{printer}\"]")}}}),
+        )
+        .unwrap();
+        let item = ItemData::Material {
+            material,
+            appearances: vec![Appearance {
+                id: look.to_owned(),
+                name: look.to_owned(),
+                ..Appearance::default()
+            }],
+        };
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{id}.json")), item.text()).unwrap();
+    }
+    let mut doc = Document::new(MockKernel::default());
+    let libraries = Libraries::load(Vec::new(), None, Some(&project));
+    let ids = ["shop-pla-bench-x".to_owned(), "shop-pla-bench-y".to_owned()];
+    let (id, _, _) = doc
+        .merge_library_materials(&libraries, LibraryKind::Project, &ids)
+        .unwrap();
+    assert_eq!(id, "shop-pla-bench-x");
+    assert!(!folder.join("shop-pla-bench-y.json").exists());
+    let items: Vec<ItemData> = Libraries::load(Vec::new(), None, Some(&project))
+        .items
+        .into_iter()
+        .filter(|i| i.library == LibraryKind::Project && i.data.kind() == ItemKind::Material)
+        .map(|i| i.data)
+        .collect();
+    assert_eq!(items.len(), 1);
+    let ItemData::Material {
+        material,
+        appearances,
+    } = &items[0]
+    else {
+        unreachable!();
+    };
+    assert_eq!(material.appearance_list(), ["shop_red", "shop_blue"]);
+    let carried: Vec<&str> = appearances.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(carried, ["shop_red", "shop_blue"]);
+    let _ = std::fs::remove_dir_all(&project);
+}
+
 #[test]
 fn the_design_s_separate_materials_merge_and_its_bodies_follow() {
     let mut doc = Document::new(MockKernel::default());

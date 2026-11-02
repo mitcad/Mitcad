@@ -22,6 +22,7 @@
 #include <QUuid>
 
 #include "MainWindow.hpp"
+#include "framework/TitleBar.hpp"
 #include "AgentIndicator.hpp"
 #include "ChatGate.hpp"
 #include "EndpointLimits.hpp"
@@ -85,7 +86,9 @@ struct LiveServer::State {
 
   void publishWindow() {
     if (!published || !window) return;
-    endpoint.title = window->windowTitle();
+    // The design's name as the title bar shows it (mitcad#1149): not the
+    // raw title, whose "[*]" is Qt's placeholder of the modified mark.
+    endpoint.title = TitleBar::documentTitleOf(window->windowTitle());
     QString error;
     if (!publishWindowState(endpoint, &error)) qWarning().noquote() << error;
   }

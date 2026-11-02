@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]

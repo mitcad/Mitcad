@@ -23,11 +23,13 @@ namespace mitcad {
 // The appearance library as a popover (mitcad#1055, app/COMMANDS.md
 // "Appearances of a material"): a search field over the swatches, first
 // those of the material's class (mitcad#1102, appearanceSections), then
-// the design's appearances and then the library's, each with its name, and
-// Edit Appearances… at the end when the window has it. A click, Return
-// or a double-click chooses one (chosen()); Escape or a click outside
-// closes it. Typing in the search field keeps the first match current,
-// so that Return chooses it; Down goes into the list. A frameless window
+// the design's appearances and then the library's by class (mitcad#1133),
+// each section under its heading and each swatch with its name, and Edit
+// Appearances… at the end when the window has it. A click, Return or a
+// double-click chooses one (chosen()); Escape or a click outside closes
+// it. Typing in the search field keeps the first match current, so that
+// Return chooses it, and hides the sections without a match; Down goes
+// into the list. A frameless window
 // of its own, not a Qt popup, which closes once another window takes the
 // activation (as the tools' LibraryPicker): a popup closes as soon as it
 // opens in the Windows UI tests' session, and their posted input reaches
@@ -35,7 +37,8 @@ namespace mitcad {
 // mitcad#1071). The AppKit frontend shows it as a popover under the
 // anchor's native control (showNativePicker, mitcad#1068). Logged as
 // "<logName> picker opened: N appearances", "<logName> picker sections:
-// FDM Plastic 1 | General Plastic 6 | This design 1 | Library 21",
+// FDM Plastic 16 | General Plastic 6 | This Design 1 | Metal 8 | Resin 3 |
+// Other 14",
 // "<logName> picker search: <text>, M shown" and "<logName> picker
 // chosen: <name> (<id>)".
 class AppearancePopover : public QFrame {
@@ -77,19 +80,26 @@ private:
   bool m_activated = false; // it had the activation since it opened: losing it closes it
 };
 
-// The appearances of a picker in sections by a material's class
-// (mitcad#1102, app/COMMANDS.md "Appearances of a material"): first those
-// of the class, the design's and the library's together, under its title
-// ("FDM Plastic"); for FDM Plastic and Resin then General Plastic's; then
-// the rest under `designTitle` (the design's) and `libraryTitle`. Empty
-// sections are left out; without a class only the last two.
+// The appearances in sections by class (mitcad#1102, mitcad#1133,
+// app/COMMANDS.md "Appearances of a material" and "Edit Appearances"),
+// shared by the pickers and the Appearances window: with a material's
+// class first those of the class, the design's and the library's
+// together, under its title ("FDM Plastic"), for FDM Plastic and Resin
+// then General Plastic's; then the design's others under `designTitle`;
+// then the library's others by class in the lists' order (Metal, General
+// Plastic, FDM Plastic, Resin, Other; materialClasses()). Empty sections
+// are left out; an appearance without a class (or one not known here) is
+// Other. Without a class: the design's, then the library's by class.
 struct AppearanceSection {
+  QString key; // the class id (`fdm_plastic`), or `design` for the design's others
   QString title;
   QVector<const Appearance*> appearances;
 };
 QVector<AppearanceSection> appearanceSections(const QVector<Appearance>& appearances, const QString& materialClass,
-                                              const QString& designTitle, const QString& libraryTitle);
-// The sections as logged: "FDM Plastic 1 | General Plastic 6 | This design 1".
+                                              const QString& designTitle);
+// The key of the design's others' section.
+QString designSectionKey();
+// The sections as logged: "FDM Plastic 16 | General Plastic 6 | This Design 1 | Metal 8".
 QString appearanceSectionsText(const QVector<AppearanceSection>& sections);
 
 // The swatch of an appearance as the pickers and a material's list show

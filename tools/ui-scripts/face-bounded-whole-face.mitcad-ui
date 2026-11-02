@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# No sketch splits this fixture's face: the whole face remains pickable.
+wait-idle
+command view.top
+command view.fit
+# Seed a real face selection so the clear control is enabled regardless
+# of Extrude's automatic-selection policy. The tested pick follows clear.
+click-visible-face
+expect-selection 1 0
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+screenshot '${MITCAD_TEST_WORK}/whole-face-before-pick.png'
+mark
+# Keep the real whole-face pick in the command's active Profiles input.
+click-pick '@WHOLE_FACE_PICK@'
+wait-log '^Extrude Profiles: 1 face '
+mark
+type-in '^Panel Extrude input distance at ' '2 mm'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/whole-face-preview.png'
+mark
+key Escape
+expect-log '^Command Extrude cancelled'
+expect-model-bodies 1 @BASE_VOLUME@
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

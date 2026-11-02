@@ -866,9 +866,10 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-configuration-panel"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-configuration-panel PROPERTIES TIMEOUT 300)
-    # A material's filament preset per slicer (mitcad#1062): 3D Print's
-    # Materials row warns of a material that names no preset of the slicer,
-    # Bambu Studio's typed on Materials' Filament tab, the 3MF sent names
+    # A material's filament preset per slicer (mitcad#1062): 3D Print warns
+    # under the Material row of a material that names no preset of the
+    # slicer, Bambu Studio's typed on Materials' Filament tab (Edit
+    # materials… of the row's picker, mitcad#1141), the 3MF sent names
     # the filament by it and inherits from it.
     add_test(NAME app.ui-windows-filament-preset
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
@@ -954,6 +955,121 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-quick-access" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-quick-access PROPERTIES TIMEOUT 300)
+    # Face-bounded profiles without Project and the ordinary whole-face
+    # picker, from a synthetic fixture with queried region keys (mitcad#1138).
+    if(TARGET test_face_profiles)
+      add_test(NAME app.ui-windows-face-bounded-profiles
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-face-bounded-profiles-test.ps1"
+                -App "$<TARGET_FILE:mitcad>" -Fixture "$<TARGET_FILE:test_face_profiles>"
+                -Out "${CMAKE_BINARY_DIR}/ui-windows-face-bounded-profiles"
+                -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+      set_tests_properties(app.ui-windows-face-bounded-profiles PROPERTIES TIMEOUT 600)
+    endif()
+    # Features on a fixed plane (mitcad#1137): every type Place On places
+    # opens for editing with the plane listed "(fixed)"; a new size keeps
+    # the plane, a face picked in Place On replaces it.
+    add_test(NAME app.ui-windows-fixed-plane
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-fixed-plane-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-fixed-plane"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-fixed-plane PROPERTIES TIMEOUT 300)
+    # Typed polygon radii/first-edge lengths, sides-only input and atomic
+    # Undo/Redo (mitcad#1136), shared with the Linux and macOS driver.
+    add_test(NAME app.ui-windows-sketch-polygon-dimensions
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-polygon-dimensions-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-polygon-dimensions"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-polygon-dimensions PROPERTIES TIMEOUT 300)
+    # Selection Delete, dependency union, Cancel and one-step Undo (mitcad#1139).
+    add_test(NAME app.ui-windows-delete-feature-selection
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-delete-feature-selection-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-delete-feature-selection"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-delete-feature-selection PROPERTIES TIMEOUT 300)
+    # Send to Slicer's material rows (mitcad#1141): a body without a
+    # material says so, a material chosen in the row's picker is the
+    # body's at once (one undo step), a row per filament changed alone,
+    # Edit materials… opens the Materials window on the row's material.
+    add_test(NAME app.ui-windows-print-material-picker
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-print-material-picker-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-print-material-picker"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-print-material-picker PROPERTIES TIMEOUT 300)
+    # A click on a manipulator's knob over the orientation cube (mitcad#1105):
+    # Fillet's arrow panned onto the cube's top face and clicked without a
+    # drag keeps the click, the camera unchanged; without the handle the
+    # cube turns the view.
+    add_test(NAME app.ui-windows-knob-over-cube
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-knob-over-cube-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-knob-over-cube"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-knob-over-cube PROPERTIES TIMEOUT 300)
+    # A design a newer MitCad wrote (mitcad#1132): the warning on opening
+    # it in both layouts, and the question before Save writes over it
+    # (Cancel, Save As, Save and Drop Them).
+    add_test(NAME app.ui-windows-unknown-fields
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-unknown-fields-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-unknown-fields"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-unknown-fields PROPERTIES TIMEOUT 300)
+    # Send to Slicer's Use the open slicer window (mitcad#1162): with fake
+    # slicers, two sends of a design start one window and hand it the
+    # second file; another design starts its own; the box off starts a
+    # window per send; a program without a hand-over is brought forward.
+    add_test(NAME app.ui-windows-slicer-window
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-slicer-window-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-slicer-window"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-slicer-window PROPERTIES TIMEOUT 300)
+    # Same synthetic planar Measure workflow as Linux/macOS (mitcad#1161).
+    add_test(NAME app.ui-windows-measure-planar
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-measure-planar-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-measure-planar"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-measure-planar PROPERTIES TIMEOUT 180)
+    # Sketch Move/Copy starts at 0 (mitcad#1163): opened on a selected line
+    # it leaves the line where it is until a distance is typed; the Linux
+    # test's shared input script.
+    add_test(NAME app.ui-windows-sketch-move-zero
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-move-zero-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-move-zero"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-move-zero PROPERTIES TIMEOUT 300)
+    # Lengths in the design's unit (mitcad#1165), the steps of
+    # tools/ui-units-inch-test.sh: in a design in inches the sheet-rules
+    # row, Extrude's default distance and Measure in inches.
+    add_test(NAME app.ui-windows-units-inch
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-units-inch-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-units-inch"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-units-inch PROPERTIES TIMEOUT 180)
+    # Measure picks a face that carries an annotation, drawn opaque
+    # (mitcad#1166), as on Linux.
+    add_test(NAME app.ui-windows-measure-annotated-face
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-measure-annotated-face-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-measure-annotated-face"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-measure-annotated-face PROPERTIES TIMEOUT 180)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

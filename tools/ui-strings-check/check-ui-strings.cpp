@@ -32,9 +32,10 @@
 // with. In Markdown it reads the prose: fenced code blocks, code spans, link
 // targets, URLs and HTML tags left out. Texts built at run time and
 // QStringLiteral texts are not seen. In Rust it reads the string literals of
-// the sources (a file's test module, after its #[cfg(test)], left out) and
-// finds a value quoted as '{x}' (rule 6: a name stands unquoted, a value
-// that could be misread gets curly quotes).
+// the sources (the item each #[cfg(test)] guards left out: a test module, a
+// test helper, a field; the scan goes on after it) and finds a value quoted
+// as '{x}' (rule 6: a name stands unquoted, a value that could be misread
+// gets curly quotes).
 //
 // A text that must keep a word the rules retire (a string of Qt's own
 // translation context, a file format's own term) goes into kAllowed with
@@ -104,7 +105,6 @@ const RustAllowed kRustAllowed[] = {
     {"expr/src/format.rs", "'{}'", "an expression's text literal"},
     {"ifc/src/step.rs", "'{}'", "a STEP file's string"},
     {"print-keys/src/lib.rs", "'{text}'", "a slicer key's text value as its file writes it"},
-    {"model/src/library.rs", "'{size}'", "a stored expression's text literal"},
     {"import-ifc/src/report.rs", "'{}'", "the import report quotes the names as the IFC file stores them"},
     {"import-ifc/src/lib.rs", "#{id} {} '{}'", "a comparison line of the IFC import's log"},
 };
@@ -470,6 +470,13 @@ private:
     while (m_i < m_s.size() && m_s[m_i] != '"' && m_s[m_i] != '\n') {
       if (m_s[m_i] == '\\' && m_i + 1 < m_s.size()) {
         text += m_s[m_i++];
+        // A backslash-newline continues the literal on the next line.
+        if (m_s[m_i] == '\r' && peek(1) == '\n') {
+          text += m_s[m_i++];
+        }
+        if (m_s[m_i] == '\n') {
+          ++m_line;
+        }
       }
       text += m_s[m_i++];
     }
@@ -648,14 +655,61 @@ void scanMarkdown(const std::string& file, const std::string& source, std::vecto
   }
 }
 
-// The string literals of a Rust source with their lines, up to its test
-// module (#[cfg(test)]): plain, byte and raw strings; comments, characters
-// and lifetimes left out.
+// The words that start a Rust item or statement whose own commas (a where
+// clause, a closure's parameters) do not end it, unlike a field's, a
+// variant's or a match arm's.
+const std::set<std::string> kRustItemWords = {
+    "fn",  "impl", "struct", "enum", "union",  "trait", "type",       "const",
+    "static", "let", "use",  "mod",  "extern", "unsafe", "macro_rules",
+};
+
+// The item a #[cfg(test)] guards, skipped up to its end: its `;` or its
+// closing brace at its own level, its `,` as a field, variant, field value
+// or match arm, or the end of the braces around it. `depth` counts the
+// brackets, parentheses and braces open in the item, `angle` the generic
+// arguments open at its own level ("HashMap<K, V>,").
+struct RustSkip {
+  bool on = false;
+  int depth = 0;
+  int angle = 0;
+  bool item = false; // started with one of kRustItemWords
+};
+
+// The string literals of a Rust source with their lines: plain, byte and
+// raw strings; comments, characters, lifetimes and the items #[cfg(test)]
+// guards (a file's test module, a test helper, a field) left out.
 std::vector<std::pair<int, std::string>> rustStrings(const std::string& s) {
   std::vector<std::pair<int, std::string>> strings;
   int line = 1;
   std::size_t i = 0;
+  RustSkip skip;
   const auto peek = [&s](std::size_t at) { return at < s.size() ? s[at] : '\0'; };
+  // A punctuation character at `at`: the brackets and the item's end while
+  // an item is skipped.
+  const auto punctuation = [&s, &skip, &peek](std::size_t at) {
+    const char c = s[at];
+    if (!skip.on) {
+      return;
+    }
+    if (c == '(' || c == '[' || c == '{') {
+      ++skip.depth;
+    } else if (c == ')' || c == ']' || c == '}') {
+      --skip.depth;
+      // Its balanced braces end the item; a closing bracket below its level
+      // closes what holds it ("S { #[cfg(test)] a: u8 }").
+      skip.on = skip.depth > 0 || (skip.depth == 0 && c != '}');
+    } else if (skip.depth == 0 && c == ';') {
+      skip.on = false;
+    } else if (skip.depth == 0 && c == ',' && skip.angle == 0 && !skip.item) {
+      skip.on = false;
+    } else if (skip.depth == 0 && c == '<' && peek(at + 1) != '=' && peek(at + 1) != '<' &&
+               (at == 0 || s[at - 1] != '<')) {
+      ++skip.angle;
+    } else if (skip.depth == 0 && c == '>' && skip.angle > 0 && at > 0 && s[at - 1] != '-' && s[at - 1] != '=' &&
+               peek(at + 1) != '=') {
+      --skip.angle;
+    }
+  };
   while (i < s.size()) {
     const char c = s[i];
     if (c == '\n') {
@@ -686,8 +740,11 @@ std::vector<std::pair<int, std::string>> rustStrings(const std::string& s) {
       }
       continue;
     }
-    if (c == '#' && s.compare(i, 12, "#[cfg(test)]") == 0) {
-      break;
+    if (!skip.on && c == '#' && s.compare(i, 12, "#[cfg(test)]") == 0) {
+      skip = RustSkip();
+      skip.on = true;
+      i += 12;
+      continue;
     }
     if (identStart(c)) {
       const std::size_t start = i;
@@ -695,6 +752,9 @@ std::vector<std::pair<int, std::string>> rustStrings(const std::string& s) {
         ++i;
       }
       const std::string word = s.substr(start, i - start);
+      if (skip.on && skip.depth == 0 && kRustItemWords.count(word)) {
+        skip.item = true;
+      }
       if ((word == "r" || word == "br" || word == "cr") && (peek(i) == '"' || peek(i) == '#')) {
         std::size_t hashes = 0;
         while (peek(i + hashes) == '#') {
@@ -708,7 +768,9 @@ std::vector<std::pair<int, std::string>> rustStrings(const std::string& s) {
         const std::size_t end = s.find(close, from);
         const std::size_t stop = end == std::string::npos ? s.size() : end;
         const std::string text = s.substr(from, stop - from);
-        strings.emplace_back(line, text);
+        if (!skip.on) {
+          strings.emplace_back(line, text);
+        }
         line += static_cast<int>(std::count(text.begin(), text.end(), '\n'));
         i = end == std::string::npos ? s.size() : end + close.size();
       }
@@ -726,7 +788,9 @@ std::vector<std::pair<int, std::string>> rustStrings(const std::string& s) {
         text += s[i++];
       }
       ++i;
-      strings.emplace_back(first, text);
+      if (!skip.on) {
+        strings.emplace_back(first, text);
+      }
       continue;
     }
     if (c == '\'') {
@@ -751,6 +815,7 @@ std::vector<std::pair<int, std::string>> rustStrings(const std::string& s) {
       i += peek(i + 1 + width) == '\'' ? width + 2 : 1;
       continue;
     }
+    punctuation(i);
     ++i;
   }
   return strings;
@@ -870,6 +935,9 @@ int selfTest() {
       "  s.title = @\"Hide Others\";\n"                                         // 23: allowed
       "  t = NSClassFromString(@\"MitcadNativeTile\");\n"                       // 24: an identifier
       "  u = @\"%@ %@\";\n"                                                     // 25: a format
+      "  v = tr(\"Open the \\\n"                                                // 26: continued
+      "and save\");\n"                                                          // 27
+      "  w = tr(\"Mitcad again\");\n"                                           // 28: Mitcad
       "}\n";
   const std::string markdown =
       "# Title\n"                                                              // 1
@@ -884,16 +952,29 @@ int selfTest() {
   std::vector<Violation> found;
   const std::string rust =
       "// SPDX-License-Identifier: MIT\n"                                      // 1
-      "fn f<'a>(x: &'a str) -> String {\n"                                     // 2: lifetimes
-      "    let (c, d, e) = ('\\'', '\"', '\xC3\xA4');\n"                         // 3: characters
-      "    format!(\"unknown parameter '{x}'\")\n"                              // 4: '{x}'
-      "}\n"                                                                    // 5
-      "// format!(\"'{x}'\")\n"                                                // 6: a comment
-      "const R: &str = r#\"a \"raw\" '{y}' string\"#;\n"                       // 7: '{x}'
-      "const S: &str = \"the {name} and \xE2\x80\x9C{text}\xE2\x80\x9D\";\n"   // 8: fine
-      "const T: &str = \"'{{' and '{}'\";\n"                                   // 9: '{x}'
-      "#[cfg(test)]\n"                                                         // 10
-      "mod tests { const U: &str = \"'{z}'\"; }\n";                            // 11: a test
+      "#[cfg(test)]\n"                                                         // 2: tests in
+      "mod tests;\n"                                                           // 3: their own file
+      "fn f<'a>(x: &'a str) -> String {\n"                                     // 4: lifetimes
+      "    let (c, d, e) = ('\\'', '\"', '\xC3\xA4');\n"                         // 5: characters
+      "    format!(\"unknown parameter '{x}'\")\n"                              // 6: '{x}'
+      "}\n"                                                                    // 7
+      "// format!(\"'{x}'\")\n"                                                // 8: a comment
+      "const R: &str = r#\"a \"raw\" '{y}' string\"#;\n"                       // 9: '{x}'
+      "const S: &str = \"the {name} and \xE2\x80\x9C{text}\xE2\x80\x9D\";\n"   // 10: fine
+      "const T: &str = \"'{{' and '{}'\";\n"                                   // 11: '{x}'
+      "#[cfg(test)]\n"                                                         // 12
+      "mod tests { const U: &str = \"'{z}'\"; }\n"                             // 13: a test
+      "#[cfg(test)]\n"                                                         // 14: a helper
+      "fn h<A, B>(a: A) -> String where A: Into<String>, B: Copy "              // 15
+      "{ format!(\"'{z}' {}\", '}') }\n"                                       //
+      "const W: &str = \"'{w}'\";\n"                                           // 16: '{x}'
+      "fn g() -> E { E { #[cfg(test)] hook: \"'{z}'\".into(), "                // 17: a field
+      "name: \"'{v}'\".into() } }\n"                                           //     then '{x}'
+      "#[cfg(test)]\n"                                                         // 18
+      "const X: [&str; 2] = [\"'{z}'\", \"b\"];\n"                             // 19: a test value
+      "fn k() -> E { E { #[cfg(test)] hook: M::<String, u8>::new(), "          // 20: a field
+      "name: \"the '{t}'\" } }\n"                                              //     then '{x}'
+      "const Y: &str = \"the value '{u}'\";\n";                                // 21: '{x}'
   scanSource("planted.cpp", source, found);
   scanMarkdown("planted.md", markdown, found);
   scanRust("core/planted/src/lib.rs", rust, found);
@@ -906,8 +987,11 @@ int selfTest() {
       "planted.md:8 Mitcad, licence",
       "planted.cpp:14 @\"text\"",       "planted.cpp:16 ribbon, @\"text\"",
       "planted.cpp:20 Title Case",      "planted.cpp:21 deg, x in a size",
-      "planted.md:9 Title Case, deg",   "core/planted/src/lib.rs:4 '{x}'",
-      "core/planted/src/lib.rs:7 '{x}'", "core/planted/src/lib.rs:9 '{x}'",
+      "planted.md:9 Title Case, deg",   "planted.cpp:28 Mitcad",
+      "core/planted/src/lib.rs:6 '{x}'",  "core/planted/src/lib.rs:9 '{x}'",
+      "core/planted/src/lib.rs:11 '{x}'", "core/planted/src/lib.rs:16 '{x}'",
+      "core/planted/src/lib.rs:17 '{x}'", "core/planted/src/lib.rs:20 '{x}'",
+      "core/planted/src/lib.rs:21 '{x}'",
   };
   std::set<std::string> got;
   for (const Violation& v : found) {

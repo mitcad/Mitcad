@@ -239,6 +239,21 @@
 //! `last_saved_with`; see `file/statistics.rs`). They are kept beside the
 //! definition, not in it: undo leaves them, and a design comparison does
 //! not see them.
+//!
+//! Top-level fields this build does not know (mitcad#1132) are ignored:
+//! a newer MitCad wrote them (comments, say), and a field added later
+//! must not keep an older build from opening the design. Opening names
+//! them in a warning ([`crate::Document::load_warnings`]: "this design was
+//! written by a newer MitCad: the fields `comments`, `next_comment` were
+//! not read") and keeps them with the file they were read from
+//! ([`Document::unknown_fields`]). This build cannot write them back, so
+//! saving over that file drops them ([`Document::fields_dropped_by_saving`]
+//! tells it before the save; the application asks first, Save As to a new
+//! file keeps the old one as it is); a save over it clears them, a save to
+//! another file keeps them. Unknown fields inside the known ones (a
+//! feature's, a parameter's) are still errors that say where, and so is a
+//! newer `version`. Builds before this rule refuse a design with an
+//! unknown top-level field.
 
 mod project;
 // A project's settings, shared and of this computer (mitcad#89).
@@ -255,7 +270,7 @@ pub use self::statistics::{DesignStatistics, SaveStamp, utc_text};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use self::project::{
@@ -355,6 +370,59 @@ impl fmt::Display for FileError {
 
 impl std::error::Error for FileError {}
 
+/// The top-level fields of a design file that this build did not read
+/// (mitcad#1132), and the file they were read from (None for text read
+/// without a path: a version's, recovered work). See the module's
+/// documentation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnknownFields {
+    pub file: Option<PathBuf>,
+    /// Their names, sorted.
+    pub fields: Vec<String>,
+}
+
+/// `` `a`, `b` `` for a message.
+fn quoted_list(fields: &[String]) -> String {
+    fields
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The warning on opening a design with unknown top-level fields
+/// (mitcad#1132): "this design was written by a newer MitCad: the field
+/// `comments` was not read".
+pub fn unknown_fields_warning(fields: &[String]) -> String {
+    let (noun, verb) = if fields.len() == 1 {
+        ("field", "was")
+    } else {
+        ("fields", "were")
+    };
+    format!(
+        "this design was written by a newer MitCad: the {noun} {} {verb} not read",
+        quoted_list(fields)
+    )
+}
+
+/// The warning before saving over the file the unknown top-level fields
+/// were read from (mitcad#1132).
+pub fn dropped_fields_warning(fields: &[String]) -> String {
+    let noun = if fields.len() == 1 { "field" } else { "fields" };
+    format!(
+        "saving over this design drops the {noun} {} that a newer MitCad wrote and this \
+         MitCad did not read",
+        quoted_list(fields)
+    )
+}
+
+/// Whether `a` and `b` name the same file: their real paths when both
+/// exist, else their absolute paths.
+fn same_file(a: &Path, b: &Path) -> bool {
+    let resolve = |p: &Path| std::fs::canonicalize(p).or_else(|_| std::path::absolute(p));
+    matches!((resolve(a), resolve(b)), (Ok(a), Ok(b)) if a == b)
+}
+
 impl<K: Kernel> Document<K> {
     /// The design file of this document as a single file, pretty-printed
     /// (see [`crate::file`]): version 2 with the B-rep data inside, unless a
@@ -437,7 +505,31 @@ impl<K: Kernel> Document<K> {
         if let Some(directory) = absolute.parent() {
             self.set_source_directory(directory);
         }
+        // The file the unknown fields were read from no longer has them
+        // (mitcad#1132); another file's save leaves them to that one.
+        if !self.fields_dropped_by_saving(path).is_empty() {
+            self.set_unknown_fields(UnknownFields::default());
+        }
         Ok(json)
+    }
+
+    /// The top-level fields of the design file this document was read
+    /// from that this build did not read (mitcad#1132): a newer MitCad
+    /// wrote them. Empty for a design without them, and after a save over
+    /// that file.
+    pub fn unknown_fields(&self) -> UnknownFields {
+        self.kept_unknown_fields()
+    }
+
+    /// The fields saving to `path` drops (mitcad#1132): the unknown
+    /// top-level fields when `path` is the file they were read from, none
+    /// for another file. The application asks before such a save.
+    pub fn fields_dropped_by_saving(&self, path: &Path) -> Vec<String> {
+        let unknown = self.kept_unknown_fields();
+        match &unknown.file {
+            Some(file) if !unknown.fields.is_empty() && same_file(file, path) => unknown.fields,
+            _ => Vec::new(),
+        }
     }
 
     /// The text [`Document::save_file`] writes to `path` in `format`, and
@@ -514,14 +606,21 @@ impl<K: Kernel> Document<K> {
     pub fn from_json_at(json: &str, path: &Path, kernel: K) -> Result<Self, FileError> {
         let absolute = std::path::absolute(path)
             .map_err(|e| FileError::Invalid(format!("cannot resolve {}: {e}", path.display())))?;
-        let (state, warnings, statistics) = load_parts_at(json, path)?;
+        let loaded = load_parts_at(json, path)?;
         // A file without statistics was saved before MitCad kept them
         // (mitcad#1088): its creation is not known. An empty design's file
         // (a project's New Design writes one) is created when first saved.
-        let new = state.features.is_empty();
-        let document = Document::from_state(kernel, state)
-            .with_warnings(warnings)
-            .with_statistics(KeptStatistics::read(statistics, new));
+        let new = loaded.state.features.is_empty();
+        // The fields a newer MitCad wrote, with the file saving over which
+        // drops them (mitcad#1132).
+        let unknown = UnknownFields {
+            file: Some(absolute.clone()),
+            fields: loaded.unknown_fields,
+        };
+        let document = Document::from_state(kernel, loaded.state)
+            .with_warnings(loaded.warnings)
+            .with_statistics(KeptStatistics::read(loaded.statistics, new))
+            .with_unknown_fields(unknown);
         if let Some(directory) = absolute.parent() {
             document.set_source_directory(directory);
         }
@@ -531,11 +630,20 @@ impl<K: Kernel> Document<K> {
     /// Reads a design file, its B-rep data from `store` (e.g. an older
     /// version's, P12b).
     pub fn from_json_in(json: &str, store: &dyn BlobStore, kernel: K) -> Result<Self, FileError> {
-        let (mut state, mut warnings, statistics) = load_parts(json)?;
+        let Loaded {
+            mut state,
+            mut warnings,
+            statistics,
+            unknown_fields,
+        } = load_parts(json)?;
         resolve(&mut state, store, &mut warnings);
         Ok(Document::from_state(kernel, state)
             .with_warnings(warnings)
-            .with_statistics(KeptStatistics::read(statistics, false)))
+            .with_statistics(KeptStatistics::read(statistics, false))
+            .with_unknown_fields(UnknownFields {
+                file: None,
+                fields: unknown_fields,
+            }))
     }
 
     /// The design file of this document with the timeline marker at
@@ -564,10 +672,14 @@ impl<K: Kernel> Document<K> {
     /// Text without statistics (an import's design, recovered work) is a
     /// new design's: its first stamped save sets `created` (mitcad#1088).
     pub fn from_json(json: &str, kernel: K) -> Result<Self, FileError> {
-        let (state, warnings, statistics) = load_parts(json)?;
-        Ok(Document::from_state(kernel, state)
-            .with_warnings(warnings)
-            .with_statistics(KeptStatistics::read(statistics, true)))
+        let loaded = load_parts(json)?;
+        Ok(Document::from_state(kernel, loaded.state)
+            .with_warnings(loaded.warnings)
+            .with_statistics(KeptStatistics::read(loaded.statistics, true))
+            .with_unknown_fields(UnknownFields {
+                file: None,
+                fields: loaded.unknown_fields,
+            }))
     }
 }
 
@@ -575,12 +687,18 @@ impl<K: Kernel> Document<K> {
 /// loading changed. B-rep references stay unresolved.
 #[doc(hidden)]
 pub fn load_state(json: &str) -> Result<(DocState, Vec<String>), FileError> {
-    load_parts(json).map(|(state, warnings, _)| (state, warnings))
+    load_parts(json).map(|loaded| (loaded.state, loaded.warnings))
 }
 
-/// What a design file gives: its definition state, what loading changed
-/// and its statistics, if it has any (mitcad#1088).
-type Loaded = (DocState, Vec<String>, Option<DesignStatistics>);
+/// What a design file gives: its definition state, what loading changed,
+/// its statistics, if it has any (mitcad#1088), and its top-level fields
+/// that this build does not know (mitcad#1132).
+struct Loaded {
+    state: DocState,
+    warnings: Vec<String>,
+    statistics: Option<DesignStatistics>,
+    unknown_fields: Vec<String>,
+}
 
 /// [`load_state`] with the file's statistics.
 fn load_parts(json: &str) -> Result<Loaded, FileError> {
@@ -604,10 +722,19 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
                 .map_err(|e| FileError::Schema(format!("statistics: {e}")))?,
         ),
     };
-    let (mut state, warnings) = match version {
+    // Top-level fields a newer MitCad wrote are ignored, with a warning
+    // (mitcad#1132). Version 1 files are older than every such field.
+    let unknown_fields = match version {
+        1 => Vec::new(),
+        _ => v2::take_unknown_fields(&mut value),
+    };
+    let (mut state, mut warnings) = match version {
         1 => v1::load(json),
         _ => v2::load(value),
     }?;
+    if !unknown_fields.is_empty() {
+        warnings.insert(0, unknown_fields_warning(&unknown_fields));
+    }
     // Ids in the top of their type would leave the session too few to
     // hand out (mitcad#944).
     id_reserve::check(&state)?;
@@ -616,36 +743,42 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
     state
         .settle_references()
         .map_err(|e| FileError::Invalid(e.to_string()))?;
-    Ok((state, warnings, statistics))
+    Ok(Loaded {
+        state,
+        warnings,
+        statistics,
+        unknown_fields,
+    })
 }
 
 /// The definition state of the design file at `path` (its text read by
 /// the caller), its B-rep references resolved from the store of the
 /// project the path is in; inserted components read other files with it.
 pub(crate) fn load_state_at(json: &str, path: &Path) -> Result<(DocState, Vec<String>), FileError> {
-    load_parts_at(json, path).map(|(state, warnings, _)| (state, warnings))
+    load_parts_at(json, path).map(|loaded| (loaded.state, loaded.warnings))
 }
 
-/// [`load_state_at`] with the file's statistics.
+/// [`load_state_at`] with the file's statistics and unknown fields.
 fn load_parts_at(json: &str, path: &Path) -> Result<Loaded, FileError> {
-    let (mut state, mut warnings, statistics) = load_parts(json)?;
+    let mut loaded = load_parts(json)?;
+    let (state, warnings) = (&mut loaded.state, &mut loaded.warnings);
     match Project::find(path) {
         Some(project) => {
-            if has_references(&state) {
-                resolve(&mut state, &project.store(), &mut warnings);
+            if has_references(state) {
+                resolve(state, &project.store(), warnings);
             }
-            if let Some(display) = local_display(&project, path, &mut warnings) {
+            if let Some(display) = local_display(&project, path, warnings) {
                 state.display = display;
             }
         }
-        None if has_references(&state) => warnings.push(format!(
+        None if has_references(state) => warnings.push(format!(
             "{} is not in a MitCad project (a folder with {PROJECT_MARKER} in it or above \
              it), so the B-rep data it refers to is not found",
             path.display()
         )),
         None => {}
     }
-    Ok((state, warnings, statistics))
+    Ok(loaded)
 }
 
 /// The definition state of a design file whose B-rep data is in `store`

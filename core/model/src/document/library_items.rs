@@ -847,14 +847,16 @@ impl<K: Kernel> Document<K> {
         id: &str,
         change: &MaterialChange,
     ) -> Result<(PathBuf, u32), ModelError> {
-        self.edit_library_material_carrying(libraries, library, id, change, None)
+        self.edit_library_material_carrying(libraries, library, id, change, None, &[])
     }
 
     /// [`Document::edit_library_material`] whose file carries `given`, the
     /// appearance the change names, in place of the one it carried
-    /// (mitcad#1053: an imported filament's appearance overriding an item).
-    /// The design's copies of the item take the change too, so when it has
-    /// any, `given` must be the design's appearance of that id.
+    /// (mitcad#1053: an imported filament's appearance overriding an item),
+    /// and of `also` (other items' appearances, mitcad#1150: a merge's)
+    /// those its list names that it does not carry. The design's copies of
+    /// the item take the change too, so when it has any, `given` must be
+    /// the design's appearance of that id.
     pub(crate) fn edit_library_material_carrying(
         &mut self,
         libraries: &Libraries,
@@ -862,6 +864,7 @@ impl<K: Kernel> Document<K> {
         id: &str,
         change: &MaterialChange,
         given: Option<&Appearance>,
+        also: &[Appearance],
     ) -> Result<(PathBuf, u32), ModelError> {
         if change.based_on.is_some() {
             return Err(invalid("based_on is only for create_material"));
@@ -895,6 +898,11 @@ impl<K: Kernel> Document<K> {
             .collect();
         if let Some(g) = given {
             carrying.insert(0, g.clone());
+        }
+        for look in also {
+            if !carrying.iter().any(|a| a.id == look.id) {
+                carrying.push(look.clone());
+            }
         }
         // The library has these values already (a newer version made in
         // another design): its file stays, and only the design's copies

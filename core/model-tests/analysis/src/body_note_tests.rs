@@ -215,3 +215,49 @@ fn the_bodies_whose_material_or_print_settings_differ_are_listed() {
     );
     assert_eq!(differences(&doc), json!([]));
 }
+
+/// Root › Arm › Pin, only Arm with a default material (mitcad#1150): a
+/// body of Pin made of Arm's material is made of what its components give
+/// it, so it differs in nothing; another material of its own differs.
+#[test]
+fn a_material_given_by_a_component_further_up_is_no_difference() {
+    use mitcad_model::ids::ComponentUid;
+    use mitcad_model::transform::Transform;
+    let mut doc = Document::new(MockKernel::default());
+    doc.create_component(Some("Arm"), Transform::IDENTITY, true)
+        .unwrap();
+    doc.create_component(Some("Pin"), Transform::translation([5.0, 0.0, 0.0]), true)
+        .unwrap();
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+               "length": 4, "width": 4, "height": 4, "operation": "new_body"}}),
+    );
+    let body = format!("{}.b0", added["uid"].as_str().unwrap());
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "Arm", "material": "abs"}),
+    );
+    let differences = |doc: &Document<MockKernel>| query(doc, json!({"query": "make_differences"}));
+    assert_eq!(differences(&doc), json!([]));
+    // Its own material the same as Arm's: as its note says, like its parent.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": body, "material": "abs"}),
+    );
+    assert_eq!(
+        query(&doc, json!({"query": "body_material", "body": body}))["source"],
+        "body"
+    );
+    assert_eq!(differences(&doc), json!([]));
+    // Another material of its own differs.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": body, "material": "pla"}),
+    );
+    let listed = differences(&doc);
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    assert_eq!(listed[0]["body"], body, "{listed}");
+    assert_ne!(listed[0]["material"], Value::Null, "{listed}");
+}

@@ -48,9 +48,10 @@ namespace {
 // "Mitcad shape", then the format version. A new version is a new
 // kernel_build_id, so stored results of an older one are not read.
 // Format 2 (mitcad#841) keeps the edges' and vertices' names and faces,
-// format 3 (mitcad#1106) the infos after the notes.
+// format 3 (mitcad#1106) the infos after the notes; format 4 (mitcad#1142)
+// keeps exact source-profile names for one-sided open boundary edges.
 constexpr char kMagic[4] = {'M', 'C', 'S', 'H'};
-constexpr std::uint32_t kFormat = 3;
+constexpr std::uint32_t kFormat = 4;
 
 class Writer {
 public:
@@ -234,6 +235,9 @@ std::string serialize_shape(const Shape& shape) {
     out.u32(static_cast<std::uint32_t>(pair[0] + 1));
     out.u32(static_cast<std::uint32_t>(pair[1] + 1));
     out.text(shape.edge_name(i));
+    const NameList& open = shape.open_edge_names(i);
+    out.u32(static_cast<std::uint32_t>(open.size()));
+    for (const std::string& name : open) out.text(name);
   }
   for (int i = 0; i < shape.vertex_count(); ++i) {
     const std::vector<int>& at = shape.vertex_faces(i);
@@ -261,7 +265,8 @@ ShapePtr deserialize_shape(std::string_view data) {
   if (in.bytes(sizeof kMagic) != std::string_view(kMagic, sizeof kMagic)) {
     throw std::runtime_error("stored shape: not a shape");
   }
-  if (const std::uint32_t format = in.u32(); format != kFormat) {
+  const std::uint32_t format = in.u32();
+  if (format != 3 && format != kFormat) {
     throw std::runtime_error("stored shape: format " + std::to_string(format) + " is not " +
                              std::to_string(kFormat));
   }
@@ -309,11 +314,18 @@ ShapePtr deserialize_shape(std::string_view data) {
   Shape::DerivedNames derived;
   derived.edge_faces.reserve(static_cast<std::size_t>(edges));
   derived.edge_names.reserve(static_cast<std::size_t>(edges));
+  if (format >= 4) derived.open_edge_names.reserve(static_cast<std::size_t>(edges));
   for (int i = 0; i < edges; ++i) {
     const int first = face();
     const int second = face();
     derived.edge_faces.push_back(std::array<int, 2>{{first, second}});
     derived.edge_names.push_back(in.text());
+    if (format >= 4) {
+      NameList names;
+      const std::uint32_t count = in.u32();
+      for (std::uint32_t k = 0; k < count; ++k) names.push_back(in.text());
+      derived.open_edge_names.push_back(std::move(names));
+    }
   }
   derived.vertex_faces.reserve(static_cast<std::size_t>(vertices));
   derived.vertex_names.reserve(static_cast<std::size_t>(vertices));
@@ -369,6 +381,7 @@ std::size_t memory_estimate(const Shape& shape) {
   constexpr std::size_t kVertex = 160;
   constexpr std::size_t kAnalytic = 160; // a plane, cylinder, line, circle ...
   std::size_t bytes = sizeof(Shape) + 256;
+  if (shape.has_open_edge_names()) bytes += static_cast<std::size_t>(shape.edge_count()) * sizeof(NameList);
   for (int i = 0; i < shape.face_count(); ++i) {
     const TopoDS_Face& face = shape.face(i);
     bytes += kFace;
@@ -394,6 +407,7 @@ std::size_t memory_estimate(const Shape& shape) {
   }
   for (int i = 0; i < shape.edge_count(); ++i) {
     bytes += kEdge + shape.edge_name(i).size();
+    for (const std::string& name : shape.open_edge_names(i)) bytes += sizeof(std::string) + name.size();
     TopLoc_Location location;
     double first = 0.0;
     double last = 0.0;

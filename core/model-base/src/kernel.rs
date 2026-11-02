@@ -18,7 +18,7 @@ use crate::datum::{
 use crate::exchange::{BodyKind, ExportBody, ExportOptions, ImportBody, ReadOptions};
 use crate::ids::{EntityUid, FeatureUid};
 use crate::profile::{ProfileRegion, SketchFrame};
-use crate::topo::{EdgeName, FaceName, TopoName, VertexName};
+use crate::topo::{EdgeName, FaceBoundaryRef, FaceName, TopoName, VertexName};
 use crate::transform::{Instance, PrimitiveSpec, Transform};
 // Sweeps, lofts, pipes, coils, ribs and webs (F3).
 use crate::sweeps::{CoilSpec, LoftSpec, PipeSpec, RibSpec, SweepSpec};
@@ -529,6 +529,18 @@ pub trait Kernel: Send {
         _name: &TopoName,
     ) -> Result<Vec<Curve3>, KernelError> {
         Err(KernelError::Unsupported("edge geometry"))
+    }
+
+    /// The persistent, non-degenerate boundary edges of a planar face, including
+    /// every piece of a split face without their shared internal edges.
+    /// Curves use the body's model space, as [`Kernel::curves_of`]; occurrence transforms
+    /// belong to the caller. Empty when the face name does not resolve.
+    fn face_boundary(
+        &self,
+        _shape: &Self::Shape,
+        _face: &FaceName,
+    ) -> Result<Vec<(FaceBoundaryRef, Curve3)>, KernelError> {
+        Err(KernelError::Unsupported("named face boundaries"))
     }
 
     // .f3d import (T1): replayed bodies against the file's.

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files/MainWindowSaveComponent.cpp app/browser core/model/src/document
-# check-all sources: core/model-api/src/components.rs tools/cli
+# check-all sources: core/model-api/src/components.rs tools/cli app/files/SaveComponentTarget.cpp
 # Input-driven Windows UI test of Save Component as Design (mitcad#1057) in
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-save-component-test.sh does on Linux, on a design that mitcad-cli
@@ -12,7 +12,11 @@
 #   2. Box:1: the dialog lists the projection of A:1, frozen; Save... with
 #      the proposed name writes Box.mitcad in the design's folder, without
 #      the link to A:1.
-#   3. Box:1 again with Replace with a link to the new file: Box2.mitcad
+#   3. Box:1 again, Save... over the design's own file by a name that
+#      differs only in case (BENCH.mitcad), the replace question answered
+#      Yes: refused with a warning, bench.mitcad byte-identical
+#      (mitcad#1148).
+#   4. Box:1 again with Replace with a link to the new file: Box2.mitcad
 #      written and Box:1 linked to it; its row then has no Save Component
 #      as Design... (a linked component).
 #
@@ -158,7 +162,40 @@ if ($text.Contains('"source": "O1"')) { Ui-Fail 'Box.mitcad still links to A:1' 
 Write-Host 'ok   the new design holds the sketch, its projection unlinked'
 Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
 
-Write-Host '--- 3. Replace with a link to the new file'
+Write-Host '--- 3. Not over the design''s own file by a name that differs only in case (mitcad#1148)'
+$designBytes = (Get-FileHash $design).Hash
+Row-Menu 'Browser Root/Box:1'
+Ui-Mark
+Menu-Choose $entry
+Ui-ExpectNew 'Save Component as Design dialog opened: Box; references: ' 'the dialog opened'
+Ui-FocusDialog '^Save Component as Design$'
+Ui-Mark
+Ui-Step 'Save... (Enter)'                { Ui-Key 'Return' }
+Ui-ExpectNew 'Save Component as Design dialog: replace with a link: no' 'not replaced'
+Ui-FocusDialog '^Save Design File$'
+# The file dialog's overwrite question has the dialog's title.
+$fileDialog = Ui-Windows '^Save Design File$'
+Ui-Step 'the design''s own file in capitals' {
+  Ui-Key 'ctrl+a'
+  Ui-Type (Join-Path $work 'BENCH.mitcad')
+  Start-Sleep -Milliseconds 300
+  Ui-Key 'Return'
+}
+Ui-FocusDialog '^Save Design File$' -Except $fileDialog
+Ui-Step 'replace it (Alt+Y)'             { Ui-Key 'alt+y' }
+Ui-ExpectNew "Save Component as Design refused: " 'refused as the design''s own file' 20
+Ui-FocusDialog '^Save Component as Design$'
+Ui-Step 'close the warning (Enter)'      { Ui-Key 'Return' }
+Ui-FocusMain
+if (-not (Ui-NewLines | Where-Object { $_.Contains("is this design's own file") })) {
+  Ui-Fail "not refused as the design's own file: $((Ui-NewLines) -join ' / ')"
+}
+if (Ui-NewLines | Where-Object { $_.Contains('Saved component Box as design') }) { Ui-Fail 'Box was saved over the design' }
+if ((Get-FileHash $design).Hash -ne $designBytes) { Ui-Fail 'bench.mitcad changed' }
+Write-Host 'ok   bench.mitcad is byte-identical'
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+
+Write-Host '--- 4. Replace with a link to the new file'
 Row-Menu 'Browser Root/Box:1'
 Ui-Mark
 Menu-Choose $entry

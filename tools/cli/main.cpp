@@ -41,6 +41,9 @@
 namespace {
 
 const char* const kUsage = R"(usage:
+  mitcad-cli --version
+      Prints MitCad's version ("mitcad-cli <version>"). In the Linux
+      AppImage, `MitCad.AppImage cli <arguments>` runs mitcad-cli.
   mitcad-cli info <file.mitcad> [--json] [--properties [--density G_PER_CM3]] [--timings]
                   [--result-store DIR [--persist-min-ms MS]] [--diagnostics] [--names]
       Opens a design, recomputes it and prints the timeline with the
@@ -56,6 +59,12 @@ const char* const kUsage = R"(usage:
       memory and store sizes, hits, and where each result came from.
       --names adds the names of every body's faces and edges (the faces and
       edges queries, JSON), to compare the topology of two builds.
+      Like every command that opens a design file (run --open, import
+      --open, measure, the exports, drawing, parts, ...), it places BUILD
+      connectors and their nuts and screws that the first placing rule
+      placed by the current one in the opened document, as the application
+      does (run --save writes them so); when that is refused, a warning
+      says why and the design is used as it was loaded.
   mitcad-cli run <script.json> [--open <file.mitcad>] [--save <out.mitcad>] [--json]
                  [--properties [--density G_PER_CM3]] [--timings]
       Runs a script of JSON commands and expectations on a new document, or
@@ -506,6 +515,7 @@ using mitcad::cli::open_document;
 using mitcad::cli::parse_arguments;
 using mitcad::cli::save_document;
 using mitcad::cli::StoreOptions;
+using mitcad::cli::warn_dropped_fields;
 
 // A JSON array of strings from a comma-separated list.
 std::string string_list(const std::string& text) {
@@ -1322,6 +1332,7 @@ int convert(const std::vector<std::string>& args) {
   for (const rust::String& warning : document->load_warnings()) {
     std::cerr << "warning: " << std::string(warning) << "\n";
   }
+  warn_dropped_fields(*document, a.positional[1]);
   const std::string text(document->save_design(a.positional[1], format));
   std::cout << "Wrote " << a.positional[1] << " (version " << json_count(text, "version") << ", "
             << text.size() << " bytes)\n";
@@ -1353,6 +1364,11 @@ int run(int argc, char* argv[]) {
   if (args[0] == "--help" || args[0] == "-h") {
     std::cout << kUsage << mitcad::cli::kLibraryUsage << mitcad::cli::kProjectsUsage << mitcad::cli::kLiveUsage
               << mitcad::cli::kMcpUsage << mitcad::cli::kMeshCompareUsage << kExitStatus;
+    return 0;
+  }
+  // The version, as `MitCad.AppImage cli --version` shows it (mitcad#1170).
+  if (args[0] == "--version") {
+    std::cout << "mitcad-cli " << MITCAD_VERSION << "\n";
     return 0;
   }
   const std::string& mode = args[0];

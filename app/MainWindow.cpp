@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <QAction>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
@@ -21,6 +22,8 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QJsonDocument>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QMargins>
 #include <QLabel>
 #include <QMenu>
@@ -28,6 +31,7 @@
 #include <QMessageBox>
 #include <QPair>
 #include <QPushButton>
+#include <QPlainTextEdit>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -38,6 +42,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTextEdit>
 #include <QUrl>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -420,6 +425,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       m_mcpDocumentId(QUuid::createUuid().toString(QUuid::WithoutBraces)),
       m_viewer(new OcctViewer(this)), m_statusLabel(new QLabel(this)),
       m_rendererLabel(new QLabel(this)) {
+  m_viewer->setObjectName(QStringLiteral("modelView"));
   // What a fit frames in a view with nothing to fit, and a new design's
   // first view (mitcad#1000): the box of the origin planes, as showDatums
   // draws them (kDatumSize, centred on the origin).
@@ -538,6 +544,14 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // picks), so that none is under a card (mitcad#1086); only with
   // MITCAD_LOG_PICKS.
   if (qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
+    // A release can end navigation on its fallback timer before a paint.
+    // The viewer also guards pending input until FlushViewEvents; retry
+    // after viewChanged, queued behind the actual picked signal.
+    const auto retryPickPlaces = [this] {
+      if (m_pickPlacesDeferred) logPickPlaces(m_pickPlacesFilter, true);
+    };
+    connect(m_viewer, &OcctViewer::navigationFinished, this, retryPickPlaces, Qt::QueuedConnection);
+    connect(m_viewer, &OcctViewer::viewChanged, this, retryPickPlaces, Qt::QueuedConnection);
     connect(m_viewer, &OcctViewer::coveredChanged, this, [this] {
       if (!(m_pickPlacesFilter & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex | SelectKind::Profile)) ||
           m_pickPlacesQueued) {
@@ -2379,7 +2393,9 @@ void MainWindow::editShortcuts(const QString& id) {
 // Model access
 
 const Document& MainWindow::idleDocument() const {
-  if (modelBusy()) {
+  // A job in the background gives way (Send to Slicer's bed plan beside a
+  // print window, mitcad#1121).
+  if (modelBusy() && !m_documentSession->yieldBackgroundJob()) {
     // The worker's now: the UI thread may only draw what it showed before
     // (docs/architecture.md, "Background computation").
     qCritical() << "The document was read while a job computes it";
@@ -2391,7 +2407,9 @@ const Document& MainWindow::idleDocument() const {
 
 bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   const QString name = cmd.value(QStringLiteral("cmd")).toString();
-  if (modelBusy()) {
+  // A job in the background gives way (mitcad#1121); any other is waited
+  // for by whoever calls.
+  if (modelBusy() && !m_documentSession->yieldBackgroundJob()) {
     // A call from a timer or a queued signal while a job computes the model
     // (what is known to come so waits: whenIdle): refused, as the model
     // refuses what it cannot do.
@@ -3073,6 +3091,11 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       return TopoDS_Shape();
     }
     case SelectKind::Plane:
+      if (isFixedPlane(item)) {
+        // A definition's fixed plane, drawn where it lies (mitcad#1137).
+        return datumShape(fixedPlaneDatum(item.reference().toObject()), kDatumSize);
+      }
+      [[fallthrough]];
     case SelectKind::Axis:
     case SelectKind::Point:
       return datumShape(queryObject({{QStringLiteral("query"), QStringLiteral("datum")},
@@ -3982,8 +4005,14 @@ void MainWindow::setConstructionHidden(bool hidden) {
 void MainWindow::logPickPlaces(SelectFilter filter, bool again) {
   if (!(filter & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex | SelectKind::Profile)) ||
       !qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
+    m_pickPlacesDeferred = false;
     return;
   }
+  if (!m_viewer->pickPointsReady()) {
+    m_pickPlacesDeferred = true;
+    return;
+  }
+  m_pickPlacesDeferred = false;
   // Where a click picks each face, edge, vertex and profile the input
   // takes, for UI tests (only on request: every item is tried in the view).
   // The points are clear of the cards over the view as they are now.
@@ -4071,7 +4100,7 @@ bool MainWindow::setParameterValue(const QString& name, double value) {
 // The browser, the timeline and the parameters dialog (DocumentHost)
 
 bool MainWindow::runModelCommand(const QJsonObject& command, QJsonObject* result) {
-  if (modelBusy()) {
+  if (modelBusy() && !m_documentSession->yieldBackgroundJob()) {
     return runCommand(command, result); // refused: the model is a job's
   }
   const QJsonObject before = bodyVolumes(*this);
@@ -4084,7 +4113,7 @@ bool MainWindow::runModelCommand(const QJsonObject& command, QJsonObject* result
 }
 
 bool MainWindow::runModelCommands(const QJsonArray& commands, const QString& label) {
-  if (modelBusy()) {
+  if (modelBusy() && !m_documentSession->yieldBackgroundJob()) {
     return commands.isEmpty() || runCommand(commands.first().toObject()); // refused
   }
   const QJsonObject before = bodyVolumes(*this);
@@ -4552,6 +4581,14 @@ void MainWindow::setSelection(const Selection& items) {
   m_sketch->refreshView();
   const qint64 sketchMs = selectionClock.restart();
   m_controller->showSelection(m_selection);
+#ifdef MITCAD_MACOS_NATIVE_UI
+  if (m_nativeWindow) {
+    // A collection pick need not change the document or refresh the whole
+    // native window. Its peer collections still need the current selection.
+    m_nativeWindow->setSelection(m_controller->browser()->selectedPresentationKeys());
+    m_nativeWindow->setHistorySelection(m_controller->timeline()->selectedFeatures());
+  }
+#endif
   const qint64 browserMs = selectionClock.elapsed();
   if (changed) {
     qDebug().noquote() << QStringLiteral("Selection timing: view %1 ms (highlights %2, card %3, measure %4), "
@@ -5401,6 +5438,29 @@ void MainWindow::enterSketch(const QString& uid, bool existing, const QString& p
   });
 }
 
+void MainWindow::keyPressEvent(QKeyEvent* event) {
+  // Even a read-only editor can ignore Delete and propagate it here. Its
+  // focus still means text editing, never permission to delete the model.
+  bool editing = false;
+  for (QWidget* focus = QApplication::focusWidget(); focus; focus = focus->parentWidget()) {
+    if (qobject_cast<QLineEdit*>(focus) || qobject_cast<QTextEdit*>(focus) ||
+        qobject_cast<QPlainTextEdit*>(focus) || qobject_cast<QAbstractSpinBox*>(focus)) {
+      editing = true;
+      break;
+    }
+  }
+  bool remove = event->key() == Qt::Key_Delete;
+#ifdef Q_OS_MACOS
+  remove = remove || event->key() == Qt::Key_Backspace;
+#endif
+  if (remove && !editing && event->modifiers() == Qt::NoModifier && m_mode == Mode::Idle && !modelBusy()) {
+    m_controller->deleteSelection(m_selection);
+    event->accept();
+    return;
+  }
+  QMainWindow::keyPressEvent(event);
+}
+
 void MainWindow::editSketch(const QString& uid) {
   if (m_mode != Mode::Idle || refuseReadOnly(QStringLiteral("editing %1").arg(uid))) {
     return;
@@ -5766,6 +5826,8 @@ bool MainWindow::loadDesign(const QString& path, QString& error) {
   }
   // Its project's remote: its state, and a check for newer versions.
   m_remote->fileOpened(m_filePath);
+  // Fields a newer MitCad wrote, not read (mitcad#1132): said at once.
+  warnUnknownFields();
   return true;
 }
 
@@ -5858,6 +5920,16 @@ bool MainWindow::writeFile(const QString& path, const QString& description, Vers
   if (windowReadOnly() && !m_writeAnyway && !m_filePath.isEmpty() && sameFolderPath(absolute, m_filePath)) {
     refuseReadOnly(QStringLiteral("writing %1").arg(absolute));
     return false;
+  }
+  // A design a newer MitCad wrote (mitcad#1132): saving over the file it
+  // was read from drops the fields this MitCad did not read, so it asks
+  // first; Save As writes another file and leaves that one as it is.
+  const std::optional<bool> dropFields = askDropUnknownFields(absolute);
+  if (!dropFields) {
+    return false; // canceled: no failure for a caller requiring a version
+  }
+  if (!*dropFields) {
+    return saveAs();
   }
   // In a project with version history (P12d) Save records a version too:
   // by the author (shown once), after a change made outside Mitcad was

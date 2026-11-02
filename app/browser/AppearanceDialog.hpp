@@ -43,6 +43,14 @@ class TextureBrowser;
 // The window assigns nothing: the Appearance tool does (mitcad#1059), also
 // to faces and to clear a face's own.
 //
+// The list is grouped by class (mitcad#1133): the design's own first, then
+// the library's under Metal, General Plastic, FDM Plastic, Resin and Other
+// (appearanceSections, shared with the pickers), each heading with its
+// count; a click on a heading (or Space, Return, Left, Right on it)
+// collapses or expands its group, remembered per user (the setting
+// `appearances/collapsedGroups`). The search hides the groups without a
+// match.
+//
 // Texture sources (mitcad#315): a selector above the list chooses between
 // the appearances (the library and the design's) and the texture sources
 // (app/materials/TextureSource.hpp), with a search field and a category
@@ -98,6 +106,9 @@ private:
   void showCategories();
   void runSearch();
   void filterList();
+  // A group of the list (mitcad#1133) collapsed or expanded, remembered.
+  void setGroupCollapsed(const QString& key, bool collapsed);
+  bool eventFilter(QObject* watched, QEvent* event) override;
   void useTexture(const TextureAsset& asset, const QString& resolution);
   void finishUse(const QString& sourceId, const TextureAsset& asset, const TextureFiles& files,
                  const QString& error);
@@ -133,6 +144,8 @@ private:
   bool m_fitted = false; // sized to the screen at its first show (mitcad#818)
   QString m_logged; // the logged places
   QString m_loggedTexture; // the texture line last logged
+  QStringList m_collapsed; // the list's collapsed groups by key (mitcad#1133)
+  QString m_loggedGroups;  // the groups last logged
   // Texture sources (mitcad#315): the selector's entry 0 is the
   // appearances, entry i + 1 is m_sources[i].
   TextureSettings m_textureSettings;

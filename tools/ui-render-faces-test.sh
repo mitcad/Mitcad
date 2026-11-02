@@ -217,9 +217,8 @@ ui_expect_new "Appearances item steel_satin at" "the library is listed"
 echo "--- Textures"
 ui_focus_dialog '^Appearances$'
 ui_mark
-# The design's own appearances are last in the list: checker, then lost.
-ui_step "the list"                       ui_click_logged "Appearances item steel_satin"
-ui_step "the appearance with a lost image (End)" ui_key End
+# The design's own appearances are first in the list (mitcad#1133).
+ui_step "the appearance with a lost image" ui_click_logged "Appearances item lost"
 ui_expect_new "Appearance lost texture missing: the image $WORK/nowhere/lost.png is missing" \
   "the dialog says the image is missing"
 ui_mark

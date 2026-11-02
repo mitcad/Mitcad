@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/browser/BrowserMaterialMenu.cpp app/framework/TestDriver.cpp core/model/src/material.rs core/model/src/document/materials.rs
+# check-all sources: app/print app/browser/BrowserMaterialMenu.cpp app/framework/TestDriver.cpp core/model/src/material.rs core/model/src/document/materials.rs app/browser/AppearanceDialog.cpp app/commands/MaterialCommands.cpp
 # check-all sources: core/model-base/src/material_class.rs core/model-base/src/appearance.rs
 # A filament's colour is its appearance (mitcad#1055), in the build VM: the
 # same driver script as the Linux and macOS tests
@@ -8,7 +8,9 @@
 # full in the Materials window's list, General's list of a material's
 # appearances with Add... (the appearance library's popover, the material's
 # class first, mitcad#1102), a filament's Class fixed, Make Default
-# and Remove) on a design mitcad-cli makes. The pictures of the Materials
+# and Remove, the Appearances window grouped by class with the filament
+# colours under FDM Plastic and the Appearance tool's picker on a PLA body,
+# mitcad#1133) on a design mitcad-cli makes. The pictures of the Materials
 # window and the picker go to the output folder.
 param(
   [string]$App,

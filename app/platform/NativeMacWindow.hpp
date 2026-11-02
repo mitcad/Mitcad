@@ -195,8 +195,8 @@ struct NativeMacWindowCallbacks {
   std::function<void(const QString&)> activate;
   std::function<void(const QString&, const QString&)> rename;
   std::function<void(const QString&)> historyActivated;
-  std::function<void(const QString&)> treeDelete;
-  std::function<void(const QString&)> historyDelete;
+  std::function<void(const QStringList&)> treeDelete;
+  std::function<void(const QStringList&)> historyDelete;
   std::function<void(const QString&)> historyRename;
   std::function<bool()> requestClose;
   std::function<void()> closed;

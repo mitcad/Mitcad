@@ -81,18 +81,11 @@ MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instan
   }
 
   // One body: its name; one component: its name; else the design's.
-  plan.name = design;
-  if (distinct.size() == 1) {
-    const MeshItem& item = distinct.first();
-    if (item.kind == MeshItem::Kind::Body) {
-      plan.name = bodies.value(item.uid).name;
-    } else if (!item.occurrence.isEmpty()) {
-      plan.name = components.value(item.uid, design);
-    }
+  QHash<QString, QString> bodyNames;
+  for (auto body = bodies.constBegin(); body != bodies.constEnd(); ++body) {
+    bodyNames.insert(body.key(), body.value().name);
   }
-  if (plan.name.trimmed().isEmpty()) {
-    plan.name = design;
-  }
+  plan.name = meshItemsName(distinct, bodyNames, components, design);
 
   if (plan.bodies.isEmpty()) {
     plan.blocked = found.isEmpty() ? QObject::tr("There are no bodies to save")
@@ -111,6 +104,29 @@ MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instan
     plan.bedBlocked = !bedError.isEmpty() ? bedError : QObject::tr("No body has a print bed face");
   }
   return plan;
+}
+
+QString meshItemsName(const QVector<MeshItem>& items, const QHash<QString, QString>& bodyNames,
+                      const QHash<QString, QString>& components, const QString& design) {
+  QVector<MeshItem> distinct;
+  for (const MeshItem& item : items) {
+    const bool seen = std::any_of(distinct.begin(), distinct.end(), [&item](const MeshItem& other) {
+      return other.kind == item.kind && other.uid == item.uid && other.occurrence == item.occurrence;
+    });
+    if (!seen) {
+      distinct << item;
+    }
+  }
+  QString name = design;
+  if (distinct.size() == 1) {
+    const MeshItem& item = distinct.first();
+    if (item.kind == MeshItem::Kind::Body) {
+      name = bodyNames.value(item.uid);
+    } else if (!item.occurrence.isEmpty()) {
+      name = components.value(item.uid, design);
+    }
+  }
+  return name.trimmed().isEmpty() ? design : name;
 }
 
 QStringList meshFileNames(const MeshPlan& plan, bool perBody, const QString& extension) {

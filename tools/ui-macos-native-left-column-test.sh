@@ -13,6 +13,9 @@
 #     relaunch; a double-click returns to the automatic split.
 #   - The disclosure folds Configuration to its header, remembered across a
 #     relaunch (configuration/panelCollapsed, shared with Qt).
+#   - With the Projects card shown (an empty projects folder), its boundary
+#     with Configuration dragged down past the Projects rows moves no card
+#     (mitcad#1152); the same after a relaunch.
 # Usage: tools/ui-macos-native-left-column-test.sh <app> <mitcad-cli> <output>
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -69,4 +72,12 @@ run_phase() {
 run_phase split
 run_phase restored
 run_phase collapsed
-echo "PASS: native Configuration card, shared left column, dragged and remembered split, disclosure"
+# The Projects panel shown from here on, as for a user who turned it on
+# (mitcad#1020: hidden until then), with the run's empty projects folder.
+# On macOS the private settings are nocodo.fi/Mitcad.ini (the organization
+# domain, as tools/ui-macos-test.sh notes).
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '\n[projects]\npanel=true\n' >> "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
+run_phase projects
+run_phase projects-restored
+echo "PASS: native Configuration card, shared left column, dragged and remembered split, disclosure, Projects boundary"

@@ -43,7 +43,9 @@
 // refused: <why>", "Drawing panel <field> at x,y", "Drawing picked <what>
 // (<n>): <the model's pick>" and "Drawing pick: nothing at x,y" (an
 // annotation tool's clicks), "Drawing hover: <what>" (what a click would
-// pick, "nothing"), "Drawing shortcut ignored: E".
+// pick, "nothing"), "Drawing shortcut ignored: E", "Drawing view <n>
+// scale: 1:1.5 (0.667)" (its panel's Scale field and the model's scale) and
+// "Drawing scale refused: <text>" (mitcad#1169).
 //
 // A cut sheet (mitcad#853) opens here too: its parts are the sheet's views
 // (dragged to move them, turned from their menu or their panel's Rotation),
@@ -73,6 +75,7 @@
 #include "DrawingTools.hpp"
 
 class QAction;
+class QComboBox;
 class QFormLayout;
 class QKeyEvent;
 class QVBoxLayout;
@@ -232,6 +235,12 @@ private:
   // Runs one field's change of a view after the event that made it (the
   // panel is built again once the model has it).
   void editView(int view, const QString& field, const QString& value);
+  // A scale field (mitcad#1169), a tool's option or a view's Scale: its
+  // list's scales, or any ratio a:b typed and sent with Enter or by
+  // leaving the field. A text that is neither shows the field's error
+  // state, is logged ("Drawing scale refused: abc") and is not sent.
+  // `chosen` gets the choice's value or the ratio ("2:3") once per change.
+  void watchScale(QComboBox* combo, const std::function<void(const QString&)>& chosen);
   void editSheet();
   void addSheet();
   // Delete Sheet of a sheet tab's menu: the sheet shown stays shown, at its

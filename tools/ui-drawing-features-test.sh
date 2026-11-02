@@ -18,6 +18,8 @@
 #     menu, undone and redone.
 #   - A section and a detail on the view, then its Orientation changed: no
 #     longer refused, the three views still drawn.
+#   - Its Scale typed (mitcad#1169): abc refused and not sent, 2:3 sent,
+#     the model's scale 0.667 and the field showing it as 1:1.5 (1:X or X:1).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-drawing-features-test.sh [screenshot.png]
@@ -370,6 +372,23 @@ ui_expect_new '"direction":"front"' "the front asked for"
 ui_expect_new "Drawing sheet drawn: 3 views" "drawn with its section and detail"
 no_refusal
 grep -F "Drawing sheet drawn" "$UI_LOG" | tail -1
+
+echo "--- Any scale typed in the view's Scale (mitcad#1169)"
+ui_expect_log "Drawing panel drawingViewScale at" "its Scale in its panel"
+ui_mark
+ui_step "Scale: abc"                       field_text "Drawing panel drawingViewScale" "abc"
+ui_expect_new "Drawing scale refused: abc" "not a scale: refused"
+ui_sync
+grep -q '"cmd":"edit_drawing_view"' <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "abc was sent to the model"
+echo "ok   abc not sent"
+ui_mark
+ui_step "Scale: 2:3"                       field_text "Drawing panel drawingViewScale" "2:3"
+ui_expect_new '"scale":"2:3"' "two thirds asked for"
+# The model keeps 0.667; the field shows it as drawings write scales, 1:X
+# or X:1 (ISO 5455): 1:1.5.
+ui_expect_new "Drawing view 1 scale: 1:1.5 (0.667)" "the model's scale, shown as 1:1.5"
+ui_expect_new "Drawing sheet drawn: 3 views" "drawn at 2:3"
+no_refusal
 ui_crashed && ui_fail "crashed"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"

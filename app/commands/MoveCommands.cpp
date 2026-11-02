@@ -593,11 +593,13 @@ QVector<InputDef> motionInputs(const Choices& types, bool along) {
                 .withVisible(type("translate"))
                 .withManipulator(translateHandle(2));
   if (along) {
-    // Translate Along: a distance along an axis, an edge or a face's axis.
+    // Translate Along: a distance along an axis, an edge or a face's axis;
+    // 0 at the start, as every distance of the motion (mitcad#1163):
+    // nothing moves until a distance is typed or the arrow dragged.
     inputs << selectionInput(QStringLiteral("along_axis"), QObject::tr("Direction"), kAxisKinds, 1, 1)
                   .withAccepts(isAxial)
                   .withVisible(type("along"))
-           << valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("1 mm"))
+           << valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("0 mm"))
                   .withVisible(type("along"))
                   .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
                     const Selection& axis = state.items(QStringLiteral("along_axis"));

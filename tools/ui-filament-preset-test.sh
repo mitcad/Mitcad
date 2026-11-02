@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/files/MainWindowPrint.cpp app/framework/NoteRow.cpp
+# check-all sources: app/print app/files/MainWindowPrint.cpp app/framework/NoteRow.cpp app/browser/LibraryPicker.cpp
 # check-all sources: app/framework/CommandPanel.cpp app/framework/Command.hpp core/model core/3mf core/zip tools/cli
 # A material's filament preset per slicer (mitcad#1062) through the real
 # UI, on a box whose material (Shop PETG HF, made in MitCad) names no
 # slicer preset:
 #   1. 3D Print with 3MF, to a slicer of no known dialect (the design's
-#      slicer, Bambu Studio, then): the Materials row warns that Shop PETG
-#      HF names no Bambu Studio filament preset.
-#   2. The row's pencil opens Materials on the body's material; on the
+#      slicer, Bambu Studio, then): the warning under the Material row says
+#      that Shop PETG HF names no Bambu Studio filament preset.
+#   2. Edit materials…, the last row of the Material row's picker
+#      (mitcad#1141), opens Materials on the body's material; on the
 #      Filament tab the search finds the Slicer presets, a row per slicer;
 #      Bambu Studio's typed and Enter: one edit, the name kept for Bambu
-#      Studio. Closed, the row's warning is gone.
+#      Studio. Closed, the warning is gone.
 #   3. Send: the 3MF's project settings name the filament by the preset
 #      (`filament_settings_id`) and inherit from it (`inherits_group`).
 #
@@ -73,15 +74,22 @@ ui_start_app --open "$FILE" --no-native-dialogs
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Body F1.b0 at" "the box is in the view"
 
-echo "--- 1. 3D Print: the Materials row warns of the material without a preset"
+echo "--- 1. 3D Print: a warning under the Material row of the material without a preset"
 ui_mark
 ui_command "Send to Slicer"
-ui_expect_new "$WARNING" "the row warns that Shop PETG HF names no Bambu Studio preset"
-ui_expect_new "Panel Send to Slicer action materials.0 at" "its pencil has its place"
+ui_expect_new "$WARNING" "the warning that Shop PETG HF names no Bambu Studio preset"
+ui_expect_new "3D Print materials warning: Shop PETG HF names no Bambu Studio filament preset" "the warning logged"
+ui_expect_new "Panel Send to Slicer input material_1 at" "the Material row has its place"
 
-echo "--- 2. Materials' Filament tab: Bambu Studio's preset typed"
+echo "--- 2. Edit materials…: Materials' Filament tab, Bambu Studio's preset typed"
 ui_mark
-ui_step "the Materials row's pencil"       ui_click_logged "Panel Send to Slicer action materials.0"
+ui_step "open the Material row"            ui_click_logged "Panel Send to Slicer input material_1"
+ui_expect_new "Material picker opened: " "its picker opened"
+ui_focus_dialog '^Material Picker$'
+xdotool type --delay 40 -- "Edit materials"
+ui_expect_new "Material picker search: Edit materials, first Edit materials…" "its last row, Edit materials…"
+ui_step "Edit materials… (Enter)"          ui_key Return
+ui_expect_new "Material picker chose: Edit materials…" "Edit materials… chosen"
 ui_expect_new "Materials opened for bodies F1.b0" "Materials opened for the body printed"
 ui_expect_new "Material selected: Shop PETG HF (design)" "on the body's material"
 ui_expect_new "Materials settings tab filament at" "the print tabs beside General"
@@ -105,12 +113,7 @@ ui_expect_new "Material Shop PETG HF (design) filament_settings_id = Bambu Studi
   "Enter saved it, for Bambu Studio"
 ui_step "close"                            ui_click_logged "Materials close"
 ui_focus_main
-ui_expect_new "Panel Send to Slicer note materials: " "the Materials row again"
-last=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Panel Send to Slicer note materials: " | tail -1)
-case $last in
-  *"(warning:"*) ui_fail "the row still warns: $last" ;;
-esac
-echo "ok   the row warns no more"
+ui_expect_new "3D Print materials warning: none" "the warning is gone"
 
 echo "--- 3. Send: the 3MF names the filament by the preset and inherits from it"
 rm -f "$ARGS"

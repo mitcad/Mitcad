@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-40,0],"length":10,"width":10,"height":10,"operation":"new_body"}},
+  {"cmd":"rename_feature","uid":"F1","name":"A"},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-20,0],"length":10,"width":10,"height":10,"operation":"new_body"}},
+  {"cmd":"rename_feature","uid":"F2","name":"B"},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":10,"width":10,"height":10,"operation":"new_body"}},
+  {"cmd":"rename_feature","uid":"F3","name":"C"},
+  {"cmd":"sketch.create"},
+  {"cmd":"rename_feature","uid":"F4","name":"Source"},
+  {"cmd":"sketch.add_rectangle","sketch":"F4","corner":[20,0],"width":10,"height":10},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F4","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":10},"operation":"new_body"}},
+  {"cmd":"rename_feature","uid":"F5","name":"Dependent"}
+]

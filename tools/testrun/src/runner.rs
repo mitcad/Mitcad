@@ -841,6 +841,9 @@ impl<'o> Runner<'o> {
         }
         let physical = sys::physical_memory();
         let available = sys::available_memory();
+        // macOS headroom depends on memory pressure; its complement is
+        // not a measurement of system memory in use. Keep that unknown.
+        #[cfg(not(target_os = "macos"))]
         if let Some(available) = available {
             // Of the physical memory assigned now (the budget's basis may
             // be larger).

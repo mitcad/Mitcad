@@ -143,8 +143,9 @@ struct FileOut<'a> {
     #[serde(skip_serializing_if = "crate::tables::Tables::is_empty")]
     tables: &'a crate::tables::Tables,
     // The design's statistics (mitcad#1088), when anything of them is
-    // known. Read apart from the definition (`file/mod.rs`, `load_parts`),
-    // so not in `TOP_FIELDS`.
+    // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
+    // which takes it out before the unknown fields), so not in
+    // `TOP_FIELDS`.
     #[serde(skip_serializing_if = "super::DesignStatistics::is_empty")]
     statistics: &'a super::DesignStatistics,
 }
@@ -1033,16 +1034,32 @@ fn assembly_in(
     Ok((assembly, visible_when))
 }
 
+/// Takes the top-level fields this build does not know out of a design
+/// file's object and returns their names, sorted (mitcad#1132). A newer MitCad wrote them: they are ignored, so that a
+/// field added later does not keep this build from opening the design,
+/// and the caller warns that they were not read (saving over the file
+/// drops them). Fields inside the known ones are still checked strictly.
+pub(super) fn take_unknown_fields(value: &mut Value) -> Vec<String> {
+    let Some(top) = value.as_object_mut() else {
+        return Vec::new();
+    };
+    let unknown: Vec<String> = top
+        .keys()
+        .filter(|k| !TOP_FIELDS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    for field in &unknown {
+        top.remove(field);
+    }
+    unknown
+}
+
+/// Reads a version 2 or 3 design file's object whose unknown top-level
+/// fields [`take_unknown_fields`] took out.
 pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     let Value::Object(mut top) = value else {
         return Err(FileError::NotADesign);
     };
-    if let Some(field) = top.keys().find(|k| !TOP_FIELDS.contains(&k.as_str())) {
-        return Err(schema(format!(
-            "unknown field `{field}`, expected one of {}",
-            TOP_FIELDS.map(|f| format!("`{f}`")).join(", ")
-        )));
-    }
     let context = match top.remove("units") {
         None => default_context(),
         Some(units) => {
@@ -1689,7 +1706,9 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.motion_studies = motion_studies;
     state.contact_sets = contact_sets;
     state.properties = properties;
-    // Appearances (mitcad#46): ids of their own, not the library's.
+    // Appearances (mitcad#46): ids of their own, not the library's; one the
+    // library took only later (the filament colours) gets a free id at the
+    // end (`free_library_appearance_ids`, mitcad#1133).
     for (i, appearance) in appearances.iter().enumerate() {
         let id = &appearance.id;
         if !crate::appearance::valid_id(id) {
@@ -1697,7 +1716,9 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 "appearances[{i}]: {id} is no appearance id"
             )));
         }
-        if crate::appearance::library_appearance(id).is_some() {
+        if crate::appearance::library_appearance(id).is_some()
+            && !crate::appearance::library_id_taken_later(id)
+        {
             return Err(invalid(format!(
                 "appearances[{i}]: {id} is a library appearance's id"
             )));
@@ -1732,8 +1753,18 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 c.material
             )));
         }
+        // An appearance the design and the library do not have (a file
+        // edited by hand) is dropped with a warning, as setting it refuses
+        // it: the component shows its material's appearance.
         if let Some(look) = c.appearance {
-            state.component_appearances.insert(c.component, look);
+            if state.look(&look).is_some() {
+                state.component_appearances.insert(c.component, look);
+            } else {
+                warnings.push(format!(
+                    "component_materials[{i}]: there is no appearance {look}; the component \
+                     shows its material's"
+                ));
+            }
         }
         if state
             .component_materials
@@ -1886,8 +1917,98 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     if !renamed.is_empty() {
         state.edit_binding_texts(|text| *text = rename_names(text, &renamed));
     }
+    free_library_appearance_ids(&mut state, &mut warnings);
     state.settle_bindings();
     Ok((state, warnings))
+}
+
+/// The design's own appearances whose ids the library took only later
+/// (mitcad#1133: the `filament_*` colours,
+/// `appearance::library_id_taken_later`; another library id is refused
+/// above) keep their values under a free id, the first of `<id>_2`, `<id>_3`, …
+/// that no appearance and no reference uses, and under a free name when
+/// the library's has theirs (`<name> (2)`). Every reference follows: the
+/// bodies' and faces' appearances, the materials' default and list, the
+/// components' appearances and the bindings' quoted texts (`'filament_red'`).
+/// One warning per renamed appearance. A parameter's text that spells the
+/// old id is a value of its own and names the library's from now on.
+fn free_library_appearance_ids(state: &mut DocState, warnings: &mut Vec<String>) {
+    use crate::appearance::{library, library_id_taken_later};
+    let clashing: Vec<String> = state
+        .appearances
+        .iter()
+        .filter(|a| library_id_taken_later(&a.id))
+        .map(|a| a.id.clone())
+        .collect();
+    if clashing.is_empty() {
+        return;
+    }
+    let mut ids: BTreeSet<String> = library()
+        .iter()
+        .chain(&state.appearances)
+        .map(|a| a.id.clone())
+        .collect();
+    ids.extend(state.body_attributes.values().flat_map(|attributes| {
+        attributes
+            .appearance
+            .iter()
+            .chain(attributes.face_appearances.values())
+            .cloned()
+    }));
+    ids.extend(state.materials.iter().flat_map(|m| m.appearance_list()));
+    ids.extend(state.component_appearances.values().cloned());
+    let mut names: BTreeSet<String> = library()
+        .iter()
+        .chain(&state.appearances)
+        .map(|a| a.name.clone())
+        .collect();
+    for old in clashing {
+        let new = (2..)
+            .map(|n| format!("{old}_{n}"))
+            .find(|id| ids.insert(id.clone()))
+            .expect("an unused appearance id exists");
+        let follow = |id: &mut String| {
+            if *id == old {
+                new.clone_into(id);
+            }
+        };
+        for appearance in &mut state.appearances {
+            if appearance.id != old {
+                continue;
+            }
+            appearance.id.clone_from(&new);
+            if library().iter().any(|a| a.name == appearance.name) {
+                let name = appearance.name.clone();
+                appearance.name = (2..)
+                    .map(|n| format!("{name} ({n})"))
+                    .find(|candidate| names.insert(candidate.clone()))
+                    .expect("an unused appearance name exists");
+            }
+        }
+        for attributes in state.body_attributes.values_mut() {
+            attributes.appearance.iter_mut().for_each(follow);
+            attributes.face_appearances.values_mut().for_each(follow);
+        }
+        for material in &mut state.materials {
+            material.appearance.iter_mut().for_each(follow);
+            material.appearances.iter_mut().for_each(follow);
+        }
+        state.component_appearances.values_mut().for_each(follow);
+        let quoted: Vec<(String, String)> = ['\'', '"']
+            .into_iter()
+            .map(|q| (format!("{q}{old}{q}"), format!("{q}{new}{q}")))
+            .collect();
+        state.edit_binding_texts(|text| {
+            for (from, to) in &quoted {
+                if text.contains(from.as_str()) {
+                    *text = text.replace(from.as_str(), to);
+                }
+            }
+        });
+        warnings.push(format!(
+            "appearance {old} of this design is now {new}: the library has an appearance {old}"
+        ));
+    }
 }
 
 /// Count, factor and fraction slots are unitless (mitcad#662). A file from

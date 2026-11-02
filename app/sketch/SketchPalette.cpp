@@ -579,8 +579,25 @@ void SketchPalette::refresh() {
                               .arg(solveLine.isEmpty() ? QStringLiteral("none") : solveLine);
   }
   // What the evaluation warns about (mitcad#232: projections that could
-  // not follow their sources), as links to what they are about (mitcad#264).
+  // not follow their sources), as links to what they are about (mitcad#264);
+  // also the solve's redundant constraints, grouped by the offset, pattern
+  // or sketch they come from, as links to what they name (mitcad#1171).
   m_warnings->setWarnings(model.warnings, model.warningEntities);
+  // "Sketch Palette warnings: Offset k1: 2 dimensions follow from the
+  // others" and the redundant constraints' ids ("Sketch Palette redundant:
+  // k7, k9"), when they change, for UI tests and the log.
+  const QString warningsLine =
+      model.warnings.isEmpty() ? QStringLiteral("none") : model.warnings.join(QStringLiteral("; "));
+  if (warningsLine != m_loggedWarnings) {
+    m_loggedWarnings = warningsLine;
+    qDebug().noquote() << QStringLiteral("Sketch Palette warnings: %1").arg(warningsLine);
+  }
+  const QString redundantLine =
+      model.redundant.isEmpty() ? QStringLiteral("none") : model.redundant.join(QStringLiteral(", "));
+  if (redundantLine != m_loggedRedundant) {
+    m_loggedRedundant = redundantLine;
+    qDebug().noquote() << QStringLiteral("Sketch Palette redundant: %1").arg(redundantLine);
+  }
   // The clean-up offered while projections cannot follow (mitcad#252).
   if (model.staleProjections != m_cleanUpOffered) {
     m_cleanUpOffered = model.staleProjections;

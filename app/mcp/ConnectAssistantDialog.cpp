@@ -98,8 +98,11 @@ QString tomlString(const QString& text) {
   return literal ? QString(QLatin1Char('\'') + text + QLatin1Char('\'')) : jsonString(text);
 }
 
-QString codexToml(const QString& bridge) {
-  return QStringLiteral("[mcp_servers.mitcad-desktop]\ncommand = %1\nargs = [\"mcp\", \"--connect\"]\n").arg(tomlString(bridge));
+QString codexToml(const QString& bridge, const QStringList& leading) {
+  QStringList arguments;
+  for (const QString& argument : bridgeConnectArguments(leading)) arguments << tomlString(argument);
+  return QStringLiteral("[mcp_servers.mitcad-desktop]\ncommand = %1\nargs = [%2]\n")
+      .arg(tomlString(bridge), arguments.join(QStringLiteral(", ")));
 }
 
 QString codexHomeCommand(const QString& command, const QString& path) {
@@ -113,24 +116,30 @@ QString codexHomeCommand(const QString& command, const QString& path) {
 // under Advanced gets the TOML by hand.
 bool standardCodexFile(const QString& path) { return QFileInfo(path).fileName() == QStringLiteral("config.toml"); }
 
-QJsonObject codexPlan(const QString& current, const QString& bridge, bool replace = false) {
-  return parseObject(plan_codex_mcp_config(rustStr(current.toUtf8()), rustStr(bridge.toUtf8()), replace));
+// The leading arguments of the bridge (BridgeLaunch) as the Rust plan takes them.
+QByteArray leadingJson(const QStringList& leading) {
+  return QJsonDocument(QJsonArray::fromStringList(leading)).toJson(QJsonDocument::Compact);
+}
+
+QJsonObject codexPlan(const QString& current, const QString& bridge, const QStringList& leading, bool replace = false) {
+  const QByteArray arguments = leadingJson(leading);
+  return parseObject(plan_codex_mcp_config(rustStr(current.toUtf8()), rustStr(bridge.toUtf8()), rustStr(arguments), replace));
 }
 
 // Whether Codex's settings already start this bridge: as setup writes it,
 // or with the platform's separators as the manual configuration shows it.
-bool codexHasBridge(const QString& current, const QString& bridge) {
-  const auto unchanged = [&current](const QString& form) {
-    return codexPlan(current, form).value(QStringLiteral("status")).toString() == QStringLiteral("unchanged");
+bool codexHasBridge(const QString& current, const QString& bridge, const QStringList& leading) {
+  const auto unchanged = [&current, &leading](const QString& form) {
+    return codexPlan(current, form, leading).value(QStringLiteral("status")).toString() == QStringLiteral("unchanged");
   };
   const QString native = QDir::toNativeSeparators(bridge);
   return unchanged(bridge) || (native != bridge && unchanged(native));
 }
 
 // A Claude Code entry that starts this bridge (with either separator).
-bool claudeEntryStarts(const QJsonObject& entry, const QString& bridge) {
+bool claudeEntryStarts(const QJsonObject& entry, const QString& bridge, const QStringList& leading) {
   return QDir::fromNativeSeparators(entry.value(QStringLiteral("command")).toString()) == QDir::fromNativeSeparators(bridge) &&
-      entry.value(QStringLiteral("args")) == QJsonArray{QStringLiteral("mcp"), QStringLiteral("--connect")};
+      entry.value(QStringLiteral("args")) == QJsonArray::fromStringList(bridgeConnectArguments(leading));
 }
 
 bool confirmReplacement(QWidget* parent, const QString& name) {
@@ -330,7 +339,16 @@ QString rgba(const QColor& colour, int alpha) {
 }
 
 ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
-    : QDialog(parent), m_host(std::move(host)), m_bridge(installedBridge(QCoreApplication::applicationDirPath())) {
+    : QDialog(parent), m_host(std::move(host)) {
+  // The bundled mitcad-cli, or for an AppImage the AppImage file with `cli`
+  // (mitcad#1170): a path that stays valid after MitCad closes. Logged with
+  // the command that starts it (the AppImage's test runs it).
+  const BridgeLaunch launch = registeredBridge();
+  m_bridge = launch.program;
+  m_leading = launch.leading;
+  qInfo().noquote() << (m_bridge.isEmpty() ? QStringLiteral("Connect AI Assistant: bridge not found")
+      : QStringLiteral("Connect AI Assistant: bridge command: %1")
+            .arg(assistantCommand(m_bridge, bridgeConnectArguments(m_leading), windows)));
   setObjectName(QStringLiteral("connectAssistantDialog"));
   setWindowTitle(tr("Connect AI Assistant"));
   setAttribute(Qt::WA_DeleteOnClose);
@@ -553,7 +571,7 @@ ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
   });
   connect(copyWindow, &QPushButton::clicked, this, [this, copyWindow] {
     QApplication::clipboard()->setText(assistantCommand(m_bridge,
-        {QStringLiteral("mcp"), QStringLiteral("--connect"), QStringLiteral("--instance"), m_ownInstance}, windows));
+        bridgeConnectArguments(m_leading) + QStringList{QStringLiteral("--instance"), m_ownInstance}, windows));
     showCopied(copyWindow);
   });
 
@@ -753,8 +771,8 @@ void ConnectAssistantDialog::fitConfigurationHeight() {
 QString ConnectAssistantDialog::manualConfiguration() const {
   const QString bridge = QDir::toNativeSeparators(m_bridge);
   return client() == AssistantClient::Codex
-      ? codexToml(bridge)
-      : QString::fromUtf8(QJsonDocument(assistantJsonConfiguration(bridge)).toJson(QJsonDocument::Indented));
+      ? codexToml(bridge, m_leading)
+      : QString::fromUtf8(QJsonDocument(assistantJsonConfiguration(bridge, m_leading)).toJson(QJsonDocument::Indented));
 }
 
 // The registration command (Claude Code, Codex) or the bridge's own launch;
@@ -767,8 +785,8 @@ QString ConnectAssistantDialog::manualCommand() const {
   const QString program = registration
       ? assistantProgram(selected == AssistantClient::ClaudeCode ? QStringLiteral("claude") : QStringLiteral("codex"))
       : bridge;
-  const QStringList arguments = registration ? assistantRegistration(selected, bridge)
-      : QStringList{QStringLiteral("mcp"), QStringLiteral("--connect")};
+  const QStringList arguments = registration ? assistantRegistration(selected, bridge, m_leading)
+      : bridgeConnectArguments(m_leading);
   const QString command = assistantCommand(program, arguments, windows);
   return selected == AssistantClient::Codex ? codexHomeCommand(command, configPath()) : command;
 }
@@ -812,7 +830,7 @@ bool ConnectAssistantDialog::configured(AssistantClient which) const {
   if (which == AssistantClient::Codex) {
     return cachedCheck(m_codexRead, configPath(), [this](const QString& text) {
       try {
-        return codexHasBridge(text, m_bridge);
+        return codexHasBridge(text, m_bridge, m_leading);
       } catch (const std::exception&) {
         return false;
       }
@@ -822,7 +840,7 @@ bool ConnectAssistantDialog::configured(AssistantClient which) const {
   return cachedCheck(m_claudeRead, claudeUserConfiguration(), [this](const QString& text) {
     const auto entry = QJsonDocument::fromJson(text.toUtf8()).object().value(QStringLiteral("mcpServers")).toObject()
         .value(QStringLiteral("mitcad")).toObject();
-    return claudeEntryStarts(entry, m_bridge);
+    return claudeEntryStarts(entry, m_bridge, m_leading);
   }, kClaudeConfigurationLimit);
 }
 
@@ -1155,11 +1173,11 @@ void ConnectAssistantDialog::setupCodex() {
   QJsonObject plan;
   try {
     // Already there, as setup writes it or as the manual configuration shows it.
-    if (codexHasBridge(current, m_bridge)) { message(QString()); return; }
-    plan = codexPlan(current, m_bridge);
+    if (codexHasBridge(current, m_bridge, m_leading)) { message(QString()); return; }
+    plan = codexPlan(current, m_bridge, m_leading);
     if (plan.value(QStringLiteral("status")).toString() == QStringLiteral("conflict") &&
         confirmReplacement(this, assistantSentenceName(AssistantClient::Codex))) {
-      plan = codexPlan(current, m_bridge, true);
+      plan = codexPlan(current, m_bridge, m_leading, true);
     }
   } catch (const std::exception& failure) {
     message(tr("Codex's settings file could not be read. Fix it, then try again."), true, errorText(failure)); return;
@@ -1196,12 +1214,14 @@ void ConnectAssistantDialog::setupCodex() {
     environment.insert(QStringLiteral("CODEX_HOME"), staged->path());
     process->setProcessEnvironment(environment);
     m_process = process;
-    runRegistration(cli, assistantRegistration(AssistantClient::Codex, m_bridge), [this, path, current, staged, backedUp] {
+    runRegistration(cli, assistantRegistration(AssistantClient::Codex, m_bridge, m_leading), [this, path, current, staged, backedUp] {
       QString written, error;
       bool valid = readAssistantConfiguration(QDir(staged->path()).filePath(QStringLiteral("config.toml")), written, error);
       if (valid) {
         try {
-          const auto verified = parseObject(verify_codex_mcp_config(rustStr(current.toUtf8()), rustStr(written.toUtf8()), rustStr(m_bridge.toUtf8())));
+          const QByteArray leading = leadingJson(m_leading);
+          const auto verified = parseObject(verify_codex_mcp_config(rustStr(current.toUtf8()), rustStr(written.toUtf8()),
+                                                                    rustStr(m_bridge.toUtf8()), rustStr(leading)));
           valid = verified.value(QStringLiteral("valid")).toBool();
           error = verified.value(QStringLiteral("error")).toString();
         } catch (const std::exception& failure) { valid = false; error = errorText(failure); }
@@ -1242,7 +1262,7 @@ void ConnectAssistantDialog::setupClaudeCode() {
   QJsonObject servers = existing.toObject();
   const auto entry = servers.value(QStringLiteral("mitcad"));
   if (!entry.isUndefined()) {
-    if (claudeEntryStarts(entry.toObject(), m_bridge)) { message(QString()); return; }
+    if (claudeEntryStarts(entry.toObject(), m_bridge, m_leading)) { message(QString()); return; }
     if (!confirmReplacement(this, assistantSentenceName(AssistantClient::ClaudeCode))) return;
   }
   // CLAUDE_CONFIG_DIR places user-scope .claude.json inside this private
@@ -1266,7 +1286,7 @@ void ConnectAssistantDialog::setupClaudeCode() {
   environment.insert(QStringLiteral("CLAUDE_CONFIG_DIR"), staged->path());
   process->setProcessEnvironment(environment);
   m_process = process;
-  runRegistration(cli, assistantRegistration(AssistantClient::ClaudeCode, m_bridge), [this, path, current, seed, staged] {
+  runRegistration(cli, assistantRegistration(AssistantClient::ClaudeCode, m_bridge, m_leading), [this, path, current, seed, staged] {
     QString written, error;
     if (!readAssistantConfiguration(QDir(staged->path()).filePath(QStringLiteral(".claude.json")), written, error,
                                     kClaudeConfigurationLimit)) {
@@ -1280,7 +1300,7 @@ void ConnectAssistantDialog::setupClaudeCode() {
     result.insert(QStringLiteral("mcpServers"), servers);
     if (parse.error != QJsonParseError::NoError || !document.isObject() || result != seed ||
         entry.value(QStringLiteral("command")) != m_bridge ||
-        entry.value(QStringLiteral("args")) != QJsonArray{QStringLiteral("mcp"), QStringLiteral("--connect")} ||
+        entry.value(QStringLiteral("args")) != QJsonArray::fromStringList(bridgeConnectArguments(m_leading)) ||
         (entry.contains(QStringLiteral("type")) && entry.value(QStringLiteral("type")) != QStringLiteral("stdio"))) {
       message(tr("Claude Code's registration could not be verified; nothing was changed. Try again."), true); return;
     }

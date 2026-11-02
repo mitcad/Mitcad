@@ -5,7 +5,7 @@
 // and their status badge, as the painted pixels show; the badges differ by
 // shape as well as colour, also as the failures' and warnings' buttons'
 // icons; the card's line of a failed feature; a red text's colour for the
-// card it sits on.
+// card it sits on, and a message box's fill with it (mitcad#1152).
 #include "browser/FeatureStatus.hpp"
 
 #include <algorithm>
@@ -246,6 +246,41 @@ void themedSheetTests() {
   CHECK(label->styleSheet() == QStringLiteral("color: %1;").arg(errorColor(night).name()));
 }
 
+// A message box's fill follows the palette with its text (mitcad#1152: the
+// fill was the old theme's under the new theme's text after a switch, the
+// light theme's red text on the dark theme's fill).
+void themedBoxTests() {
+  const QPalette night = windowPalette(QColor(0x14, 0x15, 0x18), QColor(0xe6, 0xe8, 0xec));
+  const QPalette day = windowPalette(QColor(0xe4, 0xe7, 0xec), QColor(0x1d, 0x20, 0x26));
+  const QString format = QStringLiteral("QLabel { color: %1; background: %2; }");
+  const auto box = [&format](ColorRole text, ColorRole fill, const QPalette& palette) {
+    return format.arg(themeColor(text, palette).name(), themeColor(fill, palette).name());
+  };
+  CHECK(themeColor(ColorRole::ErrorFill, night) != themeColor(ColorRole::ErrorFill, day));
+  QWidget window;
+  window.setPalette(night);
+  auto* error = new QLabel(QStringLiteral("Failed: no edges"), &window);
+  setErrorStyleSheet(error, format, ColorRole::ErrorFill);
+  CHECK(error->styleSheet() == box(ColorRole::ErrorText, ColorRole::ErrorFill, night));
+  CHECK(error->styleSheet().contains(QStringLiteral("background: #4a2025;")));
+  auto* warning = new QLabel(QStringLiteral("Warning: thin wall"), &window);
+  setWarningStyleSheet(warning, format, ColorRole::WarningFill);
+  CHECK(warning->styleSheet() == box(ColorRole::WarningText, ColorRole::WarningFill, night));
+  // The theme turns light: both colours of both boxes follow.
+  window.setPalette(day);
+  for (QLabel* label : {error, warning}) {
+    label->resize(label->sizeHint());
+    (void)label->grab(); // a paint
+  }
+  QCoreApplication::processEvents();
+  CHECK(error->styleSheet() == box(ColorRole::ErrorText, ColorRole::ErrorFill, day));
+  CHECK(error->styleSheet().contains(QStringLiteral("background: #fbe3e3;")));
+  CHECK(warning->styleSheet() == box(ColorRole::WarningText, ColorRole::WarningFill, day));
+  // A format without %2 keeps the one colour (the plain red text).
+  setErrorStyleSheet(error, QStringLiteral("color: %1;"), ColorRole::ErrorFill);
+  CHECK(error->styleSheet() == QStringLiteral("color: %1;").arg(themeColor(ColorRole::ErrorText, day).name()));
+}
+
 // The error text (the selection card's `Failed:` line, the status message)
 // at least 4.5:1 on what it is shown on: the dark window, panels and
 // Floating card (#464748), the light window and panels.
@@ -348,6 +383,7 @@ int featureStatusTests() {
   paintTests();
   iconTests();
   themedSheetTests();
+  themedBoxTests();
   issueBadgeTests();
   errorTextTests();
   cardTests();

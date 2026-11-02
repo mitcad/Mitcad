@@ -36,6 +36,15 @@ bool face_matches(const NameList& names, const std::string& reference);
 std::string make_edge_name(const std::string& a, const std::string& b, int index = -1);
 std::string make_vertex_name(NameList faces, int index = -1);
 
+// A one-sided profile boundary's exact source face and sketch segment.
+// This is provenance for implicit profiles, not a two-face EdgeName.
+std::string make_open_edge_name(const std::string& face, const std::string& segment);
+// Applies a transform's instance prefix to the owning face, preserving the
+// exact source segment (including nested references), as Instance::face
+// wraps an original face without rewriting its source keys. This is not a
+// FeatureUid replacement map; copied definitions are remapped by the model.
+std::string rename_open_edge_name(const std::string& name, const std::string& rename);
+
 // The parts of an edge (`kind` 'E') or vertex ('V') reference.
 struct CompositeName {
   char kind = 'E';

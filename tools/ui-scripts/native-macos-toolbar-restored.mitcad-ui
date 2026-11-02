@@ -10,9 +10,9 @@ expect-native-toolbar-item mitcad.agent true
 expect-native-toolbar-item command.file.open_from_project true
 native-toolbar-item command.file.open_from_project remove
 expect-native-toolbar-item command.file.open_from_project false
-expect-native-toolbar-item command.native.menu.887abc3a37a931467873f9b8dddb94d816b70cdf6a35c7485e13d07f551ec4b4 true
-native-toolbar-item command.native.menu.887abc3a37a931467873f9b8dddb94d816b70cdf6a35c7485e13d07f551ec4b4 remove
-expect-native-toolbar-item command.native.menu.887abc3a37a931467873f9b8dddb94d816b70cdf6a35c7485e13d07f551ec4b4 false
+expect-native-toolbar-item command.file.open true
+native-toolbar-item command.file.open remove
+expect-native-toolbar-item command.file.open false
 native-toolbar-item mitcad.project insert
 expect-native-toolbar-item mitcad.project true
 expect-native-text mitcad.project 'Not in a project'

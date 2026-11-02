@@ -26,7 +26,12 @@
 #   8. Hole Callout from the Annotate group on a plate with four counterbored
 #      through holes (mitcad#902): HoleCallout1 written from the hole's
 #      feature, in the bundled lettering.
-#   9. A broken annotation (an offset Gone of a block that is deleted) is a
+#   9. Its text heights to the design's scale (mitcad#1168): at one zoom,
+#      the window's Text Height... 5 mm and 10 mm draw it about twice as
+#      high; at 5 mm its landing is a text height and a half as drawn, the
+#      bend obtuse; dragged toward its hole, the landing shortens and the
+#      bend stays obtuse.
+#  10. A broken annotation (an offset Gone of a block that is deleted) is a
 #      warning (mitcad#1051): the Annotations folder's Browser row and
 #      Gone's row in the Annotations window at the warning level.
 #
@@ -325,7 +330,9 @@ Ui-StartApp 'annotations-holes' @('--open', $holes)
 Ui-ExpectLog 'Annotations: none' 'the plate opened without annotations'
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Annotate 'shift+F5' 'Hole Callout'
-Ui-Step 'pick a hole''s counterbore wall' { Ui-ClickPick 'face F2.b0/F3:hole0.cbore_wall' }
+# The front right hole: its callout's text runs right, into the view (the
+# front left one's ran past the view's left edge, out of reach of a drag).
+Ui-Step 'pick a hole''s counterbore wall' { Ui-ClickPick 'face F2.b0/F3:hole1.cbore_wall' }
 Ui-ExpectNew 'Hole Callout Hole: 1 face' 'the hole picked'
 Ui-Step 'add (Enter)'                      { Ui-Key 'Return' }
 Ui-ExpectNew 'Annotation kept: HoleCallout1' 'the hole callout added'
@@ -344,7 +351,79 @@ if (-not (Select-String -Path $holes -SimpleMatch -Pattern '"kind": "hole_callou
   Ui-Fail 'the design file has no hole callout'
 }
 
-Write-Host '--- 9. A broken annotation is a warning (mitcad#1051)'
+Write-Host '--- 9. Text heights to the design''s scale, the landing with its text (mitcad#1168)'
+# Text-Height "keys" mm: the Annotations window's Text Height... set by
+# those keys in its list; the callout's text drawn again.
+function Text-Height([string[]]$Keys, [string]$Millimetres) {
+  Ui-Mark
+  Ui-Step 'Annotations (F8)'               { Ui-Key 'F8' }
+  Ui-ExpectNew 'Annotations window opened: 1 annotation(s)' 'the window opened'
+  Wait-Enabled 'Annotations Text Height'
+  Ui-Step 'Text Height... (Alt+X)'         { Window-Keys @('alt+x') }
+  Ui-ExpectNew 'Annotation Text Height dialog opened: ' 'Text Height asked'
+  Ui-Step "$Millimetres mm ($($Keys -join ' '), Enter)" {
+    Ui-FocusDialog '^Annotation Text Height$'
+    foreach ($key in $Keys) { Ui-Key $key }
+    Ui-Key 'Return'
+  }
+  Ui-ExpectNew "Annotation Text Height dialog: $Millimetres" "$Millimetres mm chosen"
+  Ui-ExpectNew 'Annotation text HoleCallout1 ' 'the callout''s text drawn again'
+  Ui-Step 'close the window (Escape)'      { Window-Keys @('Escape'); Ui-FocusMain }
+  Ui-WaitIdle
+}
+# The callout's text's capital height on screen, last logged.
+function Text-Pixels {
+  $match = [regex]::Match("$(Ui-LastLineWith 'Annotation text HoleCallout1 ')", ' ([0-9.]+) px')
+  if (-not $match.Success) { Ui-Fail 'no text height logged for HoleCallout1' }
+  return [double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+}
+# Its landing and bend, last logged.
+function Landing {
+  $line = "$(Ui-LastLineWith 'Annotation landing HoleCallout1 ')"
+  $match = [regex]::Match($line, ' ([0-9.]+) px, bend ([0-9.]+) deg')
+  if (-not $match.Success) { Ui-Fail "no landing logged for HoleCallout1: $line" }
+  $culture = [Globalization.CultureInfo]::InvariantCulture
+  return @([double]::Parse($match.Groups[1].Value, $culture), [double]::Parse($match.Groups[2].Value, $culture))
+}
+# The same zoom: 5 mm (Auto, 2.5, 3.5, 5) and 10 mm (7, 10) about twice as
+# high on screen, no longer held to a ceiling.
+Text-Height @('Down', 'Down', 'Down') '5'
+$five = Text-Pixels
+Text-Height @('Down', 'Down') '10'
+$ten = Text-Pixels
+if (-not ($five -gt 9.5 -and $ten / $five -gt 1.8 -and $ten / $five -lt 2.2)) {
+  Ui-Fail "5 mm drawn $five px high, 10 mm $ten px: not about twice as high"
+}
+Write-Host "ok   5 mm drawn $five px high, 10 mm $ten px"
+Text-Height @('Up', 'Up') '5'
+# Its landing a text height and a half as drawn, its bend obtuse.
+$landing = Landing
+$text = Text-Pixels
+if (-not ($text -gt 0 -and $landing[0] / $text -gt 1.35 -and $landing[0] / $text -lt 1.65 -and $landing[1] -gt 90)) {
+  Ui-Fail "the landing $($landing[0]) px under a $text px text, bend $($landing[1]) deg"
+}
+Write-Host "ok   the landing $($landing[0]) px under the $text px text, bend $($landing[1]) deg"
+# Dragged toward the hole along the text, its start half a landing past
+# the point: the landing shortens, the bend stays obtuse (no knee past the
+# point).
+$knee = Ui-LoggedAt 'Annotation knee HoleCallout1'
+$point = Ui-LoggedAt 'Annotation point HoleCallout1'
+$label = Ui-LoggedAt 'Annotation label HoleCallout1'
+$side = if ($knee[0] -ge $point[0]) { 1 } else { -1 }
+$dx = [int](-$side * ([Math]::Abs($knee[0] - $point[0]) + 0.5 * $landing[0]))
+Ui-Mark
+Ui-Step "drag the callout's text $dx px toward its hole" { Ui-Drag $label[0] $label[1] ($label[0] + $dx) $label[1] }
+Ui-ExpectNew 'Annotation HoleCallout1 dragged: text by' 'the callout''s text dragged'
+Ui-ExpectNew 'Annotation HoleCallout1 moved: ' 'moved, an undo step'
+Ui-ExpectNew 'Annotation landing HoleCallout1 ' 'its landing drawn again'
+Ui-WaitIdle
+$near = Landing
+if (-not ($near[0] -lt 0.75 * $landing[0] -and $near[1] -gt 90)) {
+  Ui-Fail "dragged near: the landing $($near[0]) px (was $($landing[0])), bend $($near[1]) deg"
+}
+Write-Host "ok   dragged near: the landing shortened to $($near[0]) px, bend $($near[1]) deg"
+
+Write-Host '--- 10. A broken annotation is a warning (mitcad#1051)'
 $brokenJson = Join-Path $work 'broken.json'
 $broken = Join-Path $work 'broken.mitcad'
 Set-Content -Encoding ascii $brokenJson @'

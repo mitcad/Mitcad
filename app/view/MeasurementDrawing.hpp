@@ -200,9 +200,9 @@ struct MeasurementShape {
   bool autoColor = false; // drawn in measurementAutoColor of the halo
   bool preview = false;   // a preview (mitcad#1097): painted dimmed
   // The height of its text's capitals on the picture: the model's height
-  // in its plane, between the text floor and ceiling (times the scale;
-  // mitcad#902); a screen-facing label's the floor. Arrowheads, gaps and
-  // frames' cells are sized by it.
+  // in its plane, never under the text floor (times the scale; mitcad#902,
+  // no ceiling since mitcad#1168); a screen-facing label's the floor.
+  // Arrowheads, gaps, frames' cells and a leader's landing are sized by it.
   double textPixels = 0.0;
   std::vector<QLineF> lines;                       // extension and dimension lines, rays, leaders
   std::vector<QPolygonF> arcs;                     // an angle's arc
@@ -269,6 +269,13 @@ struct MeasurementShape {
   bool highlighted = false;
   // Drawn in the hover's colour (the mouse over it).
   bool hovered = false;
+  // A leader's landing on the picture (mitcad#1168): its length, the bend
+  // between it and the leader to the point (degrees, over 90), the knee
+  // and the point; 0 without a landing. For the tests' log.
+  double landingPixels = 0.0;
+  double bendDegrees = 0.0;
+  QPointF kneeAt;
+  QPointF pointAt;
 };
 
 // Lays out an annotation through `project`. With the model's drawing: its
@@ -290,11 +297,10 @@ MeasurementShape layoutMeasurement(const MeasurementDisplay& measurement, const 
 // or a macOS bundle's Resources/fonts; empty when it is not there (the
 // annotations then take the UI's font). Logs "Annotation lettering: ...".
 QString measurementFontFamily();
-// The least and the most a text's capitals are high on screen at `scale`
-// (pixels): zoomed out a text stays readable, zoomed in it stays in
-// proportion to the reference drawing.
+// The least a text's capitals are high on screen at `scale` (pixels):
+// zoomed out a text stays readable; zoomed in it grows with the design
+// (no ceiling since mitcad#1168).
 double measurementTextFloor(double scale = 1.0);
-double measurementTextCeiling(double scale = 1.0);
 // The screen-facing labels' font at `scale`: the technical lettering
 // (else `base`'s family), regular, its capitals at the text floor.
 QFont measurementFont(const QFont& base, double scale = 1.0);

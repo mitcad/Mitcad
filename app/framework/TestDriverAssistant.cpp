@@ -72,7 +72,11 @@ int spareHeight(QWidget* dialog) {
 void TestDriver::testAssistantSetup(const QString& mode) {
   if (mode == QStringLiteral("window-activate")) {
     if (!m_main) { fail(m_line, QStringLiteral("main window missing")); return; }
-    m_main->setWindowTitle(qEnvironmentVariable("MITCAD_MCP_WINDOW_LABEL"));
+    // Titled as MainWindow::updateWindowTitle titles a design, and
+    // modified: the published title is the label alone, without Qt's "[*]"
+    // placeholder and the application's name (mitcad#1149).
+    m_main->setWindowTitle(QStringLiteral("%1[*] - MitCad").arg(qEnvironmentVariable("MITCAD_MCP_WINDOW_LABEL")));
+    m_main->setWindowModified(true);
     m_main->raise();
     m_main->activateWindow();
 #ifdef Q_OS_WIN
@@ -119,6 +123,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
       return indicator && (indicator->state() == mcp::AgentIndicator::State::Connected) == local &&
           stateOf(status) == (local ? QStringLiteral("connected") : QStringLiteral("connected-elsewhere")) &&
           status->text().contains(local ? QStringLiteral("in this window") : QStringLiteral("in Second design")) &&
+          !status->text().contains(QStringLiteral("[*]")) && !status->text().contains(QStringLiteral(" - MitCad")) &&
           (actionOf(setup) == QStringLiteral("disconnect")) == local;
     }, 6, QStringLiteral("assistant connection did not identify its own window"), [mode] {
       qInfo().noquote() << QStringLiteral("Assistant setup UI: %1").arg(mode);
@@ -300,7 +305,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
                     "\"clientInfo\":{\"name\":\"claude-code\",\"version\":\"test\"}}}\n"
                     "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n");
     });
-    bridge->start(mcp::installedBridge(QCoreApplication::applicationDirPath()),
+    bridge->start(mcp::bundledBridge(),
                   {QStringLiteral("mcp"), QStringLiteral("--connect")});
     whenReady([status, setup] {
       return stateOf(status) == QStringLiteral("connected") && actionOf(setup) == QStringLiteral("disconnect") &&

@@ -161,5 +161,26 @@ int saveAsMeshTests() {
   options.maxEdge = 0.0;
   command = meshExportCommand(QStringLiteral("Pin.obj"), {QStringLiteral("F2.b0")}, QString(), options, {});
   CHECK(!command.value(QStringLiteral("refinement")).toObject().contains(QStringLiteral("max_edge")));
+
+  // File › Export's name (mitcad#1164), by the same rule: one body (two
+  // faces of it are one), one component where an occurrence places it,
+  // else the design; nothing selected, the root or a body without a name:
+  // the design.
+  const QHash<QString, QString> names{{QStringLiteral("F1.b0"), QStringLiteral("Plate")},
+                                      {QStringLiteral("F2.b0"), QStringLiteral("Pin")},
+                                      {QStringLiteral("F4.b0"), QStringLiteral(" ")}};
+  CHECK(meshItemsName({{Kind::Body, QStringLiteral("F1.b0"), QString()}}, names, components, design) ==
+        QStringLiteral("Plate"));
+  CHECK(meshItemsName({{Kind::Body, QStringLiteral("F2.b0"), QStringLiteral("O1")},
+                       {Kind::Body, QStringLiteral("F2.b0"), QStringLiteral("O1")}},
+                      names, components, design) == QStringLiteral("Pin"));
+  CHECK(meshItemsName({{Kind::Component, QStringLiteral("C1"), QStringLiteral("O1")}}, names, components, design) ==
+        QStringLiteral("Arm"));
+  CHECK(meshItemsName({{Kind::Body, QStringLiteral("F1.b0"), QString()},
+                       {Kind::Body, QStringLiteral("F2.b0"), QStringLiteral("O1")}},
+                      names, components, design) == design);
+  CHECK(meshItemsName({}, names, components, design) == design);
+  CHECK(meshItemsName({{Kind::Component, QStringLiteral("C0"), QString()}}, names, components, design) == design);
+  CHECK(meshItemsName({{Kind::Body, QStringLiteral("F4.b0"), QString()}}, names, components, design) == design);
   return failures;
 }

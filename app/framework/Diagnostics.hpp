@@ -39,7 +39,8 @@ namespace mitcad {
 //   the worker after its work, whether it evaluates features or not, so
 //   that a test can watch what the window does while it waits for a job
 //   that only changes a drawing (tools/ui-drawings-test.sh: the hover's
-//   question while a redo runs, mitcad#753).
+//   question while a redo runs, mitcad#753). Also a job in the background
+//   ("bed plan": Send to Slicer's, tools/ui-print-bed-test.sh, mitcad#1121).
 // - MITCAD_COMPUTE_INLINE=1: jobs run on the UI thread, with the same
 //   progress and cancel in the model but without waiting for them (no
 //   dialog, no drawing meanwhile): for a debugger, or to compare.

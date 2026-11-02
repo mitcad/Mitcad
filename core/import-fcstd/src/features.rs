@@ -467,7 +467,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .doc
             .sketch_output(sketch.uid)
             .ok_or("the sketch did not solve")?;
-        let depths = region_depths(&output.region_info);
+        let depths = self.sketch_region_depths(sketch.uid, output);
         if depths.is_empty() {
             return Err("the sketch has no closed profile".to_owned());
         }
@@ -2786,7 +2786,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .doc
             .sketch_output(sketch.uid)
             .ok_or("the sketch did not solve")?;
-        let depths = region_depths(&output.region_info);
+        let depths = self.sketch_region_depths(sketch.uid, output);
         Ok(Profile {
             sketch,
             regions: depths
@@ -3356,6 +3356,43 @@ pub(super) fn region_depths(
             (r.profile.key.to_string(), depth)
         })
         .collect()
+}
+
+impl<K: Kernel> Importer<'_, '_, K> {
+    /// [`region_depths`] of a sketch's regions as FreeCAD's face makers
+    /// see them: inside how many loops of the sketch's own curves. A
+    /// sketch on a planar face also has regions bounded by the face's edges
+    /// (mitcad#1138), which FreeCAD's sketch does not: there a region's
+    /// depth counts the regions of the sketch's own curves around it (less
+    /// the one it lies in), and a region outside all of them (the face
+    /// around the sketch's loops) is left out (mitcad#1159).
+    pub(super) fn sketch_region_depths(
+        &self,
+        uid: mitcad_model::FeatureUid,
+        output: &mitcad_model::features::SketchOutput,
+    ) -> Vec<(String, usize)> {
+        let all = &output.region_info;
+        let Some(mitcad_model::FeatureDef::Sketch(def)) = self.doc.feature(uid).map(|f| &f.def)
+        else {
+            return region_depths(all);
+        };
+        if !all.iter().any(|r| r.profile.face_bounded()) {
+            return region_depths(all);
+        }
+        let own = mitcad_model::sketch::regions::regions(
+            &def.region_curves_of(&output.solved, &output.texts),
+        );
+        all.iter()
+            .filter_map(|r| {
+                let inside = interior_point(r)?;
+                let around = own
+                    .iter()
+                    .filter(|o| in_polygon(&o.outline, inside))
+                    .count();
+                Some((r.profile.key.to_string(), around.checked_sub(1)?))
+            })
+            .collect()
+    }
 }
 
 /// A point strictly inside a region (not in its holes): the middle of the

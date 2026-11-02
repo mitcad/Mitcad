@@ -30,6 +30,8 @@
 #   6. An assembly mitcad-cli makes (Component1 placed twice, Component2
 #      once): a front view, a parts list of it placed by a click and a
 #      balloon on Component1's second placement (phase 3).
+#   7. The front view's Scale typed (mitcad#1169): abc refused and not
+#      sent, 2:3 sent, the model's scale 0.667 and the field showing 1:1.5.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-drawings-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -412,6 +414,26 @@ Ui-Step 'where the balloon goes'          { Sheet-Click 175 150 }
 Ui-ExpectNew '"type":"balloon"' 'a balloon asked for'
 Ui-ExpectNew '| 2 = 1' "the balloon shows Component1's number"
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
+if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
+
+Write-Host '--- 7. Any scale typed in the view''s Scale (mitcad#1169)'
+Ui-Mark
+Ui-Step 'select the front view'           { Ui-ClickLogged 'Drawing view 1' }
+Ui-ExpectNew 'Drawing view 1 selected' 'the front view selected'
+Ui-ExpectNew 'Drawing panel drawingViewScale at' 'its Scale in its panel'
+Settled 'Drawing panel drawingViewScale'
+Ui-Mark
+Ui-Step 'Scale: abc'                      { Ui-TypeIn 'Drawing panel drawingViewScale' 'abc'; Ui-Key 'Return' }
+Ui-ExpectNew 'Drawing scale refused: abc' 'not a scale: refused'
+Ui-Sync
+if (Ui-NewLines | Where-Object { $_.Contains('"cmd":"edit_drawing_view"') }) { Ui-Fail 'abc was sent to the model' }
+Write-Host 'ok   abc not sent'
+Ui-Mark
+Ui-Step 'Scale: 2:3'                      { Ui-TypeIn 'Drawing panel drawingViewScale' '2:3'; Ui-Key 'Return' }
+Ui-ExpectNew '"scale":"2:3"' 'two thirds asked for'
+# The model keeps 0.667; the field shows it as drawings write scales, 1:X
+# or X:1 (ISO 5455): 1:1.5.
+Ui-ExpectNew 'Drawing view 1 scale: 1:1.5 (0.667)' "the model's scale, shown as 1:1.5"
 if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
 
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }

@@ -11,7 +11,7 @@ holds the notes, stage by stage, and the corpus test (`freecad.corpus`).
 |---|---|
 | `lib.rs` | `import_fcstd` and `FcstdOptions`: the document's structure (components, occurrences, links) with the bodies FreeCAD stored (stage 1). |
 | `sketch`, `sketches`, `profiles` | Sketches with their constraints and dimensions (stage 2), face profiles and chosen parts of sketches. |
-| `history`, `features`, `part`, `primitives`, `sweep_inputs`, `fixed_paths`, `elements`, `reference` | The history of PartDesign Bodies and the Part workbench's results, each feature checked against its stored shape (stage 3). |
+| `history`, `binders`, `features`, `part`, `primitives`, `sweep_inputs`, `fixed_paths`, `elements`, `reference` | The history of PartDesign Bodies and the Part workbench's results, each feature checked against its stored shape (stage 3). |
 | `params` | Spreadsheets, VarSets, named constraints and bound expressions as parameters (stage 4). |
 | `report`, `notes` | The report, and the timeline notes made from it (mitcad#170). |
 | `appearances` | FreeCAD's body and face colours as document appearances on the bodies made, stored or rebuilt (mitcad#793). |

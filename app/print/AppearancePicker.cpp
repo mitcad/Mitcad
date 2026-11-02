@@ -2,7 +2,6 @@
 #include "AppearancePicker.hpp"
 
 #include <algorithm>
-#include <initializer_list>
 
 #include <QApplication>
 #include <QColor>
@@ -121,10 +120,19 @@ void AppearancePopover::setAppearances(const QVector<Appearance>& appearances) {
   m_appearances = appearances;
 }
 
+QString designSectionKey() {
+  return QStringLiteral("design");
+}
+
 QVector<AppearanceSection> appearanceSections(const QVector<Appearance>& appearances, const QString& materialClass,
-                                              const QString& designTitle, const QString& libraryTitle) {
+                                              const QString& designTitle) {
   QVector<AppearanceSection> sections;
   QVector<const Appearance*> placed;
+  // An appearance from a model before classes (none), or of a class not
+  // known here, is Other.
+  const auto classOf = [](const Appearance* a) {
+    return materialClasses().contains(a->materialClass) ? a->materialClass : QStringLiteral("other");
+  };
   // The design's first, then the library's, in the query's order.
   const auto ordered = [&appearances] {
     QVector<const Appearance*> list;
@@ -140,38 +148,42 @@ QVector<AppearanceSection> appearanceSections(const QVector<Appearance>& appeara
     }
     return list;
   }();
-  const auto add = [&sections, &placed](const QString& title, const QVector<const Appearance*>& list) {
+  const auto add = [&sections, &placed](const QString& key, const QString& title,
+                                        const QVector<const Appearance*>& list) {
     if (!list.isEmpty()) {
-      sections.append(AppearanceSection{title, list});
+      sections.append(AppearanceSection{key, title, list});
       placed += list;
     }
   };
-  const auto ofClass = [&ordered](const QString& wanted) {
+  // Those of a class not placed yet: of the design and the library, or of
+  // the library only.
+  const auto ofClass = [&ordered, &placed, &classOf](const QString& wanted, bool libraryOnly) {
     QVector<const Appearance*> list;
     for (const Appearance* a : ordered) {
-      // An appearance from a model before classes (none) is Other.
-      const QString own = a->materialClass.isEmpty() ? QStringLiteral("other") : a->materialClass;
-      if (own == wanted) {
+      if (classOf(a) == wanted && (a->library || !libraryOnly) && !placed.contains(a)) {
         list.append(a);
       }
     }
     return list;
   };
-  if (!materialClass.isEmpty()) {
-    add(materialClassTitle(materialClass), ofClass(materialClass));
+  if (materialClasses().contains(materialClass)) {
+    add(materialClass, materialClassTitle(materialClass), ofClass(materialClass, false));
     // A printed plastic is a plastic too: General Plastic's next.
     if (materialClass == QStringLiteral("fdm_plastic") || materialClass == QStringLiteral("resin")) {
-      add(materialClassTitle(QStringLiteral("plastic")), ofClass(QStringLiteral("plastic")));
+      add(QStringLiteral("plastic"), materialClassTitle(QStringLiteral("plastic")),
+          ofClass(QStringLiteral("plastic"), false));
     }
   }
-  for (const bool library : {false, true}) {
-    QVector<const Appearance*> rest;
-    for (const Appearance* a : ordered) {
-      if (a->library == library && !placed.contains(a)) {
-        rest.append(a);
-      }
+  // The design's others, then the library's by class.
+  QVector<const Appearance*> design;
+  for (const Appearance* a : ordered) {
+    if (!a->library && !placed.contains(a)) {
+      design.append(a);
     }
-    add(library ? libraryTitle : designTitle, rest);
+  }
+  add(designSectionKey(), designTitle, design);
+  for (const QString& cls : materialClasses()) {
+    add(cls, materialClassTitle(cls), ofClass(cls, true));
   }
   return sections;
 }
@@ -250,9 +262,9 @@ void AppearancePopover::fill(const QString& current, const QStringList& marked, 
     }
   }
   // The material's class first (mitcad#1102), then the design's own (those
-  // of its materials and imports), then the library's.
-  const QVector<AppearanceSection> sections =
-      appearanceSections(m_appearances, materialClass, tr("This design"), tr("Library"));
+  // of its materials and imports), then the library's by class
+  // (mitcad#1133).
+  const QVector<AppearanceSection> sections = appearanceSections(m_appearances, materialClass, tr("This Design"));
   for (const AppearanceSection& section : sections) {
     heading(section.title);
     for (const Appearance* a : section.appearances) {
@@ -274,24 +286,36 @@ void AppearancePopover::filter() {
   const QString wanted = m_search->text().trimmed();
   int shown = 0;
   QListWidgetItem* first = nullptr;
+  // A section's heading shows while one of its entries does (mitcad#1133).
+  QListWidgetItem* heading = nullptr;
+  bool headingUsed = false;
   for (int row = 0; row < m_list->count(); ++row) {
     QListWidgetItem* item = m_list->item(row);
     const QString id = item->data(kIdRole).toString();
     const bool special = id == QLatin1String(kNoneId) || id == QLatin1String(kEditId);
-    if (id.isEmpty()) {
-      // Headings only without a search.
-      item->setHidden(!wanted.isEmpty());
-      continue;
+    if (id.isEmpty() || special) {
+      if (heading != nullptr) {
+        heading->setHidden(!headingUsed);
+      }
+      heading = id.isEmpty() ? item : nullptr;
+      headingUsed = false;
+      if (id.isEmpty()) {
+        continue;
+      }
     }
     const bool match = wanted.isEmpty() || (!special && (item->toolTip().contains(wanted, Qt::CaseInsensitive) ||
                                                          id.contains(wanted, Qt::CaseInsensitive)));
     item->setHidden(!match);
+    headingUsed = headingUsed || match;
     if (match && !special) {
       ++shown;
       if (first == nullptr) {
         first = item;
       }
     }
+  }
+  if (heading != nullptr) {
+    heading->setHidden(!headingUsed);
   }
   // The first match current, which Return chooses.
   if (!wanted.isEmpty() && first != nullptr) {

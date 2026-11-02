@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -820,6 +821,15 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
         }
       }
       QComboBox* combo = comboOf(choices, chosen);
+      if (id == QStringLiteral("scale")) {
+        // Any ratio typed too (mitcad#1169).
+        watchScale(combo, [this, toolId, id](const QString& scale) {
+          m_options[toolId].insert(id, scale);
+          qDebug().noquote() << QStringLiteral("Drawing option %1: %2").arg(id, scale);
+        });
+        field = combo;
+        break;
+      }
       connect(combo, &QComboBox::currentIndexChanged, this, [this, combo, toolId, id] {
         m_options[toolId].insert(id, combo->currentData().toString());
         qDebug().noquote() << QStringLiteral("Drawing option %1: %2").arg(id, combo->currentData().toString());
@@ -868,6 +878,49 @@ void DrawingWorkspace::editView(int view, const QString& field, const QString& v
     return;
   }
   QTimer::singleShot(0, this, [this, command] { run(command); });
+}
+
+void DrawingWorkspace::watchScale(QComboBox* combo, const std::function<void(const QString&)>& chosen) {
+  combo->setEditable(true);
+  combo->setInsertPolicy(QComboBox::NoInsert);
+  // No completion: "1" and Enter is 1:1 typed, not the list's 10:1.
+  combo->setCompleter(nullptr);
+  QLineEdit* line = combo->lineEdit();
+  // The error border of the app's fields (CommandPanel's), on the text.
+  const auto showError = [line](bool error) {
+    line->setProperty("invalid", error);
+    setErrorStyleSheet(line, error ? QStringLiteral("border: 1px solid %1;") : QString());
+  };
+  // A choice picked in the list and its text sent with Enter come both:
+  // the change is sent once.
+  const auto sent = std::make_shared<QString>(combo->currentData().toString());
+  const auto take = [chosen, sent](const QString& value) {
+    if (value != *sent) {
+      *sent = value;
+      chosen(value);
+    }
+  };
+  connect(combo, &QComboBox::activated, this, [combo, showError, take](int index) {
+    showError(false);
+    take(combo->itemData(index).toString());
+  });
+  connect(line, &QLineEdit::editingFinished, this, [this, combo, line, showError, take] {
+    QList<QPair<QString, QString>> choices;
+    for (int i = 0; i < combo->count(); ++i) {
+      choices.append({combo->itemData(i).toString(), combo->itemText(i)});
+    }
+    const QString text = line->text().trimmed();
+    const std::optional<QString> value = scaleEntry(text, choices);
+    if (!value) {
+      showError(true);
+      qDebug().noquote() << QStringLiteral("Drawing scale refused: %1").arg(text);
+      setStatus(tr("A scale is a ratio of two positive numbers, such as 2:3 or 1:1.5, not %1.").arg(text), true);
+      return;
+    }
+    showError(false);
+    take(*value);
+  });
+  connect(line, &QLineEdit::textEdited, this, [showError] { showError(false); });
 }
 
 void DrawingWorkspace::fillViewPanel(int id) {
@@ -1016,6 +1069,8 @@ void DrawingWorkspace::fillViewPanel(int id) {
   // The scale: a base view's fits the sheet when asked (its own scale
   // then; one without any draws at 1:1 and says so); another's follows its
   // parent's (twice it for a detail) unless it has its own.
+  // Any ratio can be typed (mitcad#1169); the field then shows the model's
+  // scale as drawings write it, 1:X or X:1 (ISO 5455): 2:3 as 1:1.5.
   const bool base = type == QStringLiteral("base");
   const QString scale = json.value(QStringLiteral("own_scale")).toBool() || base
                             ? json.value(QStringLiteral("scale_text")).toString()
@@ -1026,9 +1081,12 @@ void DrawingWorkspace::fillViewPanel(int id) {
     scales->setItemText(0, type == QStringLiteral("detail") ? tr("Twice Its Parent's (%1)").arg(automatic)
                                                             : tr("Its Parent's (%1)").arg(automatic));
   }
-  connect(scales, &QComboBox::currentIndexChanged, this,
-          [edit, scales] { edit(QStringLiteral("scale"), scales->currentData().toString()); });
+  watchScale(scales, [edit](const QString& chosen) { edit(QStringLiteral("scale"), chosen); });
   m_form->addRow(tr("Scale"), named(scales, "drawingViewScale"));
+  qDebug().noquote() << QStringLiteral("Drawing view %1 scale: %2 (%3)")
+                            .arg(id)
+                            .arg(scales->currentText())
+                            .arg(json.value(QStringLiteral("scale")).toDouble(), 0, 'f', 3);
   // Turned on the sheet (mitcad#729), the views from it and its
   // annotations with it; a detail turns with its parent.
   if (type != QStringLiteral("detail")) {

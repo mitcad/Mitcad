@@ -188,6 +188,7 @@ ShapePtr trim_surface(const Shape& body, const TrimInput& input, const std::vect
       }
     }
     auto trimmed = std::make_shared<Shape>(detail::compound_or_single(parts), named);
+    trimmed->set_open_edge_names(all->named_open_edges());
     detail::require_valid(trimmed->occt(), "trim");
     return trimmed;
   });

@@ -62,6 +62,10 @@
 namespace mitcad {
 namespace {
 
+// The size of an option's swatch in a choice's picker, in pixels
+// (mitcad#1141; the Material tool's picker's too).
+constexpr int kPickerSwatch = 32;
+
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
 QColor paletteColor(int index) {
@@ -206,7 +210,8 @@ protected:
 // (InputDef::choicePicker, mitcad#1108: Send to Slicer's Printer and
 // Process): the options in their order under the rows' headings, by their
 // short labels with their tags, the chosen one checked, a line where the
-// options have a separator; a window titled "<label> Picker" (LibraryPicker,
+// options have a separator, the options' pictures as their swatches
+// (mitcad#1141); a window titled "<label> Picker" (LibraryPicker,
 // logged "<label> picker …") under the field, as wide as its names need.
 // Its choice is the drop-down's, as if chosen in its list. The closed
 // field shows the chosen row's short label.
@@ -259,6 +264,12 @@ public:
       entry.value = value;
       entry.name = known && !found->shortLabel.isEmpty() ? found->shortLabel : itemText(i);
       entry.section = known ? found->heading : QString();
+      // The option's picture as its swatch (InputDef::choiceImage,
+      // mitcad#1141: Send to Slicer's materials).
+      const QIcon icon = itemIcon(i);
+      if (!icon.isNull()) {
+        entry.swatch = icon.pixmap(QSize(kPickerSwatch, kPickerSwatch)).toImage();
+      }
       entry.tooltip = itemText(i);
       entry.tag = known ? found->tag : QString();
       entry.search = known ? QStringList{itemText(i), found->heading, found->search}.join(QLatin1Char(' ')) : itemText(i);
@@ -1018,7 +1029,13 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     auto* check = new QCheckBox;
     check->setFocusPolicy(Qt::NoFocus);
     check->setToolTip(input.tooltip);
-    // Only as wide as its box, which is where a click toggles it.
+    if (input.textBeside && form != nullptr) {
+      // Its label beside the box, a click there toggles it too
+      // (InputDef::textBeside, mitcad#1162; a list's row keeps its label).
+      check->setText(input.label);
+    }
+    // Only as wide as its box (and its text), which is where a click
+    // toggles it.
     check->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     connect(check, &QCheckBox::clicked, this, [this, key](bool on) { emit checkChanged(key, on); });
     row.check = check;
@@ -1109,6 +1126,14 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     if (input.type == InputDef::Type::Note && input.label.isEmpty() && !input.fieldColumn && form != nullptr) {
       // A note row without a label takes the panel's whole width
       // (mitcad#655): its text is not squeezed beside the labels.
+      form->addRow(container);
+      updateNote(row);
+      return &row;
+    }
+    if (input.type == InputDef::Type::Check && input.textBeside && !input.disclosure && !input.fxToggle &&
+        form != nullptr) {
+      // The box carries its label (InputDef::textBeside, mitcad#1162): a
+      // row across the panel, none in the labels' column.
       form->addRow(container);
       updateNote(row);
       return &row;
@@ -1702,13 +1727,14 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
   // hint, progress and information as plain grey text.
   const bool boxed = isProblem(level) && !message.isEmpty();
   if (boxed) {
+    // Both colours follow the palette (mitcad#1152: the fill was the old
+    // theme's under the new theme's text after a theme switch).
     const QString format = QStringLiteral("QTextEdit { color: %1; background: %2; border-radius: 6px; "
-                                          "padding: 5px 6px; }")
-                               .arg(QStringLiteral("%1"), noticeFill(level, palette()).name());
+                                          "padding: 5px 6px; }");
     if (level == NoticeLevel::Error) {
-      setErrorStyleSheet(m_message, format);
+      setErrorStyleSheet(m_message, format, ColorRole::ErrorFill);
     } else {
-      setWarningStyleSheet(m_message, format);
+      setWarningStyleSheet(m_message, format, ColorRole::WarningFill);
     }
   } else {
     setRoleStyleSheet(m_message, ColorRole::TextSecondary,

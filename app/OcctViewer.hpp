@@ -20,6 +20,8 @@
 #include <QMetaObject>
 #include <QOpenGLWidget>
 #include <QPoint>
+#include <QPointer>
+#include <QPolygonF>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -293,6 +295,7 @@ public:
                   // error's colour, apart from the cut's red (mitcad#1041)
     ExtendedTool, // orange, see-through: a split's or trim's tool as the
                   // feature extends it (mitcad#712)
+    MeasurementWire, // opaque dimension lines through the measured bodies
   };
 
   explicit OcctViewer(QWidget* parent = nullptr);
@@ -474,6 +477,20 @@ public:
   // The value boxes of a command's handles (mitcad#656, widget pixels):
   // a click there edits a value, so they count as covered too.
   void setHandleBoxes(const std::vector<QRect>& boxes) { m_handleBoxes = boxes; }
+  // Where a command's handles take the mouse (mitcad#1105): within `reach`
+  // pixels of `line` (widget pixels; a single point for a knob). A press
+  // there stays with the handle, even without a drag, so these places
+  // count as covered too: the places offered for picks avoid them and the
+  // view is not picked there. Only while `owner` (the overlay that draws
+  // the handles) exists; a null owner clears them.
+  struct HandleArea {
+    QPolygonF line;
+    double reach = 0.0;
+  };
+  void setHandleAreas(const QObject* owner, std::vector<HandleArea> areas) {
+    m_handleAreasOwner = owner;
+    m_handleAreas = owner != nullptr ? std::move(areas) : std::vector<HandleArea>();
+  }
   // The panels floating over the view and the cards at its top (widget
   // pixels): what the handles' value boxes keep out of (mitcad#656).
   std::vector<QRect> coveredRects() const {
@@ -804,6 +821,9 @@ public:
   // For UI tests: a point in the widget where a click picks each face,
   // edge or vertex of the shown bodies that the filter takes (only those
   // a click there would pick).
+  // Candidate probes move OCCT's detected owner. Wait for navigation and
+  // pending pointer selection to finish before probing, even for logging.
+  bool pickPointsReady() const;
   std::vector<std::pair<SelectionItem, QPoint>> pickPoints(SelectFilter kinds);
   // The same for what the filter's kinds take but its finer test refuses
   // (mitcad#474: the faces Create Sketch cannot sketch on).
@@ -1199,7 +1219,7 @@ private:
   // What each pickable object shows.
   std::map<const AIS_InteractiveObject*, PickInfo> m_pickInfo;
   occ::handle<AIS_Shape> m_preview;
-  int m_previewMode = 1; // AIS_Shaded, or AIS_WireFrame for a failed one
+  int m_previewMode = 1; // AIS_Shaded, or AIS_WireFrame for errors/measurement guides
   // setProvisional's (mitcad#636), and the frames drawn.
   occ::handle<AIS_InteractiveObject> m_provisional;
   quint64 m_framesDrawn = 0;
@@ -1249,6 +1269,9 @@ private:
   // m_untestedPicks is set.
   QPointF m_clickPosition;
   bool m_clickPickedNothing = false;
+  // Diagnostic probes must not replace detection before queued pointer
+  // input (especially release -> selection) has reached FlushViewEvents.
+  bool m_pointerInputPending = false;
   bool m_untestedPicks = false;
   // While pickPoints() tries its points (the view, the filter and the
   // input stand still): what accepts() found of each owner it was asked
@@ -1384,6 +1407,8 @@ private:
   int m_badgeWidth = 0;
   std::vector<QRect> m_covered;
   std::vector<QRect> m_handleBoxes; // setHandleBoxes
+  QPointer<const QObject> m_handleAreasOwner; // setHandleAreas
+  std::vector<HandleArea> m_handleAreas;
   std::vector<QRect> m_topCards; // setTopCards
   int m_topCardsBottom = 0;
   qreal m_cubeRatio = 1.0;       // the device pixel ratio applied to the cube

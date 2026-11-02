@@ -224,6 +224,18 @@ impl<K: Kernel> Document<K> {
         if let Some(found) = self.own_material(uid) {
             return (found, MaterialSource::Body);
         }
+        self.inherited_material(uid, path)
+    }
+
+    /// The material a body's components give it, its own left out: the
+    /// nearest component's default up `path` (as [`Self::body_material`]
+    /// takes it), else the root's, else steel; what it is made of once its
+    /// own material is cleared.
+    pub fn inherited_material(
+        &self,
+        uid: BodyUid,
+        path: Option<&[OccurrenceUid]>,
+    ) -> (&Material, MaterialSource) {
         let chain: Vec<ComponentUid> = match path {
             Some(path) => self.path_components_up(path),
             None => self
@@ -416,7 +428,7 @@ impl<K: Kernel> Document<K> {
         attributes.material_expr = None;
         let made_of = match &attributes.material {
             Some(id) => self.material(id),
-            None => Some(self.inherited_material(uid)),
+            None => Some(self.inherited_material(uid, None).0),
         };
         if let Some(look) = look {
             attributes.appearance = Some(look.to_owned());
@@ -523,25 +535,12 @@ impl<K: Kernel> Document<K> {
                     .and_then(|a| a.appearance.as_deref());
                 let target = match new {
                     Some(m) => m,
-                    None => self.inherited_material(*uid),
+                    None => self.inherited_material(*uid, None).0,
                 };
                 // One the new material offers stays (mitcad#1055).
                 self.appearance_set_by_hand(*uid) && !own.is_some_and(|own| target.offers(own))
             })
             .collect())
-    }
-
-    /// The material a body has from its components (not its own).
-    fn inherited_material(&self, uid: BodyUid) -> &Material {
-        let component = self
-            .body_component(uid)
-            .or_else(|| self.feature_component(uid.feature));
-        component
-            .into_iter()
-            .chain([ComponentUid::ROOT])
-            .find_map(|c| self.component_material(c).and_then(|id| self.material(id)))
-            .or_else(|| self.material(DEFAULT_MATERIAL))
-            .expect("the default material is built in")
     }
 
     /// Sets a component's default material (C0: the root's; None takes it

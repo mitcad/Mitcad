@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The AppKit left column with the Projects card after a relaunch
+# (tools/ui-macos-native-left-column-test.sh): the split remembered by the
+# drag past the Projects rows (mitcad#1152) keeps Configuration as high as
+# its options, and a double-click returns to the automatic split.
+expect-ever 'Native split restored: projects [0-9]+, configuration 1[0-9][0-9], browser [0-9]+'
+wait-idle
+native-resize 1280 820
+native-appearance light
+native-expand native.modelTree
+expect-native-visible native.projectsCard true
+expect-native-card-height native.configurationCard 100 190
+expect-native-card-height native.sidebar bottom
+mark
+native-column-split native.columnSplit.projects.configuration reset
+expect-log '^Native split: automatic$'
+expect-native-card-height native.configurationCard 100 190
+expect-native-card-height native.sidebar bottom

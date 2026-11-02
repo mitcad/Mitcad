@@ -77,7 +77,7 @@ public:
   // order.
   void setSelectedFeatures(const QStringList& uids);
   QString selectedFeature() const;
-  // The selected features (a Shift+click run or an external set), in timeline order.
+  // The selected features (Ctrl toggles, a Shift run or an external set), in timeline order.
   QStringList selectedFeatures() const;
   // Folds a timeline group into one cell or opens it (this window's view
   // of it, P9); a renamed group keeps how it was shown.
@@ -137,7 +137,7 @@ signals:
   void featuresClicked(const QStringList& uids);
   void editRequested(const QString& uid);
   void contextMenuRequested(const QString& uid, const QPoint& globalPosition);
-  void deleteRequested(const QString& uid);
+  void deleteRequested(const QStringList& uids);
   void renamed(const QString& uid, const QString& name);
   // The marker: a drag starts, crosses features, ends; the playback
   // buttons ask for a position.

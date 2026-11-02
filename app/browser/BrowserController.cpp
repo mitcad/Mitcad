@@ -9,6 +9,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include <QColor>
 #include <QColorDialog>
@@ -381,7 +382,14 @@ void BrowserController::showSelection(const Selection& items) {
   // Rows picked in the tree stay where they are: scrolling would jump to
   // another selected row (mitcad#318). A pick in the timeline, the view or
   // a command scrolls to its row when none is in sight.
-  m_browser->showSelection(items, m_shownFeatures, !(m_picking && m_fromTree));
+  // The collection keeps its exact user-selected rows, including a folder
+  // or origin that has no view item. Delete can then name what it skipped.
+  // A command's input still clears/replaces its temporary row selection.
+  // The rows of the picked items are selected beside them (a feature's
+  // body, mitcad#177), and the shown selection stays current for a refresh
+  // after Collapse All (mitcad#312).
+  const bool fromTree = m_picking && m_fromTree;
+  m_browser->showSelection(items, m_shownFeatures, !fromTree, fromTree && m_host.canChangeModel());
 }
 
 bool BrowserController::cancelEditing() {
@@ -864,83 +872,94 @@ bool BrowserController::keyDeletesModel() {
   return false;
 }
 
-void BrowserController::deleteKeyed(const BrowserNode& node) {
-  if (node.type == BrowserNode::Type::Drawing || keyDeletesModel()) {
-    deleteNode(node);
+void BrowserController::deleteKeyed(const QVector<BrowserNode>& nodes) {
+  const bool drawings = std::all_of(nodes.begin(), nodes.end(), [](const BrowserNode& node) {
+    return node.type == BrowserNode::Type::Drawing;
+  });
+  if (drawings || keyDeletesModel()) {
+    deleteNodes(nodes);
   }
 }
 
-void BrowserController::deleteFeatureKeyed(const QString& uid) {
+void BrowserController::deleteFeatureKeyed(const QStringList& uids) {
   if (keyDeletesModel()) {
-    deleteFeature(uid);
+    deleteFeatures(uids);
   }
 }
 
 void BrowserController::deleteNode(const BrowserNode& node) {
-  switch (node.type) {
-  case BrowserNode::Type::FlatPattern:
-    if (canChange() && m_host.runModelCommand(cmd("remove_flat_pattern", {{QStringLiteral("body"), node.uid}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted the flat pattern of %1").arg(m_host.model().bodyName(node.uid));
-    }
-    break;
-  case BrowserNode::Type::Body:
-    // The feature that made it goes, as nothing removes a body by itself.
-    deleteFeature(node.uid.section(QLatin1Char('.'), 0, 0));
-    break;
-  case BrowserNode::Type::Sketch:
-  case BrowserNode::Type::Datum:
-  case BrowserNode::Type::Joint:
-  case BrowserNode::Type::Feature:
-    deleteFeature(node.uid);
-    break;
-  case BrowserNode::Type::Component:
-    if (!node.occurrence.isEmpty() && canChange()) {
-      QJsonObject result;
-      if (m_host.runModelCommand(cmd("delete_occurrence", {{QStringLiteral("occurrence"), node.occurrence}}),
-                                 &result)) {
-        qDebug().noquote() << QStringLiteral("Deleted %1").arg(node.name);
+  const QVector<BrowserNode> selected = m_browser->selectedNodes();
+  const bool inSelection = std::any_of(selected.begin(), selected.end(), [&node](const BrowserNode& other) {
+    return other.type == node.type && other.uid == node.uid && other.occurrence == node.occurrence &&
+           other.sketch == node.sketch;
+  });
+  deleteNodes(inSelection ? selected : QVector<BrowserNode>{node});
+}
+
+void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
+  QStringList features, names, skipped;
+  QJsonArray commands;
+  for (const BrowserNode& node : nodes) {
+    QJsonObject command;
+    QString name = node.name;
+    switch (node.type) {
+    case BrowserNode::Type::FlatPattern:
+      command = cmd("remove_flat_pattern", {{QStringLiteral("body"), node.uid}});
+      name = tr("the flat pattern of %1").arg(m_host.model().bodyName(node.uid));
+      break;
+    case BrowserNode::Type::Body:
+      // The feature that made it goes, as nothing removes a body by itself.
+      features.append(node.uid.section(QLatin1Char('.'), 0, 0));
+      continue;
+    case BrowserNode::Type::Sketch:
+    case BrowserNode::Type::Datum:
+    case BrowserNode::Type::Joint:
+    case BrowserNode::Type::Feature:
+    case BrowserNode::Type::SheetRules:
+      if (m_snapshot.feature(node.uid)) { features.append(node.uid); continue; }
+      break;
+    case BrowserNode::Type::Component:
+      if (!node.occurrence.isEmpty()) {
+        command = cmd("delete_occurrence", {{QStringLiteral("occurrence"), node.occurrence}});
       }
+      break;
+    case BrowserNode::Type::NamedView:
+      if (node.uid.startsWith(QStringLiteral("named:"))) {
+        command = cmd("delete_named_view", {{QStringLiteral("name"), node.uid.mid(6)}});
+        name = tr("named view %1").arg(node.name);
+      }
+      break;
+    case BrowserNode::Type::Analysis:
+      command = cmd("delete_analysis", {{QStringLiteral("name"), node.uid}});
+      name = tr("analysis %1").arg(node.name);
+      break;
+    case BrowserNode::Type::MotionStudy:
+      command = cmd("delete_motion_study", {{QStringLiteral("name"), node.uid}});
+      name = tr("motion study %1").arg(node.name);
+      break;
+    case BrowserNode::Type::ContactSet:
+      command = cmd("delete_contact_set", {{QStringLiteral("name"), node.uid}});
+      name = tr("contact set %1").arg(node.name);
+      break;
+    case BrowserNode::Type::Drawing: // mitcad#707
+      command = cmd("delete_drawing", {{QStringLiteral("drawing"), node.uid}});
+      name = tr("drawing %1").arg(node.name);
+      break;
+    case BrowserNode::Type::ImageReference: // mitcad#782
+      command = cmd("delete_image_reference", {{QStringLiteral("name"), node.uid}});
+      name = tr("image reference %1").arg(node.name);
+      break;
+    case BrowserNode::Type::CenterOfMass: // mitcad#1094: display state, as its light bulb
+      command = cmd("delete_center_of_mass");
+      name = tr("the Center of Mass marker");
+      break;
+    default:
+      break;
     }
-    break;
-  case BrowserNode::Type::NamedView:
-    if (node.uid.startsWith(QStringLiteral("named:")) && canChange() &&
-        m_host.runModelCommand(cmd("delete_named_view", {{QStringLiteral("name"), node.uid.mid(6)}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted named view %1").arg(node.name);
-    }
-    break;
-  case BrowserNode::Type::Analysis:
-    if (canChange() && m_host.runModelCommand(cmd("delete_analysis", {{QStringLiteral("name"), node.uid}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted analysis %1").arg(node.name);
-    }
-    break;
-  case BrowserNode::Type::MotionStudy:
-    if (canChange() && m_host.runModelCommand(cmd("delete_motion_study", {{QStringLiteral("name"), node.uid}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted motion study %1").arg(node.name);
-    }
-    break;
-  case BrowserNode::Type::ContactSet:
-    if (canChange() && m_host.runModelCommand(cmd("delete_contact_set", {{QStringLiteral("name"), node.uid}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted contact set %1").arg(node.name);
-    }
-    break;
-  case BrowserNode::Type::Drawing: // mitcad#707
-    if (canChange() && m_host.runModelCommand(cmd("delete_drawing", {{QStringLiteral("drawing"), node.uid}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted drawing %1").arg(node.name);
-    }
-    break;
-  case BrowserNode::Type::ImageReference: // mitcad#782
-    if (canChange() && m_host.runModelCommand(cmd("delete_image_reference", {{QStringLiteral("name"), node.uid}}))) {
-      qDebug().noquote() << QStringLiteral("Deleted image reference %1").arg(node.name);
-    }
-    break;
-  case BrowserNode::Type::CenterOfMass: // mitcad#1094: display state, as its light bulb
-    if (canChange(true) && m_host.runModelCommand(cmd("delete_center_of_mass"))) {
-      qDebug().noquote() << QStringLiteral("Deleted the Center of Mass marker");
-    }
-    break;
-  default:
-    break;
+    if (command.isEmpty()) skipped.append(node.name);
+    else if (!commands.contains(command)) { commands.append(command); names.append(name); }
   }
+  deleteTargets(features, commands, names, skipped);
 }
 
 void BrowserController::newComponent(const BrowserNode& node) {
@@ -1781,31 +1800,83 @@ void BrowserController::pick(const Selection& items, const QStringList& features
 }
 
 void BrowserController::deleteFeature(const QString& uid) {
-  const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
-  if (feature == nullptr || !canChange()) {
-    return;
+  deleteFeatures({uid});
+}
+
+void BrowserController::deleteSelection(const Selection& items) {
+  if (!keyDeletesModel()) return;
+  QStringList features = m_shownFeatures;
+  QStringList skipped;
+  // A modifier feature may be represented by an earlier feature's body.
+  // Keep that explicit context, while including independently picked rows.
+  const Selection represented = featureItems(features);
+  for (const SelectionItem& item : items) {
+    if (represented.contains(item)) continue;
+    const QString uid = item.kind == SelectKind::Feature ? item.owner : item.creatingFeature();
+    if (m_snapshot.feature(uid)) features.append(uid);
+    else skipped.append(item.describe());
   }
-  const QString name = feature->name;
-  QStringList dependents;
+  deleteTargets(features, {}, {}, skipped);
+}
+
+void BrowserController::deleteFeatures(const QStringList& uids) {
+  deleteTargets(uids, {}, {}, {});
+}
+
+void BrowserController::deleteTargets(const QStringList& features, const QJsonArray& otherCommands,
+                                      const QStringList& otherNames, const QStringList& skipped) {
+  const bool markerOnly = features.isEmpty() && otherCommands.size() == 1 &&
+      otherCommands.first().toObject().value(QStringLiteral("cmd")) == QStringLiteral("delete_center_of_mass");
+  if (!canChange(markerOnly)) return;
+  QSet<QString> requested;
+  QStringList omitted = skipped;
+  for (const QString& uid : features) {
+    if (m_snapshot.feature(uid)) requested.insert(uid);
+    else if (!uid.isEmpty()) omitted.append(uid);
+  }
+  omitted.removeDuplicates();
+  if (!omitted.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Delete skipped: %1").arg(omitted.join(QStringLiteral(", ")));
+    m_host.showStatus(tr("Cannot delete: %1").arg(omitted.join(QStringLiteral(", "))), NoticeLevel::Warning);
+  }
+  if (requested.isEmpty() && otherCommands.isEmpty()) return;
+  QSet<QString> removed = requested;
   try {
-    for (const QJsonValue& value : m_host.model()
+    for (const QString& uid : requested) {
+      const QJsonArray dependents = m_host.model()
                                        .queryObject({{QStringLiteral("query"), QStringLiteral("dependents")},
                                                      {QStringLiteral("uid"), uid}})
-                                       .value(QStringLiteral("dependents"))
-                                       .toArray()) {
-      dependents << value.toObject().value(QStringLiteral("name")).toString();
+                                       .value(QStringLiteral("dependents")).toArray();
+      for (const QJsonValue& value : dependents) {
+        removed.insert(value.toObject().value(QStringLiteral("uid")).toString());
+      }
     }
   } catch (const std::exception& e) {
     m_host.showStatus(QString::fromUtf8(e.what()), NoticeLevel::Error);
     return;
   }
+  QStringList names, dependents, allNames;
+  QStringList ordered;
+  for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
+    if (requested.contains(feature.uid)) names.append(feature.name);
+    if (removed.contains(feature.uid)) {
+      ordered.append(feature.uid);
+      allNames.append(feature.name);
+      if (!requested.contains(feature.uid)) dependents.append(feature.name);
+    }
+  }
+  names.append(otherNames);
+  allNames.append(otherNames);
+  const QString name = names.join(QStringLiteral(", "));
   if (!dependents.isEmpty()) {
-    // The user is asked: the features that use it go too, or nothing does.
+    // One union of dependents, never a second question for another root.
     qDebug().noquote() << QStringLiteral("Delete %1: also %2?").arg(name, dependents.join(QStringLiteral(", ")));
-    QMessageBox box(QMessageBox::Warning, tr("Delete"), tr("Delete %1?").arg(name), QMessageBox::Cancel,
-                    m_window);
-    box.setInformativeText(tr("These features use it and will be deleted too:\n%1")
-                               .arg(dependents.join(QLatin1Char('\n'))));
+    QMessageBox box(QMessageBox::Warning, tr("Delete"),
+                    names.size() == 1 ? tr("Delete %1?").arg(name) : tr("Delete %1 features?").arg(names.size()),
+                    QMessageBox::Cancel, m_window);
+    box.setInformativeText((names.size() == 1 ? tr("These features use it and will be deleted too:\n%1")
+                                            : tr("These features use them and will be deleted too:\n%1"))
+                              .arg(dependents.join(QLatin1Char('\n'))));
     QPushButton* all = box.addButton(tr("Delete &All"), QMessageBox::AcceptRole);
     box.setDefaultButton(all);
     prepareModal(&box);
@@ -1815,14 +1886,38 @@ void BrowserController::deleteFeature(const QString& uid) {
       return;
     }
   }
-  QJsonObject result;
-  if (m_host.runModelCommand(cmd("delete_feature", {{QStringLiteral("uid"), uid},
-                                                    {QStringLiteral("dependents"), !dependents.isEmpty()}}),
-                             &result)) {
-    qDebug().noquote() << QStringLiteral("Deleted %1%2")
-                              .arg(name, dependents.isEmpty()
-                                             ? QString()
-                                             : QStringLiteral(", ") + dependents.join(QStringLiteral(", ")));
+  // Delete dependents before their inputs. An input shared by several
+  // selected features appears only once, and no cascade deletes a later
+  // command's target. The host rolls the entire array back on any failure.
+  std::vector<QJsonObject> extra;
+  for (const QJsonValue& command : otherCommands) extra.push_back(command.toObject());
+  // Deleting a parent occurrence can also remove its child occurrences and
+  // drawings. Delete those explicit children first, never a stale target
+  // after its parent has already cascaded through it.
+  std::stable_sort(extra.begin(), extra.end(), [](const QJsonObject& a, const QJsonObject& b) {
+    const bool aOccurrence = a.value(QStringLiteral("cmd")) == QStringLiteral("delete_occurrence");
+    const bool bOccurrence = b.value(QStringLiteral("cmd")) == QStringLiteral("delete_occurrence");
+    if (aOccurrence != bOccurrence) return !aOccurrence;
+    return aOccurrence && a.value(QStringLiteral("occurrence")).toString().count(QLatin1Char('/')) >
+                              b.value(QStringLiteral("occurrence")).toString().count(QLatin1Char('/'));
+  });
+  QJsonArray commands;
+  const auto occurrence = [](const QJsonObject& command) {
+    return command.value(QStringLiteral("cmd")) == QStringLiteral("delete_occurrence");
+  };
+  // A selected flat pattern or drawing may refer to a feature/body that
+  // this same batch removes. Remove those special objects first too.
+  for (const QJsonObject& command : extra) {
+    if (!occurrence(command)) commands.append(command);
+  }
+  for (auto it = ordered.crbegin(); it != ordered.crend(); ++it) {
+    commands.append(cmd("delete_feature", {{QStringLiteral("uid"), *it}}));
+  }
+  for (const QJsonObject& command : extra) {
+    if (occurrence(command)) commands.append(command);
+  }
+  if (m_host.runModelCommands(commands, tr("Delete %1").arg(allNames.join(QStringLiteral(", "))))) {
+    qDebug().noquote() << QStringLiteral("Deleted %1").arg(allNames.join(QStringLiteral(", ")));
   }
 }
 
@@ -1851,13 +1946,13 @@ void BrowserController::pickRows(const Selection& items, const QStringList& feat
 
 void BrowserController::pickRowsOfTree(const Selection& items, const QStringList& features) {
   // The features of the rows are selected in the timeline (mitcad#177),
-  // without its signal: sketches, datums, joints and the features under
-  // sketches; a body, a component or the origin's rows clear it.
+  // without its signal: sketches, datums, joints, the features under
+  // sketches, and each body's creating feature (mitcad#1139).
   QStringList uids = features;
   for (const SelectionItem& item : items) {
-    if (item.kind != SelectKind::Body && item.kind != SelectKind::Component &&
-        m_snapshot.feature(item.owner) != nullptr && !uids.contains(item.owner)) {
-      uids.append(item.owner);
+    const QString uid = item.kind == SelectKind::Body ? item.creatingFeature() : item.owner;
+    if (item.kind != SelectKind::Component && m_snapshot.feature(uid) != nullptr && !uids.contains(uid)) {
+      uids.append(uid);
     }
   }
   std::sort(uids.begin(), uids.end(), [this](const QString& a, const QString& b) {
@@ -1990,7 +2085,14 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
            });
   // Suppressed while a condition holds (mitcad#809).
   menu.add(QStringLiteral("suppress"), tr("Suppress When…"), [this, uid] { suppressWhen(uid); });
-  menu.add(QStringLiteral("delete"), tr("Delete"), [this, uid] { deleteFeature(uid); });
+  menu.add(QStringLiteral("delete"), tr("Delete"), [this, uid, row] {
+    if (row.isValid()) {
+      deleteNode(row);
+    } else {
+      const QStringList selected = m_timeline->selectedFeatures();
+      deleteFeatures(selected.contains(uid) ? selected : QStringList{uid});
+    }
+  });
   // Moving features into components (mitcad#171): a modelled feature with
   // what goes with it, or the history of a component made from bodies.
   if (feature->type == QStringLiteral("component_from_bodies")) {
@@ -2824,20 +2926,26 @@ void BrowserController::openPolicy(const QString& component) {
 }
 
 void BrowserController::openDesignProperties() {
-  if (!canChange()) {
-    return;
-  }
+  // Opened in any window (mitcad#1149): the statistics read in a read-only
+  // one or while a command is open too; only a change of the summary needs
+  // a model that can change.
+  const bool editable = m_host.canChangeModel(false);
   DesignPropertiesDialog dialog([this](const QJsonObject& query) { return m_host.model().queryObject(query); },
-                                m_window);
+                                editable, m_window);
   prepareModal(&dialog);
-  qDebug().noquote() << QStringLiteral("Design Properties opened: %1").arg(dialog.statisticsText());
+  qDebug().noquote() << QStringLiteral("Design Properties opened%1: %2")
+                            .arg(editable ? QString() : QStringLiteral(" read-only"), dialog.statisticsText());
   if (execDialog(&dialog) != QDialog::Accepted) {
-    qDebug() << "Design Properties canceled";
+    qDebug() << (editable ? "Design Properties canceled" : "Design Properties closed");
     return;
   }
   const QJsonObject changes = dialog.changes();
   if (changes.isEmpty()) {
     qDebug() << "Design Properties closed without a change";
+    return;
+  }
+  // The window may have turned read-only while the dialog was open.
+  if (!canChange()) {
     return;
   }
   QJsonObject request = changes;

@@ -25,6 +25,8 @@ bool nativeFocused();
 bool applicationDelegate(QString& error);
 bool controlExists(const QString& identifier, QString* detail = nullptr);
 bool click(const QString& identifier, QString& error);
+// Move keyboard focus without invoking the control or changing selection.
+bool focusControl(const QString& identifier, QString& error);
 bool hover(const QString& identifier, bool enter, QString& error);
 bool clickImmediately(const QString& identifier, QString& error);
 bool replaceText(const QString& identifier, const QString& text, QString& error);
@@ -166,6 +168,10 @@ bool pointerClick(const QString& identifier, QString& error);
 // The same at fractions of the control's bounds; a point outside a checkbox's
 // or radio button's visible box and title glyphs is refused.
 bool pointerClick(const QString& identifier, QString& error, double x, double y);
+// A viewport-local logical point through the existing embedded Qt root and
+// NSApp mouse routing. Refuses covering native cards; never creates a new
+// native handle for the OpenGL child or invokes the model's picker.
+bool pointerClickViewport(QOpenGLWidget* viewport, const QPointF& position, QString& error);
 // Two real pointer clicks on the same guarded native control, with the
 // second press carrying AppKit's double-click count.
 bool pointerDoubleClick(const QString& identifier, QString& error);
@@ -199,6 +205,7 @@ inline bool nativeFocused() { return false; }
 inline bool applicationDelegate(QString&) { return false; }
 inline bool controlExists(const QString&, QString* = nullptr) { return false; }
 inline bool click(const QString&, QString&) { return false; }
+inline bool focusControl(const QString&, QString&) { return false; }
 inline bool hover(const QString&, bool, QString&) { return false; }
 inline bool clickImmediately(const QString&, QString&) { return false; }
 inline bool replaceText(const QString&, const QString&, QString&) { return false; }
@@ -283,6 +290,7 @@ inline bool buttonOrder(const QStringList&, QString&) { return false; }
 inline bool focused(const QString&) { return false; }
 inline bool pointerClick(const QString&, QString&) { return false; }
 inline bool pointerClick(const QString&, QString&, double, double) { return false; }
+inline bool pointerClickViewport(QOpenGLWidget*, const QPointF&, QString&) { return false; }
 inline bool pointerDoubleClick(const QString&, QString&) { return false; }
 inline bool pointerChoice(const QString&, const QString&, const QStringList&, QString&) { return false; }
 inline bool pointerButton(const QRegularExpression&, QString&) { return false; }

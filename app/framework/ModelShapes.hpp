@@ -34,6 +34,12 @@ bool isIdentity(const QJsonArray& rows);
 // A datum of the `datums` query: a plane as a square of `size`, an axis as a
 // line of `size` through its origin, a point as a vertex.
 TopoDS_Shape datumShape(const QJsonObject& datum, double size);
+// A fixed plane of a definition (`{"origin", "normal"[, "x_axis"]}`) as the
+// `datum` query gives a plane (`type`, `origin`, `normal`, `x_axis`,
+// `y_axis`), its frame as the model makes it (mitcad#1137): the origin as
+// given, `x_axis` made square to the normal, without one the model's X
+// projected (Y when the plane faces X). Empty for a degenerate one.
+QJsonObject fixedPlaneDatum(const QJsonObject& plane);
 // A datum of the model's queries (in its component's coordinates) moved by
 // a placement: where an occurrence of its component shows it (mitcad#1029).
 QJsonObject placedDatum(const QJsonObject& datum, const gp_Trsf& placement);

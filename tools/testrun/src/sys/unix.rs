@@ -325,6 +325,7 @@ pub fn commit_limit() -> Option<u64> {
 /// less where a cgroup above this process is nearer its limit (the tests'
 /// scopes are in its slice, beside its own scope, so the other jobs of a
 /// shared job slice count too; its own scope's limit is the budget's).
+#[cfg(not(target_os = "macos"))]
 pub fn available_memory() -> Option<u64> {
     let text = fs::read_to_string("/proc/meminfo").ok()?;
     let machine = super::meminfo_bytes(&text, "MemAvailable")?;
@@ -335,6 +336,12 @@ pub fn available_memory() -> Option<u64> {
         .map(|(_, limit, used)| limit.saturating_sub(used))
         .fold(machine, u64::min);
     Some(machine)
+}
+
+/// Native VM statistics and memory pressure, rather than Linux's procfs.
+#[cfg(target_os = "macos")]
+pub fn available_memory() -> Option<u64> {
+    Some(super::macos::available_memory())
 }
 
 /// The free disk space of the file system the path is on, bytes.

@@ -43,6 +43,39 @@ QString installedBridge(const QString& applicationDirectory) {
   return {};
 }
 
+QString executableDirectory() {
+#ifdef Q_OS_LINUX
+  // An AppImage's file is the application for Qt; the executables are in
+  // its mount folder (mitcad#1170, as RenderBatch's workerExecutable).
+  const QString self = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
+  if (!self.isEmpty()) return QFileInfo(self).absolutePath();
+#endif
+  return QCoreApplication::applicationDirPath();
+}
+
+QString bundledBridge() { return installedBridge(executableDirectory()); }
+
+BridgeLaunch registeredBridge(const QString& bridge, const QString& appImage) {
+  const QFileInfo image(appImage);
+  if (!appImage.isEmpty() && image.isAbsolute() && image.isFile()) {
+    return {image.absoluteFilePath(), {QStringLiteral("cli")}};
+  }
+  return {bridge, {}};
+}
+
+BridgeLaunch registeredBridge() {
+#ifdef Q_OS_LINUX
+  const QString appImage = qEnvironmentVariable("APPIMAGE");
+#else
+  const QString appImage;
+#endif
+  return registeredBridge(bundledBridge(), appImage);
+}
+
+QStringList bridgeConnectArguments(const QStringList& leading) {
+  return leading + QStringList{QStringLiteral("mcp"), QStringLiteral("--connect")};
+}
+
 QStringList assistantExecutableSuffixes(bool windows, const QString& pathext) {
   if (!windows) return {QString()};
   const QStringList known{QStringLiteral(".exe"), QStringLiteral(".cmd"), QStringLiteral(".bat")};
@@ -204,18 +237,18 @@ QString assistantCommand(const QString& program, const QStringList& arguments, b
   return (callOperator ? QStringLiteral("& ") : QString()) + words.join(QLatin1Char(' '));
 }
 
-QStringList assistantRegistration(AssistantClient client, const QString& bridge) {
-  if (client == AssistantClient::ClaudeCode) {
-    return {QStringLiteral("mcp"), QStringLiteral("add"), QStringLiteral("--scope"), QStringLiteral("user"),
-            QStringLiteral("mitcad"), QStringLiteral("--"), bridge, QStringLiteral("mcp"), QStringLiteral("--connect")};
-  }
-  return {QStringLiteral("mcp"), QStringLiteral("add"), QStringLiteral("mitcad-desktop"), QStringLiteral("--"),
-          bridge, QStringLiteral("mcp"), QStringLiteral("--connect")};
+QStringList assistantRegistration(AssistantClient client, const QString& bridge, const QStringList& leading) {
+  const QStringList start = client == AssistantClient::ClaudeCode
+      ? QStringList{QStringLiteral("mcp"), QStringLiteral("add"), QStringLiteral("--scope"), QStringLiteral("user"),
+                    QStringLiteral("mitcad"), QStringLiteral("--"), bridge}
+      : QStringList{QStringLiteral("mcp"), QStringLiteral("add"), QStringLiteral("mitcad-desktop"), QStringLiteral("--"),
+                    bridge};
+  return start + bridgeConnectArguments(leading);
 }
 
-QJsonObject assistantJsonConfiguration(const QString& bridge) {
+QJsonObject assistantJsonConfiguration(const QString& bridge, const QStringList& leading) {
   const QJsonObject server{{QStringLiteral("command"), bridge},
-                           {QStringLiteral("args"), QJsonArray{QStringLiteral("mcp"), QStringLiteral("--connect")}}};
+                           {QStringLiteral("args"), QJsonArray::fromStringList(bridgeConnectArguments(leading))}};
   const QJsonObject servers{{QStringLiteral("mitcad"), server}};
   return {{QStringLiteral("mcpServers"), servers}};
 }

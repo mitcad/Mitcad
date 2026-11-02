@@ -196,9 +196,9 @@ std::optional<SaveMeshOptions> askOptions(QWidget* parent, const MeshPlan& plan)
   return options;
 }
 
-} // namespace
-
-MeshPlan MainWindow::saveAsMeshPlan(const Selection& items) const {
+// What the selected items stand for: components where their occurrences
+// place them, and bodies (of faces, edges and vertices too).
+QVector<MeshItem> meshItems(const Selection& items) {
   QVector<MeshItem> chosen;
   for (const SelectionItem& item : items) {
     if (item.kind == SelectKind::Component) {
@@ -208,6 +208,26 @@ MeshPlan MainWindow::saveAsMeshPlan(const Selection& items) const {
       chosen.append(MeshItem{MeshItem::Kind::Body, item.owner, item.occurrence});
     }
   }
+  return chosen;
+}
+
+} // namespace
+
+QString MainWindow::exportName(const Selection& items) const {
+  QHash<QString, QString> bodyNames;
+  for (const DocumentSnapshot::Body& body : std::as_const(m_snapshot.bodies)) {
+    bodyNames.insert(body.uid, body.name);
+  }
+  QHash<QString, QString> components;
+  for (const DocumentSnapshot::Component& component : std::as_const(m_snapshot.components)) {
+    components.insert(component.uid, component.name);
+  }
+  const QString design = m_filePath.isEmpty() ? documentName() : QFileInfo(m_filePath).completeBaseName();
+  return meshItemsName(meshItems(items), bodyNames, components, design);
+}
+
+MeshPlan MainWindow::saveAsMeshPlan(const Selection& items) const {
+  const QVector<MeshItem> chosen = meshItems(items);
   QHash<QString, MeshBody> bodies;
   for (const DocumentSnapshot::Body& body : std::as_const(m_snapshot.bodies)) {
     const std::shared_ptr<geometry::Shape> shape = bodyShape(body.uid);

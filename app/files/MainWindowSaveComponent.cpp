@@ -21,12 +21,15 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QStringList>
 #include <QVBoxLayout>
 #include <QtLogging>
 
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../projects/ProjectPicker.hpp"
+#include "RemoteController.hpp"
+#include "SaveComponentTarget.hpp"
 
 namespace mitcad {
 namespace {
@@ -78,6 +81,24 @@ std::optional<bool> askSaveComponent(QWidget* parent, const QString& name, const
   qDebug().noquote() << QStringLiteral("Save Component as Design dialog: replace with a link: %1")
                             .arg(replace->isChecked() ? QStringLiteral("yes") : QStringLiteral("no"));
   return replace->isChecked();
+}
+
+// The files the design's components are linked from (the `components`
+// query's `link`), absolute: a relative one in the design's folder `base`.
+QStringList linkedFiles(const QJsonObject& components, const QString& base) {
+  QStringList files;
+  for (const QJsonValue& value : components.value(QStringLiteral("components")).toArray()) {
+    const QString link = value.toObject().value(QStringLiteral("link")).toString();
+    if (link.isEmpty()) {
+      continue;
+    }
+    if (QDir::isAbsolutePath(link)) {
+      files << link;
+    } else if (!base.isEmpty()) {
+      files << QDir(base).absoluteFilePath(link);
+    }
+  }
+  return files;
 }
 
 } // namespace
@@ -148,9 +169,22 @@ void MainWindow::saveComponentAsDesign(const QString& component, const QString& 
     rememberDialogFolder(DialogGroup::Open, path);
   }
   const QString absolute = QFileInfo(path).absoluteFilePath();
-  if (!m_filePath.isEmpty() && QFileInfo(m_filePath).absoluteFilePath() == absolute) {
+  // Not over the design's own file or a file it links, however the path is
+  // spelled (mitcad#1148): a name that differs only in case on a disk that
+  // ignores it, a path through a link or with "..".
+  const QString base = documentFolder();
+  const QStringList linked = linkedFiles(queryObject({{QStringLiteral("query"), QStringLiteral("components")}}), base);
+  const SaveComponentClash clash = saveComponentClash(absolute, m_filePath, linked);
+  if (clash != SaveComponentClash::None) {
+    const bool own = clash == SaveComponentClash::Design;
+    qDebug().noquote() << QStringLiteral("Save Component as Design refused: %1 is %2")
+                              .arg(absolute, own ? QStringLiteral("this design's own file")
+                                                 : QStringLiteral("a linked component's file"));
     sheetWarning(this, tr("Save Component as Design"),
-                 tr("Could not save %1 over this design's own file: choose another file.").arg(shown));
+                 own ? tr("Could not save %1 over this design's own file: choose another file.").arg(shown)
+                     : tr("Could not save %1 over %2, which a component of this design is linked from: "
+                          "choose another file.")
+                           .arg(shown, QDir::toNativeSeparators(absolute)));
     return;
   }
 
@@ -158,9 +192,15 @@ void MainWindow::saveComponentAsDesign(const QString& component, const QString& 
                       {QStringLiteral("component"), component},
                       {QStringLiteral("path"), absolute},
                       {QStringLiteral("replace"), *replace}};
-  const QString base = documentFolder();
   if (!base.isEmpty()) {
     command.insert(QStringLiteral("base"), base);
+  }
+  // In a project with version history the new file is recorded as a
+  // version: a sync moving the project's branch is waited for before a file
+  // in it is written, as Save does.
+  const std::optional<rust::Box<Project>> project = versionedProject(absolute);
+  if (project) {
+    m_remote->waitForBranch();
   }
   // Through runModelCommand, which refreshes the scene, the browser and
   // the timeline afterwards: a replaced component is linked from now on.
@@ -182,7 +222,7 @@ void MainWindow::saveComponentAsDesign(const QString& component, const QString& 
                                   .arg(shown, QDir::toNativeSeparators(absolute))
                             : tr("Saved %1 as %2.").arg(shown, QDir::toNativeSeparators(absolute));
   bool problem = false;
-  if (const std::optional<rust::Box<Project>> project = versionedProject(absolute)) {
+  if (project) {
     if (const std::optional<QString> author = versionAuthor(**project)) {
       const VersionRecord record = recordVersion(**project, absolute, QStringList{absolute},
                                                  QStringLiteral("Save %1 as a design of its own").arg(shown), *author);

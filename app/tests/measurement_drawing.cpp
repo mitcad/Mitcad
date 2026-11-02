@@ -687,25 +687,73 @@ int measurementDrawingTests() {
   const QPointF oddSnapped = measurementSnapped(QPointF(10.3, 7.8), 1.0);
   CHECK(near(oddSnapped.x(), 10.5) && near(oddSnapped.y(), 7.5));
 
-  // The text's height between its floor and its ceiling on screen: 5 mm
-  // at 10 pixels a millimetre (zoomed in) stays at the ceiling, 0.1 mm
-  // (zoomed out) at the floor, both times a picture's scale.
-  CHECK(near(measurementTextFloor(), 9.0) && near(measurementTextCeiling(), 16.0));
+  // The text's height on screen to the design's scale above its floor, no
+  // ceiling (mitcad#1168): 5 mm at 10 pixels a millimetre (zoomed in) is
+  // 50 pixels, 10 mm twice that; 0.1 mm (zoomed out) at the floor, both
+  // times a picture's scale.
+  CHECK(near(measurementTextFloor(), 9.0));
   MeasurementDisplay tall = drawn[0];
   tall.textHeight = 5.0;
-  CHECK(near(layoutMeasurement(tall, top).textPixels, measurementTextCeiling(), 1e-9));
-  CHECK(near(layoutMeasurement(tall, twice, 2.0).textPixels, measurementTextCeiling(2.0), 1e-9));
+  CHECK(near(layoutMeasurement(tall, top).textPixels, 50.0, 1e-9));
+  CHECK(near(layoutMeasurement(tall, twice, 2.0).textPixels, 100.0, 1e-9));
+  MeasurementDisplay taller = drawn[0];
+  taller.textHeight = 10.0;
+  CHECK(near(layoutMeasurement(taller, top).textPixels, 100.0, 1e-9));
   CHECK(near(layoutMeasurement(tiny, top).textPixels, measurementTextFloor(), 1e-9));
-  CHECK(near(face.textPixels, 12.0, 1e-9)); // between them: the model's
+  CHECK(near(face.textPixels, 12.0, 1e-9)); // above the floor: the model's
 
   // Nearly equal projection scales must not lose their small difference
   // in the singular-value calculation (a face-on plane's repeated value).
   const auto almostTop = [](const gp_Pnt& p) -> std::optional<QPointF> {
     return QPointF(100.0 + 10.0 * (1.0 + 1e-8) * p.X(), 100.0 - 10.0 * p.Y());
   };
-  CHECK(near(layoutMeasurement(tall, almostTop).textPixels, measurementTextCeiling() * (1.0 + 1e-8), 1e-9));
+  CHECK(near(layoutMeasurement(tall, almostTop).textPixels, 50.0 * (1.0 + 1e-8), 1e-9));
   CHECK(near(layoutMeasurement(tiny, almostTop).textPixels, measurementTextFloor() * (1.0 + 1e-8), 1e-9));
   CHECK(near(layoutMeasurement(drawn[0], almostTop).textPixels, 12.0 * (1.0 + 1e-8), 1e-9));
+
+  // A leader's landing follows its text as drawn (mitcad#1168): laid out
+  // by the model a text height and a half long (the leader from the point
+  // to the knee at 10,10, the landing on along X to the text). A 2 mm
+  // text, 20 pixels: the landing as laid out, 30 pixels; a 0.2 mm one held
+  // to the floor of 9 pixels: the landing 13.5 pixels, not the model's 3,
+  // the text moved on along it from the knee; the bend at the knee the
+  // same obtuse 135 degrees.
+  const auto landed = [&](double height) {
+    QJsonObject callout = note;
+    callout.insert(QStringLiteral("name"), QStringLiteral("HoleCallout1"));
+    callout.insert(QStringLiteral("kind"), QStringLiteral("hole_callout"));
+    QJsonObject drawing = note.value(QStringLiteral("drawing")).toObject();
+    const double landing = 1.5 * height;
+    drawing.insert(QStringLiteral("dimension_lines"),
+                   QJsonArray{QJsonArray{xyz(10, 10, 0), xyz(0, 0, 0)},
+                              QJsonArray{xyz(10 + landing, 10, 0), xyz(10, 10, 0)}});
+    drawing.insert(QStringLiteral("text"), QJsonObject{{QStringLiteral("at"), xyz(10 + landing, 10, 0)},
+                                                       {QStringLiteral("direction"), xyz(1, 0, 0)},
+                                                       {QStringLiteral("up"), xyz(0, 1, 0)}});
+    drawing.insert(QStringLiteral("text_offset"), QJsonArray{10 + landing, 10.0});
+    drawing.insert(QStringLiteral("text_height"), height);
+    drawing.insert(QStringLiteral("align"), QStringLiteral("start"));
+    callout.insert(QStringLiteral("drawing"), drawing);
+    const std::vector<MeasurementDisplay> shown = measurementDisplays(QJsonArray{callout}, words);
+    return shown.size() == 1 ? layoutMeasurement(shown[0], top) : MeasurementShape{};
+  };
+  const MeasurementShape asLaid = landed(2.0);
+  CHECK(asLaid.valid && asLaid.note && near(asLaid.textPixels, 20.0, 1e-9));
+  CHECK(near(asLaid.landingPixels, 30.0, 1e-6) && near(asLaid.bendDegrees, 135.0, 1e-6));
+  const QPointF asLaidAt = asLaid.textTransform.map(QPointF(0.0, 0.0));
+  CHECK(near(asLaidAt.x(), 230.0, 1e-6) && near(asLaidAt.y(), 0.0, 1e-6));
+  const MeasurementShape floored = landed(0.2);
+  CHECK(floored.valid && near(floored.textPixels, measurementTextFloor(), 1e-9));
+  CHECK(near(floored.landingPixels, 1.5 * measurementTextFloor(), 1e-6) && near(floored.bendDegrees, 135.0, 1e-6));
+  const QPointF flooredAt = floored.textTransform.map(QPointF(0.0, 0.0));
+  CHECK(near(flooredAt.x(), 200.0 + 1.5 * measurementTextFloor(), 1e-6) && near(flooredAt.y(), 0.0, 1e-6));
+  // The landing drawn from the knee to the moved text.
+  bool landingDrawn = false;
+  for (const QLineF& line : floored.lines) {
+    landingDrawn = landingDrawn ||
+                   (near(std::abs(line.dx()), 1.5 * measurementTextFloor(), 1.0) && near(line.dy(), 0.0, 1e-6));
+  }
+  CHECK(landingDrawn);
 
   // Arrowheads in the annotation's plane, as its text: seen with the
   // plane's y squashed to 0.7 (the plane turned away about X), an

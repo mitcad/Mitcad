@@ -341,7 +341,8 @@ CommandDef pulleyCommand(const CommandContext& context) {
           .withVisible(toothed),
       valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("20 mm"))
           .withVisible([](const CommandState& s) { return !toothed(s); }),
-      valueInput(QStringLiteral("belt_width"), QObject::tr("Belt Width"), ValueKind::Length, QStringLiteral("6 mm")),
+      valueInput(QStringLiteral("belt_width"), QObject::tr("Belt Width"), ValueKind::Length, QStringLiteral("6 mm"))
+          .withExactDefault(),
       valueInput(QStringLiteral("clearance"), QObject::tr("Belt Clearance"), ValueKind::Length, QStringLiteral("1 mm")),
       valueInput(QStringLiteral("pitch_correction"), QObject::tr("Pitch Correction"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(toothed),
@@ -356,6 +357,7 @@ CommandDef pulleyCommand(const CommandContext& context) {
       choiceInput(QStringLiteral("bore"), QObject::tr("Bore"), kBores, QStringLiteral("plain"))
           .withHeading(QObject::tr("Bore and Hub")),
       valueInput(QStringLiteral("bore_diameter"), QObject::tr("Bore Diameter"), ValueKind::Length, QStringLiteral("5 mm"))
+          .withExactDefault()
           .withVisible(ownPlainBore),
       textInput(QStringLiteral("thread"), QObject::tr("Thread Size"), QStringLiteral("M5x0.8"))
           .withVisible([](const CommandState& s) { return s.choice(QStringLiteral("bore")) == QStringLiteral("thread"); }),

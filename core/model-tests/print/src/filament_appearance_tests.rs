@@ -658,3 +658,36 @@ fn a_library_material_brings_its_whole_list_of_appearances() {
     assert!(fresh.print_library_updates(&libraries).is_empty());
     assert!(other.print_library_updates(&libraries).is_empty());
 }
+
+/// A component's appearance that neither the design nor the library has,
+/// in a file edited by hand (mitcad#1150): the file opens with a warning,
+/// the component without that appearance, its material kept.
+#[test]
+fn an_unknown_component_appearance_is_dropped_with_a_warning() {
+    let (mut doc, _, _) = design();
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "Root", "material": "pla_basic",
+               "appearance_id": "translucent_blue"}),
+    );
+    let mut file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    file["component_materials"][0]["appearance"] = json!("no_such_look");
+    let loaded = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    let root = mitcad_model::ids::ComponentUid::ROOT;
+    assert_eq!(loaded.component_appearance(root), None);
+    assert_eq!(material(&loaded, "pla_basic")["components"], json!(["C0"]));
+    assert!(
+        loaded
+            .load_warnings()
+            .iter()
+            .any(|w| w.contains("there is no appearance no_such_look")),
+        "{:?}",
+        loaded.load_warnings()
+    );
+    // Saved again, the file no longer names it.
+    let saved: Value = serde_json::from_str(&loaded.to_json()).unwrap();
+    assert_eq!(
+        saved["component_materials"],
+        json!([{"component": "C0", "material": "pla_basic"}])
+    );
+}

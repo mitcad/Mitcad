@@ -358,7 +358,7 @@ QString targetsMaterialClass(const MaterialCache& cache, const CommandState& sta
 
 // The picker's entries: Default, then the appearances of the targets'
 // material's class first (mitcad#1102, as a material's Add…), then This
-// Design and Library.
+// Design and the library's by class (mitcad#1133).
 QVector<PickerEntry> appearanceEntries(const MaterialCache& cache, bool withDefault, const QString& materialClass) {
   QVector<PickerEntry> entries;
   if (withDefault) {
@@ -366,7 +366,7 @@ QVector<PickerEntry> appearanceEntries(const MaterialCache& cache, bool withDefa
                                QObject::tr("No appearance of its own: its material's")});
   }
   const QVector<AppearanceSection> sections =
-      appearanceSections(cache.appearances, materialClass, QObject::tr("This Design"), QObject::tr("Library"));
+      appearanceSections(cache.appearances, materialClass, QObject::tr("This Design"));
   for (const AppearanceSection& section : sections) {
     for (const Appearance* appearance : section.appearances) {
       entries.append(PickerEntry{appearance->id, appearance->name, section.title,
@@ -377,16 +377,17 @@ QVector<PickerEntry> appearanceEntries(const MaterialCache& cache, bool withDefa
   return entries;
 }
 
+// A row's choices (the fx): As above, then This Design and the library's
+// by class under their headings, as the picker (mitcad#1133).
 Choices appearanceRowChoices(const MaterialCache& cache) {
   Choices choices{{QString(), QObject::tr("As above")}};
-  QString section;
-  for (const Appearance& appearance : cache.appearances) {
-    const QString heading = appearance.library ? QObject::tr("Library") : QObject::tr("This Design");
-    if (heading != section) {
-      section = heading;
-      choices.append({choiceHeadingPrefix() + heading, heading});
+  const QVector<AppearanceSection> sections =
+      appearanceSections(cache.appearances, QString(), QObject::tr("This Design"));
+  for (const AppearanceSection& section : sections) {
+    choices.append({choiceHeadingPrefix() + section.title, section.title});
+    for (const Appearance* appearance : section.appearances) {
+      choices.append({appearance->id, appearance->name});
     }
-    choices.append({appearance.id, appearance.name});
   }
   return choices;
 }

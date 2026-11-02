@@ -3,7 +3,7 @@
 # check-all sources: app/MainWindowContextMenu.cpp app/MainWindow.cpp app/files/MainWindowPrint.cpp
 # check-all sources: app/commands/InspectCommands.cpp app/browser core/model/src/document/print_bed.rs
 # check-all sources: core/model/src/exchange core/3mf tools/cli
-# check-all sources: app/files/Print3d.cpp app/framework/CommandSession.cpp
+# check-all sources: app/files/Print3d.cpp app/framework/CommandSession.cpp app/framework/DocumentSession.cpp
 # A body's print bed face (mitcad#731) through the real UI, on a 40 x 20 x
 # 10 box (Plate, F1.b0) that mitcad-cli makes, with a fake slicer (a script
 # that writes the arguments it was started with, so no slicer runs):
@@ -34,6 +34,11 @@
 #      picking the top in Bed Face stores it as the body's print bed face
 #      (one undo step), the highlight follows, and Send turns the box onto
 #      it.
+#   9. The bed plan in the background (mitcad#1121), made slow
+#      (MITCAD_TEST_JOB_SLEEP_MS="bed plan=2500"): the panel opens at once,
+#      Bed Face says Planning…, Enter typed while the plan runs sends as
+#      soon as it is done (one log line says it waited), and no progress
+#      dialog shows meanwhile.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-print-bed-test.sh
@@ -297,5 +302,33 @@ expect_file "$FRESH" '.bodies[0].print_bed_face' '"F1:top"' "the top stored as t
 ui_mark
 ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
 ui_expect_new "Undo: Set Print Bed Face of Plate" "one undo step"
+
+echo "--- 9. The bed plan in the background (mitcad#1121)"
+# The panel's bed plan made 2.5 s longer; Enter typed at once, while it
+# runs (not a ui_step: that waits for the job), sends once it is done.
+ui_stop_app
+MITCAD_TEST_JOB_SLEEP_MS="bed plan=2500" ui_start_app --open "$FRESH"
+ui_step "fit (F6)"                         ui_key F6
+ui_expect_log "Bodies shown: F1.b0" "the box shown"
+rm -f "$ARGS"
+ui_mark
+ui_command "Send to Slicer"
+ui_expect_new "Computing bed plan started" "the bed plan runs as a job of its own"
+ui_expect_new "3D Print bed face: Planning…" "Bed Face says Planning… meanwhile"
+grep -qE "Computing bed plan done in [0-9]+ ms" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "the plan was done before Enter was typed"
+ui_key Return
+ui_expect_new "3D Print: Send waited for the bed plan (" "Enter waited for the plan, one line"
+waited=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -cF "3D Print: Send waited for the bed plan (")
+[ "$waited" = 1 ] || ui_fail "the wait was logged $waited times"
+ui_expect_new "3D Print bed face: Plate: print bed face; Plate F1:top" "the plan done: Bed Face shows the top"
+ui_expect_new "3D Print bed: Plate on F1:top, plate 128.000,128.000" "then sent, on the top"
+slicer_ran
+# No progress dialog while the plan ran: nothing took the Enter.
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed -n '1,/3D Print: Send waited for the bed plan/p' |
+  grep -F "Progress dialog shown" && ui_fail "a progress dialog showed while the bed plan ran"
+no_new "Progress dialog shown: bed plan" "the bed plan shows no progress dialog"
+no_new "The document was read while a job computes it" "nothing read the design during the plan"
+echo "ok   no progress dialog while the plan ran"
 
 ui_finish "UI print bed"

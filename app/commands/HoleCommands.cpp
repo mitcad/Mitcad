@@ -515,6 +515,7 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
           })
           .withVisible(tabled),
       valueInput(kThreadMajor, QObject::tr("Major Diameter"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withExactDefault()
           .withTooltip(QObject::tr("The custom thread's major diameter, on the 60-degree profile"))
           .withOnChange([sized](CommandState& state, const CommandContext& model) {
             // (A tapped hole's countersink follows it, mitcad#903.)
@@ -524,6 +525,7 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
           })
           .withVisible(custom),
       valueInput(kThreadPitch, QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("1.5 mm"))
+          .withExactDefault()
           .withTooltip(QObject::tr("The distance from one tooth to the next along the axis"))
           .withVisible(custom),
   };

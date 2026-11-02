@@ -319,10 +319,23 @@ void FloatingLayout::moveSplit(int globalY) {
     }
     return height;
   };
+  // A card's height for its content in the last layout (mitcad#1152): the
+  // shares give a card whose weight reaches it exactly that height and the
+  // rest to all the other cards, so a drag past it would move the other
+  // boundaries instead of this one.
+  const auto want = [this](const QString& name) {
+    for (const Entry& entry : m_entries) {
+      if (entry.card != nullptr && entry.card->objectName() == name && entry.want > 0) {
+        return entry.want;
+      }
+    }
+    return std::numeric_limits<int>::max() / 4;
+  };
   const int total = above->second + below->second;
-  const int lowest = least(above->first, above->second);
-  const int highest = std::max(lowest, total - least(below->first, below->second));
-  const int upper = std::clamp(above->second + globalY - m_drag->startY, lowest, highest);
+  const int lowest = std::max(least(above->first, above->second), total - want(below->first));
+  const int highest = std::min(total - least(below->first, below->second), want(above->first));
+  const int upper = std::clamp(above->second + globalY - m_drag->startY, std::min(lowest, above->second),
+                               std::max(highest, above->second));
   m_drag->moved = m_drag->moved || globalY != m_drag->startY;
   m_split = m_drag->heights;
   for (auto& [name, height] : m_split) {
@@ -714,6 +727,7 @@ void FloatingLayout::layoutCards() {
     // the column was shared; a card never ends below the column.
     const int height = std::max(1, std::min(heights[i], cardsBottom - leftTop));
     entry.card->setSlot(QRect(view.left() + kMargin, leftTop, width, height));
+    entry.want = claims[i].want; // where a split drag stops (mitcad#1152)
     // Its content at its largest: the height it would get wanting all of
     // the column (mitcad#426: the Browser folds a design opened whose rows
     // would not fit it).

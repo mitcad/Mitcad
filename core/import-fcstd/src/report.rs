@@ -130,7 +130,8 @@ pub struct FeatureReport {
     /// The PartDesign Body it is in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// `parametric`, `partial`, `fallback` or `skipped`.
+    /// `parametric`, `partial`, `fallback`, `included` (a carried binder)
+    /// or `skipped`.
     pub outcome: ObjectOutcome,
     /// A fallback's group: `missing` (in MitCad), `no_counterpart`,
     /// `other`.
@@ -504,6 +505,12 @@ impl FcstdReport {
                 _ => format!("{} imported", objects(n)),
             });
         notices.extend(self.warnings.iter().map(|w| Notice::warning(w.as_str())));
+        notices.extend(
+            self.features
+                .iter()
+                .filter(|f| f.outcome == ObjectOutcome::Included)
+                .map(|f| Notice::info(format!("{}: {}", f.label, f.notes.join("; ")))),
+        );
         notices
     }
 

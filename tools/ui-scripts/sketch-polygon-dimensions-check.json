@@ -1,0 +1,10 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved six polygons. Exactly the four typed sizes drive their actual construction circles or clicked edges; neither clicked size nor sides count adds a dimension."},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"solved":true,"conflicts":[],"dimensions":[
+    {"type":"radius","curve":"c18","value":"d1","measured":20},
+    {"type":"radius","curve":"c37","value":"d2","measured":20},
+    {"type":"length","line":"c41","value":"d3","measured":20},
+    {"type":"length","line":"c66","value":"d4","measured":20}
+  ]},"tolerance":0.000001}}
+]

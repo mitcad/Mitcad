@@ -762,3 +762,97 @@ fn an_appearance_class_is_kept_only_when_set() {
     );
     assert!(error.contains("wood"), "{error}");
 }
+
+/// mitcad#1133: a design saved before the library's filament colours,
+/// whose own appearances have ids the library has taken since
+/// (`filament_red`, `filament_black` named as the library's Filament -
+/// Black), opens: each keeps its values under a free id (and a free name
+/// where the library's has its name), every reference follows, one warning
+/// says so, and the library's Filament - Red is still offered.
+#[test]
+fn own_appearances_with_ids_the_library_took_open_under_free_ids() {
+    const SIDE: &str = "F2:side(c1[c4,c2])";
+    let mut doc = block();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "create_appearance", "id": "my_red", "name": "My Red",
+             "base_color": [0.1, 0.2, 0.9]},
+            {"cmd": "create_appearance", "id": "my_black", "name": "Dark Night",
+             "base_color": [0.3, 0.3, 0.3]},
+            {"cmd": "set_body_appearance", "uid": "F2.b0", "expression": "'my_red'"},
+            {"cmd": "set_face_appearance", "uid": "F2.b0", "faces": [SIDE], "appearance": "my_black"},
+            {"cmd": "create_material", "id": "shop_pla", "name": "Shop PLA", "density": 1.24,
+             "appearances": ["my_red", "plastic_black", "my_black"]},
+        ]),
+    );
+    // As a design of an older version wrote them.
+    let older = doc
+        .to_json()
+        .replace("\"my_red\"", "\"filament_red\"")
+        .replace("'my_red'", "'filament_red'")
+        .replace("\"my_black\"", "\"filament_black\"")
+        .replace("\"Dark Night\"", "\"Filament - Black\"");
+    assert!(older.contains("\"filament_red\""), "{older}");
+
+    let mut loaded = Document::from_json(&older, MockKernel::default())
+        .unwrap_or_else(|e| panic!("the design does not open: {e}"));
+    command(&mut loaded, json!({"cmd": "recompute"}));
+    let warnings = loaded.load_warnings().join("\n");
+    let red_warnings = loaded
+        .load_warnings()
+        .iter()
+        .filter(|w| w.contains("filament_red_2"))
+        .count();
+    assert_eq!(red_warnings, 1, "{warnings}");
+    assert!(warnings.contains("filament_black_2"), "{warnings}");
+    assert_eq!(custom(&loaded), ["filament_red_2", "filament_black_2"]);
+    let red = appearance(&loaded, "filament_red_2").unwrap();
+    assert_eq!(red["name"], "My Red");
+    assert_eq!(red["base_color"], json!([0.1, 0.2, 0.9]));
+    assert_eq!(red["bodies"], json!(["F2.b0"]));
+    let black = appearance(&loaded, "filament_black_2").unwrap();
+    assert_eq!(black["name"], "Filament - Black (2)");
+    assert_eq!(black["base_color"], json!([0.3, 0.3, 0.3]));
+    // The body keeps its colour: its binding follows the new id, as does
+    // its face's appearance.
+    let body = query(&loaded, "bodies")[0].clone();
+    assert_eq!(body["appearance"], "filament_red_2");
+    assert_eq!(body["appearance_expr"], "'filament_red_2'");
+    assert_eq!(
+        body["face_appearances"][0]["appearance"],
+        "filament_black_2"
+    );
+    // The material's list follows.
+    let file: Value = serde_json::from_str(&loaded.to_json()).unwrap();
+    let material = file["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "shop_pla")
+        .cloned()
+        .unwrap();
+    assert_eq!(material["appearance"], "filament_red_2");
+    assert_eq!(
+        material["appearances"],
+        json!(["plastic_black", "filament_black_2"])
+    );
+    // The library's are still offered, unchanged.
+    let library_red = appearance(&loaded, "filament_red").unwrap();
+    assert_eq!(library_red["library"], true);
+    assert_eq!(library_red["name"], "Filament - Red");
+    assert_eq!(library_red["class"], "fdm_plastic");
+    assert_eq!(library_red["bodies"], json!([]));
+    assert_eq!(
+        appearance(&loaded, "filament_black").unwrap()["name"],
+        "Filament - Black"
+    );
+    // Saved again, the free ids are the design's from now on.
+    let again = Document::from_json(&loaded.to_json(), MockKernel::default()).unwrap();
+    assert!(
+        again.load_warnings().is_empty(),
+        "{:?}",
+        again.load_warnings()
+    );
+    assert_eq!(custom(&again), ["filament_red_2", "filament_black_2"]);
+}
