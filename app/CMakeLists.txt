@@ -266,8 +266,16 @@ qt_add_executable(mitcad
   update/UpdateSettings.cpp
   update/UpdateSettings.hpp
   update/UpdaterChecks.hpp
+  # The Linux AppImage's OpenSSL configuration (mitcad#1208).
+  update/OpenSslConfiguration.cpp
+  update/OpenSslConfiguration.hpp
+  # The version over the 3D view's lower right (mitcad#1209).
+  view/VersionWatermark.cpp
+  view/VersionWatermark.hpp
   # 3D Print: bodies to a slicer (mitcad#13).
   files/MainWindowPrint.cpp
+  # Plates…: the design's print plates (mitcad#1050).
+  files/MainWindowPlates.cpp
   files/Print3d.cpp
   files/Print3d.hpp
   # Use the open slicer window: the slicer processes it started (mitcad#1162).
@@ -2100,6 +2108,14 @@ target_sources(mitcad PRIVATE
   mcp/ChatGate.hpp)
 # Check again's decisions (mitcad#1155): plain functions of the readiness.
 target_sources(mitcad PRIVATE agent/AccountCheck.hpp)
+# API endpoints and local models in the chat (phase 2 of mitcad#947): the
+# Anthropic API, Ollama, LM Studio and a custom OpenAI-compatible endpoint,
+# whose tool loop runs in MitCad (core/mcp/src/chat/api.rs) over Qt Network
+# and the chat's own connection to the live listener; their keys in the
+# keychain (QtKeychain, as files/Keychain.cpp).
+target_sources(mitcad PRIVATE agent/ApiAgent.cpp agent/ApiAgent.hpp)
+# A custom command over the Agent Client Protocol in the chat (mitcad#1198).
+target_sources(mitcad PRIVATE agent/AcpAgent.cpp agent/AcpAgent.hpp)
 # The AppKit frontend's Chat card (mitcad#1075): the same panel through the
 # presenter bridge, in a card whose host keeps the conversation's end in
 # sight.
@@ -2115,9 +2131,9 @@ if(BUILD_TESTING)
   # Check again's decisions after the agent's check (mitcad#1155).
   target_sources(test_app PRIVATE tests/chat_account_check.cpp agent/AccountCheck.hpp)
   # The chat's UI tests' scripted agent (tools/ui-chat-test.py): Claude
-  # Code's stream-json (as `claude`) or Codex's app server (as `codex`) on
-  # stdin and stdout, the real bridge as its MCP server; no AI. It is never
-  # installed.
+  # Code's stream-json (as `claude`), Codex's app server (as `codex`) or the
+  # Agent Client Protocol (as `acp-test-agent`, mitcad#1198) on stdin and
+  # stdout, the real bridge as its MCP server; no AI. It is never installed.
   add_executable(test_chat_agent tests/chat_test_agent.cpp)
   target_link_libraries(test_chat_agent PRIVATE Qt6::Core mitcad_warnings)
   mitcad_utf8_code_page(test_chat_agent)
@@ -2478,4 +2494,28 @@ if(BUILD_TESTING)
   # Synthetic images below and over a budget, PNG and JPEG, the bounded
   # attempts: plain Qt Gui.
   target_sources(test_app PRIVATE tests/screenshot_budget.cpp mcp/ScreenshotBudget.cpp mcp/ScreenshotBudget.hpp)
+endif()
+
+# Materials' mechanical, thermal and printing values in the design's units,
+# the bundled material dataset's browser (mitcad#1213): the Materials
+# window's General tab and New ▾ › Browse Material Dataset….
+target_sources(mitcad PRIVATE print/MaterialProperties.cpp print/MaterialProperties.hpp)
+
+# The layout grid in the design's length unit (mitcad#1210, app/COMMANDS.md
+# "Layout grid"): the automatic spacing's metric and inch series, the major
+# lines, Grid Settings' fixed spacing converted to and from mm.
+target_sources(mitcad PRIVATE view/GridSpacing.cpp view/GridSpacing.hpp)
+if(BUILD_TESTING)
+  # The series per unit and the conversion both ways: plain Qt Core.
+  target_sources(test_app PRIVATE tests/grid_spacing.cpp view/GridSpacing.cpp view/GridSpacing.hpp)
+endif()
+
+# The arrow keys turn the 3D view by Preferences › Navigation's step while
+# it has the keyboard (mitcad#1211, app/COMMANDS.md "Arrow keys"): the
+# camera's turn about the mouse orbit's centre.
+target_sources(mitcad PRIVATE view/CameraTurn.hpp)
+if(BUILD_TESTING)
+  # The axis, the angle, the centre and the zoom on OCCT's cameras.
+  target_sources(test_app PRIVATE tests/camera_turn.cpp view/CameraTurn.hpp)
+  target_link_libraries(test_app PRIVATE TKService)
 endif()

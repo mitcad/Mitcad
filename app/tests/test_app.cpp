@@ -721,6 +721,25 @@ void printTests() {
     CHECK(mitcad::slicerDialect(found[3]) == QStringLiteral("cura"));
   }
   CHECK(mitcad::slicerDialect(Slicer{QStringLiteral("viewer"), QStringLiteral("/usr/bin/viewer"), {}, {}}).isEmpty());
+  // The design's print plates in one 3MF (mitcad#1050): the Bambu family
+  // and PrusaSlicer from 2.9 on; Cura and other programs a 3MF per plate.
+  {
+    const Slicer prusa{QStringLiteral("PrusaSlicer"), QStringLiteral("/opt/prusa-slicer"), {}, {}};
+    const Slicer oldPrusa{QStringLiteral("PrusaSlicer"),
+                          QStringLiteral("/home/u/Apps/PrusaSlicer-2.8.1+linux-x64-GTK3.AppImage"), {}, {}};
+    const Slicer newPrusa{QStringLiteral("PrusaSlicer"),
+                          QStringLiteral("/home/u/Apps/PrusaSlicer-2.9.2+linux-x64-GTK3.AppImage"), {}, {}};
+    const Slicer flatpak{QStringLiteral("PrusaSlicer"), QStringLiteral("/usr/bin/flatpak"),
+                         {QStringLiteral("run"), QStringLiteral("com.prusa3d.PrusaSlicer")}, {}};
+    CHECK(mitcad::slicerTakesPlates(Slicer{}, QStringLiteral("bambu_studio")));
+    CHECK(mitcad::slicerTakesPlates(Slicer{}, QStringLiteral("orcaslicer")));
+    CHECK(mitcad::slicerTakesPlates(prusa, QStringLiteral("prusaslicer")));
+    CHECK(mitcad::slicerTakesPlates(newPrusa, QStringLiteral("prusaslicer")));
+    CHECK(mitcad::slicerTakesPlates(flatpak, QStringLiteral("prusaslicer")));
+    CHECK(!mitcad::slicerTakesPlates(oldPrusa, QStringLiteral("prusaslicer")));
+    CHECK(!mitcad::slicerTakesPlates(Slicer{}, QStringLiteral("cura")));
+    CHECK(!mitcad::slicerTakesPlates(Slicer{}, QString()));
+  }
 
   // Use the open slicer window (mitcad#1162): how each slicer's window
   // takes a newer file, and the command line that hands it over.
@@ -2674,6 +2693,8 @@ int saveComponentTargetTests();
 int lengthUnitsTests();
 int printValueChoicesTests();
 int screenshotBudgetTests();
+int gridSpacingTests();
+int cameraTurnTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2807,6 +2828,8 @@ int main(int argc, char* argv[]) {
     failures += lengthUnitsTests();
     failures += printValueChoicesTests();
     failures += screenshotBudgetTests();
+    failures += gridSpacingTests();
+    failures += cameraTurnTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

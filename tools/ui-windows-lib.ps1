@@ -427,8 +427,8 @@ function Ui-Init([string]$App, [string]$Out, [string]$QtBin = '', [hashtable]$Sh
 
 # Ui-StartApp name arguments... [-Recovery] [-Updates] [-DefaultChrome]:
 # starts Mitcad with its log in <out>\<name>.log and waits for the main
-# window ("<document> - MitCad"). The app offers no recovery of autosaved
-# work at start-up (--no-recovery: a test that killed it and starts it
+# window ("<document> - MitCad <version>", mitcad#1209). The app offers no
+# recovery of autosaved work at start-up (--no-recovery: a test that killed it and starts it
 # again would get the question) unless -Recovery is given, and checks for
 # no updates unless -Updates is given (a test with a server of its own:
 # MITCAD_UPDATE_URL). The window is Docked (--chrome=docked), which the
@@ -489,7 +489,7 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   $script:UiLastPress = $null
   $clock = [Diagnostics.Stopwatch]::StartNew()
   do {
-    $windows = [UiInput]::Windows($script:UiProcess.Id, ' - MitCad\*?$')
+    $windows = [UiInput]::Windows($script:UiProcess.Id, ' - MitCad [^ ]+$')
     if ($windows.Count -gt 0) { break }
     Start-Sleep -Milliseconds 50
   } while ($clock.ElapsedMilliseconds -lt 20000)
@@ -1083,6 +1083,10 @@ function Ui-TypeIn([string]$Field, [string]$Text) {
 
 # Ui-Windows "title regex": the app's windows with that title, newest first.
 function Ui-Windows([string]$TitlePattern) { return , [UiInput]::Windows($script:UiProcess.Id, $TitlePattern) }
+
+# Ui-WindowTitle: the main window's title without the version after
+# "MitCad" (mitcad#1209): "block.mitcad* - MitCad".
+function Ui-WindowTitle { return ([UiInput]::Title($script:UiWindow) -replace ' - MitCad [^ ]+$', ' - MitCad') }
 
 # Ui-FocusDialog "title regex" [-Except windows]: waits for a window of the
 # app with that title (a dialog) and sends the keys there; Ui-FocusMain

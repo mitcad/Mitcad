@@ -1087,7 +1087,7 @@ BrowserPanel::BrowserPanel(QWidget* parent) : QWidget(parent), m_tree(new Browse
   m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_tree->setUniformRowHeights(true);
   m_tree->setIconSize(QSize(18, 18));
-  m_tree->setIndentation(kIndentation);
+  panel::setCompactIndentation(m_tree, panel::Indent::Tree);
   m_tree->setExpandsOnDoubleClick(false);
   // Only a click gives the tree the keyboard, so that the view keeps the
   // single-letter shortcuts.

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# The AppImage's own OpenSSL configuration (mitcad#1208), in its
+# usr/share/mitcad. The AppImage's OpenSSL reads the system's openssl.cnf
+# (the distribution's crypto policy); only where that does not load in
+# this OpenSSL build (an option that only the distribution's OpenSSL
+# knows) does MitCad load this one in its place, and its log says so
+# (app/update/OpenSslConfiguration.hpp). TLS 1.2 or newer with OpenSSL's
+# defaults otherwise; the certificates stay the system's (Qt reads them
+# itself). No engines and no provider modules: TLS uses the built-in
+# default provider.
+openssl_conf = mitcad_init
+
+[mitcad_init]
+ssl_conf = mitcad_ssl
+
+[mitcad_ssl]
+system_default = mitcad_tls
+
+[mitcad_tls]
+MinProtocol = TLSv1.2

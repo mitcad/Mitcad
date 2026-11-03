@@ -8,6 +8,7 @@
 #include "NativeMessageBand.hpp"
 #include "NativeProjects.hpp"
 #include "framework/Icons.hpp"
+#include "framework/PanelTree.hpp"
 #include "framework/Theme.hpp"
 #include "browser/TimelinePresentation.hpp"
 
@@ -1604,7 +1605,7 @@ struct NativeMacWindowState {
     tree.headerView = nil;
     tree.style = NSTableViewStyleSourceList;
     tree.rowHeight = 24;
-    tree.indentationPerLevel = 16;
+    tree.indentationPerLevel = mitcad::panel::kTreeIndentation; // as the Browser's
     tree.backgroundColor = NSColor.clearColor;
     tree.usesAlternatingRowBackgroundColors = NO;
     tree.allowsMultipleSelection = YES;

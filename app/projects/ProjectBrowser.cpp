@@ -41,6 +41,7 @@
 #include "../framework/AppSettings.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "ProjectBrowserData.hpp"
@@ -216,6 +217,7 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   // The folders left, the contents right.
   auto* splitter = new QSplitter(Qt::Horizontal);
   m_folders = new KeyedTree;
+  panel::setCompactIndentation(m_folders, panel::Indent::Tree);
   m_folders->setHeaderHidden(true);
   m_folders->setColumnCount(1);
   m_folders->setIconSize(QSize(16, 16));
@@ -223,6 +225,7 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   m_folders->setSelectionMode(QAbstractItemView::SingleSelection);
   m_folders->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_contents = new KeyedTree;
+  panel::setCompactIndentation(m_contents, panel::Indent::Flat);
   m_contents->setColumnCount(kColumns);
   m_contents->setHeaderLabels({tr("Name"), tr("Version"), tr("Edit lock"), tr("Last change"), tr("By"),
                                tr("Project and folder")});

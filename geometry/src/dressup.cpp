@@ -71,6 +71,7 @@
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
 #include "mitred_dressup.hpp"
+#include "node_dressup.hpp"
 #include "ring_dressup.hpp"
 #include "util.hpp"
 
@@ -2014,11 +2015,33 @@ ShapePtr mitred_roundings(const std::string& feature, const Shape& body, const s
   return detail::mitred_fillet(feature, body, edges);
 }
 
+// The fillet's roundings as valleys of tubes run on through their nodes
+// (node_dressup.hpp): roundings of constant radius of concave edges between
+// tubes of one radius, meeting at nodes whose facets are narrower than the
+// radius; null when they are not such roundings or cannot be built so.
+ShapePtr node_roundings(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
+                        const std::vector<int>& owner) {
+  std::vector<detail::NodeEdge> edges;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    const int s = owner[static_cast<std::size_t>(edge)];
+    if (s < 0) {
+      continue;
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(s)];
+    if (set.curvature || set.size != FilletSize::Constant) {
+      return nullptr;
+    }
+    edges.push_back({edge, set.radius});
+  }
+  return detail::node_fillet(feature, body, edges);
+}
+
 // Runs `dressup` (OCCT's fillet at its exact size); where the geometry
 // kernel fails (not for invalid arguments), the roundings are built as
 // mitred sweeps if they are roundings that take a face away round a loop of
-// edges, whose corners OCCT cannot join (mitcad#1118), else the kernel's
-// error stands.
+// edges, whose corners OCCT cannot join (mitcad#1118), or as valleys of
+// tubes run on through their nodes, whose facets' corners OCCT cannot
+// build (mitcad#1205), else the kernel's error stands.
 template <class Dressup>
 ShapePtr or_mitred(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
                    const std::vector<int>& owner, Dressup&& dressup) {
@@ -2044,6 +2067,18 @@ ShapePtr or_mitred(const std::string& feature, const Shape& body, const std::vec
   }
   if (mitred) {
     return mitred;
+  }
+  ShapePtr node;
+  try {
+    OCC_CATCH_SIGNALS
+    node = node_roundings(feature, *detail::working_copy(body), sets, owner);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    node = nullptr;
+  }
+  if (node) {
+    return node;
   }
   std::rethrow_exception(first);
 }

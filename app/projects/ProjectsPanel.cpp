@@ -408,7 +408,7 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   m_tree->setIconSize(QSize(16, 16));
   // The Browser's indentation per level, so that a narrow panel's nested
   // rows do not drift to the right (mitcad#393).
-  m_tree->setIndentation(panel::kTreeIndentation);
+  panel::setCompactIndentation(m_tree, panel::Indent::Tree);
   m_tree->setExpandsOnDoubleClick(true);
   // Only a click gives the tree the keyboard, so that the view keeps the
   // single-letter shortcuts.

@@ -650,8 +650,8 @@ if(BUILD_TESTING)
               "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-${profile}.tsv"
               -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" -- build ${release} ${packages})
     # A build from scratch (a new build folder, a new toolchain) takes long
-    # in a VM. A build runs alone (RUN_SERIAL): a debug build from scratch
-    # beside the release profile's crate tests, the geometry tests and the
+    # in a VM. Unsupported platforms run it alone (RUN_SERIAL): a debug
+    # build from scratch beside the release profile's crate tests, geometry and the
     # .rvt corpus ran the Linux release check of 0.10.0 out of its memory
     # limit (18.10.2026).
     # On Linux the test runner (mitcad-testrun, mitcad#790) schedules by a
@@ -661,14 +661,17 @@ if(BUILD_TESTING)
     # one cargo build at a time (RESOURCE_LOCK), instead of alone for its
     # ten minutes. Windows likewise: its cargo jobs follow the available
     # memory (cargo-tests.cmake, mitcad#796) and its merge checks and
-    # release run the tests through the test runner.
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32)
+    # release run the tests through the test runner. macOS now samples
+    # process-tree RSS, reserves compiler headroom and caps compiler jobs.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR WIN32 OR APPLE)
       set(cargo_build_alone RESOURCE_LOCK cargo_build)
     else()
       set(cargo_build_alone RUN_SERIAL TRUE)
     endif()
     set_tests_properties(core.cargo_build${suffix} PROPERTIES FIXTURES_SETUP cargo_tests_${profile}
       ENVIRONMENT "${cargo_build_environment}" TIMEOUT 3600 ${cargo_build_alone})
+    include("${CMAKE_SOURCE_DIR}/cmake/MacTestScheduling.cmake")
+    mitcad_macos_cargo_build(core.cargo_build${suffix})
     add_test(NAME core.doctests${suffix}
       COMMAND "${Rust_CARGO_CACHED}" test --doc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
               --quiet ${release} ${selected})

@@ -610,7 +610,7 @@ ui_step "open (Alt+O)"                   ui_key alt+o
 ui_focus_main
 ui_expect_new "Opened version v11 ($(version_id 11)) of plate.mitcad as plate v11" "opened as a new design"
 ui_expect_new "Version status: none" "untitled: no version history"
-xdotool search --name '^plate v11 - MitCad$' > /dev/null || ui_fail "the window is not titled plate v11"
+xdotool search --name '^plate v11 - MitCad [^ ]+$' > /dev/null || ui_fail "the window is not titled plate v11"
 echo "ok   the window is titled plate v11"
 ui_mark
 ui_step "version history (Ctrl+Shift+H)" ui_key ctrl+shift+h

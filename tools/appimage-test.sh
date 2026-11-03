@@ -49,7 +49,11 @@
 #      python3 and openssl), with the AppImage's OpenSSL when it has one
 #      (the logged TLS library is the bundled libcrypto's version, and the
 #      running Mitcad has loaded libssl and libcrypto from its usr/lib
-#      only), else one system's pair; Install downloads and verifies it, Mitcad
+#      only), else one system's pair. With the bundled OpenSSL, first
+#      with an OpenSSL configuration (OPENSSL_CONF) that it cannot load,
+#      an unknown option: Mitcad falls back to the AppImage's own, logs it
+#      once, and the check's TLS works; then with one that loads: no
+#      fallback (mitcad#1208). Install downloads and verifies it, Mitcad
 #      quits, the download replaces the AppImage (a new file of the same
 #      name) and starts as the release, which reports the update.
 #      Only a test build reads the tests' variables (the CMake option
@@ -225,7 +229,10 @@ if [ -n "$ssl_bundled" ] && [ -n "$crypto_bundled" ]; then
     esac
     folders="$folders, $name ${folder:-none}"
   done
-  echo "ok   libssl.so.3 and libcrypto.so.3 bundled ($BUNDLED_TLS$folders)"
+  # The configuration MitCad loads where the system's does not (mitcad#1208).
+  cmp -s "$DIR/usr/share/mitcad/openssl.cnf" "$ROOT/packaging/linux/openssl.cnf" ||
+    ui_fail "the AppImage has no usr/share/mitcad/openssl.cnf of packaging/linux"
+  echo "ok   libssl.so.3 and libcrypto.so.3 bundled ($BUNDLED_TLS$folders), and the AppImage's own openssl.cnf"
 elif [ -n "$ssl_bundled$crypto_bundled" ]; then
   ui_fail "the AppImage bundles $(basename -a $ssl_bundled $crypto_bundled | tr '\n' ' ')without its pair, so Qt's TLS would mix it with the system's"
 else
@@ -369,7 +376,7 @@ echo "ok   --version: MitCad $VERSION"
 starter=$!
 window=""
 for _ in $(seq 1 150); do
-  window=$(xdotool search --onlyvisible --name ' - MitCad$' 2> /dev/null | head -1)
+  window=$(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | head -1)
   [ -n "$window" ] && break
   sleep 0.1
 done
@@ -507,6 +514,61 @@ fi
 # A release (--require-cuda or its build's CUDA requirement) never has them.
 [ "$REQUIRE_CUDA" = 1 ] && [ "$HOOKS" = ON ] &&
   ui_fail "a release's AppImage reads the update tests' variables (configure it with -DMITCAD_UPDATE_TEST_HOOKS=OFF)"
+# The system's OpenSSL configuration (mitcad#1208): one that the bundled
+# OpenSSL cannot load (an option it does not know, as the
+# rh-allow-sha1-signatures of openSUSE's crypto policy) gives way to the
+# AppImage's own, with one log line, and the check's TLS works; one that
+# loads is used, without the fallback. OPENSSL_CONF stands for the system's
+# file. Each run has settings of its own, so that the update run below
+# still checks (once a day). A release's AppImage (its checks off) shows
+# the log lines only.
+if [ -n "$BUNDLED_TLS" ]; then
+  cat > "$WORK/unknown-option.cnf" << 'CNF'
+openssl_conf = test_init
+[test_init]
+alg_section = test_evp
+[test_evp]
+mitcad-test-unknown-option = yes
+CNF
+  cat > "$WORK/valid.cnf" << 'CNF'
+openssl_conf = test_init
+[test_init]
+ssl_conf = test_ssl
+[test_ssl]
+system_default = test_tls
+[test_tls]
+MinProtocol = TLSv1.2
+CNF
+  for config in unknown-option valid; do
+    mkdir -p "$WORK/tls-$config"
+    if [ "$HOOKS" = ON ]; then
+      OPENSSL_CONF=$WORK/$config.cnf XDG_CONFIG_HOME=$WORK/tls-$config UI_GDB=0 UI_APP=$COPY ui_start_app
+    else
+      MITCAD_NO_UPDATE_CHECK=1 OPENSSL_CONF=$WORK/$config.cnf XDG_CONFIG_HOME=$WORK/tls-$config UI_GDB=0 UI_APP=$COPY \
+        ui_start_app
+    fi
+    if [ "$config" = valid ]; then
+      ui_expect_log "TLS: the system's OpenSSL configuration loads; the AppImage's OpenSSL uses it" \
+        "an OpenSSL configuration that loads is used"
+      grep -qF "TLS: the system's OpenSSL configuration failed to load" "$UI_LOG" &&
+        ui_fail "the AppImage fell back from an OpenSSL configuration that loads"
+    else
+      ui_expect_log "TLS: the system's OpenSSL configuration failed to load (error:" \
+        "an OpenSSL configuration with an unknown option does not load"
+      grep -qE "TLS: the system's OpenSSL configuration failed to load \(.*unknown option.*\); using the AppImage's own" \
+        "$UI_LOG" || ui_fail "the fallback's log line does not name the unknown option"
+      [ "$(grep -c "TLS: the system's OpenSSL configuration failed to load" "$UI_LOG")" = 1 ] ||
+        ui_fail "the fallback is not logged once"
+      grep -qF "TLS: the AppImage's own OpenSSL configuration" "$UI_LOG" && ui_fail "the AppImage's own configuration did not load"
+    fi
+    if [ "$HOOKS" = ON ]; then
+      ui_expect_log "Update check: TLS $BUNDLED_TLS (openssl backend)" "with the $config configuration, TLS is the bundled $BUNDLED_TLS"
+      ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0)." \
+        "with the $config configuration, the check reaches the release server over TLS"
+    fi
+    ui_stop_app
+  done
+fi
 if [ "$HOOKS" = OFF ]; then
   # A release's AppImage (mitcad#921): its check would go to GitHub, so
   # checks off; its source is logged anyway.
@@ -574,7 +636,7 @@ grep -q "^GET /release/$asset " "$WORK/requests.log" || ui_fail "the AppImage wa
 # The new process is the AppImage's own, no child of this script.
 UI_WINDOW=""
 for _ in $(seq 1 100); do
-  UI_WINDOW=$(xdotool search --onlyvisible --name ' - MitCad$' 2> /dev/null | head -1)
+  UI_WINDOW=$(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | head -1)
   [ -n "$UI_WINDOW" ] && break
   sleep 0.2
 done

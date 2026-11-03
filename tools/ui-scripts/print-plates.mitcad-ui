@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# Plates… (mitcad#1050), the shared input script of
+# tools/ui-print-plates-test.sh (Linux), tools/ui-windows-print-plates-test.ps1
+# and tools/ui-macos-print-plates-test.sh, on tools/ui-scripts/print-plates.json
+# (Body1 and Body2, no plates): Plates… adds Plate 1 and Plate 2, Body2
+# picked (its Browser row, the Add Bodies row taking it) goes on Plate 2,
+# Spiral Vase is set for Plate 2, and the plate is drawn beside the design
+# (the picture for the ticket, ${MITCAD_TEST_COLOR_SCHEME}); Close keeps it
+# all; Send to Slicer then sends the design's plates in one 3MF for the
+# Bambu family (the fixture slicer has no dialect: the design's, Bambu
+# Studio's), Plate 1 with Body1 (on no plate) and Plate 2 with Body2. The
+# wrappers read the 3MF written.
+# The panel's name has an ellipsis: "Plates.*" in the patterns (the
+# Windows wrapper writes the script as ASCII).
+wait-idle
+key F6
+
+mark
+command make.plates
+wait-log '^Command Plates.* started'
+expect-log 'Plates: none chosen'
+expect-ever 'Plate view: none'
+
+# Two plates: Add Plate, twice; the new one chosen.
+mark
+click-logged '^Panel Plates.* action plate_actions\.0 at '
+wait-log 'Plates: added Plate 1'
+wait-log 'Plates: Plate 1 chosen: nothing of its own; 2 pieces'
+mark
+click-logged '^Panel Plates.* action plate_actions\.0 at '
+wait-log 'Plates: added Plate 2'
+wait-log 'Plates: Plate 2 chosen: nothing of its own; 0 pieces'
+wait-log 'Plate view: Plate 2: 0 pieces: none'
+
+# Body2 picked: on Plate 2 at once, drawn on the plate beside the design.
+mark
+click-logged 'Browser Root/Bodies/Body2'
+wait-log 'Plates: Body2 on Plate 2'
+wait-log 'Plates: Plate 2 chosen: Body2; 1 pieces'
+wait-log 'Plate view: Plate 2: 1 pieces: Body2 x1'
+
+# Spiral Vase for Plate 2: the plate's own value, one undo step.
+mark
+click-logged '^Panel Plates.* input vase at '
+wait-log 'Plates: Spiral vase of Plate 2 on'
+wait-log 'Plates: Plate 2 chosen: Body2'
+key F6
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/print-plates-${MITCAD_TEST_COLOR_SCHEME}.png'
+
+# Close keeps the plates; the plate leaves the view.
+mark
+click-logged '^Panel Plates.* Close at '
+wait-log 'Plate view: none'
+
+# Send to Slicer sends the design's plates, one 3MF of both.
+mark
+command make.print3d
+wait-log 'Panel Send to Slicer input format at '
+expect-log '3D Print plates: 2'
+mark
+key Return
+wait-log '3D Print plate Plate 1: 1 pieces in plates\.3mf'
+wait-log '3D Print plate Plate 2: 1 pieces in plates\.3mf'
+wait-log '3D Print: plates one_file for bambu_studio: '
+wait-log 'Sent 2 plates to Fixture slicer'
+expect-never 'TestDriver: FAIL|Plates: .*refused'

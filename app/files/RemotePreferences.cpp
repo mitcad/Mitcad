@@ -27,6 +27,7 @@
 
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../platform/NativeDialogs.hpp"
 
 namespace mitcad {
@@ -139,6 +140,7 @@ RemotePreferencesBox::RemotePreferencesBox(QWidget* parent)
   // The brokers answered for (mitcad#89): the trust question's answer and
   // the user signed in as; the buttons act at once.
   m_brokers = new QTreeWidget;
+  panel::setCompactIndentation(m_brokers, panel::Indent::Flat);
   m_brokers->setObjectName(QStringLiteral("cloudKnownBrokers"));
   m_brokers->setColumnCount(3);
   m_brokers->setHeaderLabels({tr("Broker"), tr("User"), tr("Answer")});

@@ -285,6 +285,9 @@ void MainWindow::registerFileCommands() {
   // next to Send to Slicer.
   m_registry->add(printersCommand());
   m_registry->add(processesCommand());
+  // Plates… (mitcad#1050, MainWindowPlates.cpp): last in the 3D Print
+  // group.
+  m_registry->add(platesCommand());
   CommandDef recover = def("file.recover", tr("Recover Designs…"), "recover",
                            tr("Restores changes that were not saved when MitCad last ended without closing"),
                            [this] { recoverDocuments(false); });

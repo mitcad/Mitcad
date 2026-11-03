@@ -26,7 +26,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.42.0
+  VERSION 0.43.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -290,6 +290,9 @@ if(BUILD_TESTING)
   add_subdirectory(tools/ui-strings-check)
   # The colors the user sees come from the role table (tools/ui-colors-check).
   add_subdirectory(tools/ui-colors-check)
+  # Every list and tree takes the app's one compact indentation
+  # (tools/tree-indentation-check).
+  add_subdirectory(tools/tree-indentation-check)
   # Every widget of the app that paints itself names its AppKit
   # presentation (tools/native-coverage).
   add_subdirectory(tools/native-coverage)

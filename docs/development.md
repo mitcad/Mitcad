@@ -681,8 +681,16 @@ icons, licences incl. `packaging/linux/THIRD-PARTY-NOTICES.txt`), then:
   `/nonexistent/…`, so no other OpenSSL's modules load into it;
   `OPENSSLDIR` stays `/etc/ssl` (the system's `openssl.cnf`), and Qt reads
   the system's CA certificates itself (Fedora's
-  `/etc/pki/tls/certs/ca-bundle.crt` among them). The header of
-  `make-appimage.sh` gives the reasons.
+  `/etc/pki/tls/certs/ca-bundle.crt` among them). Where the system's
+  `openssl.cnf` does not load in the bundled OpenSSL (mitcad#1208: an
+  option only the distribution's patched OpenSSL knows, such as
+  openSUSE's `rh-allow-sha1-signatures`), MitCad loads the AppImage's own
+  minimal configuration in its place (`usr/share/mitcad/openssl.cnf`,
+  from `packaging/linux/openssl.cnf`; TLS 1.2 or newer) and logs
+  `TLS: the system's OpenSSL configuration failed to load (<first
+  error>); using the AppImage's own`; a configuration that loads is used
+  as before ([app/update/OpenSslConfiguration.hpp](../app/update/OpenSslConfiguration.hpp)).
+  The header of `make-appimage.sh` gives the reasons.
 - The render worker `mitcad-render` goes in
   with its libraries (and Open Image Denoise's CPU device module) and
   their licences ([rendering.md](rendering.md#appimage)).
@@ -1809,6 +1817,12 @@ runs one step after another. Build and lint use half the cores unless
   literal: the ctest `repo.ui-colors` (`tools/ui-colors-check`) fails on
   a hex color or a `QColor(r, g, b)` in `app/` outside the table and its
   recorded exceptions (`kAllowed`, each with its reason).
+- A list or tree (`QTreeView`, `QTreeWidget`) takes its indentation from
+  `panel::setCompactIndentation(view, kind)` in
+  `app/framework/PanelTree.hpp` (a tree, a grouped list or a flat list),
+  never the style's default or a number of its own: the ctest
+  `repo.tree-indentation` (`tools/tree-indentation-check`) fails on a
+  view made without it ([UI conventions](ui-conventions.md#6-lists-and-trees)).
 - A tooltip says in one short line what the control is or does: a
   command's (`CommandDef::tooltip`, the ribbon and the menus) at most 80
   characters, an input's or any other control's at most 100. No usage
@@ -2010,6 +2024,18 @@ runs one step after another. Build and lint use half the cores unless
   test data of `app/tests/heif_image.cpp` was made with ffmpeg's libx265
   (GPL) by `tools/heif-test-fixture.py`, a separate program run by hand;
   nothing of it is linked or shipped.
+- The bundled material dataset (mitcad#1213,
+  [third_party/material-properties](../third_party/material-properties/README.md)):
+  data, not code, from the material-properties dataset under Apache-2.0,
+  a permissive licence this policy allows. It is converted into the
+  materials exchange format (no script of its repository was run) and
+  compiled into `mitcad-model` (`material_dataset.rs`); its `LICENSE` and a
+  `NOTICE` of the attribution and the changes (Apache-2.0, section 4)
+  ship with the packages (`licenses/material-properties`, the bundle's
+  `MaterialData-*.txt`), the third-party notices and the About box name it,
+  and the Materials window's dataset browser says where the values come
+  from and that they are typical. The vendor's name appears only in that
+  attribution (the source's address).
 - This is not a legal review; licence combinations are checked before a
   release.
 

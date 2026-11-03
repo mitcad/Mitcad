@@ -48,6 +48,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacChrome.hpp"
@@ -1821,6 +1822,7 @@ void TimelineWidget::showSearchList() {
   if (m_searchList == nullptr) {
     auto* list = new QTreeWidget(host);
     list->setObjectName(QStringLiteral("timelineSearchResults"));
+    panel::setCompactIndentation(list, panel::Indent::Flat);
     list->setColumnCount(2);
     list->setHeaderHidden(true);
     list->setRootIsDecorated(false);

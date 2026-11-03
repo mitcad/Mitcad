@@ -52,8 +52,10 @@
 #include "framework/TestSync.hpp"
 #include "print/MakeBodyCard.hpp"
 #include "print/PrintKeys.hpp"
+#include "print/PrintLibrary.hpp"
 #include "print/PrintValueChoices.hpp"
 #include "print/PrintValuePicker.hpp"
+#include "print/ProfilePickerRows.hpp"
 #include "view/AnnotationDialogs.hpp"
 
 namespace mitcad {
@@ -645,10 +647,40 @@ void MainWindow::updateMakeCard() {
     };
     profile("printer", &card.printer, nullptr, &card.printerLevel, &card.printerOwner);
     profile("process", &card.process, &card.processId, &card.processLevel, &card.processOwner);
+    // The design's processes; under their printers, the body's printer's
+    // first, when one names a printer (mitcad#1216, profilePickerRows).
+    const QString project = projectFolder();
+    const QVector<LibraryItem> processItems = queryLibraryItems(model(), QStringLiteral("process"), project);
+    QVector<LibraryItem> designProcesses;
     for (const QJsonValue& value : queryArray(QStringLiteral("print_profiles"))) {
       const QJsonObject item = value.toObject();
       if (text(item, "kind") == QLatin1String("process")) {
         card.processes.append(qMakePair(text(item, "id"), text(item, "name")));
+        const LibraryItem* found = findDesignCopy(processItems, text(item, "id"));
+        LibraryItem process = found != nullptr ? *found : LibraryItem();
+        process.place = QStringLiteral("design");
+        process.id = text(item, "id");
+        process.name = text(item, "name");
+        designProcesses.append(process);
+      }
+    }
+    QStringList bodyPrinter;
+    const QString printerId = text(
+        settings.value(QStringLiteral("printer")).toObject().value(QStringLiteral("profile")).toObject(), "id");
+    const QVector<LibraryItem> printerItems = queryLibraryItems(model(), QStringLiteral("printer"), project);
+    if (const LibraryItem* printerItem = findDesignCopy(printerItems, printerId)) {
+      bodyPrinter = printerNames(*printerItem);
+    }
+    const QVector<ProfilePickerRow> processRows =
+        profilePickerRows(designProcesses, QStringLiteral("process"), bodyPrinter);
+    const bool grouped = std::any_of(processRows.cbegin(), processRows.cend(),
+                                     [](const ProfilePickerRow& row) { return !row.group.isEmpty(); });
+    if (grouped) {
+      card.processes.clear();
+      for (const ProfilePickerRow& row : processRows) {
+        // "design/<id>": the id may hold a '/' itself.
+        card.processes.append(qMakePair(row.key.mid(row.key.indexOf(QLatin1Char('/')) + 1), row.name));
+        card.processGroups << row.group;
       }
     }
     // The values that differ from the profiles: those set on a level.
@@ -682,6 +714,8 @@ void MainWindow::updateMakeCard() {
   if (logged != m_loggedMakeCard) {
     m_loggedMakeCard = logged;
     qDebug().noquote() << QStringLiteral("Make card: %1").arg(logged);
+    // Its process drop-down, under their printers (mitcad#1216).
+    qDebug().noquote() << QStringLiteral("Make card processes: %1").arg(makeCardProcessList(card));
     // Where its fields are, once laid out (UI tests).
     TestSync::singleShot(300, m_makeCard, [this] {
       for (const QString& line : m_makeCard->places()) {

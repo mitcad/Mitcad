@@ -23,3 +23,8 @@ mod slicer_presets_tests;
 mod print_send_tests;
 // The automatic orientation on the print bed (mitcad#1109).
 mod print_orient_tests;
+// Print plates: items with counts, plate settings, multi-plate 3MF
+// (mitcad#1050).
+mod print_plates_tests;
+// The printers a process is for (mitcad#1216).
+mod process_printers_tests;

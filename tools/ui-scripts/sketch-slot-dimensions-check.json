@@ -1,0 +1,19 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved one Center to Center Slot drawn level with a typed length of 30 and width of 8 (mitcad#1225): its outline c1..c4 (c2 the arc at the second end), the end centres p5 and p6, the outline's points p7..p10 and the construction centre line c11. The typed width is the end arc's diameter d1, the typed length the centre line's d2: only its place is free (2 degrees of freedom). A fixed point at the origin and two dimensions that move the first end's centre leave none, and a driven distance between the end centres still measures 30."},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"solved":true,"conflicts":[],"dof":2,"dimensions":[
+    {"type":"diameter","curve":"c2","value":"d1","measured":8},
+    {"type":"length","line":"c11","value":"d2","measured":30}
+  ]},"tolerance":0.000001}},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[0,0],"fixed":true},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"horizontal_distance","a":"p12","b":"p5"},"value":35},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"vertical_distance","a":"p12","b":"p5"},"value":15},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"distance","a":"p5","b":"p6"},"driven":true},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"solved":true,"conflicts":[],"dof":0,"dimensions":[
+    {"type":"diameter","curve":"c2","value":"d1","measured":8},
+    {"type":"length","line":"c11","value":"d2","measured":30},
+    {"type":"horizontal_distance","a":"p12","b":"p5","measured":35},
+    {"type":"vertical_distance","a":"p12","b":"p5","measured":15},
+    {"type":"distance","a":"p5","b":"p6","driven":true,"measured":30}
+  ]},"tolerance":0.000001}}
+]

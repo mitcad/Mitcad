@@ -16,6 +16,8 @@
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "../framework/PanelTree.hpp"
+
 namespace mitcad {
 namespace {
 
@@ -56,7 +58,7 @@ PrintValuePicker::PrintValuePicker(const QString& body, const QVector<PrintValue
   m_tree->setColumnCount(2);
   m_tree->setHeaderHidden(true);
   m_tree->setRootIsDecorated(false);
-  m_tree->setIndentation(10);
+  panel::setCompactIndentation(m_tree, panel::Indent::GroupedList);
   m_tree->setUniformRowHeights(true);
   m_tree->header()->setStretchLastSection(false);
   m_tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);

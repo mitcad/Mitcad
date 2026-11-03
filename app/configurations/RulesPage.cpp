@@ -31,6 +31,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/FormulaEditor.hpp"
 #include "../framework/ParameterSuggest.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "RuleCanvas.hpp"
@@ -101,6 +102,7 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   m_closedNote->hide();
   m_list = new QTreeWidget;
   m_list->setObjectName(QStringLiteral("rulesList"));
+  panel::setCompactIndentation(m_list, panel::Indent::Flat);
   m_list->setColumnCount(2);
   m_list->setHeaderLabels({QStringLiteral("Rule"), QString()});
   m_list->setRootIsDecorated(false);

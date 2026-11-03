@@ -315,7 +315,12 @@ fn join_any(entries: &[String]) -> String {
 }
 
 /// The project's settings and each object's filament and own values.
-pub(super) fn export(shared: &Shared<'_>) -> ExportOutput {
+/// The keys PrusaSlicer keeps for the whole project, never per object
+/// (mitcad#1050): on print plates, a part's own value of one is left out
+/// with a warning.
+const PROJECT_ONLY: [&str; 2] = ["spiral_vase", "complete_objects"];
+
+pub(super) fn export(shared: &Shared<'_>, on_plates: bool) -> ExportOutput {
     let mut out = ExportOutput::default();
     let mut warnings = Vec::new();
     let slots = shared.slot_parts.len().max(1);
@@ -545,6 +550,16 @@ pub(super) fn export(shared: &Shared<'_>) -> ExportOutput {
             .collect();
         for set in [PrintSet::Printer, PrintSet::Process] {
             for (def, value) in defs_in(set, &shared.overrides[i]) {
+                if on_plates && PROJECT_ONLY.contains(&def.key) {
+                    warnings.push(format!(
+                        "{}: {} keeps {} for the whole project, so {}'s own value is left out",
+                        def.key,
+                        DIALECT.name(),
+                        def.name,
+                        part.name
+                    ));
+                    continue;
+                }
                 for (key, text) in dialect_texts(DIALECT, def, value, &context, &mut warnings) {
                     let _ = writeln!(
                         model,

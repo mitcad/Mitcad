@@ -148,6 +148,7 @@
 #include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
 #include "view/ViewTessellation.hpp"
+#include "view/VersionWatermark.hpp"
 #include "mitcad/io/mesh.hpp"
 
 namespace mitcad {
@@ -729,6 +730,8 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // Look At, Fit, Visual Style and the grid's toggles at the bottom of the
   // view (mitcad#1086, MainWindowNavigationBar.cpp).
   createNavigationBar();
+  // The version over the view's lower right (mitcad#1209).
+  m_versionWatermark = new VersionWatermark(m_viewer);
   m_search = new CommandSearch(*m_registry, this);
   connect(m_search, &CommandSearch::chosen, this, &MainWindow::trigger, Qt::QueuedConnection);
   createAutosave();
@@ -2016,9 +2019,13 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   m_messages->commandStarted(); // an edit too (mitcad#1042)
   // A panel works in the 3D view: back from a drawing (mitcad#707).
   leaveDrawing();
+  // The sketch a feature command leaves (mitcad#1227), shown once its card
+  // is placed.
+  QString sketchLeft;
   if (m_mode == Mode::Sketch && def.mode == CommandDef::Mode::Model) {
     // A feature from sketch mode (Extrude): the sketch is finished first,
     // its selected profiles go to the feature.
+    sketchLeft = m_sketch->uid();
     Selection profiles;
     for (const SelectionItem& item : m_selection) {
       if (item.kind == SelectKind::Profile) {
@@ -2061,8 +2068,8 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
     m_session = session;
     m_lastCommand = def.id;
     connect(session, &CommandSession::finished, this, &MainWindow::onCommandFinished);
-    session->startAsync(preselection, [this, guarded = QPointer<CommandSession>(session)](
-                                         bool started, const QString& error) {
+    session->startAsync(preselection, [this, guarded = QPointer<CommandSession>(session), sketchLeft,
+                                       name = def.name](bool started, const QString& error) {
       if (!guarded || m_session != guarded) {
         return;
       }
@@ -2086,6 +2093,9 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
       addMeasureHistory(*m_nativeForm, guarded->def());   // mitcad#648
       m_nativeWindow->showInspector(true);
       m_nativeWindow->setInspectorView(m_nativeForm->nativeView(), m_nativeForm->nativeFooterView());
+      if (!sketchLeft.isEmpty()) {
+        showSketchLeft(sketchLeft, name); // mitcad#1227
+      }
       if (!m_nativeFocusInput.isEmpty()) {
         guarded->focusValue(std::exchange(m_nativeFocusInput, QString()));
       } else if (!guarded->startsWithValues() || !guarded->focusFirstValueOnOpen()) {
@@ -2154,6 +2164,9 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   m_commandPages->addWidget(page);
   m_commandPages->setCurrentWidget(page);
   m_panelScroll = page;
+  if (!sketchLeft.isEmpty()) {
+    showSketchLeft(sketchLeft, def.name); // mitcad#1227
+  }
   if (!session->startsWithValues() || !session->focusFirstValueOnOpen()) {
     m_viewer->setFocus();
   }
@@ -3183,6 +3196,8 @@ void MainWindow::refreshScene() {
     }
   }
   m_viewer->setHome(home);
+  // The layout grid in the design's length unit (mitcad#1210).
+  m_viewController->setLengthUnit(m_snapshot.lengthUnit);
   // The rendered view's light, background, ground and film (mitcad#47).
   m_viewController->setDocumentName(m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).completeBaseName());
   try {
@@ -5222,7 +5237,7 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       setSelection({item});
       selectMs = menuClock.restart();
     }
-    fillModelContextMenu(menu, entries);
+    fillModelContextMenu(menu, entries, item);
   }
   menu.addSeparator();
   add(m_registry->action(QStringLiteral("view.fit")));
@@ -5553,6 +5568,42 @@ void MainWindow::leaveSketchMode() {
   m_commandPages->setCurrentWidget(m_idlePage);
   m_sketchExisting = false;
   m_sketchRestoreMarker = -1;
+}
+
+void MainWindow::showSketchLeft(const QString& uid, const QString& command) {
+  // The view the sketch was opened from is back (leaveSketchMode). It can
+  // show them elsewhere than in the free area that the command's card
+  // leaves: zoomed in, or fitted to the larger free area before the card
+  // took its place, under the ribbon, the card or the cube. They are fitted
+  // into it then, as Fit would.
+  Bnd_Box box;
+  const auto add = [&box](const TopoDS_Shape& shape) {
+    if (!shape.IsNull()) {
+      BRepBndLib::Add(shape, box, false);
+    }
+  };
+  const QString occurrence = placingOccurrence(uid);
+  add(itemShape({SelectKind::Sketch, uid, QString(), QString(), occurrence}));
+  try {
+    const QJsonObject sketch =
+        queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), uid}});
+    const QString body = sketch.value(QStringLiteral("plane")).toObject().value(QStringLiteral("body")).toString();
+    if (!body.isEmpty()) {
+      // As sketchFace places the face it lies on.
+      const QJsonValue link = sketch.value(QStringLiteral("plane_link"));
+      add(itemShape({SelectKind::Body, body, QString(), QString(),
+                     link.isObject() ? link.toObject().value(QStringLiteral("source")).toString() : occurrence}));
+    }
+  } catch (const std::exception&) {
+    // The sketch alone then.
+  }
+  if (box.IsVoid()) {
+    return;
+  }
+  if (m_floating != nullptr) {
+    m_floating->layoutNow(); // the command's card where it goes
+  }
+  m_viewer->showInFreeArea(box, QStringLiteral("%1 from the sketch").arg(command));
 }
 
 bool MainWindow::finishSketch() {
@@ -6526,7 +6577,9 @@ void MainWindow::updateWindowTitle() {
   if (windowFilePath() != filePath) {
     setWindowFilePath(filePath);
   }
-  setWindowTitle(QStringLiteral("%1[*] - MitCad").arg(documentName()));
+  // With the version (mitcad#1209), so the taskbar and the window switchers
+  // show it.
+  setWindowTitle(QStringLiteral("%1[*] - MitCad %2").arg(documentName(), QApplication::applicationVersion()));
   const bool modified = isModified();
   setWindowModified(modified);
   // Save follows the mark (its enabled() reads it), also after a save that

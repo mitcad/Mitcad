@@ -62,6 +62,11 @@ struct MakeCardData {
   QString processLevel;
   QString processOwner;
   QVector<QPair<QString, QString>> processes;
+  // The printer each process is listed under (mitcad#1216: the body's
+  // printer's processes first, then the others under their printers, Any
+  // printer last; profilePickerRows), as many as `processes`; empty when
+  // no process names a printer: then no headings.
+  QStringList processGroups;
   QVector<MakeCardValue> values;
 
   bool operator==(const MakeCardData& other) const {
@@ -69,7 +74,8 @@ struct MakeCardData {
            materialLevel == other.materialLevel && materials == other.materials && printer == other.printer &&
            printerLevel == other.printerLevel && printerOwner == other.printerOwner && process == other.process &&
            processId == other.processId && processLevel == other.processLevel &&
-           processOwner == other.processOwner && processes == other.processes && values == other.values;
+           processOwner == other.processOwner && processes == other.processes &&
+           processGroups == other.processGroups && values == other.values;
   }
   bool operator!=(const MakeCardData& other) const { return !(*this == other); }
 };
@@ -78,6 +84,12 @@ struct MakeCardData {
 // (component Root); printer Bench (component Root); process Standard
 // (component Root); own: Walls = 5 (body Body1)".
 QString makeCardSummary(const MakeCardData& data);
+
+// The card's process drop-down for the UI tests' log (mitcad#1216): its
+// processes under their printers, "Bench Y: Shared, Strong | Bench X:
+// Fine | Any printer: Draft"; the names alone, "Fine, Draft", without
+// groups.
+QString makeCardProcessList(const MakeCardData& data);
 
 // The icon of a level in app/icons, as the Properties window's Source
 // column has it: body, insert-component (an occurrence), component;

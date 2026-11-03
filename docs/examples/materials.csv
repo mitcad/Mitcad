@@ -1,0 +1,3 @@
+id,name,class,density [g/cm3],youngs_modulus [MPa],poissons_ratio,yield_strength [MPa],max_service_temperature [C],thermal_expansion [um/(m*C)],extruder_temperature [C],extruder_temperature_min [C],extruder_temperature_max [C],bed_temperature [C],source,material,grade,revision
+custom1,Shop steel,metal,7.85,210000,0.3,235,400,12,,,,,Mill sheet,S235JR,JR,
+custom2,Shop PLA,fdm_plastic,1.24,,,,52,68,210,190,230,60,,,,

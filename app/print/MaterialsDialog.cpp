@@ -12,9 +12,12 @@
 #include <QAction>
 #include <QColor>
 #include <QComboBox>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QCompleter>
 #include <QEvent>
+#include <QFile>
+#include <QFileInfo>
 #include <QFont>
 #include <QFormLayout>
 #include <QFrame>
@@ -36,6 +39,7 @@
 #include <QPushButton>
 #include <QRect>
 #include <QRectF>
+#include <QSaveFile>
 #include <QSet>
 #include <QSettings>
 #include <QSize>
@@ -51,15 +55,18 @@
 
 #include "../browser/Bindings.hpp"
 #include "../browser/DocumentHost.hpp"
+#include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "AppearancePicker.hpp"
 #include "MaterialMenuChoices.hpp"
+#include "MaterialProperties.hpp"
 #include "MaterialVariantsPage.hpp"
 #include "SettingsForm.hpp"
 #include "SlicerImport.hpp"
@@ -69,7 +76,6 @@ namespace {
 
 constexpr int kKeyRole = Qt::UserRole; // a row's key; empty on a group's heading
 constexpr int kSwatchSize = 20; // a material's list of appearances (mitcad#1055)
-constexpr int kListIndent = 12; // the materials under their group's heading (mitcad#1083)
 constexpr int kAppearanceRowsShown = 8; // the appearance list grows to this many rows, then scrolls
 constexpr int kAppearanceRowsMin = 3;   // ... and is never shorter than this many
 constexpr int kAppearanceButtonSpacing = 4; // between Add…, Remove and Make Default
@@ -291,7 +297,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   mac::styleListTree(m_list);
   m_list->setRootIsDecorated(false);
   m_list->setItemsExpandable(false);
-  m_list->setIndentation(kListIndent);
+  panel::setCompactIndentation(m_list, panel::Indent::GroupedList);
   sideBox->addWidget(m_list, 1);
   splitter->addWidget(side);
 
@@ -327,9 +333,10 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   // The same widths as the settings form's fields (mitcad#655).
   m_density->setFixedWidth(150);
   densityRow->addWidget(m_density);
-  auto* densityUnit = new QLabel(QStringLiteral("g/cm³"));
-  densityUnit->setFixedWidth(80);
-  densityRow->addWidget(densityUnit);
+  // In the design's density unit (mitcad#1213: g/cm³, an inch design lb/in³).
+  m_densityUnit = new QLabel(QStringLiteral("g/cm³"));
+  m_densityUnit->setFixedWidth(80);
+  densityRow->addWidget(m_densityUnit);
   densityRow->addStretch(1);
   form->addRow(tr("Density"), densityRow);
   // A refused density under its field (mitcad#655).
@@ -345,6 +352,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   auto* appearancesRow = new QHBoxLayout;
   appearancesRow->setSpacing(8);
   m_appearanceList = new QTreeWidget;
+  panel::setCompactIndentation(m_appearanceList, panel::Indent::Flat);
   m_appearanceList->setObjectName(QStringLiteral("materialAppearances"));
   m_appearanceList->setProperty(NativeModelKeysProperty,
                                QVariantList{int(Qt::Key_Delete), int(Qt::Key_Backspace)});
@@ -386,10 +394,17 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   appearancesRow->addLayout(appearanceButtons);
   appearancesRow->addStretch(1);
   form->addRow(tr("Appearances"), appearancesRow);
+  // Its mechanical, thermal and printing values (mitcad#1213), in the
+  // design's units.
+  m_properties = new MaterialPropertiesBox;
+  form->addRow(m_properties);
   m_addPopover = new AppearancePopover(m_log + QStringLiteral(" add appearance"), this);
   m_form = new SettingsForm;
   m_form->setGeneralPage(general, tr("General"));
-  m_form->setGeneralNames({tr("Class"), tr("Density"), tr("Appearances")});
+  m_form->setGeneralNames({tr("Class"), tr("Density"), tr("Appearances"), tr("Young's modulus"),
+                           tr("Poisson's ratio"), tr("Yield strength"), tr("Maximum service temperature"),
+                           tr("Coefficient of thermal expansion"), tr("Extruder temperature"),
+                           tr("Bed temperature")});
   // A filament's values per printer and nozzle (mitcad#1054): the last
   // tab, with the print settings.
   m_variants = new MaterialVariantsPage(m_log);
@@ -434,11 +449,20 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_buttons->addWidget(m_new);
   m_buttons->addWidget(m_duplicate);
   m_buttons->addWidget(m_delete);
+  // Materials as JSON or CSV files (mitcad#1213).
+  m_import = new QPushButton(tr("Import…"));
+  m_import->setObjectName(QStringLiteral("materialsImport"));
+  m_import->setToolTip(tr("Import materials from a JSON or CSV file"));
+  m_export = new QPushButton(tr("Export…"));
+  m_export->setObjectName(QStringLiteral("materialsExport"));
+  m_export->setToolTip(tr("Export the materials of the selected one's place as JSON or CSV"));
+  m_buttons->addWidget(m_import);
+  m_buttons->addWidget(m_export);
   m_buttons->addStretch(1);
   layout->addLayout(m_buttons);
   // Enter in a field saves it: no button takes Enter.
-  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_addAppearance,
-                              m_removeAppearance, m_defaultAppearance}) {
+  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_import, m_export,
+                              m_addAppearance, m_removeAppearance, m_defaultAppearance}) {
     mac::auxiliaryButton(button);
   }
 
@@ -485,17 +509,25 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
     if (item == nullptr || item->readOnly) {
       return;
     }
-    const std::optional<double> density = parsePlainNumber(m_density->text());
+    // Typed in the design's density unit (mitcad#1213), kept in g/cm³.
+    const MaterialUnit unit = m_units.unit(QStringLiteral("density"));
+    const std::optional<double> typed = parsePlainNumber(m_density->text());
     const double now = itemFields(*item, m_designMaterials, QJsonObject()).value(QStringLiteral("density")).toDouble();
-    if (!density || *density <= 0.0) {
-      m_densityError->setText(tr("Use a value above 0 g/cm³."));
+    const QString shownNow = materialValueText(unit.shown(now));
+    if (!typed || *typed <= 0.0) {
+      m_densityError->setText(tr("Use a value above 0 %1.").arg(unit.symbol));
       m_densityError->show();
-      m_density->setText(printNumberText(now));
+      m_density->setText(shownNow);
       return;
     }
     m_densityError->hide();
-    if (std::abs(*density - now) > 1e-12) {
-      edit({{QStringLiteral("density"), *density}}, QStringLiteral("density = %1").arg(printNumberText(*density)));
+    if (m_density->text().trimmed() == shownNow) {
+      return;
+    }
+    const double density = unit.model(*typed);
+    if (std::abs(density - now) > 1e-12) {
+      edit({{QStringLiteral("density"), density}},
+           QStringLiteral("density = %1 %2").arg(materialValueText(*typed), unit.symbol));
     }
   });
   connect(m_addPopover, &AppearancePopover::chosen, this, &MaterialsPanel::addAppearance);
@@ -549,6 +581,10 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   connect(m_duplicate, &QPushButton::clicked, this, [this] { duplicate(m_duplicate); });
   connect(m_headerDuplicate, &QPushButton::clicked, this, [this] { duplicate(m_headerDuplicate); });
   connect(m_delete, &QPushButton::clicked, this, &MaterialsPanel::remove);
+  connect(m_import, &QPushButton::clicked, this, &MaterialsPanel::importMaterials);
+  connect(m_export, &QPushButton::clicked, this, &MaterialsPanel::exportMaterials);
+  connect(m_properties, &MaterialPropertiesBox::changeRequested, this,
+          [this](const QJsonObject& change, const QString& what) { edit(change, what); });
 }
 
 MaterialsPanel::~MaterialsPanel() = default;
@@ -636,6 +672,11 @@ void MaterialsPanel::refresh() {
   } catch (const std::exception& e) {
     error = QString::fromUtf8(e.what());
   }
+  // The design's units of materials' values, temperatures as preferred
+  // (mitcad#1213).
+  m_units = MaterialUnits::ask(m_host->model());
+  m_densityUnit->setText(m_units.unit(QStringLiteral("density")).symbol);
+  m_properties->setUnits(m_units);
   if (!error.isEmpty()) {
     setMessage(error, true);
   }
@@ -834,6 +875,7 @@ void MaterialsPanel::showCurrent() {
     m_editing->clear();
     m_density->clear();
     showAppearances(QJsonObject(), false);
+    m_properties->setMaterial(QJsonObject(), false, false);
     m_class->setCurrentIndex(-1);
     m_form->setValues({});
     return;
@@ -862,9 +904,22 @@ void MaterialsPanel::showCurrent() {
     m_loggedEditing = item->key() + line;
     qDebug().noquote() << QStringLiteral("%1 editing: %2").arg(m_log, line);
   }
+  // In the design's density unit (mitcad#1213).
   const double density = fields.value(QStringLiteral("density")).toDouble(1.0);
-  m_density->setText(printNumberText(density));
+  m_density->setText(materialValueText(m_units.unit(QStringLiteral("density")).shown(density)));
   m_density->setReadOnly(!editable);
+  // Its mechanical, thermal and, for an FDM plastic, printing values
+  // (mitcad#1213), logged when they change.
+  m_properties->setMaterial(fields, editable, item->materialClass == QStringLiteral("fdm_plastic"));
+  const QString properties = QStringLiteral("%1: %2").arg(item->name, m_properties->shownText());
+  if (properties != m_loggedProperties) {
+    m_loggedProperties = properties;
+    qDebug().noquote() << QStringLiteral("%1 properties: %2").arg(m_log, properties);
+    const QString reference = materialReferenceText(fields);
+    if (!reference.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("%1 source: %2").arg(m_log, reference);
+    }
+  }
   const QString appearanceId = text(fields, "appearance");
   showAppearances(fields, editable);
   {
@@ -1287,8 +1342,17 @@ void MaterialsPanel::newMaterial() {
     menu.addAction(materialClassTitle(materialClass))->setData(materialClass);
     titles << materialClassTitle(materialClass);
   }
+  // A material of the bundled dataset, its values filled in (mitcad#1213).
+  menu.addSeparator();
+  const QString browse = tr("Browse Material Dataset…");
+  menu.addAction(browse)->setData(QStringLiteral("dataset"));
+  titles << browse;
   qDebug().noquote() << QStringLiteral("%1 new menu: %2").arg(m_log).arg(titles.join(QStringLiteral(" | ")));
   QAction* chosen = execMenu(&menu, m_new->mapToGlobal(QPoint(0, m_new->height())));
+  if (chosen != nullptr && chosen->data().toString() == QStringLiteral("dataset")) {
+    newFromDataset();
+    return;
+  }
   if (chosen == nullptr) {
     return;
   }
@@ -1320,6 +1384,209 @@ void MaterialsPanel::newMaterial() {
     qDebug().noquote() << QStringLiteral("Material created: %1 in %2").arg(text(result, "id"), place);
   }
   refresh();
+}
+
+void MaterialsPanel::newFromDataset() {
+  // Picked from the bundled dataset (mitcad#1213), then where it goes; the
+  // model fills its values in and names it as the entry.
+  MaterialDatasetDialog dialog(m_host->model(), m_units, this);
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted || dialog.chosenId().isEmpty()) {
+    qDebug().noquote() << QStringLiteral("%1 dataset cancelled").arg(m_log);
+    return;
+  }
+  const QString entry = dialog.chosenId();
+  const QString place = askWhere(m_new, QStringLiteral("dataset"));
+  if (place.isEmpty()) {
+    return;
+  }
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("create_material")},
+                      {QStringLiteral("dataset"), entry}};
+  inPlace(command, place);
+  QJsonObject result;
+  if (run(command, &result)) {
+    m_currentKey = place + QLatin1Char('/') + text(result, "id");
+    m_pendingFocus = m_currentKey;
+    qDebug().noquote() << QStringLiteral("Material created from the dataset: %1 (%2) as %3 in %4")
+                              .arg(dialog.chosenName(), entry, text(result, "id"), place);
+  }
+  refresh();
+}
+
+void MaterialsPanel::importMaterials() {
+  if (!canChange()) {
+    return;
+  }
+  const QString path =
+      dialogOpenFileName(this, tr("Import Materials"), dialogStartFolder(DialogGroup::Import, QString()),
+                         tr("Materials (*.json *.csv);;JSON (*.json);;CSV (*.csv)"));
+  if (path.isEmpty()) {
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Import, path);
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    setMessage(tr("Cannot read %1: %2").arg(QFileInfo(path).fileName(), file.errorString()), true);
+    return;
+  }
+  const QString contents = QString::fromUtf8(file.readAll());
+  const QString format =
+      path.endsWith(QStringLiteral(".csv"), Qt::CaseInsensitive) ? QStringLiteral("csv") : QStringLiteral("json");
+  // Where they go, as New's (the design first when one is open).
+  const QString place = askWhere(m_import, QStringLiteral("import_materials"));
+  if (place.isEmpty()) {
+    return;
+  }
+  // First without a choice: a name that is there already comes back and
+  // the user decides once for the file (mitcad#1213).
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("import_materials")},
+                      {QStringLiteral("text"), contents},
+                      {QStringLiteral("format"), format},
+                      {QStringLiteral("conflict"), QStringLiteral("ask")}};
+  inPlace(command, place);
+  QJsonObject result;
+  if (!run(command, &result)) {
+    refresh();
+    return;
+  }
+  QStringList conflicts;
+  for (const QJsonValue& name : result.value(QStringLiteral("conflicts")).toArray()) {
+    conflicts << name.toString();
+  }
+  if (!conflicts.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("%1 import conflicts: %2").arg(m_log, conflicts.join(QStringLiteral(" | ")));
+    QMessageBox box(QMessageBox::Question, tr("Import Materials"),
+                    conflicts.size() == 1 ? tr("A material named %1 is there already.").arg(conflicts.first())
+                                          : tr("%1 materials of the file have names that are there already: %2.")
+                                                .arg(conflicts.size())
+                                                .arg(conflicts.join(QStringLiteral(", "))),
+                    QMessageBox::Cancel, this);
+    box.setInformativeText(tr("Keep the materials that are there, replace their values with the file's, or keep "
+                              "both?"));
+    QPushButton* keep = box.addButton(tr("&Keep Existing"), QMessageBox::AcceptRole);
+    QPushButton* replace = box.addButton(tr("&Replace Values"), QMessageBox::AcceptRole);
+    QPushButton* both = box.addButton(tr("Keep &Both"), QMessageBox::AcceptRole);
+    box.setDefaultButton(keep);
+    prepareModal(&box);
+    execDialog(&box);
+    QString choice;
+    if (box.clickedButton() == keep) {
+      choice = QStringLiteral("keep");
+    } else if (box.clickedButton() == replace) {
+      choice = QStringLiteral("replace");
+    } else if (box.clickedButton() == both) {
+      choice = QStringLiteral("keep_both");
+    } else {
+      qDebug().noquote() << QStringLiteral("%1 import cancelled").arg(m_log);
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("%1 import conflict: %2").arg(m_log, choice);
+    command.insert(QStringLiteral("conflict"), choice);
+    if (!run(command, &result)) {
+      refresh();
+      return;
+    }
+  }
+  // The first one imported selected where it went; then what was done.
+  const QJsonArray added = result.value(QStringLiteral("added")).toArray();
+  if (added.isEmpty()) {
+    refresh();
+  } else {
+    showItem(place + QLatin1Char('/') + added.first().toString());
+  }
+  reportImport(result, QFileInfo(path).fileName());
+}
+
+void MaterialsPanel::reportImport(const QJsonObject& result, const QString& file) {
+  const int added = static_cast<int>(result.value(QStringLiteral("added")).toArray().size());
+  const int replaced = static_cast<int>(result.value(QStringLiteral("replaced")).toArray().size());
+  const int kept = static_cast<int>(result.value(QStringLiteral("kept")).toArray().size());
+  const QJsonArray errors = result.value(QStringLiteral("errors")).toArray();
+  qDebug().noquote() << QStringLiteral("%1 import: %2: added %3, replaced %4, kept %5, %6 not valid")
+                            .arg(m_log, file)
+                            .arg(added)
+                            .arg(replaced)
+                            .arg(kept)
+                            .arg(errors.size());
+  // What was done, then each row that was not, plainly (its line or
+  // place in the file, its name and why).
+  QStringList lines;
+  lines << tr("Imported from %1: %2 added, %3 replaced, %4 kept.").arg(file).arg(added).arg(replaced).arg(kept);
+  for (const QJsonValue& value : errors) {
+    const QJsonObject error = value.toObject();
+    const QString name = text(error, "name");
+    const int row = error.value(QStringLiteral("row")).toInt();
+    lines << (name.isEmpty() ? tr("Row %1 not imported: %2").arg(row).arg(text(error, "message"))
+                             : tr("Row %1 (%2) not imported: %3").arg(row).arg(name, text(error, "message")));
+    qDebug().noquote() << QStringLiteral("%1 import row %2 %3: %4").arg(m_log).arg(row).arg(name, text(error, "message"));
+  }
+  setMessage(lines.join(QLatin1Char('\n')), !errors.isEmpty());
+}
+
+void MaterialsPanel::exportMaterials() {
+  // The materials of the selected one's place; none selected, the design's
+  // own (mitcad#1213). The design's by id, a library's whole.
+  const LibraryItem* item = current();
+  const QString place = item != nullptr ? item->place : (hasDesign() ? QStringLiteral("design") : QString());
+  QJsonArray ids;
+  QJsonArray materials;
+  for (const LibraryItem& each : std::as_const(m_items)) {
+    if (each.place != place) {
+      continue;
+    }
+    if (each.library.isEmpty()) {
+      ids.append(each.designId());
+    } else {
+      materials.append(itemFields(each, m_designMaterials, QJsonObject()));
+    }
+  }
+  if (ids.isEmpty() && materials.isEmpty()) {
+    setMessage(tr("There are no materials to export here."), true);
+    return;
+  }
+  QString filter;
+  QString path = dialogSaveFileName(this, tr("Export Materials"),
+                                    QDir(dialogStartFolder(DialogGroup::Export, QString()))
+                                        .filePath(QStringLiteral("materials.json")),
+                                    tr("JSON (*.json);;CSV (*.csv)"), &filter);
+  if (path.isEmpty()) {
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Export, path);
+  const bool csv = path.endsWith(QStringLiteral(".csv"), Qt::CaseInsensitive) ||
+                   (!path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive) && filter.contains(QStringLiteral("csv")));
+  if (QFileInfo(path).suffix().isEmpty()) {
+    path += csv ? QStringLiteral(".csv") : QStringLiteral(".json");
+  }
+  // In the design's units, temperatures as preferred; the file says them.
+  QJsonObject query{{QStringLiteral("query"), QStringLiteral("export_materials")},
+                    {QStringLiteral("format"), csv ? QStringLiteral("csv") : QStringLiteral("json")},
+                    {QStringLiteral("temperature"), preferredTemperatureUnit()}};
+  if (!ids.isEmpty()) {
+    query.insert(QStringLiteral("ids"), ids);
+  }
+  if (!materials.isEmpty()) {
+    query.insert(QStringLiteral("materials"), materials);
+  }
+  QJsonObject answer;
+  try {
+    answer = m_host->model().queryObject(query);
+  } catch (const std::exception& e) {
+    setMessage(QString::fromUtf8(e.what()), true);
+    return;
+  }
+  QSaveFile out(path);
+  if (!out.open(QIODevice::WriteOnly) || out.write(text(answer, "text").toUtf8()) < 0 || !out.commit()) {
+    setMessage(tr("Cannot write %1: %2").arg(QFileInfo(path).fileName(), out.errorString()), true);
+    return;
+  }
+  const int count = answer.value(QStringLiteral("count")).toInt();
+  setMessage(tr("Exported %1 materials to %2.").arg(count).arg(QFileInfo(path).fileName()));
+  qDebug().noquote() << QStringLiteral("%1 exported: %2 to %3 (%4, %5, %6)")
+                            .arg(m_log)
+                            .arg(count)
+                            .arg(QFileInfo(path).fileName(), text(answer, "format"), text(answer, "units"),
+                                 text(answer, "temperature"));
 }
 
 QString MaterialsPanel::askWhere(QPushButton* anchor, const QString& what) {
@@ -1639,7 +1906,9 @@ void MaterialsPanel::logPlaces() {
       {QStringLiteral("appearance_default"), m_defaultAppearance},
       {QStringLiteral("new"), m_new},
       {QStringLiteral("duplicate"), m_duplicate},
-      {QStringLiteral("delete"), m_delete}};
+      {QStringLiteral("delete"), m_delete},
+      {QStringLiteral("import_materials"), m_import},
+      {QStringLiteral("export_materials"), m_export}};
   // The window's buttons (Close).
   for (const auto& [name, button] : std::as_const(m_windowButtons)) {
     widgets.append(std::pair<QString, QWidget*>(name, button));
@@ -1662,6 +1931,10 @@ void MaterialsPanel::logPlaces() {
                           at(m_appearanceList->viewport(), QPoint(kSwatchSize + 40, rect.center().y())));
       }
     }
+  }
+  // The fields of its mechanical, thermal and printing values (mitcad#1213).
+  if (m_properties->isVisibleTo(this)) {
+    lines << m_properties->places(m_log, at);
   }
   if (m_form->isVisibleTo(this)) {
     lines << m_form->places(m_log + QStringLiteral(" settings"), at);

@@ -151,7 +151,7 @@ if (Ui-LastLineWith 'Ribbon MAKE/CNC') { Ui-Fail 'a CNC group without commands' 
 Ui-ExpectNew 'Browser Make markers: Root/Bodies/Body2: Own print settings: Walls' 'Body2 marked'
 Group-Menu 'MAKE/MATERIALS' 'Edit Materials... | Material'
 Group-Menu 'MAKE/ANNOTATE' 'Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations...'
-Group-Menu 'MAKE/3D PRINT' 'Print Analysis | Send to Slicer | Printers... | Processes...'
+Group-Menu 'MAKE/3D PRINT' 'Print Analysis | Send to Slicer | Printers... | Processes... | Plates...'
 Group-Menu 'MAKE/LASER' 'Export Flat Pattern... | Export Face as DXF...'
 
 Write-Host '--- 2. The moved commands from their new places'

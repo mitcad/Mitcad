@@ -102,7 +102,6 @@ inline void styleParametersDialog(QDialog* dialog, QTreeWidget* table, QLineEdit
     button->setIconSize(QSize(14, 14));
   }
   table->setItemDelegate(new parameters::RowDelegate(table));
-  table->setIndentation(18);
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setAllColumnsShowFocus(true);
   table->header()->setMinimumHeight(28);

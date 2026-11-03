@@ -1,4 +1,4 @@
-# Offset, projection and pipes: 0100, 0960, 1030, 1130, 1160, 1180, 1190
+# Offset, projection and pipes: 0100, 0960, 1030, 1130, 1160, 1180, 1190, 1200
 
 OCCT's offset (`TKOffset`), the projection of a curve onto a surface
 (`ProjLib`) and the pipe shell's guide trihedron (`GeomFill`). Back to the
@@ -34,6 +34,9 @@ OCCT's offset (`TKOffset`), the projection of a curve onto a surface
   the solid (the walls leaning in towards the circle), and widens a
   substituted vertex's tolerance to the points it takes over
   (mitcad#1193).
+- **1200** enlarges a B-spline face at C2 across a side that is the
+  iso-line of a tangential edge, so that intersection curves ending there
+  no longer cross a crease of its offset (mitcad#1202).
 
 ## 0100: faces vanishing within the offset
 
@@ -252,8 +255,8 @@ otherwise `SameParameter` runs as before. Where the projection succeeds,
 and for every other curve, nothing changes. The offsets' edges are within
 0.001 mm at 0.5 to 2 mm, the volume that of the same loft with the seam on
 a corner within 1e-5. At 3 mm the curves where the halves' offsets cut the
-circle's end come out to 1.06e-3 mm, and the volume is 1.6e-5 of it off
-(those intersections, not this curve).
+circle's end came out to 1.06e-3 mm, and the volume 1.6e-5 of it off
+(those intersections, not this curve: patch 1200).
 
 ## 1190: offsets tangent inside the solid
 
@@ -293,6 +296,20 @@ removed end, are left out. A single edge that runs on along the branch
 itself is left as it is; where the tangency lies further past the end, 1130
 is unchanged.
 
+Where no piece goes on from within 5 % of the offset of the tangency, a
+piece from within 20 % is taken, bridged by the same tangent curve
+(mitcad#1217). The pave filler's walk about the tangency stops where the
+offsets are nearly tangent, and where it stops depends on the extended
+surfaces and on rounding: with 1200's extension, the facade's loft of the
+square to a circle of radius 10 (its seam on a side) shelled 1 mm left a
+gap of 8 % of the offset at the corner of one half on Windows (none of
+the pieces from within 5 %, so 1190 left that corner as the pave filler
+gave it, and an inner wall's wire came out the wrong way round,
+`BRepCheck_BadOrientationOfSubshape`), while on Linux the shell was
+valid. With 1200 off the gap was under 5 % there too. The shell is now
+valid on Windows, its volume within 0.04 mm³ (1.5e-5) of the one without
+1200's extension.
+
 `BRepOffset_MakeLoops` substitutes vertices and gives the new one the old
 one's points on the edges' curves, which could lie further from it than
 either's tolerance: in the closed offset and the one-end shells the vertex
@@ -308,6 +325,42 @@ thickness from the outer ones within 1e-6 mm, the volume of the shell open
 at both ends the one the one-end shells and the closed offset give (within
 0.05 mm³). OCCT's default volume integration (without an accuracy) is off
 by up to 0.3 % on these bodies; with an accuracy, and on a mesh, it agrees.
+
+## 1200: enlarging across a tangential side
+
+### 1200-brepoffset-c2-extension-across-a-tangential-side
+
+The loft of 1180 (a square to a circle of radius 20, the seam on a side)
+offset 3 mm inwards closed. `BRepOffset_Inter3d` enlarges each half's
+offset for the intersections (`BRepOffset_Tool::EnLargeFace`,
+`GeomLib::ExtendSurfByLength` at C1), also across the tangential edge
+between the halves. The offset of a surface extended at C1 has a crease
+along the junction (its normal turns there), and the curves where the
+circle's end cuts the halves' offsets end on the tangential edge's offset
+just there. Their approximations, running across the crease, came out up
+to 1.06e-3 mm off their faces and their vertex at that end (the edges'
+tolerances raised to cover it), and the volume 1.6e-5 of it off that of
+the same loft with the seam on a corner. The same crease at the corners
+(extended across convex creases) leaves those curves 2e-4 mm off with
+either seam; it is left as it was.
+
+`BRepOffset_Inter3d` now extends a B-spline or Bezier surface at C2 before
+its first or after its last U where that side is the iso-line of an edge
+the analysis finds tangential all along (the new
+`ContinuityAcrossTangentialSides`; `EnLargeFace` and `EnlargeGeometry` get
+each U side's continuity as parameters, 1 by default). Every other side
+and surface is extended as before. The edges are then within 2.1e-4 mm and
+the volume that of the seam on a corner within 3e-8 (1e-5 at 0.5 to
+2 mm).
+
+That changes the extended surfaces, and with them how the intersections
+at the corners of the octagon to a circle of radius 21.7 (seam on a side,
+3 mm) meet: there, as at 1 and 2 mm for a circle of radius 24.5, the
+curves on the circle's end meet nearly tangentially at a corner whose
+crease flattens to tangency, and the vertex `BRepOffset_MakeLoops`
+substitutes keeps points on its edges up to 1.4e-4 mm off it. Patch
+1190's `CoverPoints` widens its tolerance to them, so those offsets are
+valid.
 
 ## Reports and tests
 
@@ -338,4 +391,16 @@ by up to 0.3 % on these bodies; with an accuracy, and on a mesh, it agrees.
   square to circles of radii 8, 10 and 14.1 shelled 0.5 to 3 mm with both
   ends removed, the volume of the shell open at both ends against the
   one-end shells and the closed offset for three of them, and a loft
-  leaning in shelled through the geometry facade.
+  leaning in shelled through the geometry facade (invalid on Windows with
+  1200 before the wider search, mitcad#1217). mitcad#1199's lean-in cases
+  in `geometry/tests/test_offset_loft_circle_seam.cpp`, the ctest
+  `geometry.offset_loft_circle_seam_lean_in`: a square to circles of
+  radii 6 (1 to 3 mm), 8 (0.5 to 2 mm) and 14.142 (0.5 mm), the octagon to
+  circles of radii 14 (0.5, 1, 3 mm) and 12 (0.5 to 3 mm), the seam on a
+  side, closed inward offsets with OCCT alone, checked as for 1160.
+- 1200: mitcad#1202 and the same test (the square to a circle of radius 20
+  offset 3 mm, the seam on a side: edges within 0.001 mm, the volume that
+  of the seam-on-a-corner loft's offset within 1e-5; the octagon to a
+  circle of radius 24.5 offset 1 and 2 mm, the seam on a side: valid, the
+  volume that of the seam on a corner within 3e-5; at 3 mm the edges fail
+  without the patch, at 1 and 2 mm the octagon's offsets without 1190).

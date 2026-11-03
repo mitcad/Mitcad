@@ -142,6 +142,11 @@ endif()
 # three.js, embedded for the web viewer (app/web/viewer).
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/three/LICENSE"
   DESTINATION "${MITCAD_LICENSES_DIR}" RENAME three.js-MIT.txt)
+# The bundled material dataset (mitcad#1213), compiled into the model as data.
+install(FILES "${PROJECT_SOURCE_DIR}/third_party/material-properties/LICENSE"
+  DESTINATION "${MITCAD_LICENSES_DIR}" RENAME MaterialData-Apache-2.0.txt)
+install(FILES "${PROJECT_SOURCE_DIR}/third_party/material-properties/NOTICE"
+  DESTINATION "${MITCAD_LICENSES_DIR}" RENAME MaterialData-NOTICE.txt)
 # SolidCraft's format upgrade steps, adapted for the .solidcraft import (third_party/solidcraft).
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/solidcraft/LICENSE-MIT"
   DESTINATION "${MITCAD_LICENSES_DIR}" RENAME SolidCraft-MIT.txt)
@@ -261,6 +266,9 @@ The ISO 3098 type B style technical lettering font of Zefram Cochrane and its co
 three.js r170 (https://threejs.org/), embedded, and in every web page that Export > Web
   page and the project's web viewer write: MIT, Copyright 2010-2024 three.js authors
   (three.js-MIT.txt); the pages carry the licence text with it.
+the material-properties dataset (https://github.com/KittyCAD/material-properties), the bundled
+  material dataset, compiled into the model as data: Apache-2.0, its contributors
+  (MaterialData-Apache-2.0.txt; MaterialData-NOTICE.txt says how it was converted).
 QtKeychain ${MITCAD_QTKEYCHAIN_VERSION} (https://github.com/frankosterfeld/qtkeychain), the live updates'
   credentials in the macOS Keychain: BSD-3-Clause, Copyright (C) 2011-2015 Frank
   Osterfeld and its contributors, linked statically into the mitcad executable

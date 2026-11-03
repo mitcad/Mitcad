@@ -70,4 +70,5 @@ TimelineStrip replaced MITCADHistoryStrip: the history card, with its hover prev
 TitleBar replaced MITCADNativeWindowDelegate: the Qt title row; the AppKit toolbar
 TitleButton replaced MITCADNativeWindowDelegate: the Qt title row's buttons and a Docked panel's float and close buttons; the AppKit toolbar and cards
 TreeRenameEdit replaced renameTree: inline renaming in the Qt trees; AppKit outlines edit their own cells
+VersionWatermark shared the version over the 3D view's lower right (mitcad#1209)
 ViewCubeHomeButton replaced view.home: the Qt view's Home button; the toolbar's Home

@@ -13,7 +13,9 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSettings>
 #include <QStringList>
+#include <QTemporaryDir>
 
 namespace {
 
@@ -549,6 +551,68 @@ int drawingToolsTests() {
   CHECK(templateIndex(choices, QStringLiteral("din")) == -1);
   CHECK(defaultTemplate(QStringLiteral("ANSI_B")) == QStringLiteral("ansi"));
   CHECK(defaultTemplate(QStringLiteral("A4")) == QStringLiteral("iso"));
+  // What Create Drawing opens with (mitcad#1218): ISO while nothing is
+  // kept; ANSI on B portrait, third angle, kept and read back, then opened
+  // with; a kept template no longer offered falls back to ISO with a note.
+  {
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    QSettings settings(directory.filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
+    const QJsonObject listed{
+        {QStringLiteral("templates"),
+         QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("iso")},
+                                {QStringLiteral("name"), QStringLiteral("ISO")},
+                                {QStringLiteral("library"), QStringLiteral("builtin")},
+                                {QStringLiteral("size"), QStringLiteral("A3")},
+                                {QStringLiteral("projection"), QStringLiteral("first_angle")},
+                                {QStringLiteral("choice"), QStringLiteral("iso")}},
+                    QJsonObject{{QStringLiteral("id"), QStringLiteral("ansi")},
+                                {QStringLiteral("name"), QStringLiteral("ANSI")},
+                                {QStringLiteral("library"), QStringLiteral("builtin")},
+                                {QStringLiteral("size"), QStringLiteral("ANSI_B")},
+                                {QStringLiteral("projection"), QStringLiteral("third_angle")},
+                                {QStringLiteral("choice"), QStringLiteral("ansi")}}}}};
+    const QList<TemplateChoice> offered = templateChoices(listed);
+    CHECK(!NewDrawingChoice::load(settings).has_value());
+    StartingChoice start = startingChoice(offered, NewDrawingChoice::load(settings));
+    CHECK(start.source == StartSource::Default && start.choice.choice == QStringLiteral("iso"));
+    CHECK(start.choice.size.isEmpty() && start.choice.projection.isEmpty() && start.note.isEmpty());
+    CHECK(startSourceName(start.source) == QStringLiteral("the default"));
+    NewDrawingChoice kept;
+    kept.choice = QStringLiteral("ansi");
+    kept.size = QStringLiteral("ANSI_B");
+    kept.orientation = QStringLiteral("portrait");
+    kept.projection = QStringLiteral("third_angle");
+    kept.save(settings);
+    const std::optional<NewDrawingChoice> read = NewDrawingChoice::load(settings);
+    CHECK(read.has_value());
+    if (read) {
+      CHECK(read->choice == QStringLiteral("ansi") && read->size == QStringLiteral("ANSI_B"));
+      CHECK(read->orientation == QStringLiteral("portrait") && read->projection == QStringLiteral("third_angle"));
+    }
+    start = startingChoice(offered, read);
+    CHECK(start.source == StartSource::Last && start.choice.choice == QStringLiteral("ansi"));
+    CHECK(start.choice.size == QStringLiteral("ANSI_B") && start.choice.orientation == QStringLiteral("portrait"));
+    CHECK(start.choice.projection == QStringLiteral("third_angle") && start.note.isEmpty());
+    CHECK(startSourceName(start.source) == QStringLiteral("the last choice"));
+    // The simple title block kept: its empty choice is one too.
+    NewDrawingChoice simple;
+    simple.size = QStringLiteral("A4");
+    simple.save(settings);
+    const std::optional<NewDrawingChoice> readSimple = NewDrawingChoice::load(settings);
+    CHECK(readSimple.has_value() && readSimple->choice.isEmpty() && readSimple->size == QStringLiteral("A4"));
+    CHECK(startingChoice(offered, readSimple).source == StartSource::Last);
+    // A project's template kept, Create Drawing in another project: ISO,
+    // as the template brings its sheet, and the note for the log.
+    NewDrawingChoice elsewhere;
+    elsewhere.choice = QStringLiteral("project:company-a3");
+    elsewhere.size = QStringLiteral("A2");
+    start = startingChoice(offered, elsewhere);
+    CHECK(start.source == StartSource::Default && start.choice.choice == QStringLiteral("iso"));
+    CHECK(start.choice.size.isEmpty());
+    CHECK(start.note ==
+          QStringLiteral("Create Drawing: the last template project:company-a3 is not offered; iso instead"));
+  }
   // The views' projections an answer lists, one log line each (mitcad#1033).
   QJsonArray notes;
   notes.append(QJsonObject{{QStringLiteral("view"), 1},

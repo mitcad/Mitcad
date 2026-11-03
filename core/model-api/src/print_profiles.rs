@@ -244,6 +244,11 @@ pub(crate) struct PrintSettingsQuery {
     /// A component by uid (`C0` the root) or name.
     #[serde(default)]
     component: Option<String>,
+    /// A print plate by id or name (mitcad#1050): the settings on it, the
+    /// plate a level between the components and the design; left out, a
+    /// body's or an occurrence's own plate.
+    #[serde(default)]
+    plate: Option<String>,
 }
 
 /// The document's methods of this module used across the model, as an
@@ -500,6 +505,12 @@ impl<K: Kernel> PrintProfilesOps<K> for Document<K> {
 
     fn print_settings_query(&self, query: &PrintSettingsQuery) -> Result<Value, ApiError> {
         let target = self.print_target(query)?;
+        // On a print plate given (mitcad#1050), else the target's own.
+        if let Some(plate) = &query.plate {
+            let index = self.plate_index(plate)?;
+            let plate = &self.print_plates()[index];
+            return Ok(self.print_settings_json_on(&target, Some(plate)));
+        }
         Ok(self.print_settings_json(&target))
     }
 

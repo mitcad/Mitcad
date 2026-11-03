@@ -62,6 +62,14 @@ and the closed offset give (within 0.05 mm3), the inner walls the
 thickness from the outer ones within 1e-6 mm. OCCT's default (not
 adaptive) volume integration of these bodies is off by up to 0.3 % (it is
 exact with an accuracy given, and on a mesh).
+
+Where no piece goes on from within 5 % of the offset of the tangency, a
+piece from within 20 % is taken (mitcad#1217): with patch 1200, the walk
+of the pave filler about the tangency at the corner of a half of the side
+the loft splits (a square to a circle of radius 10, its seam on a side,
+shelled 1 mm through the geometry facade) stopped 8 % of the offset short
+of it on Windows, and the inner wall came out with a wire the wrong way
+round; on Linux it passed.
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 +++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
@@ -212,7 +220,7 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
    {
      return;
    }
-@@ -1612,11 +1629,277 @@
+@@ -1612,11 +1629,293 @@
        aMain       = i;
      }
    }
@@ -239,10 +247,11 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +  {
 +    // The tangency inside the solid or on its end: the branch along the edge
 +    // up to the tangency and its continuation past it, as one edge.
-+    // An edge's curve from its point nearest to the tangency (within the
-+    // neighbourhood) to its end away from it, oriented towards the tangency
++    // An edge's curve from its point nearest to the tangency (within
++    // theNear of it) to its end away from it, oriented towards the tangency
 +    // or away from it; theFarDist the distance of that end.
-+    const auto aPiece = [&](const TopoDS_Edge& theE, const bool theTowards, double& theFarDist) {
++    const auto aPiece = [&](const TopoDS_Edge& theE, const bool theTowards, double& theFarDist,
++                            const double theNear) {
 +      theFarDist = -1.;
 +      double                         aF, aL;
 +      const occ::handle<Geom_Curve>& aCurve = BRep_Tool::Curve(theE, aF, aL);
@@ -260,7 +269,7 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +        aTQ    = aOnC.LowerDistanceParameter();
 +        aDistQ = aOnC.LowerDistance();
 +      }
-+      if (aDistQ > aNear)
++      if (aDistQ > theNear)
 +      {
 +        return occ::handle<Geom_BSplineCurve>();
 +      }
@@ -282,7 +291,7 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +    };
 +    const TopoDS_Edge&             aMainE   = TopoDS::Edge(TrueEdges(aMain));
 +    double                         aMainFar = 0.;
-+    occ::handle<Geom_BSplineCurve> aB1      = aPiece(aMainE, true, aMainFar);
++    occ::handle<Geom_BSplineCurve> aB1      = aPiece(aMainE, true, aMainFar, aNear);
 +    if (aB1.IsNull() || aMainFar <= aNear)
 +    {
 +      return;
@@ -290,38 +299,41 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +    const gp_Vec aDir = gp_Vec(aB1->StartPoint(), aB1->EndPoint()).Normalized();
 +    // The continuation: of all the pieces of the intersection (it may start
 +    // a few microns from the branch's end, not connected to it), the one
-+    // from about the tangency that goes on most nearly in the branch's
-+    // direction.
++    // from about the tangency (within theNear of it) that goes on most
++    // nearly in the branch's direction.
 +    occ::handle<Geom_BSplineCurve> aB2;
 +    TopoDS_Edge                    aB2Edge;
 +    double                         aBest = -2.;
 +    double                         aTol  = BRep_Tool::Tolerance(aMainE);
-+    for (int i = 1; i <= AllEdges.Extent(); i++)
-+    {
-+      if (AllEdges(i).IsSame(aMainE))
++    const auto aSearch = [&](const double theNear) {
++      for (int i = 1; i <= AllEdges.Extent(); i++)
 +      {
-+        continue;
++        if (AllEdges(i).IsSame(aMainE))
++        {
++          continue;
++        }
++        double                               aFar  = 0.;
++        const occ::handle<Geom_BSplineCurve> aCand = aPiece(TopoDS::Edge(AllEdges(i)), false, aFar, theNear);
++        if (aCand.IsNull() || aFar <= theNear)
++        {
++          continue;
++        }
++        const double aCos = gp_Vec(aPQ, aCand->EndPoint()).Normalized().Dot(aDir);
++        if (aCos > aBest)
++        {
++          aBest   = aCos;
++          aB2     = aCand;
++          aB2Edge = TopoDS::Edge(AllEdges(i));
++          aTol    = std::max(BRep_Tool::Tolerance(aMainE), BRep_Tool::Tolerance(TopoDS::Edge(AllEdges(i))));
++        }
 +      }
-+      double                               aFar  = 0.;
-+      const occ::handle<Geom_BSplineCurve> aCand = aPiece(TopoDS::Edge(AllEdges(i)), false, aFar);
-+      if (aCand.IsNull() || aFar <= aNear)
-+      {
-+        continue;
-+      }
-+      const double aCos = gp_Vec(aPQ, aCand->EndPoint()).Normalized().Dot(aDir);
-+      if (aCos > aBest)
-+      {
-+        aBest = aCos;
-+        aB2   = aCand;
-+        aB2Edge = TopoDS::Edge(AllEdges(i));
-+        aTol  = std::max(BRep_Tool::Tolerance(aMainE), BRep_Tool::Tolerance(TopoDS::Edge(AllEdges(i))));
-+      }
-+    }
++    };
++    aSearch(aNear);
 +    // (A single edge that itself runs on along the branch is left as it
 +    // is.)
 +    {
 +      double                               aFar  = 0.;
-+      const occ::handle<Geom_BSplineCurve> aRest = aPiece(aMainE, false, aFar);
++      const occ::handle<Geom_BSplineCurve> aRest = aPiece(aMainE, false, aFar, aNear);
 +      if (!aRest.IsNull() && aFar > aNear && aRest->StartPoint().Distance(aB1->EndPoint()) <= Precision::Confusion()
 +          && gp_Vec(aPQ, aRest->EndPoint()).Normalized().Dot(aDir) > aBest)
 +      {
@@ -334,6 +346,18 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +        aB2Edge.Nullify();
 +        aTol  = BRep_Tool::Tolerance(aMainE);
 +      }
++    }
++    // (Where no piece goes on from the neighbourhood, the pave filler may
++    // have left a longer gap about the tangency, where the offsets are
++    // nearly tangent and its walk stops early: a piece from within four
++    // times as far, 20 % of the offset. With patch 1200's extension of a
++    // half of a side the loft splits, the gap at that half's corner came
++    // out 8 % of the offset on Windows, where the shell was then invalid,
++    // while on Linux it passed (mitcad#1217). The curve tangent to both
++    // pieces bridges it.)
++    if (aB2.IsNull() || aBest < 0.5)
++    {
++      aSearch(4. * aNear);
 +    }
 +    if (aB2.IsNull() || aBest < 0.5)
 +    {
@@ -493,7 +517,7 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
    {
      return;
    }
-@@ -1716,7 +1999,44 @@
+@@ -1716,7 +2015,44 @@
    if (!RefEdge.IsNull())
    {
      CheckIntersFF(aPF.PDS(), RefEdge, TrueEdges);

@@ -23,6 +23,7 @@
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QSlider>
+#include <QSpinBox>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
@@ -252,6 +253,21 @@ public:
     speeds->addLayout(mouseSpeeds);
     speeds->addLayout(scrollSpeeds);
     layout->addLayout(speeds);
+    // How far the arrow keys turn the view while it has the keyboard
+    // (mitcad#1211).
+    auto* turnForm = new QFormLayout;
+    auto* turnStep = new QSpinBox;
+    turnStep->setObjectName(QStringLiteral("navigationTurnStep"));
+    turnStep->setRange(1, 90);
+    turnStep->setSuffix(QStringLiteral("°"));
+    turnStep->setValue(int(std::lround(sanitizeTurnStep(m_settings.turnStep))));
+    turnStep->setToolTip(tr("How far an arrow key turns the 3D view"));
+    turnForm->addRow(tr("Arrow key step:"), turnStep);
+    layout->addLayout(turnForm);
+    connect(turnStep, &QSpinBox::valueChanged, this, [this](int degrees) {
+      m_settings.turnStep = degrees;
+      notify();
+    });
     auto* flags = new QGridLayout;
     addFlag(flags, 0, 0, tr("Zoom about the cursor"), "navigationZoomToCursor", &NavigationSettings::zoomToCursor);
     addFlag(flags, 0, 1, tr("Reverse the zoom direction"), "preferencesReverseZoom", &NavigationSettings::reverseZoom);

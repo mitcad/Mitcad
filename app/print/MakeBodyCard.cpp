@@ -19,8 +19,10 @@
 #include <QWidget>
 #include <QtLogging>
 
+#include "../framework/Command.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
+#include "PrintLibrary.hpp"
 
 namespace mitcad {
 namespace {
@@ -76,6 +78,29 @@ QString makeCardSummary(const MakeCardData& data) {
            data.printer, levelWords(data.printerLevel, data.printerOwner), data.process,
            levelWords(data.processLevel, data.processOwner),
            own.isEmpty() ? QStringLiteral("none") : own.join(QStringLiteral("; ")));
+}
+
+QString makeCardProcessList(const MakeCardData& data) {
+  QStringList groups;
+  QString group;
+  QStringList names;
+  const auto closeGroup = [&groups, &group, &names] {
+    if (!names.isEmpty()) {
+      groups << (group.isEmpty() ? names.join(QStringLiteral(", "))
+                                 : QStringLiteral("%1: %2").arg(group, names.join(QStringLiteral(", "))));
+    }
+    names.clear();
+  };
+  for (int i = 0; i < data.processes.size(); ++i) {
+    const QString itsGroup = i < data.processGroups.size() ? data.processGroups.at(i) : QString();
+    if (i == 0 || itsGroup != group) {
+      closeGroup();
+      group = itsGroup;
+    }
+    names << data.processes.at(i).second;
+  }
+  closeGroup();
+  return groups.join(QStringLiteral(" | "));
 }
 
 MakeBodyCard::MakeBodyCard(QWidget* parent) : QGroupBox(tr("Make"), parent) {
@@ -204,14 +229,22 @@ void MakeBodyCard::rebuild() {
     if (m_data.processId.isEmpty()) {
       m_process->addItem(m_data.process, QString());
     }
-    for (const auto& [id, name] : m_data.processes) {
-      m_process->addItem(name, id);
+    // Under their printers' headings, the body's printer's first
+    // (mitcad#1216).
+    QString heading;
+    for (int i = 0; i < m_data.processes.size(); ++i) {
+      const QString group = i < m_data.processGroups.size() ? m_data.processGroups.at(i) : QString();
+      if (!group.isEmpty() && group != heading) {
+        addComboHeading(m_process, group);
+        heading = group;
+      }
+      m_process->addItem(m_data.processes.at(i).second, m_data.processes.at(i).first);
     }
     m_process->setCurrentIndex(std::max(0, m_process->findData(m_data.processId)));
   }
   connect(m_process, &QComboBox::activated, this, [this](int index) {
     const QString id = m_process->itemData(index).toString();
-    if (!id.isEmpty() && id != m_data.processId) {
+    if (!id.isEmpty() && id != m_data.processId && !id.startsWith(choiceHeadingPrefix())) {
       emit processChosen(id);
     }
   });

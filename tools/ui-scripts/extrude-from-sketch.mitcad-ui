@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# Extrude (E) started from a zoomed sketch on a box's top face, on
+# extrude-from-sketch.json (mitcad#1227, mitcad#1226):
+#   1. The view the sketch is opened from is zoomed in on the box, which
+#      then reaches under the ribbon, the cards and the cube; the sketch is
+#      zoomed in further. E leaves the sketch with the sketch and the box
+#      inside the free area the Extrude card leaves (logged "View for
+#      Extrude from the sketch: fitted; ... (inside)").
+#   2. Extrude's automatic profile is one of the two drawn circles, not the
+#      face's leftover region around them (a key with the face's boundary,
+#      b{...}), and its preview is made.
+# Run by tools/ui-extrude-from-sketch-test.sh (Linux) and
+# tools/ui-windows-extrude-from-sketch-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+capture-view-height fitted
+wheel 50 50 8
+expect-view-zoom ${fitted} in
+mark
+dblclick-logged '^Timeline Sketch2 at '
+expect-log '^Editing sketch F3 \(Sketch2\)'
+capture-view-height sketch
+wheel 55 45 4
+expect-view-zoom ${sketch} in
+
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^View for Extrude from the sketch: fitted; .* \(inside\)$'
+wait-log '^Extrude Profiles: 1 profile '
+expect-no-log '^Extrude Profiles: .*b\{'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/extrude-from-zoomed-sketch.png'
+mark
+key Escape
+expect-log '^Command Extrude cancelled'
+expect-never 'View for Extrude from the sketch: .*\(outside\)|TestDriver: FAIL'

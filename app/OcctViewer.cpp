@@ -29,6 +29,7 @@
 #include "framework/TestSync.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "view/CameraHeight.hpp"
+#include "view/CameraTurn.hpp"
 #include "view/ViewCube.hpp"
 #include "view/ViewTessellation.hpp"
 #include "sketch/PointMarkers.hpp"
@@ -1353,6 +1354,18 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   images.SetEnableDepthTest(false);
   images.SetClearDepth(false);
   m_viewer->InsertLayerBefore(m_imageLayer, images, m_sketchHaloLayer);
+  // The sketch regions on offer while an input takes profiles
+  // (setProfilesFirst, mitcad#1222), with their selection highlights and
+  // hover: through the bodies, as the images, so that a region whose plane
+  // lies inside or behind a body shows where a click picks it. Depth writes
+  // stay on, as the images' do, so that the layer stays in the bodies'
+  // group for picking (PickContext's setPickAhead orders the regions
+  // there); the see-through faces are blended and write no depth anyway.
+  Graphic3d_ZLayerSettings profilesOnOffer;
+  profilesOnOffer.SetName("profiles on offer");
+  profilesOnOffer.SetEnableDepthTest(false);
+  profilesOnOffer.SetClearDepth(false);
+  m_viewer->InsertLayerAfter(m_profileLayer, profilesOnOffer, m_imageLayer);
   // A feature's input lines where they were (mitcad#957), in two layers of
   // their own after the top layer and the points' layer, before the
   // topmost one. First their dashed copy, without depth: over the bodies,
@@ -1481,6 +1494,27 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
             m_pickInfo.find(dynamic_cast<const AIS_InteractiveObject*>(owner->Selectable().get()));
         return info != m_pickInfo.end() && info->second.body != nullptr;
       });
+  // The sketch regions on offer before the faces, bodies and planes in
+  // front of them while an input takes profiles (mitcad#1222,
+  // setProfilesFirst).
+  mitcad::setPickAhead(
+      m_context,
+      [this](const occ::handle<SelectMgr_EntityOwner>& owner) {
+        if (!m_profilesFirst || owner.IsNull()) {
+          return false;
+        }
+        const auto info =
+            m_pickInfo.find(dynamic_cast<const AIS_InteractiveObject*>(owner->Selectable().get()));
+        return info != m_pickInfo.end() && info->second.item.kind == SelectKind::Profile;
+      },
+      [this](const occ::handle<SelectMgr_EntityOwner>& owner) {
+        if (!m_profilesFirst || owner.IsNull()) {
+          return false;
+        }
+        const auto item = itemFor(owner);
+        return item && (item->kind == SelectKind::Face || item->kind == SelectKind::Body ||
+                        item->kind == SelectKind::Plane);
+      });
   mitcad::setPickSources(m_context, [this](const occ::handle<SelectMgr_EntityOwner>& owner)
       -> const SelectMgr_SelectableObject* {
     const auto* selectable = owner->Selectable().get();
@@ -1520,6 +1554,9 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   // Linked to OCCT's own hover style for the aspects it does not set.
   m_sketchPointHover = new Prs3d_Drawer();
   m_sketchPointHover->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
+  // The hover of a region on offer, in the regions' layer (mitcad#1222).
+  m_profileHover = new Prs3d_Drawer();
+  m_profileHover->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
   setHoverColor(viewColor(ColorRole::Hover, false));
   // OCCT's own selection is cleared as soon as it is made
   // (OnSelectionChanged); should it show, it looks as setHighlights' does.
@@ -2454,6 +2491,7 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
           m_context->Redisplay(existing->second, false);
         }
       }
+      placeProfile(existing->second);
       m_profiles.emplace(key, existing->second);
       shown.erase(existing);
       continue;
@@ -2468,6 +2506,7 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
       styleProfile(profile); // pale outside the active component (mitcad#420)
     }
     display(profile, AIS_Shaded, std::move(info), true);
+    placeProfile(profile); // through the bodies while an input takes profiles (mitcad#1222)
     m_profiles.emplace(key, profile);
   }
   for (const auto& [key, profile] : shown) {
@@ -2805,11 +2844,44 @@ void OcctViewer::styleProfile(const occ::handle<AIS_Shape>& profile) const {
       inactive ? inactiveColor(kSketchColor, m_paper) : kSketchColor, Aspect_TOL_SOLID, 2.0));
 }
 
+Graphic3d_ZLayerId OcctViewer::profileHighlightLayer() const {
+  return m_profilesFirst ? m_profileLayer : Graphic3d_ZLayerId_Top;
+}
+
+void OcctViewer::placeProfile(const occ::handle<AIS_Shape>& profile) {
+  // Its hover in the regions' layer too, else OCCT's own (the top layer,
+  // which a body in front hides).
+  profile->SetDynamicHilightAttributes(m_profilesFirst ? m_profileHover : occ::handle<Prs3d_Drawer>());
+  const Graphic3d_ZLayerId layer = m_profilesFirst ? m_profileLayer : Graphic3d_ZLayerId_Default;
+  if (profile->ZLayer() != layer) {
+    m_context->SetZLayer(profile, layer);
+  }
+}
+
+void OcctViewer::setProfilesFirst(bool on) {
+  if (on == m_profilesFirst) {
+    return;
+  }
+  m_profilesFirst = on;
+  for (const auto& [key, profile] : m_profiles) {
+    placeProfile(profile);
+  }
+  for (const occ::handle<AIS_Shape>& highlight : m_profileHighlights) {
+    m_context->SetZLayer(highlight, profileHighlightLayer());
+  }
+  // The hover drawn before belongs to the old layer.
+  m_context->ClearDetected(false);
+  qDebug().noquote() << QStringLiteral("View profiles first: %1")
+                            .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  sceneChanged();
+}
+
 void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) {
   for (const occ::handle<AIS_Shape>& highlight : m_highlights) {
     remove(highlight);
   }
   m_highlights.clear();
+  m_profileHighlights.clear();
   if (&highlights != &m_shownHighlights) {
     m_shownHighlights = highlights;
   }
@@ -2995,9 +3067,17 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
     } else {
       // A light tint stays with the bodies, under the highlights on top;
       // a feature's input line in sight over its dashed copy (mitcad#957).
+      // A selected region with the regions, over them, where they are
+      // drawn through the bodies (mitcad#1222).
+      const bool profileOver = kind == SelectKind::Profile && !highlight.light && !highlight.inputLines;
       m_context->SetZLayer(object, highlight.light        ? Graphic3d_ZLayerId_Default
                                    : highlight.inputLines ? m_inputLineSightLayer
+                                   : profileOver          ? profileHighlightLayer()
                                                           : Graphic3d_ZLayerId_Top);
+      if (profileOver) {
+        m_context->SetDisplayPriority(object, Graphic3d_DisplayPriority_Above);
+        m_profileHighlights.push_back(object);
+      }
       if (kind == SelectKind::SketchCurve) {
         ++sketchCurveHighlights;
       }
@@ -3240,6 +3320,10 @@ void OcctViewer::setHoverColor(const QColor& color) {
   if (!m_sketchPointHover.IsNull()) {
     setHighlightStyle(m_sketchPointHover, occtColor(color), kHoverTransparency);
     m_sketchPointHover->SetZLayer(m_sketchPointLayer);
+  }
+  if (!m_profileHover.IsNull()) {
+    setHighlightStyle(m_profileHover, occtColor(color), kHoverTransparency);
+    m_profileHover->SetZLayer(m_profileLayer);
   }
   m_hoverColor = color;
   if (m_browserHover.shown) {
@@ -4054,6 +4138,13 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
   if (!m_windowPick && items.size() == 1 && mitcad::pickPrioritized(m_context) && !outsideActive(items.first())) {
     qDebug().noquote() << QStringLiteral("Pick priority: active %1").arg(m_activeScope.name);
   }
+  // A click that took a sketch region before a nearer face, body or plane
+  // (mitcad#1222: a region inside a body).
+  if (!m_windowPick && items.size() == 1 && items.first().kind == SelectKind::Profile &&
+      mitcad::pickMovedAhead(m_context)) {
+    qDebug().noquote() << QStringLiteral("Pick priority: profile %1/%2 before a nearer face")
+                              .arg(items.first().owner, items.first().name);
+  }
   m_context->MainSelector()->AllowOverlapDetection(false);
   m_windowSelecting = false; // what follows is a hover or a click again
   m_clickPickedNothing = !m_windowPick && items.isEmpty();
@@ -4240,23 +4331,7 @@ bool OcctViewer::bringClearOfPanels(const Bnd_Box& box, bool fit) {
   if (box.IsVoid() || (!fit && m_covered.empty()) || width() <= 0 || height() <= 0) {
     return false;
   }
-  // The box's corners on the screen.
-  double x0 = 0.0;
-  double y0 = 0.0;
-  double z0 = 0.0;
-  double x1 = 0.0;
-  double y1 = 0.0;
-  double z1 = 0.0;
-  box.Get(x0, y0, z0, x1, y1, z1);
-  QRectF shown;
-  for (const double x : {x0, x1}) {
-    for (const double y : {y0, y1}) {
-      for (const double z : {z0, z1}) {
-        const QPointF at = toWidgetF(gp_Pnt(x, y, z));
-        shown = shown.isNull() ? QRectF(at, QSizeF(0.001, 0.001)) : shown.united(QRectF(at, QSizeF(0.001, 0.001)));
-      }
-    }
-  }
+  const QRectF shown = screenBox(box);
   const QRectF free = freeArea().adjusted(12, 12, -12, -12);
   if (free.isEmpty() || free.contains(shown)) {
     return false;
@@ -4299,6 +4374,75 @@ bool OcctViewer::bringClearOfPanels(const Bnd_Box& box, bool fit) {
                             .arg(qRound(shift.y()));
   moveCamera(moved);
   return true;
+}
+
+bool OcctViewer::showInFreeArea(const Bnd_Box& box, const QString& what) {
+  if (box.IsVoid() || width() <= 0 || height() <= 0) {
+    return false;
+  }
+  // Where the view is going: an animation ended, a pending fit made.
+  settleCamera();
+  // The free area below the cube where the cube reaches into it (the
+  // Docked layout, a tall card on the right that moved the cube left).
+  QRectF area = freeArea();
+  const QRectF cube = cubeArea();
+  if (m_context->IsDisplayed(m_orientationCube) && cube.intersects(area)) {
+    area.setTop(std::max(area.top(), cube.bottom() + 1.0));
+  }
+  if (area.height() < 0.3 * height()) {
+    area = freeArea(); // a low view keeps the cards' free area
+  }
+  const QRectF inside = area.adjusted(12, 12, -12, -12);
+  bool fitted = false;
+  if (!inside.contains(screenBox(box))) {
+    occ::handle<Graphic3d_Camera> camera = new Graphic3d_Camera();
+    camera->Copy(m_view->Camera());
+    if (m_view->FitMinMax(camera, box, 0.15, 10.0 * Precision::Confusion())) {
+      keepEyeOffCentre(*camera);
+      fitToArea(camera, area);
+      AbortViewAnimation();
+      m_fitPending = false;
+      m_framingNewDesign = false;
+      m_view->Camera()->Copy(camera);
+      m_view->Invalidate();
+      cameraMoved();
+      requestFrame();
+      fitted = true;
+    }
+  }
+  // In window coordinates, as the UI tests' other places.
+  const QPointF corner = mapTo(window(), QPoint(0, 0));
+  const QRectF shown = screenBox(box).translated(corner);
+  const QRectF free = inside.translated(corner);
+  const auto place = [](const QPointF& at) {
+    return QStringLiteral("%1,%2").arg(qRound(at.x())).arg(qRound(at.y()));
+  };
+  qDebug().noquote() << QStringLiteral("View for %1: %2; the box at %3 to %4, the area at %5 to %6 (%7)")
+                            .arg(what, fitted ? QStringLiteral("fitted") : QStringLiteral("kept"),
+                                 place(shown.topLeft()), place(shown.bottomRight()), place(free.topLeft()),
+                                 place(free.bottomRight()),
+                                 free.contains(shown) ? QStringLiteral("inside") : QStringLiteral("outside"));
+  return fitted;
+}
+
+QRectF OcctViewer::screenBox(const Bnd_Box& box) const {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  QRectF shown;
+  for (const double x : {x0, x1}) {
+    for (const double y : {y0, y1}) {
+      for (const double z : {z0, z1}) {
+        const QPointF at = toWidgetF(gp_Pnt(x, y, z));
+        shown = shown.isNull() ? QRectF(at, QSizeF(0.001, 0.001)) : shown.united(QRectF(at, QSizeF(0.001, 0.001)));
+      }
+    }
+  }
+  return shown;
 }
 
 Bnd_Box OcctViewer::bodiesBox() const {
@@ -4472,25 +4616,35 @@ void OcctViewer::fitToFreeArea(const occ::handle<Graphic3d_Camera>& camera) cons
   if (m_covered.empty() || width() <= 0 || height() <= 0) {
     return;
   }
-  const QRectF free = freeArea();
-  const qreal zoomOut = std::max(width() / free.width(), height() / free.height());
+  fitToArea(camera, freeArea());
+}
+
+void OcctViewer::fitToArea(const occ::handle<Graphic3d_Camera>& camera, const QRectF& area) const {
+  if (width() <= 0 || height() <= 0 || area.isEmpty()) {
+    return;
+  }
+  const qreal zoomOut = std::max(width() / area.width(), height() / area.height());
   if (camera->IsOrthographic()) {
     camera->SetScale(camera->Scale() * zoomOut);
   } else {
     camera->SetDistance(camera->Distance() * zoomOut);
   }
-  const gp_Vec move = freeAreaShift(camera);
+  const gp_Vec move = areaShift(camera, area);
   camera->SetEyeAndCenter(camera->Eye().Translated(move), camera->Center().Translated(move));
 }
 
 gp_Vec OcctViewer::freeAreaShift(const occ::handle<Graphic3d_Camera>& camera) const {
+  return areaShift(camera, freeArea());
+}
+
+gp_Vec OcctViewer::areaShift(const occ::handle<Graphic3d_Camera>& camera, const QRectF& area) const {
   if (width() <= 0 || height() <= 0) {
     return gp_Vec(0.0, 0.0, 0.0);
   }
-  // The model sits in the middle of the view; the middle of the free area
-  // is dx, dy pixels from there. Moving the camera the other way moves the
+  // The model sits in the middle of the view; the middle of the area is
+  // dx, dy pixels from there. Moving the camera the other way moves the
   // model there.
-  const QPointF shift = freeArea().center() - QPointF(width() / 2.0, height() / 2.0);
+  const QPointF shift = area.center() - QPointF(width() / 2.0, height() / 2.0);
   const gp_XYZ extent = camera->ViewDimensions(camera->Distance());
   const double perPixel = extent.Y() / height();
   const std::optional<gp_Dir> right = crossedDir(camera->Direction(), camera->Up());
@@ -4698,6 +4852,7 @@ void OcctViewer::setOverlayInsets(const QMargins& insets) {
   }
   m_loggedCamera.clear(); // the cube's places moved
   m_restTimer->start();
+  emit overlayInsetsChanged();
 }
 
 void OcctViewer::placeHomeButton() {
@@ -4863,14 +5018,15 @@ void OcctViewer::logCamera() {
                            .arg(vectorText(current->Direction().XYZ()), vectorText(current->Up().XYZ()),
                                 isPerspective() ? QStringLiteral("perspective")
                                                 : QStringLiteral("orthographic"));
-  // The grid's spacing once it changes (UI tests check it against the zoom).
+  // The grid's spacing once it changes (UI tests check it against the zoom),
+  // in the design's unit (mitcad#1210).
   const double step = m_gridShown ? gridStep() : 0.0;
   if (step != m_loggedGridStep) {
     m_loggedGridStep = step;
     if (step > 0.0) {
-      qDebug().noquote() << QStringLiteral("Layout grid %1 mm, major %2 mm, %3 px apart")
-                                .arg(step)
-                                .arg(step * kLayoutGridMajor)
+      qDebug().noquote() << QStringLiteral("Layout grid %1, major %2, %3 px apart")
+                                .arg(gridSpacingText(step, m_gridUnit),
+                                     gridSpacingText(step * layoutGridMajor(step, m_gridUnit), m_gridUnit))
                                 .arg(step * height() / current->ViewDimensions().Y(), 0, 'f', 1);
     }
   }
@@ -5289,6 +5445,21 @@ void OcctViewer::setGrid(bool shown, double step) {
   m_gridShown = shown;
   m_gridStep = step;
   updateGrid(true);
+  // The spacing is logged again once the camera rests (UI tests read it).
+  m_loggedGridStep = -1.0;
+  cameraMoved();
+  sceneChanged();
+}
+
+void OcctViewer::setGridUnit(const QString& unit) {
+  const QString name = unit.isEmpty() ? QStringLiteral("mm") : unit;
+  if (name == m_gridUnit) {
+    return;
+  }
+  m_gridUnit = name;
+  updateGrid(true);
+  m_loggedGridStep = -1.0; // logged again in the new unit
+  cameraMoved();
   sceneChanged();
 }
 
@@ -5305,8 +5476,9 @@ double OcctViewer::gridStep() const {
   if (m_gridStep > 0.0) {
     return m_gridStep;
   }
-  // Logical pixels, as the screen distances of sketch mode.
-  return layoutGridStep(height() / m_view->Camera()->ViewDimensions().Y());
+  // Logical pixels, as the screen distances of sketch mode; the series of
+  // the design's unit (mitcad#1210).
+  return layoutGridStep(height() / m_view->Camera()->ViewDimensions().Y(), m_gridUnit);
 }
 
 void OcctViewer::updateGrid(bool force) {
@@ -5324,6 +5496,7 @@ void OcctViewer::updateGrid(bool force) {
   LayoutGrid::Lines lines;
   lines.step = gridStep();
   lines.minor = lines.step * perMm >= 4.0; // a fixed step far out: majors only
+  lines.major = layoutGridMajor(lines.step, m_gridUnit);
   // The view's middle on the grid plane, in the plane's coordinates.
   gp_Trsf toPlane;
   toPlane.SetTransformation(m_gridPlane);
@@ -5333,8 +5506,8 @@ void OcctViewer::updateGrid(bool force) {
   // of the plane), and are rebuilt when the view nears their edge.
   const LayoutGrid::Lines& drawn = m_grid->lines();
   const double offset = std::max(std::abs(middle.X() - drawn.centreX), std::abs(middle.Y() - drawn.centreY));
-  const double major = lines.step * kLayoutGridMajor;
-  const bool rebuild = force || lines.step != drawn.step || lines.minor != drawn.minor ||
+  const double major = lines.step * lines.major;
+  const bool rebuild = force || lines.step != drawn.step || lines.minor != drawn.minor || lines.major != drawn.major ||
                        drawn.extent - offset < across ||
                        drawn.extent > std::max(8.0 * across, 2.0 * major);
   if (!rebuild && m_context->IsDisplayed(m_grid)) {
@@ -5475,6 +5648,31 @@ void OcctViewer::setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& o
     // background, not the widgets' palette (mitcad#1041).
     setEdgeStyle(m_buildOutside, viewRole(ColorRole::WarningBorder, m_backgroundDark), 2.0, Aspect_TOL_DASH);
     m_context->Display(m_buildOutside, AIS_WireFrame, -1, false);
+  }
+  sceneChanged();
+}
+
+void OcctViewer::setPlateView(const TopoDS_Shape& bed, const TopoDS_Shape& bodies) {
+  for (occ::handle<AIS_Shape>* shown : {&m_plateBed, &m_plateBodies}) {
+    if (!shown->IsNull()) {
+      m_context->Remove(*shown, false);
+      shown->Nullify();
+    }
+  }
+  if (!bed.IsNull()) {
+    m_plateBed = new AIS_Shape(bed);
+    setEdgeStyle(m_plateBed, viewRole(ColorRole::PrintBed, m_backgroundDark), 2.0);
+    m_context->Display(m_plateBed, AIS_WireFrame, -1, false);
+  }
+  if (!bodies.IsNull()) {
+    m_plateBodies = new AIS_Shape(bodies);
+    // The bodies' own triangulations (the shapes are moved, not copied):
+    // never meshed again here.
+    if (hasAnyTriangulation(bodies)) {
+      m_plateBodies->Attributes()->SetAutoTriangulation(false);
+    }
+    m_plateBodies->SetColor(viewRole(ColorRole::Body, m_backgroundDark));
+    m_context->Display(m_plateBodies, AIS_Shaded, -1, false);
   }
   sceneChanged();
 }
@@ -6632,6 +6830,30 @@ void OcctViewer::rollView(double degrees) {
   camera->SetUp(camera->Up().Rotated(gp_Ax1(gp_Pnt(), camera->Direction()),
                                      -kRollDirection * qDegreesToRadians(degrees)));
   camera->OrthogonalizeUp();
+  m_view->Invalidate();
+  cameraMoved();
+  navigationStep();
+  requestFrame();
+}
+
+void OcctViewer::turnView(double right, double up) {
+  if (m_view->Window().IsNull() || (right == 0.0 && up == 0.0)) {
+    return;
+  }
+  AbortViewAnimation();
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  try {
+    // About the centre a mouse orbit turns about; with a constrained
+    // orbit about Z, which then stays up.
+    const gp_Pnt centre = GravityPoint(m_context, m_view);
+    const gp_Dir vertical = m_navigation.constrainedOrbit ? gp_Dir(0.0, 0.0, 1.0) : camera->Up();
+    if (!turnCamera(*camera, centre, vertical, right, up)) {
+      return;
+    }
+  } catch (const Standard_Failure& failure) {
+    qWarning().noquote() << QStringLiteral("View turn failed: %1").arg(QString::fromUtf8(failure.what()));
+    return;
+  }
   m_view->Invalidate();
   cameraMoved();
   navigationStep();

@@ -31,8 +31,25 @@
 //!
 //! Codex's `init` adds `resume_failed`: the thread to resume was gone and a
 //! new one started.
+//!
+//! The API agents (phase 2, [`api`]: the Anthropic API, Ollama, LM Studio,
+//! a custom OpenAI-compatible endpoint) run their tool loop in MitCad: their
+//! stream adds `mcp` (`line`: for MitCad's own listener, on the chat's
+//! connection), `http` (`id`, `method`, `url`, `headers`, `auth`, `body`: a
+//! request to the model's service), `http_abort` (`id`) and `transcript`
+//! (`session`, `content`: the conversation to keep for resuming); its
+//! `init` adds `resume_failed` too, and a `turn_end` whose model cannot call
+//! tools has the subtype `no_tools`.
+//!
+//! A custom command that speaks the Agent Client Protocol (mitcad#1198,
+//! [`acp`]) is driven as Codex is (`start`, `message`, `interrupt`; `write`,
+//! `end`, `models`); its `init` adds `resume_failed`, and its turns end with
+//! the protocol's stop reasons as subtypes (`end_turn`, `cancelled`,
+//! `max_tokens`, `max_turn_requests`, `refusal`).
 
 mod account;
+mod acp;
+mod api;
 mod claude;
 mod codex;
 mod groups;
@@ -41,10 +58,16 @@ mod policy;
 mod undo;
 
 #[cfg(test)]
+mod acp_tests;
+#[cfg(test)]
+mod api_tests;
+#[cfg(test)]
 mod codex_tests;
 #[cfg(test)]
 mod tests;
 
+pub use acp::{ACP_PROTOCOL_VERSION, AcpStream};
+pub use api::ApiStream;
 pub use claude::{CLAUDE_MINIMUM_VERSION, ClaudeStream};
 pub use codex::{CODEX_MINIMUM_VERSION, CodexStream};
 
@@ -59,36 +82,50 @@ pub const MAX_RESULT_CHARS: usize = 2000;
 pub enum Stream {
     Claude(ClaudeStream),
     Codex(Box<CodexStream>),
+    Api(Box<ApiStream>),
+    Acp(Box<AcpStream>),
 }
 
 impl Stream {
-    /// The stream of the agent named `agent` (`claude`, `codex`).
+    /// The stream of the agent named `agent` (`claude`, `codex`, `acp`; the
+    /// API agents').
     pub fn new(agent: &str) -> Result<Stream, String> {
         match agent {
             "claude" => Ok(Stream::Claude(ClaudeStream::default())),
             "codex" => Ok(Stream::Codex(Box::default())),
-            other => Err(format!("unknown chat agent “{}”", crate::echoed(other))),
+            "acp" => Ok(Stream::Acp(Box::default())),
+            other => match ApiStream::new(other) {
+                Some(stream) => Ok(Stream::Api(Box::new(stream))),
+                None => Err(format!("unknown chat agent “{}”", crate::echoed(other))),
+            },
         }
     }
 
     /// The panel events of one output line (without its newline): none, one
-    /// or several.
+    /// or several. An API agent's lines are its MCP connection's: its account
+    /// failures come from the model's service ([`api`]).
     pub fn feed(&mut self, line: &str) -> Vec<Value> {
         let events = match self {
             Stream::Claude(stream) => stream.feed(line),
             Stream::Codex(stream) => stream.feed(line),
+            Stream::Acp(stream) => stream.feed(line),
+            Stream::Api(stream) => return stream.feed(line),
         };
         account::events(line, events)
     }
 
-    /// A control of a stream that holds a protocol's state (Codex: `start`,
-    /// `message`, `interrupt`): its panel events, `write` among them. Claude
+    /// A control of a stream that holds a protocol's state (Codex and a
+    /// custom ACP agent: `start`,
+    /// `message`, `interrupt`; an API agent: those and `http_line`,
+    /// `http_end`): its panel events, `write` among them. Claude
     /// Code's stream has none (its command line and messages are
     /// [`request`]s).
     pub fn control(&mut self, request: &Value) -> Result<Vec<Value>, String> {
         match self {
             Stream::Claude(_) => Err("Claude Code's stream takes no controls".to_owned()),
             Stream::Codex(stream) => stream.control(request),
+            Stream::Api(stream) => stream.control(request),
+            Stream::Acp(stream) => stream.control(request),
         }
     }
 }
@@ -156,6 +193,20 @@ pub(crate) fn pictures(request: &Value) -> Result<Vec<(&str, &str)>, String> {
 ///   `panel`, `message` → `merge`, `depth`, `label`, `reason`
 /// - `history_entry`: `entry` → `line`
 /// - `history_read`: `content`, `limit` → `entries`, `sessions`, `skipped`
+/// - `api_presets` → `agents` (`id`, `name`, `url`, `key`, `page`): the API
+///   agents and their preset addresses
+/// - `api_endpoint`: `url` → `url` (checked: https, or http to this
+///   computer only), `local`; an error for another address
+/// - `api_models_request`: `agent`, `url` → `url`, `headers`, `auth`
+/// - `api_models`: `agent`, `status`, `body`, `error` → `ok`, `models`
+///   (`id`, `name`), `account`, `text`
+/// - `api_default_models`: `agent` → `models` offered before the service
+///   listed its own
+/// - `acp_command`: `command`, `arguments` (one line) → `program`,
+///   `arguments` (its words): the custom agent's command line (mitcad#1198)
+/// - `acp_handshake` → `line`: the setup check's `initialize` request
+/// - `acp_handshake_answer`: `output` (what the command wrote) → `state`
+///   (`waiting`, `ok`, `failed`), `agent` (its name and version), `reason`
 /// - `tool_groups`: `entries` (the panel's: `role`; a call's `name`,
 ///   `summary`, `state` or `error`), `index` (optional) → `groups` (`first`,
 ///   `last`, `count`, `failed`, `running`, `state`, `latest`, `head`) and
@@ -202,6 +253,17 @@ pub fn request(request: &Value) -> Result<Value, String> {
                 .map_or(history::DEFAULT_LIMIT, |limit| limit as usize),
         )),
         "tool_groups" => Ok(groups::groups(request)),
+        "api_presets" => Ok(api::presets()),
+        "api_endpoint" => {
+            let url = api::endpoint(text_field(request, "url"))?;
+            Ok(json!({"local": api::local(&url), "url": url}))
+        }
+        "api_models_request" => api::models_request(request),
+        "api_models" => Ok(api::models(request)),
+        "api_default_models" => Ok(api::offered(text_field(request, "agent"))),
+        "acp_command" => acp::command(request),
+        "acp_handshake" => Ok(acp::handshake()),
+        "acp_handshake_answer" => Ok(acp::handshake_answer(text_field(request, "output"))),
         other => Err(format!("unknown chat op “{}”", crate::echoed(other))),
     }
 }

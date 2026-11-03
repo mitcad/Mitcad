@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/LengthUnits.cpp app/framework/CommandSession.cpp app/browser/BrowserPanel.cpp
 # check-all sources: app/commands/InspectCommands.cpp app/commands/ExtrudeCommands.cpp tools/cli
+# check-all sources: app/view/GridSpacing.cpp app/view/ViewController.cpp app/LayoutGrid.cpp app/OcctViewer.cpp tools/ui-scripts/units-inch.mitcad-ui
 # Lengths in the design's unit (mitcad#1165) through the real UI, on a
 # design in inches that mitcad-cli makes (tools/cli/tests/units_inch.json):
 # the Browser's sheet-rules row shows 0.05 in and R 0.1 in, Extrude opens
 # with its default 10 mm as 0.5 in, Measure shows a top's area as 2 in² and
-# two parallel tops 1 in apart. The steps are
+# two parallel tops 1 in apart; the layout grid in inches (mitcad#1210):
+# Grid Settings shows the fixed spacing in inches, the automatic grid steps
+# through the inch series when zooming, and after the design set to mm the
+# grid is metric again with the fixed spacing kept. The steps are
 # tools/ui-scripts/units-inch.mitcad-ui, which
 # tools/ui-windows-units-inch-test.ps1 runs on Windows.
 #
@@ -31,5 +35,5 @@ for _ in $(seq 1 600); do
 done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'units in inches driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
-ui_expect_log 'TestDriver: done' 'the sheet-rules row, Extrude and Measure in inches'
+ui_expect_log 'TestDriver: done' 'the sheet-rules row, Extrude, Measure and the layout grid in inches'
 ui_finish 'UI lengths in the design unit'

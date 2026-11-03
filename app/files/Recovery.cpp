@@ -25,6 +25,7 @@
 #include <QtLogging>
 
 #include "../framework/Dialogs.hpp"
+#include "../framework/PanelTree.hpp"
 #include "Autosave.hpp"
 
 namespace mitcad {
@@ -218,6 +219,7 @@ std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSes
   text->setWordWrap(true);
   layout->addWidget(text);
   auto* table = new QTreeWidget;
+  panel::setCompactIndentation(table, panel::Indent::Flat);
   table->setObjectName(QStringLiteral("recoverySessions"));
   table->setRootIsDecorated(false);
   table->setAllColumnsShowFocus(true);

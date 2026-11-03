@@ -826,10 +826,19 @@ fn resolve_in(
             }
         }
     }
-    // The farthest first, each nearer one's values over it.
+    // The farthest first, each nearer one's values over it; but a nearer
+    // preset's empty `compatible_printers` names no printer, so that the
+    // printers of the preset it inherits from stay its own (mitcad#1216:
+    // the printers a process or filament is for).
     let mut merged = Map::new();
     for map in chain.into_iter().rev() {
         for (key, value) in map {
+            if key == "compatible_printers"
+                && compatible_of(Some(&value)).is_empty()
+                && !compatible_of(merged.get(&key)).is_empty()
+            {
+                continue;
+            }
             merged.insert(key, value);
         }
     }

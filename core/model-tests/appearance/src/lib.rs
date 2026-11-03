@@ -11,6 +11,7 @@
 mod appearance_tests;
 mod binding_tests;
 mod copy_binding_tests;
+mod material_properties_tests;
 mod material_tests;
 mod mesh_export_tests;
 mod properties_tests;

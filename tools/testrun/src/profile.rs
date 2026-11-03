@@ -194,8 +194,8 @@ pub struct Defaults {
 }
 
 /// What a test with no history is taken to be, by its name and labels.
-/// (The cargo test builds run one at a time, RUN_SERIAL on macOS; their
-/// own history soon replaces the guess.)
+/// Cargo test builds share their compiler lock; the native macOS runner
+/// also reserves a conservative compiler floor (`macos_policy`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// `app.ui-*`, or labelled `ui`: 1 GiB, 1 core.

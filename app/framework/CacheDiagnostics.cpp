@@ -22,6 +22,7 @@
 
 #include "DisplayMeshes.hpp"
 #include "Json.hpp"
+#include "PanelTree.hpp"
 #include "ResultCache.hpp"
 #include "mitcad_bridge/lib.h"
 
@@ -49,6 +50,7 @@ QString ofLimit(double bytes, const QJsonValue& limit) {
 
 QTreeWidget* table(const QStringList& columns) {
   auto* tree = new QTreeWidget;
+  panel::setCompactIndentation(tree, panel::Indent::Flat);
   tree->setColumnCount(static_cast<int>(columns.size()));
   tree->setHeaderLabels(columns);
   tree->setRootIsDecorated(false);

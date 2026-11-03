@@ -4570,7 +4570,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.set_fixed` | `entities`, `fixed` (default true) | |
 | `sketch.drag` | `entity`: a point with `to` [x, y], or a curve with `by` [dx, dy] or `radius`; or `entities` (points and curves) with `by` | pulls as far as the constraints allow; a derived offset's curve or point pulls its source chain by as much; `entities` drags a selection together (see [Dragging a selection](#dragging-a-selection)) |
 | `sketch.move` | `entities`, `by` [dx, dy] or `rotate` {`center` (point input), `angle`}, `copy` | a move keeps the constraints (the points are dragged); a copy copies the constraints among the entities; a derived offset's curves move their source chain, their copies are ordinary curves; `made` lists the copies |
-| `sketch.trim` | `curve`, `at` [x, y] | removes the piece around `at` between the curves crossing it; a curve nothing crosses is deleted; a cut end on an existing point becomes that point, so that both curves of a crossing trimmed there share one end; a projected or computed point holds it with a point-to-point `coincident` instead, and elsewhere (a T) the end is a new point on the crossing curve (mitcad#1191, see [Points that become one](#points-that-become-one)); of a closed spline the rest becomes a spline by control points (mitcad#783); refused for a projected curve (linked or not: `sketch.convert_projected` first, mitcad#357, also for `sketch.extend`, `sketch.fillet` and `sketch.chamfer`) and for a curve a derived offset computes; a trim or an extension that ends on a derived offset's curve ends in a plain point, since its curves take no constraints (mitcad#361) |
+| `sketch.trim` | `curve`, `at` [x, y] | removes the piece around `at` between the curves crossing it; a curve nothing crosses is deleted; a cut end on an existing point becomes that point, so that both curves of a crossing trimmed there share one end; a projected or computed point holds it with a point-to-point `coincident` instead, and elsewhere (a T) the end is a new point on the crossing curve (mitcad#1191, see [Points that become one](#points-that-become-one)); a joined end that meets a curve there tangentially gets a `tangent` to it, and a `tangent` that held the cut-off end to a curve no longer touching it then goes (mitcad#1220, same section); of a closed spline the rest becomes a spline by control points (mitcad#783); refused for a projected curve (linked or not: `sketch.convert_projected` first, mitcad#357, also for `sketch.extend`, `sketch.fillet` and `sketch.chamfer`) and for a curve a derived offset computes; a trim or an extension that ends on a derived offset's curve ends in a plain point, since its curves take no constraints (mitcad#361) |
 | `sketch.extend` | `curve`, `at` | extends the end nearest `at` (a line or an arc) to the next curve; an arc extended all the way round becomes a circle; reaching an existing point joins it (a shared end; a projected or computed point holds the end with a point-to-point `coincident` instead), elsewhere the end lies on the curve; result `joined`: the point reached, when it joined one (see [Points that become one](#points-that-become-one)) |
 | `sketch.insert_spline_point` | `curve` (a spline), `at` [x, y] | a point on the spline where it is nearest `at`: a fit point between its neighbours, or a control point by knot insertion that keeps the shape exactly; result `made`: the new point; see [Insert Point on a spline](#insert-point-on-a-spline) (mitcad#836) |
 | `sketch.fillet` | `a`, `b` (lines, or a circular arc and a line or arc that end together, mitcad#1192), or `curves` (lines and arcs) and/or `points` (corners) for several corners; `radius` (value) | a tangent arc with a radius dimension; the corner stays as a point on both curves ([Fillets at corners of arcs](#fillets-at-corners-of-arcs)), and a length dimension of either line becomes a distance to it, so dimensions keep their meaning; several corners: one arc each, one radius dimension and the others Equal to the first ([Rounded rectangles and fillets of several corners](#rounded-rectangles-and-fillets-of-several-corners)) |
@@ -4764,7 +4764,23 @@ mitcad#1191, `sketch/points.rs`):
   now holds, goes. So both curves of a crossing, trimmed there one after
   the other in either order, end in one point, also two arcs that touch.
   A cut in the middle of the crossing curve (a T) is a new point on it,
-  as before.
+  as before. A joined end that meets a curve there tangentially (the
+  crossing curve or another curve ending at the joined point; directions
+  within 1e-3, as a cut where curves touch) gets a `tangent` to it, as
+  the Line and Arc tools add one when drawing tangentially (mitcad#1220):
+  not where an active `tangent` or `smooth` between the two holds there
+  already, not between two lines or with an ellipse or a derived offset's
+  curve, and not when the others already imply it or it conflicts (the
+  solve's redundant or conflicting constraints would grow). When such a
+  tangent takes the place of the cut-off end (a trim that cuts off one
+  end), a `tangent` that held that end to a curve that met it there and
+  no longer touches the trimmed curve (the two share no point) goes: it
+  held the joint that is gone. A tangent that still constrains something
+  real stays: one at a point the curve still has, one between curves
+  that still share a point, and every tangent where no new one took the
+  old one's place (a join at an angle, a trim that splits a curve in
+  two). So a slot extended by a second one, its old top trimmed where its
+  arcs touch the new sides, is held as before.
 - `sketch.add_constraint` with a `coincident` between two points that are
   both ends of curves (lines, arcs, elliptical arcs, spline ends) merges
   them: one is kept (a fixed point over a free one, else the one more
@@ -15402,8 +15418,8 @@ library's or an import's, [Print profiles](#print-profiles)).
 
 | Command | Fields | Result |
 |---|---|---|
-| `create_material` | `id` (the next free `custom<n>` when left out), `name` (`Material 1`, `Material 2`, ... when left out, never `New …`, mitcad#828; a copy `<its source's name> (copy)`, `(copy 2)`, ..., a copy of a copy counted on from its source's name, mitcad#655, mitcad#828; free among the design's and the libraries' names), `density`, `appearance`, `filament`, `class` (`metal`, `plastic`, `fdm_plastic`, `resin` or `other`, mitcad#655, mitcad#1102: stored on the material, but `plastic` for `fdm_plastic` when the material has print settings, which make it an FDM plastic anyway; left out, a copy keeps its source's class and a new one is stored as worked out, see `library_items`), `based_on` (a material whose fields it starts from, by id, or a library's item `{library, id}`: Duplicate, with the appearance it carries; 1 g/cm³ and nothing else without it), `version`, `origin`, `project`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | `id`; undo step `Create Material Acme PETG` (with a library item's appearance, one step) |
-| `edit_material` | `id`, and the fields that change: `name`, `density`, `appearance` (null: none), `filament` (its keys are set, a key with null removed), `class`, `version`, `origin`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | undo step `Edit Material Acme PETG` unless nothing changes; a built-in one is refused (`create_material` with `based_on`, or with its id, makes one the design can change) |
+| `create_material` | `id` (the next free `custom<n>` when left out), `name` (`Material 1`, `Material 2`, ... when left out, never `New …`, mitcad#828; a copy `<its source's name> (copy)`, `(copy 2)`, ..., a copy of a copy counted on from its source's name, mitcad#655, mitcad#828; free among the design's and the libraries' names), `density`, `appearance`, `filament`, `class` (`metal`, `plastic`, `fdm_plastic`, `resin` or `other`, mitcad#655, mitcad#1102: stored on the material, but `plastic` for `fdm_plastic` when the material has print settings, which make it an FDM plastic anyway; left out, a copy keeps its source's class and a new one is stored as worked out, see `library_items`), `based_on` (a material whose fields it starts from, by id, or a library's item `{library, id}`: Duplicate, with the appearance it carries; 1 g/cm³ and nothing else without it), `version`, `origin`, `project`, `properties`, `reference` and `dataset` ([Material properties](#material-properties)); with `library` see *Items where they live* ([Print profiles](#print-profiles)) | `id`; undo step `Create Material Acme PETG` (with a library item's appearance, one step) |
+| `edit_material` | `id`, and the fields that change: `name`, `density`, `appearance` (null: none), `filament` (its keys are set, a key with null removed), `class`, `version`, `origin`, `properties`, `reference` ([Material properties](#material-properties)); with `library` see *Items where they live* ([Print profiles](#print-profiles)) | undo step `Edit Material Acme PETG` unless nothing changes; a built-in one is refused (`create_material` with `based_on`, or with its id, makes one the design can change) |
 | `delete_material` | `id`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | `bodies` and `components` that named it: they use the built-in of the same id when the deleted one took its place, else none of their own; undo step `Delete Material Acme PETG` |
 | `set_component_material` | `component` (uid, `C0` the root, or name), `material` (an id, or null: none of its own), `library` (`base`, `user`, `project`: `material` is that library's item), `project` | undo step `Set Default Material of Arm` unless nothing changes; a library's item is copied in first (or the design's copy of it reused) in the same step |
 | `set_body_material` | `uid`, `material`, `appearance`, `library`, `project` | as `set_component_material` with a library; see [Visibility and display](#visibility-and-display) |
@@ -15686,6 +15702,24 @@ profile's `nozzle_diameter`); a process row `bare_name`, its name before
 its `@` (`0.20mm Standard @Acme X1C` is `0.20mm Standard`), and
 `for_printer`, what follows the `@` (null without one). Names without
 those parts give themselves as `bare_name`.
+
+**The printers of a process** (mitcad#1216: the Processes manager's
+groups by printer and the process pickers' order, `app/COMMANDS.md`). A
+process row of `library_items` also gives `printers`
+(`[{"printer", "nozzle"}]`, empty: any printer), by the rule of the
+filament presets ([A filament's variants per printer and nozzle](#a-filaments-variants-per-printer-and-nozzle), Import): the
+printers of the process's `compatible_printers` (any slicer's kept text,
+a JSON list or `"a";"b"`), else the printer its name's `@` part names
+("0.20mm Standard @Bench X 0.6 nozzle" is Bench X with a 0.6 mm nozzle),
+else none; each printer named without its nozzle. A printer row also
+gives `printer_names`, the names it goes by (its printer model, its name
+and its slicers' preset names, each also without the nozzle), which a
+process's printers are matched against in any case and spacing. The
+import of an installed slicer's presets (`import_slicer_presets`) keeps a
+process's or filament's `compatible_printers` as the slicer has it, and
+an empty list of a preset's own does not hide the list of the preset it
+inherits from. Tests: `process_printers_tests` (`core/model-tests/print`)
+and `print_profile::tests`.
 
 **By place** (mitcad#1135: the Materials, Printers and Processes managers,
 `app/COMMANDS.md`). `library_items` with `by_place: true` lists each item
@@ -20668,6 +20702,123 @@ values with the existing property commands; no command of its own.
 Test: `a_print_value_added_to_a_body_reaches_the_3mf_export`
 (`core/model-tests/print/src/print_files_tests.rs`, mock kernel).
 
+## Print plates
+
+mitcad#1050 (`core/model/src/print_plates.rs`, `document/print_plates.rs`,
+`exchange/plates.rs`, `api/print_plates.rs`): the design carries the plates
+it prints on, so that the 3MF goes to the slicer laid out and ready to
+print, with each plate's own settings.
+
+- **A plate** has an `id` (`plate1`, the first free number; never another
+  plate's while the design has it), a `name` (`Plate 1`; unique ignoring
+  case), its `items` and its own `values`. A design has at most 36 plates.
+  The file keeps them as `print_plates`
+  (`[{"id", "name", "items": [{"body": "F1.b0", "count": 4}, {"occurrence":
+  ["O1", "O4"]}], "values": {"spiral_vase": true}}]`, a count of 1 left
+  out); an item whose body or occurrence is gone stays on its plate.
+- **What goes on a plate:** a body (the body itself, printed `count` times,
+  each copy a piece of its own at its first shown placement) or an
+  occurrence by its path (its printed bodies as assembled, `count` copies,
+  each a piece). An item is on one plate at most: putting it on another
+  moves it. What no item names goes on the **first** plate: each shown
+  placement of a printed body without a body item that no occurrence item
+  takes, each a piece of its own.
+- **Layout:** automatic within each plate by the export's arranger ([Print
+  bed faces](#print-bed-faces)): each piece on its print bed face, else the
+  automatic orientation's, dropped onto the bed, the pieces side by side
+  along X, the row centred on the plate.
+- **Plate settings:** process values of the key map (the `Print Process`
+  set, not the keys kept per slicer), in its JSON form, as a profile keeps
+  them. The plate is a level of the settings order: profile < plate <
+  component < occurrence < body. Its values come after the design's own
+  (the root's values and its profiles) and before every component's,
+  occurrence's and body's, so a body's own value still wins. A body prints
+  on the plate of its own item, else of the outermost occurrence item of
+  its placement, else the first plate (none without plates);
+  `print_settings` gives a value from the plate as `{"from": "plate",
+  "plate": "plate2", "level": "plate", "owner_name": "Vase"}` and names the
+  plate (`"plate": {"id", "name"}`, null without one).
+
+Commands, each one undo step that recomputes nothing (a plate by its id or
+name):
+
+```json
+{"cmd": "add_print_plate", "name": "Vase"}          → {"id": "plate2", "name": "Vase"}   "Add Vase"
+{"cmd": "edit_print_plate", "plate": "Vase", "name": "Vases",
+ "values": {"spiral_vase": true, "layer_height": null}}        "Edit Vase"
+{"cmd": "move_print_plate", "plate": "Vase", "index": 0}       "Move Vase"
+{"cmd": "delete_print_plate", "plate": "Vase"}                 "Delete Vase"
+{"cmd": "place_on_plate", "plate": "Vase",
+ "items": [{"body": "Body1", "count": 4}, {"occurrence": "Arm:1"}]}   "Put 2 items on Vase"
+{"cmd": "remove_from_plates", "items": [{"occurrence": "O1"}]} "Take Arm:1 off Vase"
+```
+
+`name` left out is `Plate <n>`. `edit_print_plate` renames (`Rename …`),
+sets values and takes them away (a key's `null`); one value alone is `Set
+Layer height of Vase` or `Clear Layer height of Vase`. A body is given by
+uid or name (a printed body at the marker: a solid or a mesh body), an
+occurrence by its path of uids or names; `count` is 1 to 999, left out the
+count the item has (here or on the plate it leaves), else 1. What is on a
+deleted plate goes on no plate (the first one's). Nothing changing is no
+undo step.
+
+Queries:
+
+- `{"query": "print_plates"}` → `{"plates": [{"id", "name", "index",
+  "items": [{"body" | "occurrence", "name", "count", "missing": true when
+  gone}], "values": [{"key", "name", "value", "text"}], "pieces"}],
+  "unplaced": [{"body", "name", "occurrence", "occurrence_name"}]}`:
+  `pieces` the objects the plate prints (the first plate's with the
+  placements on no plate), `unplaced` those placements.
+- `{"query": "plate_layout", "plate": "Vase"}` → `{"plate", "name",
+  "index", "bed": [[x, y], …], "shift": [x, y], "pieces", "bodies":
+  [{"body", "name", "transforms": [[[a, b, c, t] × 3], …]}], "warnings"}`:
+  how the plate's pieces lie, drawn beside the design (the bed's left edge
+  a fifth of its width right of the shown bodies, its middle level with
+  theirs; without shown bodies centred on the origin): the bed's outline
+  and each body's placements there from its component's coordinates, the
+  plate's coordinates (the printer's `bed_shape`, else 256 × 256 mm) moved
+  by `shift`. Meshed coarsely.
+- `print_settings` takes `"plate"` (id or name): the settings on that
+  plate; left out, a body's or an occurrence's own plate.
+
+Export (`export` of a 3MF; on the print bed, `on_bed` implied; no
+`bodies`, `occurrence`, `occurrences`, `whole` or `bed_face` with it):
+
+- `"plates": "one_file"`: every plate in the one file, for the slicers that
+  keep several plates. The Bambu family (and no `dialect`) lays plates out
+  on a grid of `ceil(sqrt(n))` columns (one more when the square root rounds
+  down), each a plate's width and depth plus a fifth apart, rows towards
+  −Y; each plate is a `<plate>` block of `model_settings.config` with
+  `plater_id` (from 1), `plater_name`, `locked`, a `model_instance` per
+  object on it (`object_id`, `instance_id` 0, `identify_id`) and the plate
+  settings the family keeps per plate when the project does not set them
+  for every part (`spiral_mode` `true`/`false`, `print_sequence` by its
+  name), never as an object's override. PrusaSlicer 2.9 and later reads
+  its beds from where the objects lie: the beds on its grid growing in
+  rings from the first ((0, 0), (1, 0), (0, 1), (1, 1), (2, 0), …), a bed's
+  size plus a gap of 3/10 of its diagonal (at most 100 mm) apart; it keeps
+  `spiral_vase` and `complete_objects` for the whole project, so a part's
+  own value of one is left out with a warning. Cura has one build plate:
+  refused.
+- `"plates": "file_per_plate"`: a file per plate beside the path,
+  `<name> - <plate name>.3mf` (characters a file name cannot have become
+  `_`), each plate a project of its own; an empty plate writes no file.
+  For Cura and PrusaSlicer before 2.9.
+- `"plate": "Vase"`: that plate alone, in the path.
+
+The result adds `"plates": [{"id", "name", "path" (null for an empty
+plate of a file per plate), "bodies", "pieces", "origin" (where its bed
+lies in a file of several plates), "bed" (as an export's `bed`),
+"warnings"}]` and `"files"` (the paths written, each once); every body on a
+plate takes that plate's settings. Items whose body or occurrence is gone
+are left out with a warning.
+
+Tests: `core/model-tests/print/src/print_plates_tests.rs` (mock kernel:
+items with counts, the settings order, the file, a Bambu-family project of
+two plates with the vase mode on its plate, PrusaSlicer's beds, a Cura
+file per plate, a plate's layout) and the unit tests of
+`core/model/src/print_plates.rs` (the slicers' grids).
 ## How volumes and areas are computed (mitcad#1200)
 
 Every volume, area, centre of mass, mass and inertia a query gives comes
@@ -20710,3 +20861,141 @@ imports' reports. So the same body gives the same value everywhere.
 - The FreeCAD import's reference check alone measures with the kernel's
   default rule too (`Kernel::fixed_point_properties`), to compare with
   programs that measure so.
+
+## Material properties
+
+A material's mechanical and thermal properties, their units, the bundled
+material dataset and materials as JSON and CSV files (mitcad#1213;
+`core/model/src/material.rs`, `material_units.rs`, `material_dataset.rs`,
+`material_exchange.rs`, `document/material_import.rs`,
+`api/materials.rs`). The properties are data: no analysis uses them yet;
+they are shown on the material, in Physical Properties (`properties`)
+and in a parts list, and carried by the design file, the libraries and
+the files below.
+
+- **Properties:** a material's `properties` holds the values given, in
+  the model's units: `youngs_modulus` (MPa, above 0), `poissons_ratio`
+  (above -1, at most 0.5), `yield_strength` (MPa, above 0),
+  `max_service_temperature` (°C, above absolute zero) and
+  `thermal_expansion` (the coefficient, µm/(m·°C)); Mechanical the first
+  three, Thermal the last two. A value not given is left out, never 0;
+  designs and library files from before have none and read as before.
+  `create_material` and `edit_material` take `properties` with the values
+  that change (`null` takes one away; an unknown key is refused). The
+  **printing** values are the print settings' own (no second set): the
+  extruder temperature is the filament's `temperature`, the bed
+  temperature its `bed_temperature`.
+- **Reference:** `reference` (`{source, material, grade, revision}`, the
+  source required) says where the values came from: a dataset or a
+  supplier's sheet. A copy keeps it; `null` takes it away.
+- **Units:** the values are shown in the design's unit system, its
+  length unit's: a metric design (mm, cm, m, km, µm) MPa, g/cm³ and
+  µm/(m·°C), an inch design (in, ft, yd, mi, mil) psi, lb/in³ and
+  µin/(in·°F) (the expansion coefficient's degree follows the system);
+  temperatures in °C or °F as the user prefers, everywhere (the
+  material card, Physical Properties, parts lists and bills of
+  materials): the application gives the model its setting at start and
+  when it changes (the bridge's `set_temperature_unit`, °C until then),
+  and a query's `temperature` left out is that unit. Commands always take
+  the model's units.
+- **The dataset** is the bundled material dataset (Apache-2.0,
+  `third_party/material-properties`): typical values of 112 metals and 7
+  printing materials, offline. `create_material` with `dataset` (an
+  entry's id, `aluminum/6061/t6`) makes a material of the entry's values,
+  converted from the dataset's units, its class, an appearance of its
+  kind and the entry as its `reference` (the dataset, material, grade and
+  the data's revision); it is named as the entry (`Aluminum 6061, T6`,
+  numbered when the name is taken) and is the user's own: a newer dataset
+  never changes it. With `library` it is made there. `dataset` and
+  `based_on` together are refused; `edit_material` refuses `dataset`.
+- **Files:** [material-files.md](../../../docs/material-files.md) gives
+  the JSON and CSV formats; both state their units.
+
+| Command | Fields | Result |
+|---|---|---|
+| `import_materials` | `text` (the file's text: the application reads the file), `format` (`json` or `csv`), `conflict` (on a name that is there already: `keep`, the default, `replace`, `keep_both`, or `ask`), `library` (`user` or `project`: into that library; the design when left out), `project` | `added` and `replaced` (ids), `kept` (names), `conflicts` (with `ask`: the names that are there already, and nothing imported; none: imported as with `keep`), `errors` (`{row, name, message}`: a material of the file that is not valid, its line in a CSV, its place from 1 in a JSON file, imported without it); one undo step `Import Materials`; a file that cannot be read at all is refused |
+
+A name is matched in any case: the design's own materials and the
+built-in ones it shows, or the library's items. `replace` gives the
+material the file's values, the ones the file does not give kept (a
+built-in one gets a material of the design in its place, named as it);
+`keep_both` adds the file's numbered (`Steel (2)`). A material the import
+adds needs a density.
+
+| Query | Fields | Result |
+|---|---|---|
+| `material_units` | `units` (`metric` or `imperial`: the design's when left out), `temperature` (`C` or `F`, the preferred unit when left out) | `units`, `temperature`, `quantities` (`density`, `stress`, `temperature`, `expansion`, `ratio`: each `{symbol, scale, offset}`, a value in the model's unit shown as `value * scale + offset`: psi's scale is 145.0377), `properties` (`{key, name, group, group_title, quantity, unit}` in their order), `printing` (the print settings' `temperature` and `bed_temperature`: `{key, name, quantity, unit}`) |
+| `material_dataset` | `search` (words each found material's name, material, grade or id holds, any case; all when left out) | `name`, `license`, `caution` (that the values are typical), `count` (all its materials), `materials`: `{id, name, class, density, properties, filament, reference}` in the model's units |
+| `export_materials` | `format` (`json` or `csv`), `ids` (the design's and built-in materials; the design's own when left out and no `materials` are given), `materials` (materials given whole, as `materials` or `library_items` list them: a library's items), `units` (the design's when left out), `temperature` (the preferred unit when left out) | `text` (the file), `count`, `format`, `units`, `temperature` |
+
+`properties` (Physical Properties) takes `temperature` too and gives each
+body with a material `material_properties`: `{key, name, group, text}`
+for each value given (`group` `mechanical`, `thermal` or `printing` for
+the print settings' extruder and bed temperature), its text in the
+design's units (`29007500 psi`, `212 °F`). A parts list's column named by
+a property's name or key (`Young's modulus`, `yield_strength`) or
+`Density` shows the row's material's value, in the design's units with
+temperatures in the preferred unit: a body's material,
+a component's when all its bodies share one (without bodies its default
+material); a stored property of the component of that name comes first.
+## Auto Fix
+
+A feature whose stored reference is no longer found exactly is computed
+with what the model found instead and keeps a warning naming both: a
+region `found as` another region or the sum of several ([Profile
+references after a sketch change](#profile-references-after-a-sketch-change)),
+a face, edge or vertex a sketch change renamed ([Faces, edges and
+vertices a sketch change renamed](#faces-edges-and-vertices-a-sketch-change-renamed)).
+The definition keeps the old reference, so the warning stays. Auto Fix
+(mitcad#1223; `core/model/src/document/auto_fix.rs`, `api/auto_fix.rs`)
+writes into the definitions what the model found and used, so that the
+bodies stay as they are and the warnings go:
+
+| Command | Fields | Result |
+|---|---|---|
+| `auto_fix` | `features`: uids (a selection, a timeline group's members); all features when left out or empty | `warnings` (the reference problems of those features before), `fixed` (those gone after), `changed` and `followed` (the features whose definitions changed; `followed` those not asked for), `left` (each problem left: `feature`, `name`, `message`, `advice`), `label` (the undo step's name, null when nothing changed) and `message`: `Auto Fix: 2 of 3 warnings fixed; Hole1: the body has no edge E{…}, pick it again` |
+
+- **What it writes** is read from the warnings themselves, which name the
+  stored reference and exactly what the computation used: `face F2:side(c1[c4,c2])
+  found as F2:side(c1[c4,c9]) after a change in Sketch1` replaces the name
+  wherever the definition holds it (a face, the faces of an edge or a
+  vertex, a plane or a sketch on the face, a projection). `region r{…}
+  found as r{…} + r{…} after a change in Sketch1` gives a reference in a
+  list of `profiles` every region it was found as, at its place and in
+  that order, each once (a region the list has later moves up); a region
+  reference elsewhere (a loft section, a sheet's panel slot) takes the
+  main region, the first one named, which is the one the computation used
+  there. Only references of the sketch the warning names are changed.
+- **The result stays.** The fixed definition finds every reference
+  exactly and builds the same bodies (the same regions, faces and edges).
+  The faces made from a region now carry its new key (`F2:end(r{…})`
+  instead of the old one): a later feature that named them finds them
+  again with a warning of its own, and Auto Fix fixes that too in the same
+  step (`followed`; the message ends `also updated: Shell1`).
+- **Checked before it is taken.** Each feature's fix is computed first,
+  in timeline order. It is not taken, and its warnings stay with the
+  reason in `left`, when it would make a feature that built fail
+  (`fixing it would make Fillet2 fail`), when the warning would stay, when
+  the definition does not hold the reference (`the definition does not
+  hold the reference`) or when the feature's component cannot be changed
+  (a linked component).
+- **Not fixable:** a reference that is gone (`the body has no edge E{…}`,
+  `edge E{…} no longer exists after Chamfer1`, `Sketch1 has no profile
+  r{…}`) or ambiguous (`F2:side(…) is ambiguous after a sketch change: …`):
+  the feature fails and nothing is changed; `left` names it with `pick it
+  again` or `pick one of them again`. Other warnings (a fillet built as
+  rings) are not references and are neither counted nor changed.
+- **One undo step:** `Auto Fix Extrude8` for one feature, `Auto Fix
+  <group>` when the features are a timeline group's, else `Auto Fix 3
+  Features`. Nothing fixed: no step. A cancelled computation (P7) changes
+  nothing.
+- The `timeline` query gives a feature whose warnings Auto Fix can write
+  `auto_fix`: how many (left out when none); the application offers Auto
+  Fix then.
+
+Tests: `core/model-tests/features-solid/src/auto_fix_tests.rs` (a region
+found as another and as the sum of two, a renamed face, a face renamed by
+the fix followed in a later feature, an ambiguous reference left with its
+error; the definitions, the bodies, the warnings and undo),
+`document::auto_fix::tests` (the warnings read, the lists of profiles,
+names replaced).

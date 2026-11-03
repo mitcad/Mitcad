@@ -84,6 +84,10 @@
 #     Create Drawing's Kind Cut Sheet (600 x 300) on its CUT SHEET tab
 #     (mitcad#1008), Add Components… with both
 #     bodies, Export… DXF: the outlines on CUT_OUTER, the disk a circle.
+#   - Create Drawing opens with the last choice (mitcad#1218): the last
+#     drawing's ISO, A3, first angle (a cut sheet is not kept); ANSI chosen
+#     (B, third angle) and a drawing created; the next Create Drawing opens
+#     with ANSI, B, third angle (logged), cancelled.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-drawings-test.sh [screenshot.png]
@@ -1192,6 +1196,41 @@ ui_expect_new "Exported $WORK/parts.dxf: cut sheet CutSheet1, 2 parts" "the DXF 
 grep -q "CUT_OUTER" "$WORK/parts.dxf" || ui_fail "the DXF has no layer CUT_OUTER"
 grep -q "CIRCLE" "$WORK/parts.dxf" || ui_fail "the DXF has no circle (the disk)"
 echo "ok   the DXF has the parts' outlines"
+
+echo "--- Create Drawing opens with the last choice (mitcad#1218)"
+ui_mark
+settled "Drawing Close Drawing"
+ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
+ui_expect_new "Drawing closed" "the 3D view again"
+ui_mark
+ui_step "Create Drawing (search)"          ui_command "Create Drawing"
+# The cut sheet is not kept: the last drawing's ISO, A3, first angle.
+ui_expect_new "Create Drawing dialog starts with template iso, A3, landscape, first_angle (the last choice)" \
+  "the last drawing's choice"
+ui_expect_new "Create Drawing dialog opened" "its dialog"
+ui_focus_dialog '^Create Drawing$'
+ui_step "Template: ANSI (Alt+T, Home, Down)" ui_key alt+t Home Down
+ui_step "OK: ANSI B, third angle"          ui_key Return
+ui_focus_main
+ui_expect_new "Create Drawing dialog: template ansi, ANSI_B, third_angle" "the ANSI template on its B, third angle"
+ui_expect_new "Drawing created: " "the drawing made"
+ui_expect_new "Create Drawing choice kept: template ansi, ANSI_B, landscape, third_angle" "the choice kept"
+ui_expect_new "Drawing tool: Base View" "Base View on for the new drawing"
+ui_mark
+ui_step "end the tool (Esc)"               ui_key Escape
+ui_expect_new "Drawing tool: selection" "back to the selection"
+settled "Drawing Close Drawing"
+ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
+ui_expect_new "Drawing closed" "the 3D view again"
+ui_mark
+ui_step "Create Drawing again (search)"    ui_command "Create Drawing"
+ui_expect_new "Create Drawing dialog starts with template ansi, ANSI_B, landscape, third_angle (the last choice)" \
+  "it opens with ANSI, B, third angle"
+ui_expect_new "Create Drawing dialog opened" "its dialog"
+ui_focus_dialog '^Create Drawing$'
+ui_step "Cancel (Esc)"                     ui_key Escape
+ui_focus_main
+ui_expect_new "Create Drawing cancelled" "nothing made"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI drawings test"

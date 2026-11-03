@@ -2070,6 +2070,18 @@ public:
     return QObject::tr("Center to Center Slot");
   }
 
+  void press(const Snap& snap) override {
+    // A straight slot's length is typed in the second step; its field is
+    // gone at the last click, so what was typed is kept for its dimension
+    // (mitcad#1225).
+    if (clicked() == 0) {
+      m_length.clear();
+    } else if (clicked() == 1 && !arcSlot()) {
+      m_length = m_c.typed(QStringLiteral("length")) ? m_c.fieldExpression(QStringLiteral("length")) : QString();
+    }
+    StepTool::press(snap);
+  }
+
   void paint(ToolPreview& preview) const override {
     if (clicked() == 0) {
       return;
@@ -2277,8 +2289,9 @@ protected:
       holdPoint(op, result, click(0), snapOf(0), false);
       holdPoint(op, result, click(1), snapOf(1), false);
     }
-    // A straight slot drawn exactly level or plumb keeps its direction
-    // (mitcad#1024): on its construction centre line.
+    // A straight slot's construction centre line.
+    QString axis;
+    QString along;
     if (!arcSlot()) {
       const SketchModel& now = op.model();
       for (const QString& id : entities(result)) {
@@ -2286,21 +2299,76 @@ protected:
         if (c == nullptr || !c->isLine() || !c->construction) {
           continue;
         }
-        const QString along = axisAlignment(c->curve.a, c->curve.b);
-        if (!along.isEmpty()) {
-          op.addAuto({{QStringLiteral("type"), along}, {QStringLiteral("line"), id}});
-        }
+        axis = id;
+        along = axisAlignment(c->curve.a, c->curve.b);
         break;
       }
     }
+    // The typed sizes become the slot's dimensions, as the other tools'
+    // typed values do (mitcad#1225), so that a slot drawn with typed values
+    // keeps only its place free. The width is an end arc's diameter; the
+    // length is between the end centres: a Center Point Slot's from its
+    // centre to an end's, an Overall Slot's the overall length less the
+    // width.
+    QStringList dimensionLog;
+    const auto dimension = [&op, &dimensionLog](const QJsonObject& what, const QString& value) {
+      const auto before = op.model().dimensions.size();
+      op.addDimension(what, value);
+      const auto& dimensions = op.model().dimensions;
+      if (dimensions.size() <= before) {
+        return QString();
+      }
+      const DimensionData& added = dimensions.back();
+      dimensionLog << QStringLiteral("%1 = %2 mm").arg(added.parameter).arg(added.measured, 0, 'g', 8);
+      return added.parameter;
+    };
+    const QStringList outline = made(result);
+    QString widthValue = QString::number(w, 'g', 12);
+    if (m_c.typed(QStringLiteral("width")) && outline.size() == 4) {
+      const QString parameter =
+          dimension({{QStringLiteral("type"), QStringLiteral("diameter")}, {QStringLiteral("curve"), outline[1]}},
+                    m_c.fieldExpression(QStringLiteral("width")));
+      if (!parameter.isEmpty()) {
+        widthValue = parameter;
+      }
+    }
+    if (!m_length.isEmpty()) {
+      if (m_mode == QStringLiteral("center_point")) {
+        const QString middle = pointNear(op.model(), result, click(0));
+        const QString end = pointNear(op.model(), result, click(1));
+        if (!middle.isEmpty() && !end.isEmpty() && middle != end) {
+          dimension({{QStringLiteral("type"), QStringLiteral("distance")},
+                     {QStringLiteral("a"), middle},
+                     {QStringLiteral("b"), end}},
+                    m_length);
+        }
+      } else if (!axis.isEmpty()) {
+        const QString between = m_mode == QStringLiteral("overall")
+                                    ? QStringLiteral("(%1) - %2").arg(m_length, widthValue)
+                                    : m_length;
+        dimension({{QStringLiteral("type"), QStringLiteral("length")}, {QStringLiteral("line"), axis}}, between);
+      }
+    }
+    // A straight slot drawn exactly level or plumb keeps its direction
+    // (mitcad#1024): on its centre line.
+    if (!along.isEmpty()) {
+      op.addAuto({{QStringLiteral("type"), along}, {QStringLiteral("line"), axis}});
+    }
     op.commit();
-    qDebug().noquote() << QStringLiteral("Added slot, width %1 mm [%2]")
+    const QString dimensionText =
+        dimensionLog.isEmpty()
+            ? QString()
+            : QStringLiteral(", %1 %2").arg(dimensionLog.size() == 1 ? QStringLiteral("dimension")
+                                                                     : QStringLiteral("dimensions"),
+                                            dimensionLog.join(QStringLiteral(", ")));
+    qDebug().noquote() << QStringLiteral("Added slot, width %1 mm [%2]%3")
                               .arg(w)
-                              .arg(made(result).join(QStringLiteral(", ")));
+                              .arg(made(result).join(QStringLiteral(", ")), dimensionText);
   }
 
 private:
   QString m_mode;
+  QString m_length; // a straight slot's typed length, as typed
 };
 
 // ---------------------------------------------------------------------------

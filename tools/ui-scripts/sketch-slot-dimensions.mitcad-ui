@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# A Center to Center Slot drawn with a typed length and width (mitcad#1225):
+# both become its dimensions, the width the diameter of an end arc (d1)
+# and the length its centre line's (d2), in the slot's one undo step; the
+# slot drawn level keeps its centre line horizontal. The saved design is
+# checked by sketch-slot-dimensions-check.json: 2 degrees of freedom (its
+# place) are left, and dimensions that move its first end's centre keep
+# its length. The wrapper replaces ENTER_SKETCH with the frontend's
+# ordinary timeline activation on the empty F1 fixture. Every click and
+# move stays within x -20..10, y 10..16 mm, on the grid and clear of the
+# sketch's axes.
+# Run by tools/ui-sketch-slot-dimensions-test.sh (Linux) and
+# tools/ui-windows-sketch-slot-dimensions-test.ps1 (Windows).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+expect-profiles 0
+capture-undo-depth baseline
+
+command sketch.slot
+sketch-click -20 10
+sketch-move 5 10
+type 30
+expect-sketch-field-dimension length length 30
+key Return
+sketch-move 5 16
+type 8
+expect-sketch-field-dimension width length 8
+mark
+key Return
+wait-log '^Added slot, width 8 mm \[c1, c2, c3, c4\], dimensions d1 = 8 mm, d2 = 30 mm$'
+expect-log '^Constraint added automatically: horizontal c11'
+key Escape
+expect-model-parameter d1 8 model
+expect-model-parameter d2 30 model
+expect-profiles 1
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+expect-model-parameter d1 absent model
+expect-model-parameter d2 absent model
+expect-profiles 0
+command edit.redo
+expect-undo-depth ${baseline} 1
+expect-model-parameter d1 8 model
+expect-model-parameter d2 30 model
+expect-profiles 1
+screenshot '${MITCAD_TEST_WORK}/slot-dimensions.png'
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Dimension .* not added|TestDriver: FAIL'

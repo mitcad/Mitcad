@@ -33,6 +33,7 @@
 #include <QTimer>
 
 #include "../framework/NoticeLevel.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/Theme.hpp"
 #include "../framework/Dialogs.hpp"
 
@@ -634,7 +635,7 @@ RulePalette::RulePalette(QWidget* parent) : QTreeWidget(parent) {
   setObjectName(QStringLiteral("rulePalette"));
   setHeaderHidden(true);
   setRootIsDecorated(false);
-  setIndentation(12);
+  panel::setCompactIndentation(this, panel::Indent::GroupedList);
   setSelectionMode(QAbstractItemView::SingleSelection);
   setDragEnabled(false);
   setExpandsOnDoubleClick(false);

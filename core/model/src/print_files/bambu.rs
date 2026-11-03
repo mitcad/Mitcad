@@ -501,6 +501,7 @@ pub(super) fn export(
     shared: &Shared<'_>,
     model_name: &str,
     objects: &[super::ExportObject<'_>],
+    plates: &[super::ExportPlate<'_>],
 ) -> ExportOutput {
     let dialect = shared.dialect;
     let mut out = ExportOutput::default();
@@ -766,9 +767,32 @@ pub(super) fn export(
                 .map_or(1, |s| s + 1)
         );
         for &i in parts.iter() {
-            write_part(&mut model, shared, i, &mut warnings);
+            write_part(&mut model, shared, i, !plates.is_empty(), &mut warnings);
         }
         model.push_str("  </object>\n");
+    }
+    // The print plates (mitcad#1050): each its objects and the plate
+    // settings it keeps per plate.
+    for (index, plate) in plates.iter().enumerate() {
+        let here: Vec<usize> = plate
+            .objects
+            .iter()
+            .filter(|&&o| o < listed.len())
+            .copied()
+            .collect();
+        let parts_here: Vec<usize> = here
+            .iter()
+            .flat_map(|&o| listed[o].1.iter().copied())
+            .collect();
+        write_plate(
+            &mut model,
+            shared,
+            index,
+            plate,
+            &here,
+            &parts_here,
+            &mut warnings,
+        );
     }
     model.push_str("</config>\n");
     let application = match dialect {
@@ -791,9 +815,98 @@ pub(super) fn export(
     out
 }
 
+/// A print plate in `model_settings.config` (mitcad#1050), as the family
+/// writes one: its number (`plater_id`, from 1), name and lock, the plate
+/// settings it keeps per plate that its parts (`parts`) print with and
+/// the project does not set for every part (`spiral_mode` as `true` or
+/// `false`, `print_sequence` by its name), and a `model_instance` per
+/// object on it (`objects`, by their ids). Parts of one plate that differ
+/// in such a key are a warning: the first part's value is written.
+fn write_plate(
+    model: &mut String,
+    shared: &Shared<'_>,
+    index: usize,
+    plate: &super::ExportPlate<'_>,
+    objects: &[usize],
+    parts: &[usize],
+    warnings: &mut Vec<String>,
+) {
+    let dialect = shared.dialect;
+    let meta = |model: &mut String, key: &str, value: &str| {
+        let _ = writeln!(
+            model,
+            "    <metadata key=\"{}\" value=\"{}\"/>",
+            xml_escape(key),
+            xml_escape(value)
+        );
+    };
+    model.push_str("  <plate>\n");
+    meta(model, "plater_id", &(index + 1).to_string());
+    meta(model, "plater_name", plate.name);
+    meta(model, "locked", "false");
+    for key in crate::print_plates::BAMBU_PLATE_KEYS {
+        let Some(def) = print_keys::key(key) else {
+            continue;
+        };
+        let Some(dk) = def.dialect(dialect) else {
+            continue;
+        };
+        if shared.values.contains_key(key) {
+            continue; // the project's, every part's alike
+        }
+        let values: Vec<&Value> = parts
+            .iter()
+            .filter_map(|&i| shared.parts[i].settings.values.get(key).map(|(v, _)| v))
+            .collect();
+        let Some(first) = values.first().copied() else {
+            continue;
+        };
+        if values.len() != parts.len() || values.iter().any(|v| *v != first) {
+            warnings.push(format!(
+                "{key}: the parts on {} print with different values, and {} keeps one per \
+                 plate: written as the first part's",
+                plate.name,
+                dialect.name()
+            ));
+        }
+        let text = if def.kind == Kind::Boolean && dk.key == "spiral_mode" {
+            first.as_bool().unwrap_or(false).to_string()
+        } else {
+            let context: BTreeMap<String, Value> = BTreeMap::new();
+            match dialect_texts(dialect, def, first, &context, warnings)
+                .into_iter()
+                .find(|(k, _)| *k == dk.key)
+            {
+                Some((_, text)) => text,
+                None => continue,
+            }
+        };
+        meta(model, dk.key, &text);
+    }
+    for &object in objects {
+        let id = mitcad_3mf::build_object_id(shared.parts.len(), object);
+        model.push_str("    <model_instance>\n");
+        let _ = writeln!(model, "      <metadata key=\"object_id\" value=\"{id}\"/>");
+        model.push_str("      <metadata key=\"instance_id\" value=\"0\"/>\n");
+        let _ = writeln!(
+            model,
+            "      <metadata key=\"identify_id\" value=\"{id}\"/>"
+        );
+        model.push_str("    </model_instance>\n");
+    }
+    model.push_str("  </plate>\n");
+}
+
 /// A part of an object in `model_settings.config`: its filament and the
-/// values it does not share.
-fn write_part(model: &mut String, shared: &Shared<'_>, i: usize, warnings: &mut Vec<String>) {
+/// values it does not share; on print plates (`on_plates`, mitcad#1050)
+/// not those the family keeps per plate.
+fn write_part(
+    model: &mut String,
+    shared: &Shared<'_>,
+    i: usize,
+    on_plates: bool,
+    warnings: &mut Vec<String>,
+) {
     let part = &shared.parts[i];
     let _ = writeln!(
         model,
@@ -818,6 +931,9 @@ fn write_part(model: &mut String, shared: &Shared<'_>, i: usize, warnings: &mut 
         .collect();
     for set in [PrintSet::Printer, PrintSet::Process] {
         for (def, value) in defs_in(set, &shared.overrides[i]) {
+            if on_plates && crate::print_plates::BAMBU_PLATE_KEYS.contains(&def.key) {
+                continue;
+            }
             for (key, text) in dialect_texts(shared.dialect, def, value, &context, warnings) {
                 let _ = writeln!(
                     model,

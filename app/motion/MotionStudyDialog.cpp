@@ -24,6 +24,7 @@
 #include <QtLogging>
 
 #include "framework/Command.hpp"
+#include "framework/PanelTree.hpp"
 #include "framework/TestSync.hpp"
 
 #include "../platform/MacDialogs.hpp"
@@ -111,6 +112,7 @@ MotionStudyDialog::MotionStudyDialog(MotionStudyHost host, const QString& study,
   layout->addLayout(transport);
 
   m_keys = new QTreeWidget(this);
+  panel::setCompactIndentation(m_keys, panel::Indent::Flat);
   m_keys->setObjectName(QStringLiteral("motionKeys"));
   m_keys->setRootIsDecorated(false);
   m_keys->setHeaderLabels({tr("Joint"), tr("Motion"), tr("Keys (step: value)"), tr("At step")});

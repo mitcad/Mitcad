@@ -72,7 +72,7 @@ function Expect-Exists([string]$Path, [string]$Description) {
 function Expect-Title([string]$Expected) {
   $title = ''
   for ($i = 0; $i -lt 25; $i++) {
-    $title = [UiInput]::Title($script:UiWindow)
+    $title = Ui-WindowTitle
     if ($title -eq $Expected) { Write-Host "ok   title '$Expected'"; return }
     Start-Sleep -Milliseconds 200
   }

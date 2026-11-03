@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The platform's means: starting a test in a container that measures its
 //! whole process tree (a Job Object on Windows, a systemd scope's cgroup on
-//! Linux, the children's rusage elsewhere), the system's CPU load, its
+//! Linux, sampled descendant/group RSS on macOS), the system's CPU load, its
 //! memory and free disk. The parsers of the system's text files are here,
 //! tested on every platform.
 
@@ -9,6 +9,8 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_process;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -49,11 +51,11 @@ pub struct Usage {
     /// CPU time of the process tree (user and system), seconds.
     pub cpu: f64,
     /// Peak memory, bytes: of the whole tree with a Job Object or a
-    /// cgroup, else of its largest process.
+    /// cgroup; sampled group/descendant RSS on macOS, else the largest process.
     pub peak: u64,
     /// The platform says it went over its memory limit.
     pub over_memory: bool,
-    /// The peak is of the whole process tree.
+    /// The peak includes the process tree (sampled on macOS, not a hard limit).
     pub tree: bool,
 }
 

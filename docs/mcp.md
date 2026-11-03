@@ -5,8 +5,9 @@
 
 To work with an agent inside MitCad instead, open the chat panel (**View ›
 Chat**): it starts your own Claude Code or Codex with this process's live server as
-its only tool source and asks you before file operations; see [the chat
-panel](ai-chat.md).
+its only tool source and asks you before file operations, or runs the tool
+loop itself for an API endpoint or a local model, as a client of the same
+live server; see [the chat panel](ai-chat.md).
 
 For a design already open in MitCad, choose **Help › Connect AI Assistant…**.
 The assistant indicator (a click with no assistant connected, or **Connect

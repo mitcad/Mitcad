@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# Look At in the view's context menu (mitcad#1212) on context-look-at.json:
+# a block in a component (O1, F2.b0) and a cylinder in the root (F4.b0).
+#   1. The cylinder's side, a face that is not planar: its menu has no
+#      Look At.
+#   2. The block's top, a planar face of the component's occurrence: its
+#      menu has Look At before Measure, which looks down the face's
+#      normal (the camera logged looking along -Z).
+# Run by tools/ui-context-look-at-test.sh (Linux) and
+# tools/ui-windows-context-look-at-test.ps1 (Windows).
+wait-idle
+command view.fit
+# Where a click picks each face: Measure's input logs the places.
+mark
+command inspect.measure
+expect-log '^Command Measure started'
+wait-log '^Pick occurrence face F2[.]b0/F2:end[(].* in O1 at '
+wait-log '^Pick face F4[.]b0/F4:side'
+key Escape
+expect-log '^Command Measure cancelled'
+
+# 1. A cylindrical face: no Look At.
+mark
+click-logged '^Pick face F4[.]b0/F4:side' right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Measure'
+expect-no-log '^Context menu: .*Look At'
+key Escape
+key Escape
+
+# 2. The planar top of the component's block: Look At, near Measure.
+mark
+click-logged '^Pick occurrence face F2[.]b0/F2:end[(].* in O1 at ' right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*[|] Look At [|] Measure'
+popup 'Look At'
+wait-log '^Look at .*F2:end'
+wait-log '^Camera direction -?0 -?0 -1 up ' 30
+expect-never 'TestDriver: FAIL'

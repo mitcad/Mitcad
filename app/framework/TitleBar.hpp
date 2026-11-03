@@ -50,9 +50,9 @@ public:
   // The height of the row.
   static int rowHeight();
   // The document's name a window title shows: without Qt's "[*]"
-  // placeholder of the modified mark and the " - MitCad" after it
-  // ("Lid.mitcad[*] - MitCad" gives "Lid.mitcad"). Also the title published
-  // to assistants (mitcad#1149).
+  // placeholder of the modified mark and the " - MitCad <version>" after it
+  // ("Lid.mitcad[*] - MitCad 0.42.0" gives "Lid.mitcad"; mitcad#1209). Also
+  // the title published to assistants (mitcad#1149).
   static QString documentTitleOf(QString windowTitle);
 
   // The Floating layout's title row on Windows and Linux (mitcad#425,

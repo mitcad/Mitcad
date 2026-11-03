@@ -25,6 +25,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/NoticeLevel.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../platform/NativeDialogs.hpp"
 
@@ -98,6 +99,7 @@ CommentsWindow::CommentsWindow(QWidget* parent) : QDialog(parent) {
   layout->addLayout(filters);
 
   m_tree = new QTreeWidget(this);
+  panel::setCompactIndentation(m_tree, panel::Indent::Tree);
   m_tree->setObjectName(QStringLiteral("commentsTable"));
   m_tree->setAccessibleName(tr("Comments"));
   m_tree->setAccessibleDescription(tr("Select a comment to select and frame its target in the design"));

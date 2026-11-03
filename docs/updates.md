@@ -254,7 +254,16 @@ OpenSSL reads the system's `/etc/ssl/openssl.cnf` (the distribution's
 crypto policy), and Qt reads the system's CA certificates itself
 (`/etc/ssl/certs`, Fedora's `/etc/pki/tls/certs/ca-bundle.crt` and
 others). It loads no engine or provider module: TLS needs none
-([development.md](development.md#linux-appimage)).
+([development.md](development.md#linux-appimage)). When the system's
+configuration does not load in the bundled OpenSSL (mitcad#1208:
+openSUSE's crypto policy sets `rh-allow-sha1-signatures`, an option
+only its own OpenSSL knows), Qt would have no TLS (`Update check: TLS
+unavailable`). So MitCad checks at start-up, before any request, whether
+it loads: if it does, nothing changes; if not, MitCad loads the
+AppImage's own minimal configuration (`usr/share/mitcad/openssl.cnf`)
+in its place and logs `TLS: the system's OpenSSL configuration failed
+to load (<first error>); using the AppImage's own`. The certificate
+folders stay the system's.
 
 ### The manifest
 
@@ -504,7 +513,10 @@ MitCad at their own server only in a test build
   MitCad has quit and starts again as the release. The check uses the
   AppImage's own OpenSSL: the logged TLS library is the bundled
   libcrypto's version, and MitCad has loaded `libssl.so.3` and
-  `libcrypto.so.3` from the AppImage only.
+  `libcrypto.so.3` from the AppImage only. Two short runs before it set
+  `OPENSSL_CONF` to a configuration with an unknown option (MitCad falls
+  back to the AppImage's own, logs it once, and the check's TLS works)
+  and to one that loads (no fallback), mitcad#1208.
 
 #### The test hooks
 

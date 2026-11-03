@@ -176,7 +176,7 @@ start_b() {
   B_WINDOW=""
   for _ in $(seq 1 100); do
     # --all: B's process and the name (without it either would do).
-    B_WINDOW=$(xdotool search --all --pid "$B_PID" --onlyvisible --name ' - MitCad$' 2> /dev/null | head -1)
+    B_WINDOW=$(xdotool search --all --pid "$B_PID" --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | head -1)
     [ -n "$B_WINDOW" ] && break
     sleep 0.2
   done
@@ -324,7 +324,7 @@ b_expect "Remote notice: A newer version of block.mitcad is on the remote, saved
   "B's notice of the newer version"
 [ $(($(date +%s) - SENT)) -lt 30 ] || ui_fail "B learnt of the version after $(($(date +%s) - SENT)) s"
 echo "ok   B learnt of it in $(($(date +%s) - SENT)) s (its remote check timer: 10 min)"
-b_key ' - MitCad$' ctrl+q
+b_key ' - MitCad [^ ]+$' ctrl+q
 for _ in $(seq 1 50); do
   kill -0 "$B_PID" 2> /dev/null || break
   sleep 0.2

@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# The arrow keys turn the view (mitcad#1211) on view-arrow-keys.json, a
+# block: while the 3D view has the keyboard, Right turns the camera round
+# to the right by the step (15 degrees by default), Left back, Up round
+# upwards (also with a perspective camera), the zoom kept; with the
+# keyboard in a command panel's value field the key moves the text cursor
+# and the view stays. Run by tools/ui-view-arrow-keys-test.sh (Linux) and
+# tools/ui-windows-view-arrow-keys-test.ps1 (Windows).
+wait-idle
+command view.fit
+mark
+command view.front
+wait-log '^Camera direction 0 1 0 up 0 0 1 [(]orthographic[)]' 30
+
+# The 3D view has the keyboard: Right, the camera round to the right.
+focus-widget modelView
+capture-view-orientation front
+capture-view-height height
+mark
+key Right
+expect-log '^View turned right by 15 degrees$'
+expect-view-orientation ${front} changed
+expect-view-zoom ${height} unchanged
+wait-log '^Camera direction -0[.]259 0[.]966 -?0 up -?0 -?0 1 [(]orthographic[)]' 30
+# Left turns it back.
+mark
+key Left
+expect-log '^View turned left by 15 degrees$'
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]orthographic[)]' 30
+expect-view-orientation ${front} unchanged
+
+# Up with a perspective camera: round upwards, looking down by the step.
+command view.perspective
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]perspective[)]' 30
+focus-widget modelView
+capture-view-height height
+mark
+key Up
+expect-log '^View turned up by 15 degrees$'
+expect-view-zoom ${height} unchanged
+wait-log '^Camera direction -?0 0[.]966 -0[.]259 up -?0 0[.]259 0[.]966 [(]perspective[)]' 30
+mark
+key Down
+expect-log '^View turned down by 15 degrees$'
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]perspective[)]' 30
+command view.orthographic
+
+# The keyboard in a value field: Left moves the text cursor, the view stays.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Panel Extrude input distance at '
+# The field by name, as the other Extrude scripts do: a click at its
+# logged place left the keyboard in the view on Windows.
+focus-widget input_distance
+capture-view-orientation in_field
+mark
+key Left
+key Right
+expect-no-log '^View turned'
+expect-view-orientation ${in_field} unchanged
+# Back in the view, Esc cancels the command.
+focus-widget modelView
+key Escape
+wait-log '^Command Extrude cancelled'
+expect-never 'TestDriver: FAIL'

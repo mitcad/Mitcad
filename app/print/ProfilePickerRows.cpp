@@ -4,6 +4,7 @@
 #include <algorithm>
 
 #include <QChar>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QObject>
@@ -39,7 +40,70 @@ QString bareName(const LibraryItem& item) {
   return bare.isEmpty() ? item.name : bare;
 }
 
+// Adds `name` to `names` unless a name there names the same printer.
+void addPrinterName(QStringList& names, const QString& name) {
+  const QString trimmed = name.simplified();
+  if (trimmed.isEmpty()) {
+    return;
+  }
+  const bool known = std::any_of(names.begin(), names.end(),
+                                 [&trimmed](const QString& other) { return samePrinterName(other, trimmed); });
+  if (!known) {
+    names << trimmed;
+  }
+}
+
 } // namespace
+
+bool samePrinterName(const QString& a, const QString& b) {
+  const QString left = a.simplified();
+  return !left.isEmpty() && left.compare(b.simplified(), Qt::CaseInsensitive) == 0;
+}
+
+QString anyPrinterTitle() { return QObject::tr("Any printer"); }
+
+QStringList processPrinters(const LibraryItem& process) {
+  QStringList names;
+  const QJsonValue printers = process.row.value(QStringLiteral("printers"));
+  if (printers.isArray()) {
+    for (const QJsonValue& printer : printers.toArray()) {
+      addPrinterName(names, printer.toObject().value(QStringLiteral("printer")).toString());
+    }
+    return names;
+  }
+  // A row from before the model gave them: the printer after its `@`.
+  addPrinterName(names, textOf(process.row, "for_printer"));
+  return names;
+}
+
+QStringList printerNames(const LibraryItem& printer) {
+  QStringList names;
+  for (const QJsonValue& name : printer.row.value(QStringLiteral("printer_names")).toArray()) {
+    addPrinterName(names, name.toString());
+  }
+  if (names.isEmpty()) {
+    addPrinterName(names, printer.name);
+  }
+  return names;
+}
+
+QString processPickerGroup(const LibraryItem& process, const QStringList& chosenPrinter, bool* forChosen) {
+  const QStringList printers = processPrinters(process);
+  for (const QString& printer : printers) {
+    const bool chosen = std::any_of(chosenPrinter.begin(), chosenPrinter.end(),
+                                    [&printer](const QString& name) { return samePrinterName(name, printer); });
+    if (chosen) {
+      if (forChosen != nullptr) {
+        *forChosen = true;
+      }
+      return printer;
+    }
+  }
+  if (forChosen != nullptr) {
+    *forChosen = false;
+  }
+  return printers.isEmpty() ? QString() : printers.first();
+}
 
 QString printerVendor(const QString& bareName, const QStringList& bareNames) {
   const QStringList words = wordsOf(bareName);
@@ -103,7 +167,8 @@ QString profileSource(const LibraryItem& item) {
   return QObject::tr("This design");
 }
 
-QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, const QString& kind) {
+QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, const QString& kind,
+                                            const QStringList& chosenPrinter) {
   const bool printers = kind == QStringLiteral("printer");
   QStringList bareNames;
   for (const LibraryItem& item : items) {
@@ -132,16 +197,37 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
         row.shortName += QStringLiteral(" · ") + QObject::tr("%1 mm nozzle").arg(QString::number(nozzle));
       }
     } else {
-      // A process's printer, named after its `@`.
-      row.group = textOf(item.row, "for_printer").trimmed();
+      // A process's printer (mitcad#1216): the chosen one's when it is for
+      // it, else its first; by its name before the `@` under it.
+      row.group = processPickerGroup(item, chosenPrinter, &row.forChosen);
       row.shortName = row.group.isEmpty() ? item.name : bare;
     }
     grouped = grouped || !row.group.isEmpty();
     rows.append(row);
   }
-  // By group, the rows without one last; then by name, the same names by
-  // key.
+  // One heading per printer (mitcad#1216): as the first row names it.
+  if (!printers) {
+    QStringList spellings;
+    for (ProfilePickerRow& row : rows) {
+      if (row.group.isEmpty()) {
+        continue;
+      }
+      const QString group = row.group;
+      const auto known = std::find_if(spellings.cbegin(), spellings.cend(),
+                                      [&group](const QString& other) { return samePrinterName(other, group); });
+      if (known != spellings.cend()) {
+        row.group = *known;
+      } else {
+        spellings << group;
+      }
+    }
+  }
+  // The chosen printer's processes first, then by group, the rows without
+  // one last; then by name, the same names by key.
   std::stable_sort(rows.begin(), rows.end(), [](const ProfilePickerRow& a, const ProfilePickerRow& b) {
+    if (a.forChosen != b.forChosen) {
+      return a.forChosen;
+    }
     if (a.group.isEmpty() != b.group.isEmpty()) {
       return b.group.isEmpty();
     }
@@ -155,7 +241,8 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
   if (grouped) {
     for (ProfilePickerRow& row : rows) {
       if (row.group.isEmpty()) {
-        row.group = QObject::tr("Other");
+        // A process for any printer (mitcad#1216), a printer of no vendor.
+        row.group = printers ? QObject::tr("Other") : anyPrinterTitle();
       }
     }
   }

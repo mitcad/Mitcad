@@ -149,6 +149,9 @@ struct FileOut<'a> {
     comments: &'a [Comment],
     #[serde(skip_serializing_if = "Option::is_none")]
     next_comment: Option<u32>,
+    // The print plates (mitcad#1050), when there are any.
+    #[serde(skip_serializing_if = "<[crate::print_plates::PrintPlate]>::is_empty")]
+    print_plates: &'a [crate::print_plates::PrintPlate],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -520,6 +523,7 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
         tables: &state.tables,
         comments: &state.comments,
         next_comment: next_comment_out(state),
+        print_plates: &state.print_plates,
         statistics,
     };
     let mut json =
@@ -808,7 +812,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 40] = [
+const TOP_FIELDS: [&str; 41] = [
     "format",
     "version",
     "units",
@@ -868,6 +872,8 @@ const TOP_FIELDS: [&str; 40] = [
     // Comments and the next comment's number (mitcad#1119).
     "comments",
     "next_comment",
+    // The print plates (mitcad#1050).
+    "print_plates",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1401,6 +1407,31 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // The print plates (mitcad#1050): each valid, each id and name once.
+    // An item whose body or occurrence is not in the design is kept.
+    let print_plates = array(&mut top, "print_plates", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let plate = serde_json::from_value::<crate::print_plates::PrintPlate>(p)
+                .map_err(|e| schema(format!("print_plates[{i}]: {e}")))?;
+            plate
+                .check()
+                .map_err(|e| invalid(format!("print_plates[{i}]: {e}")))?;
+            Ok(plate)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    for (i, plate) in print_plates.iter().enumerate() {
+        if print_plates[..i]
+            .iter()
+            .any(|p| p.id == plate.id || p.name.trim().eq_ignore_ascii_case(plate.name.trim()))
+        {
+            return Err(invalid(format!(
+                "print_plates[{i}]: plate {} is listed more than once",
+                plate.name
+            )));
+        }
+    }
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -1847,6 +1878,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.comments = file_comments;
     state.next_comment = next_comment;
     state.purge_volumes = purge_volumes;
+    state.print_plates = print_plates;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

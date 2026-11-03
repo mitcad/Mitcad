@@ -195,8 +195,8 @@ ui_mark
 ui_step "New (Ctrl+N)"                     ui_key ctrl+n
 ui_expect_new "New design in in" "New makes a design in inches"
 ui_expect_new "Opened the new design with Component1 active" "the new design is open"
-[ "$(xdotool getwindowname "$UI_WINDOW")" = "Untitled - MitCad" ] ||
-  ui_fail "the new design is modified: '$(xdotool getwindowname "$UI_WINDOW")'"
+[ "$(ui_window_title)" = "Untitled - MitCad" ] ||
+  ui_fail "the new design is modified: '$(ui_window_title)'"
 echo "ok   the new design is not modified"
 expect_units in "the browser shows Units: in"
 ui_step "create sketch on XY"              ui_create_sketch xy

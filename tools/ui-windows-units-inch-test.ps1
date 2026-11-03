@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/LengthUnits.cpp app/commands/InspectCommands.cpp tools/cli
+# check-all sources: app/view/GridSpacing.cpp app/view/ViewController.cpp app/OcctViewer.cpp
 # Lengths in the design's unit (mitcad#1165) in the build VM, as
 # tools/ui-units-inch-test.sh on Linux: the shared steps
 # tools/ui-scripts/units-inch.mitcad-ui on the design in inches that
 # mitcad-cli makes (tools/cli/tests/units_inch.json): the Browser's
 # sheet-rules row in inches, Extrude's default distance as 0.5 in, Measure's
-# area and distances in inches.
+# area and distances in inches; the layout grid in inches (mitcad#1210):
+# Grid Settings' fixed spacing, the automatic inch series when zooming, and
+# the metric grid after the design is set to mm.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-units-inch-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -30,6 +33,6 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "units in inches driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'TestDriver: done' 'the sheet-rules row, Extrude and Measure in inches'
+Ui-ExpectLog 'TestDriver: done' 'the sheet-rules row, Extrude, Measure and the layout grid in inches'
 Ui-StopApp
 Write-Host 'PASS: lengths in the design unit'

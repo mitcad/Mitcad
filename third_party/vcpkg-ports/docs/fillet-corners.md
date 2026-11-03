@@ -1,4 +1,4 @@
-# Fillet corners where a rounding ends: 0130–0540, 1140, 1170
+# Fillet corners where a rounding ends: 0130–0540, 1140, 1170, 1210, 1220
 
 The corners OCCT's rolling ball fillet builds where a rounding ends at a
 vertex (`PerformIntersectionAtEnd`, `PerformOneCorner`), in the rounds of
@@ -42,6 +42,15 @@ mitcad#342. Most cases are rebuilt with OCCT alone in
   contact's face (mitcad#236).
 - **1170** takes 1140's end wherever the edge's faces go on meeting along
   its curve continued, and over pieces given up at the end (mitcad#236).
+- **1220** ends a rounding whose contact stops at a slight crease of its
+  face square to the plane at the end: the ball turns on about the crease
+  (mitcad#1203).
+
+- **1210** rounds over the mouths of slots whose rounded ends touch the
+  top face along a crest line, as a construction of its own where the
+  corners fail there: the body rounded with slabs through the mouths cut
+  out, the slabs put back with the blends prolonged across them and the
+  slots' ends grown up to the blends (mitcad#1204).
 
 ## 0130: a rounding vanishing at a tangent end
 
@@ -521,6 +530,116 @@ along it and for a wall and a cylinder running on along their vertical
 edge. The wall grows down to the cut, its edge with the corner's rounding
 prolonged down to the end, as in the files' bodies.
 
+## 1220: the ball turning about a crease at the end
+
+The patch 1220 follows mitcad#236's rounds (mitcad#1203): a rounding along
+a bar's end face whose contact on the bar stops at a crease with a concave
+arc that just overlaps the bar.
+
+### 1220-chfi3d-ball-pivots-about-a-crease-at-the-end
+
+A rounding along the outline of a bar's end face, a plane, where a concave
+arc meets the bar with a small overlap: the bar's cylinder and the arc's
+meet along a line L square to the end face at a slight crease, and the bar
+keeps only a sliver between L and the end vertex, rounded along its rim.
+The walk stops at L's section (the contact on the bar reaches L, the one
+on the end face lies inside it), and the corner failed ("Corner OnSame :
+no point on arc"). The file's body rounds on with the ball turning about
+L while it touches the end face, until it reaches the end face's edge: a
+horn torus about L, cut by the faces it meets (the sliver, its rim
+rounding, the arc's cylinder).
+
+`PerformPivotAboutCreaseAtEnd`, a construction of its own beside 0951's
+`PerformPivotAtStepEnd` and tried after it, builds that: where the end
+piece's contact on one face stops at a point P inside a line edge L of it,
+square to the other face, a plane, at a crease of less than 30 degrees
+with the face beyond L, and the end's vertex lies past L (where it is L's
+own end, as for a rounding stopped at a crease, the faces beyond L cut the
+end as before), the stripe ends at L's section (the pieces past
+it dropped) and a corner stripe of the horn torus about L closes the end.
+The torus's quarter towards the plane is sectioned with the solid
+(`BRepAlgoAPI_Section`), and the chain of section edges from P to the
+plane gives the pieces of the corner stripe, one face: the turn about P,
+its side on the crease face degenerated at the apex, then one piece per
+face cut, all against the plane along the circle about L's foot up to the
+plane's edge with the last face cut. At a first end the corner stripe
+comes before the stripe, its pieces reversed. The degenerated side's
+transition is the one that orients the face as the contact's does
+(`ChFi3d_FilDS` orients a blend face's edges from side 1's alone).
+
+## 1210: a rounding over slot mouths that touch the top along a crest
+
+### 1210-brepfilletapi-rounding-over-slot-mouths-touching-the-top-along-a-crest
+
+A rim of eight arcs (a circle of radius 93.5 between a top plane and eight
+pieces of an outer cylinder, 2.17 high above a rounding of 5) rounded with
+2.5. At each of the eight vertices between the arcs a fin 1.5 thick stands
+out of the wall; its top is a cylinder of radius 0.75 about an axis 0.75
+under the top, so that the top plane and that cylinder touch along the
+crest line with no edge there. Four edges meet at each vertex: the two
+arcs and the two curves where the fin's cylinder cuts the two cylinder
+pieces. The chain stops there, and the corner's walk round the vertex
+finds no edge between the top plane and the fin's cylinder
+(`ChFi3d_Builder_0.cxx`, "Failed to find edge"): the fillet fails at all
+eight vertices. The file's body after the rounding runs each arc's blend
+on past the vertex over the fin's top, cut by the fin's side wall and then
+by its top cylinder, which grows inwards to the blends up to the crest's
+point on the top plane, (90.978, 0, 307.4635) at the mouth on the x axis,
+where the two blends meet.
+
+No corner builder of ChFi3d cuts a blend with faces that do not hold the
+vertex's edges, so this is a construction of its own, outside ChFi3d's
+corners: `BRepFilletAPI_MakeFillet::Build` tries `BuildOverSlotMouths`
+(`BRepFilletAPI_MakeFillet_SlotMouths.cxx`) where the computation failed
+only at faulty vertices, each of them such a mouth (`FindSlotMouth`: four
+edges there, two of them rounded with the same constant radius and
+tangent there, between a plane T and two faces A and B; the other two
+between A and a cylinder C and between B and C; C's radius smaller than
+the rounding's, its axis parallel to T and under it by C's radius, the
+vertex on the crest line). It
+
+1. cuts a slab through each mouth out of the body: C's diameter wide,
+   from four radii inside to four outside along C's axis, from three radii
+   below the crest to one above;
+2. rounds that body with the same edges' images, radii and parameters
+   (`SetParams`, `StopChainsAtTurns`): each arc's blend now ends at the
+   slab's walls, a plain end OCCT builds;
+3. puts each slab's part of the body back less what lies past the blends
+   beside it: each blend's surface prolonged across the slab (by twice the
+   slab's half width along the rounding, and past its contact away from
+   the top by six), a half slab round its end section split by it and by
+   the top's plane, and the piece holding the rim's corner taken; each such
+   piece less the fin's top under C (the part under C's axis and inside C,
+   prolonged along it, wider and longer than the slab), one piece at a
+   time, so that C and the fin's walls grow up to the blends; then the
+   body in the slabs less all those pieces at once;
+4. fuses that with the rounded body (each boolean once for all the slabs,
+   run in parallel), and takes the result only where it is a valid single
+   solid.
+
+Cut all at once, the pieces of a slab's two halves (which touch) and the
+fins' tops sharing faces with them came out wrong at some mouths, a fin's
+top left 0.75 lower than the file's at one mouth of eight; one piece at a
+time they all come out alike.
+
+The result's history gives each face from the body's face on its surface
+(or the one it lies on), or as generated from the rounded edge whose blend
+or prolonged blend it lies on, and the body's faces with no image as
+removed (`Generated`, `Modified` and `IsDeleted` read it).
+`ChFi3d_Builder` gives its shape, parameters and `StopChainsAtTurns`
+setting for the inner rounding (`InitialShape`, `Params`,
+`StopsChainsAtTurns`, `ChainTurnThrough`). Every other fillet is as
+before.
+
+On the file's body before the item: valid, 304 faces, every face of the
+result on the file's body within 2 µm and every face of the file's above
+the rim's rounding on the result within 2 µm (OCCT's walked blend against
+the file's along the arcs); the boolean differences of the two bodies are
+empty both ways with a fuzzy value of 2 µm (without one, OCCT's booleans
+fail on the faces 2 µm apart). Against the file's body, the material within
+a wedge of 6 degrees round a mouth is 0.04 mm³ more, within the arc beside
+it (39 degrees) 0.19 mm³ more. The rounding of the rim takes about 10 s.
+
 ## Reports and tests
 
 - 0130 to 0139, 0210 to 0219, 0280 to 0289, 0290 to 0299, 0340 to 0349 and
@@ -550,3 +669,13 @@ prolonged down to the end, as in the files' bodies.
   wall, against the lower block alone rounded on the far side of the
   wall's plane (failing without the patch), in
   `geometry/tests/test_fillet_corners.cpp`.
+- 1220: mitcad#1203 and a bar with a concave arc meeting it with a small
+  overlap, its rim rounded, the end face's outline rounded (failing
+  without the patch), against the horn torus about the crease, in
+  `geometry/tests/test_fillet_corners.cpp`.
+- 1210: mitcad#1204 and the case `fillet-slot-mouths` of
+  `MITCAD_GEOMETRY_CASES` (`body.brep`, the reported design's body before
+  the rounding; its tangent crests cannot be built with OCCT's booleans) in
+  `geometry/tests/test_fillet_slot_mouths.cpp`: the eight arcs rounded with
+  OCCT alone, valid, of the expected volume within 1e-6, the history's
+  faces (failing without the patch).

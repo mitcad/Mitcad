@@ -19,6 +19,7 @@
 #include <QtLogging>
 
 #include "../platform/NativeDialogs.hpp"
+#include "PanelTree.hpp"
 
 namespace mitcad {
 namespace {
@@ -217,6 +218,7 @@ CutTargetsPanel::CutTargetsPanel(QWidget* parent) : QWidget(parent) {
   m_status->setWordWrap(true);
   layout->addWidget(m_status);
   m_tree = new QTreeWidget;
+  panel::setCompactIndentation(m_tree, panel::Indent::Tree);
   m_tree->setObjectName(QStringLiteral("cut_targets_list"));
   m_tree->setProperty("nativeModelHoverEvents", true);
   m_tree->setHeaderHidden(true);

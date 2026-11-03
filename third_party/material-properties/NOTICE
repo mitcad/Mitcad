@@ -1,0 +1,20 @@
+Mitcad's bundled material dataset
+
+This folder's materials.json contains material property data from the
+material-properties dataset (https://github.com/KittyCAD/material-properties),
+commit 61088092d5a90bcf4e0beee0c6a36783776a3a88, copyright the
+material-properties contributors, licensed under the Apache License,
+Version 2.0 (the LICENSE file in this folder).
+
+The data was changed: the dataset's files (materials/*.json) were converted
+into Mitcad's materials exchange format, one list of materials in the
+dataset's own units (psi, lb/in3, degrees Fahrenheit, microinches per inch
+and degree Fahrenheit). The materials were named after their file, material
+and grade; the ultimate strength and the elongation were left out; the
+minimum and maximum extruder and bed temperatures of the printing
+materials were kept as the extruder temperature range and the midpoints of
+the ranges as the extruder and the bed temperature. The values themselves
+are the dataset's.
+
+The values are typical values for the materials. Check them against the
+supplier's data before relying on them.

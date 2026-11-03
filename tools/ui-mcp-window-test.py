@@ -81,7 +81,11 @@ def run(app, cli, output, binary_path=None):
             # The driver's window-activate steps done so far. A window also
             # records an activation when it is first shown, so its
             # activated_at alone does not say that the step has run: under
-            # load the other window's step could come before it.
+            # load the other window's step could come before it. The step
+            # prints its line only once the window is active and has
+            # recorded the activation at the step's time, so no activation
+            # of its own can arrive after the other window's step
+            # (mitcad#1206).
             text = (out / (label + ".log")).read_text(encoding="utf-8", errors="replace")
             return text.count("Assistant window activated")
 

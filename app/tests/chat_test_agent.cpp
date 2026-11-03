@@ -40,12 +40,29 @@
 // deltas, mcpToolCall items and turn/completed) and turn/interrupt ("wait"
 // ends as interrupted). Its starts record the thread requests' parameters
 // (the model among them), its messages the turn's model too.
+//
+// Copied as `acp-test-agent` it is a custom command that speaks the Agent
+// Client Protocol (mitcad#1198, core/mcp/src/chat/acp.rs) in the shapes of
+// the protocol's published schema (version 1): initialize (it checks that
+// MitCad offers no file system and no terminal), session/new and
+// session/load (MitCad's bridge as the only MCP server, which it starts; a
+// loaded session replays an earlier exchange, which MitCad must not show
+// again), a model selector (two test models, session/set_config_option),
+// session/prompt by the same words as above (agent_message_chunk,
+// tool_call and tool_call_update updates; "box" first asks permission for
+// an edit of its own, which MitCad must reject, and reads a file through
+// MitCad, which MitCad must refuse, then asks permission for MitCad's tool,
+// which MitCad must allow) and session/cancel ("wait" ends cancelled). The
+// permissions and the refusal are recorded in acp-checks.jsonl. Copied as
+// `not-acp` it writes a line that is no message of the protocol and ends:
+// a command that does not answer the handshake.
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <deque>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -474,6 +491,27 @@ public:
     return false;
   }
 
+  // The first waiting message that `wanted` accepts, taken out; waits up
+  // to `ms` for it.
+  bool take(const std::function<bool(const QJsonObject&)>& wanted, int ms, QJsonObject* found) {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    for (;;) {
+      for (auto line = m_lines.begin(); line != m_lines.end(); ++line) {
+        const QJsonObject message = QJsonDocument::fromJson(QByteArray::fromStdString(*line)).object();
+        if (wanted(message)) {
+          *found = message;
+          m_lines.erase(line);
+          return true;
+        }
+      }
+      if (m_closed || std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      m_ready.wait_until(lock, deadline);
+    }
+  }
+
 private:
   void read() {
     std::string line;
@@ -820,11 +858,363 @@ int appServer(const QStringList& args) {
   return 0;
 }
 
+// The Agent Client Protocol (mitcad#1198): JSON-RPC 2.0, one message per
+// line.
+void acpEmit(QJsonObject message) {
+  message.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
+  emitLine(message);
+}
+
+void acpReply(const QJsonValue& id, const QJsonObject& result) {
+  acpEmit({{QStringLiteral("id"), id}, {QStringLiteral("result"), result}});
+}
+
+void acpError(const QJsonValue& id, int code, const QString& message) {
+  acpEmit({{QStringLiteral("id"), id},
+           {QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), code}, {QStringLiteral("message"), message}}}});
+}
+
+void acpUpdate(const QString& session, const QJsonObject& update) {
+  acpEmit({{QStringLiteral("method"), QStringLiteral("session/update")},
+           {QStringLiteral("params"), QJsonObject{{QStringLiteral("sessionId"), session}, {QStringLiteral("update"), update}}}});
+}
+
+QJsonObject acpText(const QString& text) {
+  return {{QStringLiteral("type"), QStringLiteral("text")}, {QStringLiteral("text"), text}};
+}
+
+// The session's model selector, its two test models.
+QJsonArray acpConfig(const QString& current) {
+  QJsonArray options;
+  options.append(QJsonObject{{QStringLiteral("value"), QStringLiteral("test-acp-model")},
+                             {QStringLiteral("name"), QStringLiteral("Test ACP model")}});
+  options.append(QJsonObject{{QStringLiteral("value"), QStringLiteral("test-acp-large")},
+                             {QStringLiteral("name"), QStringLiteral("Test ACP large")}});
+  QJsonArray config;
+  config.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("model")},
+                            {QStringLiteral("name"), QStringLiteral("Model")},
+                            {QStringLiteral("category"), QStringLiteral("model")},
+                            {QStringLiteral("type"), QStringLiteral("select")},
+                            {QStringLiteral("currentValue"), current},
+                            {QStringLiteral("options"), options}});
+  return config;
+}
+
+class AcpTurn {
+public:
+  AcpTurn(QString session, Bridge& bridge, Inbox& inbox, int& next)
+      : m_session(std::move(session)), m_bridge(bridge), m_inbox(inbox), m_next(next) {}
+
+  void answer(const QString& text) {
+    const qsizetype half = text.size() / 2;
+    const QStringList pieces{text.left(half), text.mid(half)};
+    for (const QString& piece : pieces) {
+      acpUpdate(m_session, {{QStringLiteral("sessionUpdate"), QStringLiteral("agent_message_chunk")},
+                            {QStringLiteral("content"), acpText(piece)}});
+    }
+  }
+
+  // A request of the agent to MitCad; its answer (empty: none in time).
+  QJsonObject ask(const QString& method, const QJsonObject& params) {
+    const int id = m_next++;
+    acpEmit({{QStringLiteral("id"), id}, {QStringLiteral("method"), method}, {QStringLiteral("params"), params}});
+    QJsonObject answer;
+    m_inbox.take([id](const QJsonObject& message) {
+      return !message.contains(QStringLiteral("method")) && message.value(QStringLiteral("id")).toInt(-1) == id;
+    }, 60000, &answer);
+    return answer;
+  }
+
+  // Permission for a tool call, with the four options; the option chosen
+  // (empty: refused or cancelled), recorded in acp-checks.jsonl.
+  QString permission(const QString& call, const QString& title, const QString& kind) {
+    QJsonArray options;
+    for (const char* option : {"allow_once", "allow_always", "reject_once", "reject_always"}) {
+      options.append(QJsonObject{{QStringLiteral("optionId"), QStringLiteral("opt_") + QString::fromLatin1(option)},
+                                 {QStringLiteral("name"), QString::fromLatin1(option)},
+                                 {QStringLiteral("kind"), QString::fromLatin1(option)}});
+    }
+    const QJsonObject answer = ask(
+        QStringLiteral("session/request_permission"),
+        {{QStringLiteral("sessionId"), m_session},
+         {QStringLiteral("toolCall"), QJsonObject{{QStringLiteral("toolCallId"), call},
+                                                  {QStringLiteral("title"), title},
+                                                  {QStringLiteral("kind"), kind}}},
+         {QStringLiteral("options"), options}});
+    const QJsonObject outcome = answer.value(QStringLiteral("result")).toObject().value(QStringLiteral("outcome")).toObject();
+    const QString chosen = outcome.value(QStringLiteral("optionId")).toString();
+    appendLine(QStringLiteral("acp-checks.jsonl"), {{QStringLiteral("check"), QStringLiteral("permission")},
+                                                    {QStringLiteral("title"), title},
+                                                    {QStringLiteral("outcome"), outcome.value(QStringLiteral("outcome"))},
+                                                    {QStringLiteral("option"), chosen}});
+    return chosen;
+  }
+
+  // A file read through MitCad: it must be refused (no file system).
+  void readFile() {
+    const QJsonObject answer = ask(QStringLiteral("fs/read_text_file"),
+                                   {{QStringLiteral("sessionId"), m_session},
+                                    {QStringLiteral("path"), QDir(work()).absoluteFilePath(QStringLiteral("notes.txt"))}});
+    appendLine(QStringLiteral("acp-checks.jsonl"),
+               {{QStringLiteral("check"), QStringLiteral("fs/read_text_file")},
+                {QStringLiteral("error"), answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("code"))}});
+  }
+
+  // One of MitCad's tools through the bridge, shown as the protocol's tool
+  // call; `asked`: permission is asked first.
+  QJsonObject call(const QString& name, const QJsonObject& arguments, bool* error, bool asked = false) {
+    ++m_calls;
+    const QString id = QStringLiteral("call_%1").arg(m_calls);
+    const QString title = QStringLiteral("mcp__mitcad__") + name;
+    acpUpdate(m_session, {{QStringLiteral("sessionUpdate"), QStringLiteral("tool_call")},
+                          {QStringLiteral("toolCallId"), id},
+                          {QStringLiteral("title"), title},
+                          {QStringLiteral("kind"), QStringLiteral("other")},
+                          {QStringLiteral("status"), QStringLiteral("pending")},
+                          {QStringLiteral("rawInput"), arguments}});
+    if (asked && !permission(id, title, QStringLiteral("other")).startsWith(QStringLiteral("opt_allow"))) {
+      *error = true;
+      acpUpdate(m_session, {{QStringLiteral("sessionUpdate"), QStringLiteral("tool_call_update")},
+                            {QStringLiteral("toolCallId"), id},
+                            {QStringLiteral("status"), QStringLiteral("failed")}});
+      return {};
+    }
+    acpUpdate(m_session, {{QStringLiteral("sessionUpdate"), QStringLiteral("tool_call_update")},
+                          {QStringLiteral("toolCallId"), id},
+                          {QStringLiteral("status"), QStringLiteral("in_progress")}});
+    const QJsonObject result = m_bridge.tool(name, arguments, error);
+    QJsonArray content;
+    content.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("content")},
+                               {QStringLiteral("content"), acpText(QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)))}});
+    acpUpdate(m_session, {{QStringLiteral("sessionUpdate"), QStringLiteral("tool_call_update")},
+                          {QStringLiteral("toolCallId"), id},
+                          {QStringLiteral("status"), *error ? QStringLiteral("failed") : QStringLiteral("completed")},
+                          {QStringLiteral("content"), content}});
+    return result;
+  }
+
+  QString document() {
+    bool error = false;
+    const QJsonObject listed = m_bridge.tool(QStringLiteral("document_list"), QJsonObject(), &error);
+    return listed.value(QStringLiteral("documents")).toArray().at(0).toObject().value(QStringLiteral("document")).toString();
+  }
+
+private:
+  QString m_session;
+  Bridge& m_bridge;
+  Inbox& m_inbox;
+  int& m_next;
+  int m_calls = 0;
+};
+
+// The session's MCP servers as MitCad must give them: its bridge alone, with
+// the chat's marker.
+bool expectedServers(const QJsonObject& params, QString* program, QStringList* arguments) {
+  const QJsonArray servers = params.value(QStringLiteral("mcpServers")).toArray();
+  if (servers.size() != 1) {
+    return false;
+  }
+  const QJsonObject server = servers.at(0).toObject();
+  for (const QJsonValue& argument : server.value(QStringLiteral("args")).toArray()) {
+    arguments->append(argument.toString());
+  }
+  *program = server.value(QStringLiteral("command")).toString();
+  return server.value(QStringLiteral("name")).toString() == QStringLiteral("mitcad") && !program->isEmpty() &&
+         server.value(QStringLiteral("env")).isArray() && arguments->contains(QStringLiteral("--chat-session")) &&
+         QDir::isAbsolutePath(params.value(QStringLiteral("cwd")).toString());
+}
+
+int acpAgent(const QStringList& args) {
+  appendLine(QStringLiteral("chat-starts.jsonl"),
+             {{QStringLiteral("agent"), QStringLiteral("acp")}, {QStringLiteral("argv"), QJsonArray::fromStringList(args)}});
+  const QDir sessions(QDir(work()).filePath(QStringLiteral("acp-sessions")));
+  QDir().mkpath(sessions.path());
+  Inbox inbox;
+  Bridge bridge;
+  bool connected = false;
+  bool bridgeStarted = false;
+  QString session;
+  QString model = QStringLiteral("test-acp-model");
+  int next = 100;
+  QJsonObject message;
+  while (inbox.next(&message)) {
+    const QString method = message.value(QStringLiteral("method")).toString();
+    const QJsonValue id = message.value(QStringLiteral("id"));
+    const QJsonObject params = message.value(QStringLiteral("params")).toObject();
+    if (message.value(QStringLiteral("jsonrpc")).toString() != QStringLiteral("2.0")) {
+      std::fputs("test agent: a message without jsonrpc 2.0\n", stderr);
+      if (!id.isUndefined()) {
+        acpError(id, -32600, QStringLiteral("Invalid Request"));
+      }
+      continue;
+    }
+    if (method == QStringLiteral("initialize")) {
+      const QJsonObject client = params.value(QStringLiteral("clientCapabilities")).toObject();
+      const QJsonObject files = client.value(QStringLiteral("fs")).toObject();
+      if (params.value(QStringLiteral("protocolVersion")).toInt() != 1 ||
+          files.value(QStringLiteral("readTextFile")).toBool(true) || files.value(QStringLiteral("writeTextFile")).toBool(true) ||
+          client.value(QStringLiteral("terminal")).toBool(true)) {
+        std::fputs("test agent: unexpected initialize\n", stderr);
+        acpError(id, -32602, QStringLiteral("test agent: unexpected initialize"));
+        continue;
+      }
+      acpReply(id, {{QStringLiteral("protocolVersion"), 1},
+                    {QStringLiteral("agentCapabilities"),
+                     QJsonObject{{QStringLiteral("loadSession"), true},
+                                 {QStringLiteral("promptCapabilities"),
+                                  QJsonObject{{QStringLiteral("image"), true},
+                                              {QStringLiteral("audio"), false},
+                                              {QStringLiteral("embeddedContext"), false}}}}},
+                    {QStringLiteral("agentInfo"), QJsonObject{{QStringLiteral("name"), QStringLiteral("acp-test-agent")},
+                                                              {QStringLiteral("title"), QStringLiteral("ACP test agent")},
+                                                              {QStringLiteral("version"), QStringLiteral("1.0.0")}}},
+                    {QStringLiteral("authMethods"), QJsonArray()}});
+    } else if (method == QStringLiteral("session/new") || method == QStringLiteral("session/load")) {
+      appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("agent"), QStringLiteral("acp")},
+                                                       {QStringLiteral("method"), method},
+                                                       {QStringLiteral("params"), params}});
+      QString program;
+      QStringList arguments;
+      if (!expectedServers(params, &program, &arguments)) {
+        std::fputs("test agent: unexpected MCP servers\n", stderr);
+        acpError(id, -32602, QStringLiteral("test agent: unexpected MCP servers"));
+        continue;
+      }
+      if (method == QStringLiteral("session/load")) {
+        const QString wanted = params.value(QStringLiteral("sessionId")).toString();
+        if (wanted.isEmpty() || !QFileInfo::exists(sessions.filePath(wanted))) {
+          acpError(id, -32002, QStringLiteral("Resource not found: session %1").arg(wanted));
+          continue;
+        }
+        session = wanted;
+      } else {
+        session = QStringLiteral("sess_") + QUuid::createUuid().toString(QUuid::Id128);
+      }
+      if (!bridgeStarted) {
+        bridgeStarted = true;
+        connected = bridge.start(program, arguments, QStringLiteral("acp-test-agent"));
+      }
+      if (method == QStringLiteral("session/load")) {
+        // The protocol's replay of the conversation before the answer:
+        // MitCad shows its own history instead.
+        acpUpdate(session, {{QStringLiteral("sessionUpdate"), QStringLiteral("user_message_chunk")},
+                            {QStringLiteral("content"), acpText(QStringLiteral("An earlier message, replayed."))}});
+        acpUpdate(session, {{QStringLiteral("sessionUpdate"), QStringLiteral("agent_message_chunk")},
+                            {QStringLiteral("content"), acpText(QStringLiteral("An earlier answer, replayed."))}});
+        acpReply(id, {{QStringLiteral("configOptions"), acpConfig(model)}});
+      } else {
+        acpReply(id, {{QStringLiteral("sessionId"), session}, {QStringLiteral("configOptions"), acpConfig(model)}});
+      }
+    } else if (method == QStringLiteral("session/set_config_option")) {
+      appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("agent"), QStringLiteral("acp")},
+                                                       {QStringLiteral("method"), method},
+                                                       {QStringLiteral("params"), params}});
+      if (params.value(QStringLiteral("configId")).toString() != QStringLiteral("model")) {
+        acpError(id, -32602, QStringLiteral("test agent: no such option"));
+        continue;
+      }
+      model = params.value(QStringLiteral("value")).toString();
+      acpReply(id, {{QStringLiteral("configOptions"), acpConfig(model)}});
+    } else if (method == QStringLiteral("session/prompt")) {
+      if (params.value(QStringLiteral("sessionId")).toString() != session || session.isEmpty()) {
+        acpError(id, -32602, QStringLiteral("test agent: no such session"));
+        continue;
+      }
+      QFile known(sessions.filePath(session));
+      if (!known.exists() && known.open(QIODevice::WriteOnly)) {
+        known.close();
+      }
+      QString text;
+      QString context;
+      QJsonArray pictures;
+      for (const QJsonValue& value : params.value(QStringLiteral("prompt")).toArray()) {
+        const QJsonObject part = value.toObject();
+        const QString type = part.value(QStringLiteral("type")).toString();
+        if (type == QStringLiteral("text")) {
+          (text.isEmpty() ? text : context) = part.value(QStringLiteral("text")).toString();
+        } else if (type == QStringLiteral("image")) {
+          pictures.append(part.value(QStringLiteral("mimeType")));
+        }
+      }
+      appendLine(QStringLiteral("chat-messages.jsonl"), {{QStringLiteral("agent"), QStringLiteral("acp")},
+                                                         {QStringLiteral("session"), session},
+                                                         {QStringLiteral("text"), text},
+                                                         {QStringLiteral("context"), context},
+                                                         {QStringLiteral("pictures"), pictures},
+                                                         {QStringLiteral("model"), model}});
+      AcpTurn turn(session, bridge, inbox, next);
+      const auto stopped = [&id](const QString& reason) { acpReply(id, {{QStringLiteral("stopReason"), reason}}); };
+      if (!connected) {
+        turn.answer(QStringLiteral("MitCad's tools are not connected."));
+        acpError(id, -32603, QStringLiteral("MitCad's tools are not connected."));
+        continue;
+      }
+      bool error = false;
+      if (networkDown(text)) {
+        acpError(id, -32603, networkFailure());
+      } else if (text.contains(QStringLiteral("box"))) {
+        turn.answer(QStringLiteral("Adding the boxes."));
+        // An edit of its own and a file read through MitCad first: both
+        // must be refused.
+        turn.permission(QStringLiteral("call_own"), QStringLiteral("Write notes.txt"), QStringLiteral("edit"));
+        turn.readFile();
+        const QString document = turn.document();
+        turn.call(QStringLiteral("model_command"), box(document, 0, 20, 30, 10), &error, true);
+        turn.call(QStringLiteral("model_command"), box(document, 40, 10, 10, 10), &error);
+        turn.answer(QStringLiteral("Two boxes are in the design."));
+        stopped(QStringLiteral("end_turn"));
+      } else if (text.contains(QStringLiteral("save"))) {
+        turn.answer(QStringLiteral("Saving the design."));
+        const QString document = turn.document();
+        turn.call(QStringLiteral("document_save"),
+                  {{QStringLiteral("document"), document},
+                   {QStringLiteral("path"), qEnvironmentVariable("MITCAD_TEST_CHAT_SAVE_PATH")},
+                   {QStringLiteral("overwrite"), true}},
+                  &error);
+        turn.answer(error ? QStringLiteral("The design was not saved.") : QStringLiteral("Saved."));
+        stopped(QStringLiteral("end_turn"));
+      } else if (text.contains(QStringLiteral("wait"))) {
+        turn.answer(QStringLiteral("Waiting to be stopped."));
+        QJsonObject cancel;
+        const bool asked = inbox.take([](const QJsonObject& candidate) {
+          return candidate.value(QStringLiteral("method")).toString() == QStringLiteral("session/cancel");
+        }, 60000, &cancel);
+        stopped(asked ? QStringLiteral("cancelled") : QStringLiteral("end_turn"));
+      } else {
+        turn.answer(QStringLiteral("Hello from the test agent: %1 characters of context, %2 picture(s).")
+                        .arg(context.size())
+                        .arg(pictures.size()));
+        stopped(QStringLiteral("end_turn"));
+      }
+    } else if (method == QStringLiteral("session/cancel")) {
+      // Nothing runs: nothing to cancel.
+    } else if (!id.isUndefined() && !method.isEmpty()) {
+      acpError(id, -32601, QStringLiteral("test agent: %1 is not handled").arg(method));
+    }
+  }
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   const QStringList args = app.arguments().mid(1);
+  const QString called = QFileInfo(QCoreApplication::applicationFilePath()).baseName();
+  // Copied as `acp-test-agent`: a custom command over the Agent Client
+  // Protocol; as `not-acp`: a command that does not answer its handshake.
+  if (called == QStringLiteral("acp-test-agent")) {
+    return acpAgent(args);
+  }
+  if (called == QStringLiteral("not-acp")) {
+    // It answers nothing, and ends with its input.
+    std::fputs("This program does not speak the Agent Client Protocol.\n", stdout);
+    std::fflush(stdout);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+    }
+    return 0;
+  }
   // Copied as `codex` (codex.exe): Codex's commands.
   if (QFileInfo(QCoreApplication::applicationFilePath()).baseName() == QStringLiteral("codex")) {
     const QString codexIn = QDir(work()).filePath(QStringLiteral("codex-signed-in"));

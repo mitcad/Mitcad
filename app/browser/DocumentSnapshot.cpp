@@ -232,6 +232,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.sketches = f.value(QStringLiteral("sketches")).toVariant().toStringList();
     // The condition it is suppressed under (mitcad#800, mitcad#809).
     feature.suppressedWhen = text(f, "suppressed_when");
+    // Warnings Auto Fix can fix (mitcad#1223).
+    feature.autoFix = f.value(QStringLiteral("auto_fix")).toInt();
     // A joint origin's light bulb is construction geometry's (mitcad#55).
     if (feature.isSketch() || feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
       snapshot.featureShown.insert(feature.uid, feature.visible);

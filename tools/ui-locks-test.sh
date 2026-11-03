@@ -788,7 +788,7 @@ for action in Open New Close; do
   # the filename survived.
   sleep 1.5
   ui_sync
-  title=$(xdotool getwindowname "$UI_WINDOW")
+  title=$(ui_window_title)
   [ "$title" = 'part.mitcad* - MitCad' ] || ui_fail "$action changed the design's name: $title"
   tail -n +$((UI_MARK + 1)) "$UI_LOG" |
     grep -qE 'Imported exchange.step|New document|New Design: made|Document closed|Autosave removed' &&
@@ -810,7 +810,7 @@ ui_step "release without sending"        ui_key alt+w
 ui_focus_main
 ui_expect_new "Imported exchange.step as" "successful Open imports into the new design" 30
 ui_expect_new "Autosaved exchange:" "the untitled import has recovery data" 20
-title=$(xdotool getwindowname "$UI_WINDOW")
+title=$(ui_window_title)
 [ "$title" = 'exchange* - MitCad' ] || ui_fail "the imported design's name is $title"
 python3 - "$MITCAD_AUTOSAVE_DIR" << 'EOF'
 import glob, json, os, sys

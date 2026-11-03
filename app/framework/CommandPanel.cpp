@@ -52,6 +52,7 @@
 #include "GlassCard.hpp"
 #include "Icons.hpp"
 #include "NoteRow.hpp"
+#include "PanelTree.hpp"
 #include "ParameterField.hpp"
 #include "ResultRows.hpp"
 #include "TestSync.hpp"
@@ -898,7 +899,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       table->setTextElideMode(Qt::ElideRight);
       // Each column as wide as its cells (short ones, mitcad#656), the list
       // at least as wide as its columns: nothing clipped.
-      table->setIndentation(0);
+      panel::setCompactIndentation(table, panel::Indent::Flat);
       table->header()->setStretchLastSection(false);
       table->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
       // The chosen row stands out also while the list has no keyboard.

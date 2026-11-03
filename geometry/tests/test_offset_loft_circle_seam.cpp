@@ -22,10 +22,31 @@
 // surface, the projection failed, and SameParameter then replaced the
 // exact line by a wrong approximation. With the port's patch 1180 the curve
 // is kept where it lies on the edge all along the edge's own range.
+//
+// At 3 mm the curves where the halves' offsets cut the circle's end were
+// still up to 1.06e-3 mm off their faces near the split, and the volume
+// 1.6e-5 of it off (mitcad#1202): each half's offset was enlarged across
+// the tangential edge too, its surface extended there with a junction
+// where the offset surface has a crease, and the intersection curves'
+// approximations run across it. With the port's patch 1200 such a side is
+// extended at C2, so that the offset is smooth across the junction. At the
+// corners where the octagon's creases flatten to tangency at the circle,
+// the curves on the circle's end meet nearly tangentially, and the offset
+// of the octagon to a circle of radius 24.5 with the seam on a side was
+// invalid at 1 and 2 mm (a vertex off its edges' parameters by about
+// 1e-4 mm), as was the radius 21.7 one at 3 mm with the extension at C2:
+// patch 1190 widens such a substituted vertex's tolerance to its points.
+//
+// Where the walls lean in towards the circle (the circle inside the
+// polygon), the offsets of a corner's faces become tangent inside the solid
+// or on its end, as in mitcad#1193; the closed offsets with the seam on a
+// side were invalid there with patches 1130 and 1160 alone, and are valid
+// with patch 1190 (the ctest geometry.offset_loft_circle_seam_lean_in).
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -213,14 +234,25 @@ void test_square_to_a_circle_seam_on_a_side() {
   }
 }
 
-// The square to a circle of radius 20 (mitcad#1201): edges within
-// 0.001 mm, the volume that of the seam on a corner within 1e-5 (at 2 mm
-// the offset of the seam-on-a-corner loft is invalid and not compared).
+// The square to a circle of radius 20 (mitcad#1201, at 3 mm mitcad#1202):
+// edges within 0.001 mm, the volume that of the seam on a corner within
+// 1e-5.
 void test_square_to_a_circle_of_radius_20_seam_on_a_side() {
-  for (const double t : {0.5, 1.0, 2.0}) {
+  for (const double t : {0.5, 1.0, 2.0, 3.0}) {
     char name[96];
     std::snprintf(name, sizeof name, "square to a circle of radius 20, seam on a side, offset %g", t);
     check_closed_offset(name, square_loft(20.0, 0.0), square_loft(20.0, 45.0), t, 1e-3, 1e-5);
+  }
+}
+
+// The octagon to a circle of radius 24.5, the seam on a side, at 1 and 2 mm
+// (mitcad#1202): a vertex at a corner on the circle's end off its edges'
+// parameters made the offset invalid (patch 1190's vertex tolerance).
+void test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side() {
+  for (const double t : {1.0, 2.0}) {
+    char name[96];
+    std::snprintf(name, sizeof name, "octagon to a circle of radius 24.5, seam on a side, offset %g", t);
+    check_closed_offset(name, octagon_loft(24.5, 0.0), octagon_loft(24.5, 22.5), t, 1e-3, 3e-5);
   }
 }
 
@@ -232,14 +264,47 @@ void test_octagon_to_a_circle_seam_on_a_side() {
   }
 }
 
+// Walls leaning in towards the circle (mitcad#1199): the circle inside the
+// polygon, or through the square's corners, its seam on a side. At the
+// corners the offsets become tangent inside the solid or on its end plane
+// (mitcad#1193's crease branches): these offsets were invalid with patches
+// 1130 and 1160 alone; patch 1190 makes them valid single solids of the
+// seam-on-a-corner loft's volume.
+void test_lean_in_seam_on_a_side() {
+  const struct {
+    bool   octagon;
+    double radius, t;
+  } cases[] = {{false, 6.0, 1.0},  {false, 6.0, 2.0},  {false, 6.0, 3.0}, {false, 8.0, 0.5}, {false, 8.0, 1.0},
+               {false, 8.0, 2.0},  {false, 14.142, 0.5}, {true, 14.0, 0.5}, {true, 14.0, 1.0}, {true, 14.0, 3.0},
+               {true, 12.0, 0.5},  {true, 12.0, 1.0},  {true, 12.0, 2.0}, {true, 12.0, 3.0}};
+  for (const auto& c : cases) {
+    char name[96];
+    std::snprintf(name, sizeof name, "%s to a circle of radius %g, seam on a side, offset %g",
+                  c.octagon ? "octagon" : "square", c.radius, c.t);
+    if (c.octagon) {
+      check_closed_offset(name, octagon_loft(c.radius, 0.0), octagon_loft(c.radius, 22.5), c.t);
+    } else {
+      check_closed_offset(name, square_loft(c.radius, 0.0), square_loft(c.radius, 45.0), c.t);
+    }
+  }
+}
+
 } // namespace
 } // namespace test
 
-int main() {
-  test::guarded("test_square_to_a_circle_seam_on_a_side", test::test_square_to_a_circle_seam_on_a_side);
-  test::guarded("test_octagon_to_a_circle_seam_on_a_side", test::test_octagon_to_a_circle_seam_on_a_side);
-  test::guarded("test_square_to_a_circle_of_radius_20_seam_on_a_side",
-                test::test_square_to_a_circle_of_radius_20_seam_on_a_side);
+// With the argument "lean-in" only the lean-in cases run (their own ctest,
+// geometry.offset_loft_circle_seam_lean_in); without it the others.
+int main(int argc, char** argv) {
+  if (argc > 1 && std::string(argv[1]) == "lean-in") {
+    test::guarded("test_lean_in_seam_on_a_side", test::test_lean_in_seam_on_a_side);
+  } else {
+    test::guarded("test_square_to_a_circle_seam_on_a_side", test::test_square_to_a_circle_seam_on_a_side);
+    test::guarded("test_octagon_to_a_circle_seam_on_a_side", test::test_octagon_to_a_circle_seam_on_a_side);
+    test::guarded("test_square_to_a_circle_of_radius_20_seam_on_a_side",
+                  test::test_square_to_a_circle_of_radius_20_seam_on_a_side);
+    test::guarded("test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side",
+                  test::test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side);
+  }
   if (test::failures == 0) {
     std::puts("test_offset_loft_circle_seam: all checks passed");
   }

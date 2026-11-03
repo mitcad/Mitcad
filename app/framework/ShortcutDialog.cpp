@@ -29,6 +29,7 @@
 #include "CommandRegistry.hpp"
 
 #include "Dialogs.hpp"
+#include "PanelTree.hpp"
 
 #include "../platform/MacDialogs.hpp"
 #include "../platform/NativeDialogs.hpp"
@@ -131,6 +132,7 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   layout->addLayout(filters);
 
   m_tree = new QTreeWidget;
+  panel::setCompactIndentation(m_tree, panel::Indent::Tree);
   m_tree->setObjectName(QStringLiteral("shortcutTree"));
   m_tree->setColumnCount(3);
   m_tree->setHeaderLabels({tr("Command"), tr("Context"), tr("Shortcut")});

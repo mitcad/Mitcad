@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <optional>
+
+#include <QJsonArray>
 #include <QString>
 
 #include "../framework/Selection.hpp"
@@ -31,5 +34,14 @@ enum class ProfilesCommand { Extrude, Revolve };
 // sketch profiles is most likely the plane to start at.
 QString profilesRefused(const SelectionItem& item, const Selection& held, bool planar, ProfilesCommand command,
                         const QString& start = QString());
+
+// The profile that Extrude and the other profile commands take by
+// themselves when they start (mitcad#1226), of `profiles`, the model's
+// `profiles` query (the newest sketch's last). Of the newest sketch with an
+// unused profile, the last unused one that the sketch's own curves bound;
+// one that the face the sketch lies on bounds in part (`face_bounded`: the
+// face's leftover region around the drawn shapes) only when the sketch has
+// no other unused profile. None when every profile is used.
+std::optional<SelectionItem> automaticProfile(const QJsonArray& profiles);
 
 } // namespace mitcad::cmd

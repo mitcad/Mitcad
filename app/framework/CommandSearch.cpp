@@ -14,6 +14,7 @@
 #include <QtLogging>
 
 #include "CommandRegistry.hpp"
+#include "PanelTree.hpp"
 #include "../platform/MacCommandSearch.hpp"
 
 namespace mitcad {
@@ -78,6 +79,7 @@ CommandSearch::CommandSearch(CommandRegistry& registry, QWidget* parent)
   m_edit->setClearButtonEnabled(true);
   m_edit->installEventFilter(this);
   m_list = new QTreeWidget;
+  panel::setCompactIndentation(m_list, panel::Indent::Flat);
   m_list->setObjectName(QStringLiteral("commandSearchResults"));
   m_list->setAccessibleName(tr("Commands"));
   m_list->setColumnCount(2);

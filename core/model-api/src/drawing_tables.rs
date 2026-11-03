@@ -622,6 +622,11 @@ trait DrawingTablesLocal<K: Kernel> {
         quantity: usize,
         list: &[PartsListRow],
     ) -> String;
+
+    /// A parts list's cell of a material's property (mitcad#1213: its key or
+    /// name, `density`), in the design's units, temperatures in the
+    /// preferred unit; empty for another column or a value not given.
+    fn material_cell(&self, material: &mitcad_model::material::Material, column: &str) -> String;
 }
 
 impl<K: Kernel> DrawingTablesLocal<K> for Document<K> {
@@ -637,7 +642,8 @@ impl<K: Kernel> DrawingTablesLocal<K> for Document<K> {
                 "quantity" => quantity.to_string(),
                 "name" => self.body_name(body),
                 "material" => self.body_material(body, None).0.name.clone(),
-                _ => String::new(),
+                // A property of its material (mitcad#1213).
+                other => self.material_cell(self.body_material(body, None).0, other),
             },
             RowKey::Component(component) => {
                 let row = list.iter().find(|r| r.component == component);
@@ -653,13 +659,31 @@ impl<K: Kernel> DrawingTablesLocal<K> for Document<K> {
                     ("material", Some(row)) => self
                         .component_property_text(component, row, "Material")
                         .unwrap_or_default(),
+                    // A property of the component, else of the material its
+                    // bodies are made of (mitcad#1213).
                     (key, Some(row)) => self
                         .component_property_text(component, row, key)
+                        .filter(|text| !text.is_empty())
+                        .or_else(|| {
+                            super::materials::component_made_of(self, component)
+                                .map(|m| self.material_cell(m, key))
+                        })
                         .unwrap_or_default(),
-                    (_, None) => String::new(),
+                    (key, None) => super::materials::component_made_of(self, component)
+                        .map(|m| self.material_cell(m, key))
+                        .unwrap_or_default(),
                 }
             }
         }
+    }
+
+    fn material_cell(&self, material: &mitcad_model::material::Material, column: &str) -> String {
+        // Lengths, stresses and densities in the design's system,
+        // temperatures in the preferred unit (mitcad#1213).
+        let system = super::materials::MaterialsOps::material_system(self);
+        let temperature = mitcad_model::material_units::preferred_temperature();
+        super::materials::material_value_text(material, column, system, temperature)
+            .unwrap_or_default()
     }
 }
 

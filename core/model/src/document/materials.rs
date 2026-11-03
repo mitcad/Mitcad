@@ -32,6 +32,21 @@ use crate::material::{self, DEFAULT_MATERIAL, Material, MaterialChange};
 use crate::print_library::{BasedOn, ItemData, ItemKind};
 use crate::print_profile::{copy_name, new_item_name};
 
+/// The material an entry of the bundled material dataset gives a new one
+/// (mitcad#1213): refused with `based_on`, or for an entry it has not.
+pub(super) fn dataset_material(
+    change: &MaterialChange,
+    entry: &str,
+) -> Result<Material, ModelError> {
+    if change.based_on.is_some() {
+        return Err(invalid(
+            "a new material starts from another material (based_on) or from the dataset, not both",
+        ));
+    }
+    crate::material_dataset::material(entry)
+        .ok_or_else(|| invalid(format!("the material dataset has no material {entry}")))
+}
+
 /// What `set_body_material` does with the body's appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppearanceChoice {
@@ -738,6 +753,10 @@ impl<K: Kernel> Document<K> {
                 "a material of a library is made there (create_library_material)",
             ));
         }
+        // An entry of the bundled material dataset (mitcad#1213).
+        if let Some(entry) = &change.dataset {
+            return self.create_material_from(Some(dataset_material(change, entry)?), change);
+        }
         let base = match change.based_on.as_ref() {
             Some(BasedOn::Design(id)) => {
                 let mut base = self
@@ -832,6 +851,8 @@ impl<K: Kernel> Document<K> {
                 class: None,
                 version: None,
                 origin: None,
+                properties: Default::default(),
+                reference: None,
             },
         };
         new.id = match change.id.as_deref().map(str::trim) {
@@ -840,8 +861,10 @@ impl<K: Kernel> Document<K> {
         };
         // A copy is named after its source, `<name> (copy)` (mitcad#655:
         // the user's own copy of a built-in or library material;
-        // mitcad#828), a new one `Material 1`.
+        // mitcad#828), a new one `Material 1`; a dataset's material as its
+        // entry (mitcad#1213).
         new.name = match source_class {
+            Some(_) if change.dataset.is_some() => material::numbered_name(&new.name, taken),
             Some(_) => copy_name(&new.name, taken),
             None => new_item_name("Material", free),
         };
@@ -883,6 +906,9 @@ impl<K: Kernel> Document<K> {
     pub fn edit_material(&mut self, id: &str, change: &MaterialChange) -> Result<(), ModelError> {
         if change.based_on.is_some() {
             return Err(invalid("based_on is only for create_material"));
+        }
+        if change.dataset.is_some() {
+            return Err(invalid("dataset is only for create_material"));
         }
         if change.id.as_deref().is_some_and(|new| new != id) {
             return Err(invalid("a material's id cannot change"));

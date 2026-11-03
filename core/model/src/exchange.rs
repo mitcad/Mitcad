@@ -33,6 +33,10 @@ pub use stl::read as read_stl;
 // The bodies on the print bed by their print bed faces (mitcad#731).
 mod bed;
 pub use bed::{BedChoice, BedObject, DEFAULT_PLATE, OnBed, Settle};
+
+// The design's print plates in 3MF files (mitcad#1050).
+mod plates;
+pub use plates::{ExportedPlate, PlateFiles};
 // The automatic orientation on the print bed (mitcad#1109).
 pub mod orient;
 
@@ -94,6 +98,28 @@ pub struct ExportPlacement {
     /// plate and its lowest point on the bed, also without a bed face and
     /// kept as assembled (both by default).
     pub settle: Settle,
+    /// 3MF on the print bed (mitcad#1050): the design's print plates
+    /// instead of the bodies chosen, in one file, a file per plate or one
+    /// plate (`plates.rs`).
+    pub plates: Option<PlateFiles>,
+}
+
+/// A 3MF model before its slicer's settings (mitcad#1050,
+/// [`Document::build_3mf`]): its parts and objects, each part's effective
+/// settings (with a slicer's) and what was written.
+pub(crate) struct Built3mf {
+    pub model: mitcad_3mf::Model,
+    pub settings: Vec<crate::document::EffectivePrint>,
+    pub exported: Exported,
+}
+
+/// The print plate a 3MF model is built on (mitcad#1050): the plate whose
+/// settings its bodies take (none: each body its own plate's) and the
+/// move of the placements onto the plate's place in the file, mm.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ThreeMfPlate<'a> {
+    pub plate: Option<&'a crate::print_plates::PrintPlate>,
+    pub shift: [f64; 2],
 }
 
 /// What [`Document::export_bodies`] wrote.
@@ -129,6 +155,9 @@ pub struct Exported {
     /// 3MF and STL on the print bed (mitcad#731): how the bodies were put
     /// there.
     pub on_bed: Option<OnBed>,
+    /// 3MF of the print plates (mitcad#1050): each plate as written, in
+    /// the design's order.
+    pub plates: Vec<ExportedPlate>,
 }
 
 /// A body's mesh in a 3MF file: its triangles and the volume they enclose
@@ -441,6 +470,10 @@ impl<K: Kernel> Document<K> {
         placement: &ExportPlacement,
     ) -> Result<Exported, ModelError> {
         let format = options.format;
+        // The design's print plates (mitcad#1050, `plates.rs`).
+        if let Some(files) = placement.plates {
+            return self.export_plates(path, bodies, options, colors, placement, files);
+        }
         let design = placement.coordinates != Some(Coordinates::Component);
         let within = placement.within.as_deref();
         if within.is_some() && !design {
@@ -1001,6 +1034,59 @@ impl<K: Kernel> Document<K> {
         )>,
         pieces: Option<&mut Vec<bed::Piece>>,
     ) -> Result<Exported, ModelError> {
+        let model_name = Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Mitcad")
+            .to_owned();
+        let dialect = print.as_ref().map(|(d, _)| *d);
+        let built = self.build_3mf(
+            model_name,
+            chosen,
+            all,
+            tolerance,
+            unit,
+            color,
+            placements,
+            print,
+            pieces,
+            ThreeMfPlate::default(),
+        )?;
+        self.write_3mf(path, built, dialect, &[])
+    }
+
+    /// The model of a 3MF file of the bodies as [`Document::export_3mf`]
+    /// writes it, without the slicer's settings: its parts and objects,
+    /// each part's effective settings (with `print`) and what is written.
+    /// `plate` gives the print plate whose settings the bodies take
+    /// (mitcad#1050; none: each body its own plate's) and the move of the
+    /// placements onto that plate's place in the file (before the unit's
+    /// scale).
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn build_3mf(
+        &self,
+        model_name: String,
+        chosen: &[&BodyView<'_, K::Shape>],
+        all: bool,
+        tolerance: &MeshTolerance,
+        unit: LengthUnit,
+        color: impl Fn(BodyUid) -> Option<[f64; 3]>,
+        placements: impl Fn(BodyUid) -> Vec<Transform>,
+        print: Option<(
+            crate::print_keys::Dialect,
+            &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
+        )>,
+        pieces: Option<&mut Vec<bed::Piece>>,
+        plate: ThreeMfPlate<'_>,
+    ) -> Result<Built3mf, ModelError> {
+        let settings_of = |body: BodyUid, path: Option<Vec<OccurrenceUid>>| {
+            let target = crate::document::PrintTarget::Body(body, path);
+            match plate.plate {
+                Some(on) => self.effective_print_on(&target, Some(on)),
+                None => self.effective_print(&target),
+            }
+        };
         let mut exported = Exported::default();
         let mut parts = Vec::with_capacity(chosen.len());
         // With a slicer's settings, each part's effective ones (mitcad#640,
@@ -1053,12 +1139,9 @@ impl<K: Kernel> Document<K> {
                 .unwrap_or_default();
             let mut groups: Vec<(Option<crate::document::EffectivePrint>, Vec<usize>)> = Vec::new();
             for (k, _) in placed.iter().enumerate() {
-                let effective = print.as_ref().map(|_| {
-                    self.effective_print(&crate::document::PrintTarget::Body(
-                        body.uid,
-                        paths.get(k).cloned().flatten(),
-                    ))
-                });
+                let effective = print
+                    .as_ref()
+                    .map(|_| settings_of(body.uid, paths.get(k).cloned().flatten()));
                 let alike = groups
                     .iter_mut()
                     .find(|(group, _)| match (group, &effective) {
@@ -1072,12 +1155,9 @@ impl<K: Kernel> Document<K> {
             }
             if groups.is_empty() {
                 groups.push((
-                    print.as_ref().map(|_| {
-                        self.effective_print(&crate::document::PrintTarget::Body(
-                            body.uid,
-                            paths.first().cloned().flatten(),
-                        ))
-                    }),
+                    print
+                        .as_ref()
+                        .map(|_| settings_of(body.uid, paths.first().cloned().flatten())),
                     Vec::new(),
                 ));
             }
@@ -1133,11 +1213,6 @@ impl<K: Kernel> Document<K> {
         if parts.is_empty() {
             return Err(invalid("there are no solid or mesh bodies to export"));
         }
-        let model_name = Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Mitcad")
-            .to_owned();
         // On the print bed (mitcad#731): each piece's placements moved
         // alike by its turn, as its bodies are one object; the pieces
         // turned side by side, and several pieces the build's objects
@@ -1237,6 +1312,16 @@ impl<K: Kernel> Document<K> {
                 objects.clear();
             }
         }
+        // On a print plate's place in a file of several plates
+        // (mitcad#1050): every placement moved alike.
+        if plate.shift != [0.0, 0.0] {
+            for part in &mut parts {
+                for placement in &mut part.placements {
+                    placement.translation[0] += plate.shift[0];
+                    placement.translation[1] += plate.shift[1];
+                }
+            }
+        }
         // In the file's unit (mitcad#734): the meshes and the placements'
         // moves scaled, the turns as they are.
         let scale = 1.0 / unit.millimeters();
@@ -1250,7 +1335,7 @@ impl<K: Kernel> Document<K> {
                 }
             }
         }
-        let mut model = mitcad_3mf::Model {
+        let model = mitcad_3mf::Model {
             name: model_name,
             parts,
             objects,
@@ -1258,9 +1343,33 @@ impl<K: Kernel> Document<K> {
             application: format!("MitCad {}", env!("CARGO_PKG_VERSION")),
             ..mitcad_3mf::Model::default()
         };
+        Ok(Built3mf {
+            model,
+            settings,
+            exported,
+        })
+    }
+
+    /// Writes a model [`Document::build_3mf`] made: with a slicer's
+    /// `dialect`, each part's effective settings in its dialect
+    /// (mitcad#640, mitcad#1061: of its group of placements), on the print
+    /// `plates` the file holds (mitcad#1050; none: one plate of every
+    /// object).
+    pub(crate) fn write_3mf(
+        &self,
+        path: &str,
+        built: Built3mf,
+        dialect: Option<crate::print_keys::Dialect>,
+        plates: &[crate::print_files::ExportPlate<'_>],
+    ) -> Result<Exported, ModelError> {
+        let Built3mf {
+            mut model,
+            settings,
+            mut exported,
+        } = built;
         // The slicer's settings (mitcad#640): each part's effective ones
         // (mitcad#1061: of its group of placements).
-        if let Some((dialect, _)) = print {
+        if let Some(dialect) = dialect {
             let parts: Vec<crate::print_files::ExportPart<'_>> = model
                 .parts
                 .iter()
@@ -1286,13 +1395,15 @@ impl<K: Kernel> Document<K> {
                     }
                 })
                 .collect();
-            // With the purge volumes set by hand (mitcad#705).
-            let written = crate::print_files::export(
+            // With the purge volumes set by hand (mitcad#705), on the
+            // plates (mitcad#1050).
+            let written = crate::print_files::export_plates(
                 dialect,
                 &model.name,
                 &parts,
                 &objects,
                 &self.state().purge_volumes,
+                plates,
             );
             if let Some(application) = written.application {
                 model.application = application;

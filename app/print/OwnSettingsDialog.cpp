@@ -60,15 +60,29 @@ OwnSettingsDialog::~OwnSettingsDialog() = default;
 
 void OwnSettingsDialog::setOwner(const QString& owner, const QString& name) {
   m_owner = owner;
+  m_plate.clear();
   m_name = name;
   setWindowTitle(tr("%1 · Own settings").arg(name));
   qDebug().noquote() << QStringLiteral("Own settings opened: %1").arg(windowTitle());
   refresh();
 }
 
+void OwnSettingsDialog::setPlate(const QString& plate, const QString& name) {
+  m_plate = plate;
+  m_owner = plate;
+  m_name = name;
+  setWindowTitle(tr("%1 · Plate settings").arg(name));
+  qDebug().noquote() << QStringLiteral("Own settings opened: %1").arg(windowTitle());
+  refresh();
+}
+
 QJsonObject OwnSettingsDialog::query() const {
   QJsonObject request{{QStringLiteral("query"), QStringLiteral("print_settings")}};
-  if (m_owner.contains(QStringLiteral(".b"))) {
+  if (!m_plate.isEmpty()) {
+    // The design's settings on the plate (mitcad#1050).
+    request.insert(QStringLiteral("component"), QStringLiteral("C0"));
+    request.insert(QStringLiteral("plate"), m_plate);
+  } else if (m_owner.contains(QStringLiteral(".b"))) {
     request.insert(QStringLiteral("body"), m_owner);
   } else if (m_owner.startsWith(QLatin1Char('O'))) {
     request.insert(QStringLiteral("occurrence"), m_owner);
@@ -100,7 +114,9 @@ void OwnSettingsDialog::refresh() {
   QJsonObject inherited;
   for (const QJsonValue& value : print.value(QStringLiteral("process")).toObject().value(QStringLiteral("values")).toArray()) {
     const QJsonObject entry = value.toObject();
-    const bool mine = text(entry, "from") == QStringLiteral("property") && text(entry, "owner") == m_owner;
+    const bool mine = m_plate.isEmpty()
+                          ? text(entry, "from") == QStringLiteral("property") && text(entry, "owner") == m_owner
+                          : text(entry, "from") == QStringLiteral("plate") && text(entry, "plate") == m_plate;
     (mine ? own : inherited).insert(text(entry, "key"), entry.value(QStringLiteral("value")));
   }
   m_form->setValues(own);
@@ -110,9 +126,10 @@ void OwnSettingsDialog::refresh() {
 
 void OwnSettingsDialog::edit(const QString& key, const QJsonValue& value) {
   const QString owner = m_owner;
+  const QString plate = m_plate;
   // The model command rebuilds the form: not while the field handles its
   // signal.
-  afterEventWhenIdle(m_host, this, [this, owner, key, value] {
+  afterEventWhenIdle(m_host, this, [this, owner, plate, key, value] {
     if (!m_host.canChangePrintSettings()) {
       m_message->setText(m_host.changeBlockedReason());
       m_message->show();
@@ -126,12 +143,21 @@ void OwnSettingsDialog::edit(const QString& key, const QJsonValue& value) {
     if (!clear) {
       command.insert(QStringLiteral("value"), value);
     }
+    if (!plate.isEmpty()) {
+      // A print plate's value (mitcad#1050): null clears it.
+      QJsonObject values;
+      values.insert(key, clear ? QJsonValue(QJsonValue::Null) : value);
+      command = QJsonObject{{QStringLiteral("cmd"), QStringLiteral("edit_print_plate")},
+                            {QStringLiteral("plate"), plate},
+                            {QStringLiteral("values"), values}};
+    }
     if (m_host.runModelCommand(command)) {
       m_message->hide();
       m_host.commandInputsChanged();
       const PrintKey* printKey = m_keys.find(key);
-      qDebug().noquote() << QStringLiteral("Own setting %1 %2 = %3")
-                                .arg(owner, key,
+      qDebug().noquote() << QStringLiteral("%1 %2 %3 = %4")
+                                .arg(plate.isEmpty() ? QStringLiteral("Own setting") : QStringLiteral("Plate setting"),
+                                     owner, key,
                                      clear ? QStringLiteral("cleared")
                                            : (printKey != nullptr ? printValueText(*printKey, value)
                                                                   : value.toVariant().toString()));

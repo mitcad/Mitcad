@@ -78,6 +78,7 @@
 //                           accessibility, and no all-caps group captions
 //   collapse-card <object-name> true|false  use the card's chevron button
 //   expect-setting <key> <value>     the current saved QSettings value
+//   set-setting <key> <value>        saves a QSettings value (text)
 //   expect-native-configuration-layout complete visible configuration
 //                           controls/captions and reachable slider track/knob
 //   expect-dialog-gone <title-regex> no matching Qt tool window remains visible

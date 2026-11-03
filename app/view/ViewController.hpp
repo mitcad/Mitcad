@@ -120,6 +120,10 @@ public:
   // `cloud`, `updates`, `print`); the last one shown when empty.
   void showPreferences(const QString& page = QString());
   void showGridSettings();
+  // The design's length unit (mitcad#1210), after each change of the
+  // model: Grid Settings shows the fixed spacing in it, and the automatic
+  // grid steps through its series (an inch series in a design in in or ft).
+  void setLengthUnit(const QString& unit);
   // The document's render settings (the `render_settings` query, mitcad#47)
   // and its file's folder, after each change of the model: the rendered
   // view and Render Environment follow them. Nothing without the render
@@ -148,7 +152,16 @@ signals:
   // Camera/background changed outside the non-modal Settings window.
   void displaySettingsChanged();
 
+protected:
+  // The arrow keys' turn commands (mitcad#1211) take their keys only while
+  // a 3D view has the keyboard: anywhere else (a value or text field, the
+  // Browser, a list, a panel, a dialog) the key keeps its usual meaning.
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
+  // Turns the view by Preferences › Navigation's step, `right` and `up`
+  // steps (-1, 0 or 1) as the arrow keys do (mitcad#1211).
+  void turnView(int right, int up);
   void apply();
   void setStyle(VisualStyle style);
   void setPerspective(bool perspective);
@@ -173,6 +186,7 @@ private:
   QPointer<RenderImageDialog> m_renderImage;
   QString m_documentFolder;
   QString m_documentName;
+  QString m_lengthUnit = QStringLiteral("mm"); // the design's (mitcad#1210)
   void setRendered(bool on);
   QString m_preferencesPage = QStringLiteral("general"); // the page Preferences opens on
   // Show Build Volume (mitcad#640): on or off for the window's session.

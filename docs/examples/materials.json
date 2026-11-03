@@ -1,0 +1,15 @@
+{
+  "format": "mitcad-materials",
+  "version": 1,
+  "units": {"stress": "MPa", "density": "g/cm3", "temperature": "C", "expansion": "um/(m*C)"},
+  "materials": [
+    {"id": "custom1", "name": "Shop steel", "class": "metal", "density": 7.85,
+     "youngs_modulus": 210000, "poissons_ratio": 0.3, "yield_strength": 235,
+     "max_service_temperature": 400, "thermal_expansion": 12,
+     "reference": {"source": "Mill sheet", "material": "S235JR", "grade": "JR"}},
+    {"id": "custom2", "name": "Shop PLA", "class": "fdm_plastic", "density": 1.24,
+     "max_service_temperature": 52, "thermal_expansion": 68,
+     "extruder_temperature": 210, "extruder_temperature_min": 190, "extruder_temperature_max": 230,
+     "bed_temperature": 60}
+  ]
+}

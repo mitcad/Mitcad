@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <utility>
 
 #include <QAction>
 #include <QApplication>
@@ -23,6 +24,7 @@
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
+#include <QSettings>
 #include <QtLogging>
 
 #include <gp_Dir.hxx>
@@ -35,6 +37,7 @@
 #include "DrawingTemplates.hpp"
 #include "DrawingTools.hpp"
 #include "DrawingWorkspace.hpp"
+#include "../view/VersionWatermark.hpp"
 #ifdef MITCAD_MACOS_NATIVE_UI
 #include "../platform/NativeMacWindow.hpp"
 #endif
@@ -55,8 +58,11 @@ QJsonObject cameraOf(const OcctViewer& viewer) {
 // orientation and projection method, the model's names) or a cut sheet
 // (mitcad#853: the material's width and height, mm, as `kind`
 // "cut_sheet"), or none when cancelled. A template chosen brings its own
-// sheet size; ISO is chosen first.
-std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::TemplateChoice>& templates) {
+// sheet size; it opens with `start` (mitcad#1218: the last choice, else
+// ISO), and a drawing's answer names its template's choice as
+// `template_choice`, to be kept for the next time.
+std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::TemplateChoice>& templates,
+                                         const drawings::StartingChoice& start) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Create Drawing"));
   auto* form = new QFormLayout(&dialog);
@@ -78,8 +84,7 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   for (const drawings::TemplateChoice& choice : templates) {
     templateBox->addItem(choice.label, choice.choice);
   }
-  templateBox->setCurrentIndex(
-      std::max(0, drawings::templateIndex(templates, drawings::defaultTemplate(QStringLiteral("A4")))));
+  templateBox->setCurrentIndex(std::max(0, drawings::templateIndex(templates, start.choice.choice)));
   form->addRow(QObject::tr("&Template"), templateBox);
   QComboBox* sizes = combo({{QStringLiteral("A4"), QStringLiteral("A4")},
                             {QStringLiteral("A3"), QStringLiteral("A3")},
@@ -95,6 +100,7 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   form->addRow(QObject::tr("Size"), sizes);
   QComboBox* orientation = combo({{QStringLiteral("landscape"), QObject::tr("Landscape")},
                                   {QStringLiteral("portrait"), QObject::tr("Portrait")}});
+  orientation->setObjectName(QStringLiteral("drawingOrientation"));
   form->addRow(QObject::tr("Orientation"), orientation);
   QComboBox* projection = combo({{QStringLiteral("third_angle"), QObject::tr("Third Angle")},
                                  {QStringLiteral("first_angle"), QObject::tr("First Angle")}});
@@ -117,6 +123,26 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   // The template chosen first brings its sheet too, as the handler was not
   // connected when it was chosen (mitcad#722).
   templateSheet();
+  // Then the sheet chosen last with it (mitcad#1218); a value the lists do
+  // not have stays as the template brought it.
+  for (const auto& [box, value] : {std::pair<QComboBox*, QString>{sizes, start.choice.size},
+                                   std::pair<QComboBox*, QString>{orientation, start.choice.orientation},
+                                   std::pair<QComboBox*, QString>{projection, start.choice.projection}}) {
+    const int at = value.isEmpty() ? -1 : box->findData(value);
+    if (at >= 0) {
+      box->setCurrentIndex(at);
+    }
+  }
+  const auto choiceName = [](const QString& choice) {
+    return choice.isEmpty() ? QStringLiteral("simple") : choice;
+  };
+  if (!start.note.isEmpty()) {
+    qDebug().noquote() << start.note;
+  }
+  qDebug().noquote() << QStringLiteral("Create Drawing dialog starts with template %1, %2, %3, %4 (%5)")
+                            .arg(choiceName(templateBox->currentData().toString()), sizes->currentData().toString(),
+                                 orientation->currentData().toString(), projection->currentData().toString(),
+                                 drawings::startSourceName(start.source));
   // A cut sheet's material, 600 x 300 mm unless typed.
   const auto length = [](double value, const char* name) {
     auto* box = new QDoubleSpinBox;
@@ -161,7 +187,8 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   }
   QJsonObject out{{QStringLiteral("size"), sizes->currentData().toString()},
                   {QStringLiteral("orientation"), orientation->currentData().toString()},
-                  {QStringLiteral("projection"), projection->currentData().toString()}};
+                  {QStringLiteral("projection"), projection->currentData().toString()},
+                  {QStringLiteral("template_choice"), templateBox->currentData().toString()}};
   const int chosen = drawings::templateIndex(templates, templateBox->currentData().toString());
   if (chosen >= 0) {
     out.insert(QStringLiteral("template"), templates.at(chosen).value);
@@ -237,6 +264,10 @@ void MainWindow::updateDrawingChrome() {
   // the drawing's own messages come in the same place (mitcad#1008).
   if (open && m_statusIsHint && !m_statusLabel->text().isEmpty()) {
     showHint(QString());
+  }
+  // The version watermark (mitcad#1209) at the sheet's lower right.
+  if (m_versionWatermark != nullptr) {
+    m_versionWatermark->setArea(open ? m_drawingWorkspace->sheetView() : nullptr);
   }
   if (m_ribbon == nullptr) {
     return;
@@ -394,11 +425,17 @@ void MainWindow::createDrawing(const QString& component) {
     showStatus(changeBlockedReason(), NoticeLevel::Error);
     return;
   }
-  const std::optional<QJsonObject> sheet = askNewDrawing(this, drawings::availableTemplates(*this));
+  // The dialog opens with the last choice (mitcad#1218), kept in the
+  // user's settings.
+  QSettings settings;
+  const QList<drawings::TemplateChoice> templates = drawings::availableTemplates(*this);
+  const std::optional<QJsonObject> sheet =
+      askNewDrawing(this, templates, drawings::startingChoice(templates, drawings::NewDrawingChoice::load(settings)));
   if (!sheet) {
     return;
   }
   QJsonObject command = *sheet;
+  const QString templateChoice = command.take(QStringLiteral("template_choice")).toString();
   // A cut sheet (mitcad#853) starts with the bodies selected in the model.
   const bool cut = command.take(QStringLiteral("kind")).toString() == QStringLiteral("cut_sheet");
   command.insert(QStringLiteral("cmd"), cut ? QStringLiteral("add_cut_sheet") : QStringLiteral("add_drawing"));
@@ -419,6 +456,18 @@ void MainWindow::createDrawing(const QString& component) {
   qDebug().noquote() << QStringLiteral("Drawing created: %1 %2 in %3")
                             .arg(uid, result.value(QStringLiteral("name")).toString(),
                                  result.value(QStringLiteral("component")).toString());
+  if (!cut) {
+    // The next Create Drawing opens with this choice (mitcad#1218).
+    drawings::NewDrawingChoice kept;
+    kept.choice = templateChoice;
+    kept.size = command.value(QStringLiteral("size")).toString();
+    kept.orientation = command.value(QStringLiteral("orientation")).toString();
+    kept.projection = command.value(QStringLiteral("projection")).toString();
+    kept.save(settings);
+    qDebug().noquote() << QStringLiteral("Create Drawing choice kept: template %1, %2, %3, %4")
+                              .arg(kept.choice.isEmpty() ? QStringLiteral("simple") : kept.choice, kept.size,
+                                   kept.orientation, kept.projection);
+  }
   openDrawing(uid);
   // A new drawing's first view comes next (mitcad#725): Base View is on.
   // A cut sheet takes its parts from Add Parts.

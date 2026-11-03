@@ -14,6 +14,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFile>
 #include <QFileInfo>
@@ -22,6 +23,7 @@
 #include <QLayout>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -30,6 +32,12 @@
 namespace mitcad {
 
 namespace {
+#ifndef Q_OS_WIN
+// How long the window-activate step waits for the window system to activate
+// the window before it records the activation itself (mitcad#1206).
+constexpr qint64 kActivationWaitMs = 5000;
+#endif
+
 // The assistant choices of the dialog's first row (mitcad#706).
 QList<QAbstractButton*> assistantChoices(QWidget* dialog) {
   QList<QAbstractButton*> choices;
@@ -74,8 +82,10 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     if (!m_main) { fail(m_line, QStringLiteral("main window missing")); return; }
     // Titled as MainWindow::updateWindowTitle titles a design, and
     // modified: the published title is the label alone, without Qt's "[*]"
-    // placeholder and the application's name (mitcad#1149).
-    m_main->setWindowTitle(QStringLiteral("%1[*] - MitCad").arg(qEnvironmentVariable("MITCAD_MCP_WINDOW_LABEL")));
+    // placeholder and the application's name and version (mitcad#1149,
+    // mitcad#1209).
+    m_main->setWindowTitle(QStringLiteral("%1[*] - MitCad %2")
+                               .arg(qEnvironmentVariable("MITCAD_MCP_WINDOW_LABEL"), QCoreApplication::applicationVersion()));
     m_main->setWindowModified(true);
     // The top-level window: the main window may be a page of a document
     // frame (mitcad#1172), whose raise() would not raise the window, and an
@@ -88,8 +98,35 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     // that the ordinary window system sends after activateWindow().
     QEvent activation(QEvent::WindowActivate);
     QCoreApplication::sendEvent(top, &activation);
-#endif
     qInfo().noquote() << "Assistant window activated";
+#else
+    // The window system delivers the activation later (X11: a FocusIn that
+    // the process handles when its event loop next runs), and the MCP live
+    // server records it only then. Under load a starved process recorded its
+    // own step's activation after the other window's step had run, so the
+    // other window was no longer the one active last (mitcad#1206). The step
+    // therefore ends only once the window is active, after at least one turn
+    // of the event loop, so that no activation of its own is still pending,
+    // and then records the activation at the step's time: also when the
+    // window was still active as Qt saw it (X11 keeps a window active for a
+    // moment after it lost the focus), when no new activation arrives.
+    const QPointer<QWidget> shown(top);
+    const auto turned = std::make_shared<bool>(false);
+    QTimer::singleShot(0, top, [turned] { *turned = true; });
+    QElapsedTimer requested;
+    requested.start();
+    whenReady([shown, turned, requested] {
+          return !shown || (*turned && (shown->isActiveWindow() || requested.elapsed() >= kActivationWaitMs));
+        }, 10, QStringLiteral("the main window was not activated"), [this, shown] {
+          if (!shown) { fail(m_line, QStringLiteral("main window missing")); return; }
+          if (!shown->isActiveWindow()) {
+            qInfo().noquote() << "Assistant window: the window system did not activate it; the step records it";
+          }
+          QEvent activation(QEvent::WindowActivate);
+          QCoreApplication::sendEvent(shown, &activation);
+          qInfo().noquote() << "Assistant window activated";
+        });
+#endif
     return;
   }
   mcp::ConnectAssistantDialog* dialog = nullptr;

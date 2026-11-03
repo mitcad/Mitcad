@@ -20,6 +20,7 @@
 #include <QtLogging>
 
 #include "../framework/Dialogs.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "PrintKeys.hpp"
 #include "SettingsForm.hpp"
@@ -50,6 +51,7 @@ MaterialVariantsPage::MaterialVariantsPage(const QString& logName, QWidget* pare
   layout->setContentsMargins(4, 8, 4, 4);
   // The variants: printer and nozzle, then what differs.
   m_list = new QTreeWidget;
+  panel::setCompactIndentation(m_list, panel::Indent::Flat);
   m_list->setObjectName(QStringLiteral("materialVariantsList"));
   m_list->setColumnCount(2);
   m_list->setHeaderLabels({tr("Printer and nozzle"), tr("Differs in")});

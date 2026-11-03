@@ -44,6 +44,7 @@
 
 #include "Dialogs.hpp"
 #include "FormulaEditor.hpp"
+#include "PanelTree.hpp"
 #include "Theme.hpp"
 
 namespace mitcad {
@@ -512,7 +513,7 @@ void ParameterField::open(Mode mode) {
     m_list->setColumnCount(3);
     m_list->setHeaderHidden(true);
     m_list->setRootIsDecorated(false);
-    m_list->setIndentation(0);
+    panel::setCompactIndentation(m_list, panel::Indent::Flat);
     m_list->setUniformRowHeights(true);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setAllColumnsShowFocus(true);

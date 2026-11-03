@@ -35,6 +35,7 @@
 #include <QtLogging>
 
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
@@ -283,6 +284,7 @@ SlicerPresetsDialog::SlicerPresetsDialog(const QJsonArray& slicers, int index, c
   // The presets by kind, a box each. The name column as wide as its
   // names, so each row's choice sits beside its name.
   m_list = new PresetList;
+  panel::setCompactIndentation(m_list, panel::Indent::Tree);
   m_list->setObjectName(QStringLiteral("slicerPresetsList"));
   m_list->setProperty(NativeCurrentRowNavigationProperty, true);
   m_list->setColumnCount(2);

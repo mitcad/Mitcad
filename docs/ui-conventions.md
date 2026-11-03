@@ -24,6 +24,8 @@ Contents:
    severities.
 4. [Colors](#4-colors): the semantic roles and their principles.
 5. [The checks](#5-the-checks): the tests that keep the rules.
+6. [Lists and trees](#6-lists-and-trees): the one compact indentation of
+   every list and tree.
 
 ## 1. Terms
 
@@ -657,3 +659,54 @@ The colors (mitcad#1041):
   the domain palettes (components, rule blocks, Print Analysis, the
   search match, the joints) at least 12° of hue from the error's red
   and the warning's yellow, unless gray.
+
+## 6. Lists and trees
+
+Every list and tree of the app has one compact indentation (mitcad#1214;
+before it, most kept the style's 20 to 30 pixels a level and put their
+items far from their headings). It is defined once, in
+`app/framework/PanelTree.hpp`, by what the view shows:
+
+| Kind | Indentation | What it is | Examples |
+|---|---|---|---|
+| **Tree** (`panel::Indent::Tree`) | 16 px a level (`kTreeIndentation`) | Nested levels that fold | Browser, Projects panel, the component and folder pickers, the Parameters and Property Sets tables, Keyboard Shortcuts |
+| **Grouped list** (`panel::Indent::GroupedList`) | 12 px (`kGroupedListIndentation`) | One level of items under their groups' headings | Materials window, Printers and Processes managers, the rule palette, a print value's choices, the Keyboard and Mouse Overview |
+| **Flat list** (`panel::Indent::Flat`) | 0 | Rows without children | Version History, Command Search, the command panel's lists |
+
+The indentation also sets the gap between a fold arrow and its item's
+icon or text: every style draws the arrow centred in the indentation's
+step, and the item begins at the step's end. The Projects panel's tidy
+gap is nothing but its 16 px step (mitcad#393; no delegate, style sheet
+or spacing of its own), so every tree has that gap, and a grouped list
+whose headings fold a slightly smaller one; the styles' 20 to 30 pixels
+were what left the arrows far from the names. A flat list has no arrows.
+
+1. **Where it is made.** Every `QTreeView` and `QTreeWidget` calls
+   `panel::setCompactIndentation(view, kind)` where it is made (a
+   subclass may call it in its constructor), and never
+   `setIndentation` with a number of its own.
+2. **Only the indentation.** The helper changes the indentation and
+   nothing else: a view's root decoration, folding, item flags and
+   headings stay as the view sets them. A grouped list whose headings
+   fold (the Printers and Processes managers, the Keyboard and Mouse
+   Overview) keeps their arrows in its 12 px step: Qt's styles draw the
+   branch arrow in a 9 px decoration centred in the indentation, so 12
+   leaves it whole with a margin on each side. A grouped list without
+   arrows (the Materials window, the rule palette, a print value's
+   choices) hides the root's branch space itself, so that its headings
+   start at the left edge and the items one 12 px step in.
+3. **The macOS frontend** follows the same values: an AppKit outline
+   view takes its `indentationPerLevel` from the shared view's
+   `indentation()` or from `PanelTree.hpp` (the Browser's
+   `kTreeIndentation`), never a number of its own.
+
+The ctest `repo.tree-indentation` (`tools/tree-indentation-check`) reads
+the sources of `app/` (comments and strings left out) and fails on a
+`QTreeView` or `QTreeWidget` made without the helper, counted per file
+name (`Name.hpp`, `Name.cpp` and `Name.mm` together), and on any
+`setIndentation(` or a number given to `indentationPerLevel` outside
+`PanelTree.hpp`. A view that must differ is a recorded exception with its
+reason (`kAllowed` in `check-tree-indentation.cpp`): today only a UI
+test's fixture in `platform/macos/NativeTestInput.mm`.
+`repo.tree-indentation-self-test` checks the scan on planted sources,
+among them a view made without the helper.

@@ -5,6 +5,7 @@
 #include <utility>
 
 #include <QAction>
+#include <QComboBox>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QJsonValue>
@@ -19,6 +20,8 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSet>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QTreeWidget>
 #include <QVector>
 #include <QWidget>
@@ -489,6 +492,21 @@ void styleItemList(QTreeWidget* list) {
                                      "QTreeView::item:selected { background: palette(highlight);"
                                      " color: palette(highlighted-text); border: none; }"));
   list->setSelectionBehavior(QAbstractItemView::SelectRows);
+}
+
+void addComboHeading(QComboBox* combo, const QString& title) {
+  combo->addItem(title, choiceHeadingPrefix() + title);
+  // As a panel's headings (CommandPanel, mitcad#655).
+  if (auto* model = qobject_cast<QStandardItemModel*>(combo->model())) {
+    QStandardItem* heading = model->item(combo->count() - 1);
+    heading->setFlags(heading->flags() & ~(Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+    QFont font = combo->font();
+    font.setBold(true);
+    if (font.pointSizeF() > 0.0) {
+      font.setPointSizeF(font.pointSizeF() * 0.9);
+    }
+    heading->setFont(font);
+  }
 }
 
 bool confirmDelete(QWidget* parent, const LibraryItem& item, const QString& logName, const QStringList& users,

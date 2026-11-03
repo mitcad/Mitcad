@@ -67,6 +67,9 @@ pub enum PrintFrom {
     },
     /// The material (its id).
     Material(String),
+    /// The print plate it prints on (its id, mitcad#1050): a level between
+    /// the components and the design's own settings.
+    Plate(String),
 }
 
 /// The settings something prints with, resolved.
@@ -161,7 +164,7 @@ pub fn print_key_name(set: &str, key: &str) -> Option<&'static str> {
 
 /// A value's text for people: a number with its unit, text as it is, a
 /// per-slicer value per slicer.
-fn value_text(def: &KeyDef, value: &Value) -> String {
+pub(crate) fn value_text(def: &KeyDef, value: &Value) -> String {
     if def.per_dialect
         && let Value::Object(values) = value
     {
@@ -824,13 +827,46 @@ impl<K: Kernel> Document<K> {
     /// The settings a target prints with: printer and process values by
     /// the inheritance above, the material's filament, the slicers' own
     /// keys (set on the levels, then the profiles', then the material's)
-    /// and the printer profile's raw blocks.
+    /// and the printer profile's raw blocks. A body or an occurrence takes
+    /// the values of the print plate it prints on (mitcad#1050,
+    /// [`Document::effective_print_on`]).
     pub fn effective_print(&self, target: &PrintTarget) -> EffectivePrint {
+        self.effective_print_on(target, self.auto_plate(target))
+    }
+
+    /// [`Document::effective_print`] on a print plate (mitcad#1050), or on
+    /// none: the plate's process values come after every level but the
+    /// root (profile < plate < component < occurrence < body), so a
+    /// component's, an occurrence's or a body's own value wins over the
+    /// plate's, and the plate's over the design's own values and
+    /// profiles.
+    pub fn effective_print_on(
+        &self,
+        target: &PrintTarget,
+        plate: Option<&crate::print_plates::PrintPlate>,
+    ) -> EffectivePrint {
         let levels = self.print_levels(target);
+        let root = PropertyOwner::Component(ComponentUid::ROOT);
         let mut out = EffectivePrint::default();
         for kind in ProfileKind::ALL {
             let set = kind.set();
             for owner in &levels {
+                // The plate, just before the design's own level.
+                if let Some(plate) = plate
+                    && kind == ProfileKind::Process
+                    && *owner == root
+                {
+                    for (key, value) in &plate.values {
+                        if print_keys::key(key).is_some_and(|d| !d.per_dialect)
+                            && !out.values.contains_key(key)
+                        {
+                            out.values.insert(
+                                key.clone(),
+                                (value.clone(), PrintFrom::Plate(plate.id.clone())),
+                            );
+                        }
+                    }
+                }
                 if let Some(group) = self
                     .state
                     .properties
@@ -1001,13 +1037,45 @@ impl<K: Kernel> Document<K> {
                 "material": id,
                 "material_name": self.material(id).map(|m| m.name.clone()),
             }),
+            // mitcad#1050: the plate's name as the owner's.
+            PrintFrom::Plate(id) => json!({
+                "from": "plate",
+                "plate": id,
+                "level": "plate",
+                "owner_name": self
+                    .state
+                    .print_plates
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .map(|p| p.name.clone()),
+            }),
         }
     }
 
     /// The `print_settings` query: the effective values of the three sets
     /// for a target, each with where it comes from.
     pub fn print_settings_json(&self, target: &PrintTarget) -> Value {
-        let effective = self.effective_print(target);
+        self.print_settings_json_on(target, self.auto_plate(target))
+    }
+
+    /// The `print_settings` query on a print plate (mitcad#1050), or on
+    /// none; with a plate, `plate` names it (`{id, name}`).
+    pub fn print_settings_json_on(
+        &self,
+        target: &PrintTarget,
+        plate: Option<&crate::print_plates::PrintPlate>,
+    ) -> Value {
+        let mut out = self.print_settings_on(target, plate);
+        out["plate"] = plate.map_or(Value::Null, |p| json!({"id": p.id, "name": p.name}));
+        out
+    }
+
+    fn print_settings_on(
+        &self,
+        target: &PrintTarget,
+        plate: Option<&crate::print_plates::PrintPlate>,
+    ) -> Value {
+        let effective = self.effective_print_on(target, plate);
         let entry = |def: &KeyDef, value: &Value, from: &PrintFrom| -> Value {
             let mut out = self.print_from_json(from);
             out["key"] = json!(def.key);

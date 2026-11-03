@@ -11,7 +11,7 @@ use super::ApiError;
 use mitcad_model::Document;
 use mitcad_model::exchange::{
     BedChoice, Coordinates, ExportFormat, ExportOptions, ExportPlacement, Imported, LengthUnit,
-    OnBed, ReadOptions, Refinement, Settle, StepSchema,
+    OnBed, PlateFiles, ReadOptions, Refinement, Settle, StepSchema,
 };
 use mitcad_model::features::FeatureDef;
 use mitcad_model::ids::{BodyUid, FeatureUid};
@@ -101,6 +101,22 @@ pub(super) struct ExportCommand {
     /// true).
     #[serde(default)]
     auto_orient: Option<bool>,
+    /// 3MF (mitcad#1050): the design's print plates instead of the
+    /// bodies, on the print bed: every plate in one file (`one_file`) or a
+    /// file per plate beside the path (`file_per_plate`).
+    #[serde(default)]
+    plates: Option<PlatesMode>,
+    /// 3MF (mitcad#1050): one print plate (id or name) alone, in the path.
+    #[serde(default)]
+    plate: Option<String>,
+}
+
+/// `plates` (mitcad#1050).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PlatesMode {
+    OneFile,
+    FilePerPlate,
 }
 
 /// A print bed face chosen (mitcad#857): a body (uid or name) and the
@@ -261,10 +277,23 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             let uid = self.body_by_uid_or_name(&choice.body)?;
             bed_faces.push((uid, find(choice.occurrence.as_str())?));
         }
+        // The print plates (mitcad#1050): on the print bed.
+        let plates = match (command.plates, &command.plate) {
+            (Some(_), Some(_)) => {
+                return Err(ApiError(
+                    "plates writes every plate, plate one of them: give one".to_owned(),
+                ));
+            }
+            (Some(PlatesMode::OneFile), None) => Some(PlateFiles::OneFile),
+            (Some(PlatesMode::FilePerPlate), None) => Some(PlateFiles::FilePerPlate),
+            (None, Some(plate)) => Some(PlateFiles::Only(self.plate_index(plate)?)),
+            (None, None) => None,
+        };
+        let on_bed = command.on_bed || plates.is_some();
         // The automatic orientation and the settling (mitcad#1109): on the
         // print bed only, each true unless given false.
         let rules = [command.center, command.drop, command.auto_orient];
-        if !command.on_bed && rules.iter().any(Option::is_some) {
+        if !on_bed && rules.iter().any(Option::is_some) {
             return Err(ApiError(
                 "center, drop and auto_orient are for the bodies put on the print bed (on_bed)"
                     .to_owned(),
@@ -273,7 +302,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         let placement = ExportPlacement {
             coordinates: command.coordinates,
             within,
-            on_bed: command.on_bed,
+            on_bed,
             occurrences,
             whole,
             bed_faces,
@@ -283,6 +312,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 center: command.center.unwrap_or(true),
                 drop: command.drop.unwrap_or(true),
             },
+            plates,
         };
         let exported = self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
         let mut result =
@@ -344,6 +374,34 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         // How the bodies were put on the print bed (mitcad#731).
         if let Some(on_bed) = &exported.on_bed {
             result["bed"] = self.on_bed_json(on_bed);
+            result["warnings"] = json!(exported.warnings);
+        }
+        // Each print plate as written, and the files (mitcad#1050).
+        if plates.is_some() {
+            let mut files: Vec<&str> = Vec::new();
+            let written: Vec<Value> = exported
+                .plates
+                .iter()
+                .map(|plate| {
+                    if let Some(path) = plate.path.as_deref()
+                        && !files.contains(&path)
+                    {
+                        files.push(path);
+                    }
+                    json!({
+                        "id": plate.id,
+                        "name": plate.name,
+                        "path": plate.path,
+                        "bodies": plate.bodies,
+                        "pieces": plate.pieces,
+                        "origin": plate.origin,
+                        "bed": plate.on_bed.as_ref().map(|b| self.on_bed_json(b)),
+                        "warnings": plate.warnings,
+                    })
+                })
+                .collect();
+            result["plates"] = json!(written);
+            result["files"] = json!(files);
             result["warnings"] = json!(exported.warnings);
         }
         Ok(result)

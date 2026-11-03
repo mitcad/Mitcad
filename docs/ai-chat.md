@@ -8,9 +8,11 @@ view, the browser and the timeline as they happen, and the whole message
 undoes with one **Undo** (Ctrl+Z).
 
 The agent is your own: MitCad uses the Claude Code or Codex you have
-installed and signed in to. It does not install, change or sign in to it,
-and needs no other component (no npm, Node or adapter, no configuration
-file to edit, no terminal).
+installed and signed in to, or a model's service with your API key or a
+local model ([API endpoints and local models](#api-endpoints-and-local-models)), or a program of your own that speaks the
+Agent Client Protocol ([A custom command](#a-custom-command)). It does
+not install, change or sign in to it, and needs no other component (no
+npm, Node or adapter, no configuration file to edit, no terminal).
 
 Open the panel with **View › Chat**, its button beside the assistant
 indicator (the Docked layout's toolbar), or Ctrl+Shift+L (⌘⇧L on macOS).
@@ -65,14 +67,115 @@ message: the agent starts again with it and goes on with the same
 conversation. Beside the choice, dimmed, is the model the agent reports
 it uses.
 
+### API endpoints and local models
+
+Instead of an agent program, the chat can use a model's service directly:
+the **Anthropic API** with your own API key, a local model in **Ollama**
+or **LM Studio**, or a **Custom endpoint** that speaks the
+OpenAI-compatible chat completions API (a URL and a model). MitCad then
+runs the agent's work itself: it gives the model MitCad's tools, makes
+the calls the model asks for through its own listener, with the same
+approvals as for Claude Code and Codex, and sends back the results until
+the model is done. No agent program and no other component is needed.
+
+Turn them on in **Preferences › AI Assistants › Chat › API endpoints**:
+each one that is checked is offered in the panel's agent choice. Each has
+its address, filled in for the presets:
+
+| Agent | Address | Key |
+|---|---|---|
+| Anthropic API | `https://api.anthropic.com` | required |
+| Ollama | `http://localhost:11434/v1` | none |
+| LM Studio | `http://localhost:1234/v1` | none |
+| Custom endpoint | yours, ending where `/chat/completions` and `/models` are (for example `https://example.com/v1`) | optional |
+
+An address must be `https://`, or `http://` to this computer only
+(`localhost`, `127.0.0.1`, `::1`), so that a key never travels unencrypted;
+an address with a user name, a password or a query is not used.
+**Request timeout** (300 s by default) is the longest MitCad waits for the
+service's next data before it gives up on the message.
+
+The key is kept in the system's keychain (Windows' Credential Manager,
+the macOS Keychain, the Secret Service or KWallet on Linux), never in a
+file of MitCad's or in its log. Without a keychain it is kept until MitCad
+closes. Type it in **New API key** in Preferences or, when the panel says
+**Anthropic API needs an API key.**, in its field and **Save Key**;
+**Remove Key** in Preferences removes it. For the Anthropic API, MitCad
+also uses `ANTHROPIC_API_KEY` from its environment when no key is kept.
+
+When the panel opens or the agent is chosen, MitCad asks the service for
+its models (`/models`). The answer makes the agent ready and fills
+**Model** (the Anthropic API offers its current models even before);
+a refused key asks for a new one; no answer says so:
+
+| State line | Button | What happens |
+|---|---|---|
+| No answer from Ollama at http://localhost:11434/v1. Start it, or get it. | **Get Ollama** (**Get LM Studio**) | Opens its download page. Start the server; the panel goes on by itself once it answers |
+| No answer from Custom endpoint at *address*: *why* | **Chat Preferences…** | Check the address |
+| Custom endpoint has no address: set it in Preferences › AI Assistants › Chat. | **Chat Preferences…** | Opens Preferences |
+| Anthropic API needs an API key. (*Anthropic API refused the API key. Enter a valid one.*) | **Save Key** beside the key field | Keeps the key and asks the service again |
+| Ollama is ready. | **Send** | Write your message |
+
+For a local server, **Default model** is the first model it lists; choose
+another in **Model**. For the Anthropic API it is Claude Opus 5.5
+(`claude-opus-5-5`).
+
+A model that cannot call tools cannot change the design. When the service
+says so (Ollama: "… does not support tools"), the message ends with
+**This model cannot edit the design: *model* does not support tool calls.
+Choose a model that does.**, and the message is not kept in the
+conversation, so you can send it again with another model.
+
+The conversation of an API agent is kept for each design as the others
+are, and its full exchange with the model (without pictures) beside the
+history, so that a reopened design goes on with it. **Clear History of
+This Design** and **Clear all history…** remove it too.
+
+### A custom command
+
+An agent program that speaks the [Agent Client
+Protocol](https://agentclientprotocol.com) itself can be the chat's agent
+too. Set it in **Preferences › AI Assistants › Chat › Custom agent**:
+check **Custom command**, and give its program (a name, looked for as a
+command in a terminal is and in the same folders as Claude Code, or its
+full path) and its arguments on one line (quote an argument with spaces).
+Checked, it is offered in the panel's agent choice as **Custom command**.
+
+MitCad starts the command as it is and talks to it over its standard
+input and output; it ships and installs no adapter of any kind, and
+starts no npm or Node launcher. The command must speak the protocol
+itself. When the agent is chosen or the panel opens, MitCad starts the
+command once for the protocol's handshake (`initialize`):
+
+| State line | Button | What happens |
+|---|---|---|
+| No command is set for the custom agent: set it in Preferences. | **Chat Preferences…** | Opens Preferences |
+| The custom command *name* was not found. | **Chat Preferences…** | Check the program's name or path |
+| *program* did not answer the Agent Client Protocol handshake: *why*. | **Chat Preferences…** | The command is not an agent of this kind, or it failed: *why* says what it wrote, how it ended, or that no answer came in 20 s |
+| Custom command is ready. | **Send** | Write your message |
+
+A command that did not answer is not started again until it, its
+arguments or its program file change (the panel then goes on by itself)
+or the panel is opened again. On Windows a launcher script (`.cmd`,
+`.bat`, `.ps1`) is not started: give the agent's program itself.
+
+The agent works with the same approvals, one undo step per message and
+history as Claude Code and Codex. When it has a model selector, **Model**
+offers its models; a chosen one is set before the next message. Signing
+in, an API key or anything else the agent needs is the agent's own:
+set it up with its own tools before you use it here.
+
 The chat needs MitCad's listener for assistants (the one Connect AI
 Assistant uses). When MitCad was started with `--no-mcp`, the panel says
 so.
 
 Before your first message to an agent, the panel says once what leaves
 your computer: what you write, the selection, the open comments and
-pictures of the view go to the agent's service (Anthropic for Claude Code, OpenAI for Codex),
-whose terms apply. The notice is shown once for each agent.
+pictures of the view go to the agent's service (Anthropic for Claude Code, OpenAI for Codex,
+the endpoint's address for an API agent), whose terms apply; for a local
+model, that they stay on this computer; for a custom command, that they
+go to the command and wherever it sends them. The notice is shown once for each
+agent.
 **Continue** sends the message.
 
 ## Account and sign-in problems
@@ -88,7 +191,8 @@ change the account state.
 with an allowed account (`claude /logout`, then `claude /login` in a terminal),
 set `ANTHROPIC_API_KEY` for MitCad and restart it, or ask your organization's
 administrator to enable access. For Codex, use `codex logout`, then `codex
-login`, or configure its API key. Check billing or wait for a usage limit to
+login`, or configure its API key. For an API agent, enter a valid key in
+Preferences (**New API key**). Check billing or wait for a usage limit to
 reset where applicable.
 
 Choose **Check again** after correcting the account. It checks sign-in and
@@ -302,6 +406,91 @@ not say it):
   starts, Codex 0.80.0, already has every message and key used here (only
   0.157.1's schema was at hand).
 
+### API endpoints and local models
+
+For an API agent there is no process. MitCad opens the chat's own
+connection to its listener, with the listener's token and the chat's
+marker as the bridge would, so the listener's approvals for the chat
+apply exactly as they do for Claude Code and Codex. Over it MitCad sends
+`initialize` and `tools/list`, and gives the model the tools and the
+listener's instructions (after one paragraph of its own) as the system
+prompt. Each message is a streamed request with the whole conversation:
+
+- the Anthropic Messages API: `POST /v1/messages` with `x-api-key`,
+  `anthropic-version: 2026-10-21`, `stream: true`, `max_tokens` 32000 and
+  the tools as `input_schema`; the server-sent events give the text, the
+  tool calls (their input streams as JSON pieces) and the model's
+  thinking blocks, which go back unchanged with their signatures in the
+  next request;
+- an OpenAI-compatible endpoint: `POST <address>/chat/completions` with
+  `Authorization: Bearer <key>` when a key is kept, `stream: true` and the
+  tools as `function`s; the tool calls stream in pieces by their index.
+
+Each call the model asks for goes to the listener as a `tools/call`; its
+result goes back to the model (pictures too for the Anthropic API; text
+only for an OpenAI-compatible endpoint, whose tool messages carry no
+pictures), and the next request follows, until the model answers without
+a call (at most 100 requests for one message). A tool result's text is
+cut at 100 000 characters for the model. **Stop** ends the request in
+flight; calls still running are answered as stopped, and the message
+stays in the conversation for the next one to follow. Redirects are not
+followed (they would carry the key elsewhere).
+
+A refusal that names an account problem (an invalid key, a credit or rate
+limit, HTTP 401 or 429) is an account error like Claude Code's, with
+**How to fix** and **Check again**. The kept exchange is the chat folder's
+`api-sessions/<session>.json`. All of the two services' protocols are in
+`core/mcp/src/chat/api.rs` (and its tests, `api_tests.rs`); the
+application's side, the connection, the requests and the keychain, in
+`app/agent/ApiAgent.cpp`.
+
+### The custom command's protocol
+
+For a custom command the panel starts one process per conversation, in
+the chat's own working folder, and speaks the Agent Client Protocol over
+its standard input and output: JSON-RPC 2.0, one message per line, in the
+shapes of the protocol's published schema (version 1). After
+`initialize` (MitCad offers no file system and no terminal:
+`clientCapabilities` `fs.readTextFile`, `fs.writeTextFile` and `terminal`
+are `false`), `session/new` starts the conversation, or `session/load`
+goes on with the design's session when the agent can load sessions
+(`agentCapabilities.loadSession`; otherwise, or when the agent no longer
+has it, a new session starts and the panel says so). The session's only
+MCP server is MitCad's bridge:
+
+```json
+{"cwd": "<the chat's working folder>",
+ "mcpServers": [{"name": "mitcad", "command": "<mitcad-cli>",
+   "args": ["mcp", "--connect", "--instance", "<id>", "--chat-session", "<marker>"],
+   "env": []}]}
+```
+
+Each message is a `session/prompt` (its text, the selection and the open
+comments as a second text, and the picture of the view as an `image`
+block when the agent takes pictures, `promptCapabilities.image`). The
+`session/update` notifications stream the answer
+(`agent_message_chunk`) and the tool rows (`tool_call`,
+`tool_call_update`); the prompt's answer ends the message with its stop
+reason (`end_turn`; `max_tokens`, `max_turn_requests` and `refusal` end
+it with an error). The updates with which an agent replays a loaded
+session are not shown: MitCad shows its own history. **Stop** sends
+`session/cancel`; the prompt ends `cancelled`, and if it has not ended 5
+seconds later, the process is ended and the next message loads the
+session again.
+
+The agent asks MitCad before some of its calls
+(`session/request_permission`): a call of MitCad's own tools is allowed
+once, as the listener then decides and asks you by the approvals above;
+every other call (the agent's own edits and commands) is rejected. A
+request for a file or a terminal is refused. The agent's model is its
+model selector (a `configOptions` entry of the category `model`), set with
+`session/set_config_option`. An `auth_required` refusal is an account
+error with **How to fix** and **Check again**.
+
+All of the protocol is in `core/mcp/src/chat/acp.rs` (and its tests,
+`acp_tests.rs`); the process and the handshake check in
+`app/agent/AcpAgent.cpp`.
+
 ### The parts
 
 The chat's own logic is in Rust (`core/mcp/src/chat.rs`): the agents'
@@ -309,5 +498,6 @@ streams as panel events, the command lines and messages, Codex's whole
 JSON-RPC exchange, the approval policy, the undo merge, the history
 format and the tool calls' group rows (`tool_groups`). The panel, the processes and the files are the application's
 (`app/agent/`). Each agent is a class behind one interface
-(`app/agent/ChatAgent.hpp`: `ClaudeCodeAgent`, `CodexAgent`), so that API
-endpoints and local models can plug in later without changing the panel.
+(`app/agent/ChatAgent.hpp`: `ClaudeCodeAgent`, `CodexAgent`, `ApiAgent`
+for the API endpoints and local models and `AcpAgent` for a custom
+command), so that the panel does not change with an agent's protocol.

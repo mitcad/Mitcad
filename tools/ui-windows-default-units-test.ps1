@@ -82,7 +82,7 @@ Ui-Step 'New (Ctrl+N)'                     { Ui-Key 'ctrl+n' }
 Ui-ExpectNew 'New design in in' 'New makes a design in inches'
 Ui-ExpectNew 'Opened the new design with Component1 active' 'the new design is open' 20
 Ui-WaitIdle
-$title = [UiInput]::Title($script:UiWindow)
+$title = Ui-WindowTitle
 if ($title -ne 'Untitled - MitCad') { Ui-Fail "the new design is modified: '$title'" }
 Write-Host 'ok   the new design is not modified'
 Expect-Units 'in' 'the browser shows Units: in'

@@ -48,6 +48,7 @@
 #include "../files/Libraries.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/WindowStyle.hpp"
 #include "../platform/MacDialogs.hpp"
@@ -780,7 +781,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_groups->setHeaderHidden(true);
   m_groups->setColumnCount(1);
   m_groups->setRootIsDecorated(true);
-  m_groups->setIndentation(14);
+  panel::setCompactIndentation(m_groups, panel::Indent::Tree);
   m_groups->setUniformRowHeights(true);
   m_groups->setIconSize(QSize(16, 16));
   m_groups->setMinimumWidth(160);

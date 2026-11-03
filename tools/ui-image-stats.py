@@ -7,6 +7,7 @@ Usage: ui-image-stats.py dump.xwd x y width height [other.xwd]
        ui-image-stats.py --shot screenshot.png
        ui-image-stats.py --silhouettes a.xwd b.xwd x y width height
        ui-image-stats.py --image-silhouette shot.xwd x y width height image.png fx fy fwidth fheight
+       ui-image-stats.py --png-changed a.png b.png x y width height
 
 Prints JSON with pixel counts in the region:
   pixels   all of them
@@ -58,6 +59,11 @@ image's pixels whose alpha is above one half, taken where each region
 pixel falls in the frame, scaled to the image. Prints the same JSON as
 --silhouettes (a: the dump, b: the image), plus the image's width and
 height.
+
+--png-changed compares a region of two PNG images of the same size (the
+app's --screenshot of the view, tools/ui-version-watermark-test.sh) and
+prints JSON: pixels, the region's, and changed, those that differ by more
+than 24 in a channel.
 """
 
 import json
@@ -284,6 +290,24 @@ def image_silhouette(shot_path, region, image_path, frame):
             "box_a": box(a), "box_b": box(b), "width": width, "height": height}
 
 
+def png_changed(a_path, b_path, region):
+    """--png-changed: the region's pixels that differ between two PNG images."""
+    rx, ry, rw, rh = region
+    wa, ha, bpp_a, rows_a = read_png(a_path)
+    wb, hb, bpp_b, rows_b = read_png(b_path)
+    if (wa, ha) != (wb, hb):
+        raise SystemExit("the images differ in size: %dx%d, %dx%d" % (wa, ha, wb, hb))
+    stats = {"pixels": 0, "changed": 0}
+    for y in range(max(0, ry), min(ha, ry + rh)):
+        for x in range(max(0, rx), min(wa, rx + rw)):
+            pa = rows_a[y][x * bpp_a:x * bpp_a + 3]
+            pb = rows_b[y][x * bpp_b:x * bpp_b + 3]
+            stats["pixels"] += 1
+            if max(abs(pa[0] - pb[0]), abs(pa[1] - pb[1]), abs(pa[2] - pb[2])) > 24:
+                stats["changed"] += 1
+    return stats
+
+
 def main():
     if len(sys.argv) == 12 and sys.argv[1] == "--image-silhouette":
         print(json.dumps(image_silhouette(sys.argv[2], [int(v) for v in sys.argv[3:7]], sys.argv[7],
@@ -291,6 +315,9 @@ def main():
         return
     if len(sys.argv) == 8 and sys.argv[1] == "--silhouettes":
         print(json.dumps(silhouettes(sys.argv[2], sys.argv[3], [int(v) for v in sys.argv[4:8]])))
+        return
+    if len(sys.argv) == 8 and sys.argv[1] == "--png-changed":
+        print(json.dumps(png_changed(sys.argv[2], sys.argv[3], [int(v) for v in sys.argv[4:8]])))
         return
     if len(sys.argv) == 3 and sys.argv[1] == "--shot":
         print(json.dumps(shot_stats(sys.argv[2])))

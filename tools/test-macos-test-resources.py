@@ -23,7 +23,16 @@ def main():
     assert desktop, "no desktop tests configured"
     for name in sorted(desktop):
         props = properties[name]
-        assert "macos_desktop" in props.get("RESOURCE_LOCK", []), name
+        harness = "macos_gui_harness" in props.get("LABELS", [])
+        if harness:
+            # Only the audited, process-private workflows may own Aqua
+            # inside ui_run_app rather than throughout their CLI setup.
+            workflow = name.removeprefix("app.ui-macos-").removeprefix("native-")
+            assert workflow in {"bindings-parity", "binding-card-parity", "configuration-parity",
+                                "configuration-tables-parity", "slicer-parity"}, name
+            assert "macos_desktop" not in props.get("RESOURCE_LOCK", []), name
+        else:
+            assert "macos_desktop" in props.get("RESOURCE_LOCK", []), name
         assert not props.get("RUN_SERIAL", False), name
     for name in ("app.unit", "app.render_devices"):
         props = properties[name]
@@ -35,13 +44,22 @@ def main():
             props = properties[name]
             assert not props.get("RUN_SERIAL", False), name
             assert "macos_desktop" not in props.get("RESOURCE_LOCK", []), name
-    # Compiler process-tree memory is not bounded on macOS; timed Metal
-    # scene acceptance also needs the whole machine free of competing work.
-    for name in ("core.cargo_build", "core.cargo_build_release", "app.render_metal_scenes",
+    for name in ("core.cargo_build", "core.cargo_build_release"):
+        if name in properties:
+            props = properties[name]
+            assert not props.get("RUN_SERIAL", False), name
+            assert "cargo_build" in props.get("RESOURCE_LOCK", []), name
+            assert "macos_cargo_build" in props.get("LABELS", []), name
+            assert "MITCAD_CARGO_MAX_JOBS=2" in props.get("ENVIRONMENT", []), name
+    # Timed Metal scene acceptance needs the whole machine free of
+    # competing work. Its performance assertions are unchanged.
+    for name in ("app.render_metal_scenes",
                  "app.render_surface_metal_macos", "app.render_surface_metal_gl_macos"):
         if name in properties:
             assert properties[name].get("RUN_SERIAL", False), name
-    print(f"macOS resources: {len(desktop)} desktop tests locked; offscreen work independent")
+    harnesses = sum("macos_gui_harness" in properties[n].get("LABELS", []) for n in desktop)
+    print(f"macOS resources: {len(desktop) - harnesses} CTest desktop locks; "
+          f"{harnesses} harnesses lock every app launch; offscreen work independent")
 
 
 if __name__ == "__main__":

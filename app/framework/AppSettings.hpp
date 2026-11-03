@@ -47,6 +47,11 @@ struct GeneralSettings {
   // changes no open design. Millimetres by default (metric defaults, P11);
   // one of newDesignUnitChoices().
   QString newDesignUnits = QStringLiteral("mm");
+  // The unit materials' temperatures are shown in, `C` or `F` (mitcad#1213;
+  // the setting units/temperature): the maximum service temperature and
+  // the extruder and bed temperatures, whatever the design's units.
+  // Degrees Celsius by default.
+  QString temperatureUnit = QStringLiteral("C");
   // Open normally adds a document; this restores replacement in the
   // current window. macOS uses system window tabs instead of a Qt frame.
   bool openInCurrentWindow = false;

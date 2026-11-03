@@ -138,7 +138,7 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_ag
             "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:test_chat_agent>"
             "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-chat"
             "$<TARGET_FILE_DIR:Qt6::Core>")
-  set_tests_properties("${chat_ui_test}" PROPERTIES TIMEOUT 900 ${selection_ui_alone}
+  set_tests_properties("${chat_ui_test}" PROPERTIES TIMEOUT 1200 ${selection_ui_alone}
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 

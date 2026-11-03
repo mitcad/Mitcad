@@ -43,6 +43,7 @@
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/NativeDialogs.hpp"
@@ -1119,6 +1120,7 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
   auto* tree = new OptionTree([this] { optionsDropped(); });
   m_options = tree;
   m_options->setObjectName(QStringLiteral("configurationsOptions"));
+  panel::setCompactIndentation(m_options, panel::Indent::Flat);
   m_options->setColumnCount(7);
   // The approved words (mitcad#968, docs/ui-conventions.md
   // "Configurations"): Possible Values before restrictions, the current

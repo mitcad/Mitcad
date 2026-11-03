@@ -45,6 +45,7 @@
 #include <TopoDS_Iterator.hxx>
 
 #include "../files/Print3d.hpp"
+#include "../framework/AppSettings.hpp"
 #include "../framework/Appearances.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/CommandSession.hpp"
@@ -1514,6 +1515,13 @@ Inspection propertiesInspection(const QJsonObject& answer) {
         body.value(QStringLiteral("material")).toString(QStringLiteral("steel")));
     row(prefix + QStringLiteral("density"), QObject::tr("Density"),
         QStringLiteral("%1 g/cm³").arg(n(body.value(QStringLiteral("density")).toDouble(), 4)));
+    // Its material's mechanical, thermal and printing values, in the design's
+    // units (mitcad#1213); a value not given has no row.
+    for (const QJsonValue& entry : body.value(QStringLiteral("material_properties")).toArray()) {
+      const QJsonObject property = entry.toObject();
+      row(prefix + QStringLiteral("material_") + property.value(QStringLiteral("key")).toString(),
+          property.value(QStringLiteral("name")).toString(), property.value(QStringLiteral("text")).toString());
+    }
     row(prefix + QStringLiteral("mass"), QObject::tr("Mass"),
         QStringLiteral("%1 kg").arg(n(body.value(QStringLiteral("mass")).toDouble(), 6)));
     row(prefix + QStringLiteral("volume"), QObject::tr("Volume"),
@@ -1639,6 +1647,8 @@ void presentProperties(const Inspection& result, QWidget* window) {
 
 void showProperties(const CommandContext& context, QWidget* window, const Selection& selection) {
   QJsonObject request{{QStringLiteral("query"), QStringLiteral("properties")}};
+  // Materials' temperatures in the unit the user prefers (mitcad#1213).
+  request.insert(QStringLiteral("temperature"), GeneralSettings::load().temperatureUnit);
   QJsonArray uids;
   for (const SelectionItem& item : selection) {
     const bool onBody = item.kind == SelectKind::Body || item.kind == SelectKind::Face ||

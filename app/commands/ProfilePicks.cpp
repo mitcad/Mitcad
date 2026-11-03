@@ -3,6 +3,8 @@
 
 #include <algorithm>
 
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QObject>
 
 namespace mitcad::cmd {
@@ -50,6 +52,37 @@ QString profilesRefused(const SelectionItem& item, const Selection& held, bool p
                            "click Start Object, then the face; to extrude the face, clear Profiles first.")
              : QObject::tr("Profiles holds sketch profiles, which a face does not join. To start at this face, "
                            "set Start to Object; to extrude the face, clear Profiles first.");
+}
+
+std::optional<SelectionItem> automaticProfile(const QJsonArray& profiles) {
+  const auto unused = [](const QJsonValue& value) {
+    return !value.toObject().value(QStringLiteral("consumed")).toBool();
+  };
+  QString sketch;
+  for (const QJsonValue& value : profiles) {
+    if (unused(value)) {
+      sketch = value.toObject().value(QStringLiteral("sketch")).toString();
+    }
+  }
+  if (sketch.isEmpty()) {
+    return std::nullopt;
+  }
+  std::optional<SelectionItem> drawn;
+  std::optional<SelectionItem> leftover;
+  for (const QJsonValue& value : profiles) {
+    const QJsonObject profile = value.toObject();
+    if (!unused(value) || profile.value(QStringLiteral("sketch")).toString() != sketch) {
+      continue;
+    }
+    const SelectionItem item{SelectKind::Profile, sketch, profile.value(QStringLiteral("region")).toString(),
+                             QStringLiteral("plane")};
+    if (profile.value(QStringLiteral("face_bounded")).toBool()) {
+      leftover = item;
+    } else {
+      drawn = item;
+    }
+  }
+  return drawn ? drawn : leftover;
 }
 
 } // namespace mitcad::cmd

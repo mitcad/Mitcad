@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Lengths in the design's unit (mitcad#1165) on tools/cli/tests/units_inch.json,
 # a design in inches: the Browser's sheet-rules row in inches, Extrude's
-# default distance 10 mm as 0.5 in, Measure's area and distances in inches.
+# default distance 10 mm as 0.5 in, Measure's area and distances in inches;
+# the layout grid in inches (mitcad#1210): Grid Settings' fixed spacing,
+# the automatic grid's inch series when zooming, and after the design set to
+# mm the metric grid and the fixed spacing kept.
 # Run by tools/ui-units-inch-test.sh (Linux) and
 # tools/ui-windows-units-inch-test.ps1 (Windows).
 wait-idle
@@ -30,3 +33,46 @@ expect-log 'distance 25[.]4'
 screenshot '${MITCAD_TEST_WORK}/units-inch-measure.png'
 key Escape
 expect-log '^Command Measure cancelled'
+
+# The layout grid in the design's unit (mitcad#1210). Grid Settings shows
+# the fixed spacing in inches (automatic: 10 mm as 0.5 in).
+mark
+command view.grid_settings
+focus-dialog '^Grid Settings$'
+expect-log '^Grid settings dialog opened: automatic, fixed spacing 0[.]5 in$'
+key Escape
+focus-main
+# The automatic grid steps through the inch series as the view zooms in
+# (1/16, 1/8, 1/4, 1/2, 1, 2, 5, 10 in; halves further down).
+expect-ever '^Layout grid [0-9.]+ in, major [0-9.]+ in, '
+mark
+wheel-burst 50 50 1 20
+wait-log '^Layout grid (0[.]0*(5|25|125|0625|3125|15625|78125)|[125]0*) in, major [0-9.]+ in, '
+# A fixed spacing typed in inches: 0.25 in, its major lines every inch.
+mark
+command view.grid_settings
+focus-dialog '^Grid Settings$'
+expect-log '^Grid settings dialog opened: automatic, fixed spacing 0[.]5 in$'
+button '^Fixed spacing$'
+focus-widget gridSpacing
+key ctrl+a
+type 0.25
+key Return
+focus-main
+wait-log '^Grid spacing 0[.]25 in$'
+wait-log '^Layout grid 0[.]25 in, major 1 in, '
+# The design set to mm: the fixed spacing stays where it was (6.35 mm, its
+# major lines every fifth), and the dialog shows it in mm.
+mark
+model-command '{"cmd": "set_units", "length": "mm"}'
+wait-log '^Layout grid 6[.]35 mm, major 31[.]75 mm, '
+mark
+command view.grid_settings
+focus-dialog '^Grid Settings$'
+expect-log '^Grid settings dialog opened: fixed, fixed spacing 6[.]35 mm$'
+button '^Automatic'
+key Return
+focus-main
+wait-log '^Grid spacing automatic$'
+# A metric design's automatic grid as before: 1 or 5 times a power of ten mm.
+wait-log '^Layout grid (0[.]0*[15]|[15]0*) mm, major [0-9.]+ mm, '

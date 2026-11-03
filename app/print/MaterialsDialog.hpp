@@ -13,6 +13,7 @@
 #include <QWidget>
 
 #include "../framework/Appearances.hpp"
+#include "MaterialProperties.hpp"
 #include "PrintItemsHost.hpp"
 #include "PrintKeys.hpp"
 #include "PrintLibrary.hpp"
@@ -33,6 +34,7 @@ namespace mitcad {
 
 class AppearancePopover;
 class DocumentHost;
+class MaterialPropertiesBox;
 class MaterialVariantsPage;
 class SettingsForm;
 class SlicerImportBar;
@@ -80,6 +82,19 @@ class SlicerImportBar;
 // removes the item, always asked (confirmDelete). A refusal of a setting
 // shows under its field, others on the message line. Read only is
 // disabled, never hidden.
+//
+// Material properties (mitcad#1213, MaterialProperties.hpp): General shows
+// Density and the mechanical, thermal and, for an FDM plastic, printing
+// values in the design's units (the `material_units` query; temperatures
+// in the preferred unit), each saved as Name is; its source and a line
+// that the values are typical. New ▾ › Browse Material Dataset… picks a
+// material of the bundled dataset (MaterialDatasetDialog), then where it
+// goes: `create_material` with `dataset`. Import… reads a JSON or CSV
+// file into the place chosen (`import_materials`; a name there already is
+// asked once: Keep Existing, Replace Values, Keep Both) and says on the
+// message line what it did and each row it did not import, with the
+// reason; Export… writes the selected one's place's materials (none
+// selected: the design's) in the design's units.
 //
 // Without a design (ManagerHosts) the panel works through a model of its
 // own: This design is no group and no place to ask for.
@@ -135,6 +150,14 @@ private:
   // A new item's `library` and project when `place` is a library.
   void inPlace(QJsonObject& command, const QString& place) const;
   void newMaterial();
+  // Browse Material Dataset… of New ▾ (mitcad#1213): a dataset's material
+  // made the user's own where they choose, selected.
+  void newFromDataset();
+  // Import… and Export… (mitcad#1213): materials as JSON or CSV files.
+  void importMaterials();
+  void exportMaterials();
+  // Says on the message line and in the log what an import did.
+  void reportImport(const QJsonObject& result, const QString& file);
   void duplicate(QPushButton* anchor);
   void remove();
   void copyTo();
@@ -205,6 +228,10 @@ private:
   QStringList m_usedIds;         // the design's materials its bodies use
   QPushButton* m_copyTo = nullptr;
   QLineEdit* m_density = nullptr;
+  QLabel* m_densityUnit = nullptr; // the design's density unit (mitcad#1213)
+  MaterialUnits m_units;           // the design's units of materials' values
+  MaterialPropertiesBox* m_properties = nullptr; // Mechanical, Thermal, Printing (mitcad#1213)
+  QString m_loggedProperties;
   QLabel* m_densityError = nullptr;
   QTreeWidget* m_appearanceList = nullptr; // every one it offers, the default marked
   QString m_selectAfterEdit;               // Add…'s, or the new default after Remove, selected once listed
@@ -222,6 +249,8 @@ private:
   QPushButton* m_new = nullptr;
   QPushButton* m_duplicate = nullptr;
   QPushButton* m_delete = nullptr;
+  QPushButton* m_import = nullptr; // Import… of materials files (mitcad#1213)
+  QPushButton* m_export = nullptr;
   QVector<std::pair<QString, QPushButton*>> m_windowButtons; // addButton's
   QString m_loggedRows;
   QString m_loggedEditing;

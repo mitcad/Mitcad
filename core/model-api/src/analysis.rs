@@ -71,6 +71,10 @@ pub(super) struct PropertiesQuery {
     /// `bodies` (mitcad#1095, `physical_extent.rs`).
     #[serde(default)]
     components: Vec<ComponentArg>,
+    /// The unit the bodies' material temperatures are written in, `C` or
+    /// `F` (mitcad#1213: the user's preference); the preferred unit when left out.
+    #[serde(default)]
+    temperature: Option<String>,
 }
 
 /// A body, a face, edge or vertex of it, or a datum.
@@ -981,6 +985,9 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                 "the density must be greater than zero, got {density}"
             )));
         }
+        // The materials' properties in the design's units (mitcad#1213).
+        let temperature = super::materials::temperature_of(query.temperature.as_deref())?;
+        let system = super::materials::MaterialsOps::material_system(self);
         let mut bodies = Vec::new();
         let mut all = Vec::new();
         // One entry per placement of a body, its properties, box and
@@ -1027,6 +1034,13 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                 }
                 value["material"] = material;
                 value["density"] = json!(density);
+                if !value["material"].is_null() {
+                    value["material_properties"] = json!(super::materials::material_property_rows(
+                        made_of,
+                        system,
+                        temperature
+                    ));
+                }
                 let placed = Extent {
                     bbox: self.placed_extent(shape, &placement.transform, name)?,
                     counts,

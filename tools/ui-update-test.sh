@@ -391,7 +391,7 @@ echo "ok   the release's AppImage, executable, the design saved"
 # The new process is the AppImage's own, no child of this script.
 UI_WINDOW=""
 for _ in $(seq 1 100); do
-  UI_WINDOW=$(xdotool search --onlyvisible --name ' - MitCad$' 2> /dev/null | head -1)
+  UI_WINDOW=$(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | head -1)
   [ -n "$UI_WINDOW" ] && break
   sleep 0.2
 done

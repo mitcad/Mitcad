@@ -1078,6 +1078,10 @@ void CommandSession::activate(const QString& key) {
   // Measure's Faces, Edges and Vertices: a body's corner or edge before the
   // sketch point or line on it, but the edited sketch's own (mitcad#869).
   viewer.setSketchesBehind(input != nullptr && input->sketchesBehind, m_host.editedSketch());
+  // An input that takes sketch profiles: the regions on offer drawn over
+  // the bodies and picked before the faces in front of them, also where
+  // their plane lies inside a body (mitcad#1222).
+  viewer.setProfilesFirst(input != nullptr && input->filter.testFlag(SelectKind::Profile));
   if (input == nullptr) {
     viewer.setPickFilter(SelectFilter());
     updateGhosts();
@@ -4670,6 +4674,7 @@ void CommandSession::finish(bool committed) {
   viewer.setPlanesBehind(false);
   viewer.setPlanesByDepth(false);
   viewer.setSketchesBehind(false);
+  viewer.setProfilesFirst(false);
   viewer.setHandleBoxes({}); // the handles' value boxes went with them
   viewer.setHandleAreas(nullptr, {}); // and the handles (mitcad#1105)
   viewer.setHighlights({});

@@ -72,7 +72,7 @@ expect-log '^Materials list: [0-9]+ names, none cut$'
 wait-idle
 mark
 button '^New'
-expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Other$'
+expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Other \| Browse Material Dataset…$'
 popup 'FDM Plastic'
 # Then where (mitcad#1135): This design first.
 expect-log '^Materials new menu: This design \| My library$'

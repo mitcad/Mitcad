@@ -20,6 +20,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
@@ -209,6 +210,30 @@ QString slicerDialect(const Slicer& slicer) {
     return QStringLiteral("cura");
   }
   return QString();
+}
+
+bool slicerTakesPlates(const Slicer& slicer, const QString& dialect) {
+  if (dialect == QStringLiteral("bambu_studio") || dialect == QStringLiteral("orcaslicer") ||
+      dialect == QStringLiteral("qidi_studio")) {
+    return true;
+  }
+  if (dialect != QStringLiteral("prusaslicer")) {
+    return false;
+  }
+  // PrusaSlicer keeps several beds in a project since 2.9: an older one
+  // named by its version ("PrusaSlicer-2.8.1+linux-x64-....AppImage", a
+  // folder "PrusaSlicer 2.7") takes a 3MF per plate; an unknown version is
+  // taken to be a current one.
+  static const QRegularExpression version(QStringLiteral("prusa[^/\\\\]*?(\\d+)\\.(\\d+)"),
+                                          QRegularExpression::CaseInsensitiveOption);
+  const QString named = slicer.name + QLatin1Char(' ') + slicer.location();
+  const QRegularExpressionMatch match = version.match(named);
+  if (!match.hasMatch()) {
+    return true;
+  }
+  const int major = match.captured(1).toInt();
+  const int minor = match.captured(2).toInt();
+  return major > 2 || (major == 2 && minor >= 9);
 }
 
 Slicer slicerForProgram(const QString& name, const QString& program) {

@@ -73,6 +73,7 @@
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -2636,6 +2637,151 @@ void test_rounding_round_a_corner_cut_by_a_wall_standing_across_it() {
   CHECK(volume_of(BRepAlgoAPI_Cut(expected, result).Shape()) < 1e-6);
 }
 
+// Raises each edge's tolerance to its curve's largest deviation from
+// its faces through its pcurves, sampled at 400 points, with a margin.
+void raise_edge_tolerances_to_their_deviations(const TopoDS_Shape& shape) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces_of);
+  BRep_Builder builder;
+  for (int i = 1; i <= faces_of.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(faces_of.FindKey(i));
+    double f3 = 0, l3 = 0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, f3, l3);
+    if (BRep_Tool::Degenerated(edge) || curve.IsNull()) {
+      continue;
+    }
+    double worst = 0;
+    for (const TopoDS_Shape& f : faces_of.FindFromIndex(i)) {
+      const TopoDS_Face& face = TopoDS::Face(f);
+      double f2 = 0, l2 = 0;
+      const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, face, f2, l2);
+      if (pcurve.IsNull()) {
+        continue;
+      }
+      const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+      for (int q = 0; q <= 400; ++q) {
+        const double t = f3 + (l3 - f3) * q / 400.0;
+        const gp_Pnt2d uv = pcurve->Value(t);
+        worst = std::max(worst, curve->Value(t).Distance(surface->Value(uv.X(), uv.Y())));
+      }
+    }
+    if (worst * 1.1 > BRep_Tool::Tolerance(edge)) {
+      builder.UpdateEdge(edge, worst * 1.1);
+      for (TopExp_Explorer v(edge, TopAbs_VERTEX); v.More(); v.Next()) {
+        if (BRep_Tool::Tolerance(TopoDS::Vertex(v.Current())) < worst * 1.1) {
+          builder.UpdateVertex(TopoDS::Vertex(v.Current()), worst * 1.1);
+        }
+      }
+    }
+  }
+}
+
+// A bar of radius 5 along x (axis y = z = 0, from x = 0 to 14) under a
+// riser y < -1.7543, joined to it by a concave arc of radius 3 about
+// (1.2457, 7.8808): tangent to the riser's face, but crossing the bar at L
+// (y 0.5001, z 4.9749) at about 9 degrees instead of touching it (it runs
+// 0.0214 into the bar). The concave arc's edge with the end face x = 0 is
+// rounded with 0.3, which leaves a sliver of the bar's surface between L's
+// end and that rounding. A null shape when a step fails.
+constexpr double kCreaseY = 1.2457, kCreaseZ = 7.8808;
+
+TopoDS_Shape bar_with_a_crease_and_a_rim_rounding() {
+  const TopoDS_Shape bar   = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), 5, 14).Shape();
+  const TopoDS_Shape riser = BRepPrimAPI_MakeBox(gp_Pnt(0, -10, 0), gp_Pnt(14, kCreaseY - 3, 20)).Shape();
+  const TopoDS_Shape fill  = BRepAlgoAPI_Cut(
+    BRepPrimAPI_MakeBox(gp_Pnt(0, kCreaseY - 3, 3), gp_Pnt(14, 0.8, kCreaseZ)).Shape(),
+    BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-1, kCreaseY, kCreaseZ), gp_Dir(1, 0, 0)), 3, 16).Shape()).Shape();
+  ShapeUpgrade_UnifySameDomain unify(BRepAlgoAPI_Fuse(BRepAlgoAPI_Fuse(bar, riser).Shape(), fill).Shape(), true, true,
+                                     true);
+  unify.Build();
+  const TopoDS_Shape body = unify.Shape();
+  // The concave arc's edge with the end face.
+  const std::vector<TopoDS_Edge> rim = edges_where(body, [](const gp_Pnt& m) {
+    return std::abs(m.X()) < 1e-9 && std::abs(std::hypot(m.Y() - kCreaseY, m.Z() - kCreaseZ) - 3) < 1e-6;
+  });
+  if (rim.size() != 1) {
+    return TopoDS_Shape();
+  }
+  // The rim rounding's own edges come out with tolerances a few per cent
+  // under their pcurves' deviations, sampled densely (9.4e-7 against
+  // 9.6e-7 mm); the corner splits one, and a check of the piece samples
+  // it more densely, so the input's tolerances are raised to what they
+  // cover first.
+  TopoDS_Shape rimmed = rounded(body, rim, 0.3);
+  if (!rimmed.IsNull()) {
+    raise_edge_tolerances_to_their_deviations(rimmed);
+  }
+  return rimmed;
+}
+
+void test_rounding_pivots_about_a_crease_over_a_sliver() {
+  const TopoDS_Shape body = bar_with_a_crease_and_a_rim_rounding();
+  CHECK(!body.IsNull());
+  if (body.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(body).IsValid());
+  // The end face's edges with the bar (radius 5 at x = 0).
+  const std::vector<TopoDS_Edge> foot = edges_where(body, [](const gp_Pnt& m) {
+    return std::abs(m.X()) < 1e-9 && std::abs(std::hypot(m.Y(), m.Z()) - 5) < 1e-6;
+  });
+  CHECK(!foot.empty());
+  const TopoDS_Shape result = foot.empty() ? TopoDS_Shape() : rounded(body, foot, 0.5);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result).IsValid());
+  // The crease line L: the bar (radius 5 about the x axis) meets the
+  // concave arc (radius 3) at its first point from the end vertex.
+  const double d = std::hypot(kCreaseY, kCreaseZ);
+  const double a = (25 - 9 + d * d) / (2 * d);
+  const double h = std::sqrt(25 - a * a);
+  const gp_XY  u(kCreaseY / d, kCreaseZ / d), n(-u.Y(), u.X());
+  const gp_XY  l1 = a * u + h * n, l2 = a * u - h * n;
+  const gp_XY  L  = l1.X() < l2.X() ? l1 : l2;
+  // The pivot corner: a horn torus (both radii the rounding's) about L,
+  // centred a radius off the end face, touching the end face along the
+  // circle of a radius about L's foot.
+  int pivots = 0;
+  for (TopExp_Explorer ex(result, TopAbs_FACE); ex.More(); ex.Next()) {
+    const TopoDS_Face&  face = TopoDS::Face(ex.Current());
+    BRepAdaptor_Surface s(face);
+    if (s.GetType() != GeomAbs_Torus || std::abs(s.Torus().MajorRadius() - 0.5) > 1e-6 ||
+        std::abs(s.Torus().MinorRadius() - 0.5) > 1e-6) {
+      continue;
+    }
+    ++pivots;
+    const gp_Ax1 axis = s.Torus().Axis();
+    CHECK(axis.Direction().IsParallel(gp_Dir(1, 0, 0), 1e-9));
+    CHECK(axis.Location().Distance(gp_Pnt(0.5, L.X(), L.Y())) < 1e-6);
+    double on_end_face = 0;
+    for (TopExp_Explorer ee(face, TopAbs_EDGE); ee.More(); ee.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(ee.Current());
+      if (BRep_Tool::Degenerated(edge)) {
+        continue;
+      }
+      BRepAdaptor_Curve c(edge);
+      const gp_Pnt      m = c.Value(0.5 * (c.FirstParameter() + c.LastParameter()));
+      if (std::abs(m.X()) > 1e-6) {
+        continue;
+      }
+      for (int q = 0; q <= 20; ++q) {
+        const gp_Pnt p = c.Value(c.FirstParameter() + (c.LastParameter() - c.FirstParameter()) * q / 20.0);
+        CHECK(std::abs(p.X()) < 1e-6);
+        CHECK(std::abs(std::hypot(p.Y() - L.X(), p.Z() - L.Y()) - 0.5) < 1e-6);
+      }
+      on_end_face += GCPnts_AbscissaPoint::Length(c);
+    }
+    CHECK(on_end_face > 0.1);
+  }
+  CHECK(pivots == 1);
+  // The rounding only takes material away.
+  const double removed = volume_of(body) - volume_of(result);
+  CHECK(removed > 1.0 && removed < 1.5);
+  CHECK(std::abs(volume_of(BRepAlgoAPI_Common(result, body).Shape()) - volume_of(result)) < 1e-6);
+}
+
 } // namespace
 
 void fillet_corner_tests() {
@@ -2688,6 +2834,7 @@ void fillet_corner_tests() {
           test_tab_top_rounded_up_to_its_side_roundings_tangent_to_a_curved_wall);
   guarded("test_rounding_round_a_corner_cut_by_a_wall_standing_across_it",
           test_rounding_round_a_corner_cut_by_a_wall_standing_across_it);
+  guarded("test_rounding_pivots_about_a_crease_over_a_sliver", test_rounding_pivots_about_a_crease_over_a_sliver);
 }
 
 } // namespace test

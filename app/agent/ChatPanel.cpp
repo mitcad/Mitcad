@@ -240,6 +240,13 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_setupRow = new QWidget;
   auto* setupLine = new QHBoxLayout(m_setupRow);
   setupLine->setContentsMargins(0, 0, 0, 0);
+  // An API agent's key, typed in place (phase 2 of mitcad#947).
+  m_key = new QLineEdit;
+  m_key->setObjectName(QStringLiteral("chatApiKey"));
+  m_key->setEchoMode(QLineEdit::Password);
+  m_key->setPlaceholderText(tr("API key"));
+  m_key->hide();
+  setupLine->addWidget(m_key, 1);
   m_setup = new QPushButton;
   m_setup->setObjectName(QStringLiteral("chatSetup"));
   m_secondary = new QPushButton(tr("Connect AI Assistant…"));
@@ -268,6 +275,12 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
       m_chat.openInstallPage();
     } else if (m_setupAction == QStringLiteral("signin")) {
       m_chat.signIn();
+    } else if (m_setupAction == QStringLiteral("key")) {
+      const QString key = m_key->text().trimmed();
+      m_key->clear();
+      m_chat.setApiKey(key);
+    } else if (m_setupAction == QStringLiteral("preferences")) {
+      emit preferencesRequested();
     } else if (m_setupAction == QStringLiteral("check")) {
       m_chat.refreshSetup(true);
     } else if (m_setupAction == QStringLiteral("account-help")) {
@@ -276,6 +289,7 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
     }
   });
   connect(m_secondary, &QPushButton::clicked, this, [this] { emit connectAssistantRequested(); });
+  connect(m_key, &QLineEdit::returnPressed, m_setup, &QPushButton::click);
 
   // The message, what goes with it, Send.
   m_inputRow = new QWidget;
@@ -437,10 +451,7 @@ void ChatPanel::submit() {
   m_input->clear();
   if (m_chat.needsPrivacyNotice()) {
     m_waiting = text;
-    m_noticeText->setText(tr("What you write here, the selection, the open comments and pictures of the view go to "
-                             "%1's service, "
-                             "whose terms apply. The agent changes this design through MitCad's tools.")
-                              .arg(m_chat.agent()->name()));
+    m_noticeText->setText(m_chat.agent()->privacyNotice());
     m_notice->show();
     updateState();
     return;
@@ -925,8 +936,9 @@ void ChatPanel::updateState() {
       text = !agent->readinessDetail().isEmpty() ? agent->readinessDetail()
              : secondary ? tr("The chat uses %1; Claude Desktop connects through Connect AI Assistant.").arg(name)
                          : tr("The chat uses %1, which is not installed.").arg(name);
-      action = QStringLiteral("install");
-      actionText = tr("Install %1").arg(name);
+      // Without a setup page (a custom endpoint): its address in Preferences.
+      action = agent->installPage().isEmpty() ? QStringLiteral("preferences") : QStringLiteral("install");
+      actionText = agent->installAction();
       break;
     case ChatAgent::Readiness::Outdated:
       key = QStringLiteral("outdated");
@@ -936,9 +948,9 @@ void ChatPanel::updateState() {
       break;
     case ChatAgent::Readiness::SignedOut:
       key = QStringLiteral("signed-out");
-      text = tr("%1 is not signed in.").arg(name);
-      action = QStringLiteral("signin");
-      actionText = tr("Sign in to %1").arg(agent->accountName());
+      text = agent->signedOutText();
+      action = agent->asksForKey() ? QStringLiteral("key") : QStringLiteral("signin");
+      actionText = agent->signInAction();
       break;
     case ChatAgent::Readiness::SigningIn:
       key = QStringLiteral("signing-in");
@@ -959,7 +971,8 @@ void ChatPanel::updateState() {
   if (!accountProblem || unusable) {
     m_accountHelp->hide();
   }
-  m_accountHelpText->setText(agent->id() == QStringLiteral("claude")
+  m_accountHelpText->setText(!agent->accountHelp().isEmpty() ? agent->accountHelp()
+      : agent->id() == QStringLiteral("claude")
       ? tr("Sign in again with an account allowed to use Claude Code: in a terminal run claude /logout, then claude /login. "
            "Alternatively set ANTHROPIC_API_KEY for MitCad and restart it, or ask your organization's administrator to enable access. "
            "For a credit or rate limit, check the account's billing or wait for the limit to reset. "
@@ -971,6 +984,7 @@ void ChatPanel::updateState() {
            "Then choose Check again. The check sends one short request without your design or conversation; account usage may apply. "
            "New Conversation (+) starts a fresh process with the latest sign-in."));
   m_setupAction = action;
+  m_key->setVisible(action == QStringLiteral("key"));
   m_setup->setText(actionText);
   m_setupRow->setVisible(!action.isEmpty());
   m_secondary->setVisible(secondary);

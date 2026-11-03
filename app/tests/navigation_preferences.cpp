@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTemporaryDir>
 
@@ -128,6 +129,11 @@ int navigationPreferencesTests() {
   if (constrained) constrained->setChecked(true);
   CHECK(form.chosen().zoomSpeed == 1.5);
   CHECK(form.chosen().constrainedOrbit);
+  // The arrow keys' step (mitcad#1211): 15 degrees by default, 1 to 90.
+  auto* turnStep = form.findChild<QSpinBox*>(QStringLiteral("navigationTurnStep"));
+  CHECK(turnStep && turnStep->value() == 15 && turnStep->minimum() == 1 && turnStep->maximum() == 90);
+  if (turnStep) turnStep->setValue(30);
+  CHECK(form.chosen().turnStep == 30.0);
 
   // The 3D mouse's tab (mitcad#951): its speed, a reversed axis, an axis
   // off, a lock and a button's command go into the settings.
@@ -188,6 +194,9 @@ int navigationPreferencesTests() {
     }
     NavigationPreferences reopened(loaded, schemes);
     CHECK(reopened.chosen().zoomSpeed == 1.5);
+    CHECK(reopened.chosen().turnStep == 30.0);
+    auto* reopenedStep = reopened.findChild<QSpinBox*>(QStringLiteral("navigationTurnStep"));
+    CHECK(reopenedStep && reopenedStep->value() == 30);
     CHECK(reopened.chosen().spaceMouse.speed == 2.0 && reopened.chosen().spaceMouse.reversed[0] &&
           !reopened.chosen().spaceMouse.axisOn[5] && reopened.chosen().spaceMouse.lockRotation);
     CHECK(reopened.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));

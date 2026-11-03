@@ -1,0 +1,1021 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding over the mouths of slots whose rounded ends touch the
+top face along a crest line, built as a construction of its own when the
+corners fail there (mitcad#1204).
+
+The case: a rim of eight arcs (a circle of radius 93.5 between a top plane
+and eight pieces of an outer cylinder, 2.17 high above a rounding of 5),
+rounded with 2.5. At each of the eight vertices between the arcs a fin
+1.5 thick stands out of the wall; its top is a cylinder of radius 0.75
+about an axis 0.75 under the top, so that the top plane and that cylinder
+touch along the crest line with no edge there. Four edges meet at each
+vertex: the two arcs and the two curves where the fin's cylinder cuts the
+two cylinder pieces. The chain stops there, and the corner's walk round
+the vertex finds no edge between the top plane and the fin's cylinder
+(ChFi3d_Builder_0.cxx, "Failed to find edge"): the fillet fails at all
+eight vertices. The stored body after the rounding runs each arc's blend
+on past the vertex over the fin's top, cut there by the fin's side wall
+and then by its top cylinder, which grows inwards to the blends up to the
+crest's point on the top plane, where the two blends meet.
+
+BRepFilletAPI_MakeFillet::Build now tries BuildOverSlotMouths (a new
+method, in the new BRepFilletAPI_MakeFillet_SlotMouths.cxx) where the
+computation failed only at faulty vertices, each of them such a mouth
+(FindSlotMouth): four edges there, two of them rounded with the same
+constant radius, tangent there, between a plane T and two faces A and B;
+the other two between A and a cylinder C and between B and C; C's radius
+smaller than the rounding's, its axis parallel to T and under it by C's
+radius, the vertex on the crest line. Its construction:
+1. the body less a slab through each mouth, C's diameter wide, from four
+   radii inside to four outside along C's axis, from three radii below the
+   crest to one above (BRepAlgoAPI_Cut);
+2. that body rounded with the same edges' images, radii and parameters
+   (SetParams, StopChainsAtTurns): each arc's blend now ends at the slab's
+   walls, a plain end;
+3. what lies past the blends in the slabs: each blend face beside a slab's
+   wall, its surface (a B-spline segmented to the face) prolonged across
+   the slab at its end there by twice the slab's half width and past its
+   contact away from the top by six (GeomLib, at C2), only its part within
+   eight half widths of that end kept; a half slab round the blend's end
+   section split by it and by the top's plane (BRepAlgoAPI_Splitter), and
+   the piece holding the rim's corner taken;
+4. each of those pieces less the fin's top there (the part under C's axis
+   and inside C, prolonged along it, wider and longer than the slab, so
+   that C and the fin's walls grow up to the blends), cut one by one; the
+   body in the slabs less them all, fused with the rounded body (each of
+   these booleans once for all the slabs, run in parallel); only a valid
+   single solid is taken. (Cut all at once, the pieces of a slab's two
+   halves, which touch, and the fins' tops sharing faces with them, came
+   out wrong at some mouths.)
+The result's history: each face from the body's face on its surface (or
+the one it lies on), or generated from the rounded edge whose blend (or
+prolonged blend) it lies on; the body's faces with no image removed
+(Generated, Modified and IsDeleted read it). ChFi3d_Builder gives its
+shape, parameters and StopChainsAtTurns setting (InitialShape, Params,
+StopsChainsAtTurns, ChainTurnThrough). Every other fillet is as before.
+
+On the stored design's body before the item: valid, 304 faces, the faces
+of each body on the other's within 2 micrometres (OCCT's walked blend
+against the file's along the arcs), the boolean differences of the two
+empty both ways with a fuzzy value of 2 micrometres; the material within
+a wedge of 6 degrees round a mouth 0.04 mm3 more than the file's, within
+the arc beside it (39 degrees) 0.19 mm3 more; the rounding of the rim
+takes about 10 s.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
+index 9963c775..3a60d690 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
+@@ -385,7 +385,12 @@ occ::handle<TopOpeBRepBuild_HBuilder> BRepFilletAPI_MakeFillet::Builder() const
+ 
+ void BRepFilletAPI_MakeFillet::Build(const Message_ProgressRange& /*theRange*/)
+ {
++  mySlotMouthHistory.Nullify();
+   myBuilder.Compute();
++  if (!myBuilder.IsDone() && BuildOverSlotMouths())
++  {
++    return;
++  }
+   if (myBuilder.IsDone())
+   {
+     Done();
+@@ -405,6 +410,7 @@ void BRepFilletAPI_MakeFillet::Build(const Message_ProgressRange& /*theRange*/)
+ void BRepFilletAPI_MakeFillet::Reset()
+ {
+   NotDone();
++  mySlotMouthHistory.Nullify();
+   myBuilder.Reset();
+   myMap.Clear();
+ }
+@@ -450,6 +456,10 @@ occ::handle<NCollection_HArray1<ChFiDS_CircSection>> BRepFilletAPI_MakeFillet::S
+ 
+ const NCollection_List<TopoDS_Shape>& BRepFilletAPI_MakeFillet::Generated(const TopoDS_Shape& EorV)
+ {
++  if (!mySlotMouthHistory.IsNull())
++  {
++    return mySlotMouthHistory->Generated(EorV);
++  }
+   return myBuilder.Generated(EorV);
+ }
+ 
+@@ -457,6 +467,10 @@ const NCollection_List<TopoDS_Shape>& BRepFilletAPI_MakeFillet::Generated(const
+ 
+ const NCollection_List<TopoDS_Shape>& BRepFilletAPI_MakeFillet::Modified(const TopoDS_Shape& F)
+ {
++  if (!mySlotMouthHistory.IsNull())
++  {
++    return mySlotMouthHistory->Modified(F);
++  }
+   myGenerated.Clear();
+ 
+   if (myBuilder.Builder()->IsSplit(F, TopAbs_OUT))
+@@ -490,6 +504,10 @@ const NCollection_List<TopoDS_Shape>& BRepFilletAPI_MakeFillet::Modified(const T
+ 
+ bool BRepFilletAPI_MakeFillet::IsDeleted(const TopoDS_Shape& F)
+ {
++  if (!mySlotMouthHistory.IsNull())
++  {
++    return mySlotMouthHistory->IsRemoved(F);
++  }
+   return !(myMap.Contains(F) || myBuilder.Builder()->IsSplit(F, TopAbs_OUT)
+            || myBuilder.Builder()->IsSplit(F, TopAbs_IN)
+            || myBuilder.Builder()->IsSplit(F, TopAbs_ON));
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
+index 98e87a3d..61f2eed8 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
+@@ -26,6 +26,7 @@
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <NCollection_Map.hxx>
+ #include <BRepFilletAPI_LocalOperation.hxx>
++#include <BRepTools_History.hxx>
+ #include <ChFi3d_FilletShape.hxx>
+ #include <Standard_Real.hxx>
+ #include <GeomAbs_Shape.hxx>
+@@ -437,8 +438,17 @@ public:
+   TCollection_AsciiString FailedCornerMessage(const int IV) const { return myBuilder.FailedCornerMessage(IV); }
+ 
+ private:
++  //! Where the computation failed only at vertices where a rounding meets
++  //! the mouth of a slot whose rounded end touches the top face along a
++  //! crest line (mitcad#1204): rounds the body with the slots' slabs cut
++  //! out, then puts the slabs back, the roundings prolonged across them and
++  //! the slots' ends grown up to them. True when it built the result.
++  bool BuildOverSlotMouths();
++
+   ChFi3d_FilBuilder                                      myBuilder;
+   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> myMap;
++  //! The history of BuildOverSlotMouths' result, null otherwise.
++  occ::handle<BRepTools_History> mySlotMouthHistory;
+ };
+ 
+ #endif // _BRepFilletAPI_MakeFillet_HeaderFile
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx
+new file mode 100644
+index 00000000..3cf41aca
+--- /dev/null
++++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx
+@@ -0,0 +1,811 @@
++// MitCad's addition to OCCT 8.0.1, under OCCT's licence:
++// SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
++//
++// A rounding over the mouths of slots whose rounded ends touch the top face
++// along a crest line (mitcad#1204). See BRepFilletAPI_MakeFillet.hxx,
++// BuildOverSlotMouths.
++
++#include <BRepFilletAPI_MakeFillet.hxx>
++
++#include <BRepAdaptor_Curve.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <BRepAlgoAPI_BooleanOperation.hxx>
++#include <BRepAlgoAPI_Common.hxx>
++#include <BRepAlgoAPI_Cut.hxx>
++#include <BRepAlgoAPI_Fuse.hxx>
++#include <BRepAlgoAPI_Splitter.hxx>
++#include <BRepBuilderAPI_MakeFace.hxx>
++#include <BRepCheck_Analyzer.hxx>
++#include <BRepClass3d_SolidClassifier.hxx>
++#include <BRepPrimAPI_MakeBox.hxx>
++#include <BRepPrimAPI_MakeCylinder.hxx>
++#include <BRepTools.hxx>
++#include <BRep_Tool.hxx>
++#include <GeomAPI_ProjectPointOnSurf.hxx>
++#include <GeomLib.hxx>
++#include <Geom_BSplineSurface.hxx>
++#include <Geom_BoundedSurface.hxx>
++#include <Geom_RectangularTrimmedSurface.hxx>
++#include <Geom_Surface.hxx>
++#include <NCollection_DataMap.hxx>
++#include <NCollection_IndexedDataMap.hxx>
++#include <NCollection_IndexedMap.hxx>
++#include <NCollection_List.hxx>
++#include <NCollection_Map.hxx>
++#include <Precision.hxx>
++#include <Standard_ErrorHandler.hxx>
++#include <Standard_Failure.hxx>
++#include <TopExp.hxx>
++#include <TopExp_Explorer.hxx>
++#include <TopTools_ShapeMapHasher.hxx>
++#include <TopoDS.hxx>
++#include <gp_Ax2.hxx>
++#include <gp_Cylinder.hxx>
++#include <gp_Pln.hxx>
++
++#include <algorithm>
++#include <cmath>
++#include <vector>
++
++namespace
++{
++typedef NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
++  AncestorMap;
++
++// A slot's mouth on a rounded edge: the vertex, the slot's end cylinder
++// (its axis, the point of the axis nearest the vertex, its radius), the top
++// face's outer normal and the rounding's radius there.
++struct SlotMouth
++{
++  TopoDS_Vertex Vertex;
++  gp_Pnt        Origin;
++  gp_Dir        Axis;
++  gp_Dir        Up;
++  double        Rho    = 0.;
++  double        Radius = 0.;
++};
++
++// The faces of an edge (two for a manifold one).
++static bool TwoFaces(const TopoDS_Shape& theE, const AncestorMap& theEF, TopoDS_Face& theF1, TopoDS_Face& theF2)
++{
++  const NCollection_List<TopoDS_Shape>* aL = theEF.Seek(theE);
++  if (aL == nullptr || aL->Extent() != 2)
++  {
++    return false;
++  }
++  theF1 = TopoDS::Face(aL->First());
++  theF2 = TopoDS::Face(aL->Last());
++  return !theF1.IsSame(theF2);
++}
++
++// Whether theV is a slot's mouth on two rounded edges (theRadius gives the
++// rounded edges' radii): four edges meet there, two of them rounded with
++// the same radius and tangent there, between a plane T and two faces A and
++// B; the other two between A and a cylinder C and between B and C, C's
++// radius smaller than the rounding's, its axis parallel to T, under it by
++// C's radius (so that C touches T along a line without an edge), and theV
++// on that line.
++static bool FindSlotMouth(const TopoDS_Vertex&                                              theV,
++                          const AncestorMap&                                                theVE,
++                          const AncestorMap&                                                theEF,
++                          const NCollection_DataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher>& theRadius,
++                          SlotMouth&                                                        theMouth)
++{
++  const NCollection_List<TopoDS_Shape>* aLE = theVE.Seek(theV);
++  if (aLE == nullptr)
++  {
++    return false;
++  }
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aEdges;
++  for (NCollection_List<TopoDS_Shape>::Iterator it(*aLE); it.More(); it.Next())
++  {
++    if (!BRep_Tool::Degenerated(TopoDS::Edge(it.Value())))
++    {
++      aEdges.Add(it.Value());
++    }
++  }
++  if (aEdges.Extent() != 4)
++  {
++    return false;
++  }
++  std::vector<TopoDS_Edge> aRounded, aSharp;
++  for (int i = 1; i <= aEdges.Extent(); i++)
++  {
++    (theRadius.IsBound(aEdges(i)) ? aRounded : aSharp).push_back(TopoDS::Edge(aEdges(i)));
++  }
++  if (aRounded.size() != 2 || aSharp.size() != 2)
++  {
++    return false;
++  }
++  const double aR = theRadius.Find(aRounded[0]);
++  if (std::abs(theRadius.Find(aRounded[1]) - aR) > Precision::Confusion())
++  {
++    return false;
++  }
++  // The rounded edges' common plane T and their other faces A and B.
++  TopoDS_Face aF[2][2];
++  if (!TwoFaces(aRounded[0], theEF, aF[0][0], aF[0][1]) || !TwoFaces(aRounded[1], theEF, aF[1][0], aF[1][1]))
++  {
++    return false;
++  }
++  TopoDS_Face aTop, aA, aB;
++  for (int i = 0; i < 2 && aTop.IsNull(); i++)
++  {
++    for (int j = 0; j < 2 && aTop.IsNull(); j++)
++    {
++      if (aF[0][i].IsSame(aF[1][j]))
++      {
++        aTop = aF[0][i];
++        aA   = aF[0][1 - i];
++        aB   = aF[1][1 - j];
++      }
++    }
++  }
++  if (aTop.IsNull() || aA.IsSame(aB))
++  {
++    return false;
++  }
++  const BRepAdaptor_Surface aTopS(aTop, false);
++  if (aTopS.GetType() != GeomAbs_Plane)
++  {
++    return false;
++  }
++  // The rounded edges tangent at theV.
++  {
++    gp_Dir aT[2];
++    for (int k = 0; k < 2; k++)
++    {
++      BRepAdaptor_Curve aC(aRounded[k]);
++      const double      aPar = BRep_Tool::Parameter(theV, aRounded[k]);
++      gp_Pnt            aP;
++      gp_Vec            aD;
++      aC.D1(aPar, aP, aD);
++      if (aD.Magnitude() <= gp::Resolution())
++      {
++        return false;
++      }
++      aT[k] = gp_Dir(aD);
++    }
++    if (!aT[0].IsParallel(aT[1], 1.e-6))
++    {
++      return false;
++    }
++  }
++  // The sharp edges: A with C and B with C.
++  TopoDS_Face aS[2][2];
++  if (!TwoFaces(aSharp[0], theEF, aS[0][0], aS[0][1]) || !TwoFaces(aSharp[1], theEF, aS[1][0], aS[1][1]))
++  {
++    return false;
++  }
++  TopoDS_Face aC;
++  for (int i = 0; i < 2 && aC.IsNull(); i++)
++  {
++    for (int j = 0; j < 2 && aC.IsNull(); j++)
++    {
++      if (aS[0][i].IsSame(aS[1][j]))
++      {
++        const TopoDS_Face& aO0 = aS[0][1 - i];
++        const TopoDS_Face& aO1 = aS[1][1 - j];
++        if ((aO0.IsSame(aA) && aO1.IsSame(aB)) || (aO0.IsSame(aB) && aO1.IsSame(aA)))
++        {
++          aC = aS[0][i];
++        }
++      }
++    }
++  }
++  if (aC.IsNull() || aC.IsSame(aTop))
++  {
++    return false;
++  }
++  const BRepAdaptor_Surface aCS(aC, false);
++  if (aCS.GetType() != GeomAbs_Cylinder)
++  {
++    return false;
++  }
++  const gp_Cylinder aCyl = aCS.Cylinder();
++  const double      aRho = aCyl.Radius();
++  if (aRho >= aR)
++  {
++    return false;
++  }
++  gp_Dir aUp = aTopS.Plane().Axis().Direction();
++  if (aTop.Orientation() == TopAbs_REVERSED)
++  {
++    aUp.Reverse();
++  }
++  const gp_Dir aAxis = aCyl.Axis().Direction();
++  if (std::abs(aAxis.Dot(aUp)) > 1.e-9)
++  {
++    return false;
++  }
++  const double aTol = std::max(BRep_Tool::Tolerance(theV), Precision::Confusion());
++  const gp_Pnt aPV  = BRep_Tool::Pnt(theV);
++  const gp_Pnt aL0  = aCyl.Axis().Location();
++  // The axis under the top by the radius, and theV on the crest.
++  if (std::abs(gp_Vec(aPV, aL0).Dot(gp_Vec(aUp)) + aRho) > aTol)
++  {
++    return false;
++  }
++  const gp_Pnt aO = aL0.Translated(gp_Vec(aAxis) * gp_Vec(aL0, aPV).Dot(gp_Vec(aAxis)));
++  if (std::abs(aO.Distance(aPV) - aRho) > aTol)
++  {
++    return false;
++  }
++  theMouth.Vertex = theV;
++  theMouth.Origin = aO;
++  theMouth.Axis   = aAxis;
++  theMouth.Up     = aUp;
++  theMouth.Rho    = aRho;
++  theMouth.Radius = aR;
++  return true;
++}
++
++// A box in the frame of a mouth (along its axis, across, up), over the
++// given ranges.
++static TopoDS_Shape MouthBox(const SlotMouth& theM,
++                             const double     theX0,
++                             const double     theX1,
++                             const double     theY0,
++                             const double     theY1,
++                             const double     theZ0,
++                             const double     theZ1)
++{
++  const gp_Dir aY = theM.Up.Crossed(theM.Axis);
++  const gp_Pnt aP = theM.Origin.Translated(gp_Vec(theM.Axis) * theX0 + gp_Vec(aY) * theY0
++                                           + gp_Vec(theM.Up) * theZ0);
++  return BRepPrimAPI_MakeBox(gp_Ax2(aP, theM.Up, theM.Axis), theX1 - theX0, theY1 - theY0, theZ1 - theZ0)
++    .Shape();
++}
++
++// The surface of a face without a trimming wrapper.
++static occ::handle<Geom_Surface> BasisOf(const TopoDS_Face& theF)
++{
++  occ::handle<Geom_Surface> aS = BRep_Tool::Surface(theF);
++  occ::handle<Geom_RectangularTrimmedSurface> aT = occ::down_cast<Geom_RectangularTrimmedSurface>(aS);
++  return aT.IsNull() ? aS : aT->BasisSurface();
++}
++
++// Whether the point of theF at the middle of its parameters lies on theS
++// (within theTol).
++static bool LiesOn(const TopoDS_Face& theF, const occ::handle<Geom_Surface>& theS, const double theTol)
++{
++  double u0, u1, v0, v1;
++  BRepTools::UVBounds(theF, u0, u1, v0, v1);
++  const BRepAdaptor_Surface aFS(theF);
++  const gp_Pnt              aP = aFS.Value(0.5 * (u0 + u1), 0.5 * (v0 + v1));
++  GeomAPI_ProjectPointOnSurf aProj(aP, theS);
++  return aProj.NbPoints() > 0 && aProj.LowerDistance() <= theTol;
++}
++} // namespace
++
++//=================================================================================================
++
++bool BRepFilletAPI_MakeFillet::BuildOverSlotMouths()
++{
++  // Not within itself: the rounding of the body with the slabs cut out runs
++  // this method too when it fails.
++  static thread_local int aDepth = 0;
++  if (aDepth > 0 || myBuilder.NbFaultyVertices() == 0 || myBuilder.NbFaultyContours() > 0)
++  {
++    return false;
++  }
++  struct DepthGuard
++  {
++    int& myDepth;
++    explicit DepthGuard(int& theDepth) : myDepth(theDepth) { ++myDepth; }
++    ~DepthGuard() { --myDepth; }
++  } aGuard(aDepth);
++
++  const TopoDS_Shape& aBody = myBuilder.InitialShape();
++  if (aBody.IsNull())
++  {
++    return false;
++  }
++  try
++  {
++    OCC_CATCH_SIGNALS
++    // The contours' edges and their radii (constant ones only).
++    NCollection_DataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher> aRadius;
++    std::vector<std::vector<TopoDS_Edge>>                              aContours;
++    std::vector<double>                                                aContourRadius;
++    for (int ic = 1; ic <= NbContours(); ic++)
++    {
++      if (!IsConstant(ic))
++      {
++        return false;
++      }
++      const double             aR = Radius(ic);
++      std::vector<TopoDS_Edge> aEdges;
++      for (int ie = 1; ie <= NbEdges(ic); ie++)
++      {
++        aEdges.push_back(Edge(ic, ie));
++        aRadius.Bind(Edge(ic, ie), aR);
++      }
++      aContours.push_back(aEdges);
++      aContourRadius.push_back(aR);
++    }
++    // Every faulty vertex a slot's mouth.
++    AncestorMap aVE, aEF;
++    TopExp::MapShapesAndUniqueAncestors(aBody, TopAbs_VERTEX, TopAbs_EDGE, aVE);
++    TopExp::MapShapesAndUniqueAncestors(aBody, TopAbs_EDGE, TopAbs_FACE, aEF);
++    std::vector<SlotMouth> aMouths;
++    for (int iv = 1; iv <= myBuilder.NbFaultyVertices(); iv++)
++    {
++      SlotMouth aM;
++      if (!FindSlotMouth(myBuilder.FaultyVertex(iv), aVE, aEF, aRadius, aM))
++      {
++        return false;
++      }
++      aMouths.push_back(aM);
++    }
++    // 1. The body less a slab through each mouth, the slot's width, from
++    // the rounding's reach inside to as far outside, from three radii below
++    // the crest to one above.
++    NCollection_List<TopoDS_Shape> aBoxes;
++    std::vector<TopoDS_Shape>      aBoxOf;
++    for (const SlotMouth& aM : aMouths)
++    {
++      const double aL = 4. * aM.Radius;
++      aBoxOf.push_back(MouthBox(aM, -aL, aL, -aM.Rho, aM.Rho, aM.Rho - 3. * aM.Radius, aM.Rho + aM.Radius));
++      aBoxes.Append(aBoxOf.back());
++    }
++    BRepAlgoAPI_Cut aCut;
++    {
++      NCollection_List<TopoDS_Shape> aArgs;
++      aArgs.Append(aBody);
++      aCut.SetArguments(aArgs);
++      aCut.SetTools(aBoxes);
++      aCut.SetRunParallel(true);
++      aCut.Build();
++    }
++    if (!aCut.IsDone() || aCut.HasErrors())
++    {
++      return false;
++    }
++    // 2. Its rounding, with this one's parameters.
++    BRepFilletAPI_MakeFillet aInner(aCut.Shape(), myBuilder.GetFilletShape());
++    {
++      double aTang, aTesp, aT2d, aTApp3d, aTolApp2d, aFleche;
++      myBuilder.Params(aTang, aTesp, aT2d, aTApp3d, aTolApp2d, aFleche);
++      aInner.SetParams(aTang, aTesp, aT2d, aTApp3d, aTolApp2d, aFleche);
++      if (myBuilder.StopsChainsAtTurns())
++      {
++        NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aThrough;
++        for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator it(myBuilder.ChainTurnThrough());
++             it.More();
++             it.Next())
++        {
++          const NCollection_List<TopoDS_Shape>& aImages = aCut.Modified(it.Key());
++          if (aImages.IsEmpty())
++          {
++            aThrough.Add(it.Key());
++          }
++          for (NCollection_List<TopoDS_Shape>::Iterator jt(aImages); jt.More(); jt.Next())
++          {
++            aThrough.Add(jt.Value());
++          }
++        }
++        aInner.StopChainsAtTurns(aThrough);
++      }
++    }
++    // The images' origins (a rounded edge of the body for each).
++    NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aOrigin;
++    for (std::size_t ic = 0; ic < aContours.size(); ic++)
++    {
++      for (const TopoDS_Edge& aE : aContours[ic])
++      {
++        NCollection_List<TopoDS_Shape> aImages = aCut.Modified(aE);
++        if (aImages.IsEmpty() && !aCut.IsDeleted(aE))
++        {
++          aImages.Append(aE);
++        }
++        for (NCollection_List<TopoDS_Shape>::Iterator it(aImages); it.More(); it.Next())
++        {
++          if (aInner.Contour(TopoDS::Edge(it.Value())) == 0)
++          {
++            aInner.Add(aContourRadius[ic], TopoDS::Edge(it.Value()));
++          }
++          aOrigin.Bind(it.Value(), aE);
++        }
++      }
++    }
++    aInner.Build();
++    if (!aInner.IsDone())
++    {
++      return false;
++    }
++    const TopoDS_Shape aRounded = aInner.Shape();
++    // The blend faces of the inner rounding and their edges of the body.
++    NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aBlendOrigin;
++    for (int ic = 1; ic <= aInner.NbContours(); ic++)
++    {
++      for (int ie = 1; ie <= aInner.NbEdges(ic); ie++)
++      {
++        const TopoDS_Edge& aE = aInner.Edge(ic, ie);
++        if (!aOrigin.IsBound(aE))
++        {
++          continue;
++        }
++        for (NCollection_List<TopoDS_Shape>::Iterator it(aInner.Generated(aE)); it.More(); it.Next())
++        {
++          if (it.Value().ShapeType() == TopAbs_FACE)
++          {
++            aBlendOrigin.Bind(it.Value(), aOrigin.Find(aE));
++          }
++        }
++      }
++    }
++    // 3. Each slab: the body in it, less what lies past the blends on both
++    // sides prolonged across it, with the slot's end under its cylinder
++    // kept (the cylinder and the slot's walls grown up to the blends).
++    NCollection_List<TopoDS_Shape> aPieces;
++    // What lies past the blends in the slabs (two per mouth), and the
++    // fins' tops under their cylinders, prolonged along them (one per mouth).
++    NCollection_List<TopoDS_Shape> aPasts;
++    std::vector<TopoDS_Shape>      aEndOf;
++    // Surfaces of prolonged blends and their edges of the body.
++    NCollection_DataMap<occ::handle<Standard_Transient>, TopoDS_Shape> aToolOrigin;
++    for (std::size_t im = 0; im < aMouths.size(); im++)
++    {
++      const SlotMouth& aM  = aMouths[im];
++      const gp_Dir     aY  = aM.Up.Crossed(aM.Axis);
++      const gp_Pnt     aPV = BRep_Tool::Pnt(aM.Vertex);
++      for (int aSide = -1; aSide <= 1; aSide += 2)
++      {
++        // The blend face beside the slab's wall on this side, near the
++        // mouth: of the blend faces with a vertex within twice the radius
++        // and the half width of it, the one with a vertex nearest the wall
++        // (and the mouth).
++        const gp_Pln aWall(aM.Origin.Translated(gp_Vec(aY) * (aSide * aM.Rho)), aY);
++        TopoDS_Face  aBlend;
++        double       aBest = RealLast();
++        for (NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator it(aBlendOrigin);
++             it.More();
++             it.Next())
++        {
++          for (TopExp_Explorer aEx(it.Key(), TopAbs_VERTEX); aEx.More(); aEx.Next())
++          {
++            const gp_Pnt aP = BRep_Tool::Pnt(TopoDS::Vertex(aEx.Current()));
++            const double aD = aWall.Distance(aP) + 0.01 * aP.Distance(aPV);
++            if (aD < aBest && aP.Distance(aPV) < 2. * aM.Radius + aM.Rho)
++            {
++              aBest  = aD;
++              aBlend = TopoDS::Face(it.Key());
++            }
++          }
++        }
++        if (aBlend.IsNull())
++        {
++          return false;
++        }
++        // Its end section on the wall, its extent in the mouth's frame.
++        double aX0 = RealLast(), aX1 = RealFirst(), aZ0 = RealLast(), aZ1 = RealFirst();
++        for (TopExp_Explorer aEx(aBlend, TopAbs_EDGE); aEx.More(); aEx.Next())
++        {
++          BRepAdaptor_Curve aC(TopoDS::Edge(aEx.Current()));
++          bool              aOn = true;
++          for (int q = 0; q <= 8 && aOn; q++)
++          {
++            aOn = aWall.Distance(aC.Value(aC.FirstParameter() + (aC.LastParameter() - aC.FirstParameter()) * q / 8))
++                  <= 1.e-4;
++          }
++          if (!aOn)
++          {
++            continue;
++          }
++          for (int q = 0; q <= 16; q++)
++          {
++            const gp_Vec aD(aM.Origin,
++                            aC.Value(aC.FirstParameter() + (aC.LastParameter() - aC.FirstParameter()) * q / 16));
++            aX0 = std::min(aX0, aD.Dot(gp_Vec(aM.Axis)));
++            aX1 = std::max(aX1, aD.Dot(gp_Vec(aM.Axis)));
++            aZ0 = std::min(aZ0, aD.Dot(gp_Vec(aM.Up)));
++            aZ1 = std::max(aZ1, aD.Dot(gp_Vec(aM.Up)));
++          }
++        }
++        if (aX0 > aX1)
++        {
++          return false;
++        }
++        // Its surface prolonged along the rounding both ways, by twice the
++        // slot's half width, and across it past the contact away from the
++        // top by six times that (the top's own plane closes the other).
++        // (The face's own part of it: a B-spline segmented to the face's
++        // parameters, any other surface trimmed to them.)
++        const occ::handle<Geom_Surface> aS = BasisOf(aBlend);
++        occ::handle<Geom_BoundedSurface> aBS;
++        {
++          double u0, u1, v0, v1;
++          BRepTools::UVBounds(aBlend, u0, u1, v0, v1);
++          occ::handle<Geom_BSplineSurface> aSpline = occ::down_cast<Geom_BSplineSurface>(aS);
++          if (!aSpline.IsNull())
++          {
++            aSpline = occ::down_cast<Geom_BSplineSurface>(aSpline->Copy());
++            aSpline->Segment(u0, u1, v0, v1);
++            aBS = aSpline;
++          }
++          else
++          {
++            aBS = new Geom_RectangularTrimmedSurface(aS, u0, u1, v0, v1);
++          }
++        }
++        // Only the part of it by the wall is needed: along the rounding,
++        // from six half widths inside the face to its end prolonged.
++        bool   aAlongU     = true;
++        bool   aWallAtFirst = true;
++        {
++          double u0, u1, v0, v1;
++          aBS->Bounds(u0, u1, v0, v1);
++          const gp_Pnt aPu0 = aBS->Value(u0, 0.5 * (v0 + v1)), aPu1 = aBS->Value(u1, 0.5 * (v0 + v1));
++          const gp_Pnt aPv0 = aBS->Value(0.5 * (u0 + u1), v0), aPv1 = aBS->Value(0.5 * (u0 + u1), v1);
++          aAlongU            = aPu0.Distance(aPu1) > aPv0.Distance(aPv1);
++          aWallAtFirst       = aAlongU ? aWall.Distance(aPu0) < aWall.Distance(aPu1)
++                                       : aWall.Distance(aPv0) < aWall.Distance(aPv1);
++          const gp_Pln aTopPlane(aPV, aM.Up);
++          const double aDFirst = aAlongU ? aTopPlane.Distance(aPv0) : aTopPlane.Distance(aPu0);
++          const double aDLast  = aAlongU ? aTopPlane.Distance(aPv1) : aTopPlane.Distance(aPu1);
++          GeomLib::ExtendSurfByLength(aBS, 2. * aM.Rho, 2, aAlongU, !aWallAtFirst);
++          GeomLib::ExtendSurfByLength(aBS, 6. * aM.Rho, 2, !aAlongU, aDFirst < aDLast);
++        }
++        double a0, a1, b0, b1;
++        aBS->Bounds(a0, a1, b0, b1);
++        {
++          // The parameter's length per unit at the prolonged end.
++          const double aS0  = aAlongU ? (aWallAtFirst ? a0 : a1) : (aWallAtFirst ? b0 : b1);
++          const double aMid = aAlongU ? 0.5 * (b0 + b1) : 0.5 * (a0 + a1);
++          gp_Pnt       aP;
++          gp_Vec       aDu, aDv;
++          aBS->D1(aAlongU ? aS0 : aMid, aAlongU ? aMid : aS0, aP, aDu, aDv);
++          const double aSpeed = (aAlongU ? aDu : aDv).Magnitude();
++          if (aSpeed > gp::Resolution())
++          {
++            const double aSpan = 8. * aM.Rho / aSpeed;
++            if (aAlongU)
++            {
++              a0 = aWallAtFirst ? a0 : std::max(a0, a1 - aSpan);
++              a1 = aWallAtFirst ? std::min(a1, a0 + aSpan) : a1;
++            }
++            else
++            {
++              b0 = aWallAtFirst ? b0 : std::max(b0, b1 - aSpan);
++              b1 = aWallAtFirst ? std::min(b1, b0 + aSpan) : b1;
++            }
++          }
++        }
++        const TopoDS_Face aTool = BRepBuilderAPI_MakeFace(aBS, a0, a1, b0, b1, Precision::Confusion()).Face();
++        aToolOrigin.Bind(aBS, aBlendOrigin.Find(aBlend));
++        // The half slab round the end section, a margin of the half width,
++        // split by the prolonged blend and the top's plane.
++        const double aMg   = aM.Rho;
++        const TopoDS_Shape aHalf = MouthBox(aM,
++                                            aX0 - aMg,
++                                            std::max(aX1, 0.) + aMg,
++                                            aSide < 0 ? -aM.Rho : 0.,
++                                            aSide < 0 ? 0. : aM.Rho,
++                                            aZ0 - aMg,
++                                            std::max(aZ1, aM.Rho) + aMg);
++        BRepAlgoAPI_Splitter           aSplit;
++        NCollection_List<TopoDS_Shape> aArgs, aTools;
++        aArgs.Append(aHalf);
++        aTools.Append(aTool);
++        aTools.Append(BRepBuilderAPI_MakeFace(gp_Pln(aPV, aM.Up), -1.e3, 1.e3, -1.e3, 1.e3).Face());
++        aSplit.SetArguments(aArgs);
++        aSplit.SetTools(aTools);
++        aSplit.Build();
++        if (!aSplit.IsDone() || aSplit.HasErrors())
++        {
++          return false;
++        }
++        // Past the blend: the piece holding the rim's corner beside the
++        // mouth.
++        const gp_Pnt aCorner = aPV.Translated(gp_Vec(aY) * (aSide * 0.5 * aM.Rho) - gp_Vec(aM.Up) * (0.01 * aM.Rho));
++        TopoDS_Shape aPast;
++        for (TopExp_Explorer aEx(aSplit.Shape(), TopAbs_SOLID); aEx.More(); aEx.Next())
++        {
++          BRepClass3d_SolidClassifier aCls(aEx.Current(), aCorner, Precision::Confusion());
++          if (aCls.State() == TopAbs_IN)
++          {
++            aPast = aEx.Current();
++          }
++        }
++        if (aPast.IsNull())
++        {
++          return false;
++        }
++        aPasts.Append(aPast);
++      }
++      // The fin's top under its cylinder: under the cylinder's axis and
++      // inside it, prolonged along it (wider than the slab and longer than
++      // the pieces past the blends, so that it shares no face with them).
++      const double       aL     = 4. * aM.Radius;
++      const TopoDS_Shape aUnder =
++        MouthBox(aM, -aL, aL, -2. * aM.Rho, 2. * aM.Rho, aM.Rho - 4. * aM.Radius, 0.);
++      const TopoDS_Shape aBar =
++        BRepPrimAPI_MakeCylinder(gp_Ax2(aM.Origin.Translated(gp_Vec(aM.Axis) * -aL), aM.Axis), aM.Rho, 2. * aL)
++          .Shape();
++      BRepAlgoAPI_Fuse aEndOp(aUnder, aBar);
++      if (!aEndOp.IsDone() || aEndOp.HasErrors())
++      {
++        return false;
++      }
++      aEndOf.push_back(aEndOp.Shape());
++    }
++    // The body in the slabs, less what lies past the blends, and with the
++    // fins' tops under their cylinders.
++    const auto aRun = [](BRepAlgoAPI_BooleanOperation&         theOp,
++                         const TopoDS_Shape&                   theArg,
++                         const NCollection_List<TopoDS_Shape>& theTools) {
++      NCollection_List<TopoDS_Shape> aArgs;
++      aArgs.Append(theArg);
++      theOp.SetArguments(aArgs);
++      theOp.SetTools(theTools);
++      theOp.SetRunParallel(true);
++      theOp.Build();
++      return theOp.IsDone() && !theOp.HasErrors();
++    };
++    BRepAlgoAPI_Common aSlabsOp;
++    if (!aRun(aSlabsOp, aBody, aBoxes))
++    {
++      return false;
++    }
++    // What lies past the blends, less the fins' tops (so that those stay),
++    // each piece by itself (the two halves of a slab touch); taken from the
++    // slabs at once, the slabs' pieces and the rounded body then meeting
++    // only on the slabs' walls.
++    NCollection_List<TopoDS_Shape> aPastLess;
++    {
++      NCollection_List<TopoDS_Shape>::Iterator aItP(aPasts);
++      for (std::size_t aK = 0; aItP.More(); aItP.Next(), aK++)
++      {
++        BRepAlgoAPI_Cut aPastOp(aItP.Value(), aEndOf[aK / 2]);
++        if (!aPastOp.IsDone() || aPastOp.HasErrors())
++        {
++          return false;
++        }
++        aPastLess.Append(aPastOp.Shape());
++      }
++    }
++    BRepAlgoAPI_Cut aKeptOp;
++    if (!aRun(aKeptOp, aSlabsOp.Shape(), aPastLess))
++    {
++      return false;
++    }
++    aPieces.Append(aKeptOp.Shape());
++    // 4. All together.
++    BRepAlgoAPI_Fuse aFuse;
++    {
++      NCollection_List<TopoDS_Shape> aArgs;
++      aArgs.Append(aRounded);
++      aFuse.SetArguments(aArgs);
++      aFuse.SetTools(aPieces);
++      aFuse.SetRunParallel(true);
++      aFuse.Build();
++    }
++    if (!aFuse.IsDone() || aFuse.HasErrors())
++    {
++      return false;
++    }
++    const TopoDS_Shape aResult = aFuse.Shape();
++    int                aNbSolids = 0;
++    for (TopExp_Explorer aEx(aResult, TopAbs_SOLID); aEx.More(); aEx.Next())
++    {
++      aNbSolids++;
++    }
++    if (aNbSolids != 1 || !BRepCheck_Analyzer(aResult).IsValid())
++    {
++      return false;
++    }
++    // The history: each face of the result from the body's face on its
++    // surface (the same surface, or one the face lies on), or generated
++    // from the rounded edge whose blend it lies on.
++    occ::handle<BRepTools_History> aHistory = new BRepTools_History();
++    NCollection_DataMap<occ::handle<Standard_Transient>, NCollection_List<TopoDS_Shape>> aBySurface;
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>                        aBodyFaces;
++    TopExp::MapShapes(aBody, TopAbs_FACE, aBodyFaces);
++    for (int i = 1; i <= aBodyFaces.Extent(); i++)
++    {
++      const occ::handle<Geom_Surface> aS = BasisOf(TopoDS::Face(aBodyFaces(i)));
++      if (!aBySurface.IsBound(aS))
++      {
++        aBySurface.Bind(aS, NCollection_List<TopoDS_Shape>());
++      }
++      aBySurface.ChangeFind(aS).Append(aBodyFaces(i));
++    }
++    NCollection_DataMap<occ::handle<Standard_Transient>, TopoDS_Shape> aBlendBySurface;
++    for (NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator it(aBlendOrigin);
++         it.More();
++         it.Next())
++    {
++      aBlendBySurface.Bind(BasisOf(TopoDS::Face(it.Key())), it.Value());
++    }
++    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aKeptFaces;
++    for (TopExp_Explorer aEx(aResult, TopAbs_FACE); aEx.More(); aEx.Next())
++    {
++      const TopoDS_Face&              aF = TopoDS::Face(aEx.Current());
++      const occ::handle<Geom_Surface> aS = BasisOf(aF);
++      if (aBodyFaces.Contains(aF))
++      {
++        aKeptFaces.Add(aF);
++        continue;
++      }
++      if (aBlendBySurface.IsBound(aS))
++      {
++        aHistory->AddGenerated(aBlendBySurface.Find(aS), aF);
++        continue;
++      }
++      if (aToolOrigin.IsBound(aS))
++      {
++        aHistory->AddGenerated(aToolOrigin.Find(aS), aF);
++        continue;
++      }
++      // The body's face it lies in (on the same surface, the nearest one).
++      TopoDS_Shape                          aFrom;
++      const NCollection_List<TopoDS_Shape>* aSame = aBySurface.Seek(aS);
++      double                                u0, u1, v0, v1;
++      BRepTools::UVBounds(aF, u0, u1, v0, v1);
++      const gp_Pnt aMid = BRepAdaptor_Surface(aF).Value(0.5 * (u0 + u1), 0.5 * (v0 + v1));
++      double       aBest = RealLast();
++      for (int i = 1; i <= aBodyFaces.Extent(); i++)
++      {
++        const TopoDS_Face& aB = TopoDS::Face(aBodyFaces(i));
++        bool               aOnIt = false;
++        if (aSame != nullptr)
++        {
++          for (NCollection_List<TopoDS_Shape>::Iterator it(*aSame); it.More() && !aOnIt; it.Next())
++          {
++            aOnIt = it.Value().IsSame(aB);
++          }
++        }
++        if (!aOnIt && (BRepAdaptor_Surface(aB, false).GetType() != BRepAdaptor_Surface(aF, false).GetType()
++                       || !LiesOn(aF, BasisOf(aB), 1.e-6)))
++        {
++          continue;
++        }
++        double aD = RealLast();
++        {
++          double                     bu0, bu1, bv0, bv1;
++          BRepTools::UVBounds(aB, bu0, bu1, bv0, bv1);
++          GeomAPI_ProjectPointOnSurf aProj(aMid, BasisOf(aB));
++          if (aProj.NbPoints() > 0)
++          {
++            double aU, aV;
++            aProj.LowerDistanceParameters(aU, aV);
++            // Distance from the face's domain in its parameters.
++            const double aDu = std::max({0., bu0 - aU, aU - bu1});
++            const double aDv = std::max({0., bv0 - aV, aV - bv1});
++            aD               = aProj.LowerDistance() + aDu + aDv;
++          }
++        }
++        if (aD < aBest)
++        {
++          aBest = aD;
++          aFrom = aB;
++        }
++      }
++      if (!aFrom.IsNull())
++      {
++        aHistory->AddModified(aFrom, aF);
++      }
++    }
++    for (int i = 1; i <= aBodyFaces.Extent(); i++)
++    {
++      if (!aKeptFaces.Contains(aBodyFaces(i)) && aHistory->Modified(aBodyFaces(i)).IsEmpty())
++      {
++        aHistory->Remove(aBodyFaces(i));
++      }
++    }
++    myShape = aResult;
++    myMap.Clear();
++    for (TopExp_Explorer aEx(myShape, TopAbs_FACE); aEx.More(); aEx.Next())
++    {
++      myMap.Add(aEx.Current());
++    }
++    mySlotMouthHistory = aHistory;
++    Done();
++    return true;
++  }
++  catch (Standard_Failure const&)
++  {
++    return false;
++  }
++}
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/FILES.cmake b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/FILES.cmake
+index 895c3f09..533c0538 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/FILES.cmake
++++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/FILES.cmake
+@@ -7,6 +7,7 @@ set(OCCT_BRepFilletAPI_FILES
+   BRepFilletAPI_MakeChamfer.hxx
+   BRepFilletAPI_MakeFillet.cxx
+   BRepFilletAPI_MakeFillet.hxx
++  BRepFilletAPI_MakeFillet_SlotMouths.cxx
+   BRepFilletAPI_MakeFillet2d.cxx
+   BRepFilletAPI_MakeFillet2d.hxx
+   BRepFilletAPI_MakeFillet2d.lxx
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 6145e4ff..9aa9f6cc 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -99,6 +99,33 @@ public:
+     return myTurnStops;
+   }
+ 
++  //! The parameters SetParams set (mitcad#1204).
++  void Params(double& theTang,
++              double& theTesp,
++              double& theT2d,
++              double& theTApp3d,
++              double& theTolApp2d,
++              double& theFleche) const
++  {
++    theTang     = angular;
++    theTesp     = tolesp;
++    theT2d      = tol2d;
++    theTApp3d   = tolapp3d;
++    theTolApp2d = tolapp2d;
++    theFleche   = fleche;
++  }
++
++  //! The shape being filleted (mitcad#1204).
++  const TopoDS_Shape& InitialShape() const { return myShape; }
++
++  //! Whether StopChainsAtTurns was called, and its edges (mitcad#1204).
++  bool StopsChainsAtTurns() const { return myStopAtTurns; }
++
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& ChainTurnThrough() const
++  {
++    return myTurnThrough;
++  }
++
+   //! extracts from the list the contour containing edge E.
+   Standard_EXPORT void Remove(const TopoDS_Edge& E);
+ 

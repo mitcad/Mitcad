@@ -1,0 +1,6 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Two boxes for Plates… (mitcad#1050): Body1, 30 x 20 x 5 mm at x = -40, and Body2, 40 x 30 x 10 mm at the origin; no plates yet."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-40,0],"length":30,"width":20,"height":5,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":40,"width":30,"height":10,"operation":"new_body"}}
+]

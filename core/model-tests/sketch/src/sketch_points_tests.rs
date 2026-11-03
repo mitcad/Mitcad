@@ -876,3 +876,153 @@ fn a_trim_at_a_projected_point_is_held_there_by_a_constraint() {
     assert_eq!(held[0]["entity"], "p5");
     assert_eq!(ends(&s, "c6"), ["p4", "p5"].map(String::from), "{s}");
 }
+
+// --- Trim makes the tangent where a joined end meets a curve (mitcad#1220)
+
+/// The tangent constraints between two curves.
+fn tangents_between(s: &Value, a: &str, b: &str) -> usize {
+    constraints_of(s, "tangent")
+        .iter()
+        .filter(|k| (k["a"] == a && k["b"] == b) || (k["a"] == b && k["b"] == a))
+        .count()
+}
+
+/// The tangent constraints that name a curve.
+fn tangents_of(s: &Value, curve: &str) -> usize {
+    constraints_of(s, "tangent")
+        .iter()
+        .filter(|k| k["a"] == curve || k["b"] == curve)
+        .count()
+}
+
+/// The ids and types of the dimensions.
+fn dimension_ids(s: &Value) -> Vec<(String, String)> {
+    s["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| {
+            (
+                k["id"].as_str().unwrap_or_default().to_owned(),
+                k["type"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_slot_extended_by_a_second_slot_and_trimmed_is_fully_constrained() {
+    // The reported case. A slot from (-10, 0) to (10, 0), 10 wide (its
+    // centres fixed, its radius dimensioned): top c7, right arc c8, bottom
+    // c9, left arc c10. A second slot extends it upwards, as wide as the
+    // first is long: its vertical sides c21 and c22 start where they touch
+    // the first slot's arcs, at (15, 0) and (-15, 0), and end tangent to
+    // its top arc c23 (centre free, the right side's length dimensioned).
+    let mut d = Document::new(MockKernel::default());
+    command(
+        &mut d,
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+            {"id": "p1", "type": "point", "at": [-10.0, 0.0], "fixed": true},
+            {"id": "p2", "type": "point", "at": [10.0, 0.0], "fixed": true},
+            {"id": "p3", "type": "point", "at": [-10.0, 5.0]},
+            {"id": "p4", "type": "point", "at": [10.0, 5.0]},
+            {"id": "p5", "type": "point", "at": [10.0, -5.0]},
+            {"id": "p6", "type": "point", "at": [-10.0, -5.0]},
+            {"id": "c7", "type": "line", "start": "p4", "end": "p3"},
+            {"id": "c8", "type": "arc", "center": "p2", "start": "p5", "end": "p4"},
+            {"id": "c9", "type": "line", "start": "p6", "end": "p5"},
+            {"id": "c10", "type": "arc", "center": "p1", "start": "p3", "end": "p6"},
+            {"id": "p16", "type": "point", "at": [15.0, 0.0]},
+            {"id": "p17", "type": "point", "at": [15.0, 30.0]},
+            {"id": "p18", "type": "point", "at": [-15.0, 0.0]},
+            {"id": "p19", "type": "point", "at": [-15.0, 30.0]},
+            {"id": "p20", "type": "point", "at": [0.0, 30.0]},
+            {"id": "c21", "type": "line", "start": "p16", "end": "p17"},
+            {"id": "c22", "type": "line", "start": "p18", "end": "p19"},
+            {"id": "c23", "type": "arc", "center": "p20", "start": "p17", "end": "p19"}],
+            "constraints": [
+            {"id": "k11", "type": "tangent", "a": "c7", "b": "c8"},
+            {"id": "k12", "type": "tangent", "a": "c7", "b": "c10"},
+            {"id": "k13", "type": "tangent", "a": "c9", "b": "c8"},
+            {"id": "k14", "type": "tangent", "a": "c9", "b": "c10"},
+            {"id": "k15", "type": "equal", "a": "c8", "b": "c10"},
+            {"id": "k24", "type": "vertical", "line": "c21"},
+            {"id": "k25", "type": "vertical", "line": "c22"},
+            {"id": "k26", "type": "tangent", "a": "c21", "b": "c23"},
+            {"id": "k27", "type": "tangent", "a": "c22", "b": "c23"}]}}),
+    );
+    for dimension in [
+        json!({"type": "radius", "curve": "c8"}),
+        json!({"type": "length", "line": "c21"}),
+    ] {
+        let value = if dimension["type"] == "radius" { 5 } else { 30 };
+        command(
+            &mut d,
+            json!({"cmd": "sketch.add_dimension", "sketch": "F1", "dimension": dimension,
+                   "value": value}),
+        );
+    }
+    let before = sketch(&d);
+    assert_clean(&before);
+    // The old slot's top: the upper quarters of its arcs, then its top
+    // line. Each arc ends on the side it touches, at the side's start.
+    trim(&mut d, "c8", [13.5, 3.5]);
+    trim(&mut d, "c10", [-13.5, 3.5]);
+    let s = sketch(&d);
+    assert_eq!(ends(&s, "c8"), ["p5", "p16"].map(String::from), "{s}");
+    assert_eq!(ends(&s, "c10"), ["p18", "p6"].map(String::from), "{s}");
+    // Tangent where each arc meets its side, and the tangents that held
+    // the arcs to the top line, which no longer touches them, are gone.
+    assert_eq!(tangents_between(&s, "c8", "c21"), 1, "{s}");
+    assert_eq!(tangents_between(&s, "c10", "c22"), 1, "{s}");
+    assert_eq!(tangents_of(&s, "c7"), 0, "{s}");
+    // The bottom's tangents stay.
+    assert_eq!(tangents_between(&s, "c9", "c8"), 1, "{s}");
+    assert_eq!(tangents_between(&s, "c9", "c10"), 1, "{s}");
+    trim(&mut d, "c7", [0.0, 5.0]);
+    let s = sketch(&d);
+    assert!(
+        s["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["id"] != "c7"),
+        "{s}"
+    );
+    // Fully constrained by the same dimensions, nothing redundant.
+    assert_clean(&s);
+    assert_eq!(s["dof"], 0, "{}", s["fully_constrained"]);
+    assert_eq!(dimension_ids(&s), dimension_ids(&before), "{s}");
+    assert_eq!(constraints_of(&s, "tangent").len(), 6, "{s}");
+}
+
+#[test]
+fn a_join_at_an_angle_gets_no_tangent_and_keeps_the_old_one() {
+    // An arc over the x axis (c4, from (10, 0) round to (-10, 0)) with a
+    // line tangent at its start (c6, down from (10, 0)), and a line up from
+    // the arc's top (c9), square to it.
+    let mut d = Document::new(MockKernel::default());
+    command(
+        &mut d,
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+            {"id": "p1", "type": "point", "at": [0.0, 0.0]},
+            {"id": "p2", "type": "point", "at": [10.0, 0.0]},
+            {"id": "p3", "type": "point", "at": [-10.0, 0.0]},
+            {"id": "c4", "type": "arc", "center": "p1", "start": "p2", "end": "p3"},
+            {"id": "p5", "type": "point", "at": [10.0, -10.0]},
+            {"id": "c6", "type": "line", "start": "p2", "end": "p5"},
+            {"id": "p7", "type": "point", "at": [0.0, 10.0]},
+            {"id": "p8", "type": "point", "at": [0.0, 20.0]},
+            {"id": "c9", "type": "line", "start": "p7", "end": "p8"}],
+            "constraints": [{"id": "k10", "type": "tangent", "a": "c4", "b": "c6"}]}}),
+    );
+    // The arc's right half goes: it ends at the line's start.
+    trim(&mut d, "c4", [7.0, 7.0]);
+    let s = sketch(&d);
+    assert!(s["error"].is_null(), "{s}");
+    assert_eq!(ends(&s, "c4"), ["p7", "p3"].map(String::from), "{s}");
+    assert_eq!(tangents_between(&s, "c4", "c9"), 0, "{s}");
+    // No new tangent took its place: the old one stays.
+    assert_eq!(constraints_of(&s, "tangent").len(), 1, "{s}");
+    assert_eq!(tangents_between(&s, "c4", "c6"), 1, "{s}");
+}

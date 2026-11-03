@@ -21,6 +21,8 @@
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <mach/mach.h>
+#include <sys/sysctl.h>
 #endif
 
 #include <algorithm>
@@ -508,6 +510,29 @@ std::uint64_t available_memory() {
   MEMORYSTATUSEX status{};
   status.dwLength = sizeof status;
   return GlobalMemoryStatusEx(&status) ? static_cast<std::uint64_t>(status.ullAvailPhys) : 0;
+#elif defined(__APPLE__)
+  // Match the native test runner's conservative headroom. Do not count
+  // speculative pages twice (already free), or purgeable pages twice
+  // (possibly inactive). A failed/critical reading returns one byte:
+  // zero means "unknown, allow more" to the portable corpus scheduler.
+  static const mach_port_t host = mach_host_self();
+  vm_statistics64_data_t stats{};
+  mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+  const long page_size = sysconf(_SC_PAGESIZE);
+  if (page_size <= 0 || host_statistics64(host, HOST_VM_INFO64,
+      reinterpret_cast<host_info64_t>(&stats), &count) != KERN_SUCCESS) {
+    return 1;
+  }
+  unsigned pressure = 0;
+  std::size_t size = sizeof pressure;
+  const bool pressure_read = sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure,
+                                        &size, nullptr, 0) == 0 && size == sizeof pressure;
+  if (pressure_read && (pressure & 4u) != 0) {
+    return 1;
+  }
+  const std::uint64_t pages = static_cast<std::uint64_t>(stats.free_count) +
+      (pressure_read && pressure == 1 ? static_cast<std::uint64_t>(stats.inactive_count) : 0);
+  return std::max<std::uint64_t>(1, pages * static_cast<std::uint64_t>(page_size));
 #else
   std::uint64_t out = 0;
 #ifdef __linux__

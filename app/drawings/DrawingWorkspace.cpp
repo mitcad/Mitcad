@@ -48,6 +48,7 @@
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/Theme.hpp"
 #include "../view/AnnotationDialogs.hpp"
+#include "../view/VersionWatermark.hpp"
 #include "DrawingSheetView.hpp"
 
 namespace mitcad::drawings {
@@ -504,9 +505,10 @@ bool DrawingWorkspace::open(const QString& uid) {
   raise();
   // The view's own controls (the home button, the cube's arrows) raise
   // themselves when the view's insets change: the drawing goes back above
-  // them (mitcad#1008: the home button showed over Sheet…).
+  // them (mitcad#1008: the home button showed over Sheet…). Not the version
+  // watermark (mitcad#1209), which stays over the sheet's lower right.
   for (QWidget* overlay : m_viewer->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
-    if (overlay != this) {
+    if (overlay != this && qobject_cast<VersionWatermark*>(overlay) == nullptr) {
       overlay->installEventFilter(this);
     }
   }
@@ -2831,6 +2833,8 @@ void DrawingWorkspace::keyPressEvent(QKeyEvent* event) {
   }
   QWidget::keyPressEvent(event);
 }
+
+QWidget* DrawingWorkspace::sheetView() const { return m_sheetView; }
 
 bool DrawingWorkspace::eventFilter(QObject* watched, QEvent* event) {
   if (watched == m_viewer && event->type() == QEvent::Resize && isVisible()) {

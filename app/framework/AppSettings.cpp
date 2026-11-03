@@ -19,6 +19,7 @@ const QString kAutosave = QStringLiteral("autosave/enabled");
 const QString kAutosaveMinutes = QStringLiteral("autosave/minutes");
 const QString kImportTolerance = QStringLiteral("import/geometricTolerance");
 const QString kNewDesignUnits = QStringLiteral("units/newDesigns");
+const QString kTemperatureUnit = QStringLiteral("units/temperature");
 
 } // namespace
 
@@ -40,6 +41,10 @@ GeneralSettings GeneralSettings::load() {
   if (newDesignUnitChoices().contains(units)) {
     general.newDesignUnits = units;
   }
+  const QString temperature = settings.value(kTemperatureUnit, general.temperatureUnit).toString();
+  if (temperature == QStringLiteral("C") || temperature == QStringLiteral("F")) {
+    general.temperatureUnit = temperature;
+  }
   general.openInCurrentWindow = settings.value(QStringLiteral("documents/openInCurrentWindow"), false).toBool();
   const QString presentation = settings.value(QStringLiteral("documents/openDesignsIn"), general.openDesignsIn).toString();
   if (presentation == QStringLiteral("tabs") || presentation == QStringLiteral("windows")) {
@@ -54,6 +59,7 @@ void GeneralSettings::save() const {
   settings.setValue(kAutosaveMinutes, autosaveMinutes);
   settings.setValue(kImportTolerance, importTolerance);
   settings.setValue(kNewDesignUnits, newDesignUnits);
+  settings.setValue(kTemperatureUnit, temperatureUnit);
   settings.setValue(QStringLiteral("documents/openInCurrentWindow"), openInCurrentWindow);
   settings.setValue(QStringLiteral("documents/openDesignsIn"), openDesignsIn);
 }

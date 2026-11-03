@@ -33,6 +33,7 @@
 
 #include "Dialogs.hpp"
 #include "FitToScreen.hpp"
+#include "PanelTree.hpp"
 #include "Theme.hpp"
 #include "../platform/NativeDialogs.hpp"
 
@@ -98,6 +99,7 @@ FormulaEditor::FormulaEditor(ParameterSource source, ParameterFieldOptions optio
   search->setPlaceholderText(tr("Search functions, descriptions and examples"));
   layout->addWidget(search);
   m_functions = new QTreeWidget;
+  panel::setCompactIndentation(m_functions, panel::Indent::Flat);
   m_functions->setObjectName(QStringLiteral("formulaFunctions"));
   m_functions->setColumnCount(3);
   m_functions->setHeaderLabels({tr("Function"), tr("Description"), tr("Example")});

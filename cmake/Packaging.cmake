@@ -91,6 +91,10 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/third_party/fonts/iso-lettering/lettering.ttf")
 endif()
 # three.js, embedded for the web viewer (app/web/viewer).
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/three/LICENSE" DESTINATION licenses/three)
+# The bundled material dataset (mitcad#1213), compiled into the model as data.
+install(FILES "${PROJECT_SOURCE_DIR}/third_party/material-properties/LICENSE"
+              "${PROJECT_SOURCE_DIR}/third_party/material-properties/NOTICE"
+  DESTINATION licenses/material-properties)
 # SolidCraft's format upgrade steps, adapted for the .solidcraft import (third_party/solidcraft).
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/solidcraft/LICENSE-MIT" DESTINATION licenses/solidcraft)
 # QtKeychain, linked statically (cmake/Keychain.cmake).

@@ -284,7 +284,7 @@ ui_start_app() {
     options+=(--chrome=docked)
   fi
   # The windows of other instances (ui_instance) are not this one's.
-  before=" $(xdotool search --onlyvisible --name ' - MitCad$' 2> /dev/null | tr '\n' ' ')"
+  before=" $(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | tr '\n' ' ')"
   if [ "${UI_GDB:-0}" = 1 ] && command -v gdb > /dev/null; then
     gdb -q -batch -ex "set debuginfod enabled off" -ex run -ex bt --args "$UI_APP" "${options[@]}" "$@" \
       > "$UI_LOG" 2>&1 &
@@ -292,10 +292,11 @@ ui_start_app() {
     "$UI_APP" "${options[@]}" "$@" > "$UI_LOG" 2>&1 &
   fi
   UI_RUNNER=$!
-  # The main window is titled "<document> - MitCad", "*" marking changes.
+  # The main window is titled "<document> - MitCad <version>", "*" marking
+  # changes (mitcad#1209: the version; ui_window_title leaves it out).
   UI_WINDOW=""
   for _ in $(seq 1 $((${UI_WINDOW_WAIT:-20} * 20))); do
-    for window in $(xdotool search --onlyvisible --name ' - MitCad$' 2> /dev/null); do
+    for window in $(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null); do
       case "$before " in
       *" $window "*) ;;
       *)
@@ -871,6 +872,12 @@ ui_focus_main() {
 
 # ui_title_regex "title": a regex that matches exactly that window title.
 ui_title_regex() { printf '^%s$' "$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g')"; }
+
+# ui_window_title [window]: the main window's title (UI_WINDOW's) without
+# the version after "MitCad" (mitcad#1209): "block.mitcad* - MitCad".
+ui_window_title() {
+  xdotool getwindowname "${1:-$UI_WINDOW}" 2> /dev/null | sed -E 's/ - MitCad [^ ]+$/ - MitCad/'
+}
 
 # ui_typed_since line "prefix"...: the text logged last after that line of
 # the log for a typed-in field, in lines "<prefix><text>"

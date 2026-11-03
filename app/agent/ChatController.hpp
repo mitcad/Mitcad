@@ -100,6 +100,8 @@ public:
   // activated); a quick file check while it is missing.
   void refreshSetup(bool full);
   void signIn();
+  // An API agent's key, given in the panel (ChatAgent::asksForKey).
+  void setApiKey(const QString& key);
   QJsonObject accountError() const { return m_accountErrors.value(m_agent->id()); }
   bool checkingAccount() const { return m_checkingAccount; }
   // Recheck sign-in and one bounded, context-free turn in a fresh process.

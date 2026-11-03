@@ -50,19 +50,6 @@ QString CommandContext::featureName(const QString& uid) const {
   return uid;
 }
 
-Selection CommandContext::unusedProfiles() const {
-  Selection profiles;
-  for (const QJsonValue& value : queryArray(QStringLiteral("profiles"))) {
-    const QJsonObject profile = value.toObject();
-    if (profile.value(QStringLiteral("consumed")).toBool()) {
-      continue;
-    }
-    profiles.append({SelectKind::Profile, profile.value(QStringLiteral("sketch")).toString(),
-                     profile.value(QStringLiteral("region")).toString(), QStringLiteral("plane")});
-  }
-  return profiles;
-}
-
 QString CommandContext::valueText(const QJsonValue& slot, const QString& owner) const {
   if (slot.isDouble()) {
     return QString::number(slot.toDouble());

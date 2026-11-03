@@ -9,6 +9,7 @@ pub mod changed;
 pub mod concurrency;
 pub mod corpus;
 pub mod ctest;
+pub mod macos_policy;
 pub mod options;
 pub mod profile;
 pub mod report;

@@ -397,6 +397,35 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
                     value["properties"][key.as_str()] = json!(material);
                 }
             }
+            // A column of a material property (mitcad#1213: `Young's
+            // modulus`, `density`): the row's material's value in the
+            // design's units, unless the component has the property itself.
+            if let [id] = row.materials.as_slice()
+                && let Some(material) = self.material(id)
+            {
+                // Lengths, stresses and densities in the design's system,
+                // temperatures in the preferred unit (mitcad#1213).
+                let system = super::materials::MaterialsOps::material_system(self);
+                let temperature = mitcad_model::material_units::preferred_temperature();
+                for key in keys {
+                    let Some(text) =
+                        super::materials::material_value_text(material, key, system, temperature)
+                    else {
+                        continue;
+                    };
+                    let own = value["properties"]
+                        .get(key.as_str())
+                        .and_then(Value::as_str)
+                        .is_some_and(|own| !own.is_empty());
+                    if own {
+                        continue;
+                    }
+                    if !value["properties"].is_object() {
+                        value["properties"] = json!({});
+                    }
+                    value["properties"][key.as_str()] = json!(text);
+                }
+            }
             rows.push(value);
         }
         // Purchased hardware has no shape and must not be geometry-grouped.

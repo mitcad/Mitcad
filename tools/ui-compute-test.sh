@@ -97,7 +97,7 @@ EOF
 expect_title() {
   local title=""
   for _ in $(seq 1 25); do
-    title=$(xdotool getwindowname "$UI_WINDOW" 2> /dev/null)
+    title=$(ui_window_title)
     [ "$title" = "$1" ] && { echo "ok   title '$1'"; return; }
     sleep 0.2
   done
@@ -367,7 +367,7 @@ ui_focus_dialog '^Computing$'
 ui_key Escape # not a step: it waits for the job
 ui_expect_log "Opening boss.mitcad cancelled" "the open at start-up was cancelled"
 for _ in $(seq 1 50); do
-  UI_WINDOW=$(xdotool search --onlyvisible --name ' - MitCad$' 2> /dev/null | head -1)
+  UI_WINDOW=$(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | head -1)
   [ -n "$UI_WINDOW" ] && break
   sleep 0.2
 done

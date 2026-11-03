@@ -16,3 +16,5 @@ mod surface_modelling_tests;
 mod feature_inputs_tests;
 // Dogbone: relief cuts at a body's inside corners (mitcad#1011).
 mod dogbone_tests;
+// Auto Fix of references a warning found again (mitcad#1223).
+mod auto_fix_tests;

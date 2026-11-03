@@ -236,6 +236,10 @@ vcpkg_from_github(
         1170-chfi3d-cut-to-end-past-the-vertex-along-faces-meeting-on.patch
         1180-brepoffset-extended-edge-keeps-a-pcurve-on-its-curve-where-reprojection-fails.patch
         1190-brepoffset-offsets-tangent-inside-keep-the-branch-and-its-continuation.patch
+        1200-brepoffset-c2-extension-across-a-tangential-side.patch
+        1210-brepfilletapi-rounding-over-slot-mouths-touching-the-top-along-a-crest.patch
+        1220-chfi3d-ball-pivots-about-a-crease-at-the-end.patch
+        1230-chfi3d-rolls-before-a-blend-curving-away-as-fast-as-the-ball.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

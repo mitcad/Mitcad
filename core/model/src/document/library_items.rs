@@ -834,6 +834,20 @@ impl<K: Kernel> Document<K> {
                     row["bare_name"] = json!(bare);
                     row["for_printer"] = json!(printer);
                 }
+                // The printers a process is for and the names a printer
+                // goes by (mitcad#1216): the managers group the processes
+                // by printer, the pickers list the chosen printer's first.
+                if profile.kind == ProfileKind::Printer {
+                    row["printer_names"] = json!(profile.printer_key().names);
+                } else {
+                    row["printers"] = json!(
+                        profile
+                            .process_printers()
+                            .into_iter()
+                            .map(|(printer, nozzle)| json!({"printer": printer, "nozzle": nozzle}))
+                            .collect::<Vec<_>>()
+                    );
+                }
             }
         }
         row
@@ -855,15 +869,21 @@ impl<K: Kernel> Document<K> {
             return Err(invalid("a library's item keeps its own version and origin"));
         }
         let folder = library_folder(libraries, library)?;
-        let (mut new, carried) = match &change.based_on {
-            Some(crate::print_library::BasedOn::Design(id)) => {
+        // An entry of the bundled material dataset (mitcad#1213).
+        let dataset = match &change.dataset {
+            Some(entry) => Some(super::materials::dataset_material(change, entry)?),
+            None => None,
+        };
+        let (mut new, carried) = match (&change.based_on, dataset) {
+            (None, Some(base)) => (base, Vec::new()),
+            (Some(crate::print_library::BasedOn::Design(id)), _) => {
                 let base = self
                     .material(id)
                     .cloned()
                     .ok_or_else(|| invalid(format!("there is no material {id}")))?;
                 (base, Vec::new())
             }
-            Some(crate::print_library::BasedOn::Library(item)) => {
+            (Some(crate::print_library::BasedOn::Library(item)), _) => {
                 let found = library_item(
                     libraries,
                     library_kind(&item.library)?,
@@ -878,7 +898,7 @@ impl<K: Kernel> Document<K> {
                     ItemData::Profile(_) => unreachable!("a material's folder"),
                 }
             }
-            None => (
+            (None, None) => (
                 Material {
                     id: String::new(),
                     name: String::new(),
@@ -892,6 +912,8 @@ impl<K: Kernel> Document<K> {
                     class: None,
                     version: None,
                     origin: None,
+                    properties: Default::default(),
+                    reference: None,
                 },
                 Vec::new(),
             ),
@@ -907,6 +929,8 @@ impl<K: Kernel> Document<K> {
         let taken = |name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
         new.name = match &change.based_on {
             Some(_) => copy_name(&new.name, taken),
+            // A dataset's material as its entry (mitcad#1213).
+            None if change.dataset.is_some() => material::numbered_name(&new.name, taken),
             None => (1..)
                 .map(|n| new_item_name("Material", n))
                 .find(|name| !taken(name))
@@ -917,7 +941,8 @@ impl<K: Kernel> Document<K> {
         // The class is stored (mitcad#655): the one chosen, else the source's
         // of a copy, else the one its fields give. Print settings make it an
         // FDM plastic whatever it stores (mitcad#1102).
-        let source_class = change.based_on.as_ref().map(|_| material_class(&new));
+        let source_class =
+            (change.based_on.is_some() || change.dataset.is_some()).then(|| material_class(&new));
         change.apply_to(&mut new);
         let class = change
             .class

@@ -904,8 +904,8 @@ impl SketchEdit<'_> {
                 if at_end {
                     continue;
                 }
-                let touching =
-                    cross(unit(curve.eval(hit.ta)[1]), unit(c.eval(hit.tb)[1])).abs() <= 1e-3;
+                let touching = cross(unit(curve.eval(hit.ta)[1]), unit(c.eval(hit.tb)[1])).abs()
+                    <= TANGENT_JOIN;
                 cuts.push(Cut {
                     t,
                     curve: *other,
@@ -991,6 +991,155 @@ impl SketchEdit<'_> {
                 self.drop_idle_on(*q);
             }
         }
+    }
+
+    /// After a trim's cut end `end` of the curve `id` joined the existing
+    /// point `joined` (mitcad#1220): a tangent between the curve and each
+    /// curve there that it meets tangentially (the directions within
+    /// [`TANGENT_JOIN`]), the crossing curve and any other curve that ends
+    /// at the joined point, as the Line and Arc tools add one when drawing
+    /// tangentially. None where one already holds (an active tangent or
+    /// smooth constraint between the two at that point), none between two
+    /// lines or with an ellipse or a curve a derived offset computes, and
+    /// none that the other constraints already imply or that conflicts with
+    /// them (see `add_tangent_if_safe`). Returns whether one was added.
+    fn tangent_at_join(
+        &mut self,
+        id: EntityUid,
+        curve: &Curve2,
+        cut: &Cut,
+        end: EntityUid,
+        joined: Option<EntityUid>,
+        solved: &Solved,
+    ) -> bool {
+        let Some(q) = joined else {
+            return false;
+        };
+        let Some(&at) = solved.points.get(&q) else {
+            return false;
+        };
+        let along = unit(curve.eval(cut.t)[1]);
+        let mut others = vec![cut.curve];
+        others.extend(
+            self.def
+                .entities
+                .iter()
+                .filter(|e| e.id != id && e.id != cut.curve)
+                .filter(|e| e.kind.ends().is_some_and(|(s, t)| s == q || t == q))
+                .map(|e| e.id),
+        );
+        let mut added = false;
+        for other in others {
+            if !self.takes_tangent(id, other) || self.tangent_holds(id, other, &[end, q]) {
+                continue;
+            }
+            let Some(c) = solved.curves.get(&other) else {
+                continue;
+            };
+            let (t, _) = c.closest(at);
+            if cross(along, unit(c.eval(t)[1])).abs() > TANGENT_JOIN {
+                continue;
+            }
+            added |= self.add_tangent_if_safe(id, other);
+        }
+        added
+    }
+
+    /// Whether a tangent between the curves `a` and `b` is one the solver
+    /// takes: lines, circles, arcs and splines, not two lines, and neither
+    /// computed by a derived offset (whose curves take no constraints,
+    /// mitcad#361).
+    fn takes_tangent(&self, a: EntityUid, b: EntityUid) -> bool {
+        let kind = |c: EntityUid| match self.def.entity(c).map(|e| &e.kind) {
+            Some(EntityKind::Line { .. }) => Some(true),
+            Some(
+                EntityKind::Arc { .. }
+                | EntityKind::Circle { .. }
+                | EntityKind::Spline { .. }
+                | EntityKind::FittedSpline { .. },
+            ) => Some(false),
+            _ => None,
+        };
+        match (kind(a), kind(b)) {
+            (Some(true), Some(true)) | (None, _) | (_, None) => false,
+            _ => self.computing_offset(a).is_none() && self.computing_offset(b).is_none(),
+        }
+    }
+
+    /// Whether an active tangent or smooth constraint between the curves
+    /// `a` and `b` applies at one of the points `at` (or, without a point
+    /// of its own, where they meet).
+    fn tangent_holds(&self, a: EntityUid, b: EntityUid, at: &[EntityUid]) -> bool {
+        self.def.constraints.iter().any(|c| match c.kind {
+            ConstraintKind::Tangent { a: x, b: y, at: on }
+            | ConstraintKind::Smooth { a: x, b: y, at: on } => {
+                c.active
+                    && ((x == a && y == b) || (x == b && y == a))
+                    && on.is_none_or(|p| at.contains(&p))
+            }
+            _ => false,
+        })
+    }
+
+    /// Adds a tangent between the curves `a` and `b` only when the sketch
+    /// still solves with it, no constraint more is redundant (the others
+    /// already imply it) and none more conflicts; otherwise it is taken out
+    /// again. Returns whether it stays.
+    fn add_tangent_if_safe(&mut self, a: EntityUid, b: EntityUid) -> bool {
+        let Ok(before) = self.solved() else {
+            return false;
+        };
+        let id = self.add_constraint(ConstraintKind::tangent(a, b));
+        let safe = self.solved().is_ok_and(|after| {
+            after.status.conflicts.len() <= before.status.conflicts.len()
+                && after.status.redundant.len() <= before.status.redundant.len()
+        });
+        if !safe {
+            self.def.constraints.retain(|c| c.id != id);
+            self.report.constraints.retain(|k| *k != id);
+        }
+        safe
+    }
+
+    /// After a trim cut off the end `old` of the curve `id` and a new
+    /// tangent took its place at the new end (mitcad#1220): a tangent
+    /// between the curve and one that met it at `old` (or that applies at
+    /// `old`) and no longer touches it (the two share no point) held the
+    /// joint that is gone, and goes with it. A tangent that still
+    /// constrains something real stays: one at a point the curve still
+    /// has, one between curves that still share a point, and every tangent
+    /// where no new one took the old one's place.
+    fn drop_replaced_tangents(&mut self, id: EntityUid, old: EntityUid) {
+        let points_of = |c: EntityUid| -> Vec<EntityUid> {
+            self.def
+                .entity(c)
+                .map(|e| e.kind.points())
+                .unwrap_or_default()
+        };
+        let own = points_of(id);
+        let stale: BTreeSet<ConstraintUid> = self
+            .def
+            .constraints
+            .iter()
+            .filter_map(|c| {
+                let ConstraintKind::Tangent { a, b, at } = c.kind else {
+                    return None;
+                };
+                let other = match (a == id, b == id) {
+                    (true, false) => b,
+                    (false, true) => a,
+                    _ => return None,
+                };
+                let theirs = points_of(other);
+                let met_there = match at {
+                    Some(p) => p == old,
+                    None => theirs.contains(&old),
+                };
+                let apart = !theirs.iter().any(|p| own.contains(p));
+                (met_there && apart).then_some(c.id)
+            })
+            .collect();
+        self.drop_constraints(&stale);
     }
 
     /// A new point at a position on the curve `on` (point-on-curve).
@@ -1103,7 +1252,10 @@ impl SketchEdit<'_> {
     /// it (Trim). A curve nothing crosses is deleted. A cut end that lies on
     /// an existing point becomes that point, as an extended end does
     /// (mitcad#1191, see `cut_end`), so that both curves of a crossing
-    /// trimmed there end in one point.
+    /// trimmed there end in one point. A joined end that meets a curve
+    /// there tangentially gets a tangent constraint to it, and a tangent
+    /// that held the cut-off end to a curve no longer touching it goes
+    /// (mitcad#1220, see `tangent_at_join` and `drop_replaced_tangents`).
     pub fn trim(&mut self, id: EntityUid, at: P2) -> Result<(), String> {
         self.shape_editable(id)?;
         let solved = self.solved()?;
@@ -1138,6 +1290,8 @@ impl SketchEdit<'_> {
                 // as a spline by control points.
                 self.reshape(id, &curve, t_start, t_end, Some(start), Some(end))?;
                 self.drop_idle_after_trim(&joined, &[id]);
+                self.tangent_at_join(id, &curve, &cuts[after], start, joined_start, &solved);
+                self.tangent_at_join(id, &curve, &cuts[before], end, joined_end, &solved);
                 return Ok(());
             }
             let e = self.def.entity_mut(id).expect("a curve");
@@ -1157,6 +1311,8 @@ impl SketchEdit<'_> {
                 _ => return Err("this closed curve cannot be trimmed".to_owned()),
             };
             self.drop_idle_after_trim(&joined, &[id]);
+            self.tangent_at_join(id, &curve, &cuts[after], start, joined_start, &solved);
+            self.tangent_at_join(id, &curve, &cuts[before], end, joined_end, &solved);
             return Ok(());
         }
         let below = cuts.iter().rev().find(|c| c.t < t_at);
@@ -1171,12 +1327,18 @@ impl SketchEdit<'_> {
                 self.reshape(id, &curve, cut.t, hi, Some(p), None)?;
                 self.drop_if_unused(old_start);
                 self.drop_idle_after_trim(joined.as_slice(), &[id]);
+                if self.tangent_at_join(id, &curve, cut, p, joined, &solved) {
+                    self.drop_replaced_tangents(id, old_start);
+                }
             }
             (Some(cut), None) => {
                 let (p, joined) = self.cut_end(id, &curve, cut, &solved);
                 self.reshape(id, &curve, lo, cut.t, None, Some(p))?;
                 self.drop_if_unused(old_end);
                 self.drop_idle_after_trim(joined.as_slice(), &[id]);
+                if self.tangent_at_join(id, &curve, cut, p, joined, &solved) {
+                    self.drop_replaced_tangents(id, old_end);
+                }
             }
             (Some(cut0), Some(cut1)) => {
                 // Keep both ends: this curve up to t0, a new one from t1.
@@ -1197,6 +1359,10 @@ impl SketchEdit<'_> {
                 }
                 let joined: Vec<EntityUid> = joined0.into_iter().chain(joined1).collect();
                 self.drop_idle_after_trim(&joined, &[id, copy]);
+                // Tangents at the cut ends; the curve's own constraints stay
+                // as they were (no end of it is gone, only split off).
+                self.tangent_at_join(id, &curve, cut0, p0, joined0, &solved);
+                self.tangent_at_join(copy, &curve, cut1, p1, joined1, &solved);
             }
         }
         Ok(())
@@ -3045,6 +3211,12 @@ struct Cut {
 /// contact is only that accurate: two arcs trimmed one after the other at
 /// their contact were left with ends 2e-6 mm apart.
 const TANGENT_REACH: f64 = 5e-5;
+
+/// How far from parallel (the sine of the angle between them) the
+/// directions of two curves may be where they meet and still count as
+/// touching: a trim's cut where the curves touch, and a cut end joined to a
+/// curve it meets tangentially (mitcad#1220).
+const TANGENT_JOIN: f64 = 1e-3;
 
 struct Chain {
     /// Curves in order, and whether each runs forward along the chain.

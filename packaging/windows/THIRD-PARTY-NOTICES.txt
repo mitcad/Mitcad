@@ -69,6 +69,12 @@ page that Export > Web page and the project's web viewer write
   MIT licence, Copyright 2010-2024 three.js authors; see
   licenses\three\LICENSE. The pages carry the licence text with it.
 
+the material-properties dataset (https://github.com/KittyCAD/material-properties,
+commit 61088092), the bundled material dataset, compiled into the model as data
+  Apache License 2.0, the material-properties contributors; see
+  licenses\material-properties\LICENSE and NOTICE (the attribution and how
+  the data was converted). The values are typical values.
+
 SolidCraft (https://github.com/tangency-labs/solidcraft), the design file
 format's upgrade steps, adapted for the .solidcraft import, inside
 mitcad.exe

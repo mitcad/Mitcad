@@ -141,6 +141,9 @@ public:
   // shows it (3D Print's own-settings links, Property Sets' Edit… of
   // Process).
   void openOwnSettings(const QString& owner, const QString& name);
+  // A print plate's own settings in the same window and form (mitcad#1050,
+  // Plates…' Plate Settings…): `plate` its id, `name` its name.
+  void openPlateSettings(const QString& plate, const QString& name);
   // A manager closed after it changed a library without a design
   // (mitcad#1135): the other managers read the libraries again.
   void librariesChanged();
@@ -270,6 +273,11 @@ private:
   // Timeline groups (P9): a group's menu, and grouping features.
   void groupMenu(const QString& name, const QPoint& at);
   void groupFeatures(const QStringList& uids);
+  // Auto Fix (mitcad#1223): whether any of the features has a warning the
+  // model can write into its definition, and the model's auto_fix of them
+  // (one undo step), its summary logged and shown in the status bar.
+  bool autoFixable(const QStringList& uids) const;
+  void autoFix(const QStringList& uids);
   void browserDoubleClicked(const BrowserNode& node);
   void toggleVisibility(const BrowserNode& node);
   // The names of a component's bodies that follow a Show When condition,

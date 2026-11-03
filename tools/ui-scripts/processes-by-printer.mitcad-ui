@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MIT
+# Processes grouped by printer (mitcad#1216), through the real Qt controls;
+# shared by tools/ui-processes-by-printer-test.sh (Linux, Xvfb) and
+# tools/ui-windows-processes-by-printer-test.ps1. The design is
+# processes-by-printer.json: a box, the printers Bench X 0.4 nozzle and
+# Bench Y 0.4 nozzle (the design's), and six processes: 0.12mm Fine and
+# 0.20mm Standard @Bench X and 0.16mm Optimal @Bench Y by their names,
+# Strong by its compatible printers (Bench Y), Shared for Bench X and
+# Bench Y, Draft for any printer.
+#   1. The Processes manager: This design's processes in sub-groups Bench
+#      X, Bench Y and Any printer, Shared under both, the place counting it
+#      once; Shared clicked under Bench Y stays selected there; the search
+#      filters every sub-group.
+#   2. Send to Slicer's Process picker: Bench Y's processes first (the
+#      design's printer), Shared among them, then Bench X's, then Any
+#      printer; with Bench X chosen in the Printer picker, Bench X's first.
+#   3. The Make tab's body card: its Process drop-down under the printers,
+#      the body's printer (Bench X now) first.
+wait-idle
+window-resize 1280 860
+focus-main
+mark
+
+# 1. The Processes manager.
+command make.processes
+focus-dialog '^Processes$'
+expect-log 'Processes groups: This design 6 \| My library 0 \| Built-in '
+expect-log 'Processes printers: This design: Bench X 3 \| Bench Y 3 \| Any printer 1$'
+expect-log 'Processes printer group: This design . Bench X: 0\.12mm Fine @Bench X, 0\.20mm Standard @Bench X, Shared$'
+expect-log 'Processes printer group: This design . Bench Y: 0\.16mm Optimal @Bench Y, Shared, Strong$'
+expect-log 'Processes printer group: This design . Any printer: Draft$'
+expect-log 'Processes design . Bench Y item Shared at'
+mark
+dialog-click-logged 'Processes design . Bench Y item Shared at'
+expect-log 'Profile selected: process Shared \(design\)'
+expect-log 'Processes selected under: This design . Bench Y$'
+mark
+focus-widget printManagerSearch
+type 'Shared'
+expect-log 'Processes search: Shared, '
+expect-log 'Processes groups: This design 1 \| My library 0 \| Built-in '
+expect-log 'Processes printers: This design: Bench X 1 \| Bench Y 1$'
+expect-log 'Processes printer group: This design . Bench X: Shared$'
+expect-log 'Processes printer group: This design . Bench Y: Shared$'
+mark
+key ctrl+a
+key BackSpace
+expect-log 'Processes search: , '
+expect-log 'Processes printers: This design: Bench X 3 \| Bench Y 3 \| Any printer 1$'
+button '^Close$'
+focus-main
+wait-idle
+
+# 2. Send to Slicer's Process picker: the design's printer's first.
+mark
+command make.print3d
+expect-log '^Command Send to Slicer started$'
+expect-log 'Panel Send to Slicer input process at'
+mark
+click-logged 'Panel Send to Slicer input process at'
+expect-log 'Process picker opened: '
+expect-log 'Process picker sections: Bench Y 3 \| Bench X 2 \| Any printer [0-9]+$'
+focus-dialog '^Process Picker$'
+key Escape
+expect-log 'Process picker closed'
+focus-main
+mark
+click-logged 'Panel Send to Slicer input printer at'
+expect-log 'Printer picker opened: '
+focus-dialog '^Printer Picker$'
+type 'Bench X'
+expect-log 'Printer picker search: Bench X, first X '
+key Return
+expect-log 'Printer picker chose: X '
+expect-log '3D Print printer: design/x4'
+focus-main
+mark
+click-logged 'Panel Send to Slicer input process at'
+expect-log 'Process picker opened: '
+expect-log 'Process picker sections: Bench X 3 \| Bench Y 2 \| Any printer [0-9]+$'
+focus-dialog '^Process Picker$'
+key Escape
+expect-log 'Process picker closed'
+focus-main
+key Escape
+expect-log '^Command Send to Slicer cancelled$'
+wait-idle
+
+# 3. The body card's Process drop-down: the body's printer, Bench X, first.
+mark
+click-logged 'Ribbon tab MAKE at'
+expect-log 'Ribbon tab shown: MAKE'
+# The Browser logged Body1's row when the design opened.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+expect-log 'Make card: Body1: material '
+expect-log 'Make card processes: Bench X: 0\.12mm Fine @Bench X, 0\.20mm Standard @Bench X, Shared \| Bench Y: 0\.16mm Optimal @Bench Y, Strong \| Any printer: Draft$'
+key Escape
+expect-never 'TestDriver: FAIL'

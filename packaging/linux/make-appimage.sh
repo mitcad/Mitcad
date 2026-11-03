@@ -43,8 +43,21 @@
 # module of another OpenSSL build is ever loaded into it. Nothing needs
 # one: TLS uses the built-in default provider. Qt reads the system's CA
 # certificates itself (/etc/ssl/certs, Fedora's
-# /etc/pki/tls/certs/ca-bundle.crt and others). tools/appimage-test.sh
-# checks the pair, the folders and which OpenSSL the update check uses.
+# /etc/pki/tls/certs/ca-bundle.crt and others).
+# A system's openssl.cnf that this OpenSSL build cannot load (mitcad#1208:
+# openSUSE's crypto policy sets rh-allow-sha1-signatures, an option only
+# the distribution's patched OpenSSL knows) would leave Qt without TLS. So
+# MitCad checks at start-up whether the system's configuration loads in
+# the bundled libcrypto (app/update/OpenSslConfiguration.hpp): where it
+# does, it is used as before, the distribution's policy applies; where it
+# fails, MitCad loads the AppImage's own minimal configuration
+# (packaging/linux/openssl.cnf, copied into usr/share/mitcad) in its place
+# and logs "TLS: the system's OpenSSL configuration failed to load (<first
+# error>); using the AppImage's own". Never a silent bypass of a policy
+# that loads; the certificate folders stay the system's either way.
+# tools/appimage-test.sh checks the pair, the folders, which OpenSSL the
+# update check uses, and its TLS with a configuration that does not load
+# (it falls back) and with one that does (no fallback).
 #
 # Usage: packaging/linux/make-appimage.sh <build dir> <built mitcad> <AppImage>
 # Environment: MITCAD_APPIMAGE_TOOLS (default ~/appimage-tools), QMAKE
@@ -177,6 +190,9 @@ if [ -e "$LIBCRYPTO" ] || [ -e "$APPDIR/usr/lib/libssl.so.3" ]; then
     /etc/* | /usr/*) ;;
     *) echo "the bundled libcrypto's OPENSSLDIR is not a system folder" >&2; exit 1 ;;
   esac
+  # The configuration MitCad loads where the system's does not (see the
+  # header).
+  install -D -m 644 "$(dirname "$0")/openssl.cnf" "$APPDIR/usr/share/mitcad/openssl.cnf"
 fi
 
 # linuxdeploy does not strip a file whose RUNPATH starts with $ORIGIN (a

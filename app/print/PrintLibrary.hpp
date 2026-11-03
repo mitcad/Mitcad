@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QVector>
 
+class QComboBox;
 class QHBoxLayout;
 class QLabel;
 class QLineEdit;
@@ -150,6 +151,10 @@ void markInDesign(QTreeWidgetItem* row, bool used, const QString& tooltip);
 // The item lists of Materials and Printers and Processes (mitcad#655): the
 // selected row as readable while the list has no keyboard as with it.
 void styleItemList(QTreeWidget* list);
+// Adds a heading of the items after it to a drop-down (mitcad#1216: a
+// process picker's printer): small, bold, not a choice; its data
+// choiceHeadingPrefix() and the title.
+void addComboHeading(QComboBox* combo, const QString& title);
 
 // Asks before Delete (mitcad#655), the same in every window, saying what
 // follows and who it concerns, never a rule. An item saved in a library:

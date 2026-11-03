@@ -50,6 +50,9 @@ struct DocumentSnapshot {
     QStringList sketches;
     // The condition it is suppressed under (mitcad#800); empty: none.
     QString suppressedWhen;
+    // How many of its warnings Auto Fix can write into its definition
+    // (mitcad#1223: the timeline's `auto_fix`); 0: Auto Fix is not offered.
+    int autoFix = 0;
 
     // Whether it has something to tell as information: an import note, or
     // infos of a feature that built (mitcad#1106: a fillet built 0.1 %

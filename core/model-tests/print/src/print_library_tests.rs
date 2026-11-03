@@ -66,6 +66,8 @@ fn petg(version: u32) -> ItemData {
             class: None,
             version: Some(version),
             origin: None,
+            properties: Default::default(),
+            reference: None,
         },
         appearances: vec![Appearance {
             id: "acme_teal".to_owned(),

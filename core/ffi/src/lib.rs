@@ -176,6 +176,10 @@ mod ffi {
         /// named (`mm`, `cm`, `m`, `in`, `ft`, as set_units reads it;
         /// mitcad#1036): no undo step, not modified.
         fn new_design_document_in(unit: &str) -> Result<Box<Document>>;
+        /// The temperature unit the user prefers, `C` or `F` (mitcad#1213):
+        /// every temperature of materials shown follows it (parts lists and
+        /// bills of materials too, and the queries that are given none).
+        fn set_temperature_unit(unit: &str) -> Result<()>;
         /// A 60 x 40 x 20 mm block (Sketch1, Extrude1), used by tests.
         fn new_demo_document() -> Box<Document>;
         /// Reads a design file (.mitcad JSON, version 1, 2 or 3; the
@@ -672,7 +676,9 @@ mod ffi {
         /// One request ({"op": ...}); JSON with "error" when it fails.
         fn agent_chat(request: &str) -> String;
         type ChatStream;
-        /// The output stream of an agent ("claude", "codex").
+        /// The output stream of an agent ("claude", "codex", "acp": a custom
+        /// command over the Agent Client Protocol; the API agents
+        /// "anthropic", "ollama", "lmstudio", "openai").
         fn new_chat_stream(agent: &str) -> Result<Box<ChatStream>>;
         /// The panel events of one output line, a JSON array.
         fn feed_line(self: &mut ChatStream, line: &str) -> String;
@@ -719,6 +725,14 @@ fn new_design_document_in(unit: &str) -> Result<Box<Document>, String> {
     Ok(Box::new(Document(mitcad_model::Document::new_design_in(
         OcctKernel, length,
     ))))
+}
+
+/// The temperature unit the user prefers (mitcad#1213).
+fn set_temperature_unit(unit: &str) -> Result<(), String> {
+    let unit = mitcad_model::material_units::TemperatureUnit::from_id(unit)
+        .ok_or_else(|| format!("{unit} is no temperature unit: C or F"))?;
+    mitcad_model::material_units::set_preferred_temperature(unit);
+    Ok(())
 }
 
 fn new_demo_document() -> Box<Document> {

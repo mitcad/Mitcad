@@ -4,13 +4,18 @@
 // Sheet templates of drawings (mitcad#707 phase 4, app/COMMANDS.md
 // "Drawings"): the choices the model's `drawing_templates` query lists (the
 // built-in ISO and ANSI, the user's and the project's) and the simple title
-// block, each with what the model's `template` field takes for it. Plain
-// Qt Core, so that the tests check it without a window.
+// block, each with what the model's `template` field takes for it; and what
+// Create Drawing opens with (mitcad#1218). Plain Qt Core, so that the tests
+// check it without a window.
+
+#include <optional>
 
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
 #include <QString>
+
+class QSettings;
 
 namespace mitcad::drawings {
 
@@ -39,5 +44,45 @@ int templateIndex(const QList<TemplateChoice>& choices, const QString& choice);
 // The template a new drawing starts with on a sheet of this size: ANSI on
 // the ANSI sizes, else ISO.
 QString defaultTemplate(const QString& size);
+
+// What Create Drawing chose (mitcad#1218): kept in the user's settings
+// (group `createDrawing`) when a drawing is created, so that the next
+// Create Drawing opens with it.
+struct NewDrawingChoice {
+  // The template's choice ("ansi", "user:company-a3", "" for the simple
+  // title block).
+  QString choice;
+  // The sheet size ("ANSI_B"), its orientation ("landscape", "portrait")
+  // and the projection method ("third_angle"); empty: as the template
+  // brings it, else the dialog's first.
+  QString size;
+  QString orientation;
+  QString projection;
+
+  // The kept choice, none when no drawing was created yet.
+  static std::optional<NewDrawingChoice> load(QSettings& settings);
+  void save(QSettings& settings) const;
+};
+
+// Where the choice Create Drawing opens with comes from.
+enum class StartSource { Default, Last };
+
+struct StartingChoice {
+  NewDrawingChoice choice;
+  StartSource source = StartSource::Default;
+  // Why the last choice was not taken (its template is not offered), for
+  // the log; empty otherwise.
+  QString note;
+};
+
+// What Create Drawing opens with (mitcad#1218): the last choice when its
+// template is still offered; else today's default, ISO with its sheet and
+// projection method. A last choice whose template is no longer offered (a
+// project's template in another project, a user's template deleted) falls
+// back to the default, with a note.
+StartingChoice startingChoice(const QList<TemplateChoice>& templates, const std::optional<NewDrawingChoice>& last);
+
+// The source as the log names it: "the default", "the last choice".
+QString startSourceName(StartSource source);
 
 } // namespace mitcad::drawings

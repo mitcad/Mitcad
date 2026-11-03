@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Auto Fix in the timeline's context menu (mitcad#1223) on
+# timeline-auto-fix.json: Extrude1's region was found as two pieces after
+# a change in Sketch1, and the extrusion warns.
+#   1. Its menu offers Auto Fix after Edit Feature; Auto Fix writes the
+#      pieces into the definition as one undo step, and the bodies keep
+#      their volume.
+#   2. The warning is gone: the menu no longer offers Auto Fix.
+#   3. One undo brings the warning back, and Auto Fix with it.
+# Run by tools/ui-timeline-auto-fix-test.sh (Linux) and
+# tools/ui-windows-timeline-auto-fix-test.ps1 (Windows).
+wait-idle
+capture-undo-depth baseline
+capture-model-number volumeBefore '{"query":"properties"}' total.volume
+
+# 1. Auto Fix from the timeline's menu.
+mark
+context-menu-logged '^Timeline Extrude1 at ' 'Auto Fix'
+wait-log '^Context menu: Edit Feature [|] Auto Fix [|] Rename'
+wait-log '^Auto Fix: 1 of 1 warning fixed$'
+expect-undo-depth ${baseline} 1
+capture-model-number volumeAfter '{"query":"properties"}' total.volume
+expect-near ${volumeAfter} ${volumeBefore}
+
+# 2. Nothing left to fix: no Auto Fix in the menu.
+mark
+context-menu-logged '^Timeline Extrude1 at ' cancel
+wait-log '^Context menu: Edit Feature'
+expect-no-log '^Context menu: .*Auto Fix'
+
+# 3. Undo restores the warning.
+command edit.undo
+expect-undo-depth ${baseline} 0
+mark
+context-menu-logged '^Timeline Extrude1 at ' cancel
+wait-log '^Context menu: Edit Feature [|] Auto Fix [|] Rename'
+expect-never 'TestDriver: FAIL'

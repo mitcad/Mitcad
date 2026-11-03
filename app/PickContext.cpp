@@ -66,6 +66,7 @@ public:
   void SortResult() const override {
     StdSelect_ViewerSelector3d::SortResult();
     m_prioritized = false;
+    m_movedAhead = false;
     // Only a click or the hover has one item to choose; a window takes all.
     // (With nothing picked, the indexes are left over from the last pick.)
     if (mystored.Extent() < 2 ||
@@ -77,6 +78,7 @@ public:
     narrowFaceFirst();
     lastBehind();
     edgesFirst();
+    aheadOfAreas();
     preferredFirst();
   }
 
@@ -97,31 +99,53 @@ public:
     m_yields = std::move(yields);
     m_over = std::move(over);
   }
+  // setPickAhead(), pickMovedAhead().
+  void setAhead(std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> ahead,
+                std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> passed) {
+    m_ahead = std::move(ahead);
+    m_passed = std::move(passed);
+  }
+  bool movedAhead() const { return m_movedAhead; }
 
 private:
   // The owners `over` behind the first yielding one (a sketch point on a
   // body's corner, mitcad#869) moved in front of it, in their order; the
   // rest after them keep theirs.
   void yieldingBehind() const {
-    if (!m_yields || !m_over) {
-      return;
+    if (m_yields && m_over) {
+      moveInFront(m_yields, m_over);
     }
+  }
+
+  // The sketch regions on offer behind the first face, body or plane under
+  // the cursor (a region inside a body, mitcad#1222) moved in front of it.
+  void aheadOfAreas() const {
+    if (m_ahead && m_passed) {
+      m_movedAhead = moveInFront(m_passed, m_ahead);
+    }
+  }
+
+  // The owners `over` behind the first owner that `yields` moved in front
+  // of it, in their order; the rest after them keep theirs. Whether any
+  // moved.
+  bool moveInFront(const std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)>& yields,
+                   const std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)>& over) const {
     std::vector<int> order;
     for (int rank = myIndexes.Lower(); rank <= myIndexes.Upper(); ++rank) {
       order.push_back(myIndexes(rank));
     }
     const auto first = std::find_if(order.begin(), order.end(),
-                                    [this](const int index) { return m_yields(mystored.FindKey(index)); });
+                                    [this, &yields](const int index) { return yields(mystored.FindKey(index)); });
     if (first == order.end()) {
-      return;
+      return false;
     }
     std::vector<int> moved;
     std::vector<int> rest;
     for (auto it = first; it != order.end(); ++it) {
-      (m_over(mystored.FindKey(*it)) ? moved : rest).push_back(*it);
+      (over(mystored.FindKey(*it)) ? moved : rest).push_back(*it);
     }
     if (moved.empty()) {
-      return;
+      return false;
     }
     int rank = myIndexes.Lower() + static_cast<int>(std::distance(order.begin(), first));
     for (const int index : moved) {
@@ -130,6 +154,7 @@ private:
     for (const int index : rest) {
       myIndexes(rank++) = index;
     }
+    return true;
   }
 
   // The owners put last (construction planes while a placement input takes
@@ -372,7 +397,10 @@ private:
   std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> m_last;
   std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> m_yields;
   std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> m_over;
+  std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> m_ahead;
+  std::function<bool(const occ::handle<SelectMgr_EntityOwner>&)> m_passed;
   mutable bool m_prioritized = false;
+  mutable bool m_movedAhead = false;
 
   // Whether an edge or vertex picked with a face lies on the face's surface
   // where the face was hit (within both pick widths), not behind it: the
@@ -442,6 +470,19 @@ void setPickYield(const occ::handle<AIS_InteractiveContext>& context, PickPrefer
 bool pickPrioritized(const occ::handle<AIS_InteractiveContext>& context) {
   const auto selector = occ::handle<EdgeFirstSelector>::DownCast(context->MainSelector());
   return !selector.IsNull() && selector->prioritized();
+}
+
+void setPickAhead(const occ::handle<AIS_InteractiveContext>& context, PickPreference ahead,
+                  PickPreference passed) {
+  const auto selector = occ::handle<EdgeFirstSelector>::DownCast(context->MainSelector());
+  if (!selector.IsNull()) {
+    selector->setAhead(std::move(ahead), std::move(passed));
+  }
+}
+
+bool pickMovedAhead(const occ::handle<AIS_InteractiveContext>& context) {
+  const auto selector = occ::handle<EdgeFirstSelector>::DownCast(context->MainSelector());
+  return !selector.IsNull() && selector->movedAhead();
 }
 
 } // namespace mitcad

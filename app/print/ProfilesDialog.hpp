@@ -35,7 +35,15 @@ class SlicerImportBar;
 // project (in a project only), My library and Built-in, each a heading
 // with its count ("This design (2)"), the search across the groups. A
 // design's copy of a library item and that item are two rows, each in its
-// place. The design's printer or process is marked (bold, ●).
+// place. The design's printer or process is marked (bold, ●). In the
+// Processes manager each place's processes are in sub-groups by printer
+// (mitcad#1216: processPrinters, the model's `printers`), foldable as the
+// places, by name, then Any printer; a process for several printers is
+// under each, its row under the printer it was chosen under staying the
+// selected one. Logged "Processes printers: My library: Bench X 2 | Any
+// printer 1" and "Processes printer group: My library › Bench X: Fine,
+// Shared"; each row under a printer also "Processes user › Bench X item
+// Fine at x,y".
 //
 // On the right the selected item: its Name (F2 on a row), "Built-in" with
 // a lock and Duplicate for a built-in one, else Copy to ▾ (the other
@@ -130,6 +138,7 @@ private:
   QJsonArray m_profiles;
   QJsonObject m_library;
   QString m_currentKey; // the selected row's key, "<place>/<id>"
+  QString m_currentPrinter; // the printer it was chosen under (mitcad#1216); empty: its first row
   QString m_pendingFocus; // a row made just now, whose Name takes the keyboard
   bool m_building = false;
   QLineEdit* m_search = nullptr;

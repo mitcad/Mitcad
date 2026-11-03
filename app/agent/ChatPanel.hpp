@@ -57,6 +57,7 @@ class QComboBox;
 class QFrame;
 class QKeyEvent;
 class QLabel;
+class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QScrollArea;
@@ -151,6 +152,7 @@ private:
   QLabel* m_noticeText = nullptr;
   QWidget* m_setupRow = nullptr;
   QPushButton* m_setup = nullptr;
+  QLineEdit* m_key = nullptr; // an API agent's key (ChatAgent::asksForKey)
   QPushButton* m_secondary = nullptr;
   QPushButton* m_checkAccount = nullptr;
   QFrame* m_accountHelp = nullptr;

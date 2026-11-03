@@ -4,18 +4,14 @@
 #include <AIS_InteractiveObject.hxx>
 #include <Quantity_Color.hxx>
 
+// The automatic spacing per unit and the major lines (mitcad#1210).
+#include "view/GridSpacing.hpp"
+
 namespace mitcad {
 
-// Every this many minor lines of the layout grid is a major line.
-constexpr int kLayoutGridMajor = 5;
-
-// The layout grid's spacing when it follows the zoom: the
-// largest of 1 or 5 times a power of ten millimetres whose lines are at
-// most 35 pixels apart at `pixelsPerMm`, so 7 to 35 pixels apart.
-double layoutGridStep(double pixelsPerMm);
-
 // The layout grid: lines on the XY plane of its local transformation (the
-// grid plane), minor lines `step` apart and every fifth one a major line,
+// grid plane), minor lines `step` apart and every `major`-th one a major
+// line (every fifth on a metric grid, layoutGridMajor),
 // in a square of half-width `extent` about the centre. Not pickable, and
 // left out of the view's bounding box, so that Fit ignores it.
 class LayoutGrid : public AIS_InteractiveObject {
@@ -28,6 +24,7 @@ public:
     double centreY = 0.0;
     double extent = 0.0;
     bool minor = true; // false: the major lines only (minor ones too dense)
+    int major = kLayoutGridMajor; // every this many lines a major one
   };
 
   const Lines& lines() const { return m_lines; }

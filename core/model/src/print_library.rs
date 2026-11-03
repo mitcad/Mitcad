@@ -561,6 +561,8 @@ mod tests {
                 class: None,
                 version: Some(version),
                 origin: None,
+                properties: Default::default(),
+                reference: None,
             },
             appearances: Vec::new(),
         }

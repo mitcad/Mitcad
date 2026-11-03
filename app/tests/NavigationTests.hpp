@@ -17,6 +17,9 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
   NAV_CHECK(settings.scheme == NavigationScheme::MiddlePan);
   NAV_CHECK(settings.orbitSpeed == 1.0 && settings.panSpeed == 1.0 && settings.zoomSpeed == 1.0 &&
             settings.trackpadSpeed == 1.0);
+  NAV_CHECK(settings.turnStep == 15.0); // the arrow keys' step (mitcad#1211)
+  NAV_CHECK(sanitizeTurnStep(0.0) == 1.0 && sanitizeTurnStep(120.0) == 90.0 && sanitizeTurnStep(22.5) == 22.5 &&
+            sanitizeTurnStep(std::numeric_limits<double>::quiet_NaN()) == 15.0);
   NAV_CHECK(navigationAction(settings, Input::MiddleButton, Qt::NoModifier) == Action::Pan);
   NAV_CHECK(navigationAction(settings, Input::MiddleButton, Qt::ShiftModifier) == Action::Orbit);
   NAV_CHECK(navigationAction(settings, Input::LeftButton, Qt::NoModifier) == Action::None);
@@ -98,6 +101,7 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
     settings.panSpeed = 2.5;
     settings.zoomSpeed = 3.0;
     settings.trackpadSpeed = 0.25;
+    settings.turnStep = 30.0;
     saveNavigationDetails(store, settings);
     store.sync();
     NAV_CHECK(store.status() == QSettings::NoError);
@@ -114,14 +118,16 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
     NAV_CHECK(navigationAction(loaded, Input::LeftButton, Qt::NoModifier) == Action::None);
     NAV_CHECK(loaded.orbitSpeed == 0.5 && loaded.panSpeed == 2.5 && loaded.zoomSpeed == 3.0 &&
               loaded.trackpadSpeed == 0.25);
+    NAV_CHECK(loaded.turnStep == 30.0);
     store.setValue(QStringLiteral("view/orbitSpeed"), QStringLiteral("invalid"));
     store.setValue(QStringLiteral("view/panSpeed"), -100.0);
+    store.setValue(QStringLiteral("view/turnStep"), QStringLiteral("invalid"));
     store.setValue(QStringLiteral("view/navigationBindings"), QByteArrayLiteral(
         "[{\"input\":0,\"modifiers\":0,\"f4\":false,\"action\":1},"
         "{\"input\":999,\"modifiers\":0,\"f4\":false,\"action\":1},"
         "{\"input\":1,\"modifiers\":0,\"f4\":false,\"action\":999}]"));
     loadNavigationDetails(store, loaded);
-    NAV_CHECK(loaded.orbitSpeed == 1.0 && loaded.panSpeed == 0.1);
+    NAV_CHECK(loaded.orbitSpeed == 1.0 && loaded.panSpeed == 0.1 && loaded.turnStep == 15.0);
     NAV_CHECK(navigationAction(loaded, Input::LeftButton, Qt::NoModifier) == Action::None);
     NAV_CHECK(navigationAction(loaded, Input::MiddleButton, Qt::NoModifier) == Action::Pan);
   }

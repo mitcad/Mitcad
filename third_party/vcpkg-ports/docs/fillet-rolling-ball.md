@@ -1,9 +1,9 @@
-# The blend rolling on an edge as a true rolling ball: 0170–0172, 0390, 0391, 0500–0503
+# The blend rolling on an edge as a true rolling ball: 0170–0172, 0390, 0391, 0500–0503, 1230
 
 The blend OCCT's fillet rolls on an edge, where a rounding's face is
 narrower than the radius, made a true rolling ball, as
 [0075](fillet-edge-overflow.md#0075-blendfunc-constrad-rolling-ball-section)
-did for the blend between two faces (mitcad#237, mitcad#378).
+did for the blend between two faces (mitcad#237, mitcad#378, mitcad#1215).
 `geometry/tests/test_fillet_rolling_ball.cpp` checks the cases with OCCT
 alone. Back to the [port's README](../README.md).
 
@@ -20,6 +20,9 @@ alone. Back to the [port's README](../README.md).
   at its end (mitcad#237).
 - **0503** joins two roundings at a corner along their intersection where
   their ends meet on an edge within its tolerance (mitcad#378).
+- **1230** lets a rounding whose contact runs off a narrow face onto an
+  earlier blend of its radius roll on that face's far edges, the ball
+  passing over slivers there (mitcad#1215).
 
 ## 0170 to 0172: the rolling ball and its pivot
 
@@ -192,8 +195,64 @@ self-intersecting wire once the vertex tolerances were cut down. Walked
 roundings end further apart there, so 0500 exposed it; now the corner is the
 two roundings' intersection, as in the files' bodies.
 
+## 1230: rolling on the far edges of a face before an earlier blend
+
+### 1230-chfi3d-rolls-before-a-blend-curving-away-as-fast-as-the-ball
+
+Ticket: mitcad#1215, a follow-up of mitcad#1204.
+
+A ring's top, 5 wide between an inner cylinder of radius 88.5 and an outer
+rim that an earlier rounding of 2.5 took (its contact on the top at radius
+90.978, 2.478 from the inner rim), with fins at eight mouths whose crests
+meet the top there; the inner rim, a closed chain of 17 edges, is rounded
+with 2.5. The ball's contact on the top would lie at radius 91.0, past the
+top face; the face beyond its tangent far edge is the earlier blend, which
+curves away from the ball as fast as the ball's own sphere, so the ball
+touches it along a whole section and the walk that overflowed onto it
+failed at once. The stored body after the rounding has the ball passing
+through the top's far edge all round, the top face gone, the blend a torus
+through that edge meeting the earlier blend there. At some mouths the far
+edge has a sliver edge of 2 to 7 µm where a fin's crest meets the top, and
+at one the inner cylinder's seam lies under the crest.
+
+- `ChFi3d_Builder::Compute` computes a stripe whose walk or start failed
+  again where a side reaches, within twice the radius, an edge of a face of
+  its edges across which the face beyond continues it tangentially and
+  curves away from the ball as fast as its sphere or faster (normal
+  curvature across the edge at least 1/(1.01 R), `RollsBeforeCurvedAway`):
+  that side rolls on the edge before that face, as `RollsInsteadOfOverflow`
+  makes it before another stripe's blend, the overflow start rolling there
+  although the faces are tangent and the obstacle chaining at a vertex
+  going on along the next such edge; as before where that fails too.
+- A sliver edge between two such edges (shorter than 100 tolerances,
+  `PassesOverEdge`): the ball turns about the end of the edge it rolled on
+  until it first touches the edge after the sliver
+  (`BRepBlend_SurfRstLineBuilder::FindTouchOverSliver`), or rolls on from
+  that edge's start where it reaches it already; the piece of the ball
+  between (`ChFi3d_ConcaveTurnWedge`, as 0390's concave turn) runs along the
+  sliver and the edge after it, so that the face rolled on goes all round.
+- Where the other contact lies within a hair of an edge of its face across
+  which that face goes on tangentially (a seam) at the end of the edge
+  rolled on, it changes face there; the ball turns about the next edge's
+  start, its other contact a hair outside its face at most.
+- `ChFi3d_FilDS`: a closed stripe rolling on an edge at its start, where its
+  last piece ends on the same edge, cuts that edge with the last piece's
+  transition only; a piece whose contact on its first side is a point takes
+  the transition of its second side.
+
+On item 36's bodies of two versions of the design: valid, 343 and 358
+faces, the faces of each body round the rim on the other's within 2 µm both
+ways (OCCT's walked blends against the file's); each rounding takes 0.2 s.
+
 ## Reports and tests
 
 - 0170 to 0179, 0390 to 0399 and 0500 to 0509: mitcad#237 (0503:
   mitcad#378) and `geometry/tests/test_fillet_rolling_ball.cpp`, which fails
   without them.
+- 1230: mitcad#1215 and the cases `fillet-roll-over-blend` and
+  `fillet-roll-over-blend-2` of `MITCAD_GEOMETRY_CASES` (`body.brep`, the
+  reported design's body before the rounding in two versions;
+  `after.brep`, the stored body after it) in
+  `geometry/tests/test_fillet_roll_over_blend.cpp`: the inner rim rounded
+  with OCCT alone, valid, of the expected volume and faces, within 2 µm of
+  the stored body round the rim (failing without the patch).

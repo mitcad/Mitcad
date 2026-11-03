@@ -40,6 +40,14 @@ public:
   // and its name as the design shows it.
   void setOwner(const QString& owner, const QString& name);
   QString owner() const { return m_owner; }
+  // A print plate's own settings instead (mitcad#1050, Plates…): the
+  // plate's id and name, the window titled "Vase · Plate settings". Its
+  // values show set, what the design prints with otherwise as the
+  // placeholders; a change is `edit_print_plate` with the value (null:
+  // cleared), one undo step each. Logs `Plate setting <plate> <key> =
+  // <text>` (`cleared`); the places as for an owner.
+  void setPlate(const QString& plate, const QString& name);
+  QString plate() const { return m_plate; }
   // Shows the owner's values as the model has them now.
   void refresh();
 
@@ -56,6 +64,7 @@ private:
   DocumentHost& m_host;
   PrintKeyTable m_keys;
   QString m_owner;
+  QString m_plate; // a print plate's id (setPlate); empty for an owner
   QString m_name;
   SettingsForm* m_form = nullptr;
   QLabel* m_message = nullptr;

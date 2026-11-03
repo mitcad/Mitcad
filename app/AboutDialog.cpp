@@ -35,6 +35,9 @@ void showAboutDialog(QWidget* parent) {
       QStringLiteral("<li>%1</li>").arg(QObject::tr("Qt %1 (LGPL-3.0)").arg(qt.toHtmlEscaped())) +
       QStringLiteral("<li>%1</li>").arg(QObject::tr("FreeType (FreeType License)")) +
       QStringLiteral("<li>%1</li>").arg(QObject::tr("Droid Sans fonts, Google Corporation (Apache-2.0)")) +
+      // The bundled material dataset (mitcad#1213): its attribution.
+      QStringLiteral("<li>%1</li>")
+          .arg(QObject::tr("Material data from the material-properties dataset, its contributors (Apache-2.0)")) +
       QStringLiteral("</ul>") +
       QStringLiteral("<p>%1</p>")
           .arg(QObject::tr("Qt is used under the GNU LGPL v3 (<a href=\"https://www.gnu.org/licenses/lgpl-3.0.html\">"

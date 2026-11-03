@@ -1,0 +1,5 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"An empty sketch F1 on XY for tools/ui-scripts/sketch-slot-dimensions.mitcad-ui (mitcad#1225)."},
+  {"cmd":"sketch.create"}
+]

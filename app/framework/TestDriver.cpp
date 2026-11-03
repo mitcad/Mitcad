@@ -287,6 +287,7 @@ const StepSpec kSpecs[] = {
     {"expect-native-selection", 2, 2, kIdle},
     {"collapse-card", 2, 2, kInputOfMain},
     {"expect-setting", 2, 2, kIdle},
+    {"set-setting", 2, 2, kIdle},
     {"expect-dialog-gone", 1, 1, kIdle},
     {"dialog-resize", 2, 2, kInputOfTarget},
     {"expect-dialog-appearance", 1, 1, kIdle},
@@ -4403,6 +4404,10 @@ void TestDriver::run(const Step& step) {
     if (!value.isValid() || value.toString() != a.at(1)) {
       fail(line, QStringLiteral("setting %1 is '%2', expected '%3'").arg(a.at(0), value.toString(), a.at(1)));
     }
+  } else if (name == QLatin1String("set-setting")) {
+    // A saved QSettings value, as Preferences would save it (text).
+    QSettings().setValue(a.at(0), a.at(1));
+    qInfo().noquote() << QStringLiteral("TestDriver: setting %1 = %2").arg(a.at(0), a.at(1));
   } else if (name == QLatin1String("expect-dialog-gone")) {
     QRegularExpression re;
     if (!regex(a.at(0), re)) return;

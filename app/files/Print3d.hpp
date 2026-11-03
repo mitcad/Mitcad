@@ -51,6 +51,13 @@ struct Slicer {
 // program.
 QString slicerDialect(const Slicer& slicer);
 
+// Whether a slicer takes the design's print plates in one 3MF (mitcad#1050,
+// the model's `export` with `plates`): the Bambu family (by `dialect`,
+// the slicer's or the design's), PrusaSlicer from 2.9 on (a version in its
+// program's path or name before 2.9 says otherwise); Cura, another program
+// and no slicer take a 3MF per plate.
+bool slicerTakesPlates(const Slicer& slicer, const QString& dialect);
+
 // A slicer for a program the user chose: a macOS application bundle
 // (Name.app) starts with `open -a`, which hands it the files; any other
 // program takes them on its command line.

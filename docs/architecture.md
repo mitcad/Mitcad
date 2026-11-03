@@ -327,6 +327,20 @@ design in a project.
   nearest component's default up the occurrence path, else the root's,
   else steel. Setting a body's material sets its appearance too, unless
   the body's was set by hand.
+- **Material properties** (mitcad#1213): a material's optional
+  mechanical and thermal values (`MaterialProperties`, in MPa, °C and
+  µm/(m·°C)) and its `reference`; data only, no analysis uses them.
+  `material_units.rs` converts the model's units into a design's system
+  (its length unit's: metric or inch) and the temperature unit the
+  application passes, as scale and offset, which the application applies
+  (`material_units` query). `material_exchange.rs` writes and reads
+  materials as JSON and CSV that state their units
+  ([material-files.md](material-files.md)), each row checked on its own;
+  `document/material_import.rs` imports into the design or a library as
+  one undo step. The bundled material dataset (`material_dataset.rs`,
+  third-party data under Apache-2.0 in `third_party/material-properties`)
+  is compiled in and read through the same import; a material made from
+  it is the user's own copy that remembers the entry.
 - **Print settings key map** (mitcad#640, `core/print-keys`):
   one Rust table of MitCad's printer, process and filament keys, each
   with its type, unit, choices, plain name and, per slicer dialect (the

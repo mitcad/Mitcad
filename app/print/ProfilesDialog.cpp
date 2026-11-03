@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "ProfilesDialog.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <utility>
 
@@ -30,10 +31,12 @@
 #include "../browser/DocumentHost.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "../platform/NativeDialogs.hpp"
+#include "ProfilePickerRows.hpp"
 #include "SettingsForm.hpp"
 #include "SlicerImport.hpp"
 
@@ -41,6 +44,10 @@ namespace mitcad {
 namespace {
 
 constexpr int kKeyRole = Qt::UserRole; // a row's key; empty on a heading
+// A place heading's count of items (a process under two printers once);
+// a process row's and a printer heading's printer (mitcad#1216).
+constexpr int kCountRole = Qt::UserRole + 1;
+constexpr int kPrinterRole = Qt::UserRole + 2;
 
 QString text(const QJsonObject& object, const char* field) {
   return object.value(QLatin1String(field)).toString();
@@ -191,6 +198,9 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& kind, const QS
   styleItemList(m_list);
   m_list->installEventFilter(this);
   mac::styleListTree(m_list);
+  // The places' headings keep their fold arrows, in the grouped list's
+  // step (mitcad#1214).
+  panel::setCompactIndentation(m_list, panel::Indent::GroupedList);
   sideBox->addWidget(m_list, 1);
   splitter->addWidget(side);
 
@@ -258,12 +268,19 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& kind, const QS
       return;
     }
     m_currentKey = row->data(0, kKeyRole).toString();
+    // The printer it was chosen under, where a process is listed twice
+    // (mitcad#1216): its row there stays the selected one.
+    m_currentPrinter = row->data(0, kPrinterRole).toString();
     const LibraryItem* chosen = current();
     m_loggedValues.clear();
     setMessage(QString());
     showCurrent();
     if (chosen != nullptr) {
       qDebug().noquote() << QStringLiteral("Profile selected: %1 %2 (%3)").arg(chosen->kind, chosen->name, chosen->place);
+      if (!m_currentPrinter.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("%1 selected under: %2 › %3")
+                                  .arg(m_log, placeName(chosen->place), m_currentPrinter);
+      }
     }
     scheduleLogPlaces();
   });
@@ -295,6 +312,7 @@ ProfilesPanel::~ProfilesPanel() = default;
 void ProfilesPanel::setHost(PrintItemsHost& host, bool read) {
   m_host = &host;
   m_currentKey.clear();
+  m_currentPrinter.clear();
   m_loggedRows.clear();
   m_loggedValues.clear();
   m_loggedEditing.clear();
@@ -319,6 +337,7 @@ void ProfilesPanel::addButton(QPushButton* button, const QString& name) {
 
 void ProfilesPanel::showItem(const QString& key) {
   m_currentKey = key;
+  m_currentPrinter.clear(); // its first row
   m_loggedValues.clear();
   refresh();
   const LibraryItem* item = current();
@@ -402,9 +421,29 @@ void ProfilesPanel::rebuildList() {
   m_building = true;
   m_list->clear();
   QTreeWidgetItem* selected = nullptr;
+  bool selectedUnderPrinter = false; // the selected key's row under m_currentPrinter
   const QString wanted = m_search->text();
+  const auto addRow = [this, &selected, &selectedUnderPrinter](QTreeWidgetItem* under, const LibraryItem& item,
+                                                               const QString& printer) {
+    auto* row = new QTreeWidgetItem(under, {item.name, QString()});
+    row->setData(0, kKeyRole, item.key());
+    row->setData(0, kPrinterRole, printer);
+    row->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.item.") + item.key());
+    markInDesign(row, usedByDesign(item), tr("Used in this design"));
+    // A process under two printers: its row under the printer it was
+    // chosen under, else its first (mitcad#1216).
+    if (item.key() == m_currentKey && !selectedUnderPrinter) {
+      selectedUnderPrinter = !printer.isEmpty() && printer == m_currentPrinter;
+      if (selected == nullptr || selectedUnderPrinter) {
+        selected = row;
+      }
+    }
+  };
   // Each place a heading with its count, its items by name under it, the
-  // design's choice marked (mitcad#1135).
+  // design's choice marked (mitcad#1135). Processes under their printers
+  // within each place (mitcad#1216): a sub-group per printer, by name,
+  // then Any printer; a process for several printers under each.
+  const bool byPrinter = !isPrinter(m_kind);
   for (const QString& place : std::as_const(m_places)) {
     int count = 0;
     for (const LibraryItem& item : std::as_const(m_items)) {
@@ -415,22 +454,69 @@ void ProfilesPanel::rebuildList() {
     heading->setFlags(Qt::ItemIsEnabled);
     heading->setFirstColumnSpanned(true);
     heading->setData(1, kKeyRole, place);
+    heading->setData(0, kCountRole, count);
     QFont bold = heading->font(0);
     bold.setBold(true);
     heading->setFont(0, bold);
+    if (!byPrinter) {
+      for (const LibraryItem& item : std::as_const(m_items)) {
+        if (item.place == place && matchesSearch(item, wanted)) {
+          addRow(heading, item, QString());
+        }
+      }
+      continue;
+    }
+    // The printers of the place's items shown, each once, as the first
+    // names it; an empty one for the items for any printer.
+    QStringList printers;
+    bool anyPrinter = false;
     for (const LibraryItem& item : std::as_const(m_items)) {
       if (item.place != place || !matchesSearch(item, wanted)) {
         continue;
       }
-      auto* row = new QTreeWidgetItem(heading, {item.name, QString()});
-      row->setData(0, kKeyRole, item.key());
-      row->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.item.") + item.key());
-      markInDesign(row, usedByDesign(item), tr("Used in this design"));
-      if (item.key() == m_currentKey) {
-        selected = row;
+      const QStringList itemPrinters = processPrinters(item);
+      anyPrinter = anyPrinter || itemPrinters.isEmpty();
+      for (const QString& printer : itemPrinters) {
+        const bool known = std::any_of(printers.cbegin(), printers.cend(),
+                                       [&printer](const QString& other) { return samePrinterName(other, printer); });
+        if (!known) {
+          printers << printer;
+        }
+      }
+    }
+    std::sort(printers.begin(), printers.end(), [](const QString& a, const QString& b) {
+      return QString::localeAwareCompare(a.toLower(), b.toLower()) < 0;
+    });
+    if (anyPrinter) {
+      printers << QString();
+    }
+    for (const QString& printer : std::as_const(printers)) {
+      const QString title = printer.isEmpty() ? anyPrinterTitle() : printer;
+      auto* group = new QTreeWidgetItem(heading, {title});
+      group->setFlags(Qt::ItemIsEnabled);
+      group->setFirstColumnSpanned(true);
+      group->setData(1, kKeyRole, place);
+      group->setData(0, kPrinterRole, title);
+      group->setData(0, NativeControlIdentifierRole,
+                     QStringLiteral("printManager.printer.") + place + QLatin1Char('.') + title);
+      group->setForeground(0, themeColor(ColorRole::TextSecondary, m_list->palette()));
+      for (const LibraryItem& item : std::as_const(m_items)) {
+        if (item.place != place || !matchesSearch(item, wanted)) {
+          continue;
+        }
+        const QStringList itemPrinters = processPrinters(item);
+        const bool forIt = printer.isEmpty() ? itemPrinters.isEmpty()
+                                             : std::any_of(itemPrinters.cbegin(), itemPrinters.cend(),
+                                                           [&printer](const QString& other) {
+                                                             return samePrinterName(other, printer);
+                                                           });
+        if (forIt) {
+          addRow(group, item, title);
+        }
       }
     }
   }
+  // Every group open, the selected item's sub-group too (mitcad#1216).
   m_list->expandAll();
   if (selected != nullptr) {
     m_list->setCurrentItem(selected);
@@ -762,11 +848,35 @@ void ProfilesPanel::logRows() {
   }
   // The groups as the list shows them (mitcad#1135), "This design 1 | ...".
   QStringList groups;
+  // A process manager's sub-groups by printer (mitcad#1216): "Processes
+  // printers: My library: Bench X 3 | Any printer 1", then each one's
+  // items, "Processes printer group: My library › Bench X: Fine, Shared".
+  QStringList printerLines;
+  QStringList printerGroups;
   for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
     QTreeWidgetItem* heading = m_list->topLevelItem(i);
-    groups << QStringLiteral("%1 %2").arg(placeName(heading->data(1, kKeyRole).toString())).arg(heading->childCount());
+    const QString place = placeName(heading->data(1, kKeyRole).toString());
+    groups << QStringLiteral("%1 %2").arg(place).arg(heading->data(0, kCountRole).toInt());
+    QStringList counts;
+    for (int j = 0; j < heading->childCount(); ++j) {
+      QTreeWidgetItem* group = heading->child(j);
+      const QString printer = group->data(0, kPrinterRole).toString();
+      if (!group->data(0, kKeyRole).toString().isEmpty() || printer.isEmpty()) {
+        continue; // an item: no sub-groups
+      }
+      counts << QStringLiteral("%1 %2").arg(printer).arg(group->childCount());
+      QStringList names;
+      for (int k = 0; k < group->childCount(); ++k) {
+        names << group->child(k)->text(0);
+      }
+      printerGroups << QStringLiteral("%1 › %2: %3").arg(place, printer, names.join(QStringLiteral(", ")));
+    }
+    if (!counts.isEmpty()) {
+      printerLines << QStringLiteral("%1: %2").arg(place, counts.join(QStringLiteral(" | ")));
+    }
   }
-  const QString logged = rows.join(QLatin1Char('\n')) + QLatin1Char('|') + groups.join(QLatin1Char('|'));
+  const QString logged = rows.join(QLatin1Char('\n')) + QLatin1Char('|') + groups.join(QLatin1Char('|')) +
+                         QLatin1Char('|') + printerGroups.join(QLatin1Char('\n'));
   if (logged == m_loggedRows) {
     return;
   }
@@ -775,6 +885,12 @@ void ProfilesPanel::logRows() {
   qDebug().noquote() << QStringLiteral("%1 groups: %2").arg(m_log, groups.join(QStringLiteral(" | ")));
   for (const QString& row : std::as_const(rows)) {
     qDebug().noquote() << QStringLiteral("%1 row: %2").arg(m_log).arg(row);
+  }
+  for (const QString& line : std::as_const(printerLines)) {
+    qDebug().noquote() << QStringLiteral("%1 printers: %2").arg(m_log, line);
+  }
+  for (const QString& line : std::as_const(printerGroups)) {
+    qDebug().noquote() << QStringLiteral("%1 printer group: %2").arg(m_log, line);
   }
 }
 
@@ -838,6 +954,13 @@ void ProfilesPanel::logPlaces() {
       lines << QStringLiteral("%1 item %2 at %3").arg(m_log).arg(row->text(0), place);
     }
     lines << QStringLiteral("%1 %2 item %3 at %4").arg(m_log, key.section(QLatin1Char('/'), 0, 0), row->text(0), place);
+    // Under a printer (mitcad#1216): "Processes design › Bench Y item
+    // Shared at x,y", one line for each printer it is under.
+    const QString printer = row->data(0, kPrinterRole).toString();
+    if (!printer.isEmpty()) {
+      lines << QStringLiteral("%1 %2 › %3 item %4 at %5")
+                   .arg(m_log, key.section(QLatin1Char('/'), 0, 0), printer, row->text(0), place);
+    }
   }
   QVector<std::pair<QString, QWidget*>> widgets{{QStringLiteral("search"), m_search},
                                                {QStringLiteral("name"), m_name},

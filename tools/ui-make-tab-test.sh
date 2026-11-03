@@ -171,7 +171,7 @@ echo "ok   Body1 not marked"
 group_menu "MAKE/MATERIALS" "Edit Materials… | Material"
 group_menu "MAKE/ANNOTATE" \
   "Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations…"
-group_menu "MAKE/3D PRINT" "Print Analysis | Send to Slicer | Printers… | Processes…"
+group_menu "MAKE/3D PRINT" "Print Analysis | Send to Slicer | Printers… | Processes… | Plates…"
 group_menu "MAKE/LASER" "Export Flat Pattern… | Export Face as DXF…"
 
 echo "--- The moved commands from their new places"

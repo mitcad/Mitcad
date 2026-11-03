@@ -2,9 +2,11 @@
 #pragma once
 
 // An AI agent the chat panel talks to (mitcad#947), through the agent's own
-// native interface: one class per agent (ClaudeCodeAgent, CodexAgent)
-// behind this one interface, so that a change of an agent's protocol
-// touches its class only. The agent is the user's own installation, found
+// native interface: one class per agent (ClaudeCodeAgent, CodexAgent; the
+// API endpoints and local models of phase 2 as ApiAgent; a custom command
+// over the Agent Client Protocol as AcpAgent, mitcad#1198) behind this one
+// interface, so that a change of an agent's protocol touches its class
+// only. The agent is the user's own installation, found
 // by assistantExecutable (mitcad#682); MitCad never installs, changes or
 // signs in to it, and never reads its credentials.
 //
@@ -90,6 +92,41 @@ public:
   virtual bool send(const Message& message, QString* error) = 0;
   virtual void stop() = 0;
   virtual void shutdown() = 0;
+
+  // The setup's words and steps where an agent differs from an installed
+  // program with a sign-in of its own (the API agents, ApiAgent.hpp:
+  // phase 2 of mitcad#947).
+  // The Missing state's button (it opens installPage(); without one, the
+  // chat's Preferences).
+  virtual QString installAction() const { return tr("Install %1").arg(name()); }
+  // The SignedOut state's line and button.
+  virtual QString signedOutText() const { return tr("%1 is not signed in.").arg(name()); }
+  virtual QString signInAction() const { return tr("Sign in to %1").arg(accountName()); }
+  // Signed out means a missing API key: the panel asks for it in place
+  // (setKey) instead of starting a sign-in.
+  virtual bool asksForKey() const { return false; }
+  virtual void setKey(const QString& key) { Q_UNUSED(key); }
+  // The one notice before the first message: what leaves the computer and
+  // where to.
+  virtual QString privacyNotice() const {
+    return tr("What you write here, the selection, the open comments and pictures of the view go to %1's service, "
+              "whose terms apply. The agent changes this design through MitCad's tools.")
+        .arg(name());
+  }
+  // How to fix an account failure (the panel's help); empty: the panel's
+  // own text for the agent.
+  virtual QString accountHelp() const { return QString(); }
+  // Whether it is started with MitCad's mitcad-cli bridge (a program of
+  // its own); an agent whose tool loop runs in MitCad connects to the
+  // listener itself.
+  virtual bool needsBridge() const { return true; }
+  // Its settings are Preferences' (an endpoint's address and key, a custom
+  // command): it is looked for again when they change.
+  virtual bool configuredInPreferences() const { return !needsBridge(); }
+  // The history of a design was cleared: what the agent kept of that
+  // conversation goes too (the API agents keep it in MitCad); an empty
+  // session: every conversation.
+  virtual void forgetSession(const QString& session) { Q_UNUSED(session); }
 
 signals:
   void readinessChanged();

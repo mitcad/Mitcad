@@ -62,8 +62,6 @@ public:
   virtual TopoDS_Shape analysisShape(const QJsonObject& request) const = 0;
   QString bodyName(const QString& uid) const;
   QString featureName(const QString& uid) const;
-  // Profiles not used by a feature yet (the sketch's newest last).
-  Selection unusedProfiles() const;
   // The expression to show for a parameter of feature `owner`: its own
   // dimensions show their expression, other parameters their name.
   QString valueText(const QJsonValue& slot, const QString& owner) const;

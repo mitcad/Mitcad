@@ -35,8 +35,14 @@ SHELL = '''
 set -u
 . "$1"
 ui_init "$2" "$3"
+# A second harness may prepare its private files before it owns Aqua.
+printf '%s\\n' "$UI_ROOT" > "$3/prepared-root.txt"
 UI_TIMEOUT=$4
 ui_run_app fake "$3" "$5" "$6"
+if [ "$6" = post-hold ]; then
+  : > "$3/verifying"
+  while [ ! -f "$3/verified" ]; do sleep 0.02; done
+fi
 printf '{"exit":%s,"timeout":%s,"assertion":%s,"failures":%s,"signal":"%s","pid":"%s"}\\n' \\
     "$UI_EXIT" "$UI_TIMED_OUT" "$UI_ASSERTION_FAILED" "$UI_FAILURES" "$UI_SIGNAL" "$UI_PID" > "$3/status.json"
 '''
@@ -127,10 +133,28 @@ def main():
             started(first)
             second = launch("queued", timeout=1)
             queued(second)
+            first_root = (first[1] / "prepared-root.txt").read_text().strip()
+            second_root = (second[1] / "prepared-root.txt").read_text().strip()
+            assert first_root != second_root, "overlapping harnesses shared their settings/data root"
+            assert Path(first_root).is_dir() and Path(second_root).is_dir()
             remains_queued(second, 1.4)
             release(first)
             started(second)
             release(second)
+
+            # Post-app verification is headless: another harness may own
+            # Aqua while it is still checking the first run's files.
+            post = launch("post-work", mode="post-hold")
+            started(post)
+            (post[1] / "release").touch()
+            await_condition(lambda: (post[1] / "verifying").exists(), "post-work did not start")
+            next_app = launch("beside-post-work")
+            started(next_app)
+            assert post[0].poll() is None, "the verification fixture did not overlap"
+            release(next_app)
+            (post[1] / "verified").touch()
+            post[0].wait(timeout=20)
+            assert post[0].returncode == 0
 
             # A nonzero app exit releases ownership without hiding its
             # failure. The next run starts through the same global lock.

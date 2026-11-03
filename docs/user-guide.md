@@ -295,6 +295,19 @@ ChatGPT**) starts its own sign-in.
   agent's changes stay separate steps.
 - The conversation is kept with the design in your own data folder (not
   in the design file) and shown again when you open the design.
+- Without an agent program, the chat can use the **Anthropic API** with
+  your own key, a local model in **Ollama** or **LM Studio**, or another
+  OpenAI-compatible endpoint: check it under **Preferences › AI
+  Assistants › Chat › API endpoints** and choose it in the panel's header.
+  The key is kept in the system's keychain; a local server that is not
+  running shows **Get Ollama** (**Get LM Studio**), and a model that
+  cannot call tools is reported in the panel.
+- An agent program of your own that speaks the Agent Client Protocol can
+  be the chat's agent too: check **Custom command** under **Preferences ›
+  AI Assistants › Chat › Custom agent**, give its program and arguments,
+  and choose **Custom command** in the panel's header. MitCad starts it
+  as it is (no adapter is installed); a command that does not answer the
+  protocol's handshake is reported in the panel's state line.
 
 If the account cannot use the service (organization restrictions, expired
 sign-in, invalid API key or a credit/rate limit), the error stays in the
@@ -456,7 +469,14 @@ it uses the `xdgdesktopportal` platform theme unless
 `QT_QPA_PLATFORMTHEME` is set. An AppImage in a writable folder updates
 itself. `MitCad.AppImage cli <arguments>` runs the bundled `mitcad-cli`
 ([Command line](#command-line)), for example
-`MitCad.AppImage cli --version`.
+`MitCad.AppImage cli --version`. The AppImage's OpenSSL uses the
+system's OpenSSL configuration (`/etc/ssl/openssl.cnf`, the
+distribution's crypto policy) and certificates. If that configuration
+does not load in it (an option only the distribution's own OpenSSL
+knows), MitCad uses the AppImage's own minimal configuration for its
+connections (update checks, downloads) instead, and its log says
+`TLS: the system's OpenSSL configuration failed to load (…); using the
+AppImage's own`.
 
 ### macOS
 
@@ -500,6 +520,17 @@ timeline at the bottom and the command panel on the right. The
 orientation cube is in the top right corner of the view. The sections
 that follow describe the layouts of the window, the view, selection,
 the command panels and long computations.
+
+MitCad's version shows in two places: in the window title (for
+example `Robot.mitcad - MitCad 0.42.0`, so the taskbar and the window
+switcher show it too) and in small, faint text at the lower right of the
+view, just above the timeline. The text in the view does not take the
+mouse: a click, a drag or the wheel there works in the view. It moves
+up, or to the left of a panel along the right edge, so that it never
+covers a card or a button, and it is hidden when there is no room. It
+is not in pictures of the view (Export Snapshot, screenshots,
+thumbnails, renders). To hide it, turn off **Show the version in the
+view** in Preferences › General; the window title keeps the version.
 
 On macOS, the keys that say Ctrl in this guide are Cmd keys (Cmd+N,
 Cmd+S, Cmd+Z and so on). Refer to [Shortcuts](#shortcuts) for the
@@ -706,6 +737,18 @@ over a light background. Its face names are printed on it. The faces,
 edges and corners light up in the accent color under the pointer. The
 house is the small capsule above the upper left corner of the cube.
 
+The **arrow keys** turn the view while the view has the keyboard: click
+in the view first. Left and Right turn the view round to the left or
+right side of the design, and Up and Down round to its top or bottom, as
+the arrows of the orientation cube do, but by a step. The step is 15° by
+default. Set it in **Arrow key step** on the Navigation page of Tools ›
+Preferences. The view turns about the same center as a mouse orbit, and
+the zoom does not change. The keys also turn the view in a sketch. While
+the keyboard is in a value or text field, the Browser, a list, a panel or
+a dialog, the arrow keys do what they always do there. To use other keys,
+change **Turn View Left**, **Turn View Right**, **Turn View Up** and
+**Turn View Down** in Tools › Keyboard Shortcuts.
+
 **Preferences › Display › Orientation cube** sets how the cube is drawn:
 
 - **Follow the View** (the default): as the camera draws the design. With
@@ -725,6 +768,22 @@ The display styles are Shaded, Shaded with Visible Edges Only, Shaded
 with Hidden Edges, Wireframe and Wireframe with Hidden Edges. Named
 views are stored in the design. MitCad remembers the settings.
 
+**View › Grid and Snaps › Grid Settings…** sets the spacing of the
+layout grid. With **Automatic** (the default) the spacing follows the
+zoom, in steps that suit the unit of the design:
+
+- mm, cm or m: 1 or 5 times a power of ten mm. Every fifth line is a
+  darker major line.
+- in: 1/16, 1/8, 1/4, 1/2, 1, 2, 5, 10 in and on. Below an inch every
+  fourth line is a major line, so the major lines fall on quarters,
+  halves and whole inches.
+- ft: the inch steps up to 10 in, then 1, 2, 5, 10 ft and on.
+
+Type a **Fixed spacing** in the unit of the design, for example 0.25 in.
+MitCad keeps it as a length, so a change of the design's unit does not
+move the grid: 0.25 in shows as 6.35 mm in a design in mm. With Snap to
+Grid, sketch points snap to the grid lines that the view shows.
+
 View › Visual Style › Rendered shows the bodies path traced: refer to
 [The rendered view](#the-rendered-view) for the render environment, the
 lights and Render Image.
@@ -739,7 +798,9 @@ The **navigation bar** at the bottom of the view holds the View menu's
 commands you use all the time:
 
 - **Look At** turns the view straight at the selected plane, planar
-  face or sketch. In a sketch it looks at the sketch plane.
+  face or sketch. In a sketch it looks at the sketch plane. It is also in
+  the context menu of a planar face, a plane and a sketch: refer to [The
+  context menu](#the-context-menu).
 - **Fit** (F6) fits the design into the view.
 - **Visual Style** opens a list of the display styles. The style in use
   is checked.
@@ -1182,6 +1243,12 @@ it in the view: the selection stays, and the menu is the one of the body
 or the component. A face of a body that is not selected selects the
 face, and a face has no Move/Copy.
 
+**Look At** shows before Measure when you right-click a planar face, an
+origin or construction plane, or a sketch. It turns the view to look
+straight at what you right-clicked. This also works for a face of a
+component, of a linked design or of an imported model. A curved face and
+an edge have no Look At.
+
 **Delete** removes a whole thing, in one undo step. The thing is one
 of these:
 
@@ -1205,7 +1272,7 @@ to the machine.
 |---|---|
 | **Materials** | **Edit Materials…** ([Materials](#materials)), **Material**: the Material tool, as in Solid › Modify ([Materials](#materials)) |
 | **Annotate** | **Dimension**, **Note**, **Datum Label**, **Feature Control Frame**, **Hole Callout**, **Material**, **Process Note**, then **Annotations…** ([Annotate](#annotate)) |
-| **3D Print** | **Print Analysis** ([Print Analysis](#print-analysis)), **Send to Slicer** ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)), **Printers…** and **Processes…** ([Print settings](#print-settings)) |
+| **3D Print** | **Print Analysis** ([Print Analysis](#print-analysis)), **Send to Slicer** ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)), **Printers…** and **Processes…** ([Print settings](#print-settings)), **Plates…** ([Print plates](#print-plates)) |
 | **Laser** | **Export Flat Pattern…** ([Sheet metal](#sheet-metal)), **Export Face as DXF…** ([Laser cutting](#laser-cutting)) |
 
 Each command has one place on the toolbar: Edit Materials came from the
@@ -2557,6 +2624,12 @@ the curves that cross it. The new ends obey these rules:
   point, the end joins it. Thus when you trim both curves at a crossing,
   one after the other, they end in one point. This also works where two
   curves touch (are tangent).
+- If a new end joins a curve that it meets tangentially, the two curves
+  get a tangent constraint, as when you draw tangentially. A tangent that
+  held the removed piece's end to a curve that no longer touches the
+  trimmed curve is removed in its place. Thus when you trim a slot's arcs
+  where they touch the sides of a second slot, the arcs stay tangent to
+  the sides, and no stale tangent to the old top is left.
 - If a new end lies in the middle of a curve, the end stays on that
   curve.
 - A projected point holds the new end with a coincident constraint.
@@ -3493,7 +3566,10 @@ same length (10 mm is 1 cm). Standard sizes keep their value in mm, for
 example a thread's M10x1.5, a gear's module, a 608 bearing and the
 filament diameter of Print Analysis. The Browser's sheet rules row (for
 example `SheetRules1 (0.05 in, R 0.1 in, K 0.44)`) and **Measure** also
-show lengths, areas, volumes and positions in the unit of the design.
+show lengths, areas, volumes and positions in the unit of the design. The
+layout grid steps in inches in a design in in or ft, and Grid Settings
+shows its fixed spacing in the unit of the design: refer to [View and
+navigation](#view-and-navigation).
 
 A new design starts in the unit of **Preferences › General › Default
 units for new designs**. The default is mm. Set it to in, for example,
@@ -3564,6 +3640,14 @@ A double-click on a feature edits it.
 these entries:
 
 - Edit
+- Auto Fix. This entry shows only for a feature with a warning that a
+  sketch change caused, such as "region … found as … after a change in
+  Sketch9". MitCad used what it found in place of the old reference.
+  Auto Fix writes that into the feature, so the warning goes and the
+  bodies stay the same. Select several features, or open the menu of a
+  timeline group, to fix them all. One Undo takes it back. A reference
+  that is gone or that matches several faces is not fixed: the status bar
+  tells you to pick it again.
 - Rename
 - Suppress
 - Delete. MitCad asks you about the dependent features.
@@ -4957,6 +5041,72 @@ component that have no material of their own are made of it. A body in
 a subcomponent uses the nearest component above it that has a default
 material. Without any, a body is steel.
 
+#### Mechanical and thermal properties
+
+Under Appearances, the **General** tab of the Materials manager has the
+material's properties in three groups:
+
+- **Mechanical:** Young's modulus, Poisson's ratio and yield strength.
+- **Thermal:** maximum service temperature and coefficient of thermal
+  expansion.
+- **Printing** (FDM plastics only): the extruder temperature and the bed
+  temperature. These are the same values as the *Nozzle temperature* and
+  *Bed temperature* of the Filament tab: change them in either place.
+
+A value that is not given is an empty field that reads *Not given*; it
+is never taken as 0. Type a value and press Enter or leave the field to
+save it; empty the field to take the value away. Under the fields the
+manager says where the values came from, when it knows, and reminds you
+that the values are typical: check them against your supplier's data.
+MitCad does not compute anything with these values yet. They are shown
+on the material, in **Physical Properties** (the values of each body's
+material), in a bill of materials (type a property's name, for example
+*Young's modulus*, in a Bill of Materials table's **More Columns**) and
+they go with the material into a design, a library and the files below.
+
+**Units.** The values are shown in the design's units: in a metric
+design the density is in g/cm³, the modulus and the strength in MPa and
+the expansion coefficient in µm/(m·°C); in an inch design (Change
+Active Units › in) they are in lb/in³, psi and µin/(in·°F).
+Temperatures are in °C or °F as you choose in **Preferences › General ›
+Temperature unit**, whatever the design's units.
+
+**Browse Material Dataset…** (the last entry of **New ▾**) starts a
+material from MitCad's bundled material dataset: typical values of
+common steels, stainless steels, cast irons, aluminum, copper and nickel
+alloys, titanium and printing materials (PLA, ABS, PETG, ASA, nylon,
+polycarbonate, HIPS). It works offline. Type in its search to find a
+material and grade, for example *6061 T6*, select it to see its values
+in the design's units, and click **Create**; then choose where to make
+it. The new material is your own: its values are filled in and you can
+change them. It remembers the dataset's material and grade as its
+source, and a newer MitCad with an updated dataset never changes it.
+The dataset's values come from the material-properties dataset, under
+the Apache License 2.0 (refer to the About box and the third-party
+notices).
+
+**Import…** and **Export…** under the list read and write materials as
+JSON or CSV files (refer to [Materials as JSON and CSV
+files](material-files.md) for the formats and an example). Export writes
+the materials of the selected material's place (with none selected, the
+design's), in the design's units and your temperature unit; the file
+says its units. Import asks where to put the materials, as New does.
+When the file has a material whose name is there already, MitCad asks
+once for the whole file:
+
+- **Keep Existing** keeps the material that is there and skips the
+  file's.
+- **Replace Values** gives the material that is there the file's
+  values; the values the file does not give stay.
+- **Keep Both** adds the file's material with a number, for example
+  "Steel (2)".
+
+A material of the file that is not valid (a value that is not a number
+or is out of its range, a missing name, a new material without a
+density) is not imported: the line under the list says which row and
+why, for example "Row 4 (Broken) not imported: Yield strength must be
+greater than zero, got -3". The others are imported, in one Undo step.
+
 #### One filament, its variants per printer and nozzle
 
 A filament is one material, also when it prints differently on your
@@ -5061,8 +5211,13 @@ the picker: type in its search field to narrow the list (by any part of
 the name, the vendor or the nozzle), then press Return to choose the
 first match, or click a row; Down moves into the list, Escape or a click
 outside closes it. The printers are grouped by vendor ("Bambu Lab",
-"QIDI", …) and the processes by the printer their names name; each row
-says on the right where it comes from: **This design**, **This
+"QIDI", …) and the processes by printer (as in the Processes manager:
+refer to [Processes by printer](#print-settings)): the processes of the
+chosen printer first, then the others under their printers, those for
+any printer last under **Any printer** (the Process drop-downs of the
+Make tab's body card and of Property Sets list them the same way, the
+body's or the level's printer first). Each row of the picker says on
+the right where it comes from: **This design**, **This
 project**, **My library**, **Built-in** (the groups of the Printers and
 Processes managers), or the 3MF file it was imported from, so two
 printers of the same name can be told apart. The current choice is
@@ -5125,7 +5280,19 @@ the design uses, the editor says "Used in this design" instead. New and
 Duplicate ask where to make the item, This design first; one made in
 this design is set for the design at once, as one Undo step. Built-in
 ones cannot be changed: Duplicate one. **Copy to**, **Delete** and a
-change in another design work as for materials. Deleting the design's
+change in another design work as for materials.
+
+**Processes by printer.** In the Processes manager, the processes of
+each place are grouped by printer: a group per printer ("Bench X",
+"Bench Y", …) by name, then **Any printer**, each one level
+below its place and folded or opened as the places are. A process is
+for the printers its slicer says it is compatible with (when it was
+imported from a slicer, also those of the preset it inherits from),
+else for the printer its name names after an `@` ("0.20mm Standard
+@Bench X" is for Bench X), else for any printer. A process for several
+printers is listed under each of them; the place's count counts it
+once. The search finds processes in every group, and the group of the
+selected process is open. Deleting the design's
 own printer or process asks first, and the design then has none: the
 slicer uses its own. **Import from Slicer…** at the top works as Import
 from slicer… in Send to Slicer (below), into the place **Import into**
@@ -9477,6 +9644,44 @@ MitCad does not store this choice: it chooses again on every send, so a
 print bed face that you set later always wins. The **Bed Face** row and
 the log say *automatic* for such a face.
 
+#### Print plates
+
+A design can carry its print plates, so that the slicer gets them laid
+out and ready to print, every time you send. **Plates…** (Make › 3D
+Print) opens a panel of the design's plates:
+
+1. **Add Plate** adds a plate (*Plate 1*, *Plate 2*, …) and chooses it in
+   **Plate**. The chosen plate is drawn beside the design: its bed's
+   outline and its bodies where they will lie.
+2. Pick bodies in the view (or a component in the Browser) to put them on
+   the chosen plate. A component brings all its bodies as they are
+   assembled. **Count** sets how many of the chosen item the plate
+   prints ("4 of this on Plate 2"); **Take Off Plate** takes it off
+   again. A body or component is on one plate at most: putting it on
+   another moves it. Whatever no plate names prints on the first plate.
+3. **Spiral Vase** prints the plate in vase mode. **Plate Settings…**
+   opens the plate's own settings in the same form as the processes:
+   layer height, walls, infill and every other process setting.
+
+Each change is a step of its own in the undo history; **Close** keeps
+them. MitCad lays each plate out by itself: every piece on its print bed
+face (or the automatic orientation's), side by side, centered on the plate.
+
+**Settings order.** A plate's values come after the design's printer and
+process and before everything else: the design's process < the plate <
+a component < an occurrence < a body. So a plate in vase mode prints every
+body on it in vase mode, but a body that sets its own layer height keeps
+it.
+
+**Sending plates.** With plates in the design, **Send to Slicer** has
+**Send the Design's Plates** on: it sends the plates instead of the bodies
+chosen. Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9 or later
+get one 3MF with every plate, each plate with its own settings where the
+slicer keeps them per plate (the Bambu family's spiral vase and print
+sequence); UltiMaker Cura and older PrusaSlicer versions get a 3MF per
+plate. PrusaSlicer keeps spiral vase for the whole project, so a plate's
+spiral vase reaches it only in a file of its own (MitCad warns).
+
 #### Print Analysis
 
 **Print Analysis** (Make › 3D Print) shows where a body will print badly before
@@ -9585,6 +9790,11 @@ and its projection method: ISO starts on A3 in first-angle projection,
 ANSI on ANSI B in third-angle projection. MitCad names the drawing
 Drawing1, Drawing2 and so on, opens it and starts **Base View**: click
 where the first view goes.
+
+The dialog opens with the template, size, orientation and projection
+method that you chose last, so that you set them only once. At first,
+or when the template you chose last is not offered (a template of
+another project), it opens with ISO.
 
 **Opening one.** Double-click the drawing in the browser. The drawing
 takes the whole workspace: the sheet fills the area of the 3D view from
@@ -10248,7 +10458,7 @@ guide that explains its settings.
 
 | Page | What it sets | Refer to |
 |---|---|---|
-| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. On macOS, **Native macOS interface (experimental)**, for the next start | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [Layouts](#layouts) |
+| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). On macOS, **Native macOS interface (experimental)**, for the next start | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
 | **Display** | **Camera**, **Orientation cube**, **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first** | [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |

@@ -11,6 +11,7 @@
 # without one (a daemon, a CI runner without a display) it exits with 77 and
 # ctest reports it as skipped. Run it in the macOS VM, not on the host.
 option(MITCAD_MACOS_UI_TESTS "macOS: register the UI test app.ui-macos (opens the app's window briefly)" ON)
+option(MITCAD_MACOS_PARALLEL_HARNESSES "macOS: overlap isolated UI fixture setup and verification; application launches still own the shared Aqua lock" ON)
 
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad)
   find_program(BASH_EXECUTABLE bash)
@@ -840,6 +841,17 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
   endif()
 endif()
 
+# Plates… (mitcad#1050), the Linux test's shared input script in Qt, light
+# and dark: two plates added, a body picked onto Plate 2 in vase mode, the
+# plate drawn beside the design; Send to Slicer writes one 3MF of both
+# plates, the spiral mode on Plate 2 only.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-print-plates
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-print-plates-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-print-plates")
+  set_tests_properties(app.ui-macos-print-plates PROPERTIES TIMEOUT 420 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
 # The release's native smoke subset (mitcad#1056). macOS releases are built
 # with the AppKit frontend, an opt-in preference beside the default Qt one:
 # their ctest runs the whole Qt suite and, of the AppKit frontend's tests,
@@ -862,3 +874,12 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI)
     endif()
   endforeach()
 endif()
+
+# These audited harnesses use ui_init's separate data root and ui_run_app
+# for EVERY application launch. Their CLI setup and saved-file checks need
+# no desktop. Keep the same tests, scripts, assertions and deadlines; move
+# only Aqua ownership to the actual app lifetime in ui-macos-lib.sh.
+# The native runner admits at most two such harnesses. All other desktop
+# tests keep their CTest lock (and timed Metal checks keep RUN_SERIAL).
+include("${CMAKE_CURRENT_LIST_DIR}/MacTestScheduling.cmake")
+mitcad_macos_gui_harnesses()

@@ -30,6 +30,7 @@
 #include "../framework/AppSettings.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "ProjectsTree.hpp"
@@ -143,6 +144,7 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
     layout->addWidget(text);
   }
   auto* tree = new QTreeWidget;
+  panel::setCompactIndentation(tree, panel::Indent::Tree);
   tree->setHeaderHidden(true);
   tree->setColumnCount(1);
   tree->setIconSize(QSize(16, 16));

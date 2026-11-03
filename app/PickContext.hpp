@@ -75,4 +75,18 @@ void setPickLast(const occ::handle<AIS_InteractiveContext>& context, PickPrefere
 void setPickYield(const occ::handle<AIS_InteractiveContext>& context, PickPreference yields,
                   PickPreference over);
 
+// Owners that go ahead of the areas in front of them (mitcad#1222: the
+// sketch regions on offer while an input takes profiles, also where their
+// plane lies inside or behind a body): the owners `ahead` that lie under
+// the cursor behind the first owner that is `passed` (a body's face, a
+// whole body, a plane) come before it, in their order; the others keep
+// theirs. Ordered after the edge and vertex rules above, so that an edge
+// they put first keeps its place, and before the active component's
+// preference. Where none of `ahead` is under the cursor, the area is
+// picked as before. Unset predicates move nothing. pickMovedAhead(): the
+// last such pick put an `ahead` owner before a nearer area.
+void setPickAhead(const occ::handle<AIS_InteractiveContext>& context, PickPreference ahead,
+                  PickPreference passed);
+bool pickMovedAhead(const occ::handle<AIS_InteractiveContext>& context);
+
 } // namespace mitcad

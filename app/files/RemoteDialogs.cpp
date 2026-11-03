@@ -18,6 +18,7 @@
 #include <QtLogging>
 
 #include "../framework/Dialogs.hpp"
+#include "../framework/PanelTree.hpp"
 #include "VersionDialogs.hpp"
 
 namespace mitcad {
@@ -89,6 +90,7 @@ std::optional<QJsonObject> askResolveConflicts(QWidget* parent, const QJsonArray
                   "out stay in a backup of the project's history.",
                   nullptr, static_cast<int>(conflicts.size()))));
   auto* list = new QTreeWidget;
+  panel::setCompactIndentation(list, panel::Indent::Flat);
   list->setColumnCount(kColumns);
   list->setHeaderLabels({QObject::tr("File"), QObject::tr("Change"), QObject::tr("On the remote"),
                          QObject::tr("Here"), QObject::tr("Keep")});

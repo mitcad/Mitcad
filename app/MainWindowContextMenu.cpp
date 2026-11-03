@@ -77,6 +77,24 @@ bool isSketchPlane(const SelectionItem& item) {
          (item.kind == SelectKind::Face && item.geometry == QStringLiteral("plane"));
 }
 
+// What the menu's Look At looks at for an item (mitcad#1212): a datum
+// plane, a planar face, a sketch or its profile, or the sketch of a
+// sketch curve or point; nothing for any other face, an edge or the rest.
+std::optional<SelectionItem> lookAtTarget(const SelectionItem& item) {
+  if (isSketchPlane(item) || item.kind == SelectKind::Sketch || item.kind == SelectKind::Profile) {
+    return item;
+  }
+  if (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint) {
+    SelectionItem sketch = item;
+    sketch.kind = SelectKind::Sketch;
+    sketch.name.clear();
+    sketch.geometry.clear();
+    sketch.at.reset();
+    return sketch;
+  }
+  return std::nullopt;
+}
+
 // A submenu whose entries are logged as "Context menu <title>: A | B".
 class Submenu {
 public:
@@ -126,7 +144,7 @@ bool MainWindow::isPrintBedFace(const SelectionItem& face, const QStringList& be
   return false;
 }
 
-void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
+void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const SelectionItem& picked) {
   const auto add = [&menu, &entries](QAction* action) {
     if (menu.actions().contains(action)) {
       return; // offered already
@@ -253,6 +271,14 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
   // Export Face as DXF…, here too.
   if (selection.size() == 1 && first.kind == SelectKind::Face && first.geometry == QStringLiteral("plane")) {
     add(m_registry->action(QStringLiteral("make.export_face_dxf")));
+  }
+  // Look At the right-clicked plane, planar face (also of an occurrence, a
+  // linked or an imported model) or sketch, the menu's target, near Measure
+  // (mitcad#1212); or the one item selected when the click was on none.
+  if (const std::optional<SelectionItem> target = lookAtTarget(picked.isValid() ? picked : first);
+      target && (picked.isValid() || selection.size() == 1)) {
+    const SelectionItem item = *target;
+    addCall(QStringLiteral("look-at"), tr("Look At"), [this, item] { lookAt(item); });
   }
   for (const QPair<const CommandDef*, bool>& command : fitting[static_cast<int>(Kind::Inspect)]) {
     add(m_registry->action(command.first->id));

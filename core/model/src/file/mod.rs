@@ -146,7 +146,8 @@
 //! `filament`, `based_on`, `class` (mitcad#655: `metal`, `plastic`,
 //! `other`; `fdm_plastic` and `resin` since mitcad#1102, written only
 //! when chosen for a material without print settings, which older versions
-//! refuse), `version`, `origin`) and the components' default materials
+//! refuse), `version`, `origin`, `properties` and `reference`, mitcad#1213)
+//! and the components' default materials
 //! `component_materials` (`[{"component", "material", "appearance"?}]`), see
 //! [`crate::material`]; a body's `material` names a built-in material or
 //! one of these.
@@ -189,6 +190,12 @@
 //! `purge_volumes` (`[{"from", "to", "volume"}]`: material ids and mm³),
 //! see [`crate::print_purge`]; a pair of a material the design no longer
 //! has is kept.
+//!
+//! Print plates (mitcad#1050), when there are any: `print_plates` (`id`,
+//! `name`, `items` `[{"body"}` or `{"occurrence": [uids]}` with `count`
+//! when not 1`]`, `values`: process values by key), see
+//! [`crate::print_plates`]; an item whose body or occurrence is not in the
+//! design is kept. Builds without plates treat the field as unknown.
 //!
 //! Drawings of the root and the components (mitcad#707), when there are
 //! any: `drawings` (`uid` `D<n>`, `name`, `component` unless the root's,

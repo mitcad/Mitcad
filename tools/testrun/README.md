@@ -92,28 +92,48 @@ skipped, 1 otherwise, 2 for a usage or listing error.
   where a cgroup on that path is nearer its limit (its limit less its
   working set: `memory.current` less the page cache of `memory.stat`), so
   that other jobs in a shared slice count too.
-- **macOS:** `wait4`'s rusage (CPU time; the largest process's peak); the
-  system load from the host's CPU ticks. Available memory is read with
+- **macOS:** `libproc` samples the sum of resident memory of the test's
+  process group and descendants. PID plus process start time identifies
+  ownership, including observed detached/orphaned children; PID reuse
+  cannot transfer it. Live memory greater than the prediction reserves
+  that larger amount before another test starts. An unreadable sample
+  keeps the prediction reserved. Shared pages may be counted more than
+  once and short-lived children can end between samples: this is sampled
+  accounting, **not a kernel hard limit**. `wait4` supplies CPU time and
+  a largest-process peak fallback for such short processes. System load
+  comes from the host's CPU ticks. Available memory is read with
   `host_statistics64`: free plus inactive pages under normal memory
   pressure, only free pages under warning pressure, zero under critical
   pressure. Speculative and purgeable pages are not added again. Without
   a pressure reading only free pages count; a failed VM reading gives no
   additional headroom. This is a conservative estimate, not a whole-tree
-  memory measurement. System memory in use remains unknown in the report;
-  the changing admission budget is reported separately. No hard memory
-  limits.
+  memory measurement. The report separately records the admission budget
+  and the sampled memory of the running tests; neither is system-wide
+  memory in use. No hard memory limits.
 
 The system load for the CPU gate: `GetSystemTimes` (Windows), `/proc/stat`
 (Linux), `host_statistics` (macOS), sampled every 0.5 s.
 
-`tools/test-macos.sh` uses `--schedule --memory-budget free`: the runner's
+`tools/test-macos.sh` uses
+`--schedule --memory-budget free --corpus-children`. The runner's
 history-based ceiling (half the cores until enough tests have profiles,
 then the cores) replaces a fixed test count. The available-memory reserve
 defaults to the larger of 4 GiB and a tenth of physical memory; explicit
 runner options override these defaults. Aqua tests still share
 `macos_desktop` and the cross-checkout GUI lock, with at most one
-timing-sensitive UI test below 70% CPU load. Cargo builds and the timed
-Metal checks retain their serial properties. The wrapper gives no UI
+timing-sensitive UI test below 70% CPU load. Five audited workflows in
+each frontend instead own Aqua only for each `ui_run_app` lifetime: at
+most two harnesses may prepare isolated fixtures or verify files beside
+each other. Actual apps still never overlap. These labels do not make
+AppKit, native input, screenshots or Metal headless. Set
+`MITCAD_MACOS_PARALLEL_HARNESSES=OFF` at configure time to keep the entire
+harness under its original CTest desktop lock.
+
+Cargo build fixtures keep a common `cargo_build` lock, their fixture
+dependencies, a minimum 6 GiB prediction and at most two compiler jobs
+(one when current free headroom requires it, or the caller requests one).
+They may overlap unrelated tests. `MITCAD_CARGO_MAX_JOBS=2` also caps
+direct CTest execution. Timed Metal checks still run alone. The wrapper gives no UI
 learning bound, so its contention-rerun mode is not enabled. `--measure`
 still defaults to one test and an 85% budget.
 

@@ -1817,3 +1817,276 @@ to an existing one.
   struts (B-splines of about 239, 239 and 164 mm²) that run on along the
   struts' intersections: a node blend of three tubes, not a corner of
   two roundings.
+
+## The pivot corner over the sliver of `99ef321f` item 22 (mitcad#1203)
+
+The design's profile, extruded along x from the end face x = -7 to 7, has
+a convex arc of radius 5 (the bar, axis at y 15.5, z 10) followed by a
+concave arc of radius 3 (axis at y 16.7457, z 17.8808) that meets it not
+tangentially but along the line L (y 16, z 14.975), with a turn of about
+9 degrees: the concave arc runs 0.02 mm into the bar. The concave arc's
+edges with the end faces are rounded with 0.3, which leaves a sliver of
+the bar's surface next to the end face, 0.3 long along x and 0.84 wide,
+between L's end and the vertex V where that rounding meets the bar. Item
+22 rounds the end face's outline with 0.5; the chain's last edge is the
+end face's edge with the bar across the sliver, up to V.
+
+What the file's result does there (its stored body after the item):
+
+- The rounding along the bar's end edge (a torus of radii 4.5 and 0.5)
+  ends at the section through L.
+- From there the ball pivots about L: its centre turns on a circle of
+  radius 0.5 about L in the plane x = -6.5, from the bar's normal at L
+  through about 84 degrees, touching the end face all along (a horn
+  torus of radii 0.5 and 0.5 about L, 0.22 mm², its contact with the end
+  face a circle of radius 0.5 about L's foot).
+- That torus is cut by the concave cylinder, by the 0.3 rounding and by
+  what is left of the sliver (0.027 mm² of the bar), and ends in a point
+  on L at x = -6.5; the 0.3 rounding is trimmed by 0.0034 mm², and the
+  chain's last edge and most of the sliver are gone.
+
+OCCT's stripe for the last edge reached V with both contacts inside their
+faces, and no existing end fitted: the walk stops at L's section, what
+follows is an extension of no length, and the corner failed. Patch 1220
+(`PerformPivotAboutCreaseAtEnd`, a construction of its own beside 0951's
+`PerformPivotAtStepEnd`) builds the file's end: where the end piece's
+contact on one face stops inside a line edge of it square to the plane at
+the end, at a crease of less than 30 degrees, with the end's vertex past
+that line (not its own end, where the faces beyond cut the end as
+before), the stripe ends at that
+line's section and a corner stripe of the horn torus about it closes the
+end, cut by each face it meets on its way to the plane (a section of the
+torus with the solid), against the plane along the circle about the
+line's foot; at a first end the corner stripe runs the other way. On the
+item's dump (both ends of the outline) the result is valid and its
+boolean differences with the stored body are empty both ways; the new
+faces match the file's (the horn torus 0.220835 against 0.220833 mm², the
+sliver's remnant 0.027086 against 0.027066 mm²). In the import of the
+design alone item 22 (Fillet32) is parametric and verified, change
+difference 0, and so is item 23. Knock-on: the fallback at item 22 used
+to bring the file's body, which hid the deviations of items 20 and 21
+(Fillet30, change difference 0.107, and Fillet31, both verified within
+0.01 mm): the final body now differs from the file's by -0.0021 % in
+volume, with the same 150 faces. The items fixed in mitcad#236's rounds
+(`f5e08b18` 23, `f9d6d78a` 24, `69ca6c23` 8) import as before, their
+reports the same with and without the patch. OCCT-only test: a bar with
+a concave arc meeting it with a small overlap, its rim rounded, the end
+face's outline rounded, in `geometry/tests/test_fillet_corners.cpp` (no
+result without the patch).
+## The node blend of `b596234a`/`9c3751cd` item 63 (mitcad#1205)
+
+Item 63 (Fillet10, 3) rounds the five valleys where the tubes of a frame
+meet (outer radius 19.5, bores of 17.5, along four edges of tetrahedra
+from one point, the frame cut by a side plane): at each of two nodes three
+tubes meet, and a rod of radius 2.5 along the node's axis, capped square
+to it just past the point where the three tubes' surfaces meet, leaves a
+facet of 5.4 mm² between them. The valleys run from the facets' vertices
+to the side plane, one from node to node. With the edges found by their
+names in the file OCCT fails at the nodes ("the rounding along edge … and
+the rounding of another edge intersect each other"; with the facet's
+edges, as the ASM history state names them, "Failed to find edge").
+
+What the file's result is: each valley's rounding is the ball of 3
+rolling between the two tubes (its contacts on them are plane sections,
+ellipses, as for two tubes of one radius whose axes cross), run on past
+the facet through the node, and the three roundings at a node keep what
+lies outside each other: they meet along their crossings and at one point
+of the node's axis, and the facet is buried. The point is where the
+rounding's pipe about its ball's centre (an ellipse at 22.5 from both
+axes) crosses the axis, 35.2017 from the tubes' crossing along it; the
+file's vertex lies at 35.202. No sphere closes the node (a rolling-ball
+corner would put one about the point 22.5 from all three axes, 3.77 off
+the file's vertex): the ball's centre for the meeting point lies past
+where the ball touches the third tube.
+
+`geometry/src/node_dressup.cpp` builds that, MitCad-side, as
+`mitred_dressup` does for its corners: where OCCT's fillet fails, a set
+of concave edges between convex cylinders of one radius whose axes cross,
+each valley ending on a plane or at a vertex of a facet all of whose
+vertices end valleys of the set, is rounded valley by valley. Each
+valley's rounding is OCCT's own, of the valley edge of the two tubes alone
+(as solid rods, cut by the end's plane at a far end and, past a node,
+square to the valley three radii beyond the facet's vertex), less the
+rods; at a
+node it keeps out of the node's other tubes (within a ball about the
+facet's vertex: inside a tube it adds nothing, and past the node its bore
+may lie there). The roundings are joined to the body together; the
+union does the cutting at the nodes. A valley the booleans split into
+edges between the same two faces is one rounding.
+
+On item 63's dump the result is valid, with the file's 34 faces, and its
+faces lie on the file's (its roundings' areas within 0.01 mm² of the
+file's 239.19, 239.18 and 163.65 mm²); its volume is 0.007 mm³ off the
+file's. In the imports of the two designs alone item 63 is parametric and
+verified, and so are items 64 and 65 after it (item 65 fell back before).
+Knock-on: the final body now differs from the file's, 42 faces against 39
+and -0.0003 % in volume: item 64 (Fillet14, two edges of radius 1 at the
+side plate's hole) splits faces otherwise than the file, as it did on the
+file's own body when item 63 fell back (40 faces against 36 then), which
+the fallback at item 65 used to hide. Geometry test:
+`geometry/tests/test_fillet_tube_node.cpp`, the frame of the design with
+two nodes (its roundings on their pipes within 1.2e-6 mm, meeting on the
+nodes' axes within 1.6e-6 mm of the computed point; the fillet fails
+without the construction).
+
+## The rods' feet of `b596234a`/`9c3751cd` item 64 (mitcad#1207)
+
+After item 63 builds (mitcad#1205), item 64 (Fillet14, 1) is parametric
+and verified, change difference 0, but its result has 39 faces against
+the file's 36 (and the final body 42 against 39). The item rounds the
+feet of the two rods along the nodes' axes (radius 2.5, mirror images in
+z = 0) where they stand on the side plate's inner plane; the two feet
+meet at two vertices in z = 0, where the rods' own edge between them
+(left sharp) ends. Near the first vertex the plate's hole (radius 7.5)
+passes 0.83 from it, inside the rounding's radius: both roundings run
+over onto the hole's wall there.
+
+The file's result: each foot rounding one face (16.6899 mm²), its contact
+leaving the plane onto the hole's wall at z = ±1.055, the two meeting in
+a crease in z = 0 from the hole's wall to the rods' edge (a mitre of
+mirror images); the hole's faces whole (141.3717 and 141.3916 mm²).
+
+What MitCad builds: OCCT's fillet fails at the first vertex ("BRep_Tool::
+no parameters on surface", ChFi3d_IsInFront: the two stripes' common face
+there is the hole's cylinder, which does not hold the corner's vertex).
+Each stripe has three pieces on three surfaces: one with its contact on
+the plane, then two rolling on the hole's rim edge (OCCT's edge overflow,
+the ball touching the rim's line) down to z = 0, where it ends at the
+rim's vertex, its contact on the rod at z = ±0.035, not on the rods'
+edge: PerformTwoCorner finds no pivot there. The file's rounding instead
+touches the hole's wall past the rim (its contact there a curve on the
+wall, 0.016 below the rim at z = 0), one face with its part on the plane.
+The cut-out route of mitcad#311 builds it instead (the holes cleared, the
+rounding built on the plane, the holes cut out again): each foot rounding
+comes out as two faces on two surfaces of OCCT's corner on the cleared
+plane (16.504 and 0.197 mm², together 0.0107 mm² more than the file's
+face), and one hole's face in two (136.698 and 4.674 mm², together the
+file's 141.372) along that corner's edge in z = 0. So 3 faces more: the
+pieces of a different corner, not a split of the file's faces; within
+the import's check of 0.01 mm.
+
+Tried, none giving the file's faces: OCCT's corner with the vertex's
+parameters on the hole taken from the nearest point (port patch 0143's
+mode for chamfers) gives an invalid result (the corner falls through to
+the plate filling: no pivot) and changes the input's geometry; each foot
+alone fails at the other rod ("OneCorner : bouchon non ecrit"); a foot on
+the body cut at z = 0 fails in the data structure's rebuild
+(TopOpeBRepDS_DataStructure::Point); joining the pieces the cut-out
+route leaves (one surface on both sides of an edge the put-back made) does
+not apply, the pieces lying on different surfaces. A corner construction of its own in the port, beside
+PerformTwoRolledCorner (two stripes on a common face
+(here the hole's wall, not holding the vertex) whose other contacts lie
+on two faces meeting along an edge through the vertex (the rods' edge),
+each prolonged to and cut by the crease where their surfaces cross, from
+the common face to that edge, both ending on it), would build the corner,
+but not the file's faces: OCCT's three pieces of each rounding stay three
+faces (40 against 36, where the cut-out route gives 39). One face per foot
+needs the walk to take the hole's wall rather than its rim past the plane
+and one surface over the plane and the wall, which OCCT's fillet does not
+make (a face per piece of the stripe on its own surface).
+## A rounding over slot mouths whose tops touch the top face (mitcad#1204)
+
+`49ccc315`, `e41d24ac` item 35 (Fillet9, 2.5 round a rim of eight arcs),
+traced on the body before the item from the dressup dump (it is the
+history's stored state: the item before falls back). Fixed by the OCCT
+port's patch 1210 (`third_party/vcpkg-ports/docs/fillet-corners.md`): item
+35 of both designs is parametric and verified.
+
+**The configuration.** The rim is a circle of radius 93.5 at the top
+(z = 307.4635) split into eight arcs, the edges between the top plane and
+eight pieces of the outer cylinder. Each piece is only 2.17 high: below it
+an earlier rounding of radius 5 (a torus about the axis, stored as
+B-splines) turns the wall outwards, so the ball of 2.5 overflows the
+cylinder onto that rounding. At each of the eight vertices a fin 1.5
+thick (two planes 0.75 off a radial plane) stands out of the wall; its
+top is a cylinder of radius 0.75 about a radial axis 0.75 below the top,
+so that its crest touches the top plane along a radial line with no edge
+there. Four edges meet at each vertex: the two arcs and the two curves
+where the fin's top cylinder cuts the two cylinder pieces. The top plane
+and the fin's cylinder have no common edge.
+
+**OCCT.** The eight arcs are tangent, but each vertex has four edges, so
+the spine stops there: eight stripes, each ending at two vertices, with
+two roundings and the fin's edges at every vertex. The corner's walk
+round the vertex looks for the edge between the top plane and the face
+beyond the stripe's side (`ChFi3d_Builder_0.cxx`, "Failed to find edge"):
+there is none, the faces touching only along the crest line. All eight
+vertices fail; with one arc's edge alone its two vertices fail the same
+way.
+
+**The file's result** (the stored body after the item, volume 820.97 mm³
+less, 326471.995 → 325651.020 mm³). Each arc's blend (the ball between
+the top plane and the radius-5 rounding; the 2.17-mm cylinder piece is
+consumed) runs on past the vertex over the fin's top and is cut there by
+the fin: along its lower part by the fin's side plane (from
+(93.45, 0.75, 304.63) to (92.76, 0.75, 306.71) at the +x fin), along its
+upper part by the fin's top cylinder, up to the crest's point on the top
+plane, (90.978, 0, 307.4635), where the two arcs' blends meet. The fin's
+top cylinder grows inwards along its own surface to the blends (3.53 →
+7.16 mm²), and the top plane ends at that point.
+
+**The fix.** No corner builder of ChFi3d (`PerformOneCorner` OnSame and
+OnDiff, `PerformIntersectionAtEnd`, the cut to the end of 1140 and 1170,
+`PerformMoreThreeCorner`) intersects a blend with faces away from the
+vertex's own, so patch 1210 adds a construction of its own, tried by
+`BRepFilletAPI_MakeFillet::Build` only where the fillet failed at faulty
+vertices that are all such mouths: the body less a slab through each
+mouth is rounded (the blends then end plainly at the slabs' walls), each
+blend's surface is prolonged across its slab, and the slabs' part of the
+body is put back less what lies past the prolonged blends, keeping the
+fins' tops, so that the fins' cylinders and walls grow up to the blends.
+On item 35's body: valid, 304 faces, the faces of each body on the other's
+within 2 µm (OCCT's walked blend against the file's along the arcs), the
+boolean differences empty both ways with a fuzzy value of 2 µm. The test
+is `geometry.fillet_slot_mouths` on the case `fillet-slot-mouths` of
+`MITCAD_GEOMETRY_CASES`.
+
+**After it.** Item 36 (Fillet10) of both designs is now tried on the
+built item 35; it failed (mitcad#1215, below) and is fixed by patch 1230.
+
+**Tried first.** Removing the eight fins (`BRepAlgoAPI_Defeaturing` of the
+faces of each), rounding the healed rim and putting the fins back: the
+healed body came out invalid and smaller, so the rounding found no edges
+to take. A synthetic ring with fins whose crests touch the top (OCCT
+booleans of a ring, boxes and cylinders) comes out invalid at the tangent
+line, so the test reads the case's body; with the crests 0.1 below the
+top the rim's rounding builds (no vertex on the rim).
+
+## The inner rim rounded over the top of `49ccc315`/`e41d24ac` item 36 (mitcad#1215)
+
+Item 36 (Fillet10, 2.5) rounds the inner rim of the ring whose outer rim
+item 35 rounded (above), traced on item 35's built body from the dressup
+dump with OCCT's fillet alone. Fixed by the OCCT port's patch 1230
+(`third_party/vcpkg-ports/docs/fillet-rolling-ball.md`): item 36 of both
+designs is parametric and verified, items 35 and the others as before.
+
+**The configuration.** The ring's top is 5 wide between the inner cylinder
+(radius 88.5) and the outer rim (93.5). Item 35's blend of 2.5, which
+overflowed from the outer cylinder onto the rounding below it, meets the
+top at radius 90.978: the top left is 2.478 wide. The inner rim is a closed
+chain of 17 circular edges between the top and the inner cylinder (the
+cylinder is split at the eight mouths and at its seam). A ball of 2.5
+rounding it would touch the top at radius 91.0, 0.022 past the top's far
+edge, where item 35's blend begins tangentially; that blend curves away
+from the ball exactly as fast as the ball's own sphere (both radius 2.5),
+so the ball touches it along a whole section. OCCT's walk overflowed onto
+it and failed at once ("the walk between the two faces fails").
+
+**The file's result.** The inner blend is a torus of radius 2.5 about the
+axis passing through the top's far edge all round (its distance to the
+torus centre circle 2.5000 to 2.5006 in the file's B-spline), meeting item
+35's blend there; the top face is gone.
+
+**The fix.** The ball rolls on the top's far edges (OCCT's surface/edge
+blend) instead of overflowing onto a face curving away as fast as itself.
+Along the far boundary of the top the crests at the mouths leave sliver
+edges of 2 to 7 µm between the top and a fin's cylinder in item 35's
+result (at 90° and 270° in `49ccc315`, at 0° and 45° in `e41d24ac`); the
+ball turns about the end of the edge it rolled on until it touches the edge
+after the sliver (or rolls on from that edge's start where it reaches it
+already), the piece of the ball between running along the sliver. At 270°
+the inner cylinder's seam lies under a crest: the cylinder contact changes
+face there. On both bodies the result is valid, its faces and the file's
+round the rim on each other within 2 µm. The test is
+`geometry.fillet_roll_over_blend` on the cases `fillet-roll-over-blend` and
+`fillet-roll-over-blend-2` of `MITCAD_GEOMETRY_CASES`.

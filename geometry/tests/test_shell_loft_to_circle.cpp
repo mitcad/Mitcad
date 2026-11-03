@@ -413,7 +413,11 @@ void test_facade_shell_of_the_reported_loft() {
 }
 
 // A loft whose walls lean in towards the circle (mitcad#1193): the 20 mm
-// square to a circle of radius 10, shelled 1 mm.
+// square to a circle of radius 10, shelled 1 mm. The circle's seam falls
+// on a side, which the loft splits; with patch 1200's extension of the
+// halves the intersection at one half's corner left a gap of 8 % of the
+// offset about the tangency on Windows, and the shell was invalid until
+// patch 1190 took the continuation from within 20 % (mitcad#1217).
 void test_facade_shell_of_a_loft_leaning_in() {
   const std::vector<gp_Pnt2d> square = {gp_Pnt2d(-10, -10), gp_Pnt2d(10, -10), gp_Pnt2d(10, 10),
                                         gp_Pnt2d(-10, 10)};

@@ -49,10 +49,12 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/IdleCall.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../print/PrintLibrary.hpp"
+#include "../print/ProfilePickerRows.hpp"
 #include "../print/SettingField.hpp"
 #include "DocumentHost.hpp"
 
@@ -521,6 +523,7 @@ PropertySetsDialog::PropertySetsDialog(DocumentHost& host, QWidget* parent) : QD
 
   m_table = new PropertyTable([this](QTreeWidgetItem* item, int column) { edit(item, column); });
   m_table->setObjectName(QStringLiteral("propertySetsTable"));
+  panel::setCompactIndentation(m_table, panel::Indent::Tree);
   m_table->setColumnCount(4);
   m_table->setHeaderLabels({tr("Property"), tr("Value"), tr("Type"), tr("Source")});
   m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -611,9 +614,34 @@ PropertySetsDialog::PropertySetsDialog(DocumentHost& host, QWidget* parent) : QD
               if (chosen.isEmpty()) {
                 combo->addItem(tr("Slicer default"), QString());
               }
-              // By name, no places, as in 3D Print (mitcad#655).
-              for (const LibraryItem& item : items) {
-                combo->addItem(item.name, item.key());
+              // By name, no places, as in 3D Print (mitcad#655); processes
+              // under their printers, the level's printer's first, when one
+              // names a printer (mitcad#1216).
+              QStringList levelPrinter;
+              if (kind == QStringLiteral("process")) {
+                const QString printerId = first.data(kPropertyRole).toMap().value(QStringLiteral("printer")).toString();
+                const QVector<LibraryItem> printers = queryLibraryItems(m_host.model(), QStringLiteral("printer"), project);
+                if (const LibraryItem* printer = findDesignCopy(printers, printerId)) {
+                  levelPrinter = printerNames(*printer);
+                }
+              }
+              const QVector<ProfilePickerRow> rows = profilePickerRows(items, kind, levelPrinter);
+              const bool grouped = kind == QStringLiteral("process") &&
+                                   std::any_of(rows.cbegin(), rows.cend(),
+                                               [](const ProfilePickerRow& row) { return !row.group.isEmpty(); });
+              if (grouped) {
+                QString heading;
+                for (const ProfilePickerRow& row : rows) {
+                  if (row.group != heading) {
+                    addComboHeading(combo, row.group);
+                    heading = row.group;
+                  }
+                  combo->addItem(row.name, row.key);
+                }
+              } else {
+                for (const LibraryItem& item : items) {
+                  combo->addItem(item.name, item.key());
+                }
               }
               combo->setCurrentIndex(std::max(0, combo->findData(chosen)));
               QStringList names;
@@ -1016,6 +1044,10 @@ void PropertySetsDialog::addPrintSettings(const QJsonArray& levels, const QSet<Q
     if (from == QStringLiteral("material")) {
       return std::make_pair(QStringLiteral("material"), text(value, "material_name"));
     }
+    // The print plate the body prints on (mitcad#1050).
+    if (from == QStringLiteral("plate")) {
+      return std::make_pair(QStringLiteral("print-plates"), text(value, "owner_name"));
+    }
     const QString level = text(value, "level");
     return std::make_pair(level == QStringLiteral("body")         ? QStringLiteral("body")
                           : level == QStringLiteral("occurrence") ? QStringLiteral("insert-component")
@@ -1101,10 +1133,15 @@ void PropertySetsDialog::addPrintSettings(const QJsonArray& levels, const QSet<Q
       group->setToolTip(kValue, group->text(kValue)); // whole where elided (mitcad#827)
       group->setData(kKey, kNameRole, QStringLiteral("profile"));
       group->setData(kKey, kProfileRole, kind);
+      // The level's printer (its design id): its processes first in the
+      // drop-down (mitcad#1216).
+      const QString levelPrinter = text(
+          print.value(QStringLiteral("printer")).toObject().value(QStringLiteral("profile")).toObject(), "id");
       group->setData(kKey, kPropertyRole,
                      QVariantMap{{QStringLiteral("inherited"), true},
                                  {QStringLiteral("read_only"), true},
-                                 {QStringLiteral("key"), chosen != nullptr ? chosen->key() : QString()}});
+                                 {QStringLiteral("key"), chosen != nullptr ? chosen->key() : QString()},
+                                 {QStringLiteral("printer"), levelPrinter}});
       QStringList glyphs;
       if (!readOnly) {
         group->setFlags(group->flags() | Qt::ItemIsEditable);

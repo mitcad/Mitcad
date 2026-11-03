@@ -192,7 +192,7 @@ ui_sync
 # After the design opened: the empty design of the start has Component1 active.
 sed -n '/^Opened with the root active/,$p' "$UI_LOG" | grep "^View inactive ghosts: " | grep -qv ": none$" && ui_fail "inactive components are ghosts: the root is not active"
 echo "ok   no ghosts"
-case "$(xdotool getwindowname "$UI_WINDOW")" in
+case "$(ui_window_title)" in
 *"* - MitCad") ui_fail "the window title marks the design modified" ;;
 esac
 echo "ok   the window title marks no change"

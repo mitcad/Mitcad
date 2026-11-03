@@ -64,6 +64,9 @@ pub(super) fn classify(details: &Value, text: &str) -> Option<Value> {
         "token expired",
         "token has expired",
         "unauthenticated",
+        // The Agent Client Protocol's auth_required error (mitcad#1198).
+        "authentication required",
+        "auth_required",
     ]) || status(details, 401)
     {
         ("signed-out", "sign-in is missing or has expired")

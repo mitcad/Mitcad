@@ -336,6 +336,18 @@ impl PrintProfile {
             .or_else(|| material::split_nozzle(&self.name).1);
         material::PrinterKey { names, nozzle }
     }
+
+    /// The printers and nozzles a process is for (mitcad#1216), by the
+    /// filament presets' rule (mitcad#1054,
+    /// [`crate::print_files::filaments::preset_printers`]): the printers of
+    /// its slicers' `compatible_printers` (an import keeps there those of
+    /// the preset it inherits from when its own list is empty), else the
+    /// printer its name's `@` part names ("0.20mm Standard @Bench X"),
+    /// else none: any printer. Each printer named without its nozzle.
+    pub fn process_printers(&self) -> Vec<(String, Option<f64>)> {
+        use crate::print_files::filaments;
+        filaments::preset_printers(&self.name, &filaments::compatible_printers(&self.slicer))
+    }
 }
 
 /// Whether a value fits a key of a set: a key of the set, of its kind; a
@@ -667,6 +679,51 @@ mod tests {
             Some(&json!("Bambu Lab X1 Carbon 0.4 nozzle"))
         );
         assert_eq!(dialect_value(&value, Dialect::PrusaSlicer), None);
+    }
+
+    #[test]
+    fn a_process_is_for_its_compatible_printers_else_its_name_s() {
+        // mitcad#1216: the filament presets' rule.
+        let mut p = PrintProfile::new("fine", "0.12mm Fine @Bench X", ProfileKind::Process);
+        p.slicer.insert(
+            "bambu_studio".to_owned(),
+            BTreeMap::from([(
+                "compatible_printers".to_owned(),
+                r#"["Bench Y 0.4 nozzle", "Bench Z 0.6 nozzle"]"#.to_owned(),
+            )]),
+        );
+        assert_eq!(
+            p.process_printers(),
+            vec![
+                ("Bench Y".to_owned(), Some(0.4)),
+                ("Bench Z".to_owned(), Some(0.6))
+            ],
+            "its compatible printers before its name's"
+        );
+        // PrusaSlicer's `"a";"b"`.
+        p.slicer.insert(
+            "prusaslicer".to_owned(),
+            BTreeMap::from([(
+                "compatible_printers".to_owned(),
+                r#""Bench Y 0.4 nozzle";"Bench W""#.to_owned(),
+            )]),
+        );
+        assert_eq!(p.process_printers().len(), 3);
+        // An empty list names none: the name's `@` part.
+        p.slicer.clear();
+        p.slicer.insert(
+            "bambu_studio".to_owned(),
+            BTreeMap::from([("compatible_printers".to_owned(), "[]".to_owned())]),
+        );
+        assert_eq!(p.process_printers(), vec![("Bench X".to_owned(), None)]);
+        p.name = "0.10mm Fine @Bench X 0.2 nozzle".to_owned();
+        assert_eq!(
+            p.process_printers(),
+            vec![("Bench X".to_owned(), Some(0.2))]
+        );
+        // Neither: any printer.
+        p.name = "Draft".to_owned();
+        assert!(p.process_printers().is_empty());
     }
 
     #[test]

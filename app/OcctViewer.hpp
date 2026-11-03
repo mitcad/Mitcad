@@ -317,6 +317,10 @@ public:
   // The layout grid on the grid plane (XY, or the sketch plane): `step`
   // mm between lines, or a step that follows the zoom when 0.
   void setGrid(bool shown, double step);
+  // The design's length unit (mitcad#1210): the automatic step's series
+  // (an inch series in a design in in or ft, GridSpacing.hpp) and the
+  // unit the grid's spacing is logged in.
+  void setGridUnit(const QString& unit);
   void setGridPlane(const gp_Ax3& plane);
   // The grid's minor step now (mm), shown or not: what sketch points snap to.
   double gridStep() const;
@@ -346,6 +350,11 @@ public:
   // that do not fit in the warning's colour for the view's background
   // (mitcad#1041); not pickable. Null shapes clear them.
   void setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& outside);
+  // Plates… (mitcad#1050, files/MainWindowPlates.cpp): the chosen print
+  // plate drawn beside the design, its bed's outline in the print bed's
+  // colour and its bodies where the plate puts them, shaded in the
+  // bodies' colour; never picked. Null shapes clear them.
+  void setPlateView(const TopoDS_Shape& bed, const TopoDS_Shape& bodies);
   // Image references (mitcad#782, view/ImageReferenceView.cpp): each image
   // of `shown` drawn on its plane by its corners, see-through by its
   // opacity, hidden behind the bodies or, `through`, over them; never
@@ -585,6 +594,15 @@ public:
     m_sketchesBehind = on;
     m_sketchKept = on ? kept : QString();
   }
+  // While an input takes sketch profiles (Extrude, Revolve, ..., new or
+  // edited; mitcad#1222): the regions shown are drawn over the bodies, in
+  // a layer of their own without a depth test, with their selection
+  // highlights and their hover, and a region under the cursor is picked
+  // before the bodies' faces, the bodies and the planes in front of it
+  // (PickContext.hpp's setPickAhead), also where its plane lies inside or
+  // behind a body. Where no region is under the cursor, the face is picked
+  // as before. Logged as "View profiles first: on" / "off".
+  void setProfilesFirst(bool on);
 
   // The rendered view (docs/rendering.md): the image fills the view
   // (stretched; a frame that refines is smaller) over the bodies, which
@@ -778,6 +796,14 @@ public:
   // With `fit`, a box larger than the free area is fitted into it
   // (frameBox: zoomed out).
   bool bringClearOfPanels(const Bnd_Box& box, bool fit = false);
+  // Shows a box (model coordinates: what a feature command started from a
+  // sketch works on, mitcad#1227) inside the free area and off the view
+  // cube: one that reaches outside, under a card, the ribbon or the cube,
+  // is fitted into that area at once, as frameBox fits; false when it was
+  // there already. Logged "View for <what>: kept|fitted; the box at
+  // x0,y0 to x1,y1, the area at x0,y0 to x1,y1 (inside|outside)", in
+  // window coordinates.
+  bool showInFreeArea(const Bnd_Box& box, const QString& what);
   // The box of the bodies shown as placed (not previews, ghosts, datums,
   // sketches or the grid); void when none is shown.
   Bnd_Box bodiesBox() const;
@@ -791,6 +817,11 @@ public:
   // Looks at a plane from the side its normal points to, `up` upwards, and
   // fits the view (Look At, named views; U3).
   void lookAlong(const gp_Dir& normal, const gp_Dir& up);
+  // The arrow keys' turn (mitcad#1211, view/CameraTurn.hpp): the camera
+  // round to the right by `right` degrees about the view's up (Z with a
+  // constrained orbit), then upwards by `up` degrees about the view's
+  // right, about the mouse orbit's centre; the zoom is kept.
+  void turnView(double right, double up);
   // The isometric home view, fitted.
   void lookHome();
 
@@ -860,6 +891,9 @@ signals:
   // The panels floating over the view moved or changed size
   // (`setCoveredRects`): what keeps clear of them (a drawing) follows.
   void coveredChanged();
+  // The free area for the view's overlays changed (`setOverlayInsets`): the
+  // version watermark (mitcad#1209) follows.
+  void overlayInsetsChanged();
   // A click (window false) or a window selection; empty when the click hit
   // nothing. Emitted while the view paints: connect queued.
   void picked(const mitcad::Selection& items, Qt::KeyboardModifiers modifiers, bool window);
@@ -1009,6 +1043,10 @@ private:
   // A profile's and a datum's look, pale when drawnInactive(); a datum's
   // display mode.
   void styleProfile(const occ::handle<AIS_Shape>& profile) const;
+  // A profile in the layer, and with the hover, that setProfilesFirst()
+  // gives it now; the layer of a profile's selection highlight.
+  void placeProfile(const occ::handle<AIS_Shape>& profile);
+  Graphic3d_ZLayerId profileHighlightLayer() const;
   int styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind) const;
   void logInactiveGhosts();
   // Whether a picked item is a transparent body's (BodyDisplay::transparent),
@@ -1055,6 +1093,11 @@ private:
   // depth of the camera's centre) to the middle of freeArea(), without a
   // zoom; none while the view has no size.
   gp_Vec freeAreaShift(const occ::handle<Graphic3d_Camera>& camera) const;
+  // fitToFreeArea and freeAreaShift for another part of the view.
+  void fitToArea(const occ::handle<Graphic3d_Camera>& camera, const QRectF& area) const;
+  gp_Vec areaShift(const occ::handle<Graphic3d_Camera>& camera, const QRectF& area) const;
+  // Where a box (model coordinates) is on the view: its corners' bounds.
+  QRectF screenBox(const Bnd_Box& box) const;
   QRectF cubeArea() const;
   void placeHomeButton();
   // The buttons over the view take dark or light icons by the background.
@@ -1194,6 +1237,7 @@ private:
   bool m_planesByDepth = false;      // setPlanesByDepth()
   bool m_sketchesBehind = false;     // setSketchesBehind()
   QString m_sketchKept;              // its sketch that keeps its place
+  bool m_profilesFirst = false;      // setProfilesFirst()
   std::set<const AIS_InteractiveObject*> m_inactiveObjects;
   QString m_loggedInactiveGhosts = QStringLiteral("none");
   // Transparent bodies (mitcad#1093): "<uid>@<occurrence>" of each shown
@@ -1220,6 +1264,9 @@ private:
   QString m_loggedSketchColours;
   std::vector<occ::handle<AIS_Shape>> m_datums;
   std::vector<occ::handle<AIS_Shape>> m_highlights;
+  // The selection highlights of profiles among them (mitcad#1222), whose
+  // layer follows setProfilesFirst().
+  std::vector<occ::handle<AIS_Shape>> m_profileHighlights;
   // What setHighlights() drew last: drawn again when the background's tone
   // changes, as input lines have a variant for a dark one (mitcad#957).
   std::vector<HighlightDisplay> m_shownHighlights;
@@ -1338,6 +1385,11 @@ private:
   // Image references drawn through the bodies, just before the halos
   // (mitcad#782).
   Graphic3d_ZLayerId m_imageLayer = Graphic3d_ZLayerId_UNKNOWN;
+  // The sketch regions on offer while an input takes profiles, drawn
+  // through the bodies just after the images (mitcad#1222), with their
+  // own hover style in it.
+  Graphic3d_ZLayerId m_profileLayer = Graphic3d_ZLayerId_UNKNOWN;
+  occ::handle<Prs3d_Drawer> m_profileHover;
   // A feature's input lines where they were (mitcad#957), after the top
   // layer and the points' layer: their dashed copy drawn through the
   // solids, writing no depth, then the line in sight against the scene's
@@ -1358,6 +1410,10 @@ private:
   // (setBuildVolume, mitcad#640).
   occ::handle<AIS_Shape> m_buildFrame;
   occ::handle<AIS_Shape> m_buildOutside;
+  // A print plate's bed and its bodies in place beside the design
+  // (setPlateView, mitcad#1050).
+  occ::handle<AIS_Shape> m_plateBed;
+  occ::handle<AIS_Shape> m_plateBodies;
   PrintOverlayLabels* m_printLabels = nullptr;
   // The overlay's categories in their roles for the background's tone
   // (mitcad#1041), after the background turned light or dark.
@@ -1377,6 +1433,7 @@ private:
   QColor m_paper = QColor(0xd8, 0xdc, 0xe2); // the hidden-line style's faces
   bool m_gridShown = true;
   double m_gridStep = 0.0; // mm; 0: follows the zoom
+  QString m_gridUnit = QStringLiteral("mm"); // the design's length unit (mitcad#1210)
   occ::handle<LayoutGrid> m_grid;
   gp_Ax3 m_gridPlane;
   Graphic3d_ZLayerId m_gridLayer = Graphic3d_ZLayerId_UNKNOWN;

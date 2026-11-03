@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp
+# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp app/view/VersionWatermark.cpp
 # Appearances of faces and textures (mitcad#53, docs/rendering.md
 # "Materials"), through the real UI:
 #   - The Appearance panel gives the box's top face Paint - Red (its Faces
@@ -61,12 +61,25 @@ png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size,
 open(sys.argv[1], "wb").write(png)
 EOF
 
-# view_region: the view below the orientation cube, in screen coordinates.
+# view_region: the view below the orientation cube and above the version
+# watermark (mitcad#1209, at the view's lower right: its text would count
+# as the body's pixels and widen the body, mitcad#1221), in screen
+# coordinates.
 view_region() {
-  local area vx vy vw vh
+  local area vx vy vw vh height place wy wvy
   area=$(grep -o "View area [0-9]* [0-9]* [0-9]* [0-9]*" "$UI_LOG" | tail -1)
   read -r _ _ vx vy vw vh <<< "$area"
-  echo $((X + vx + 10)) $((Y + vy + 200)) $((vw - 20)) $((vh - 220))
+  height=$((vh - 220))
+  # The watermark's last place: "box x,y wxh, view x,y wxh" in the window,
+  # unless it was hidden since.
+  place=$(grep -E "^Version watermark ('.*' at |hidden)" "$UI_LOG" | tail -1 |
+    sed -nE 's/.*: box -?[0-9]+,(-?[0-9]+) [0-9]+x[0-9]+, view -?[0-9]+,(-?[0-9]+) .*/\1 \2/p')
+  if [ -n "$place" ]; then
+    read -r wy wvy <<< "$place"
+    # Its top in the view's frame, less a gap.
+    [ $((wy - wvy - 4 - 200)) -lt "$height" ] && height=$((wy - wvy - 4 - 200))
+  fi
+  echo $((X + vx + 10)) $((Y + vy + 200)) $((vw - 20)) "$height"
 }
 
 shot() {

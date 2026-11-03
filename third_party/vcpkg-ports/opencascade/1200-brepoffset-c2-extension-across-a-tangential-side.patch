@@ -1,0 +1,296 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: a B-spline face is enlarged at C2 across a side that is the
+iso-line of a tangential edge (mitcad#1202).
+
+The case: a loft from a square to a circle of radius 20
+(BRepOffsetAPI_ThruSections) whose circle's seam falls on a side, offset
+3 mm inwards closed. The loft splits that side into two faces tangent
+along the edge between them. BRepOffset_Inter3d enlarges each half's
+offset for the intersections (BRepOffset_Tool::EnLargeFace,
+GeomLib::ExtendSurfByLength at C1), also across that edge. The offset of
+a surface extended at C1 has a crease along the junction, and the curves
+where the circle's end cuts the halves' offsets end on the tangential
+edge's offset just there: their approximations, running across the
+crease, came out up to 1.06e-3 mm off their faces and their vertex at
+that end (the edges' tolerances raised to cover it), and the volume
+1.6e-5 of it off that of the same loft with the seam on a corner.
+
+BRepOffset_Inter3d now extends a B-spline or Bezier surface at C2 before
+its first or after its last U where that side is the iso-line of an edge
+the analysis finds tangential all along (the new
+ContinuityAcrossTangentialSides; EnLargeFace and EnlargeGeometry get the
+continuity of each U side as parameters, 1 by default). Every other side
+and surface is extended as before. The edges are then within 2.1e-4 mm
+and the volume that of the seam on a corner within 3e-8.
+
+
+That changes the extended surfaces, and with them where the intersections
+at the corners of an octagon to a circle of radius 21.7 (seam on a side,
+3 mm) meet: there the curves on the circle's end meet nearly tangentially
+at a corner whose crease flattens to tangency, and the vertex
+BRepOffset_MakeLoops substitutes keeps points on its edges up to
+1.4e-4 mm off it. Patch 1190's CoverPoints widens that vertex's tolerance
+to them, as for the octagon to a circle of radius 24.5 at 1 and 2 mm.
+And where the walls lean in (a square to a circle of radius 10, its seam
+on a side, shelled 1 mm), the intersection at the corner of the extended
+half left a gap about the tangency of 8 % of the offset on Windows;
+patch 1190 takes the continuation from within 20 % there (mitcad#1217).
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index 8606ce2b..e667b52c 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -46,7 +46,83 @@
+ #include <BOPTools_BoxTree.hxx>
+ //
+ #include <BOPTools_AlgoTools.hxx>
++#include <BRepTools.hxx>
++#include <Geom2d_Line.hxx>
++#include <Geom2d_TrimmedCurve.hxx>
++#include <Geom_BSplineSurface.hxx>
++#include <Geom_BezierSurface.hxx>
++#include <Geom_RectangularTrimmedSurface.hxx>
++#include <Geom_Surface.hxx>
++#include <Precision.hxx>
+ 
++//=======================================================================
++// function : ContinuityAcrossTangentialSides
++// purpose  : The continuity to extend theF's B-spline or Bezier surface at
++//            before its first and after its last U when it is enlarged: 2
++//            on a side that is the iso-line of a tangential edge, 1 (the
++//            default) otherwise. The offset of a surface extended at C1 has
++//            a crease along the junction (its normal turns there); on a
++//            side across a tangential edge the curves where other faces'
++//            offsets cut it end on that edge's offset, just at the crease,
++//            and their approximations running across it came out up to
++//            1e-3 mm off there (mitcad#1202). At C2 the offset is smooth
++//            across the junction.
++//=======================================================================
++static void ContinuityAcrossTangentialSides(const TopoDS_Face&        theF,
++                                            const BRepOffset_Analyse& theAnalyse,
++                                            int&                      theContUfirst,
++                                            int&                      theContUlast)
++{
++  theContUfirst = 1;
++  theContUlast  = 1;
++  occ::handle<Geom_Surface> aS = BRep_Tool::Surface(theF);
++  if (aS->DynamicType() == STANDARD_TYPE(Geom_RectangularTrimmedSurface))
++  {
++    aS = occ::down_cast<Geom_RectangularTrimmedSurface>(aS)->BasisSurface();
++  }
++  if (aS->DynamicType() != STANDARD_TYPE(Geom_BSplineSurface)
++      && aS->DynamicType() != STANDARD_TYPE(Geom_BezierSurface))
++  {
++    return;
++  }
++  double aU1, aU2, aV1, aV2;
++  BRepTools::UVBounds(theF, aU1, aU2, aV1, aV2);
++  for (TopExp_Explorer anExp(theF, TopAbs_EDGE); anExp.More(); anExp.Next())
++  {
++    const TopoDS_Edge& anE = TopoDS::Edge(anExp.Current());
++    if (BRep_Tool::Degenerated(anE) || !theAnalyse.HasAncestor(anE))
++    {
++      continue;
++    }
++    const NCollection_List<BRepOffset_Interval>& aLI = theAnalyse.Type(anE);
++    if (aLI.Extent() != 1 || aLI.First().Type() != ChFiDS_Tangential)
++    {
++      continue;
++    }
++    double                    aF, aL;
++    occ::handle<Geom2d_Curve> aC = BRep_Tool::CurveOnSurface(anE, theF, aF, aL);
++    if (!aC.IsNull() && aC->DynamicType() == STANDARD_TYPE(Geom2d_TrimmedCurve))
++    {
++      aC = occ::down_cast<Geom2d_TrimmedCurve>(aC)->BasisCurve();
++    }
++    occ::handle<Geom2d_Line> aLine = occ::down_cast<Geom2d_Line>(aC);
++    if (aLine.IsNull() || !aLine->Direction().IsParallel(gp::DY2d(), Precision::Angular()))
++    {
++      continue;
++    }
++    const double aU = aLine->Location().X();
++    if (std::abs(aU - aU1) <= Precision::PConfusion())
++    {
++      theContUfirst = 2;
++    }
++    else if (std::abs(aU - aU2) <= Precision::PConfusion())
++    {
++      theContUlast = 2;
++    }
++  }
++}
++
++//=================================================================================================
+ //=================================================================================================
+ 
+ BRepOffset_Inter3d::BRepOffset_Inter3d(const occ::handle<BRepAlgo_AsDes>& AsDes,
+@@ -741,7 +817,22 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+         bool enlargeU      = true;
+         bool enlargeVfirst = true, enlargeVlast = true;
+         BRepOffset_Tool::CheckBounds(F1, Analyse, enlargeU, enlargeVfirst, enlargeVlast);
+-        BRepOffset_Tool::EnLargeFace(OF1, NF1, true, true, enlargeU, enlargeVfirst, enlargeVlast);
++        int aContUfirst, aContUlast;
++        ContinuityAcrossTangentialSides(F1, Analyse, aContUfirst, aContUlast);
++        BRepOffset_Tool::EnLargeFace(OF1,
++                                     NF1,
++                                     true,
++                                     true,
++                                     enlargeU,
++                                     enlargeVfirst,
++                                     enlargeVlast,
++                                     1,
++                                     -1.,
++                                     -1.,
++                                     -1.,
++                                     -1.,
++                                     aContUfirst,
++                                     aContUlast);
+         MES.Bind(OF1, NF1);
+       }
+       else
+@@ -754,7 +845,22 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+         bool enlargeU      = true;
+         bool enlargeVfirst = true, enlargeVlast = true;
+         BRepOffset_Tool::CheckBounds(F2, Analyse, enlargeU, enlargeVfirst, enlargeVlast);
+-        BRepOffset_Tool::EnLargeFace(OF2, NF2, true, true, enlargeU, enlargeVfirst, enlargeVlast);
++        int aContUfirst, aContUlast;
++        ContinuityAcrossTangentialSides(F2, Analyse, aContUfirst, aContUlast);
++        BRepOffset_Tool::EnLargeFace(OF2,
++                                     NF2,
++                                     true,
++                                     true,
++                                     enlargeU,
++                                     enlargeVfirst,
++                                     enlargeVlast,
++                                     1,
++                                     -1.,
++                                     -1.,
++                                     -1.,
++                                     -1.,
++                                     aContUfirst,
++                                     aContUlast);
+         MES.Bind(OF2, NF2);
+       }
+       else
+@@ -1084,7 +1190,22 @@ void BRepOffset_Inter3d::ConnexIntAcrossVanished(
+         bool enlargeU      = true;
+         bool enlargeVfirst = true, enlargeVlast = true;
+         BRepOffset_Tool::CheckBounds(F[k], Analyse, enlargeU, enlargeVfirst, enlargeVlast);
+-        BRepOffset_Tool::EnLargeFace(OF, NF[k], true, true, enlargeU, enlargeVfirst, enlargeVlast);
++        int aContUfirst, aContUlast;
++        ContinuityAcrossTangentialSides(F[k], Analyse, aContUfirst, aContUlast);
++        BRepOffset_Tool::EnLargeFace(OF,
++                                     NF[k],
++                                     true,
++                                     true,
++                                     enlargeU,
++                                     enlargeVfirst,
++                                     enlargeVlast,
++                                     1,
++                                     -1.,
++                                     -1.,
++                                     -1.,
++                                     -1.,
++                                     aContUfirst,
++                                     aContUlast);
+         MES.Bind(OF, NF[k]);
+       }
+       else
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index 0cbdbb84..47785a78 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -3491,7 +3491,9 @@ static bool EnlargeGeometry(occ::handle<Geom_Surface>& S,
+                             const double               theLenBeforeUfirst,
+                             const double               theLenAfterUlast,
+                             const double               theLenBeforeVfirst,
+-                            const double               theLenAfterVlast)
++                            const double               theLenAfterVlast,
++                            const int                  theContinuityUfirst = 1,
++                            const int                  theContinuityUlast  = 1)
+ {
+   const double TolApex = 1.e-5;
+ 
+@@ -3518,7 +3520,9 @@ static bool EnlargeGeometry(occ::handle<Geom_Surface>& S,
+                     theLenBeforeUfirst,
+                     theLenAfterUlast,
+                     theLenBeforeVfirst,
+-                    theLenAfterVlast);
++                    theLenAfterVlast,
++                    theContinuityUfirst,
++                    theContinuityUlast);
+     if (!theGlobalEnlargeVfirst)
+     {
+       V1 = vf1;
+@@ -3559,7 +3563,9 @@ static bool EnlargeGeometry(occ::handle<Geom_Surface>& S,
+                                     theLenBeforeUfirst,
+                                     theLenAfterUlast,
+                                     theLenBeforeVfirst,
+-                                    theLenAfterVlast);
++                                    theLenAfterVlast,
++                                    theContinuityUfirst,
++                                    theContinuityUlast);
+     occ::down_cast<Geom_OffsetSurface>(S)->SetBasisSurface(Surf);
+   }
+   else if (S->DynamicType() == STANDARD_TYPE(Geom_SurfaceOfLinearExtrusion)
+@@ -3738,11 +3744,11 @@ static bool EnlargeGeometry(occ::handle<Geom_Surface>& S,
+     {
+       if (enlargeUfirst && uf1 - u1 < duf && du_first != 0.)
+       {
+-        GeomLib::ExtendSurfByLength(aSurf, du_first, 1, true, false);
++        GeomLib::ExtendSurfByLength(aSurf, du_first, theContinuityUfirst, true, false);
+       }
+       if (enlargeUlast && u2 - uf2 < duf && du_last != 0.)
+       {
+-        GeomLib::ExtendSurfByLength(aSurf, du_last, 1, true, true);
++        GeomLib::ExtendSurfByLength(aSurf, du_last, theContinuityUlast, true, true);
+       }
+     }
+     if (enlargeV)
+@@ -3998,7 +4004,9 @@ bool BRepOffset_Tool::EnLargeFace(const TopoDS_Face& F,
+                                   const double       theLenBeforeUfirst,
+                                   const double       theLenAfterUlast,
+                                   const double       theLenBeforeVfirst,
+-                                  const double       theLenAfterVlast)
++                                  const double       theLenAfterVlast,
++                                  const int          theContinuityUfirst,
++                                  const int          theContinuityUlast)
+ {
+   //---------------------------
+   // extension de la geometrie.
+@@ -4061,7 +4069,9 @@ bool BRepOffset_Tool::EnLargeFace(const TopoDS_Face& F,
+                                     theLenBeforeUfirst,
+                                     theLenAfterUlast,
+                                     theLenBeforeVfirst,
+-                                    theLenAfterVlast);
++                                    theLenAfterVlast,
++                                    theContinuityUfirst,
++                                    theContinuityUlast);
+   }
+   else
+   {
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx
+index d1e4c1f7..edeb80da 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx
+@@ -142,6 +142,8 @@ public:
+   //! <theLenBeforeUfirst>, <theLenAfterUlast>, <theLenBeforeVfirst>, <theLenAfterVlast>
+   //! set the values of enlargement on correspondent directions.
+   //! If some of them equals -1, the default value of enlargement is used.
++  //! <theContinuityUfirst>, <theContinuityUlast> set the continuity (1 to 3) at which a
++  //! B-spline or Bezier surface is extended before its first and after its last U.
+   Standard_EXPORT static bool EnLargeFace(const TopoDS_Face& F,
+                                           TopoDS_Face&       NF,
+                                           const bool         ChangeGeom,
+@@ -153,7 +155,9 @@ public:
+                                           const double       theLenBeforeUfirst = -1.,
+                                           const double       theLenAfterUlast   = -1.,
+                                           const double       theLenBeforeVfirst = -1.,
+-                                          const double       theLenAfterVlast   = -1.);
++                                          const double       theLenAfterVlast   = -1.,
++                                          const int          theContinuityUfirst = 1,
++                                          const int          theContinuityUlast  = 1);
+ 
+   Standard_EXPORT static void ExtentFace(
+     const TopoDS_Face&                                                        F,

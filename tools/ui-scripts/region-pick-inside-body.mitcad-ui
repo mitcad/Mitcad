@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# A sketch region inside a body is picked before the body's face in front
+# of it (mitcad#1222) on region-pick-inside-body.json: a block (F1.b0)
+# centred on the XY plane, Sketch1 (F2) on XY through its middle with a
+# square, Extrude1 (F3) cutting the square out downwards. Seen from the
+# top, the block's top face lies in front of the square.
+#   1. Editing Extrude1, a click on the square inside the block picks the
+#      square (it was selected: the click takes it out), not the top face;
+#      the view logs that the region went before a nearer face.
+#   2. A second click picks it again.
+#   3. With the square taken out again, a click on the top face where no
+#      region is under the cursor still picks the face, which the input
+#      takes as a profile.
+# Run by tools/ui-region-pick-inside-body-test.sh (Linux) and
+# tools/ui-windows-region-pick-inside-body-test.ps1 (Windows).
+wait-idle
+command view.top
+command view.fit
+expect-model-bodies 1 31000
+mark
+dblclick-logged '^Timeline Extrude1 at '
+expect-log 'Editing F3 with Extrude'
+wait-log '^View profiles first: on$'
+wait-log '^Pick profile F2/'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/region-inside-body.png'
+
+# 1. The square inside the block: the region, not the face in front.
+mark
+click-pick 'profile F2/'
+wait-log '^Extrude Profiles: nothing$'
+expect-log '^Pick priority: profile F2/.* before a nearer face$'
+expect-no-log '^Extrude Profiles: .*face F1:top'
+
+# 2. Picked again.
+mark
+click-pick 'profile F2/'
+wait-log '^Extrude Profiles: 1 profile \[profile .* of F2\]'
+expect-log '^Pick priority: profile F2/.* before a nearer face$'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/region-inside-body-picked.png'
+
+# 3. The face where no region is under the cursor (the input takes one
+# planar face alone).
+mark
+click-pick 'profile F2/'
+wait-log '^Extrude Profiles: nothing$'
+mark
+click-pick-offset 'face F1.b0/F1:top' 0 0 '^face F1:top of F1.b0$'
+wait-log '^Extrude Profiles: 1 face \[face F1:top'
+expect-no-log '^Pick priority: profile '
+
+mark
+key Escape
+expect-log 'Command Extrude cancelled'
+wait-log '^View profiles first: off$'
+wait-idle
+expect-model-bodies 1 31000
+expect-never 'OCCT view event failed|Recompute failed'

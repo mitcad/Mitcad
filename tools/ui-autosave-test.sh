@@ -152,7 +152,7 @@ EOF
 expect_title() {
   local title=""
   for _ in $(seq 1 25); do
-    title=$(xdotool getwindowname "$UI_WINDOW" 2> /dev/null)
+    title=$(ui_window_title)
     [ "$title" = "$1" ] && { echo "ok   title '$1'"; return; }
     sleep 0.2
   done

@@ -22,14 +22,40 @@ struct ProfilePickerRow {
   QString group;
   QString shortName;
   QString source;
+  // A process listed under the chosen printer (mitcad#1216).
+  bool forChosen = false;
 };
 
 // The rows of the `library_items` of a kind (`printer` or `process`) in
 // the picker's order: by group, then by name (the same names by key), so
 // that a choice never moves them; rows without a group last, under
 // "Other" when others have one. A printer's group is its vendor
-// (printerVendor), a process's the printer its name names after an `@`.
-QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, const QString& kind);
+// (printerVendor). A process's is its printer (mitcad#1216,
+// processPickerGroup): the processes of the chosen printer
+// (`chosenPrinter`, the names printerNames gives; empty: none chosen)
+// first, then the others under their printers, those for any printer
+// last under "Any printer".
+QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, const QString& kind,
+                                            const QStringList& chosenPrinter = QStringList());
+
+// The printers a process is for (mitcad#1216: the model's `printers` of
+// its `library_items` row, by the filament presets' rule: its compatible
+// printers, else its name's `@` part), each named once without its
+// nozzle, in the model's order; empty for any printer. A row without
+// `printers` names the printer after its name's `@` (`for_printer`).
+QStringList processPrinters(const LibraryItem& process);
+// The names a printer goes by (the row's `printer_names`: its model, its
+// name, its slicers' preset names, each also without the nozzle); its
+// name when the row gives none.
+QStringList printerNames(const LibraryItem& printer);
+// Whether two names name the same printer, in any case and spacing.
+bool samePrinterName(const QString& a, const QString& b);
+// The group of the processes for any printer: "Any printer".
+QString anyPrinterTitle();
+// The printer a picker lists a process under (mitcad#1216): the one of its
+// printers the chosen printer goes by (`chosenPrinter`, printerNames;
+// `forChosen` set), else its first printer; empty for any printer.
+QString processPickerGroup(const LibraryItem& process, const QStringList& chosenPrinter, bool* forChosen = nullptr);
 
 // A printer's vendor from its name without the nozzle (the row's
 // `bare_name`): its first word, and the words after it that the other

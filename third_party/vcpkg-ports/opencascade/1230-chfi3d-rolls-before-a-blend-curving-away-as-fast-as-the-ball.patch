@@ -1,0 +1,1571 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose contact runs off a narrow face onto an earlier
+blend of the same radius rolls on that face's far edges, the ball passing
+over slivers there (mitcad#1215).
+
+The case: a ring's top, 5 wide between an inner cylinder (radius 88.5)
+and an outer rim that an earlier rounding of 2.5 took (its contact on the
+top at radius 90.978, 2.478 from the inner rim), with fins at eight mouths
+whose crests meet the top there; the inner rim, a closed chain of 17
+edges, rounded with 2.5. The ball's contact on the top would lie at radius
+91.0, past the top face, and the face beyond its tangent edge is the
+earlier blend, curving away from the ball as fast as the ball's own
+sphere: the ball touches it along a whole section, not at a point. The
+walk overflowed onto it and failed at once. The stored body after the
+rounding has the ball passing through the top's far edge all round (the
+top face vanishes), its blend a torus through that edge meeting the
+earlier blend there. At some mouths that far edge has a sliver edge of 2
+to 7 micrometres where a fin's crest meets the top, and at one the inner
+cylinder's seam lies under the crest.
+
+1. ChFi3d_Builder::Compute: a stripe whose walk or start failed is computed
+   again where a side reaches, within twice the radius, an edge of a face
+   of its edges across which the face beyond continues it tangentially and
+   curves away from the ball as fast as the ball's sphere or faster (its
+   normal curvature across the edge at least 1/(1.01 R),
+   RollsBeforeCurvedAway): that side rolls on the edge before that face
+   (myRollStripes, as RollsInsteadOfOverflow, and myRollTangentStripes);
+   as before where that fails too. The overflow start then rolls there
+   although the faces are tangent (StartSolOverflow), and the obstacle
+   chaining at a vertex (StartSol) goes on along the next such edge.
+2. A sliver edge of the face rolled on between two such edges (shorter
+   than 100 tolerances, PassesOverEdge): the ball passes over it. At the
+   end of the edge it rolled on it turns about that end until it first
+   touches the edge after the sliver (ChFi3d_NextEdges gives that edge,
+   BRepBlend_SurfRstLineBuilder::FindTouchOverSliver ends the turn), or it
+   rolls on from that edge's start where the ball reaches it already; the
+   piece of the ball between (ChFi3d_ConcaveTurnWedge) runs along the
+   sliver and the edge after it, with that edge's transition, its curves
+   within a periodic face's parameters, so that the face rolled on goes all
+   round. A turn forced over a sliver only where the ball leaves the edge.
+3. Where the other contact lies within a hair of an edge of its face,
+   across which that face goes on tangentially, at the end of the edge
+   rolled on (an inner cylinder's seam under a crest): it changes face
+   there, the piece before ending on that edge; the ball turns about the
+   vertex at the next edge's start rather than the old edge's end (a turn
+   of no length there), its other contact a hair outside its face at most.
+4. ChFi3d_FilDS: a closed stripe rolling on an edge at its start, where its
+   last piece ends on the same edge, cuts that edge with the last piece's
+   transition only; a piece whose contact on its first side is a point (the
+   ball turning about it) takes the transition of its second side.
+Every other fillet is as before.
+
+On item 36's bodies of two versions of the design (the stored body after
+the rounding of the outer rim): valid, 343 and 358 faces, the faces of each
+body round the rim on the other's within 2 micrometres both ways; each
+rounding takes 0.2 s.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
+index 983b131a..84674d25 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
+@@ -158,6 +158,7 @@ BRepBlend_SurfRstConstRad::BRepBlend_SurfRstConstRad(const occ::handle<Adaptor3d
+       mySShape(BlendFunc_Rational)
+ {
+   hasnext[0] = hasnext[1] = false;
++  passednext[0] = passednext[1] = false;
+ }
+ 
+ //=================================================================================================
+@@ -1249,6 +1250,21 @@ void BRepBlend_SurfRstConstRad::SetNextEdges(const bool    HasFirst,
+ 
+ //=================================================================================================
+ 
++void BRepBlend_SurfRstConstRad::SetNextPassedOver(const bool First, const bool Last)
++{
++  passednext[0] = First;
++  passednext[1] = Last;
++}
++
++//=================================================================================================
++
++bool BRepBlend_SurfRstConstRad::NextEdgePassedOver(const bool AtLast) const
++{
++  return passednext[AtLast ? 1 : 0];
++}
++
++//=================================================================================================
++
+ bool BRepBlend_SurfRstConstRad::NextEdgeAtEnd(const bool AtLast, gp_Vec& Into) const
+ {
+   const int i = AtLast ? 1 : 0;
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.hxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.hxx
+index 0570b39f..c7a1c59f 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.hxx
+@@ -102,6 +102,12 @@ public:
+ 
+   Standard_EXPORT bool NextEdgeAtEnd(const bool AtLast, gp_Vec& Into) const override;
+ 
++  //! Whether the next edges at the first and last ends are those after a
++  //! sliver edge the ball passes over (NextEdgePassedOver).
++  Standard_EXPORT void SetNextPassedOver(const bool First, const bool Last);
++
++  Standard_EXPORT bool NextEdgePassedOver(const bool AtLast) const override;
++
+   //! The curves of those next edges (null where there is none).
+   Standard_EXPORT void SetNextCurves(const occ::handle<Adaptor3d_Curve>& First,
+                                      const occ::handle<Adaptor3d_Curve>& Last);
+@@ -319,6 +325,7 @@ private:
+   bool                           pinned;
+   double                         pinW;
+   bool                           hasnext[2];
++  bool                           passednext[2];
+   gp_Vec                         intonext[2];
+   occ::handle<Adaptor3d_Curve>   nextcurve[2];
+   double                         maxang;
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+index 9019424f..af4b102b 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+@@ -287,6 +287,102 @@ bool BRepBlend_SurfRstLineBuilder::NextEdgeGap(Blend_SurfRstFunction& Func,
+ 
+ //=================================================================================================
+ 
++bool BRepBlend_SurfRstLineBuilder::SliverGap(Blend_SurfRstFunction& Func,
++                                             const math_Vector&     theSol,
++                                             double&                theGap) const
++{
++  gp_Pnt centre;
++  if (!Func.Centre(theSol, centre))
++  {
++    return false;
++  }
++  const double radius = centre.Distance(surf1->Value(theSol(1), theSol(2)));
++  bool         found  = false;
++  theGap              = RealLast();
++  for (int k = 0; k < 2; k++)
++  {
++    occ::handle<Adaptor3d_Curve> next;
++    if (!Func.NextEdgePassedOver(k == 1) || !Func.NextCurveAtEnd(k == 1, next) || next.IsNull())
++    {
++      continue;
++    }
++    const double  w1 = next->FirstParameter(), w2 = next->LastParameter();
++    Extrema_ExtPC anExt(centre, *next, w1, w2, Precision::PConfusion());
++    for (int i = 1; anExt.IsDone() && i <= anExt.NbExt(); i++)
++    {
++      if (anExt.IsMin(i))
++      {
++        theGap = std::min(theGap, std::sqrt(anExt.SquareDistance(i)) - radius);
++        found  = true;
++      }
++    }
++    for (const double w : {w1, w2})
++    {
++      theGap = std::min(theGap, centre.Distance(next->Value(w)) - radius);
++      found  = true;
++    }
++  }
++  return found;
++}
++
++//=================================================================================================
++
++bool BRepBlend_SurfRstLineBuilder::FindTouchOverSliver(Blend_SurfRstFunction& Func,
++                                                       const double           P0,
++                                                       const math_Vector&     S0)
++{
++  math_Vector tolerance(1, 3), infb(1, 3), supb(1, 3);
++  Func.GetTolerance(tolerance, tolpoint3d);
++  Func.GetBounds(infb, supb);
++  math_FunctionSetRoot rsnld(Func, tolerance, 30);
++  double      pa = P0, pb = param, ga = 0., gb = 0.;
++  math_Vector sa(S0), sb(sol), sm(1, 3);
++  Func.Set(pa);
++  if (!SliverGap(Func, sa, ga) || !SliverGap(Func, sb, gb) || ga < 0. || gb >= 0.)
++  {
++    Func.Set(param);
++    return false;
++  }
++  for (int it = 0; it < 100; it++)
++  {
++    const double pm = it % 2 == 0 ? pa + (pb - pa) * ga / (ga - gb) : 0.5 * (pa + pb);
++    Func.Set(pm);
++    rsnld.Perform(Func, sa, infb, supb);
++    if (!rsnld.IsDone())
++    {
++      break;
++    }
++    rsnld.Root(sm);
++    double gm = 0.;
++    if (!Func.IsSolution(sm, tolpoint3d) || !SliverGap(Func, sm, gm))
++    {
++      break;
++    }
++    if (std::abs(gm) <= 1.e-3 * tolpoint3d || std::abs(pb - pa) <= Precision::PConfusion())
++    {
++      param = pm;
++      sol   = sm;
++      return true;
++    }
++    if (gm > 0.)
++    {
++      pa = pm;
++      sa = sm;
++      ga = gm;
++    }
++    else
++    {
++      pb = pm;
++      sb = sm;
++      gb = gm;
++    }
++  }
++  Func.Set(param);
++  return false;
++}
++
++//=================================================================================================
++
+ bool BRepBlend_SurfRstLineBuilder::FindConcaveTurn(Blend_SurfRstFunction& Func,
+                                                    const double           P0,
+                                                    const math_Vector&     S0)
+@@ -415,7 +511,39 @@ bool BRepBlend_SurfRstLineBuilder::StartPivot(Blend_SurfRstFunction& Func)
+   // The turn ends where the ball rolls on: past its tangency with the edge it
+   // rolls on next (its centre beyond the point) where it starts tangent to it.
+   pivotRelease = turns ? 0. : tolpoint3d;
+-  if (!turns && side <= tolpoint3d)
++  // (Over a sliver edge at this end the ball turns about the end until it
++  // touches the edge after it, InternalPerform, not until it is tangent to
++  // a direction there.)
++  bool aOver = Func.NextEdgePassedOver(atLast);
++  if (aOver)
++  {
++    // (Only where the free ball a little further on does not roll on the
++    // restriction: at the end it leaves, not at the start it rolls from.)
++    const double h = std::max(100. * tolgui, 1.e-6);
++    Func.Unpin();
++    Func.Set(param + sens * h);
++    rsnld.Perform(Func, root, infbound, supbound);
++    bool rolls = false;
++    if (rsnld.IsDone())
++    {
++      math_Vector further(1, 3);
++      rsnld.Root(further);
++      rolls = Func.IsSolution(further, tolpoint3d) && (atLast ? w - further(3) : further(3) - w) > tolerance(3);
++    }
++    Func.Set(param);
++    aOver = !rolls && Func.Pin(w);
++    if (!aOver)
++    {
++      Func.Pin(w);
++    }
++  }
++  if (aOver)
++  {
++    turns        = true;
++    pivotLeaves  = true;
++    pivotRelease = RealLast();
++  }
++  if (!aOver && !turns && side <= tolpoint3d)
+   {
+     // The ball is tangent to the restriction at its end: it rolls into the
+     // restriction from there, or it does not yet (it turns about that point,
+@@ -962,7 +1090,16 @@ void BRepBlend_SurfRstLineBuilder::InternalPerform(Blend_SurfRstFunction&  Func,
+     if (rsnld.IsDone())
+     {
+       rsnld.Root(sol);
+-      if (!CheckInside(Func, situonc, situons, decroch) && line->NbPoints() == 1)
++      bool aInside = CheckInside(Func, situonc, situons, decroch);
++      if (!aInside && pivot && situonc == TopAbs_IN && !decroch && situons != TopAbs_IN
++          && NearlyOnSurfaceFace(sol))
++      {
++        // (A turn about the restriction's end whose contact on the surface
++        // starts a hair outside its face, on the edge it crossed onto it.)
++        situons = TopAbs_IN;
++        aInside = true;
++      }
++      if (!aInside && line->NbPoints() == 1)
+       {
+         State    = Blend_StepTooLarge;
+         bonpoint = false;
+@@ -974,6 +1111,23 @@ void BRepBlend_SurfRstLineBuilder::InternalPerform(Blend_SurfRstFunction&  Func,
+       bonpoint = false;
+     }
+     double nextGap = 0.;
++    if (bonpoint && pivot && pivotRelease == RealLast() && SliverGap(Func, sol, nextGap)
++        && nextGap < 0.)
++    {
++      // The ball turning about the restriction's end over a sliver edge
++      // touches the edge after it: the turn ends there, the next blend rolls
++      // on that edge from there.
++      bonpoint = false;
++      if (FindTouchOverSliver(Func, parprec, parinit) && TestArret(Func, false, Blend_OK) == Blend_OK)
++      {
++        decroch = false;
++        State   = Blend_OnRst2;
++      }
++      else
++      {
++        State = Blend_StepTooLarge;
++      }
++    }
+     if (bonpoint && rolling && !pivot && NextEdgeGap(Func, sol, nextGap) && nextGap < -tolpoint3d)
+     {
+       // The ball reaches into an edge that follows the restriction at a vertex
+@@ -2241,6 +2395,29 @@ Blend_Status BRepBlend_SurfRstLineBuilder::TestArret(Blend_SurfRstFunction& Func
+ 
+ //=================================================================================================
+ 
++bool BRepBlend_SurfRstLineBuilder::NearlyOnSurfaceFace(const math_Vector& Sol) const
++{
++  gp_Pnt       P;
++  gp_Vec       Du, Dv;
++  surf1->D1(Sol(1), Sol(2), P, Du, Dv);
++  const double aSpeed = std::max(Du.Magnitude(), Dv.Magnitude());
++  if (aSpeed <= gp::Resolution())
++  {
++    return false;
++  }
++  // (The point brought within the face's parameters, a hair at most.)
++  const double aHair = 10. * tolpoint3d / aSpeed;
++  const double u = std::min(std::max(Sol(1), surf1->FirstUParameter()), surf1->LastUParameter());
++  const double v = std::min(std::max(Sol(2), surf1->FirstVParameter()), surf1->LastVParameter());
++  if (std::abs(u - Sol(1)) > aHair || std::abs(v - Sol(2)) > aHair)
++  {
++    return false;
++  }
++  return domain1->Classify(gp_Pnt2d(u, v), Precision::PConfusion(), false) != TopAbs_OUT;
++}
++
++//=================================================================================================
++
+ bool BRepBlend_SurfRstLineBuilder::CheckInside(Blend_SurfRstFunction& Func,
+                                                TopAbs_State&          SituOnC,
+                                                TopAbs_State&          SituOnS,
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx
+index 856a3118..9568b29b 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx
+@@ -196,6 +196,26 @@ private:
+                                    const math_Vector&     Sol,
+                                    double&                Gap) const;
+ 
++  //! Whether the contact on the surface of solution Sol lies on its face
++  //! within ten times the 3D tolerance (a turn about the restriction's end
++  //! starting on the face's edge, the contact a hair outside).
++  Standard_EXPORT bool NearlyOnSurfaceFace(const math_Vector& Sol) const;
++
++  //! How far the ball of the solution Sol stays clear of the edges after
++  //! sliver edges at the restriction's ends (Func.NextEdgePassedOver): the
++  //! least distance of their points, their ends included, from its centre
++  //! less its radius. Returns false where there is none.
++  Standard_EXPORT bool SliverGap(Blend_SurfRstFunction& Func, const math_Vector& Sol, double& Gap) const;
++
++  //! Where the ball turning about the restriction's end over a sliver edge
++  //! (Func.NextEdgePassedOver) first touches the edge after it, between the
++  //! parameters P0 (solution S0, clear of it) and the current one (reaching
++  //! into it): sets the parameter and the solution there. Returns false where
++  //! that is not found.
++  Standard_EXPORT bool FindTouchOverSliver(Blend_SurfRstFunction& Func,
++                                           const double           P0,
++                                           const math_Vector&     S0);
++
+   //! Where the ball rolling on the restriction reaches into an edge that
+   //! follows it (a concave turn: that edge turns towards the ball, which
+   //! touches it before the vertex), between the guide's parameters P0 (clear,
+diff --git a/src/ModelingAlgorithms/TKFillet/Blend/Blend_SurfRstFunction.hxx b/src/ModelingAlgorithms/TKFillet/Blend/Blend_SurfRstFunction.hxx
+index 98389db0..a3f598ad 100644
+--- a/src/ModelingAlgorithms/TKFillet/Blend/Blend_SurfRstFunction.hxx
++++ b/src/ModelingAlgorithms/TKFillet/Blend/Blend_SurfRstFunction.hxx
+@@ -193,6 +193,16 @@ public:
+     return false;
+   }
+ 
++  //! Whether the ball passes over a sliver edge at the restriction's last
++  //! (AtLast) or first end, the next edge (NextEdgeAtEnd, NextCurveAtEnd)
++  //! being the one after it: the ball turns about the restriction's end
++  //! until it touches that edge (the default: no).
++  virtual bool NextEdgePassedOver(const bool AtLast) const
++  {
++    (void)AtLast;
++    return false;
++  }
++
+   //! Returns if the section is rational
+   Standard_EXPORT bool IsRational() const override = 0;
+ 
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 9d2e5c5f..b0d8907b 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -87,6 +87,9 @@
+ #include <IntRes2d_Transition.hxx>
+ #include <TopOpeBRepDS_Transition.hxx>
+ #include <IntRes2d_IntersectionSegment.hxx>
++#include <BRepLProp_SLProps.hxx>
++#include <GCPnts_AbscissaPoint.hxx>
++#include <BRepAdaptor_Curve.hxx>
+ #include <utility>
+ 
+ #ifdef OCCT_DEBUG
+@@ -862,6 +865,162 @@ bool ChFi3d_Builder::RollsBefore(const occ::handle<ChFiDS_Stripe>& S, const Topo
+   return false;
+ }
+ 
++bool ChFi3d_Builder::RollsBeforeTangent(const occ::handle<ChFiDS_Stripe>& S, const TopoDS_Shape& F) const
++{
++  NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itS(myRollTangentStripes);
++  NCollection_List<TopoDS_Shape>::Iterator               itF(myRollTangentFaces);
++  for (; itS.More(); itS.Next(), itF.Next())
++  {
++    if (itS.Value() == S && itF.Value().IsSame(F))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++bool ChFi3d_Builder::RollsBeforeTangent(const occ::handle<ChFiDS_Spine>& Sp, const TopoDS_Shape& F) const
++{
++  if (Sp.IsNull() || F.IsNull())
++  {
++    return false;
++  }
++  NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itS(myRollTangentStripes);
++  NCollection_List<TopoDS_Shape>::Iterator               itF(myRollTangentFaces);
++  for (; itS.More(); itS.Next(), itF.Next())
++  {
++    if (itS.Value()->Spine() == Sp && itF.Value().IsSame(F))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++bool ChFi3d_Builder::PassesOverEdge(const occ::handle<ChFiDS_Spine>& Sp,
++                                    const TopoDS_Face&               F,
++                                    const TopoDS_Edge&               E) const
++{
++  if (Sp.IsNull() || F.IsNull() || E.IsNull() || BRep_Tool::Degenerated(E) || !myEFMap.Contains(E))
++  {
++    return false;
++  }
++  TopoDS_Face G;
++  for (NCollection_List<TopoDS_Shape>::Iterator itG(myEFMap(E)); itG.More(); itG.Next())
++  {
++    if (!itG.Value().IsSame(F))
++    {
++      G = TopoDS::Face(itG.Value());
++    }
++  }
++  if (G.IsNull() || !RollsBeforeTangent(Sp, G))
++  {
++    return false;
++  }
++  BRepAdaptor_Curve aC(E);
++  return GCPnts_AbscissaPoint::Length(aC) < 100. * tolesp;
++}
++
++bool ChFi3d_Builder::RollsBeforeCurvedAway(const occ::handle<ChFiDS_Stripe>& S)
++{
++  const occ::handle<ChFiDS_FilSpine> Sp = occ::down_cast<ChFiDS_FilSpine>(S->Spine());
++  if (Sp.IsNull())
++  {
++    return false;
++  }
++  bool found = false;
++  for (int i = 1; i <= Sp->NbEdges(); i++)
++  {
++    const TopoDS_Edge& E = Sp->Edges(i);
++    if (!Sp->IsConstant(i) || !myEFMap.Contains(E))
++    {
++      continue;
++    }
++    const double R = Sp->Radius(E);
++    for (NCollection_List<TopoDS_Shape>::Iterator itF(myEFMap(E)); itF.More(); itF.Next())
++    {
++      const TopoDS_Face F = TopoDS::Face(itF.Value());
++      for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++      {
++        const TopoDS_Edge e = TopoDS::Edge(ex.Current());
++        if (BRep_Tool::Degenerated(e) || !myEFMap.Contains(e) || Sp->Index(e) > 0)
++        {
++          continue;
++        }
++        TopoDS_Face G;
++        for (NCollection_List<TopoDS_Shape>::Iterator itG(myEFMap(e)); itG.More(); itG.Next())
++        {
++          if (!itG.Value().IsSame(F))
++          {
++            G = TopoDS::Face(itG.Value());
++          }
++        }
++        if (G.IsNull() || !spineEdgeOf(Sp, G).IsNull() || RollsBefore(S, G))
++        {
++          continue;
++        }
++        double f, l;
++        const occ::handle<Geom_Curve> c = BRep_Tool::Curve(e, f, l);
++        if (c.IsNull())
++        {
++          continue;
++        }
++        const double wm = 0.5 * (f + l);
++        gp_Pnt       Pm;
++        gp_Vec       Tm;
++        c->D1(wm, Pm, Tm);
++        if (distanceToEdge(Pm, E) > 2. * R || Tm.Magnitude() <= gp::Resolution()
++            || !ChFi3d::IsTangentFaces(e, F, G))
++        {
++          continue;
++        }
++        // G's normal curvature across e at its middle, toward the material
++        // (negative where G bulges out).
++        const occ::handle<Geom2d_Curve> pc = BRep_Tool::CurveOnSurface(e, G, f, l);
++        if (pc.IsNull())
++        {
++          continue;
++        }
++        const gp_Pnt2d       uv = pc->Value(wm);
++        BRepAdaptor_Surface  aG(G);
++        BRepLProp_SLProps    props(aG, uv.X(), uv.Y(), 2, Precision::Confusion());
++        if (!props.IsCurvatureDefined() || !props.IsNormalDefined())
++        {
++          continue;
++        }
++        gp_Dir N = props.Normal();
++        if (G.Orientation() == TopAbs_REVERSED)
++        {
++          N.Reverse();
++        }
++        const gp_Vec across = gp_Vec(N).Crossed(Tm);
++        if (across.Magnitude() <= gp::Resolution())
++        {
++          continue;
++        }
++        gp_Dir dMax, dMin;
++        props.CurvatureDirections(dMax, dMin);
++        const double cs = gp_Dir(across).Dot(dMax);
++        double       kn = props.MaxCurvature() * cs * cs + props.MinCurvature() * (1. - cs * cs);
++        if (G.Orientation() == TopAbs_REVERSED)
++        {
++          kn = -kn;
++        }
++        if (kn > -1. / (1.01 * R))
++        {
++          continue;
++        }
++        myRollStripes.Append(S);
++        myRollFaces.Append(G);
++        myRollTangentStripes.Append(S);
++        myRollTangentFaces.Append(G);
++        found = true;
++      }
++    }
++  }
++  return found;
++}
++
+ void ChFi3d_Builder::RemoveCoincidentStripes()
+ {
+   TopOpeBRepDS_DataStructure&  DStr = myDS->ChangeDS();
+@@ -2571,6 +2730,62 @@ void ChFi3d_Builder::Compute()
+   // Roundings of both edges of a lens whose concave one failed: joined
+   // once the others are done (FinishLensRoundings).
+   DeferLensRoundings(badstripes);
++  // Stripes whose walk failed where a side overflowed a face of their edge
++  // onto a face curving away from the ball as fast as its sphere or faster:
++  // computed again rolling on the edge before that face.
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itBad(badstripes); itBad.More();)
++  {
++    occ::handle<ChFiDS_Stripe> st = itBad.Value();
++    const ChFiDS_ErrorStatus   aStatus = st->Spine()->ErrorStatus();
++    if ((aStatus != ChFiDS_WalkingFailure && aStatus != ChFiDS_StartsolFailure) || !RollsBeforeCurvedAway(st))
++    {
++      itBad.Next();
++      continue;
++    }
++    st->Reset();
++    st->Spine()->SetErrorStatus(ChFiDS_Ok);
++    myWalkOnEdge = false;
++    bool aComputed = true;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      done = true;
++      PerformSetOfSurf(st);
++      aComputed = done;
++    }
++    catch (Standard_Failure const&)
++    {
++      aComputed = false;
++    }
++    if (aComputed && st->Spine()->ErrorStatus() == ChFiDS_Ok)
++    {
++      badstripes.Remove(itBad);
++      continue;
++    }
++    // (As it was where that fails too.)
++    for (int aList = 0; aList < 2; aList++)
++    {
++      NCollection_List<occ::handle<ChFiDS_Stripe>>& aS = aList == 0 ? myRollStripes : myRollTangentStripes;
++      NCollection_List<TopoDS_Shape>&               aF = aList == 0 ? myRollFaces : myRollTangentFaces;
++      NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itR(aS);
++      NCollection_List<TopoDS_Shape>::Iterator               itRF(aF);
++      while (itR.More())
++      {
++        if (itR.Value() == st)
++        {
++          aS.Remove(itR);
++          aF.Remove(itRF);
++        }
++        else
++        {
++          itR.Next();
++          itRF.Next();
++        }
++      }
++    }
++    st->Spine()->SetErrorStatus(aStatus);
++    itBad.Next();
++  }
+   done = (badstripes.IsEmpty());
+   // Stripes whose blends ran over a narrow face of their edge onto a face
+   // where another stripe's contact lies are computed again rolling on the
+@@ -4301,6 +4516,8 @@ void ChFi3d_Builder::Reset()
+   myRideSupports.Clear();
+   myRollStripes.Clear();
+   myRollFaces.Clear();
++  myRollTangentStripes.Clear();
++  myRollTangentFaces.Clear();
+   myLensConcave.Clear();
+   myLensConvex.Clear();
+   myLensFaces.Clear();
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 7aa974ed..92d42534 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -302,6 +302,14 @@ public:
+   Standard_EXPORT bool PerformTwoCornerbyInter(const int Index);
+ 
+ protected:
++  //! Whether a ball of spine Sp rolling on the edges of face F before the
++  //! faces beyond (RollsBeforeTangent) passes over its edge E as over a
++  //! vertex: E shorter than the ball's reach on it can tell, a sliver edge
++  //! between such faces.
++  Standard_EXPORT bool PassesOverEdge(const occ::handle<ChFiDS_Spine>& Sp,
++                                      const TopoDS_Face&               F,
++                                      const TopoDS_Edge&               E) const;
++
+   Standard_EXPORT ChFi3d_Builder(const TopoDS_Shape& S, const double Ta);
+ 
+   Standard_EXPORT virtual void SimulKPart(const occ::handle<ChFiDS_SurfData>& SD) const = 0;
+@@ -875,6 +883,10 @@ protected:
+   NCollection_List<occ::handle<ChFiDS_Stripe>>                                      myStripeFailed;
+   NCollection_List<int>                                                             myStripeFailure;
+   bool                                                                              myWalkOnEdge;
++  //! While set, StartSol does not let the ball turn about the vertex at the
++  //! end of the edge it rolled on (the turn is of no length there, the other
++  //! contact changing face at that end, PerformSetOfSurfOnElSpine).
++  mutable bool                                                                      myNoTurnAtVertex = false;
+   //! The last walk of a blend rolling on an edge found no section at its
+   //! start (ComputeData; reset at each step of PerformSetOfSurfOnElSpine).
+   bool                                                                              myStartSectionFailed;
+@@ -910,6 +922,10 @@ protected:
+   //! in parallel lists).
+   NCollection_List<occ::handle<ChFiDS_Stripe>>                                      myRollStripes;
+   NCollection_List<TopoDS_Shape>                                                    myRollFaces;
++  //! Of those, the faces a side rolls before although they continue the face
++  //! before them tangentially (RollsBeforeCurvedAway).
++  NCollection_List<occ::handle<ChFiDS_Stripe>>                                      myRollTangentStripes;
++  NCollection_List<TopoDS_Shape>                                                    myRollTangentFaces;
+   //! The parts after the first of chamfers cut by the faces beyond a narrow
+   //! face (ChamferCutByFacesBeyond): stripes of their own, added to the
+   //! stripes once these are computed.
+@@ -1076,6 +1092,22 @@ private:
+   //! (RollsInsteadOfOverflow).
+   Standard_EXPORT bool RollsBefore(const occ::handle<ChFiDS_Stripe>& S, const TopoDS_Shape& F) const;
+ 
++  //! For a stripe whose walk failed: the faces beyond a face of its edges,
++  //! across an edge of that face within the rounding's reach where they
++  //! continue it tangentially, that curve away from the ball as fast as the
++  //! ball's own sphere or faster (the ball cannot touch them but at its
++  //! contact; another rounding of that radius or less made them): each such
++  //! side rolls on the edge before them instead (myRollStripes, also
++  //! myRollTangentStripes). Returns whether any was found.
++  Standard_EXPORT bool RollsBeforeCurvedAway(const occ::handle<ChFiDS_Stripe>& S);
++
++  //! Whether stripe S's side rolls before face F although F continues the
++  //! face before it tangentially (RollsBeforeCurvedAway).
++  Standard_EXPORT bool RollsBeforeTangent(const occ::handle<ChFiDS_Stripe>& S, const TopoDS_Shape& F) const;
++
++  //! The same for the stripe of spine Sp.
++  Standard_EXPORT bool RollsBeforeTangent(const occ::handle<ChFiDS_Spine>& Sp, const TopoDS_Shape& F) const;
++
+   //! Once the corners are computed: each stripe that rolls on another's
+   //! contact line (RideOnOverlap) and that other meet on the line, their
+   //! sides on each other's surface; the face they shared is left without
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 6e8099da..62e31d12 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -4403,7 +4403,12 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+     V3 = Fd->VertexLastOnS1();
+     V4 = Fd->VertexLastOnS2();
+ 
+-    if (Ishape1 != 0)
++    // (A piece whose contact on side 1 is a point, the ball turning about it
++    // over a sliver: that side's transition tells nothing; side 2's does.)
++    const bool aPointOn1 = Ishape2 != 0 && Fd->IsOnCurve1() && !Fd->IsOnCurve2()
++                           && V1.Point().Distance(V3.Point()) <= Precision::Confusion()
++                           && V2.Point().Distance(V4.Point()) > 10. * Precision::Confusion();
++    if (Ishape1 != 0 && !aPointOn1)
+     {
+       if (Ishape1 > 0)
+       {
+@@ -4526,7 +4531,15 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+         // it: that vertex is the obstacle's end (CutEdge above), the arc
+         // its point was found on, any edge at the vertex, is not cut; as at
+         // the last surface data's end.)
+-        if (V1.IsOnArc() && !(V1.IsVertex() && Fd->IsOnCurve1()))
++        // (A closed stripe rolling on an edge at its start, where its last
++        // piece ends on the same edge: that end cuts the edge, with its
++        // transition, as each piece's end does.)
++        const auto closesOnArc = [&](const ChFiDS_CommonPoint& theV, const int theSide) {
++          const ChFiDS_CommonPoint& aEnd = SeqFil.Last()->Vertex(false, theSide);
++          return Closed && SeqFil.Length() > 1 && Fd->IsOnCurve(theSide) && !theV.IsVertex()
++                 && aEnd.IsOnArc() && aEnd.Arc().IsSame(theV.Arc());
++        };
++        if (V1.IsOnArc() && !(V1.IsVertex() && Fd->IsOnCurve1()) && !closesOnArc(V1, 1))
+         {
+           Iarc1 = DStr.AddShape(V1.Arc());
+           if (!ChFi3d_Contains(DStr.ShapeInterferences(Iarc1), Iarc1, Ipoin1))
+@@ -4540,7 +4553,7 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+           }
+         }
+ 
+-        if (V2.IsOnArc() && !(V2.IsVertex() && Fd->IsOnCurve2()))
++        if (V2.IsOnArc() && !(V2.IsVertex() && Fd->IsOnCurve2()) && !closesOnArc(V2, 2))
+         {
+           Iarc2 = DStr.AddShape(V2.Arc());
+           if (!ChFi3d_Contains(DStr.ShapeInterferences(Iarc2), Iarc2, Ipoin2))
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 8c40e525..401360c0 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -14,6 +14,8 @@
+ // Alternatively, this file may be used under the terms of Open CASCADE
+ // commercial license or contractual agreement.
+ 
++#include <Extrema_ExtPC.hxx>
++#include <GCPnts_AbscissaPoint.hxx>
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Approx_CurveOnSurface.hxx>
+ #include <Geom_BSplineCurve.hxx>
+@@ -2099,7 +2101,7 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+       // (Before a face it may not overflow onto, a side rolls also where the
+       // faces only nearly continue each other.)
+       if (before[k].IsNull()
+-          || (mustRoll[k] ? !sharpAt(entry[k], before[k], face[k], went[k])
++          || (mustRoll[k] ? !sharpAt(entry[k], before[k], face[k], went[k]) && !RollsBeforeTangent(Stripe, face[k])
+                           : ChFi3d::IsTangentFaces(entry[k], before[k], face[k])))
+       {
+         failed = true;
+@@ -2863,7 +2865,8 @@ bool ChFi3d_Builder::StartSol(
+   {
+     // The edge is changed, the parameter is updated and
+     // eventually the support face and(or) the reference face.
+-    const TopoDS_Vertex VCP = aCommonPoint.Vertex();
++    TopoDS_Vertex       VCP = aCommonPoint.Vertex();
++    const TopoDS_Vertex aVOnEHC = VCP;
+     const TopoDS_Edge   EHC = HC->Edge();
+     if (VCP.IsNull() || EHC.IsNull() || Fref.IsNull() || HSref.IsNull() || HCref.IsNull())
+     {
+@@ -2916,7 +2919,7 @@ bool ChFi3d_Builder::StartSol(
+         {
+           if (ex2.Current().IsSame(VCP))
+           {
+-            if (IsG1(myEFMap, cured, Fref, Fv))
++            if (IsG1(myEFMap, cured, Fref, Fv) && !RollsBeforeTangent(Spine, Fv))
+             {
+               edgereg = cured;
+               facereg = Fv;
+@@ -2979,7 +2982,7 @@ bool ChFi3d_Builder::StartSol(
+             {
+               if (ex2.Current().IsSame(VCP))
+               {
+-                if (!IsG1(myEFMap, cured, Fref, Fv))
++                if (!IsG1(myEFMap, cured, Fref, Fv) || RollsBeforeTangent(Spine, Fv))
+                 {
+                   newedge = cured;
+                 }
+@@ -2989,13 +2992,48 @@ bool ChFi3d_Builder::StartSol(
+         }
+       }
+     }
++    // (A new edge shorter than the ball's reach on a face the side rolls
++    // before although tangent, RollsBeforeCurvedAway: the ball passes over
++    // it as over a vertex, rolling on from the edge after it.)
++    bool aOverTiny = false;
++    if (!newedge.IsNull())
++    {
++      if (PassesOverEdge(Spine, Fref, newedge))
++      {
++        TopoDS_Vertex aV1, aV2;
++        TopExp::Vertices(newedge, aV1, aV2);
++        const TopoDS_Vertex aFar = aV1.IsSame(VCP) ? aV2 : aV1;
++        TopoDS_Edge         aAfter;
++        for (TopExp_Explorer ex1(bidface, TopAbs_EDGE); ex1.More() && aAfter.IsNull(); ex1.Next())
++        {
++          const TopoDS_Edge& cured = TopoDS::Edge(ex1.Current());
++          if (cured.IsSame(newedge) || cured.IsSame(EHC))
++          {
++            continue;
++          }
++          for (TopExp_Explorer ex2(cured, TopAbs_VERTEX); ex2.More(); ex2.Next())
++          {
++            if (ex2.Current().IsSame(aFar))
++            {
++              aAfter = cured;
++            }
++          }
++        }
++        if (!aAfter.IsNull())
++        {
++          newedge  = aAfter;
++          VCP      = aFar;
++          aOverTiny = true;
++        }
++      }
++    }
+     // it is necessary to find the new support face of the fillet :
+     // connected to FRef along the newedge.
+     if (newedge.IsNull())
+     {
+       throw Standard_Failure("StartSol : chain is not possible, new obstacle not found");
+     }
+-    if (IsG1(myEFMap, newedge, Fref, Fv))
++    if (IsG1(myEFMap, newedge, Fref, Fv) && !RollsBeforeTangent(Spine, Fv))
+     {
+       throw Standard_Failure("StartSol : chain is not possible, config non processed");
+     }
+@@ -3016,7 +3054,7 @@ bool ChFi3d_Builder::StartSol(
+       // vertex, its contact held at the old edge's end, until it is tangent
+       // to the new edge there: the next blend is that turn, on the old edge.
+       gp_Pnt aCentre;
+-      if (edgereg.IsNull() && ChFi3d_BallCentreAtEnd(DStr, SD, isfirst, aCentre))
++      if (edgereg.IsNull() && !aOverTiny && !myNoTurnAtVertex && ChFi3d_BallCentreAtEnd(DStr, SD, isfirst, aCentre))
+       {
+         BRepAdaptor_Curve aNew(newedge);
+         const double      wn = BRep_Tool::Parameter(VCP, newedge);
+@@ -3032,7 +3070,7 @@ bool ChFi3d_Builder::StartSol(
+           }
+           if (gp_Vec(BRep_Tool::Pnt(VCP), aCentre).Dot(tn) < -tolapp3d)
+           {
+-            W          = BRep_Tool::Parameter(VCP, EHC);
++            W          = BRep_Tool::Parameter(aVOnEHC, EHC);
+             pons       = HC->Value(W);
+             RecP       = true;
+             c1obstacle = true;
+@@ -3056,8 +3094,56 @@ bool ChFi3d_Builder::StartSol(
+       {
+         return false;
+       }
+-      HS->Initialize(Fv);
+       W = BRep_Tool::Parameter(VCP, newedge);
++      // (Over a sliver edge: the ball rolls on from where the ball at the
++      // end touches the edge after it, the point of that edge nearest its
++      // centre.)
++      gp_Pnt aOverCentre;
++      if (aOverTiny && ChFi3d_BallCentreAtEnd(DStr, SD, isfirst, aOverCentre))
++      {
++        BRepAdaptor_Curve aAfterC(newedge);
++        Extrema_ExtPC     aProj(aOverCentre, aAfterC);
++        double            aBest = RealLast(), aWBest = W;
++        for (int i = 1; aProj.IsDone() && i <= aProj.NbExt(); i++)
++        {
++          if (aProj.IsMin(i) && aProj.SquareDistance(i) < aBest)
++          {
++            aBest  = aProj.SquareDistance(i);
++            aWBest = aProj.Point(i).Parameter();
++          }
++        }
++        const double aRadius = aOverCentre.Distance(BRep_Tool::Pnt(aVOnEHC));
++        // (The ball at the end reaching the edge's start already, the sliver
++        // turning away from it: it rolls on from that start.)
++        if (aOverCentre.Distance(BRep_Tool::Pnt(VCP)) <= aRadius)
++        {
++          aBest  = aRadius * aRadius;
++          aWBest = W;
++        }
++        if (aBest < RealLast() && std::abs(std::sqrt(aBest) - aRadius) <= 10. * tolapp3d)
++        {
++          // The ball touches the edge after the sliver: it rolls on it from
++          // there (as from a concave turn, not reframed on a point).
++          W                                 = aWBest;
++          const TopoDS_Edge aNewOnFv        = edgeInFace(newedge, Fv);
++          HS->Initialize(Fv);
++          HCref->Initialize(newedge, Fref);
++          HC->Initialize(aNewOnFv.IsNull() ? newedge : aNewOnFv, Fv);
++          pons       = HC->Value(W);
++          c1obstacle = true;
++          return true;
++        }
++        else
++        {
++          // It turns about the old edge's end first, until it touches it.
++          W          = BRep_Tool::Parameter(aVOnEHC, EHC);
++          pons       = HC->Value(W);
++          RecP       = true;
++          c1obstacle = true;
++          return true;
++        }
++      }
++      HS->Initialize(Fv);
+       HCref->Initialize(newedge, Fref);
+       HC->Initialize(newedge, Fv);
+       pons = HC->Value(W);
+@@ -4211,7 +4297,8 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+                                     const int                                           ons,
+                                     const double                                        R,
+                                     const double                                        tol3d,
+-                                    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Pieces)
++                                    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Pieces,
++                                    const ChFiDS_Map*                                   EFMap = nullptr)
+ {
+   const int opp = 3 - ons;
+   if (A.IsNull() || B.IsNull() || A->Index(ons) <= 0 || B->Index(ons) <= 0 || A->Index(opp) <= 0
+@@ -4324,9 +4411,143 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+     double             ua = 0., ub = 0.;
+     gp_Pnt             Pa, Pb;
+     ChFiDS_CommonPoint CPa, CPb;
++    // (A piece whose side ons runs along an edge, from wa to wb on it.)
++    TopoDS_Edge        Arc;
++    double             wa = 0., wb = 0.;
+   };
+   NCollection_Sequence<Part> aParts;
+-  if (F1.IsSame(F2))
++  // A sliver edge S of the face on the other side of E1 from E1's end to
++  // E2's start (the ball turned about E1's end over it until it touched E2,
++  // PassesOverEdge): the sphere's side ons runs along S and E2 there, within
++  // the sliver's micrometres, so that the face of E1 and E2 goes all round.
++  TopoDS_Edge   aSliver;
++  TopoDS_Vertex aVs1, aVs2;
++  TopoDS_Face   aFs;
++  const TopoDS_Edge E1 = TopoDS::Edge(DStr.Shape(A->IndexOfC(ons)));
++  const TopoDS_Edge E2 = TopoDS::Edge(DStr.Shape(B->IndexOfC(ons)));
++  if (EFMap != nullptr && EFMap->Contains(E1))
++  {
++    for (TopExp_Explorer exv(E1, TopAbs_VERTEX); exv.More() && aVs1.IsNull(); exv.Next())
++    {
++      if (BRep_Tool::Pnt(TopoDS::Vertex(exv.Current())).Distance(p1) <= tol3d)
++      {
++        aVs1 = TopoDS::Vertex(exv.Current());
++      }
++    }
++    bool aShared = false;
++    for (TopExp_Explorer exv(E2, TopAbs_VERTEX); exv.More() && !aVs1.IsNull(); exv.Next())
++    {
++      aShared = aShared || exv.Current().IsSame(aVs1);
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator itR((*EFMap)(E1)); itR.More() && !aVs1.IsNull() && !aShared && aSliver.IsNull(); itR.Next())
++    {
++      const TopoDS_Face Fr = TopoDS::Face(itR.Value());
++      if (Fr.IsSame(F1))
++      {
++        continue;
++      }
++      for (TopExp_Explorer exs(Fr, TopAbs_EDGE); exs.More() && aSliver.IsNull(); exs.Next())
++      {
++        const TopoDS_Edge S = TopoDS::Edge(exs.Current());
++        if (S.IsSame(E1) || S.IsSame(E2) || BRep_Tool::Degenerated(S) || !EFMap->Contains(S))
++        {
++          continue;
++        }
++        TopoDS_Vertex a, z;
++        TopExp::Vertices(S, a, z);
++        const TopoDS_Vertex aOther = a.IsSame(aVs1) ? z : z.IsSame(aVs1) ? a : TopoDS_Vertex();
++        bool                aOnE2  = false;
++        for (TopExp_Explorer exv(E2, TopAbs_VERTEX); exv.More() && !aOther.IsNull(); exv.Next())
++        {
++          aOnE2 = aOnE2 || exv.Current().IsSame(aOther);
++        }
++        if (!aOnE2)
++        {
++          continue;
++        }
++        for (NCollection_List<TopoDS_Shape>::Iterator itS((*EFMap)(S)); itS.More(); itS.Next())
++        {
++          if (!itS.Value().IsSame(Fr))
++          {
++            aFs = TopoDS::Face(itS.Value());
++          }
++        }
++        if (!aFs.IsNull())
++        {
++          aSliver = S;
++          aVs2    = aOther;
++        }
++      }
++    }
++  }
++  // (E2's blend starting at the sliver's end itself: the piece along the
++  // sliver only.)
++  const bool aAtSliverEnd = !aSliver.IsNull() && BRep_Tool::Pnt(aVs2).Distance(p2) <= std::max(tol3d, BRep_Tool::Tolerance(aVs2));
++  if (aAtSliverEnd)
++  {
++    Part aPartS;
++    aPartS.F   = aFs;
++    aPartS.ua  = u1;
++    aPartS.ub  = u2;
++    aPartS.Pa  = p1;
++    aPartS.Pb  = p2;
++    aPartS.Arc = aSliver;
++    aPartS.wa  = BRep_Tool::Parameter(aVs1, aSliver);
++    aPartS.wb  = BRep_Tool::Parameter(aVs2, aSliver);
++    aPartS.CPa = Ap;
++    aPartS.CPa.Reset();
++    aPartS.CPa.SetPoint(p1);
++    aPartS.CPa.SetArc(std::max(tol3d, BRep_Tool::Tolerance(aVs1)), aSliver, aPartS.wa, TopAbs_FORWARD);
++    aPartS.CPa.SetVertex(aVs1);
++    aPartS.CPb = Bp;
++    aPartS.CPb.Reset();
++    aPartS.CPb.SetPoint(p2);
++    aPartS.CPb.SetArc(std::max(tol3d, BRep_Tool::Tolerance(aVs2)), aSliver, aPartS.wb, TopAbs_FORWARD);
++    aPartS.CPb.SetVertex(aVs2);
++    aParts.Append(aPartS);
++    A->ChangeVertex(false, ons).SetVertex(aVs1);
++  }
++  else if (!aSliver.IsNull())
++  {
++    const gp_Pnt aP2 = BRep_Tool::Pnt(aVs2);
++    double       uS = 0., vS = 0.;
++    ElSLib::SphereParameters(aFrame, R, aP2, uS, vS);
++    uS = std::min(std::max(uS, u1 + 0.01 * (u2 - u1)), u2 - 0.01 * (u2 - u1));
++    Part aPartS, aPartE;
++    aPartS.F   = aFs;
++    aPartS.ua  = u1;
++    aPartS.ub  = uS;
++    aPartS.Pa  = p1;
++    aPartS.Pb  = aP2;
++    aPartS.Arc = aSliver;
++    aPartS.wa  = BRep_Tool::Parameter(aVs1, aSliver);
++    aPartS.wb  = BRep_Tool::Parameter(aVs2, aSliver);
++    aPartS.CPa = Ap;
++    aPartS.CPa.Reset();
++    aPartS.CPa.SetPoint(p1);
++    aPartS.CPa.SetArc(std::max(tol3d, BRep_Tool::Tolerance(aVs1)), aSliver, aPartS.wa, TopAbs_FORWARD);
++    aPartS.CPa.SetVertex(aVs1);
++    aPartS.CPb.SetPoint(aP2);
++    aPartS.CPb.SetArc(std::max(tol3d, BRep_Tool::Tolerance(aVs2)), aSliver, aPartS.wb, TopAbs_FORWARD);
++    aPartS.CPb.SetVertex(aVs2);
++    aPartE.F   = F2;
++    aPartE.ua  = uS;
++    aPartE.ub  = u2;
++    aPartE.Pa  = aP2;
++    aPartE.Pb  = p2;
++    aPartE.Arc = E2;
++    aPartE.wa  = BRep_Tool::Parameter(aVs2, E2);
++    aPartE.wb  = Bp.ParameterOnArc();
++    aPartE.CPa.SetPoint(aP2);
++    aPartE.CPa.SetArc(std::max(tol3d, BRep_Tool::Tolerance(aVs2)), E2, aPartE.wa, TopAbs_FORWARD);
++    aPartE.CPa.SetVertex(aVs2);
++    aPartE.CPb = Bp;
++    aParts.Append(aPartS);
++    aParts.Append(aPartE);
++    // (E1 ends at its vertex there.)
++    A->ChangeVertex(false, ons).SetVertex(aVs1);
++  }
++  else if (F1.IsSame(F2))
+   {
+     Part aPart;
+     aPart.F   = F1;
+@@ -4427,9 +4648,30 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+     // Where the sphere cuts the face: the arc from Pa to Pb within the piece's
+     // longitudes.
+     const occ::handle<Geom_Surface> SF = BRep_Tool::Surface(aPart.F);
+-    GeomAPI_IntSS                   anInter(aSphere, SF, Precision::Confusion());
+     occ::handle<Geom_Curve>         Cc;
+-    for (int i = 1; anInter.IsDone() && i <= anInter.NbLines() && Cc.IsNull(); i++)
++    if (!aPart.Arc.IsNull())
++    {
++      // Along the edge.
++      double                        f = 0., l = 0.;
++      const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(aPart.Arc, f, l);
++      if (aC.IsNull() || std::abs(aPart.wb - aPart.wa) <= Precision::PConfusion())
++      {
++        return false;
++      }
++      occ::handle<Geom_Curve> aTrim =
++        new Geom_TrimmedCurve(aC, std::min(aPart.wa, aPart.wb), std::max(aPart.wa, aPart.wb));
++      if (aPart.wa > aPart.wb)
++      {
++        aTrim = aTrim->Reversed();
++      }
++      Cc = aTrim;
++    }
++    GeomAPI_IntSS anInter;
++    if (Cc.IsNull())
++    {
++      anInter.Perform(aSphere, SF, Precision::Confusion());
++    }
++    for (int i = 1; Cc.IsNull() && anInter.IsDone() && i <= anInter.NbLines(); i++)
+     {
+       const occ::handle<Geom_Curve>& L = anInter.Line(i);
+       GeomAPI_ProjectPointOnCurve    aPa(aPart.Pa, L), aPb(aPart.Pb, L);
+@@ -4476,11 +4718,41 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+     }
+     const double                    c1 = Cc->FirstParameter(), c2 = Cc->LastParameter();
+     const occ::handle<Geom2d_Curve> Ps = GeomProjLib::Curve2d(Cc, c1, c2, aSphere);
+-    const occ::handle<Geom2d_Curve> Pc = GeomProjLib::Curve2d(Cc, c1, c2, SF);
++    occ::handle<Geom2d_Curve> Pc = GeomProjLib::Curve2d(Cc, c1, c2, SF);
+     if (Ps.IsNull() || Pc.IsNull())
+     {
+       return false;
+     }
++    if (!aPart.Arc.IsNull())
++    {
++      // (Within the face's parameters on a periodic surface.)
++      TopoDS_Face aFF = aPart.F;
++      aFF.Orientation(TopAbs_FORWARD);
++      double umin = 0., umax = 0., vmin = 0., vmax = 0.;
++      BRepTools::UVBounds(aFF, umin, umax, vmin, vmax);
++      const gp_Pnt2d aP0 = Pc->Value(0.5 * (c1 + c2));
++      gp_Vec2d       aShift(0., 0.);
++      if (SF->IsUPeriodic())
++      {
++        const double T = SF->UPeriod();
++        while (aP0.X() + aShift.X() < umin - 0.5 * T + 0.5 * (umax - umin))
++          aShift.SetX(aShift.X() + T);
++        while (aP0.X() + aShift.X() > umax + 0.5 * T - 0.5 * (umax - umin))
++          aShift.SetX(aShift.X() - T);
++      }
++      if (SF->IsVPeriodic())
++      {
++        const double T = SF->VPeriod();
++        while (aP0.Y() + aShift.Y() < vmin - 0.5 * T + 0.5 * (vmax - vmin))
++          aShift.SetY(aShift.Y() + T);
++        while (aP0.Y() + aShift.Y() > vmax + 0.5 * T - 0.5 * (vmax - vmin))
++          aShift.SetY(aShift.Y() - T);
++      }
++      if (aShift.Magnitude() > 0.)
++      {
++        Pc = occ::down_cast<Geom2d_Curve>(Pc->Translated(aShift));
++      }
++    }
+     // The side on the other face: the point q, its parameters along the pole
+     // over the piece's longitudes (a degenerated edge of the blend's face).
+     NCollection_Array1<double> aKnots(1, 2);
+@@ -4509,8 +4781,28 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+       GO.SetFirstParameter(c1);
+       GO.SetLastParameter(c2);
+     }
+-    const TopAbs_Orientation aTra =
++    TopAbs_Orientation aTra =
+       TopAbs::Compose(FAn.Transition(), TopAbs::Compose(F1.Orientation(), aPart.F.Orientation()));
++    if (!aPart.Arc.IsNull())
++    {
++      // (Along an edge: the transition of B's contact rolling on E2, turned
++      // where the edge runs the other way round its face than E2 round F2.)
++      const auto alongFace = [&](const TopoDS_Edge& theE, const TopoDS_Face& theF, const bool theIncreasing) {
++        TopoDS_Face aFF = theF;
++        aFF.Orientation(TopAbs_FORWARD);
++        const TopoDS_Edge aEo = edgeInFace(theE, aFF);
++        return !aEo.IsNull() && theIncreasing == (aEo.Orientation() == TopAbs_FORWARD);
++      };
++      TopoDS_Vertex aE2a, aE2b;
++      TopExp::Vertices(E2, aE2a, aE2b);
++      const double wE2s          = BRep_Tool::Parameter(aVs2, E2);
++      const bool   aE2Increasing = aE2a.IsSame(aVs2) ? BRep_Tool::Parameter(aE2b, E2) > wE2s
++                                                     : BRep_Tool::Parameter(aE2a, E2) > wE2s;
++      const TopAbs_Orientation aTrB = B->Interference(ons).Transition();
++      aTra = alongFace(aPart.Arc, aPart.F, aPart.wa < aPart.wb) == alongFace(E2, F2, aE2Increasing)
++               ? aTrB
++               : TopAbs::Reverse(aTrB);
++    }
+     {
+       ChFiDS_FaceInterference& GI = G->ChangeInterference(ons);
+       GI.SetInterference(DStr.AddCurve(TopOpeBRepDS_Curve(Cc, tol3d)), aTra, Pc, Ps);
+@@ -4538,12 +4830,18 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+         }
+         const TopAbs_Orientation aTr = k == 0 ? TopAbs::Reverse(TopAbs::Compose(aTra, aEInF.Orientation()))
+                                               : TopAbs::Compose(aTra, aEInF.Orientation());
+-        const TopoDS_Edge  anArc = CP.Arc();
+-        const double       aW    = CP.ParameterOnArc();
+-        const gp_Pnt       aP    = CP.Point();
++        const TopoDS_Edge   anArc = CP.Arc();
++        const double        aW    = CP.ParameterOnArc();
++        const gp_Pnt        aP    = CP.Point();
++        const TopoDS_Vertex aV    = CP.IsVertex() ? CP.Vertex() : TopoDS_Vertex();
++        const double        aTolV = CP.Tolerance();
+         CP.Reset();
+         CP.SetPoint(aP);
+-        CP.SetArc(tol3d, anArc, aW, aTr);
++        CP.SetArc(aV.IsNull() ? tol3d : std::max(tol3d, aTolV), anArc, aW, aTr);
++        if (!aV.IsNull())
++        {
++          CP.SetVertex(aV);
++        }
+       }
+       const double ta = t1 + (t2 - t1) * (aPart.ua - u1) / (u2 - u1);
+       const double tb = t1 + (t2 - t1) * (aPart.ub - u1) / (u2 - u1);
+@@ -4552,6 +4850,17 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+     }
+     G->FirstSpineParam(t1 + (t2 - t1) * (aPart.ua - u1) / (u2 - u1));
+     G->LastSpineParam(t1 + (t2 - t1) * (aPart.ub - u1) / (u2 - u1));
++    if (!aPart.Arc.IsNull())
++    {
++      if (ons == 1)
++      {
++        G->SetIndexOfC1(DStr.AddShape(aPart.Arc));
++      }
++      else
++      {
++        G->SetIndexOfC2(DStr.AddShape(aPart.Arc));
++      }
++    }
+     Pieces.Append(G);
+   }
+   return true;
+@@ -5134,7 +5443,20 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+       {
+         const occ::handle<BRepAdaptor_Curve2d>& HCk = k == 1 ? HC1 : HC2;
+         const bool                              Okk = k == 1 ? Ok1 : Ok2;
+-        if (!Okk || HCk.IsNull() || !ref->IsOnCurve(k) || ref->Vertex(!forward, k).IsVertex()
++        // (Also from the vertex at the end of the edge it rolled on onto an
++        // edge that does not hold it, past a sliver edge between them that
++        // the ball passed over, PassesOverEdge.)
++        bool aPastSliver = false;
++        if (Okk && !HCk.IsNull() && !HCk->Edge().IsNull() && ref->IsOnCurve(k) && ref->Vertex(!forward, k).IsVertex()
++            && myRollTangentStripes.Contains(Stripe))
++        {
++          aPastSliver = true;
++          for (TopExp_Explorer exv(HCk->Edge(), TopAbs_VERTEX); exv.More(); exv.Next())
++          {
++            aPastSliver = aPastSliver && !exv.Current().IsSame(ref->Vertex(!forward, k).Vertex());
++          }
++        }
++        if (!Okk || HCk.IsNull() || !ref->IsOnCurve(k) || (ref->Vertex(!forward, k).IsVertex() && !aPastSliver)
+             || !ref->Vertex(!forward, k).IsOnArc()
+             || HCk->Edge().IsSame(DStr.Shape(ref->IndexOfC(k))))
+         {
+@@ -5227,6 +5549,142 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+       }
+     }
+ 
++    // (A side rolling before faces curving away, RollsBeforeCurvedAway, whose
++    // walk stopped at the end of the edge it rolled on while the other
++    // contact lies within a hair of an edge of its face ahead, across which
++    // that face goes on tangentially: that contact changes face too, the
++    // ball turning about that end from there.)
++    int         aSwitchSide = 0;
++    TopoDS_Edge aSwitchEdge;
++    double      aSwitchW = 0.;
++    if (!ref.IsNull() && Ok1 && Ok2 && obstacleon1 != obstacleon2 && HS3.IsNull() && HS4.IsNull()
++        && !Simul && myRollTangentStripes.Contains(Stripe))
++    {
++      const int                         k   = obstacleon1 ? 2 : 1;
++      const ChFiDS_CommonPoint&         CPk = ref->Vertex(!forward, k);
++      occ::handle<BRepAdaptor_Surface>& HSk = k == 1 ? HS1 : HS2;
++      gp_Pnt2d&                         ppk = k == 1 ? pp1 : pp2;
++      bool&                             RSk = k == 1 ? RecS1 : RecS2;
++      if (!RSk && !CPk.IsOnArc() && !HSk.IsNull())
++      {
++        const TopoDS_Face Fk    = HSk->Face();
++        const double      aHair = 10. * tolapp3d;
++        gp_Pnt            aPs;
++        gp_Vec            aTs;
++        Spine->D1(forward ? ref->LastSpineParam() : ref->FirstSpineParam(), aPs, aTs);
++        if (!forward)
++        {
++          aTs.Reverse();
++        }
++        for (TopExp_Explorer ex(Fk, TopAbs_EDGE); ex.More(); ex.Next())
++        {
++          const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++          TopoDS_Face        Fv;
++          if (BRep_Tool::Degenerated(E) || Spine->Index(E) != 0 || !myEFMap.Contains(E)
++              || !IsG1(myEFMap, E, Fk, Fv) || Fv.IsNull() || Fv.IsSame(Fk))
++          {
++            continue;
++          }
++          double                        f = 0., l = 0.;
++          const occ::handle<Geom_Curve> C = BRep_Tool::Curve(E, f, l);
++          if (C.IsNull())
++          {
++            continue;
++          }
++          GeomAPI_ProjectPointOnCurve aProj(CPk.Point(), C, f, l);
++          if (aProj.NbPoints() == 0 || aProj.LowerDistance() > aHair)
++          {
++            continue;
++          }
++          double                          f2 = 0., l2 = 0.;
++          const occ::handle<Geom2d_Curve> PC = BRep_Tool::CurveOnSurface(E, Fv, f2, l2);
++          if (PC.IsNull())
++          {
++            continue;
++          }
++          BRepAdaptor_Surface aSv(Fv);
++          gp_Pnt              aP;
++          gp_Vec              aDu, aDv;
++          const gp_Pnt2d      aUv = PC->Value(aProj.LowerDistanceParameter());
++          aSv.D1(aUv.X(), aUv.Y(), aP, aDu, aDv);
++          // (Only where the walk goes on onto Fv: a point a little ahead
++          // lies on it.)
++          const gp_Pnt aAhead = aP.Translated(10. * aHair * aTs.Normalized());
++          GeomAPI_ProjectPointOnSurf aOnV(aAhead, BRep_Tool::Surface(Fv));
++          if (aOnV.NbPoints() == 0)
++          {
++            continue;
++          }
++          double au = 0., av = 0.;
++          aOnV.LowerDistanceParameters(au, av);
++          BRepClass_FaceClassifier aCls(Fv, gp_Pnt2d(au, av), 1.e-7);
++          if (aCls.State() != TopAbs_IN)
++          {
++            continue;
++          }
++          HSk->Initialize(Fv);
++          ppk         = aUv;
++          RSk         = true;
++          aSwitchSide = k;
++          aSwitchEdge = E;
++          aSwitchW    = aProj.LowerDistanceParameter();
++          break;
++        }
++      }
++      // (The side rolling on an edge then turns about its end only over a
++      // sliver edge, PassesOverEdge: at a plain vertex the turn is of no
++      // length, and starting it on the other contact's new face fails; the
++      // ball rolls on along the next edge at once.)
++      const int o = 3 - k;
++      if (aSwitchSide != 0 && (o == 1 ? RecP1 : RecP2))
++      {
++        occ::handle<BRepAdaptor_Curve2d>& HCo    = o == 1 ? HC1 : HC2;
++        occ::handle<BRepAdaptor_Surface>& HSrefo = o == 1 ? HSref1 : HSref2;
++        const ChFiDS_CommonPoint&         CPo    = ref->Vertex(!forward, o);
++        if (!HCo.IsNull() && !HSrefo.IsNull() && ref->IsOnCurve(o) && CPo.IsVertex()
++            && HCo->Edge().IsSame(DStr.Shape(ref->IndexOfC(o))))
++        {
++          const TopoDS_Face Fr       = HSrefo->Face();
++          bool              aSliver  = false;
++          for (TopExp_Explorer ex(Fr, TopAbs_EDGE); ex.More() && !aSliver; ex.Next())
++          {
++            const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
++            if (e.IsSame(HCo->Edge()))
++            {
++              continue;
++            }
++            for (TopExp_Explorer exv(e, TopAbs_VERTEX); exv.More() && !aSliver; exv.Next())
++            {
++              aSliver = exv.Current().IsSame(CPo.Vertex()) && PassesOverEdge(Spine, Fr, e);
++            }
++          }
++          if (!aSliver)
++          {
++            myNoTurnAtVertex = true;
++            try
++            {
++              if (o == 1)
++              {
++                Ok1 = StartSol(Spine, HS1, pp1, HC1, w1, ref, !forward, 1, HSref1, HCref1, RecP1, RecS1, RecRst1,
++                               obstacleon1, HS3, pp3, decroch1, Vref);
++              }
++              else
++              {
++                Ok2 = StartSol(Spine, HS2, pp2, HC2, w2, ref, !forward, 2, HSref2, HCref2, RecP2, RecS2, RecRst2,
++                               obstacleon2, HS4, pp4, decroch2, Vref);
++              }
++            }
++            catch (Standard_Failure const&)
++            {
++              myNoTurnAtVertex = false;
++              throw;
++            }
++            myNoTurnAtVertex = false;
++          }
++        }
++      }
++    }
++
+     // No more connected faces. Construction of the tangent plane to continue the path
+     // till the output on the other face.
+     NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aBridge;
+@@ -5823,6 +6281,58 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     else
+     {
+       refbis = ref;
++      // (The piece before ends on the edge its other contact crossed onto
++      // the next face there, where this one starts.)
++      if (aSwitchSide != 0 && !ref.IsNull() && SeqSD.Length() > 0)
++      {
++        ChFiDS_CommonPoint&                 CPr  = ref->ChangeVertex(!forward, aSwitchSide);
++        const gp_Pnt                        aPe  = BRepAdaptor_Curve(aSwitchEdge).Value(aSwitchW);
++        // The contact leaves its face across the edge: the edge's
++        // transition as the walk sees it, by the side of the edge in that
++        // face the walk goes on to.
++        TopAbs_Orientation aTr = TopAbs_FORWARD;
++        {
++          const TopoDS_Face aFk = TopoDS::Face(DStr.Shape(ref->Index(aSwitchSide)));
++          TopoDS_Edge       aEk;
++          for (TopExp_Explorer exk(aFk, TopAbs_EDGE); exk.More() && aEk.IsNull(); exk.Next())
++          {
++            if (exk.Current().IsSame(aSwitchEdge))
++            {
++              aEk = TopoDS::Edge(exk.Current());
++            }
++          }
++          BRepAdaptor_Curve aCk(aSwitchEdge);
++          gp_Pnt            aPk;
++          gp_Vec            aTk;
++          aCk.D1(aSwitchW, aPk, aTk);
++          if (!aEk.IsNull() && aEk.Orientation() == TopAbs_REVERSED)
++          {
++            aTk.Reverse();
++          }
++          BRepAdaptor_Surface aSk(aFk);
++          double              uk = 0., vk = 0.;
++          GeomAPI_ProjectPointOnSurf aOnK(aPk, BRep_Tool::Surface(aFk));
++          aOnK.LowerDistanceParameters(uk, vk);
++          gp_Pnt aQ;
++          gp_Vec aDuk, aDvk;
++          aSk.D1(uk, vk, aQ, aDuk, aDvk);
++          gp_Vec aNk = aDuk.Crossed(aDvk);
++          if (aFk.Orientation() == TopAbs_REVERSED)
++          {
++            aNk.Reverse();
++          }
++          gp_Pnt aPs;
++          gp_Vec aTs;
++          Spine->D1(forward ? ref->LastSpineParam() : ref->FirstSpineParam(), aPs, aTs);
++          if (!forward)
++          {
++            aTs.Reverse();
++          }
++          const double aSide = aNk.Crossed(aTk).Dot(aTs);
++          aTr = aSide < 0. ? TopAbs_REVERSED : TopAbs_FORWARD;
++        }
++        CPr.SetArc(std::max(CPr.Tolerance(), 1.01 * aPe.Distance(CPr.Point())), aSwitchEdge, aSwitchW, aTr);
++      }
+       if (forward)
+       {
+         for (ii = 1; ii <= SeqSD.Length(); ii++)
+@@ -5883,7 +6393,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+         const occ::handle<ChFiDS_FilSpine> aFsp    = occ::down_cast<ChFiDS_FilSpine>(Spine);
+         NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aWedge;
+         if (aFsp.IsNull() || !aFsp->IsConstant()
+-            || !ChFi3d_ConcaveTurnWedge(DStr, aBefore, anAfter, aTurnSide, aFsp->Radius(), tolapp3d, aWedge))
++            || !ChFi3d_ConcaveTurnWedge(DStr, aBefore, anAfter, aTurnSide, aFsp->Radius(), tolapp3d, aWedge, &myEFMap))
+         {
+           throw Standard_Failure("PerformSetOfSurfOnElSpine : the ball's piece at a concave turn not made");
+         }
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+index 322a1410..f6e7512d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+@@ -16,6 +16,7 @@
+ 
+ // Modified:    MPS :  (10-04-97) portage WNT pour GetFilletShape
+ 
++#include <functional>
+ #include <Adaptor3d_TopolTool.hxx>
+ #include <BRepBlend_ConstRad.hxx>
+ #include <BRepBlend_ConstRadInv.hxx>
+@@ -158,9 +159,11 @@ static int ChFi3d_RefSide(const occ::handle<BRepAdaptor_Surface>& HSref,
+ static void ChFi3d_NextEdges(const occ::handle<BRepAdaptor_Surface>& HSref,
+                              const occ::handle<BRepAdaptor_Curve2d>& PC,
+                              const ChFiDS_Map&                       EFMap,
+-                             BRepBlend_SurfRstConstRad&              Func)
++                             BRepBlend_SurfRstConstRad&              Func,
++                             const std::function<bool(const TopoDS_Edge&)>& PassOver = nullptr)
+ {
+   bool                         has[2] = {false, false};
++  bool                         over[2] = {false, false};
+   gp_Vec                       into[2];
+   occ::handle<Adaptor3d_Curve> curve[2];
+   if (!HSref.IsNull() && !PC.IsNull() && !HSref->Face().IsNull() && !PC->Edge().IsNull())
+@@ -208,8 +211,33 @@ static void ChFi3d_NextEdges(const occ::handle<BRepAdaptor_Surface>& HSref,
+         {
+           continue;
+         }
+-        BRepAdaptor_Curve c(En);
+-        const double      w = BRep_Tool::Parameter(V, En);
++        // (An edge the ball passes over as over a vertex: the edge after it.)
++        TopoDS_Edge   Eu = En;
++        TopoDS_Vertex Vu = V;
++        if (PassOver && PassOver(En))
++        {
++          TopoDS_Vertex Va, Vb;
++          TopExp::Vertices(En, Va, Vb);
++          const TopoDS_Vertex Vfar = Va.IsSame(V) ? Vb : Va;
++          for (TopExp_Explorer ex2(Fref, TopAbs_EDGE); ex2.More(); ex2.Next())
++          {
++            const TopoDS_Edge& Ea = TopoDS::Edge(ex2.Current());
++            if (Ea.IsSame(En) || Ea.IsSame(E) || BRep_Tool::Degenerated(Ea))
++            {
++              continue;
++            }
++            for (TopExp_Explorer exv(Ea, TopAbs_VERTEX); exv.More(); exv.Next())
++            {
++              if (exv.Current().IsSame(Vfar))
++              {
++                Eu = Ea;
++                Vu = Vfar;
++              }
++            }
++          }
++        }
++        BRepAdaptor_Curve c(Eu);
++        const double      w = BRep_Tool::Parameter(Vu, Eu);
+         gp_Pnt            p;
+         gp_Vec            t;
+         c.D1(w, p, t);
+@@ -223,12 +251,14 @@ static void ChFi3d_NextEdges(const occ::handle<BRepAdaptor_Surface>& HSref,
+           t.Reverse();
+         }
+         has[atLast]   = true;
++        over[atLast]  = !Eu.IsSame(En);
+         into[atLast]  = t;
+-        curve[atLast] = new BRepAdaptor_Curve(En);
++        curve[atLast] = new BRepAdaptor_Curve(Eu);
+       }
+     }
+   }
+   Func.SetNextEdges(has[0], into[0], has[1], into[1]);
++  Func.SetNextPassedOver(over[0], over[1]);
+   Func.SetNextCurves(curve[0], curve[1]);
+ }
+ 
+@@ -1332,7 +1362,7 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
+     BRepBlend_SurfRstConstRad func(HS2, HS1, PC1, HGuide);
+     func.Set(HSref1, PCref1);
+     func.SetRefSide(ChFi3d_RefSide(HSref1, PCref1));
+-    ChFi3d_NextEdges(HSref1, PCref1, myEFMap, func);
++    ChFi3d_NextEdges(HSref1, PCref1, myEFMap, func, [&](const TopoDS_Edge& En) { return PassesOverEdge(Spine, HSref1->Face(), En); });
+     occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
+     HC->Load(PC1, HS1);
+     BRepBlend_SurfCurvConstRadInv  finvc(HS2, HC, HGuide);
+@@ -1574,7 +1604,7 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
+     BRepBlend_SurfRstConstRad func(HS1, HS2, PC2, HGuide);
+     func.Set(HSref2, PCref2);
+     func.SetRefSide(ChFi3d_RefSide(HSref2, PCref2));
+-    ChFi3d_NextEdges(HSref2, PCref2, myEFMap, func);
++    ChFi3d_NextEdges(HSref2, PCref2, myEFMap, func, [&](const TopoDS_Edge& En) { return PassesOverEdge(Spine, HSref2->Face(), En); });
+     occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
+     HC->Load(PC2, HS2);
+     BRepBlend_SurfCurvConstRadInv  finvc(HS1, HC, HGuide);
+@@ -2585,7 +2615,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+     BRepBlend_SurfRstConstRad func(HS2, HS1, PC1, HGuide);
+     func.Set(HSref1, PCref1);
+     func.SetRefSide(ChFi3d_RefSide(HSref1, PCref1));
+-    ChFi3d_NextEdges(HSref1, PCref1, myEFMap, func);
++    ChFi3d_NextEdges(HSref1, PCref1, myEFMap, func, [&](const TopoDS_Edge& En) { return PassesOverEdge(Spine, HSref1->Face(), En); });
+     occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
+     HC->Load(PC1, HS1);
+     BRepBlend_SurfCurvConstRadInv  finvc(HS2, HC, HGuide);
+@@ -2774,7 +2804,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+     BRepBlend_SurfRstConstRad func(HS1, HS2, PC2, HGuide);
+     func.Set(HSref2, PCref2);
+     func.SetRefSide(ChFi3d_RefSide(HSref2, PCref2));
+-    ChFi3d_NextEdges(HSref2, PCref2, myEFMap, func);
++    ChFi3d_NextEdges(HSref2, PCref2, myEFMap, func, [&](const TopoDS_Edge& En) { return PassesOverEdge(Spine, HSref2->Face(), En); });
+     occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
+     HC->Load(PC2, HS2);
+     BRepBlend_SurfCurvConstRadInv  finvc(HS1, HC, HGuide);

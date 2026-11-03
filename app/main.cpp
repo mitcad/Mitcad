@@ -40,8 +40,10 @@
 #include "mcp/LiveServer.hpp"
 #include "mcp/LogRing.hpp"
 #include "platform/MacChrome.hpp"
+#include "print/MaterialProperties.hpp"
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
+#include "update/OpenSslConfiguration.hpp"
 
 namespace {
 
@@ -187,6 +189,9 @@ int runApplication(int argc, char* argv[]) {
   mitcad::integrateDesktop();
   // Where crash reports go, also the workers' (mitcad#62).
   mitcad::ReportCenter::prepareCrashReports();
+  // The preferred temperature unit, which every temperature of materials
+  // follows (mitcad#1213).
+  mitcad::applyTemperaturePreference();
 
   // UI tests: MITCAD_TEST_INPUT=<script> runs the script in this process with
   // synthesised events (framework/TestDriver.hpp); inert without it. Before
@@ -297,6 +302,11 @@ int runApplication(int argc, char* argv[]) {
   QApplication::setApplicationName(mitcad::programName());
   parser.process(arguments);
   QApplication::setApplicationName(mitcad::storedApplicationName());
+  // The AppImage's TLS (mitcad#1208): the system's OpenSSL configuration,
+  // or the AppImage's own where the bundled OpenSSL cannot load it; before
+  // anything uses TLS, and after --version and --help, which print only
+  // themselves.
+  mitcad::checkOpenSslConfiguration();
 
   if (parser.isSet(uiOption)) {
     const QString ui = parser.value(uiOption);

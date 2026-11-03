@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::analysis;
+pub use crate::material_units::Quantity;
 use crate::print_keys::{self, Dialect, PrintSet};
 use crate::print_library::BasedOn;
 
@@ -96,6 +97,271 @@ pub struct Material {
     /// Where the design's copy came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<MaterialOrigin>,
+    /// Its mechanical and thermal properties (mitcad#1213), each optional.
+    /// Designs and library files from before have none.
+    #[serde(default, skip_serializing_if = "MaterialProperties::is_empty")]
+    pub properties: MaterialProperties,
+    /// Where its values came from (mitcad#1213): the bundled material
+    /// dataset's material and grade, or a source the user named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<MaterialReference>,
+}
+
+/// A material's mechanical and thermal properties (mitcad#1213), each
+/// optional: a value not given is none, never 0. In the model's units
+/// (`crate::material_units`): MPa, °C and µm/(m·°C); the application shows
+/// them in the design's. They are data: no analysis uses them yet.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialProperties {
+    /// Young's modulus (the modulus of elasticity), MPa.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub youngs_modulus: Option<f64>,
+    /// Poisson's ratio, without a unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poissons_ratio: Option<f64>,
+    /// The yield strength, MPa.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yield_strength: Option<f64>,
+    /// The highest temperature it serves at, °C.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_service_temperature: Option<f64>,
+    /// The coefficient of thermal expansion, µm/(m·°C).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_expansion: Option<f64>,
+}
+
+/// The group a material property is shown in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyGroup {
+    Mechanical,
+    Thermal,
+}
+
+impl PropertyGroup {
+    /// Its id in queries: `mechanical` or `thermal`.
+    pub fn id(self) -> &'static str {
+        match self {
+            PropertyGroup::Mechanical => "mechanical",
+            PropertyGroup::Thermal => "thermal",
+        }
+    }
+
+    /// Its title: Mechanical, Thermal.
+    pub fn title(self) -> &'static str {
+        match self {
+            PropertyGroup::Mechanical => "Mechanical",
+            PropertyGroup::Thermal => "Thermal",
+        }
+    }
+}
+
+/// A material property: its key in commands, files and queries, its name,
+/// its group and what it measures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PropertyDef {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub group: PropertyGroup,
+    pub quantity: Quantity,
+}
+
+/// The material properties in the order they are shown (mitcad#1213):
+/// Mechanical, then Thermal.
+pub static PROPERTY_DEFS: [PropertyDef; 5] = [
+    PropertyDef {
+        key: "youngs_modulus",
+        name: "Young's modulus",
+        group: PropertyGroup::Mechanical,
+        quantity: Quantity::Stress,
+    },
+    PropertyDef {
+        key: "poissons_ratio",
+        name: "Poisson's ratio",
+        group: PropertyGroup::Mechanical,
+        quantity: Quantity::Ratio,
+    },
+    PropertyDef {
+        key: "yield_strength",
+        name: "Yield strength",
+        group: PropertyGroup::Mechanical,
+        quantity: Quantity::Stress,
+    },
+    PropertyDef {
+        key: "max_service_temperature",
+        name: "Maximum service temperature",
+        group: PropertyGroup::Thermal,
+        quantity: Quantity::Temperature,
+    },
+    PropertyDef {
+        key: "thermal_expansion",
+        name: "Coefficient of thermal expansion",
+        group: PropertyGroup::Thermal,
+        quantity: Quantity::Expansion,
+    },
+];
+
+/// A material property by its key.
+pub fn property_def(key: &str) -> Option<&'static PropertyDef> {
+    PROPERTY_DEFS.iter().find(|d| d.key == key)
+}
+
+/// The print settings' keys a material card shows as its Printing group
+/// (mitcad#1213: the extruder and the bed temperature are the filament's
+/// own values, no second set): the key, its name.
+pub const PRINTING_KEYS: [(&str, &str); 2] = [
+    ("temperature", "Extruder temperature"),
+    ("bed_temperature", "Bed temperature"),
+];
+
+impl MaterialProperties {
+    /// Whether no value is given.
+    pub fn is_empty(&self) -> bool {
+        PROPERTY_DEFS.iter().all(|d| self.get(d.key).is_none())
+    }
+
+    /// A value by its key (none for a key it has not, or one not given).
+    pub fn get(&self, key: &str) -> Option<f64> {
+        match key {
+            "youngs_modulus" => self.youngs_modulus,
+            "poissons_ratio" => self.poissons_ratio,
+            "yield_strength" => self.yield_strength,
+            "max_service_temperature" => self.max_service_temperature,
+            "thermal_expansion" => self.thermal_expansion,
+            _ => None,
+        }
+    }
+
+    /// Sets a value by its key (none: not given); false for an unknown key.
+    pub fn set(&mut self, key: &str, value: Option<f64>) -> bool {
+        let slot = match key {
+            "youngs_modulus" => &mut self.youngs_modulus,
+            "poissons_ratio" => &mut self.poissons_ratio,
+            "yield_strength" => &mut self.yield_strength,
+            "max_service_temperature" => &mut self.max_service_temperature,
+            "thermal_expansion" => &mut self.thermal_expansion,
+            _ => return false,
+        };
+        *slot = value;
+        true
+    }
+
+    /// Whether the values are valid: Young's modulus and the yield
+    /// strength above 0, Poisson's ratio above -1 and at most 0.5, the
+    /// service temperature above absolute zero, every value finite.
+    pub fn check(&self) -> Result<(), String> {
+        for def in &PROPERTY_DEFS {
+            let Some(value) = self.get(def.key) else {
+                continue;
+            };
+            check_property(def, value)?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether a value fits a property (in the model's unit): the reason in
+/// plain words when not.
+pub fn check_property(def: &PropertyDef, value: f64) -> Result<(), String> {
+    let name = def.name;
+    if !value.is_finite() {
+        return Err(format!("{name} must be a number"));
+    }
+    match def.key {
+        "youngs_modulus" | "yield_strength" if value <= 0.0 => {
+            Err(format!("{name} must be greater than zero, got {value}"))
+        }
+        "poissons_ratio" if value <= -1.0 || value > 0.5 => Err(format!(
+            "{name} must be greater than -1 and at most 0.5, got {value}"
+        )),
+        "max_service_temperature" if value <= -273.15 => Err(format!(
+            "{name} must be above absolute zero (-273.15 °C), got {value} °C"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Where a material's values came from (mitcad#1213): a dataset or a
+/// supplier's data sheet (`source`), the material and its grade there, and
+/// the data's revision. A copy keeps it; the export and import of
+/// materials carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialReference {
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+/// A change of a material's properties in a command (mitcad#1213): the
+/// values given; `null` takes one away.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PropertiesChange {
+    #[serde(default, deserialize_with = "some")]
+    pub youngs_modulus: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "some")]
+    pub poissons_ratio: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "some")]
+    pub yield_strength: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "some")]
+    pub max_service_temperature: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "some")]
+    pub thermal_expansion: Option<Option<f64>>,
+}
+
+impl PropertiesChange {
+    /// The change that gives every value of `properties` and leaves the
+    /// others as they are.
+    pub fn giving(properties: &MaterialProperties) -> PropertiesChange {
+        let mut change = PropertiesChange::default();
+        for def in &PROPERTY_DEFS {
+            if let Some(value) = properties.get(def.key) {
+                change.set(def.key, Some(Some(value)));
+            }
+        }
+        change
+    }
+
+    /// The change of a value by its key: none leaves it, `Some(None)`
+    /// takes it away; false for an unknown key.
+    pub fn set(&mut self, key: &str, change: Option<Option<f64>>) -> bool {
+        let slot = match key {
+            "youngs_modulus" => &mut self.youngs_modulus,
+            "poissons_ratio" => &mut self.poissons_ratio,
+            "yield_strength" => &mut self.yield_strength,
+            "max_service_temperature" => &mut self.max_service_temperature,
+            "thermal_expansion" => &mut self.thermal_expansion,
+            _ => return false,
+        };
+        *slot = change;
+        true
+    }
+
+    /// The change of a value by its key.
+    pub fn get(&self, key: &str) -> Option<Option<f64>> {
+        match key {
+            "youngs_modulus" => self.youngs_modulus,
+            "poissons_ratio" => self.poissons_ratio,
+            "yield_strength" => self.yield_strength,
+            "max_service_temperature" => self.max_service_temperature,
+            "thermal_expansion" => self.thermal_expansion,
+            _ => None,
+        }
+    }
+
+    /// Applies the values given.
+    pub fn apply_to(&self, properties: &mut MaterialProperties) {
+        for def in &PROPERTY_DEFS {
+            if let Some(value) = self.get(def.key) {
+                properties.set(def.key, value);
+            }
+        }
+    }
 }
 
 /// A material's class (mitcad#655, mitcad#1102): what it is made of, by
@@ -403,6 +669,30 @@ pub struct MaterialChange {
     /// `variants`.
     #[serde(default)]
     pub variant: Option<VariantChange>,
+    /// Its mechanical and thermal properties (mitcad#1213): those given;
+    /// a property's `null` takes it away.
+    #[serde(default)]
+    pub properties: Option<PropertiesChange>,
+    /// Where its values came from (mitcad#1213); `null` takes it away.
+    #[serde(default, deserialize_with = "some")]
+    pub reference: Option<Option<MaterialReference>>,
+    /// `create_material` only: the bundled material dataset's entry
+    /// (`aluminum/6061/t6`, `crate::material_dataset`) whose values it
+    /// starts from (mitcad#1213), named as the entry (numbered when the
+    /// name is taken) and remembering it in its `reference`.
+    #[serde(default)]
+    pub dataset: Option<String>,
+}
+
+/// A name `taken` does not hold: `name` itself, else `name (2)`, `name
+/// (3)`, ... (mitcad#1213: a dataset's material made twice, an imported one
+/// kept beside one of its name).
+pub fn numbered_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    let name = name.trim();
+    std::iter::once(name.to_owned())
+        .chain((2..).map(|n| format!("{name} ({n})")))
+        .find(|candidate| !taken(candidate))
+        .expect("a free name")
 }
 
 /// A field given as `null` is `Some(None)`; one left out stays `None`.
@@ -510,6 +800,12 @@ impl MaterialChange {
                 }
             }
         }
+        if let Some(properties) = &self.properties {
+            properties.apply_to(&mut material.properties);
+        }
+        if let Some(reference) = &self.reference {
+            material.reference = reference.clone();
+        }
         if let Some(class) = self.class {
             material.class = Some(class);
         }
@@ -581,6 +877,8 @@ pub fn built_in() -> &'static [Material] {
                     class: None,
                     version: None,
                     origin: None,
+                    properties: MaterialProperties::default(),
+                    reference: None,
                 }
             })
             .collect()
@@ -793,6 +1091,20 @@ impl Material {
             || self.appearances.iter().any(|a| a.trim().is_empty())
         {
             return Err(format!("material {}: the appearance id is empty", self.id));
+        }
+        // Its properties (mitcad#1213).
+        self.properties
+            .check()
+            .map_err(|e| format!("material {}: {e}", self.id))?;
+        if self
+            .reference
+            .as_ref()
+            .is_some_and(|r| r.source.trim().is_empty())
+        {
+            return Err(format!(
+                "material {}: the reference names no source",
+                self.id
+            ));
         }
         for (key, value) in &self.filament {
             check_filament_value(key, value)
@@ -1293,5 +1605,69 @@ mod tests {
         assert!(bare.appearances.is_empty());
         bare.appearances.push(" ".to_owned());
         assert!(bare.check().is_err());
+    }
+
+    /// mitcad#1213: a material's properties are optional, checked, given
+    /// and taken away by a change, and a file from before has none.
+    #[test]
+    fn properties_are_optional_checked_and_changed() {
+        let mut m = built_in_material("steel").unwrap().clone();
+        assert!(m.properties.is_empty());
+        assert!(
+            serde_json::to_value(&m)
+                .unwrap()
+                .get("properties")
+                .is_none()
+        );
+        let change: MaterialChange = serde_json::from_value(json!({
+            "properties": {"youngs_modulus": 200000, "poissons_ratio": 0.29,
+                           "thermal_expansion": 12},
+            "reference": {"source": "Shop sheet", "grade": "S235"}}))
+        .unwrap();
+        change.apply_to(&mut m);
+        m.check().unwrap();
+        assert_eq!(m.properties.youngs_modulus, Some(200000.0));
+        assert_eq!(m.properties.get("thermal_expansion"), Some(12.0));
+        assert_eq!(m.properties.yield_strength, None);
+        let text = serde_json::to_value(&m).unwrap();
+        assert_eq!(
+            text["properties"],
+            json!({"youngs_modulus": 200000.0, "poissons_ratio": 0.29, "thermal_expansion": 12.0})
+        );
+        let back: Material = serde_json::from_value(text).unwrap();
+        assert_eq!(back, m);
+        // `null` takes one away; the others stay.
+        let change: MaterialChange =
+            serde_json::from_value(json!({"properties": {"poissons_ratio": null}})).unwrap();
+        change.apply_to(&mut m);
+        assert_eq!(m.properties.poissons_ratio, None);
+        assert_eq!(m.properties.youngs_modulus, Some(200000.0));
+        // A value out of range, 0 or an unknown key is refused.
+        for (key, value) in [
+            ("youngs_modulus", 0.0),
+            ("yield_strength", -5.0),
+            ("poissons_ratio", 0.6),
+            ("max_service_temperature", -300.0),
+        ] {
+            let mut bad = m.clone();
+            bad.properties.set(key, Some(value));
+            assert!(bad.check().is_err(), "{key} = {value}");
+        }
+        assert!(
+            serde_json::from_value::<MaterialChange>(json!({"properties": {"hardness": 3}}))
+                .is_err()
+        );
+        let mut nameless = m.clone();
+        nameless.reference = Some(MaterialReference {
+            source: " ".to_owned(),
+            material: None,
+            grade: None,
+            revision: None,
+        });
+        assert!(nameless.check().is_err());
+        // A file from before properties reads as it was.
+        let old: Material =
+            serde_json::from_value(json!({"id": "x", "name": "X", "density": 1.0})).unwrap();
+        assert!(old.properties.is_empty() && old.reference.is_none());
     }
 }

@@ -1156,6 +1156,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-fillet-arc"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-fillet-arc PROPERTIES TIMEOUT 300)
+    # Plates… (mitcad#1050), the Linux test's shared input script: two
+    # plates added, a body picked onto Plate 2 in vase mode, the plate
+    # drawn beside the design; Send to Slicer writes one 3MF of both
+    # plates, the spiral mode on Plate 2 only.
+    add_test(NAME app.ui-windows-print-plates
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-print-plates-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-print-plates"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-print-plates PROPERTIES TIMEOUT 420)
     # The sketch of a component whose first occurrence is hidden, edited
     # where its shown one places it, its curves drawn (mitcad#1194); the
     # Linux test's shared input script.
@@ -1166,6 +1177,98 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-hidden-occurrence-sketch"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-hidden-occurrence-sketch PROPERTIES TIMEOUT 300)
+    # Materials' mechanical and thermal properties (mitcad#1213), as the Linux
+    # test: a value typed in psi in an inch design, a material of the
+    # bundled dataset created and saved, a CSV imported with its invalid
+    # row reported.
+    add_test(NAME app.ui-windows-material-properties
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-material-properties-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-material-properties"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-material-properties PROPERTIES TIMEOUT 300)
+
+    # Processes grouped by printer (mitcad#1216): the Processes manager's
+    # sub-groups, Send to Slicer's Process picker with the chosen printer's
+    # processes first, the body card's drop-down; the Linux test's shared
+    # input script.
+    add_test(NAME app.ui-windows-processes-by-printer
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-processes-by-printer-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-processes-by-printer"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-processes-by-printer PROPERTIES TIMEOUT 360)
+    # The arrow keys turn the view while it has the keyboard, not from a
+    # value field (mitcad#1211); the Linux test's shared input script.
+    add_test(NAME app.ui-windows-view-arrow-keys
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-view-arrow-keys-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-view-arrow-keys"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-view-arrow-keys PROPERTIES TIMEOUT 180)
+    # Look At in the view's context menu for a planar face of a component,
+    # not for a cylindrical face (mitcad#1212); the Linux test's shared
+    # input script.
+    add_test(NAME app.ui-windows-context-look-at
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-context-look-at-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-context-look-at"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-context-look-at PROPERTIES TIMEOUT 180)
+    # MitCad's version in the main window (mitcad#1209): the watermark's text
+    # and the window title, its place in the view's lower right (above the
+    # timeline in the Floating layout), a click there reaches the view, and
+    # Preferences › General hides and shows it.
+    add_test(NAME app.ui-windows-version-watermark
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-version-watermark-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-version-watermark"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>" -Version "${PROJECT_VERSION}")
+    set_tests_properties(app.ui-windows-version-watermark PROPERTIES TIMEOUT 300)
+    # A sketch region inside a body picked before the body's face in front
+    # of it while an input takes profiles (mitcad#1222); the Linux test's
+    # shared input script.
+    add_test(NAME app.ui-windows-region-pick-inside-body
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-region-pick-inside-body-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-region-pick-inside-body"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-region-pick-inside-body PROPERTIES TIMEOUT 240)
+    # Auto Fix in the timeline's context menu (mitcad#1223): an extrusion
+    # whose region a sketch change split is fixed as one undo step and its
+    # warning goes; the Linux test's shared input script.
+    add_test(NAME app.ui-windows-timeline-auto-fix
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-timeline-auto-fix-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-timeline-auto-fix"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-timeline-auto-fix PROPERTIES TIMEOUT 180)
+    # A Center to Center Slot's typed length and width become its
+    # dimensions, so that only its place is free (mitcad#1225); the Linux
+    # test's shared input script and mitcad-cli's check.
+    add_test(NAME app.ui-windows-sketch-slot-dimensions
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-slot-dimensions-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-slot-dimensions"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-slot-dimensions PROPERTIES TIMEOUT 240)
+    # Extrude (E) from a zoomed sketch on a face: the sketch and its body in
+    # the free area (mitcad#1227), a drawn profile rather than the face's
+    # leftover region (mitcad#1226); the Linux test's shared input script.
+    add_test(NAME app.ui-windows-extrude-from-sketch
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-extrude-from-sketch-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-extrude-from-sketch"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-extrude-from-sketch PROPERTIES TIMEOUT 240)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

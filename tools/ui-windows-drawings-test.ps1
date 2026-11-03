@@ -32,6 +32,10 @@
 #      balloon on Component1's second placement (phase 3).
 #   7. The front view's Scale typed (mitcad#1169): abc refused and not
 #      sent, 2:3 sent, the model's scale 0.667 and the field showing 1:1.5.
+#   8. Create Drawing opens with the last choice (mitcad#1218): ISO, A3,
+#      first angle as the drawings before; ANSI chosen (B, third angle) and
+#      a drawing created; the next Create Drawing opens with ANSI, B, third
+#      angle (logged), cancelled.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-drawings-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -447,6 +451,40 @@ Ui-ExpectNew '"scale":"2:3"' 'two thirds asked for'
 # or X:1 (ISO 5455): 1:1.5.
 Ui-ExpectNew 'Drawing view 1 scale: 1:1.5 (0.667)' "the model's scale, shown as 1:1.5"
 if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
+
+Write-Host '--- 8. Create Drawing opens with the last choice (mitcad#1218)'
+Ui-Mark
+Settled 'Drawing Close Drawing'
+Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
+Ui-ExpectNew 'Drawing closed' 'the 3D view again'
+Ui-Mark
+Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-ExpectNew 'Create Drawing dialog starts with template iso, A3, landscape, first_angle (the last choice)' 'the last drawing''s choice'
+Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
+Ui-Step 'Template: ANSI (Alt+T, Home, Down), OK' {
+  Ui-FocusDialog '^Create Drawing$'
+  Ui-Key 'alt+t'
+  Ui-Key 'Home'
+  Ui-Key 'Down'
+  Ui-Key 'Return'
+  Ui-FocusMain
+}
+Ui-ExpectNew 'Create Drawing dialog: template ansi, ANSI_B, third_angle' 'the ANSI template on its B, third angle'
+Ui-ExpectNew 'Drawing created: D2' 'the drawing made'
+Ui-ExpectNew 'Create Drawing choice kept: template ansi, ANSI_B, landscape, third_angle' 'the choice kept'
+Ui-ExpectNew 'Drawing tool: Base View' 'Base View on for the new drawing'
+Ui-Mark
+Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
+Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
+Settled 'Drawing Close Drawing'
+Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
+Ui-ExpectNew 'Drawing closed' 'the 3D view again'
+Ui-Mark
+Ui-Step 'Create Drawing again (F9)'       { Ui-Key 'F9' }
+Ui-ExpectNew 'Create Drawing dialog starts with template ansi, ANSI_B, landscape, third_angle (the last choice)' 'it opens with ANSI, B, third angle'
+Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
+Ui-Step 'Cancel (Esc)'                    { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Escape'; Ui-FocusMain }
+Ui-ExpectNew 'Create Drawing cancelled' 'nothing made'
 
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 Ui-Finish 'UI Windows drawings test'

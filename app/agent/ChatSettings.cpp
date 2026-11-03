@@ -116,6 +116,69 @@ QString agentWorkDirectory() {
   return folderFrom("MITCAD_CHAT_AGENT_DIR", QStandardPaths::AppLocalDataLocation, QStringLiteral("chat-agent"));
 }
 
+bool apiAgentEnabled(const QString& agent) {
+  return QSettings().value(QStringLiteral("chat/api/%1/enabled").arg(agent), false).toBool();
+}
+
+void setApiAgentEnabled(const QString& agent, bool enabled) {
+  QSettings().setValue(QStringLiteral("chat/api/%1/enabled").arg(agent), enabled);
+}
+
+QString apiAgentUrl(const QString& agent, const QString& preset) {
+  const QString url = QSettings().value(QStringLiteral("chat/api/%1/url").arg(agent)).toString().trimmed();
+  return url.isEmpty() ? preset : url;
+}
+
+void setApiAgentUrl(const QString& agent, const QString& url) {
+  QSettings settings;
+  if (url.trimmed().isEmpty()) {
+    settings.remove(QStringLiteral("chat/api/%1/url").arg(agent));
+  } else {
+    settings.setValue(QStringLiteral("chat/api/%1/url").arg(agent), url.trimmed());
+  }
+}
+
+int apiRequestTimeout() {
+  bool ok = false;
+  const int seconds = QSettings().value(QStringLiteral("chat/api/timeout"), kDefaultApiTimeout).toInt(&ok);
+  return ok ? qBound(10, seconds, 3600) : kDefaultApiTimeout;
+}
+
+void setApiRequestTimeout(int seconds) {
+  QSettings().setValue(QStringLiteral("chat/api/timeout"), qBound(10, seconds, 3600));
+}
+
+QString apiSessionDirectory() {
+  const QString chat = chatDataDirectory();
+  return chat.isEmpty() ? QString() : QDir(chat).filePath(QStringLiteral("api-sessions"));
+}
+
+bool customAgentEnabled() { return QSettings().value(QStringLiteral("chat/acp/enabled"), false).toBool(); }
+
+void setCustomAgentEnabled(bool enabled) { QSettings().setValue(QStringLiteral("chat/acp/enabled"), enabled); }
+
+QString customAgentCommand() { return QSettings().value(QStringLiteral("chat/acp/command")).toString().trimmed(); }
+
+void setCustomAgentCommand(const QString& command) {
+  QSettings settings;
+  if (command.trimmed().isEmpty()) {
+    settings.remove(QStringLiteral("chat/acp/command"));
+  } else {
+    settings.setValue(QStringLiteral("chat/acp/command"), command.trimmed());
+  }
+}
+
+QString customAgentArguments() { return QSettings().value(QStringLiteral("chat/acp/arguments")).toString().trimmed(); }
+
+void setCustomAgentArguments(const QString& arguments) {
+  QSettings settings;
+  if (arguments.trimmed().isEmpty()) {
+    settings.remove(QStringLiteral("chat/acp/arguments"));
+  } else {
+    settings.setValue(QStringLiteral("chat/acp/arguments"), arguments.trimmed());
+  }
+}
+
 ChatNotifier& ChatNotifier::instance() {
   static ChatNotifier notifier;
   return notifier;

@@ -61,6 +61,32 @@ QString chatDataDirectory();
 // application data folder's chat-agent/.
 QString agentWorkDirectory();
 
+// The API agents (phase 2 of mitcad#947, ApiAgent.hpp): whether each one
+// is offered in the panel (chat/api/<agent>/enabled), its endpoint's address
+// (chat/api/<agent>/url; empty: its preset) and the requests' timeout, the
+// longest wait for the service's next data (chat/api/timeout, seconds).
+bool apiAgentEnabled(const QString& agent);
+void setApiAgentEnabled(const QString& agent, bool enabled);
+QString apiAgentUrl(const QString& agent, const QString& preset);
+void setApiAgentUrl(const QString& agent, const QString& url);
+constexpr int kDefaultApiTimeout = 300;
+int apiRequestTimeout();
+void setApiRequestTimeout(int seconds);
+// Where the API agents keep their conversations for resuming: the chat
+// folder's api-sessions/.
+QString apiSessionDirectory();
+
+// The custom command that speaks the Agent Client Protocol (mitcad#1198,
+// AcpAgent.hpp): whether it is offered in the panel (chat/acp/enabled), its
+// command, a program's name or path (chat/acp/command), and its arguments
+// as one line (chat/acp/arguments).
+bool customAgentEnabled();
+void setCustomAgentEnabled(bool enabled);
+QString customAgentCommand();
+void setCustomAgentCommand(const QString& command);
+QString customAgentArguments();
+void setCustomAgentArguments(const QString& arguments);
+
 // Tells the open panels that Preferences cleared every history or reset
 // what was allowed always.
 class ChatNotifier : public QObject {
@@ -73,6 +99,9 @@ signals:
   void historyCleared();
   // Preferences chose another agent for the chat.
   void agentChosen(const QString& agent);
+  // Preferences changed the API agents' settings (offered, address, key,
+  // timeout) or the custom command's (offered, command, arguments).
+  void apiSettingsChanged();
 };
 
 } // namespace mitcad::agent

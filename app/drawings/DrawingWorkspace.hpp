@@ -114,6 +114,9 @@ public:
   bool open(const QString& uid);
   void closeDrawing();
   bool isOpen() const { return !m_drawing.isEmpty(); }
+  // The sheet beside the panel: the view's version watermark keeps to its
+  // lower right while the drawing is open (mitcad#1209).
+  QWidget* sheetView() const;
   QString drawing() const { return m_drawing; }
   // The model changed (a command, undo, another design): the sheet is
   // asked for again; the workspace closes when its drawing is gone.

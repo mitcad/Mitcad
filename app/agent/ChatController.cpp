@@ -14,6 +14,8 @@
 
 #include "../mcp/AssistantSetup.hpp"
 #include "AccountCheck.hpp"
+#include "AcpAgent.hpp"
+#include "ApiAgent.hpp"
 #include "ChatLogic.hpp"
 #include "ChatSettings.hpp"
 #include "ClaudeCodeAgent.hpp"
@@ -94,6 +96,14 @@ ChatController::ChatController(ChatHost host, QObject* parent)
   // order.
   m_agents.push_back(new ClaudeCodeAgent(this));
   m_agents.push_back(new CodexAgent(this));
+  // The API endpoints and local models (phase 2): offered once enabled in
+  // Preferences.
+  for (const ApiAgent::Preset& preset : ApiAgent::presets()) {
+    m_agents.push_back(new ApiAgent(preset, this));
+  }
+  // A custom command over the Agent Client Protocol (mitcad#1198): offered
+  // once set in Preferences.
+  m_agents.push_back(new AcpAgent(this));
   noteDetected();
   // The last used one; when it is not found and another is, that one.
   const QString chosen = ChatSettings::load().agent;
@@ -148,6 +158,18 @@ ChatController::ChatController(ChatHost host, QObject* parent)
   });
   // Preferences chose the agent.
   connect(&ChatNotifier::instance(), &ChatNotifier::agentChosen, this, [this](const QString& id) { chooseAgent(id); });
+  // Preferences changed the API agents or the custom command: the
+  // switcher's agents, and the chosen one looked for again with its
+  // address and key, or its command.
+  connect(&ChatNotifier::instance(), &ChatNotifier::apiSettingsChanged, this, [this] {
+    noteDetected();
+    if (m_agent->configuredInPreferences() && m_activity == Activity::Idle && !m_checkingAccount) {
+      m_agent->shutdown();
+      m_marker.clear();
+      m_agent->check();
+    }
+    emit setupChanged();
+  });
 }
 
 void ChatController::noteDetected() {
@@ -255,6 +277,12 @@ void ChatController::signIn() {
   m_agent->signIn();
 }
 
+void ChatController::setApiKey(const QString& key) {
+  if (!key.trimmed().isEmpty()) {
+    m_agent->setKey(key);
+  }
+}
+
 void ChatController::accountFailed(const QJsonObject& account, const QString& text) {
   const bool repeated = m_accountErrors.value(m_agent->id()) == account;
   m_accountErrors.insert(m_agent->id(), account);
@@ -357,7 +385,7 @@ void ChatController::beginAccountProbe() {
   QString reason;
   const QString instance = m_host.listener(&reason);
   const QString bridge = mcp::installedBridge(QCoreApplication::applicationDirPath());
-  if (instance.isEmpty() || bridge.isEmpty()) {
+  if (instance.isEmpty() || (m_agent->needsBridge() && bridge.isEmpty())) {
     finishAccountProbe(false, reason.isEmpty() ? tr("MitCad's bridge is unavailable.") : reason);
     return;
   }
@@ -615,6 +643,21 @@ void ChatController::newConversation() {
 }
 
 void ChatController::clearHistory(bool all) {
+  // What the API agents kept of the conversations (their sessions) goes
+  // with the history.
+  if (all) {
+    clearApiSessions();
+  } else {
+    for (ChatAgent* candidate : m_agents) {
+      const QString kept = m_sessions.value(candidate->id()).toString();
+      if (!kept.isEmpty()) {
+        candidate->forgetSession(kept);
+      }
+    }
+    if (!m_session.isEmpty()) {
+      m_agent->forgetSession(m_session);
+    }
+  }
   const bool cleared = all ? m_store.clearAll() : m_store.clear(m_path);
   m_unsaved.clear();
   qInfo().noquote() << QStringLiteral("Chat: history of %1 cleared%2")
@@ -680,8 +723,10 @@ bool ChatController::startAgent(QString* error) {
     *error = reason.isEmpty() ? tr("MitCad's listener for assistants is not running.") : reason;
     return false;
   }
-  const QString bridge = mcp::bundledBridge();
-  if (bridge.isEmpty()) {
+  // An agent whose tool loop runs in MitCad connects to the listener
+  // itself (ApiAgent).
+  const QString bridge = m_agent->needsBridge() ? mcp::bundledBridge() : QString();
+  if (m_agent->needsBridge() && bridge.isEmpty()) {
     *error = tr("MitCad's mitcad-cli was not found beside the application.");
     return false;
   }

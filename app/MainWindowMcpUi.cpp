@@ -66,6 +66,7 @@
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
 #include "view/ViewReveal.hpp"
+#include "view/VersionWatermark.hpp"
 #ifdef MITCAD_MACOS_NATIVE_UI
 #include "platform/NativeForms.hpp"
 #endif
@@ -550,15 +551,16 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     refuse(tr("width, height and aspect render the 3D view, not the whole window."));
   }
   // The view's frame with the widgets over it (the sketch overlay, the
-  // orientation cube's buttons), as the user sees it.
-  const auto viewImage = [this] {
+  // orientation cube's buttons), as the user sees it; the version watermark
+  // (mitcad#1209) only in a picture of the window, never in one of the view.
+  const auto viewImage = [this](bool watermark) {
     QImage frame = m_viewer->grabFramebuffer();
     if (frame.isNull()) {
       return frame;
     }
     QPainter painter(&frame);
     for (QWidget* overlay : m_viewer->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
-      if (overlay->isVisibleTo(m_viewer)) {
+      if (overlay->isVisibleTo(m_viewer) && (watermark || qobject_cast<VersionWatermark*>(overlay) == nullptr)) {
         overlay->render(&painter, overlay->pos(), QRegion(), QWidget::DrawChildren);
       }
     }
@@ -575,7 +577,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     }
     image = m_viewer->snapshot(*offscreen, false, true);
   } else if (!whole) {
-    image = viewImage();
+    image = viewImage(false);
   } else if (m_nativeUi) {
     // AppKit draws the window: as the window server composes it.
     const QTemporaryDir directory;
@@ -588,7 +590,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     // The window's grab lacks what the view draws with OpenGL: the view's
     // frame goes in, and the widgets over it again.
     QPixmap shot = grab();
-    const QImage frame = viewImage();
+    const QImage frame = viewImage(true);
     if (!frame.isNull()) {
       QPainter painter(&shot);
       painter.drawImage(QRect(m_viewer->mapTo(this, QPoint(0, 0)), m_viewer->size()), frame);

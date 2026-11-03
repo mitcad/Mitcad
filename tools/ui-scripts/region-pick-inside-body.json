@@ -1,0 +1,9 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A block 40 x 40 x 20 mm centred on the XY plane (z from -10 to 10), Sketch1 on XY through its middle with a 10 mm square, and Extrude1 cutting the square downwards out through the bottom: the square's region lies inside the block (mitcad#1222)."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"origin":[0,0,-10],"normal":[0,0,1]},"corner":[-20,-20],"length":40,"width":40,"height":20,"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[-5,-5],"width":10,"height":10},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":-15},"operation":"cut"}},
+  {"expect":{"instances":1,"world_volume":31000}}
+]

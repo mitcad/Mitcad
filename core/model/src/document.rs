@@ -369,6 +369,9 @@ pub struct DocState {
     /// The number of the next comment's id: one past the largest ever
     /// used, so that an id is never given again.
     pub(crate) next_comment: u32,
+    /// The print plates (mitcad#1050), in their order: the first takes
+    /// what no plate names.
+    pub(crate) print_plates: Vec<crate::print_plates::PrintPlate>,
 }
 
 impl Default for DocState {
@@ -413,6 +416,7 @@ impl Default for DocState {
             feature_index: Default::default(),
             comments: Vec::new(),
             next_comment: 1,
+            print_plates: Vec::new(),
         }
     }
 }
@@ -4362,3 +4366,17 @@ struct ProjectionTarget {
 // Read-only BOM grouping (mitcad#1176).
 mod bom;
 pub use bom::{BomRow, PartSignature};
+
+// Print plates: what goes on each plate with counts, the plates' own print
+// settings and the plate a body prints on (mitcad#1050).
+mod print_plates;
+pub use print_plates::PlateChange;
+
+// Materials imported from JSON and CSV files, into the design or a library
+// (mitcad#1213).
+mod material_import;
+pub use material_import::{MaterialImport, NameConflict};
+// Auto Fix: the references a warning found again written into the
+// definitions (mitcad#1223).
+mod auto_fix;
+pub use auto_fix::{AutoFix, AutoFixLeft, Repair};

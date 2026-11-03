@@ -40,6 +40,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/ParameterField.hpp"
 #include "../framework/FormulaEditor.hpp"
 #include "../framework/IdleCall.hpp"
@@ -227,6 +228,7 @@ public:
 
     auto* rows = new QTreeWidget;
     rows->setObjectName(QStringLiteral("parametersImportRows"));
+    panel::setCompactIndentation(rows, panel::Indent::Flat);
     rows->setRootIsDecorated(false);
     rows->setAlternatingRowColors(true);
     rows->setUniformRowHeights(true);
@@ -403,6 +405,7 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
 
   m_table = new ParameterTable([this](QTreeWidgetItem* item, int column) { edit(item, column); });
   m_table->setObjectName(QStringLiteral("parametersTable"));
+  panel::setCompactIndentation(m_table, panel::Indent::Tree);
   m_table->setColumnCount(11);
   m_table->setHeaderLabels({tr("Name"), tr("Unit"), tr("Expression"), tr("Value"), tr("Comment"), QStringLiteral("★"),
                             tr("Min"), tr("Max"), tr("Step"), tr("Strict"), tr("Slider")});

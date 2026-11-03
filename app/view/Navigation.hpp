@@ -43,7 +43,15 @@ struct NavigationSettings {
   double trackpadSpeed = 1.0;
   // The 3D mouse (mitcad#951, SpaceMouseNavigation.hpp).
   SpaceMouseSettings spaceMouse;
+  // The arrow keys' turn of the view (mitcad#1211, `view/turnStep`), in
+  // degrees, 1 to 90.
+  double turnStep = 15.0;
 };
+
+// The arrow keys' step: 1 to 90 degrees, 15 when it is no number.
+inline double sanitizeTurnStep(double degrees) {
+  return std::isfinite(degrees) ? std::clamp(degrees, 1.0, 90.0) : 15.0;
+}
 
 inline double sanitizeNavigationSpeed(double speed) {
   return std::isfinite(speed) ? std::clamp(speed, 0.1, 4.0) : 1.0;
@@ -185,6 +193,9 @@ inline void loadNavigationDetails(const QSettings& store, NavigationSettings& se
   settings.panSpeed = speed("panSpeed");
   settings.zoomSpeed = speed("zoomSpeed");
   settings.trackpadSpeed = speed("trackpadSpeed");
+  bool stepOk = false;
+  const double step = store.value(prefix + QStringLiteral("turnStep"), 15.0).toDouble(&stepOk);
+  settings.turnStep = stepOk ? sanitizeTurnStep(step) : 15.0;
   loadSpaceMouseSettings(store, settings.spaceMouse);
   QVector<NavigationBinding> bindings;
   const QJsonDocument document = QJsonDocument::fromJson(
@@ -226,6 +237,7 @@ inline void saveNavigationDetails(QSettings& store, const NavigationSettings& se
   store.setValue(prefix + QStringLiteral("panSpeed"), sanitizeNavigationSpeed(settings.panSpeed));
   store.setValue(prefix + QStringLiteral("zoomSpeed"), sanitizeNavigationSpeed(settings.zoomSpeed));
   store.setValue(prefix + QStringLiteral("trackpadSpeed"), sanitizeNavigationSpeed(settings.trackpadSpeed));
+  store.setValue(prefix + QStringLiteral("turnStep"), sanitizeTurnStep(settings.turnStep));
   saveSpaceMouseSettings(store, settings.spaceMouse);
   if (settings.customBindings.isEmpty()) {
     store.remove(prefix + QStringLiteral("navigationBindings"));

@@ -180,7 +180,7 @@ pub(super) fn is_chosen(
 /// An object of a 3MF file on the print bed (mitcad#856): its placements
 /// of the bodies written, and how it lies.
 #[derive(Debug, Clone)]
-pub(super) struct Piece {
+pub(crate) struct Piece {
     /// None for the file's own object (the bodies not put apart).
     pub name: Option<String>,
     /// (index of the body among those written, index of its placement).

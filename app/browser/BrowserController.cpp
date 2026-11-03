@@ -2080,6 +2080,18 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
                           {SelectionItem{SelectKind::Sketch, uid, QString(), QString()}}, nullptr);
     });
   }
+  // Auto Fix (mitcad#1223): the timeline's selection when the feature is in
+  // it, else the feature; offered only when one of them has a warning the
+  // model can write into its definition.
+  {
+    QStringList fixing = row.isValid() ? QStringList() : m_timeline->selectedFeatures();
+    if (!fixing.contains(uid)) {
+      fixing = QStringList{uid};
+    }
+    if (autoFixable(fixing)) {
+      menu.add(QStringLiteral("ok"), tr("Auto Fix"), [this, fixing] { autoFix(fixing); });
+    }
+  }
   // Renamed in place where the menu was opened.
   menu.add(QStringLiteral("edit"), tr("Rename"), [this, uid, row] {
     if (!canChange()) {
@@ -2223,7 +2235,43 @@ void BrowserController::groupMenu(const QString& name, const QPoint& at) {
       qDebug().noquote() << QStringLiteral("Ungrouped %1").arg(name);
     }
   });
+  // Auto Fix of the group's features (mitcad#1223): one undo step named
+  // after the group.
+  for (const DocumentSnapshot::Group& group : std::as_const(m_snapshot.groups)) {
+    if (group.name == name && autoFixable(group.features)) {
+      const QStringList members = group.features;
+      menu.add(QStringLiteral("ok"), tr("Auto Fix"), [this, members] { autoFix(members); });
+    }
+  }
   menu.exec(at);
+}
+
+bool BrowserController::autoFixable(const QStringList& uids) const {
+  for (const QString& uid : uids) {
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+    if (feature != nullptr && feature->autoFix > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void BrowserController::autoFix(const QStringList& uids) {
+  if (!canChange()) {
+    return;
+  }
+  QJsonObject result;
+  if (!m_host.runModelCommand(cmd("auto_fix", {{QStringLiteral("features"), QJsonArray::fromStringList(uids)}}),
+                              &result)) {
+    qDebug().noquote() << QStringLiteral("Auto Fix refused: %1").arg(m_host.lastError());
+    return;
+  }
+  // The model's summary ("Auto Fix: 2 of 3 warnings fixed; Hole1: …, pick
+  // it again"): a warning while something is left.
+  const QString message = result.value(QStringLiteral("message")).toString();
+  const bool left = !result.value(QStringLiteral("left")).toArray().isEmpty();
+  qDebug().noquote() << message;
+  m_host.showStatus(message, left ? NoticeLevel::Warning : NoticeLevel::Success);
 }
 
 void BrowserController::findInBrowser(const SelectionItem& item) {
@@ -2897,6 +2945,18 @@ void BrowserController::openOwnSettings(const QString& owner, const QString& nam
     m_ownSettings->activateWindow();
   }
   m_ownSettings->setOwner(owner, name);
+}
+
+void BrowserController::openPlateSettings(const QString& plate, const QString& name) {
+  if (!m_ownSettings) {
+    m_ownSettings = new OwnSettingsDialog(m_host, m_window);
+  }
+  showDialog(m_ownSettings);
+  if (!m_ownSettings->testAttribute(Qt::WA_DontShowOnScreen)) {
+    m_ownSettings->raise();
+    m_ownSettings->activateWindow();
+  }
+  m_ownSettings->setPlate(plate, name);
 }
 
 void BrowserController::openPurgeVolumes(const QStringList& bodies) {

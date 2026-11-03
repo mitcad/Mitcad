@@ -24,6 +24,7 @@
 #include <QtLogging>
 
 #include "../framework/Json.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "mitcad_bridge/lib.h"
 
@@ -110,6 +111,7 @@ VersionHistoryDialog::VersionHistoryDialog(QWidget* parent, const QString& file,
   layout->addWidget(m_heading);
 
   m_list = new QTreeWidget;
+  panel::setCompactIndentation(m_list, panel::Indent::Flat);
   m_list->setColumnCount(kColumns);
   m_list->setHeaderLabels({tr("Version"), tr("Saved"), tr("Author"), tr("Description"), tr("Changes")});
   m_list->setRootIsDecorated(false);

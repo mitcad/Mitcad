@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 25];
+    fn command_families() -> [CommandFamily<K>; 27];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 25] {
+    fn command_families() -> [CommandFamily<K>; 27] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -307,6 +307,23 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 prefix: None,
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     doc.run_comment_command(parse(value, "command")?)
+                },
+            },
+            // Print plates (mitcad#1050, `print_plates.rs`).
+            CommandFamily {
+                names: super::print_plates::PlateCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    doc.run_plate_command(parse(value, "command")?)
+                },
+            },
+            // Auto Fix of references a warning found again (mitcad#1223,
+            // `auto_fix.rs`).
+            CommandFamily {
+                names: super::auto_fix::AutoFixCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::auto_fix::run_auto_fix_command(doc, parse(value, "command")?)
                 },
             },
         ]

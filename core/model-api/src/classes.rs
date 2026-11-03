@@ -349,6 +349,19 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("resolve_comment", Model),
     ("reopen_comment", Model),
     ("delete_comment", Model),
+    // Print plates (mitcad#1050).
+    ("add_print_plate", Model),
+    ("edit_print_plate", Model),
+    ("delete_print_plate", Model),
+    ("move_print_plate", Model),
+    ("place_on_plate", Model),
+    ("remove_from_plates", Model),
+    // Materials from a JSON or CSV file (mitcad#1213): the file's text is
+    // the command's, the application reads the file; into a library its
+    // files, see `command_class_with`.
+    ("import_materials", Model),
+    // Auto Fix of references a warning found again (mitcad#1223).
+    ("auto_fix", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -542,6 +555,14 @@ const QUERIES: &[(&str, ApiClass)] = &[
     // Where a dimension placed or dragged on a drawing snaps to
     // (mitcad#1173).
     ("drawing_snap", Model),
+    // Print plates and a plate's layout (mitcad#1050).
+    ("print_plates", Model),
+    ("plate_layout", Model),
+    // Materials' units, the bundled material dataset and materials as
+    // JSON or CSV text (mitcad#1213).
+    ("material_units", Model),
+    ("material_dataset", Model),
+    ("export_materials", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {
@@ -685,6 +706,7 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
             | "edit_material"
             | "delete_material"
             | "merge_materials"
+            | "import_materials"
             | "set_component_material"
             | "set_body_material"
             | "create_print_profile"

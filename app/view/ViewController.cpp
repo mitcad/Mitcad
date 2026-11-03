@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "ViewController.hpp"
 #include "NavigationPreferences.hpp"
+#include "GridSpacing.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -28,6 +30,9 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QJsonArray>
+#include <QKeyCombination>
+#include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -36,6 +41,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScreen>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -52,11 +58,14 @@
 #include "../framework/Dialogs.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../framework/AppSettings.hpp"
+#include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/DebugLog.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/LengthUnits.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/SettingsWindow.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacChrome.hpp"
@@ -86,6 +95,8 @@
 #include "Comments.hpp"
 // General: ask to activate the component of a picked face (mitcad#960).
 #include "../browser/ActivateQuestion.hpp"
+// General: show the version in the view (mitcad#1209).
+#include "VersionWatermark.hpp"
 
 namespace mitcad {
 namespace {
@@ -521,6 +532,42 @@ void ViewController::registerCommands() {
   }
   add("view.look_at", tr("Look At"), "look-at", [this] { m_lookAt(); }, {QStringLiteral("normal to")},
       tr("Looks straight at the selected plane, planar face or sketch"));
+  // The arrow keys turn the view by Preferences › Navigation's step while
+  // a 3D view has the keyboard (mitcad#1211; eventFilter keeps them for
+  // fields, lists and panels), as the orientation cube's arrows turn it;
+  // changeable in Keyboard Shortcuts.
+  struct Turn {
+    const char* id;
+    QString name;
+    const char* icon;
+    Qt::Key key;
+    int right;
+    int up;
+  };
+  for (const Turn& turn : {Turn{"view.turn_left", tr("Turn View Left"), "view-arrow-left", Qt::Key_Left, -1, 0},
+                           Turn{"view.turn_right", tr("Turn View Right"), "view-arrow-right", Qt::Key_Right, 1, 0},
+                           Turn{"view.turn_up", tr("Turn View Up"), "view-arrow-up", Qt::Key_Up, 0, 1},
+                           Turn{"view.turn_down", tr("Turn View Down"), "view-arrow-down", Qt::Key_Down, 0, -1}}) {
+    CommandDef def;
+    def.id = QString::fromLatin1(turn.id);
+    def.name = turn.name;
+    def.icon = QString::fromLatin1(turn.icon);
+    def.kind = CommandDef::Kind::Action;
+    def.mode = CommandDef::Mode::Any;
+    def.tab.clear(); // the command search and shortcuts
+    def.keywords = {QStringLiteral("view"), QStringLiteral("turn"), QStringLiteral("rotate"),
+                    QStringLiteral("orbit"), QStringLiteral("arrow key")};
+    def.tooltip = tr("Turns the 3D view by the arrow key step");
+    def.shortcut = QKeySequence(turn.key);
+    def.duringCommands = true; // the view turns while a panel is open
+    const int right = turn.right;
+    const int up = turn.up;
+    def.run = [this, right, up] { turnView(right, up); };
+    m_registry.add(def);
+  }
+  if (QCoreApplication::instance() != nullptr) {
+    QCoreApplication::instance()->installEventFilter(this);
+  }
   add("view.orthographic", tr("Orthographic"), "orientation-cube", [this] { setPerspective(false); },
       {QStringLiteral("camera"), QStringLiteral("parallel")});
   add("view.perspective", tr("Perspective"), "perspective", [this] { setPerspective(true); },
@@ -983,7 +1030,47 @@ void ViewController::showOrientationCubeMenu(const QPoint& globalPosition) {
 }
 
 // ---------------------------------------------------------------------------
+// The arrow keys (mitcad#1211)
+
+void ViewController::turnView(int right, int up) {
+  const double step = sanitizeTurnStep(m_viewer.navigation().turnStep);
+  m_viewer.turnView(right * step, up * step);
+  const QString way = right > 0   ? QStringLiteral("right")
+                      : right < 0 ? QStringLiteral("left")
+                      : up > 0    ? QStringLiteral("up")
+                                  : QStringLiteral("down");
+  qDebug().noquote() << QStringLiteral("View turned %1 by %2 degrees").arg(way).arg(step);
+}
+
+bool ViewController::eventFilter(QObject* watched, QEvent* event) {
+  // Before a key is a shortcut, the widget with the keyboard may keep it
+  // (ShortcutOverride): a turn command's key is kept by every widget but a
+  // 3D view, so a field, the Browser, a list or a dialog moves with it as
+  // before and the view stays.
+  if (event->type() == QEvent::ShortcutOverride) {
+    const auto* key = static_cast<const QKeyEvent*>(event);
+    const QKeySequence pressed(
+        QKeyCombination(key->modifiers() & ~Qt::KeypadModifier, static_cast<Qt::Key>(key->key())));
+    bool turnKey = false;
+    for (const char* id : {"view.turn_left", "view.turn_right", "view.turn_up", "view.turn_down"}) {
+      const QAction* action = m_registry.action(QString::fromLatin1(id));
+      turnKey = turnKey || (action != nullptr && action->shortcuts().contains(pressed));
+    }
+    if (turnKey && qobject_cast<OcctViewer*>(QApplication::focusWidget()) == nullptr) {
+      event->accept();
+      return true;
+    }
+  }
+  return QObject::eventFilter(watched, event);
+}
+
+// ---------------------------------------------------------------------------
 // Dialogs
+
+void ViewController::setLengthUnit(const QString& unit) {
+  m_lengthUnit = unit.isEmpty() ? QStringLiteral("mm") : unit;
+  m_viewer.setGridUnit(m_lengthUnit);
+}
 
 void ViewController::showGridSettings() {
   QDialog dialog(m_window);
@@ -991,11 +1078,20 @@ void ViewController::showGridSettings() {
   auto* layout = new QVBoxLayout(&dialog);
   auto* automatic = new QRadioButton(tr("Automatic: the spacing follows the zoom"));
   auto* fixed = new QRadioButton(tr("Fixed spacing"));
+  // In the design's length unit (mitcad#1210); the settings keep mm, so a
+  // change of the design's unit does not move the grid.
+  const QString unit = m_lengthUnit;
+  const int decimals = gridSpacingDecimals(unit);
   auto* spacing = new DecimalSpinBox;
-  spacing->setRange(0.01, 10000.0);
-  spacing->setDecimals(2);
-  spacing->setSuffix(QStringLiteral(" mm"));
-  spacing->setValue(m_settings.gridSpacing > 0.0 ? m_settings.gridSpacing : 10.0);
+  spacing->setObjectName(QStringLiteral("gridSpacing"));
+  spacing->setDecimals(decimals);
+  spacing->setRange(std::max(gridSpacingInUnit(0.01, unit), std::pow(10.0, -decimals)),
+                    gridSpacingInUnit(10000.0, unit));
+  spacing->setSuffix(QLatin1Char(' ') + unit);
+  // Automatic: 10 mm as a sensible value of the unit (0.5 in).
+  spacing->setValue(m_settings.gridSpacing > 0.0 ? gridSpacingInUnit(m_settings.gridSpacing, unit)
+                                                 : niceLength(10.0, unit));
+  const double shown = spacing->value();
   (m_settings.gridSpacing > 0.0 ? fixed : automatic)->setChecked(true);
   spacing->setEnabled(fixed->isChecked());
   connect(fixed, &QRadioButton::toggled, spacing, &QWidget::setEnabled);
@@ -1010,7 +1106,8 @@ void ViewController::showGridSettings() {
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   layout->addWidget(buttons);
-  // Millimetres, a metric 1-2-5 grid when automatic (P11).
+  // The design's unit (mitcad#1210): a metric grid of 1 or 5 times a power
+  // of ten mm when automatic (P11), an inch series in a design in in or ft.
   qDebug().noquote() << QStringLiteral("Grid settings dialog opened: %1, fixed spacing %2%3")
                             .arg(fixed->isChecked() ? QStringLiteral("fixed") : QStringLiteral("automatic"))
                             .arg(spacing->value())
@@ -1019,14 +1116,20 @@ void ViewController::showGridSettings() {
   if (execDialog(&dialog) != QDialog::Accepted) {
     return;
   }
-  m_settings.gridSpacing = fixed->isChecked() ? spacing->value() : 0.0;
+  if (!fixed->isChecked()) {
+    m_settings.gridSpacing = 0.0;
+  } else if (m_settings.gridSpacing <= 0.0 || std::abs(spacing->value() - shown) > 0.5 * std::pow(10.0, -decimals)) {
+    // A spacing shown rounded in the unit and left as it was stays as it
+    // was kept (10 mm shown as 0.3937 in is not 9.99998 mm).
+    m_settings.gridSpacing = gridSpacingMillimetres(spacing->value(), unit);
+  }
   m_settings.save();
   m_viewer.setGrid(m_settings.gridShown, m_settings.gridSpacing);
   if (gridSnapChanged) {
     gridSnapChanged(m_settings.snapToGrid, m_settings.gridSpacing);
   }
   qDebug().noquote() << (m_settings.gridSpacing > 0.0
-                             ? QStringLiteral("Grid spacing %1 mm").arg(m_settings.gridSpacing)
+                             ? QStringLiteral("Grid spacing %1").arg(gridSpacingText(m_settings.gridSpacing, unit))
                              : QStringLiteral("Grid spacing automatic"));
 }
 
@@ -1156,6 +1259,15 @@ void ViewController::showPreferences(const QString& page) {
   newDesignUnits->setCurrentText(general->newDesignUnits);
   newDesignUnits->setToolTip(tr("The length unit new designs start in; opened files keep their own"));
   generalForm->addRow(tr("Default &units for new designs:"), newDesignUnits);
+  // The unit materials' temperatures are shown in (mitcad#1213), whatever
+  // the design's units.
+  auto* temperatureUnit = new QComboBox;
+  temperatureUnit->setObjectName(QStringLiteral("temperatureUnit"));
+  temperatureUnit->addItem(QStringLiteral("°C"), QStringLiteral("C"));
+  temperatureUnit->addItem(QStringLiteral("°F"), QStringLiteral("F"));
+  temperatureUnit->setCurrentIndex(std::max(0, temperatureUnit->findData(general->temperatureUnit)));
+  temperatureUnit->setToolTip(tr("The unit materials' temperatures are shown in"));
+  generalForm->addRow(tr("Temperature unit:"), temperatureUnit);
   auto* openInCurrent = new QCheckBox(tr("Open in the current window"));
   openInCurrent->setObjectName(QStringLiteral("openInCurrentWindow"));
   openInCurrent->setChecked(general->openInCurrentWindow);
@@ -1192,6 +1304,27 @@ void ViewController::showPreferences(const QString& page) {
     connect(askActivate, &QCheckBox::toggled, host, applyAskActivate);
   } else {
     connect(dialog.get(), &QDialog::accepted, askActivate, applyAskActivate);
+  }
+  // MitCad's version over the view's lower right (mitcad#1209); the
+  // window title keeps it either way. Saved when the dialog is accepted, at
+  // once in the Settings window; every window follows.
+  auto* showVersion = new QCheckBox(tr("Show the v&ersion in the view"));
+  showVersion->setObjectName(QStringLiteral("showVersionInView"));
+  showVersion->setChecked(versionWatermarkShown());
+  showVersion->setToolTip(tr("MitCad's version in small text at the lower right of the 3D view"));
+  control(generalForm, showVersion);
+  const auto applyShowVersion = [showVersion] {
+    const bool on = showVersion->isChecked();
+    if (on == versionWatermarkShown()) {
+      return;
+    }
+    setVersionWatermarkShown(on);
+    qDebug().noquote() << QStringLiteral("Preferences: show the version in the view %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(showVersion, &QCheckBox::toggled, host, applyShowVersion);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, showVersion, applyShowVersion);
   }
 #ifdef MITCAD_MACOS_NATIVE_UI
   // The native macOS interface (mitcad#1056): Qt is the default; the AppKit
@@ -1310,7 +1443,15 @@ void ViewController::showPreferences(const QString& page) {
     connect(dialog.get(), &QDialog::accepted, agentsResolve, applyAgentsResolve);
   }
   agentsColumn->addWidget(commentsBox);
-  groups.insert(QStringLiteral("agents"), agentsPage);
+  // The chat's API endpoints make the page taller than a 1366 x 768 screen
+  // shows: it scrolls instead of growing the window.
+  auto* agentsScroll = new QScrollArea;
+  agentsScroll->setObjectName(QStringLiteral("agentsPageScroll"));
+  agentsScroll->setWidgetResizable(true);
+  agentsScroll->setFrameShape(QFrame::NoFrame);
+  agentsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  agentsScroll->setWidget(agentsPage);
+  groups.insert(QStringLiteral("agents"), agentsScroll);
   // Font folders for sketch text (mitcad#473).
   auto* fontsBox = new sketch::FontPreferencesBox;
   groups.insert(QStringLiteral("fonts"), fontsBox);
@@ -1638,7 +1779,7 @@ void ViewController::showPreferences(const QString& page) {
   groups.insert(QStringLiteral("display"), displayBox);
 
   *commit = [this, general, top, bottom, navigation, camera, cubeProjection, background,
-             autosave, minutes, importTolerance, newDesignUnits, openInCurrent, openDesignsIn,
+             autosave, minutes, importTolerance, newDesignUnits, temperatureUnit, openInCurrent, openDesignsIn,
              cacheBox, updatesBox, slicerBox, remoteBox,
              renderDevice, debugLog, debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice,
              layoutApplied] {
@@ -1651,7 +1792,9 @@ void ViewController::showPreferences(const QString& page) {
                                                            : fontFolders.join(QStringLiteral(", ")));
     }
     // Folders for designs (mitcad#402).
-    // The chat (mitcad#947).
+    // The chat (mitcad#947); its API endpoints first, so that an API agent
+    // chosen for the chat is offered.
+    chatBox->saveApi();
     const agent::ChatSettings chat = chatBox->chosen();
     const agent::ChatSettings chatBefore = agent::ChatSettings::load();
     if (chat != chatBefore) {
@@ -1708,12 +1851,17 @@ void ViewController::showPreferences(const QString& page) {
     chosen.autosaveMinutes = minutes->value();
     chosen.importTolerance = importTolerance->value();
     chosen.newDesignUnits = newDesignUnits->currentText();
+    chosen.temperatureUnit = temperatureUnit->currentData().toString();
     chosen.openInCurrentWindow = openInCurrent->isChecked();
     chosen.openDesignsIn = openDesignsIn->currentData().toString();
     chosen.save();
     // No open design changes: the next new one takes it (mitcad#1036).
     if (chosen.newDesignUnits != general->newDesignUnits) {
       qDebug().noquote() << QStringLiteral("Preferences: default units for new designs %1").arg(chosen.newDesignUnits);
+    }
+    if (chosen.temperatureUnit != general->temperatureUnit) {
+      qDebug().noquote() << QStringLiteral("Preferences: temperature unit %1").arg(chosen.temperatureUnit);
+      applyTemperaturePreference();
     }
     const VersionSettings author = remoteBox->chosenAuthor();
     author.save();
@@ -1863,6 +2011,7 @@ void ViewController::showPreferences(const QString& page) {
     connect(minutes, &QSpinBox::valueChanged, host, changed);
     connect(importTolerance, &QDoubleSpinBox::valueChanged, host, changed);
     connect(newDesignUnits, &QComboBox::currentIndexChanged, host, changed);
+    connect(temperatureUnit, &QComboBox::currentIndexChanged, host, changed);
     connect(openInCurrent, &QCheckBox::toggled, host, changed);
     connect(openDesignsIn, &QComboBox::currentIndexChanged, host, changed);
     connect(cacheBox, &CachePreferencesBox::changed, host, changed);
@@ -2068,6 +2217,7 @@ void ViewController::showShortcutOverview() {
   mac::styleSearchField(filter);
   layout->addWidget(filter);
   auto* tree = new QTreeWidget;
+  panel::setCompactIndentation(tree, panel::Indent::GroupedList);
   tree->setObjectName(QStringLiteral("shortcutOverviewTable"));
   tree->setColumnCount(2);
   tree->setHeaderLabels({tr("Keys or mouse"), tr("Does")});

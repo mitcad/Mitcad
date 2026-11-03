@@ -66,6 +66,7 @@ fn schedule_uses_native_headroom_and_the_history_based_ceiling() {
     assert_eq!(options.sensitive_load, 0.7);
     assert_eq!(options.ui_max, None);
     assert_eq!(options.limit_factor, 0.0);
+    assert!(options.corpus_children);
 }
 
 #[test]
@@ -75,6 +76,7 @@ fn measure_remains_single_test_and_explicit_overrides_are_kept() {
     assert_eq!(measure.mode, Mode::Measure);
     assert_eq!(measure.jobs, Some(1));
     assert_eq!(measure.memory_budget, Budget::Share(0.85));
+    assert!(!measure.corpus_children);
 
     let explicit = fixture.options(&[
         "-j",

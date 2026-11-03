@@ -23,6 +23,7 @@
 #include <QtLogging>
 
 #include "Dialogs.hpp"
+#include "PanelTree.hpp"
 
 namespace mitcad {
 namespace {
@@ -41,6 +42,7 @@ public:
     auto* targetLabel = new QLabel(tr("New &parent:"));
     layout->addWidget(targetLabel);
     m_targets = new QTreeWidget;
+    panel::setCompactIndentation(m_targets, panel::Indent::Tree);
     m_targets->setObjectName(QStringLiteral("moveOccurrenceDestinations"));
     m_targets->setHeaderLabels({tr("Component"), tr("Location")});
     m_targets->setSelectionMode(QAbstractItemView::SingleSelection);

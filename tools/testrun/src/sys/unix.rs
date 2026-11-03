@@ -5,7 +5,8 @@
 //! page cache, sampled; the scope goes when the test ends), its OOM kills,
 //! and memory.max as the hard limit. Elsewhere, and
 //! for the CPU time everywhere: wait4's rusage of ctest and the children it
-//! waited for (the peak is then of the largest process, not of the tree).
+//! waited for. macOS additionally samples process-group and descendant
+//! RSS through libproc, retaining rusage as a short-process peak fallback.
 
 use std::ffi::CString;
 use std::fs::{self, File};
@@ -30,6 +31,10 @@ pub struct Process {
     oom: bool,
     rusage: Option<(f64, u64)>,
     exit: Option<Exit>,
+    #[cfg(target_os = "macos")]
+    tree: Option<super::macos_process::Tree>,
+    #[cfg(target_os = "macos")]
+    tree_sampled: bool,
 }
 
 /// Starts the test's ctest.
@@ -76,6 +81,10 @@ pub fn spawn(spec: &Spec) -> io::Result<Process> {
         oom: false,
         rusage: None,
         exit: None,
+        #[cfg(target_os = "macos")]
+        tree: super::macos_process::Tree::new(pid),
+        #[cfg(target_os = "macos")]
+        tree_sampled: false,
     })
 }
 
@@ -141,6 +150,17 @@ impl Process {
             return self.exit;
         }
         self.sample_cgroup();
+        #[cfg(target_os = "macos")]
+        {
+            if self.tree.is_none() {
+                self.tree = super::macos_process::Tree::new(self.pid);
+            }
+            self.current = self.tree.as_mut().and_then(|tree| tree.sample());
+            if let Some(current) = self.current {
+                self.peak = self.peak.max(current);
+                self.tree_sampled = true;
+            }
+        }
         let mut status: libc::c_int = 0;
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         let waited = unsafe { libc::wait4(self.pid, &mut status, libc::WNOHANG, &mut usage) };
@@ -157,8 +177,8 @@ impl Process {
         self.exit
     }
 
-    /// The test's working set now (its scope's, at the last poll); None
-    /// without a scope or before its first sample.
+    /// The test's current memory at the last poll: a Linux scope's working
+    /// set or macOS sampled tree RSS; None on an unavailable reading.
     pub fn current(&self) -> Option<u64> {
         self.current
     }
@@ -188,7 +208,18 @@ impl Process {
             cpu,
             peak: self.peak.max(rss),
             over_memory: self.oom,
-            tree: self.cgroup.is_some(),
+            tree: self.tree_measured(),
+        }
+    }
+
+    fn tree_measured(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.tree_sampled
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.cgroup.is_some()
         }
     }
 }
@@ -373,6 +404,8 @@ pub fn cgroups_available() -> bool {
 pub fn method(cgroup: bool) -> &'static str {
     if cgroup {
         "a systemd scope per test (cgroup working set, memory.max, rusage CPU time)"
+    } else if cfg!(target_os = "macos") {
+        "libproc sampled process-tree RSS (shared pages may count twice; short-lived children may be missed; no hard limit), rusage CPU and largest-process peak fallback"
     } else {
         "rusage of ctest's children (CPU time; the peak of the largest process)"
     }

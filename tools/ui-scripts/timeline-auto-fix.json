@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Auto Fix in the timeline's context menu (mitcad#1223, tools/ui-timeline-auto-fix-test.sh): Sketch1 (F1) with circles of 660 (c1) and 600 (c3) about the origin and a vertical bar 40 wide from y = -310 (lines c5..c8, its height d4). Extrude1 (F2) extrudes the bar's tip between the inner circle and the bar's end. The bar made 700 high splits the tip in two by the outer circle: the extrusion warns that its region was found as the two pieces (the keys as tools/ui-profile-split-test.sh has them)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":660},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":600},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[-20,-310],"width":40,"height":620},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c3[c6,c8],c6[c3,c7],c7[c6,c8],c8[c7,c3]}"}],
+    "extent":{"type":"distance","distance":-10},"operation":"new_body"}},
+  {"expect":{"feature":"Extrude1","status":"ok"}},
+  {"cmd":"set_parameter","name":"d4","value":700},
+  {"expect":{"feature":"Extrude1","status":"warning",
+    "error_contains":"region r{c3[c6,c8],c6[c3,c7],c7[c6,c8],c8[c7,c3]} found as r{c1[c6,c8],c6[c1,c7],c7[c6,c8],c8[c7,c1]} + r{c1[c6,c8],c3[c6,c8],c6[c3,c1],c8[c1,c3]} after a change in Sketch1"}}
+]

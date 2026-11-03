@@ -469,6 +469,8 @@ pub(crate) fn material_from_filament(
         class: None,
         version: None,
         origin: None,
+        properties: Default::default(),
+        reference: None,
     };
     (material, appearance, colour)
 }
@@ -745,6 +747,16 @@ pub fn purge_matrix(slots: &[&EffectivePrint], overrides: &[PurgeOverride]) -> p
     print_purge::Matrix::new(&values, multiplier, overrides)
 }
 
+/// A print plate of an export (mitcad#1050): its name, its objects
+/// (indices into the export's objects; with none, 0 stands for the one
+/// object of every part) and its own values (process keys by Mitcad key).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportPlate<'a> {
+    pub name: &'a str,
+    pub objects: Vec<usize>,
+    pub values: &'a BTreeMap<String, Value>,
+}
+
 /// Writes the parts' settings for a slicer, with the design's purge
 /// volumes set by hand (mitcad#705), by the build's `objects` (mitcad#856;
 /// none: one object named `model_name` of every part).
@@ -755,12 +767,30 @@ pub fn export(
     objects: &[ExportObject<'_>],
     purge: &[PurgeOverride],
 ) -> ExportOutput {
+    export_plates(dialect, model_name, parts, objects, purge, &[])
+}
+
+/// [`export`] of a file of print plates (mitcad#1050; none: no plates of
+/// the design's): the Bambu family gets a `<plate>` block per plate with
+/// its objects and the plate settings it keeps per plate
+/// ([`crate::print_plates::BAMBU_PLATE_KEYS`], never an object's
+/// override); PrusaSlicer reads its beds from where the objects lie and
+/// keeps those keys for the whole project, so an object's value of one is
+/// left out with a warning; Cura has one plate.
+pub fn export_plates(
+    dialect: Dialect,
+    model_name: &str,
+    parts: &[ExportPart<'_>],
+    objects: &[ExportObject<'_>],
+    purge: &[PurgeOverride],
+    plates: &[ExportPlate<'_>],
+) -> ExportOutput {
     let shared = Shared::new(dialect, parts, purge);
     let mut out = match dialect {
         Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
-            bambu::export(&shared, model_name, objects)
+            bambu::export(&shared, model_name, objects, plates)
         }
-        Dialect::PrusaSlicer => prusa::export(&shared),
+        Dialect::PrusaSlicer => prusa::export(&shared, !plates.is_empty()),
         Dialect::Cura => cura::export(&shared),
     };
     let filaments = shared.slot_parts.len();

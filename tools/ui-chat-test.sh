@@ -12,7 +12,12 @@
 # group rows, the history of a
 # reopened design and its resumed session, the Docked layout, Claude
 # Desktop only, the model choice, and Codex through its app server chosen
-# in the agent switcher (kept as the last used one).
+# in the agent switcher (kept as the last used one); the API endpoints and
+# local models (phase 2) against a scripted service of the script's own on
+# localhost: the Anthropic API with its key typed in the panel, its
+# conversation resumed, and a local model's server found once it answers;
+# a custom command over the Agent Client Protocol (mitcad#1198): one that
+# does not answer the handshake, then the scripted agent's.
 # Windows runs the same script as app.ui-windows-chat, macOS as
 # app.ui-macos-chat (cmake/SelectionUiTests.cmake).
 #

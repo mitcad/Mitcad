@@ -1125,7 +1125,7 @@ public:
     m_outline.backgroundColor = NSColor.clearColor;
     m_outline.rowSizeStyle = NSTableViewRowSizeStyleCustom;
     m_outline.rowHeight = 24;
-    m_outline.indentationPerLevel = 14;
+    m_outline.indentationPerLevel = tree->indentation(); // the shared tree's (framework/PanelTree.hpp)
     m_outline.floatsGroupRows = NO;
     m_outline.allowsEmptySelection = YES;
     m_outline.allowsMultipleSelection = NO;

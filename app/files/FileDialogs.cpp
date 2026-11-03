@@ -35,6 +35,7 @@
 
 #include "../framework/Dialogs.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "IamImport.hpp"
@@ -1293,6 +1294,7 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   label->setWordWrap(true);
   layout->addWidget(label);
   auto* items = new QTreeWidget;
+  panel::setCompactIndentation(items, panel::Indent::Flat);
   items->setColumnCount(5);
   items->setHeaderLabels({QObject::tr("#"), QObject::tr("Item"), QObject::tr("Type"), QObject::tr("Came in as"),
                           QObject::tr("Note")});

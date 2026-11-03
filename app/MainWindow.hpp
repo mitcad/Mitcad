@@ -120,6 +120,7 @@ class ChatPanel;
 namespace drawings {
 class DrawingWorkspace;
 }
+class VersionWatermark;
 
 // The model is driven with JSON commands and queries (see
 // core/model-api/src/commands.md); geometry comes as Shape handles.
@@ -639,8 +640,9 @@ private:
   // The menu outside sketches and commands (mitcad#494,
   // MainWindowContextMenu.cpp): the commands that fit the selection in
   // Solid, BUILD and Construct, Delete and Hide; `entries` gets what it
-  // adds, as the log shows it.
-  void fillModelContextMenu(QMenu& menu, QStringList& entries);
+  // adds, as the log shows it. `picked` is the right-clicked item, which
+  // Look At looks at (mitcad#1212).
+  void fillModelContextMenu(QMenu& menu, QStringList& entries, const SelectionItem& picked = SelectionItem());
   // Delete Member and Delete Spacing Set of the menu: build_remove of the
   // BUILD parts (components) given, or of their sets, one undo step.
   void deleteBuildParts(const QStringList& components, bool sets);
@@ -735,6 +737,12 @@ private:
   // edit was cancelled (P7).
   bool finishSketch();
   void leaveSketchMode();
+  // A feature command started from sketch mode (Extrude: E) shows what it
+  // works on (mitcad#1227): the sketch `uid` just left and the body it lies
+  // on, inside the view's free area once the command's card is placed
+  // (OcctViewer::showInFreeArea, logged "View for Extrude from the sketch:
+  // …").
+  void showSketchLeft(const QString& uid, const QString& command);
   bool sketchExists(const QString& uid) const;
   // The sketch an item belongs to (profiles, sketch curves and points).
   static QString sketchOf(const SelectionItem& item);
@@ -1219,6 +1227,9 @@ private:
   void updateNavigationBar();
   NavigationBar* m_navigationBar = nullptr;
   GlassCard* m_navigationCard = nullptr;
+  // MitCad's version over the view's lower right (mitcad#1209); it keeps
+  // to a drawing's sheet while one is open (updateDrawingChrome).
+  VersionWatermark* m_versionWatermark = nullptr;
   // "Pick places:" of the active input's faces, edges, vertices and
   // profiles (MITCAD_LOG_PICKS, for UI tests): logged when the input takes
   // the picks and again once the cards over the view moved
@@ -1248,6 +1259,21 @@ private:
   // the Processes managers.
   CommandDef printersCommand();
   CommandDef processesCommand();
+  // Plates… (mitcad#1050, files/MainWindowPlates.cpp): the Make tab's 3D
+  // Print group's panel of the design's print plates (the list with Add
+  // Plate and Delete Plate, bodies picked in the view put on the chosen
+  // plate, each item's count, Spiral Vase and the plate's settings in the
+  // settings form), the chosen plate drawn beside the design
+  // (showPlateView, empty: none); printPlateCount is the design's plates
+  // (0 on a refusal), which Send to Slicer sends; while a job computes the
+  // model, the count last read (m_printPlatesSeen): its panel's Send the
+  // Design's Plates asks it on every refresh, and a read then would stop
+  // the bed plan in the background (mitcad#1121, mitcad#1219).
+  CommandDef platesCommand();
+  void showPlateView(const QString& plate);
+  int printPlateCount() const;
+  mutable int m_printPlatesSeen = 0;
+  QString m_plateViewLogged;
   // File › Print… (mitcad#1089; printing/MainWindowPaperPrint.cpp): what it
   // prints now (the Cut List or Bill of Materials window, the open drawing
   // or cut sheet, the open sketch), its command `file.print`, the printing,

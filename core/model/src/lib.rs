@@ -332,3 +332,18 @@ pub use document::{
 
 // Read-only BOM grouping (mitcad#1176).
 pub use document::{BomRow, PartSignature};
+
+// Print plates: bodies and occurrences on plates with counts, plate-level
+// print settings, 3MF files of several plates (mitcad#1050).
+pub mod print_plates;
+pub use document::PlateChange;
+
+// Materials' mechanical and thermal properties shown in the design's
+// units, the bundled material dataset and the materials' JSON and CSV
+// files (mitcad#1213).
+pub mod material_dataset;
+pub mod material_exchange;
+pub mod material_units;
+pub use document::{MaterialImport, NameConflict};
+// Auto Fix of references a warning found again (mitcad#1223).
+pub use document::{AutoFix, AutoFixLeft, Repair};

@@ -271,6 +271,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/mitred_dressup.cpp
   src/mitred_dressup.hpp)
+# Roundings of the valleys where tubes meet, run on through the nodes where
+# three of them meet a facet narrower than the radius (mitcad#1205).
+target_sources(mitcad_geometry PRIVATE
+  src/node_dressup.cpp
+  src/node_dressup.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -681,6 +686,35 @@ if(BUILD_TESTING)
   target_link_libraries(test_offset_loft_circle_seam PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.offset_loft_circle_seam COMMAND test_offset_loft_circle_seam)
   set_tests_properties(geometry.offset_loft_circle_seam PROPERTIES TIMEOUT 300)
+  # The lean-in ones, the circle inside the polygon (mitcad#1199).
+  add_test(NAME geometry.offset_loft_circle_seam_lean_in COMMAND test_offset_loft_circle_seam lean-in)
+  set_tests_properties(geometry.offset_loft_circle_seam_lean_in PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # Roundings of the valleys where tubes meet, run on through nodes whose
+  # facets are narrower than the radius (mitcad#1205).
+  add_executable(test_fillet_tube_node tests/test_fillet_tube_node.cpp)
+  target_link_libraries(test_fillet_tube_node PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_tube_node COMMAND test_fillet_tube_node)
+  set_tests_properties(geometry.fillet_tube_node PROPERTIES TIMEOUT 300)
+  # A rounding over the mouths of slots whose rounded ends touch the top
+  # along a crest line, on a case of MITCAD_GEOMETRY_CASES, with the port's
+  # patch 1210 (mitcad#1204).
+  add_executable(test_fillet_slot_mouths tests/test_fillet_slot_mouths.cpp)
+  target_link_libraries(test_fillet_slot_mouths PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_slot_mouths COMMAND test_fillet_slot_mouths)
+  set_tests_properties(geometry.fillet_slot_mouths PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A rounding whose contact runs off a narrow face onto an earlier blend of
+  # its radius rolls on that face's far edges, on cases of
+  # MITCAD_GEOMETRY_CASES, with the port's patch 1230 (mitcad#1215).
+  add_executable(test_fillet_roll_over_blend tests/test_fillet_roll_over_blend.cpp)
+  target_link_libraries(test_fillet_roll_over_blend PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_roll_over_blend COMMAND test_fillet_roll_over_blend)
+  set_tests_properties(geometry.fillet_roll_over_blend PROPERTIES TIMEOUT 600)
 endif()
 
 # Data exchange and analysis services, separate libraries on top of OCCT.

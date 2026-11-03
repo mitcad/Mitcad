@@ -190,8 +190,14 @@ impl Test {
     }
 
     fn candidate(&self) -> Candidate<'_> {
+        let mut prediction = self.prediction;
+        if let State::Running(active) = &self.state {
+            // A sampled live tree larger than its prediction already uses
+            // that room. Do not admit another test on the old estimate.
+            prediction.memory = prediction.memory.max(active.process.current().unwrap_or(0));
+        }
         Candidate {
-            prediction: self.prediction,
+            prediction,
             rank: self.rank,
             score: self.score,
             lane: self.lane,
@@ -476,8 +482,10 @@ impl<'o> Runner<'o> {
             .zip(setups)
             .zip(predictions);
         for ((((def, before), setups), prediction), own) in rows.zip(own) {
+            let prediction = crate::macos_policy::prediction(&def, prediction);
             let history = profiles.tests.get(&def.name).cloned().unwrap_or_default();
-            let seeded = o.sensitive.iter().any(|p| ctest::glob_match(p, &def.name));
+            let harness = crate::macos_policy::labelled(&def, crate::macos_policy::HARNESS_LABEL);
+            let seeded = !harness && o.sensitive.iter().any(|p| ctest::glob_match(p, &def.name));
             let score = history.failure_score;
             let kind = profile::kind_of(&def.name, &def.labels);
             let limit_facts = LimitFacts {
@@ -493,7 +501,7 @@ impl<'o> Runner<'o> {
                 rank: prediction.wall,
                 score,
                 lane: schedule::in_lane(scheduling, score, o.lane_score),
-                sensitive: history.sensitive || seeded,
+                sensitive: (!harness && history.sensitive) || seeded,
                 ui: kind == profile::Kind::Ui,
                 ui_room: concurrency::scheduled_room(history.ui_room, ui_bound),
                 again: None,
@@ -901,7 +909,7 @@ impl<'o> Runner<'o> {
         let mut pending = 0_u64;
         for t in &self.tests {
             if let State::Running(active) = &t.state {
-                memory = memory.saturating_add(t.prediction.memory);
+                memory = memory.saturating_add(t.candidate().prediction.memory);
                 let grows = schedule::pending(t.prediction.memory, active.process.current());
                 pending = pending.saturating_add(grows);
             }
@@ -978,7 +986,24 @@ impl<'o> Runner<'o> {
             return;
         }
         loop {
-            let ready: Vec<usize> = (0..self.tests.len()).filter(|&i| self.ready(i)).collect();
+            let harnesses = self
+                .tests
+                .iter()
+                .filter(|t| {
+                    t.running()
+                        && crate::macos_policy::labelled(&t.def, crate::macos_policy::HARNESS_LABEL)
+                })
+                .count();
+            let ready: Vec<usize> = (0..self.tests.len())
+                .filter(|&i| {
+                    self.ready(i)
+                        && (harnesses < crate::macos_policy::HARNESS_MAX
+                            || !crate::macos_policy::labelled(
+                                &self.tests[i].def,
+                                crate::macos_policy::HARNESS_LABEL,
+                            ))
+                })
+                .collect();
             if ready.is_empty() {
                 break;
             }
@@ -1124,6 +1149,18 @@ impl<'o> Runner<'o> {
     fn test_env(&self, i: usize) -> Vec<(String, String)> {
         let t = &self.tests[i];
         let mut env = t.env.clone();
+        if crate::macos_policy::labelled(&t.def, crate::macos_policy::CARGO_LABEL) {
+            let caller = std::env::var("CARGO_BUILD_JOBS").ok();
+            let reserve = self.free.as_ref().map_or_else(
+                || options::default_reserve(self.machine.memory),
+                |free| free.reserve,
+            );
+            let room = sys::available_memory().unwrap_or(0).saturating_sub(reserve);
+            env.push((
+                "CARGO_BUILD_JOBS".into(),
+                crate::macos_policy::cargo_jobs(caller.as_deref(), room).to_string(),
+            ));
+        }
         if !t.corpus {
             return env;
         }

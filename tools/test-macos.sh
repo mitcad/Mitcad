@@ -5,7 +5,7 @@
 set -euo pipefail
 build=""
 mode=--schedule
-defaults=(--memory-budget free)
+defaults=(--memory-budget free --corpus-children)
 args=("$@")
 while [ "$#" -gt 0 ]; do
   case $1 in

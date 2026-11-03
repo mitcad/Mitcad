@@ -385,9 +385,11 @@ bool MainWindow::designOpen() const {
 
 bool MainWindow::canChangePrintSettings() const {
   // 3D Print has no preview: the print windows its Edit… opens change the
-  // design while its panel is open (mitcad#655).
-  return canChangeModel() || (!windowReadOnly() && m_mode == Mode::Command && m_session &&
-                              m_session->def().id == QStringLiteral("make.print3d"));
+  // design while its panel is open (mitcad#655); so do Plates…' own
+  // changes and its plate settings (mitcad#1050).
+  return canChangeModel() ||
+         (!windowReadOnly() && m_mode == Mode::Command && m_session &&
+          (m_session->def().id == QStringLiteral("make.print3d") || m_session->def().id == QStringLiteral("make.plates")));
 }
 
 void MainWindow::importPrintSettings(const std::shared_ptr<PrintImport>& target) {
@@ -484,11 +486,23 @@ CommandDef MainWindow::print3dCommand() {
   // A printer or process box (mitcad#655): Slicer default always first (its
   // choice takes the design's away), then the items in a steady order, so a
   // choice never moves them: by vendor (a process by its printer), then by
-  // name (mitcad#1108, profilePickerRows). Then a new one, and last
-  // Edit printers… or Edit processes… (mitcad#1134, mitcad#1135).
-  const auto choices = [this](const QString& kind) {
-    const QVector<ProfilePickerRow> rows =
-        profilePickerRows(queryLibraryItems(model(), kind, projectFolder()), kind);
+  // name (mitcad#1108, profilePickerRows); the processes of the design's
+  // printer first, then the others under their printers (mitcad#1216).
+  // Then a new one, and last Edit printers… or Edit processes…
+  // (mitcad#1134, mitcad#1135).
+  const auto rowsOf = [this](const QString& kind) {
+    QStringList chosenPrinter;
+    if (kind == QStringLiteral("process")) {
+      for (const LibraryItem& printer : queryLibraryItems(model(), QStringLiteral("printer"), projectFolder())) {
+        if (printer.chosen) {
+          chosenPrinter = printerNames(printer);
+        }
+      }
+    }
+    return profilePickerRows(queryLibraryItems(model(), kind, projectFolder()), kind, chosenPrinter);
+  };
+  const auto choices = [rowsOf](const QString& kind) {
+    const QVector<ProfilePickerRow> rows = rowsOf(kind);
     QVector<QPair<QString, QString>> options{{QString(), tr("Slicer default")}};
     for (const ProfilePickerRow& row : rows) {
       options.append({row.key, row.name});
@@ -508,9 +522,8 @@ CommandDef MainWindow::print3dCommand() {
   // The box's picker (mitcad#1108): the rows under their vendor (a
   // process's printer), each by its name without it and with where it
   // comes from (This design, My library, Built-in, the 3MF).
-  const auto pickerRows = [this](const QString& kind) {
-    const QVector<ProfilePickerRow> rows =
-        profilePickerRows(queryLibraryItems(model(), kind, projectFolder()), kind);
+  const auto pickerRows = [rowsOf](const QString& kind) {
+    const QVector<ProfilePickerRow> rows = rowsOf(kind);
     QVector<ChoicePickerRow> picks;
     for (const ProfilePickerRow& row : rows) {
       picks.append(ChoicePickerRow{row.key, row.group, row.shortName, row.source, QString()});
@@ -1222,6 +1235,11 @@ CommandDef MainWindow::print3dCommand() {
       selectionInput(QStringLiteral("bodies"), tr("Bodies"), SelectKind::Body, 1, 0)
           .withAccepts([this](const SelectionItem& item) { return printable(bodyShape(item.owner)); })
           .withOnChange(sentChanged),
+      // The design's print plates instead of the bodies (mitcad#1050): on
+      // by default when the design has plates, with 3MF only.
+      checkInput(QStringLiteral("plates"), tr("Send the Design's Plates"), false)
+          .withTextBeside()
+          .withVisible([this, threeMf](const CommandState& state) { return threeMf(state) && printPlateCount() > 0; }),
       bedRow,
       // The question while Send asks for a print bed face (mitcad#857
       // review): in the panel's own text, naming the piece and the count,
@@ -1681,6 +1699,12 @@ CommandDef MainWindow::print3dCommand() {
     panel->previous = slicerChoice(current);
     state.setChoice(QStringLiteral("slicer"), panel->previous);
     state.setChecked(QStringLiteral("reuse"), settings.reuseWindow);
+    // The design's print plates, when it has any (mitcad#1050).
+    const int plates = printPlateCount();
+    state.setChecked(QStringLiteral("plates"), plates > 0);
+    if (plates > 0) {
+      qInfo().noquote() << QStringLiteral("3D Print plates: %1").arg(plates);
+    }
     qInfo().noquote() << QStringLiteral("3D Print open slicer window: %1")
                              .arg(settings.reuseWindow ? QStringLiteral("on") : QStringLiteral("off"));
     QStringList names;
@@ -1811,6 +1835,11 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   // Center on Plate and Drop to Bed (mitcad#1109).
   const bool center = state.checked(QStringLiteral("center"));
   const bool drop = state.checked(QStringLiteral("drop"));
+  // The design's print plates instead of the bodies (mitcad#1050): no
+  // bed face is asked for, each plate's pieces lie on their faces.
+  const bool sendPlates =
+      format == QStringLiteral("3mf") && state.checked(QStringLiteral("plates")) && printPlateCount() > 0;
+  int platesSent = 0;
   const auto threeMfExport = [this, &sent, &refinement, &pieces, &sentWholeOccurrences, center,
                               drop](const QString& path) {
     QJsonObject command = exportCommand(path, QStringLiteral("3mf"), sent, refinement, center, drop);
@@ -1827,7 +1856,7 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   // highlighted, the message line), and Send waits for the answer.
   QJsonArray bedFaceChoices;
   QStringList chosenLines; // for the last line: "Pair:1 on Tall's print bed face."
-  if (format == QStringLiteral("3mf") && bedFaces != nullptr) {
+  if (format == QStringLiteral("3mf") && bedFaces != nullptr && !sendPlates) {
     QJsonObject plan = threeMfExport(safeFileName(design) + QStringLiteral(".3mf"));
     plan.insert(QStringLiteral("plan"), true);
     QJsonObject planned;
@@ -1877,7 +1906,65 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   QStringList written;
   // The placements lying on their print bed faces, for the last line.
   int onFaces = 0;
-  if (format == QStringLiteral("3mf")) {
+  if (sendPlates) {
+    // Every plate (mitcad#1050): in one 3MF for a slicer that keeps
+    // several plates, else a 3MF per plate (slicerTakesPlates), in the
+    // slicer's dialect as below, each body in the colour shown.
+    QString dialect = slicerDialect(slicer);
+    if (dialect.isEmpty()) {
+      dialect = designDialect();
+    }
+    const QString mode = slicerTakesPlates(slicer, dialect) ? QStringLiteral("one_file") : QStringLiteral("file_per_plate");
+    QStringList every;
+    for (const QJsonValue& value :
+         query({{QStringLiteral("query"), QStringLiteral("instances")}, {QStringLiteral("hidden"), true}}).toArray()) {
+      const QString body = value.toObject().value(QStringLiteral("body")).toString();
+      if (!body.isEmpty() && !every.contains(body)) {
+        every << body;
+      }
+    }
+    QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export")},
+                        {QStringLiteral("path"), QDir(folder).filePath(safeFileName(design) + QStringLiteral(".3mf"))},
+                        {QStringLiteral("format"), QStringLiteral("3mf")},
+                        {QStringLiteral("refinement"), refinement},
+                        {QStringLiteral("plates"), mode},
+                        {QStringLiteral("center"), center},
+                        {QStringLiteral("drop"), drop},
+                        {QStringLiteral("colors"), appearanceColors(every)}};
+    if (!dialect.isEmpty()) {
+      command.insert(QStringLiteral("dialect"), dialect);
+    }
+    QJsonObject result;
+    if (!runCommand(command, &result)) {
+      sheetWarning(this, tr("3D Print"), tr("Could not write the plates:\n%1").arg(m_lastError));
+      return false;
+    }
+    for (const QJsonValue& value : result.value(QStringLiteral("files")).toArray()) {
+      files << value.toString();
+    }
+    for (const QJsonValue& value : result.value(QStringLiteral("plates")).toArray()) {
+      const QJsonObject plate = value.toObject();
+      const QString path = plate.value(QStringLiteral("path")).toString();
+      qInfo().noquote() << QStringLiteral("3D Print plate %1: %2 pieces%3")
+                               .arg(plate.value(QStringLiteral("name")).toString())
+                               .arg(plate.value(QStringLiteral("pieces")).toInt())
+                               .arg(path.isEmpty() ? QStringLiteral(", no file")
+                                                   : QStringLiteral(" in ") + QFileInfo(path).fileName());
+      onFaces += plate.value(QStringLiteral("bed")).toObject().value(QStringLiteral("on_faces")).toInt();
+      written << plate.value(QStringLiteral("name")).toString();
+      ++platesSent;
+    }
+    QStringList warnings;
+    for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
+      warnings << warning.toString();
+    }
+    if (!warnings.isEmpty()) {
+      *warned = warnings.join(QLatin1Char('\n'));
+    }
+    qInfo().noquote() << QStringLiteral("3D Print: plates %1 for %2: %3")
+                             .arg(mode, dialect.isEmpty() ? QStringLiteral("no slicer") : dialect,
+                                  files.join(QStringLiteral(", ")));
+  } else if (format == QStringLiteral("3mf")) {
     const QString path = QDir(folder).filePath(safeFileName(design) + QStringLiteral(".3mf"));
     QJsonObject command = threeMfExport(path);
     // The faces chosen, each turning its piece onto it (mitcad#857).
@@ -2031,8 +2118,11 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
         qInfo().noquote() << QStringLiteral("Send to Slicer: reused %1 window of %2 (pid %3): the file handed over")
                                  .arg(to, design)
                                  .arg(pid);
-        report(printBedLine(count == 1 ? tr("Sent 1 body to the %1 window of %2.").arg(to, design)
-                                       : tr("Sent %1 bodies to the %2 window of %3.").arg(count).arg(to, design),
+        report(printBedLine(platesSent == 1 ? tr("Sent 1 plate to the %1 window of %2.").arg(to, design)
+                            : platesSent > 1
+                                ? tr("Sent %1 plates to the %2 window of %3.").arg(platesSent).arg(to, design)
+                            : count == 1 ? tr("Sent 1 body to the %1 window of %2.").arg(to, design)
+                                           : tr("Sent %1 bodies to the %2 window of %3.").arg(count).arg(to, design),
                             onFaces, chosenLines),
                false);
         return true;
@@ -2077,7 +2167,10 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   windows.insert(windowKey, SlicerWindow{slicerProcess(pid), listening});
   // A real singular and plural (mitcad#655), not "body(ies)"; the faces
   // chosen (mitcad#857) and the others on their print bed faces.
-  report(printBedLine(count == 1 ? tr("Sent 1 body to %1.").arg(to) : tr("Sent %1 bodies to %2.").arg(count).arg(to),
+  report(printBedLine(platesSent == 1  ? tr("Sent 1 plate to %1.").arg(to)
+                      : platesSent > 1 ? tr("Sent %1 plates to %2.").arg(platesSent).arg(to)
+                      : count == 1     ? tr("Sent 1 body to %1.").arg(to)
+                                     : tr("Sent %1 bodies to %2.").arg(count).arg(to),
                       onFaces, chosenLines),
          false);
   return true;

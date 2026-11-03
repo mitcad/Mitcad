@@ -138,6 +138,11 @@ mod comments;
 // Dimensions snapped to the spacing of the one placed before
 // (mitcad#1173).
 mod drawing_spacing;
+// Print plates: bodies and occurrences on plates with counts, plate
+// settings (mitcad#1050).
+mod print_plates;
+// Auto Fix of references a warning found again (mitcad#1223).
+mod auto_fix;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -232,6 +237,9 @@ pub mod prelude {
     pub(crate) use super::design_properties::DesignPropertiesOps;
     // Comments pinned to the model (mitcad#1119).
     pub(crate) use super::comments::CommentsOps;
+    // Print plates (mitcad#1050).
+    pub(crate) use super::print_plates::PrintPlatesCrateOps;
+    pub(crate) use super::print_plates::PrintPlatesOps;
 }
 
 use std::fmt;
@@ -1015,6 +1023,15 @@ named_enum! {
         // Where a dimension placed or dragged on a drawing's view snaps
         // to (mitcad#1173, `drawing_spacing.rs`).
         "drawing_snap" => DrawingSnap(drawing_spacing::SnapQuery),
+        // The print plates and a plate's layout beside the design
+        // (mitcad#1050, `print_plates.rs`).
+        "print_plates" => PrintPlates,
+        "plate_layout" => PlateLayout(print_plates::PlateLayoutQuery),
+        // Materials' properties in the design's units, the bundled material
+        // dataset and materials as JSON or CSV (mitcad#1213, `materials.rs`).
+        "material_units" => MaterialUnits(materials::MaterialUnitsQuery),
+        "material_dataset" => MaterialDataset(materials::MaterialDatasetQuery),
+        "export_materials" => ExportMaterials(materials::ExportMaterialsQuery),
     }
 }
 
@@ -1528,6 +1545,13 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::UnknownFields { path } => unknown_fields_json(self, path.as_deref()),
             // Dimension spacing (mitcad#1173).
             Query::DrawingSnap(query) => self.drawing_snap_json(&query)?,
+            // Print plates (mitcad#1050).
+            Query::PrintPlates => self.print_plates_query(),
+            Query::PlateLayout(query) => self.plate_layout_query(&query)?,
+            // Material properties, the dataset and files (mitcad#1213).
+            Query::MaterialUnits(query) => self.material_units_json(&query)?,
+            Query::MaterialDataset(query) => materials::material_dataset_json(&query),
+            Query::ExportMaterials(query) => self.export_materials_json(&query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2372,6 +2396,14 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     value["sketches"] = json!(uses);
                 }
                 self.add_suppressed_when(item.entry.uid, &mut value);
+                // How many of its warnings Auto Fix can write into its
+                // definition (mitcad#1223): the timeline offers it then.
+                if !item.warnings.is_empty() {
+                    let fixable = self.auto_fixable(item.entry.uid);
+                    if fixable > 0 {
+                        value["auto_fix"] = json!(fixable);
+                    }
+                }
                 value
             })
             .collect();
