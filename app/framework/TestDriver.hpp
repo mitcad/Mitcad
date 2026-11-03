@@ -125,9 +125,12 @@
 //                           fixes navigation in this test process only
 //   click-pick <regex>      like click-logged, among the "Pick <kind> <name>
 //                           at x,y" lines after the last "Pick places:"
-//   native-viewport-click-pick <regex>  the same current logged CAD pick,
-//                           through AppKit hit-testing and NSApp mouse input
-//                           on the existing embedded Qt root (native only)
+//   native-viewport-click-pick <regex> the same newest pick-place batch,
+//                           clicked through AppKit's actual hit-test/event
+//                           path, rejecting native chrome covering the point
+//   native-viewport-click-logged <regex> a dynamic viewport overlay point
+//                           in MainWindow coordinates, through the same
+//                           AppKit path without a pick-place batch constraint
 //   expect-pick-offset <regex> <dx> <dy> <item-regex>
 //                           probe fresh viewport picks plus logical pixels
 //   click-pick-offset <regex> <dx> <dy> <item-regex>   probe, then click there
@@ -157,8 +160,32 @@
 //   expect-input-text <id> <regex> check the actual Qt or AppKit field text
 //   expect-model-parameter <name> <value|absent> [user|model|reference]
 //                           check a parameter in mm; kind defaults to user
+//   model-command <JSON object> send one synthetic model mutation through
+//                           the shared command path; ordinary UI assertions
+//                           still use pointer/key input for the action tested
 //   command <id>            trigger the command's action (objectName
 //                           "command_<id>": "sketch.create", "file.export")
+//   capture-document-window <name> remember the active document's actual window
+//   expect-document-frame-tabs <count> actual visible tab bar and document stack
+//   expect-document-frame-order <capture>... actual stack order after tab input
+//   document-tab-click <index> [left|middle] actual QTabBar press/release
+//   document-tab-drag <from> <to> real held pointer events to reorder tabs
+//   document-tab-context <index> real context event; follow with popup <entry>
+//   document-tab-drop <capture> <destination capture> <index> real Qt drag/drop
+//                           using the source document's registered MIME handle
+//   expect-document-hidden-quiet <capture> <seconds> observe no actual GL
+//                           frameSwapped events for a hidden retained document
+//                           (indices above are zero-based)
+//   observe-document-frame-close-all observe actual accepted closes of every
+//                           document and log the empty registry before natural exit
+//   focus-document-window <name> activate that retained window through its host
+//   focus-document-path <path> activate the already open file's actual window
+//   capture-model-number <var> <query JSON> <dot.path> read a numeric result
+//   expect-document-cache-sharing <total bytes> actual per-document budgets
+//   system-window-menu <entry> the owned macOS Window menu's actual action
+//   expect-document-windows <count> the actual process window registry's count
+//   expect-document-window-gone <name> its normal close removed that document
+//   expect-document-tabs <count> actual macOS NSWindow tab group membership
 //   open-file <path>        open through the external-file document host
 //   open-file-now <path>    use that same host while its preview owns the model
 //                           (Finder or drops), including save/lock questions
@@ -307,6 +334,8 @@
 //                           its ratio with a control gesture, detecting
 //                           duplicated magnification as well as lost input
 //   expect-native-text <id> <regex> assert native control text (6 s)
+//   expect-native-accessibility <id> <regex> assert the actual visible
+//                           AppKit control or model cell's VoiceOver label
 //                           native.file.name/directory read the focused
 //                           file panel's public filename/folder properties.
 //   expect-native-enabled <id> true|false assert native control state (6 s)
@@ -328,6 +357,7 @@
 //                           text-only and text-with-icon buttons (6 s)
 //   native-header-resize <id> <logical column> <delta points> drag the actual native header divider
 //   expect-native-header-resize-retained <id> <logical column> compare the last dragged width
+//   expect-native-split-retained <divider id> compare its live position after a real pointer drag
 //   expect-native-columns <id> [fit|scroll|any] the native columns keep
 //                           the shared header's sizes, hidden sections and
 //                           stretching; content-sized headers fit their
@@ -550,6 +580,7 @@ private:
   bool expand(const QString& raw, QString& out, QString& error) const;
   QWidget* inputWindow(const Step& step) const;
   QWidget* targetWindow() const;
+  QWidget* topWindow() const;
   QWidget* viewer() const;
   bool findMain();
   static bool dialogMatches(const QWidget* window, const QRegularExpression& re);
@@ -600,6 +631,7 @@ private:
   // Card widths and windows within the screen (mitcad#818,
   // TestDriverWindowFit.cpp): runs the step if it is one of those.
   bool runWindowFitStep(const QString& name, const QStringList& a, int line);
+  bool runDocumentFrameStep(const QString& name, const QStringList& args, int line);
 
   bool m_active = false;
   QTimer* m_timer = nullptr;
@@ -626,6 +658,7 @@ private:
   int m_jobPickLine = 0;
 
   QPointer<QWidget> m_main;
+  QHash<QString, QPointer<QWidget>> m_documentWindows;
   QPointer<QWidget> m_dialog; // the target of key, type and button; else the main window
   QPointer<QWidget> m_grab;   // the widget a pressed mouse button belongs to
   QPointer<QObject> m_found;  // what a wait found

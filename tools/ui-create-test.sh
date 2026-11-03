@@ -36,6 +36,8 @@
 #     Component.
 #   - Emboss (mitcad#458): a rectangle wrapped onto a rod's side and
 #     raised, edited to sunk (tools/cli/tests/emboss.json's volumes).
+#   - Emboss by projection (mitcad#1091): two letters of a text projected
+#     onto a ball (the face takes the projection by itself) and raised.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-create-test.sh [screenshot.png]
@@ -128,6 +130,18 @@ cat > "$WORK/emboss.json" << EOF
   {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [-3, -8], "width": 6, "height": 6}
 ]
 EOF
+# A ball 40 across about the origin (Sphere1 F1, Body1), a plane 30 above
+# XY (Plane1 F2) and on it the text "Mitcad" 6 high from (-9, 3) (F3),
+# off the sphere's pole and seam, to project down onto it (mitcad#1091).
+cat > "$WORK/emboss-ball.json" << 'EOF'
+[
+  {"cmd": "add_feature", "def": {"type": "sphere", "plane": "xy", "center": [0, 0], "diameter": 40,
+    "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 30}}},
+  {"cmd": "sketch.create", "plane": "F2"},
+  {"cmd": "sketch.add_text", "sketch": "F3", "text": "Mitcad", "at": [-9, 3], "height": 6}
+]
+EOF
 # A 30 x 20 block 6 high (F1, F2) with two 5 mm holes through it, the tap
 # drill of M6x1 (mitcad#691): at (-7, 0) (Sketch2 F3, cut by Extrude2 F4)
 # and at (7, 0) (Sketch3 F5, cut by Extrude3 F6).
@@ -147,7 +161,7 @@ cat > "$WORK/bores.json" << EOF
     "extent": {"type": "through_all"}, "operation": "cut", "participants": ["F2.b0"]}}
 ]
 EOF
-for model in profiles rod drilled emboss curves bores; do
+for model in profiles rod drilled emboss emboss-ball curves bores; do
   "$CLI" run "$WORK/$model.json" --save "$WORK/$model.mitcad" > "$WORK/cli.log" 2>&1 ||
     { cat "$WORK/cli.log"; ui_fail "mitcad-cli $model"; }
 done
@@ -441,6 +455,36 @@ ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Edited F4" "Emboss1 edited"
 # Sunk to radius 9: 36 * 19 / 20 less than the rod.
 ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" 9390.577961 "sunk into the rod"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "=== Emboss: a text projected onto a ball (mitcad#1091)"
+ui_start_app --open "$WORK/emboss-ball.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_step "emboss (search)"                  ui_command "Emboss"
+ui_expect_log "Command Emboss started" "emboss started"
+ui_expect_log "Emboss Profiles: 1 profile [profile r{t1.g" "a letter of the text taken"
+# The newest pick place of another letter (glyph): the taken letter is
+# offered too, and a click on it removes it (mitcad#1105 gives a profile
+# whose middle does not pick it a place of its own).
+TAKEN=$(grep -o "Emboss Profiles: 1 profile \[profile r{t1\.g[0-9]*\." "$UI_LOG" | tail -1 |
+  sed 's/.*r{t1\.\(g[0-9]*\)\./\1/')
+PLACES=$(grep -n "Pick places:" "$UI_LOG" | tail -1 | cut -d: -f1)
+OTHER=$(tail -n +"${PLACES:-1}" "$UI_LOG" | grep -o "Pick profile F3/r{t1\.g[0-9]*\.c[0-9]*}" |
+  grep -vF "r{t1.$TAKEN." | tail -1 | sed 's/^Pick //')
+[ -n "$TAKEN" ] && [ -n "$OTHER" ] || ui_fail "no pick place logged for a letter other than '$TAKEN'"
+echo "ok   another letter can be picked ($OTHER, not $TAKEN)"
+ui_step "pick another letter too"          ui_click_pick "$OTHER"
+ui_expect_log "Emboss Profiles: 2 profiles" "two letters"
+ui_step "the face input"                   ui_click_logged "Panel Emboss input face"
+ui_step "pick the ball"                    ui_click_pick "face F1.b0/F1:side0"
+ui_expect_log "Emboss Face: 1 face" "the ball's face picked"
+ui_mark
+ui_step "depth 1.5"                        ui_type_in "Panel Emboss input depth" "1.5"
+ui_expect_new "Preview Emboss: ok" "previewed, projected"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_log "Added emboss (Raise) of 2 profile(s) on a face (sphere), projected, depth 1.5" "emboss added"
+ui_expect_log "Body Body1 (F1.b0): volume 33510.322 -> " "raised on the ball"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 

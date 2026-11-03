@@ -131,7 +131,42 @@ QuickAccessGroup::QuickAccessGroup(CommandRegistry& registry, Hooks hooks, QWidg
   m_placesTimer->setInterval(0);
   connect(m_placesTimer, &QTimer::timeout, this, &QuickAccessGroup::logPlaces);
   TestSync::watch(m_placesTimer);
+  m_wanted = QuickAccessSettings::loadVisible();
+  // Preferences or the group's menu (mitcad#1189): at once, in either layout.
+  connect(&QuickAccessNotifier::instance(), &QuickAccessNotifier::visibilityChanged, this,
+          [this](bool) { applyVisible(); });
   rebuild();
+}
+
+void QuickAccessGroup::applyVisible() {
+  const bool wanted = QuickAccessSettings::loadVisible();
+  if (m_visibleApplied && wanted == m_wanted && isHidden() != wanted) {
+    return;
+  }
+  const bool first = !m_visibleApplied;
+  m_visibleApplied = true;
+  const bool changed = wanted != m_wanted;
+  m_wanted = wanted;
+  setVisible(wanted);
+  if (first || changed) {
+    qDebug().noquote() << (wanted ? QStringLiteral("Quick access toolbar shown")
+                                  : QStringLiteral("Quick access toolbar hidden"));
+  }
+  if (!wanted) {
+    // Its places are logged again once it shows.
+    m_lastPlaces.clear();
+    updateGeometry();
+    emit contentsChanged();
+    return;
+  }
+  if (changed) {
+    // Shown again: the same commands from the settings, made and logged anew.
+    rebuild();
+    return;
+  }
+  updateGeometry();
+  emit contentsChanged();
+  schedulePlaces();
 }
 
 QStringList QuickAccessGroup::availableIds() const {
@@ -378,6 +413,16 @@ void QuickAccessGroup::openMenu(const QPoint& global) {
     QMetaObject::invokeMethod(this, &QuickAccessGroup::rebuild, Qt::QueuedConnection);
   });
   top.append(quickAccessLabel(reset->text()));
+  // The group hidden (mitcad#1189); Preferences › Display › Show
+  // quick-access toolbar brings it back.
+  QAction* hide = menu.addAction(tr("Hide Quick-Access Toolbar"));
+  connect(hide, &QAction::triggered, this, [] {
+    qDebug().noquote() << QStringLiteral("Hide Quick-Access Toolbar chosen");
+    // After the menu's own handling of the click.
+    QMetaObject::invokeMethod(
+        &QuickAccessNotifier::instance(), [] { QuickAccessSettings::saveVisible(false); }, Qt::QueuedConnection);
+  });
+  top.append(quickAccessLabel(hide->text()));
   qDebug().noquote() << QStringLiteral("Context menu: %1").arg(top.join(QStringLiteral(" | ")));
   for (const QString& line : std::as_const(lines)) {
     qDebug().noquote() << line;

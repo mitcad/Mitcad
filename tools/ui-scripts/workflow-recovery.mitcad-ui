@@ -47,8 +47,10 @@ expect-log 'Autosave removed for Untitled'
 # Only the lock of the session is left.
 expect-files "${MITCAD_AUTOSAVE_DIR}" '*' 1
 expect-files "${MITCAD_AUTOSAVE_DIR}" '*.lock' 1
+capture-document-window saved
 key ctrl+n
 expect-log 'New document'
+expect-document-windows 2
 mark
 key ctrl+o
 focus-dialog '^Open$'
@@ -57,8 +59,9 @@ type "${MITCAD_TEST_WORK}/block.mitcad"
 sleep 300
 key Return
 focus-main
-expect-log 'Opened ${MITCAD_TEST_WORK:re}/block\.mitcad' 20
-expect-log 'Bodies shown: F2\.b0' 20
+# Opening the saved path activates its existing owner rather than reloading it.
+expect-document-window-active saved
+expect-document-windows 2
 mark
 command inspect.properties
 expect-log 'Physical properties: Body1 in Component1:1 volume'

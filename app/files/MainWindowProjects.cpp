@@ -5,6 +5,7 @@
 // are files/ProjectDialogs.hpp and files/ProjectSettings.hpp; the core's
 // side is commands.md, "Projects".
 #include "../MainWindow.hpp"
+#include "../WindowManager.hpp"
 
 #include <utility>
 
@@ -442,7 +443,7 @@ void MainWindow::openFromCloud(const OpenFromCloudOptions& options, bool ask) {
 }
 
 void MainWindow::openReadOnly() {
-  if (!maybeSave()) {
+  if (m_windowManager == nullptr && !maybeSave()) {
     return;
   }
   const QString path = dialogOpenFileName(this, tr("Open Read-Only"), dialogFolder(DialogGroup::Open),
@@ -459,7 +460,8 @@ void MainWindow::openReadOnlyFile(const QString& path) {
   // taken, and the window is read-only (files/LockController.hpp).
   m_openingReadOnly = true;
   QString error;
-  const bool opened = openFile(path, error);
+  const bool opened = m_windowManager != nullptr ? m_windowManager->openFile(this, path, error) != nullptr
+                                                 : openFile(path, error);
   m_openingReadOnly = false;
   qInfo().noquote() << QStringLiteral("Open Read-Only: %1%2").arg(path, opened ? QString() : QStringLiteral(" failed"));
   if (!opened && !error.isEmpty()) {
@@ -498,7 +500,7 @@ void MainWindow::openFromProject() {
     return;
   }
   if (chosen->readOnly) {
-    if (!maybeSave()) {
+    if (m_windowManager == nullptr && !maybeSave()) {
       return;
     }
     openReadOnlyFile(chosen->path);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Placing BUILD parts with the mock kernel: the first part grounded, a
+//! Placing BUILD parts with the mock kernel: the first part grounded and
+//! on a plane at a click far from its origin (mitcad#1196), a
 //! profile on a side's slot and on an end for each system, the side or end
 //! a pick decides, offsets from either end, rotation and flip, mitres
 //! (new, existing, shared), the derived part's names and frames, and the
@@ -60,6 +61,79 @@ fn the_first_part_is_grounded_where_it_is_placed() {
     assert_eq!(record.role, mitcad_model_build::BuildRole::Profile);
     assert_eq!(record.part, Some(part));
     assert_eq!(doc.undo_label(), Some("Place Profile 30x30 B8 L=1000"));
+}
+
+#[test]
+fn the_first_part_starts_where_the_click_puts_it_on_a_plane() {
+    // mitcad#1196: the app's first part on a chosen plane, the click far
+    // from the plane's origin: its end A there, standing on the plane and
+    // jointed to it (not grounded), where the preview shows it.
+    let mut doc = design();
+    let fields = json!({"part": part("p30"),
+        "at": {"geometry": "xy", "point": [1500.0, -800.0, 0.0], "direction": [0.0, 0.0, 1.0]},
+        "length": 500});
+    let mut probe = fields.clone();
+    probe["query"] = json!("build_preview");
+    let shown = query(&doc, probe);
+    let t = place(&mut doc, fields);
+    all_ok(&doc);
+    assert_eq!(t["place"], "geometry");
+    let o = occurrence(&t);
+    assert!(!doc.assembly().occurrence(o).unwrap().grounded);
+    let at = placed(&doc, o);
+    assert!(close(at.translation, [1500.0, -800.0, 0.0]), "{at:?}");
+    assert!(close(axis(&at), [0.0, 0.0, 1.0]));
+    let origin = &shown["frame"]["origin"];
+    let preview = [0, 1, 2].map(|i| origin[i].as_f64().unwrap());
+    assert!(close(preview, [1500.0, -800.0, 0.0]), "{shown}");
+    // On a construction plane 200 above XY, far from its origin; and with
+    // no point (the app's Enter before the click) at the plane's origin.
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": {"type": "offset", "plane": "xy", "distance": 200}}}),
+    )
+    .unwrap_or_else(|e| panic!("construction plane: {e}"));
+    let plane = added["uid"].as_str().unwrap().to_owned();
+    let high = place(
+        &mut doc,
+        json!({"part": {"source": "S1"},
+               "at": {"geometry": plane.as_str(), "point": [-900.0, 1200.0, 200.0]}, "length": 300}),
+    );
+    all_ok(&doc);
+    let at = placed(&doc, occurrence(&high));
+    assert!(close(at.translation, [-900.0, 1200.0, 200.0]), "{at:?}");
+    assert!(close(axis(&at), [0.0, 0.0, 1.0]));
+    let enter = place(
+        &mut doc,
+        json!({"part": {"source": "S1"}, "at": {"geometry": plane.as_str()}, "length": 300}),
+    );
+    all_ok(&doc);
+    let at = placed(&doc, occurrence(&enter));
+    assert!(close(at.translation, [0.0, 0.0, 200.0]), "{at:?}");
+}
+
+#[test]
+fn a_grounded_first_part_moves_and_stays_grounded() {
+    // mitcad#1196: Move/Copy of a grounded first part (placed without a
+    // plane) moves it and it stays grounded there, one undo step.
+    let mut doc = design();
+    let t = first(&mut doc, "p30", [10.0, 20.0, 0.0], 500.0);
+    let o = occurrence(&t);
+    assert!(doc.assembly().occurrence(o).unwrap().grounded);
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "move_occurrence",
+               "occurrences": [t["occurrence"]],
+               "transform": {"type": "translate_xyz", "x": 100, "y": 0, "z": 0}}}),
+    )
+    .unwrap_or_else(|e| panic!("move_occurrence: {e}"));
+    all_ok(&doc);
+    assert!(close(placed(&doc, o).translation, [110.0, 20.0, 0.0]));
+    assert!(doc.assembly().occurrence(o).unwrap().grounded);
+    doc.undo();
+    assert!(close(placed(&doc, o).translation, [10.0, 20.0, 0.0]));
+    assert!(doc.assembly().occurrence(o).unwrap().grounded);
 }
 
 #[test]

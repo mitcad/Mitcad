@@ -501,6 +501,9 @@ const DECODER_ONLY: &[&str] = &[
     ".timeline.items[].detail._f3d_profile_loops",
     // Text profiles whose texts the design no longer has (mitcad#332).
     ".timeline.items[].detail._f3d_missing_texts",
+    // The texts an extrusion's text profiles name, with its profile count
+    // (mitcad#1177).
+    ".timeline.items[].detail._f3d_text_profiles",
     ".timeline.items[].detail._f3d_axis",
     ".timeline.items[].detail._f3d_through_all",
     ".timeline.items[].detail.isCombine",

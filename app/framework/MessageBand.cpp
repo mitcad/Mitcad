@@ -148,6 +148,15 @@ void MessageCenter::commandStarted() {
   }
 }
 
+void MessageCenter::clear(const char* reason) {
+  m_timer.stop();
+  const bool changedBand = m_log.clear();
+  qDebug().noquote() << QStringLiteral("Message band cleared (%1)").arg(QString::fromLatin1(reason));
+  if (changedBand) {
+    emit changed();
+  }
+}
+
 void MessageCenter::toStub(const char* reason) {
   const MessageEntry* latest = m_log.latest();
   if (latest == nullptr) {
@@ -273,7 +282,7 @@ void MessageBand::refresh() {
     break;
   }
   case MessageLog::Shown::Stub: {
-    const MessageEntry& entry = *log.latest();
+    const MessageEntry& entry = *log.stub();
     const QPixmap pixmap = levelPixmap(entry.level, side, ratio, false);
     m_stub->setIcon(pixmap.isNull() ? QIcon() : QIcon(pixmap));
     m_stub->setIconSize(QSize(side, side));
@@ -303,7 +312,7 @@ void MessageBand::fitText() {
       room -= m_icon->sizeHint().width() + 8;
     }
     m_text->setText(fitLines(oneLine(noticeLevelText(full->level, full->text)), m_text->font(), room, 2));
-  } else if (const MessageEntry* latest = log.latest()) {
+  } else if (const MessageEntry* latest = log.stub()) {
     // One line: the icon, the word and as much of the text as fits.
     const int room = width - m_stub->iconSize().width() - 24;
     QString text = oneLine(noticeLevelText(latest->level, latest->text));

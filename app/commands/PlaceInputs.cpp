@@ -1627,11 +1627,12 @@ bool loadPlace(const QJsonObject& feature, CommandState& state, const CommandCon
     const double y = coordinate(centre.at(1));
     const gp_Pnt point = frame->origin.Translated(gp_Vec(frame->x) * x + gp_Vec(frame->y) * y);
     placeOnFace(state, context, plane, point, false, Refs::OriginAxes, std::nullopt);
-    if (isFixedPlane(plane)) {
-      // Moved on it, saved as `at` on the same plane without `align`: the
-      // part keeps the plane's own x axis, as its centre had it.
-      state.setObject(kNoAlign, {{QStringLiteral("on"), true}});
-    }
+    // Moved on it, saved as `at` on the same plane without `align`: the
+    // part keeps the plane's own x axis, as its centre had it. Reference 1
+    // as Align would turn it onto that origin axis (mitcad#1140: by 180
+    // degrees on a construction plane whose x runs along -X); a fixed
+    // plane likewise (mitcad#1137).
+    state.setObject(kNoAlign, {{QStringLiteral("on"), true}});
     // The distances show the coordinates' expressions where they are the
     // same distances (from the origin axes), negated across an axis.
     const std::pair<QString, double> distances[] = {{kOffset1, x}, {kOffset2, y}};

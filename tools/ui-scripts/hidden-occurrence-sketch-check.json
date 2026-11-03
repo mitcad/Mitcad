@@ -1,0 +1,5 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved Plate's Sketch1 after its hole's diameter (k7, d3) was set to 12 in the sketch edit (mitcad#1194): the plate is 24000 - 360 pi mm3 (it was 24000 - 250 pi)."},
+  {"expect":{"body":"F2.b0","volume":22869.02664,"tolerance":1e-4}}
+]

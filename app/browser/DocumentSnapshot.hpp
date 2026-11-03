@@ -203,7 +203,8 @@ struct DocumentSnapshot {
   const Feature* feature(const QString& uid) const;
   const Component* component(const QString& uid) const;
   QString componentName(const QString& uid) const;
-  // The first occurrence of a component ("" for the root), depth first.
+  // The first occurrence of a component ("" for the root), depth first:
+  // the first one shown (with every occurrence above it), else the first.
   QString firstOccurrence(const QString& component) const;
   // Whether an occurrence path and every occurrence above it are shown.
   bool isOccurrenceShown(const QString& path) const;

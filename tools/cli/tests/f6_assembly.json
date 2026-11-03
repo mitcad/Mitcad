@@ -51,14 +51,14 @@
   {"cmd": "undo"},
   {"expect": {"instances": 4}},
 
-  {"comment": "A timeline move of an occurrence (Move1 F4, 30 mm up), then grounded: the move fails and the plate stays."},
+  {"comment": "A timeline move of an occurrence (Move1 F4, 30 mm up), then grounded: the move still moves it, and it stays grounded there (mitcad#1196)."},
   {"cmd": "add_feature", "def": {"type": "move_occurrence", "occurrences": ["O2"],
     "transform": {"type": "translate_xyz", "x": 0, "y": 0, "z": 30}}},
   {"expect": {"feature": "Move1", "status": "ok"}},
   {"expect": {"occurrence": "Plate:2", "body": "Body1", "bbox": {"min": [0, 50, 30], "max": [40, 70, 38]}, "tolerance": 1e-6}},
   {"cmd": "ground_occurrence", "occurrence": "Plate:2"},
-  {"expect": {"feature": "Move1", "status": "error", "error_contains": "Plate:2 is grounded"}},
-  {"expect": {"occurrence": "Plate:2", "body": "Body1", "bbox": {"min": [0, 50, 0], "max": [40, 70, 8]}, "tolerance": 1e-6}},
+  {"expect": {"feature": "Move1", "status": "ok"}},
+  {"expect": {"occurrence": "Plate:2", "body": "Body1", "bbox": {"min": [0, 50, 30], "max": [40, 70, 38]}, "tolerance": 1e-6}},
   {"cmd": "undo"},
 
   {"comment": "Capture Position: Position1 (F5) puts the plate 50 mm along -Y after the move."},

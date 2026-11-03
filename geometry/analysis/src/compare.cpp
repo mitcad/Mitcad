@@ -12,7 +12,6 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
-#include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Builder.hxx>
@@ -120,8 +119,7 @@ std::vector<gp_Pnt> sample(const TopoDS_Shape& shape, std::size_t target, double
   std::vector<std::pair<TopoDS_Face, double>> faces;
   double total = 0.0;
   for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
-    GProp_GProps props;
-    BRepGProp::SurfaceProperties(it.Current(), props);
+    const GProp_GProps props = surface_properties(it.Current());
     faces.emplace_back(TopoDS::Face(it.Current()), props.Mass());
     total += props.Mass();
   }

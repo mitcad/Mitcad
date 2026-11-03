@@ -60,6 +60,7 @@
 #include <BRepTools_ReShape.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
@@ -2254,6 +2255,387 @@ void test_rounding_rolls_on_the_far_edge_of_a_floor_narrowing_before_the_end() {
   CHECK(in_box(w + 1e-6, 4, 10, 10) < 1e-9);
 }
 
+// A bar x in [0, 20], y in [0, 10], z in [0, 10] whose front edge along the
+// floor (y = 10, z = 0) is rounded with 3, and beside it a block x in
+// [20, 24] reaching out to y = 15 + d whose front edge along the floor is
+// rounded with 8: the block's floor goes d further than the bar's (to
+// y = 7 + d against 7). The step between the two profiles, the block's face
+// x = 20, narrows to a point where the bar's rounding meets the floor. Also
+// the block alone and the bar's profile run on along x through both, for
+// the expected rounding of the step's foot.
+struct StepBesideRoundedBar {
+  TopoDS_Shape body, block, bar_profile;
+};
+
+TopoDS_Shape with_front_floor_edge_rounded(const TopoDS_Shape& box, double y, double r) {
+  BRepFilletAPI_MakeFillet fillet(box);
+  for (const TopoDS_Edge& e :
+       edges_where(box, [y](const gp_Pnt& m) { return std::abs(m.Y() - y) < 1e-9 && std::abs(m.Z()) < 1e-9; })) {
+    fillet.Add(r, e);
+  }
+  return build(fillet) ? fillet.Shape() : TopoDS_Shape();
+}
+
+StepBesideRoundedBar step_beside_rounded_bar(double d) {
+  StepBesideRoundedBar s;
+  const TopoDS_Shape   bar = with_front_floor_edge_rounded(BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(20, 10, 10)).Shape(), 10, 3);
+  s.block = with_front_floor_edge_rounded(BRepPrimAPI_MakeBox(gp_Pnt(20, 0, 0), gp_Pnt(24, 15 + d, 10)).Shape(), 15 + d, 8);
+  s.bar_profile =
+    with_front_floor_edge_rounded(BRepPrimAPI_MakeBox(gp_Pnt(-1, 0, 0), gp_Pnt(30, 10, 10)).Shape(), 10, 3);
+  if (bar.IsNull() || s.block.IsNull() || s.bar_profile.IsNull()) {
+    return s;
+  }
+  ShapeUpgrade_UnifySameDomain unify(BRepAlgoAPI_Fuse(bar, s.block).Shape(), true, true, true);
+  unify.Build();
+  s.body = unify.Shape();
+  return s;
+}
+
+TopoDS_Shape mirrored_in_y(const TopoDS_Shape& shape) {
+  gp_Trsf mirror;
+  mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)));
+  return BRepBuilderAPI_Transform(shape, mirror, true).Shape();
+}
+
+// The foot of the step (port patch 1140): its edge with the floor, 0.0733
+// long, rounded with 0.5, on tangentially up the block's rounding and front.
+// Near the bar the step is lower than the ball: the rounding's contact on it
+// leaves it across its edge with the bar's rounding, and that rounding,
+// tangent to the floor along the floor's edge with it, cuts the rounding all
+// along its run on the block's rounding and floor up to the point where
+// both meet that edge's line, 0.5 past the step (OCCT found no point where
+// the block's floor edge crosses the bar's rounding, 0.9 micrometres above
+// it, and failed: "the edge beside the end does not cross the face at the
+// end"). The bar's rounding grows up to the cut, its edge with the floor
+// prolonged along its line. The rounding takes what the block alone loses to
+// the same rounding of its whole face x = 20, outside the bar's profile run
+// on through the block; in both orientations of the chain (the body and its
+// mirror image).
+void test_step_foot_rounded_where_a_bar_rounding_tangent_to_the_floor_ends_it() {
+  const double               d = 0.0733;
+  const StepBesideRoundedBar s = step_beside_rounded_bar(d);
+  CHECK(!s.body.IsNull());
+  if (s.body.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(s.body).IsValid());
+  const auto foot_of = [](const TopoDS_Shape& shape, double y0, double y1) {
+    return edges_where(shape, [y0, y1](const gp_Pnt& m) {
+      return std::abs(m.X() - 20) < 1e-9 && std::abs(m.Z()) < 1e-9 && m.Y() > std::min(y0, y1) && m.Y() < std::max(y0, y1);
+    });
+  };
+  // The expected rounding: the block alone rounded along its face x = 20,
+  // less what lies in the bar's profile.
+  const std::vector<TopoDS_Edge> block_foot = foot_of(s.block, 0, 7 + d);
+  CHECK(block_foot.size() == 1);
+  const TopoDS_Shape block_rounded = rounded(s.block, block_foot, 0.5);
+  CHECK(!block_rounded.IsNull());
+  if (block_rounded.IsNull()) {
+    return;
+  }
+  const TopoDS_Shape removed =
+    BRepAlgoAPI_Cut(BRepAlgoAPI_Cut(s.block, block_rounded).Shape(), s.bar_profile).Shape();
+  const double removed_volume = volume_of(removed);
+  CHECK(removed_volume > 0.5 && removed_volume < 1.5);
+  for (const bool mirror : {false, true}) {
+    const TopoDS_Shape body     = mirror ? mirrored_in_y(s.body) : s.body;
+    const TopoDS_Shape expected = BRepAlgoAPI_Cut(body, mirror ? mirrored_in_y(removed) : removed).Shape();
+    const double       sign     = mirror ? -1.0 : 1.0;
+    const std::vector<TopoDS_Edge> foot = foot_of(body, sign * 7, sign * (7 + d));
+    CHECK(foot.size() == 1);
+    if (foot.size() != 1) {
+      continue;
+    }
+    const TopoDS_Shape result = rounded(body, foot, 0.5);
+    CHECK(!result.IsNull());
+    if (result.IsNull()) {
+      continue;
+    }
+    CHECK(BRepCheck_Analyzer(result).IsValid());
+    CHECK_NEAR_TOL(volume_of(body) - volume_of(result), removed_volume, 1e-6);
+    CHECK(volume_of(BRepAlgoAPI_Cut(result, expected).Shape()) < 1e-6);
+    CHECK(volume_of(BRepAlgoAPI_Cut(expected, result).Shape()) < 1e-6);
+    // The bar's rounding past the step: its point 0.25 beyond it at y = 7.5
+    // lies on the result's boundary.
+    BRepClass3d_SolidClassifier classifier(result, gp_Pnt(20.25, sign * 7.5, 3 - std::sqrt(9 - 0.25)), 1e-6);
+    CHECK(classifier.State() == TopAbs_ON);
+  }
+}
+
+// A block x in [0, 24], y in [0, 20], z in [0, 20] whose back edge along the
+// floor (y = 0, z = 0) is rounded with 13; for x up to 20 (the bar) a notch
+// y < 5, z > 10 is taken out of its back and the notch's floor edge with the
+// rounding rounded with 2, tangent to it. The block's face x = 20 beside the
+// notch is a step whose foot on the big rounding ends where the bar's small
+// rounding meets the big one, tangent to it. The block alone and the bar's
+// profile run on along x through both, for the expected rounding.
+struct StepBesideRoundedNotch {
+  TopoDS_Shape body, block, bar_profile;
+};
+
+// A box x in [x0, x1], y in [0, 20], z in [0, 20], its back edge along the
+// floor rounded with 13.
+TopoDS_Shape with_back_floor_edge_rounded(double x0, double x1) {
+  const TopoDS_Shape       box = BRepPrimAPI_MakeBox(gp_Pnt(x0, 0, 0), gp_Pnt(x1, 20, 20)).Shape();
+  BRepFilletAPI_MakeFillet fillet(box);
+  for (const TopoDS_Edge& e :
+       edges_where(box, [](const gp_Pnt& m) { return std::abs(m.Y()) < 1e-9 && std::abs(m.Z()) < 1e-9; })) {
+    fillet.Add(13, e);
+  }
+  return build(fillet) ? fillet.Shape() : TopoDS_Shape();
+}
+
+TopoDS_Shape notched_bar(double x0, double x1) {
+  const TopoDS_Shape big = with_back_floor_edge_rounded(x0, x1);
+  if (big.IsNull()) {
+    return big;
+  }
+  const TopoDS_Shape notched =
+    BRepAlgoAPI_Cut(big, BRepPrimAPI_MakeBox(gp_Pnt(x0 - 1, -1, 10), gp_Pnt(x1 + 1, 5, 21)).Shape()).Shape();
+  const double                   y10  = 13 - std::sqrt(13 * 13 - 3 * 3); // the big rounding at z = 10
+  const std::vector<TopoDS_Edge> edge = edges_where(notched, [y10](const gp_Pnt& m) {
+    return std::abs(m.Y() - y10) < 1e-6 && std::abs(m.Z() - 10) < 1e-6;
+  });
+  return edge.size() == 1 ? rounded(notched, edge, 2) : TopoDS_Shape();
+}
+
+StepBesideRoundedNotch step_beside_rounded_notch() {
+  StepBesideRoundedNotch s;
+  s.block                = with_back_floor_edge_rounded(20, 24);
+  const TopoDS_Shape bar = notched_bar(0, 20);
+  s.bar_profile          = notched_bar(-1, 30);
+  if (s.block.IsNull() || bar.IsNull() || s.bar_profile.IsNull()) {
+    return s;
+  }
+  ShapeUpgrade_UnifySameDomain unify(BRepAlgoAPI_Fuse(bar, s.block).Shape(), true, true, true);
+  unify.Build();
+  s.body = unify.Shape();
+  return s;
+}
+
+// The step's foot on the big rounding beside the notch rounded with 0.5, on
+// tangentially up the block's back (port patch 1140). Near the bar the step
+// is lower than the ball, and the bar's small rounding, tangent to the big
+// one along their edge, cuts the rounding all along from where its contact
+// on the step leaves the step up to the point where its contact on the big
+// rounding meets that edge's line, 0.5 past the step. The analytic piece of
+// the step's foot there, on the chain's end edge, still had the parameters
+// of that edge's whole blend at its end; they are those of its end now. The
+// rounding takes what the block alone loses to the same rounding of its
+// face x = 20, outside the bar's profile run on through the block, in both
+// orientations of the chain.
+void test_step_foot_on_a_rounding_ended_by_a_rounding_tangent_to_it() {
+  const StepBesideRoundedNotch s = step_beside_rounded_notch();
+  CHECK(!s.body.IsNull());
+  if (s.body.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(s.body).IsValid());
+  // The step's edge with the big rounding: on x = 20, 13 from the rounding's
+  // axis (beside the notch, above z = 9).
+  const auto foot_of = [](const TopoDS_Shape& shape, double sign, double z0) {
+    return edges_where(shape, [sign, z0](const gp_Pnt& m) {
+      return std::abs(m.X() - 20) < 1e-9 && std::abs(std::hypot(sign * m.Y() - 13, m.Z() - 13) - 13) < 1e-6 &&
+             m.Z() > z0 && m.Z() < 13;
+    });
+  };
+  const std::vector<TopoDS_Edge> block_foot = foot_of(s.block, 1.0, 0.0);
+  CHECK(block_foot.size() == 1);
+  const TopoDS_Shape block_rounded = block_foot.empty() ? TopoDS_Shape() : rounded(s.block, block_foot, 0.5);
+  CHECK(!block_rounded.IsNull());
+  if (block_rounded.IsNull()) {
+    return;
+  }
+  const TopoDS_Shape removed =
+    BRepAlgoAPI_Cut(BRepAlgoAPI_Cut(s.block, block_rounded).Shape(), s.bar_profile).Shape();
+  const double removed_volume = volume_of(removed);
+  CHECK(removed_volume > 0.1 && removed_volume < 3);
+  for (const bool mirror : {false, true}) {
+    const TopoDS_Shape             body     = mirror ? mirrored_in_y(s.body) : s.body;
+    const TopoDS_Shape             expected = BRepAlgoAPI_Cut(body, mirror ? mirrored_in_y(removed) : removed).Shape();
+    const std::vector<TopoDS_Edge> foot     = foot_of(body, mirror ? -1.0 : 1.0, 9.0);
+    CHECK(foot.size() == 1);
+    if (foot.size() != 1) {
+      continue;
+    }
+    const TopoDS_Shape result = rounded(body, foot, 0.5);
+    CHECK(!result.IsNull());
+    if (result.IsNull()) {
+      continue;
+    }
+    CHECK(BRepCheck_Analyzer(result).IsValid());
+    CHECK_NEAR_TOL(volume_of(body) - volume_of(result), removed_volume, 1e-6);
+    CHECK(volume_of(BRepAlgoAPI_Cut(result, expected).Shape()) < 1e-6);
+    CHECK(volume_of(BRepAlgoAPI_Cut(expected, result).Shape()) < 1e-6);
+  }
+}
+
+// A wall: the block x in [-20, 20], y in [-60, -40], z in [0, 10] outside
+// the cylinder of radius 50 about the z axis; on its concave face a tab
+// x in [-5, 5] up to y = -42, 3 high, its sides' edges with the wall rounded
+// with 3 (each rounding tangent to the wall along a vertical line). The
+// tab's top edge with the wall rounded with 1 (port patch 1140): its contact
+// on the top leaves the top across the top's edges with the side roundings,
+// which cut the rounding up to where its contact on the wall meets their
+// lines of tangency with the wall, 1 above the top. The contacts' lines are
+// circles about the z axis: the pieces' parameters at their ends keep to
+// the pieces' periods. The rounding adds what lies under its torus within
+// the tab's outline run on upwards.
+void test_tab_top_rounded_up_to_its_side_roundings_tangent_to_a_curved_wall() {
+  const double       R    = 50.0;
+  const TopoDS_Shape bore = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -1), gp_Dir(0, 0, 1)), R, 12).Shape();
+  const TopoDS_Shape wall = BRepAlgoAPI_Cut(BRepPrimAPI_MakeBox(gp_Pnt(-20, -60, 0), gp_Pnt(20, -40, 10)).Shape(), bore).Shape();
+  ShapeUpgrade_UnifySameDomain unify(
+    BRepAlgoAPI_Fuse(wall, BRepPrimAPI_MakeBox(gp_Pnt(-5, -55, 0), gp_Pnt(5, -42, 3)).Shape()).Shape(), true, true, true);
+  unify.Build();
+  const TopoDS_Shape joined = unify.Shape();
+  // The tab's sides' vertical edges with the wall.
+  const std::vector<TopoDS_Edge> sides = edges_where(joined, [R](const gp_Pnt& m) {
+    return std::abs(std::abs(m.X()) - 5) < 1e-9 && std::abs(std::hypot(m.X(), m.Y()) - R) < 1e-6 && m.Z() > 0 &&
+           m.Z() < 3;
+  });
+  CHECK(sides.size() == 2);
+  const TopoDS_Shape body = sides.size() == 2 ? rounded(joined, sides, 3.0) : TopoDS_Shape();
+  CHECK(!body.IsNull());
+  if (body.IsNull()) {
+    return;
+  }
+  // The tab's top edge with the wall: on the circle of radius R at z = 3
+  // (in pieces where the fuse split it).
+  const std::vector<TopoDS_Edge> top = edges_where(body, [R](const gp_Pnt& m) {
+    return std::abs(m.Z() - 3) < 1e-9 && std::abs(std::hypot(m.X(), m.Y()) - R) < 1e-6;
+  });
+  CHECK(!top.empty());
+  if (top.empty()) {
+    return;
+  }
+  const TopoDS_Shape result = rounded(body, top, 1.0);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result).IsValid());
+  // The expected material: within the band R - 1 to R, z from 3 to 4, under
+  // the torus of radius 1 about the circle of radius R - 1 at z = 4, inside
+  // the tab's top face run on 1 upwards.
+  TopoDS_Face tab_top;
+  for (TopExp_Explorer e(body, TopAbs_FACE); e.More() && tab_top.IsNull(); e.Next()) {
+    BRepAdaptor_Surface s(TopoDS::Face(e.Current()));
+    if (s.GetType() == GeomAbs_Plane && std::abs(s.Plane().Location().Z() - 3) < 1e-9 &&
+        std::abs(std::abs(s.Plane().Axis().Direction().Z()) - 1) < 1e-9) {
+      tab_top = TopoDS::Face(e.Current());
+    }
+  }
+  CHECK(!tab_top.IsNull());
+  if (tab_top.IsNull()) {
+    return;
+  }
+  const TopoDS_Shape band = BRepAlgoAPI_Cut(
+    BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 3), gp_Dir(0, 0, 1)), R, 1).Shape(),
+    BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 2), gp_Dir(0, 0, 1)), R - 1, 3).Shape()).Shape();
+  const TopoDS_Shape under =
+    BRepAlgoAPI_Cut(band, BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 4), gp_Dir(0, 0, 1)), R - 1, 1).Shape()).Shape();
+  const TopoDS_Shape added =
+    BRepAlgoAPI_Common(under, BRepPrimAPI_MakePrism(tab_top, gp_Vec(0, 0, 1)).Shape()).Shape();
+  const double added_volume = volume_of(added);
+  CHECK(added_volume > 0.5 && added_volume < 5);
+  CHECK_NEAR_TOL(volume_of(result) - volume_of(body), added_volume, 1e-6);
+  const TopoDS_Shape expected = BRepAlgoAPI_Fuse(body, added).Shape();
+  CHECK(volume_of(BRepAlgoAPI_Cut(result, expected).Shape()) < 1e-6);
+  CHECK(volume_of(BRepAlgoAPI_Cut(expected, result).Shape()) < 1e-6);
+}
+
+// A block 11 high whose vertical corner is rounded with 2 about the z axis,
+// its faces beside the corner leaving the rounding at 120 and 210 degrees
+// (one of them, the slanted face, running off at -60 degrees), lowered to
+// 6 high on the side y < w: the step's wall y = w crosses the corner's
+// rounding at a sharp vertical edge and stands on the lower top. With `low`
+// only the block 6 high.
+constexpr double kStepWall = -0.538;
+
+TopoDS_Shape block_stepped_across_its_rounded_corner(bool low) {
+  const TopoDS_Shape       box = BRepPrimAPI_MakeBox(gp_Pnt(-2, -2, 0), gp_Pnt(28, 28, low ? 6 : 11)).Shape();
+  BRepFilletAPI_MakeFillet corner(box);
+  for (const TopoDS_Edge& e : edges_where(box, [](const gp_Pnt& m) {
+         return std::abs(m.X() + 2) < 1e-9 && std::abs(m.Y() + 2) < 1e-9;
+       })) {
+    corner.Add(2, e);
+  }
+  if (!build(corner)) {
+    return TopoDS_Shape();
+  }
+  gp_Trsf turn;
+  turn.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), -M_PI / 3);
+  const TopoDS_Shape turned = BRepBuilderAPI_Transform(corner.Shape(), turn, true).Shape();
+  if (low) {
+    return turned;
+  }
+  ShapeUpgrade_UnifySameDomain unify(
+    BRepAlgoAPI_Cut(turned, BRepPrimAPI_MakeBox(gp_Pnt(-50, -50, 6), gp_Pnt(50, kStepWall, 12)).Shape()).Shape(), true,
+    true, true);
+  unify.Build();
+  return unify.Shape();
+}
+
+// The lower top's slanted edge rounded with 1, on tangentially round the
+// corner up to the step's wall (port patch 1170). The contact on the top
+// runs onto the wall's foot before the corner: the analytic piece round
+// the corner lies wholly past the wall, as does the slanted piece's start,
+// both given up (OCCT capped the slanted piece's prolongation with the
+// wall, which it does not meet: "bouchon non ecrit"). The wall now cuts
+// them: it grows down to the cut, its edge with the corner's rounding
+// prolonged down to where the contact on the rounding meets that edge's
+// line, 1 below the top. The rounding takes what the lower block alone
+// loses to the rounding of its top edges there, on the side of the wall's
+// plane away from the upper part.
+void test_rounding_round_a_corner_cut_by_a_wall_standing_across_it() {
+  const TopoDS_Shape body = block_stepped_across_its_rounded_corner(false);
+  const TopoDS_Shape low  = block_stepped_across_its_rounded_corner(true);
+  CHECK(!body.IsNull() && !low.IsNull());
+  if (body.IsNull() || low.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(body).IsValid());
+  // The slanted face's top edge: at z = 6, its middle 10 along the face
+  // from where it leaves the rounding at 210 degrees.
+  const gp_Pnt mid(2 * std::cos(7 * M_PI / 6) + 10 * 0.5, 2 * std::sin(7 * M_PI / 6) - 10 * std::sqrt(3) / 2, 6);
+  const auto   slanted = [&mid](const TopoDS_Shape& shape) {
+    return edges_where(shape, [&mid](const gp_Pnt& m) {
+      // (On the slanted face's top edge: the line through the middle.)
+      const gp_Vec d(0.5, -std::sqrt(3) / 2, 0);
+      const gp_Vec v(mid, m);
+      return std::abs(m.Z() - 6) < 1e-9 && v.Crossed(d).Magnitude() < 1e-6;
+    });
+  };
+  const std::vector<TopoDS_Edge> low_edge = slanted(low);
+  CHECK(low_edge.size() == 1);
+  const TopoDS_Shape low_rounded = low_edge.size() == 1 ? rounded(low, low_edge, 1.0) : TopoDS_Shape();
+  CHECK(!low_rounded.IsNull());
+  if (low_rounded.IsNull()) {
+    return;
+  }
+  const TopoDS_Shape below_wall = BRepPrimAPI_MakeBox(gp_Pnt(-50, -50, -1), gp_Pnt(50, kStepWall, 12)).Shape();
+  const TopoDS_Shape removed =
+    BRepAlgoAPI_Common(BRepAlgoAPI_Cut(low, low_rounded).Shape(), below_wall).Shape();
+  const double removed_volume = volume_of(removed);
+  CHECK(removed_volume > 1 && removed_volume < 20);
+  const std::vector<TopoDS_Edge> edge = slanted(body);
+  CHECK(edge.size() == 1);
+  if (edge.size() != 1) {
+    return;
+  }
+  const TopoDS_Shape result = rounded(body, edge, 1.0);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result).IsValid());
+  CHECK_NEAR_TOL(volume_of(body) - volume_of(result), removed_volume, 1e-6);
+  const TopoDS_Shape expected = BRepAlgoAPI_Cut(body, removed).Shape();
+  CHECK(volume_of(BRepAlgoAPI_Cut(result, expected).Shape()) < 1e-6);
+  CHECK(volume_of(BRepAlgoAPI_Cut(expected, result).Shape()) < 1e-6);
+}
+
 } // namespace
 
 void fillet_corner_tests() {
@@ -2298,6 +2680,14 @@ void fillet_corner_tests() {
           test_rounding_rolls_on_the_far_edge_of_a_floor_narrowing_before_the_end);
   guarded("test_rounding_walked_again_past_an_onsame_end_generated_by_its_edge",
           test_rounding_walked_again_past_an_onsame_end_generated_by_its_edge);
+  guarded("test_step_foot_rounded_where_a_bar_rounding_tangent_to_the_floor_ends_it",
+          test_step_foot_rounded_where_a_bar_rounding_tangent_to_the_floor_ends_it);
+  guarded("test_step_foot_on_a_rounding_ended_by_a_rounding_tangent_to_it",
+          test_step_foot_on_a_rounding_ended_by_a_rounding_tangent_to_it);
+  guarded("test_tab_top_rounded_up_to_its_side_roundings_tangent_to_a_curved_wall",
+          test_tab_top_rounded_up_to_its_side_roundings_tangent_to_a_curved_wall);
+  guarded("test_rounding_round_a_corner_cut_by_a_wall_standing_across_it",
+          test_rounding_round_a_corner_cut_by_a_wall_standing_across_it);
 }
 
 } // namespace test

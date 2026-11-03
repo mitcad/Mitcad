@@ -42,7 +42,7 @@ The pins are Qt 6.12.0 (`tools/dev-env/versions.sh`) and OCCT 8.0.1 with
 MitCad's overlay patches (`vcpkg.json`, `third_party/vcpkg-ports`).
 `OcctViewer` derives from `QOpenGLWidget`; `initializeGL()` attaches OCCT to
 Qt's current context and `paintGL()` wraps the currently bound Qt FBO.
-`macSurfaceFormat()` currently lives in `app/OcctViewer.cpp`, and
+`viewportSurfaceFormat()` lives in `app/OcctViewer.cpp`, and
 `app/main.cpp` installs its 4.1 core profile before `QApplication`.
 The inspected native OCCT configuration has `USE_OPENGL=ON`,
 `USE_GLES2=OFF` and links Apple's OpenGL framework.
@@ -267,11 +267,11 @@ with an embedded XPC service and leased IOSurfaces instead; see
   of an old protocol version, or none).
 - **Protocol** (`app/render/RenderProtocol.hpp`): one JSON object per
   line. The worker's first line is `hello` with its protocol version
-  (`kProtocolVersion`, now 8) and MitCad's version, written before the
+  (`kProtocolVersion`, now 9) and MitCad's version, written before the
   renderer starts; the application sends nothing to a worker of another
   version, stops it and shows "The renderer cannot be used:
   mitcad-render does not match this MitCad (its protocol version is 1,
-  MitCad's is 8); install them together" over the view. The final
+  MitCad's is 9); install them together" over the view. The final
   render's batch mode is another way to run it, with its own events
   ([Final render](#final-render)). Commands: `device` (the first
   command, which the application sends once it has read `hello`: the
@@ -297,7 +297,15 @@ with an embedded XPC service and leased IOSurfaces instead; see
   environment, mitcad#47; 4: the final render, mitcad#48; 5: scene
   updates and denoised frames, mitcad#49; 6: the render device,
   mitcad#50; 7: materials of faces and textures, mitcad#53; 8: the user's
-  lights and the frame's second plane, mitcad#54).
+  lights and the frame's second plane, mitcad#54; 9: interactive worker
+  pause/resume for hidden document tabs).
+
+  A hidden document tab pauses its interactive render worker with the `pause`
+  command (`paused: true`), retaining the scene, samples and last image. The
+  same command with `paused: false` resumes the worker when the document becomes
+  visible; pending camera, environment and body changes are then synchronized.
+  The viewport suppresses frame requests and drawing while hidden. This also
+  applies to macOS system window tabs through actual NSWindow occlusion changes.
 - **Shared memory** (`app/render/FrameMemory.cpp`): it cannot outlive
   both processes. On Linux it is a `memfd` (`memfd_create`, no name in
   the file system; `/proc/<pid>/maps` shows `memfd:mitcad-render-frames`),
@@ -1678,7 +1686,8 @@ The macOS GUI now selects `Contents/XPCServices/org.mitcad.renderer.xpc`
 for interactive rendering. Qt remains the default frontend; Qt and the
 separate AppKit chrome use the same `RenderClient` and OCCT viewport path.
 The CLI, batch rendering, non-Mac frontends and explicit test executable
-overrides keep the original worker, POSIX pixel mapping and protocol v8.
+overrides keep the standalone worker and POSIX pixel mapping. Both transports
+use protocol v9, including the document-visibility pause command.
 The app links no Cycles dependency; the embedded service contains the same
 renderer implementation and resource tree as the standalone worker.
 
@@ -2567,6 +2576,18 @@ scope; they are not inferred from the M1 tests. Qt remains the default UI.
   images below 2 of 255). With the ground on, the block covers a good part
   of the image from below the ground in perspective, looking up in
   orthographic, and above it again (mitcad#320).
+  Its protocol-9 pause check uses the real interactive CPU renderer and the
+  same pause command decoder as both worker transports. A full-resolution
+  partial frame requests the pause before the sixteen-sample target. Cycles
+  starts full-resolution accumulation with one sample; denoising preview
+  settings do not guarantee a display update at a requested sample count.
+  After Cycles acknowledges that its render thread is paused, samples and
+  frame publications must stay unchanged for 150 ms; an unchanged scene must
+  retain its mesh and accumulation. Resuming the same view must publish a
+  later sample, finish all sixteen samples and retain visible geometry.
+  The acknowledgement timeout bounds a failure, without a render-speed
+  requirement. This checks decoder and renderer behavior inside the worker;
+  it does not establish pipe or XPC transport delivery or physical visibility.
 - `tools/ui-render-materials-test.sh`: appearances in the render
   ([Materials](#materials)).
 - `tools/ui-render-faces-test.sh`: appearances of faces and textures

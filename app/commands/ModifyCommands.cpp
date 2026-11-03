@@ -29,6 +29,7 @@ void registerModifyCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(materialCommand(context)); // mitcad#1059
   registry.add(dogboneCommand(context)); // mitcad#1011
   registry.add(mortiseTenonCommand(context)); // mitcad#1012
+  registry.add(convertMeshCommand(context)); // mitcad#1082
 }
 
 } // namespace mitcad

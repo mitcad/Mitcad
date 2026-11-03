@@ -426,6 +426,11 @@ int drawingToolsTests() {
   CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("parts_list"));
   CHECK(command.value(QStringLiteral("table")).toObject().value(QStringLiteral("levels")).toString() ==
         QStringLiteral("parts"));
+  CHECK(command.value(QStringLiteral("table")).toObject().value(QStringLiteral("group_identical")) == QJsonValue(false));
+  const QJsonObject groupedParts = parts->command(QStringLiteral("D1"), 0,
+      picks(1, {QPointF(80, 160), QPointF(300, 280)}),
+      {{QStringLiteral("group_identical"), QStringLiteral("true")}});
+  CHECK(groupedParts.value(QStringLiteral("table")).toObject().value(QStringLiteral("group_identical")) == QJsonValue(true));
   // Its balloons with it unless the option is off (mitcad#725).
   CHECK(command.value(QStringLiteral("balloons")) == QJsonValue(true));
   command = parts->command(QStringLiteral("D1"), 0, picks(1, {QPointF(80, 160), QPointF(300, 280)}),

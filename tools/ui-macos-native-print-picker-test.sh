@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/platform/macos/NativeForms app/platform/macos/NativePicker app/browser/LibraryPicker app/print/ProfilePickerRows
 # Native Printer/Process search, keyboard, pointer, current choice and undo
-# (mitcad#1122), and Edit printers and processes… as the pickers' last row with no
-# button beside Printer or Process (mitcad#1134), using only synthetic design profiles.
+# (mitcad#1122), and Edit printers… and Edit processes… as the pickers' last rows
+# (the Printers and Processes managers, mitcad#1135) with no button beside Printer
+# or Process (mitcad#1134), using only synthetic design profiles.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"

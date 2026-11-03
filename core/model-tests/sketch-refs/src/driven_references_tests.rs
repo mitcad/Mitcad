@@ -165,12 +165,11 @@ fn driven_and_driving_again_keep_the_parameter() {
 #[test]
 fn a_reference_is_used_only_after_its_sketch() {
     let (mut d, _) = rectangle();
-    // In its own sketch.
-    let error = rejected(&mut d, set_dimension("k5", "d3 * 2"));
-    assert!(
-        error.contains("d3 is what") && error.contains("Sketch1 itself"),
-        "{error}"
-    );
+    // In its own sketch, only where it cannot change what it measures
+    // (mitcad#1116, sketch_driven_uses_tests.rs): the height measures
+    // itself.
+    let error = rejected(&mut d, set_dimension("k6", "d3 * 2"));
+    assert!(error.contains("would depend on itself"), "{error}");
     // A plane after the sketch may; moved before it, it may not.
     plane(&mut d, "d3");
     let error = rejected(

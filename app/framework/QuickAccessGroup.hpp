@@ -32,8 +32,10 @@ class CommandRegistry;
 // (icon, enabled state, its run); its tooltip names the command, its key
 // and, while it is disabled, why. The ⋮ (and a right-click on the group)
 // opens its menu: the File, Edit, View and Tools menus' commands as checks
-// (submenus as submenus), Reset to Default, and, while the group is folded,
-// its commands first. A command this build does not register is left out.
+// (submenus as submenus), Reset to Default, Hide Quick-Access Toolbar
+// (mitcad#1189), and, while the group is folded, its commands first. A
+// command this build does not register is left out. The group shows only
+// while QuickAccessSettings::loadVisible() says so (applyVisible).
 class QuickAccessGroup : public CapsuleFrame {
   Q_OBJECT
 
@@ -53,6 +55,13 @@ public:
   void rebuild();
   // The commands shown, in order.
   const QStringList& shownIds() const { return m_shown; }
+
+  // Shown or hidden as the setting says (mitcad#1189), once the group has
+  // its place in a row; then again whenever the setting changes
+  // (QuickAccessNotifier). Logs "Quick access toolbar shown" or "hidden".
+  void applyVisible();
+  // What the setting asked the last time applyVisible ran.
+  bool isWanted() const { return m_wanted; }
 
   // Folded, only the ⋮ shows, whose menu then lists the commands first
   // (TitleBar folds the group before the design's name would be cut).
@@ -111,6 +120,8 @@ private:
   QTimer* m_placesTimer = nullptr;
   QString m_lastPlaces;
   bool m_folded = false;
+  bool m_wanted = true;
+  bool m_visibleApplied = false;
   int m_iconSize = 18;
 };
 

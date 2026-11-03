@@ -20,12 +20,12 @@ fn query(doc: &Document<MockKernel>, query: Value) -> Value {
 }
 
 /// A block's design file with what a newer MitCad might add at the top:
-/// comments and their counter.
+/// a future note list and its counter.
 fn newer_file() -> (String, String) {
     let plain = block().doc.to_json();
     let mut value: Value = serde_json::from_str(&plain).unwrap();
-    value["comments"] = json!([{"id": "N1", "text": "Check the wall"}]);
-    value["next_comment"] = json!(2);
+    value["future_notes"] = json!([{"id": "N1", "text": "Check the wall"}]);
+    value["next_future_note"] = json!(2);
     (plain, value.to_string())
 }
 
@@ -33,7 +33,7 @@ fn file_value(path: &std::path::Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const WARNING: &str = "this design was written by a newer MitCad: the fields `comments`, `next_comment` were not read";
+const WARNING: &str = "this design was written by a newer MitCad: the fields `future_notes`, `next_future_note` were not read";
 
 #[test]
 fn unknown_top_level_fields_are_ignored_and_named() {
@@ -43,19 +43,19 @@ fn unknown_top_level_fields_are_ignored_and_named() {
     assert_eq!(doc.state(), reference.state(), "the rest is read as before");
     assert_eq!(doc.load_warnings(), [WARNING]);
     let unknown = doc.unknown_fields();
-    assert_eq!(unknown.fields, ["comments", "next_comment"]);
+    assert_eq!(unknown.fields, ["future_notes", "next_future_note"]);
     assert_eq!(unknown.file, None, "text read without a path");
     // Saving writes only what this build knows.
     let saved: Value = serde_json::from_str(&doc.to_json()).unwrap();
-    assert!(saved.get("comments").is_none() && saved.get("next_comment").is_none());
+    assert!(saved.get("future_notes").is_none() && saved.get("next_future_note").is_none());
 
     // One field: singular words.
     let mut one: Value = serde_json::from_str(&plain).unwrap();
-    one["comments"] = json!([]);
+    one["future_notes"] = json!([]);
     let doc = Document::from_json(&one.to_string(), MockKernel::default()).unwrap();
     assert_eq!(
         doc.load_warnings(),
-        ["this design was written by a newer MitCad: the field `comments` was not read"]
+        ["this design was written by a newer MitCad: the field `future_notes` was not read"]
     );
 
     // A design without them: no warning, nothing kept.
@@ -81,6 +81,49 @@ fn unknown_top_level_fields_are_ignored_and_named() {
 }
 
 #[test]
+fn known_comments_and_their_counter_survive_ignored_future_fields() {
+    let mut original = block().doc;
+    original
+        .command(
+            &json!([
+                {"cmd": "add_comment", "text": "Keep this note", "target": {"at": [1, 2, 3]}},
+                {"cmd": "add_comment", "text": "Delete this note", "target": {"at": [4, 5, 6]}},
+                {"cmd": "delete_comment", "id": "C2"}
+            ])
+            .to_string(),
+        )
+        .unwrap();
+    let plain: Value = serde_json::from_str(&original.to_json()).unwrap();
+    assert_eq!(plain["next_comment"], json!(3));
+    let mut newer = plain.clone();
+    newer["future_notes"] = json!([{"text": "A future note"}]);
+    newer["next_future_note"] = json!(2);
+
+    let loaded = Document::from_json(&newer.to_string(), MockKernel::default()).unwrap();
+    assert_eq!(loaded.load_warnings(), [WARNING]);
+    assert_eq!(
+        loaded.unknown_fields().fields,
+        ["future_notes", "next_future_note"]
+    );
+    let saved: Value = serde_json::from_str(&loaded.to_json()).unwrap();
+    assert_eq!(saved["comments"], plain["comments"]);
+    assert_eq!(saved["next_comment"], plain["next_comment"]);
+    assert!(saved.get("future_notes").is_none());
+    assert!(saved.get("next_future_note").is_none());
+    let mut reopened = Document::from_json(&saved.to_string(), MockKernel::default()).unwrap();
+    assert!(reopened.load_warnings().is_empty());
+    reopened
+        .command(
+            &json!({"cmd": "add_comment", "text": "A later note", "target": {"at": [7, 8, 9]}})
+                .to_string(),
+        )
+        .unwrap();
+    let comments = query(&reopened, json!({"query": "comments"}));
+    assert_eq!(comments["comments"][0]["id"], "C1");
+    assert_eq!(comments["comments"][1]["id"], "C3");
+}
+
+#[test]
 fn saving_over_the_file_drops_them_and_another_file_keeps_them() {
     let dir = unique_temp_dir("unknown-fields");
     let path = dir.join("newer.mitcad");
@@ -91,13 +134,13 @@ fn saving_over_the_file_drops_them_and_another_file_keeps_them() {
     let doc = Document::load_design(&path, MockKernel::default()).unwrap();
     assert_eq!(doc.load_warnings(), [WARNING]);
     let unknown = doc.unknown_fields();
-    assert_eq!(unknown.fields, ["comments", "next_comment"]);
+    assert_eq!(unknown.fields, ["future_notes", "next_future_note"]);
     let absolute = std::path::absolute(&path).unwrap();
     assert_eq!(unknown.file.as_deref(), Some(absolute.as_path()));
 
     // The save path's flag: the file they were read from, by any spelling
     // of its path, drops them; another file does not.
-    let dropped = ["comments", "next_comment"];
+    let dropped = ["future_notes", "next_future_note"];
     assert_eq!(doc.fields_dropped_by_saving(&path), dropped);
     let spelled = dir.join(".").join("newer.mitcad");
     assert_eq!(doc.fields_dropped_by_saving(&spelled), dropped);
@@ -110,7 +153,7 @@ fn saving_over_the_file_drops_them_and_another_file_keeps_them() {
     assert_eq!(answer["file"], json!(absolute.display().to_string()));
     assert_eq!(
         answer["message"],
-        "saving over this design drops the fields `comments`, `next_comment` that a newer \
+        "saving over this design drops the fields `future_notes`, `next_future_note` that a newer \
          MitCad wrote and this MitCad did not read"
     );
     let answer = query(
@@ -126,15 +169,15 @@ fn saving_over_the_file_drops_them_and_another_file_keeps_them() {
     // Saved to another file (Save As): the file read keeps its fields, and
     // saving over it would still drop them.
     doc.save_file(&other, FileFormat::Single).unwrap();
-    assert!(file_value(&other).get("comments").is_none());
-    assert_eq!(file_value(&path)["next_comment"], json!(2));
+    assert!(file_value(&other).get("future_notes").is_none());
+    assert_eq!(file_value(&path)["next_future_note"], json!(2));
     assert_eq!(doc.fields_dropped_by_saving(&path), dropped);
 
     // Saved over it: the fields are gone from the file and the flag is
     // cleared; opened again, the design has no warning.
     doc.save_file(&path, FileFormat::Single).unwrap();
     let written = file_value(&path);
-    assert!(written.get("comments").is_none() && written.get("next_comment").is_none());
+    assert!(written.get("future_notes").is_none() && written.get("next_future_note").is_none());
     assert!(doc.fields_dropped_by_saving(&path).is_empty());
     assert!(doc.unknown_fields().fields.is_empty());
     let reopened = Document::load_design(&path, MockKernel::default()).unwrap();

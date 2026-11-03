@@ -221,9 +221,9 @@ QString appearanceName(const MaterialCache& cache, const QString& id) {
 }
 
 // Where the picker lists a material: the design's first, then the
-// libraries by place.
+// libraries by place, named as the managers' groups (mitcad#1135).
 QString materialSection(const LibraryItem& item) {
-  return inDesign(item) ? QObject::tr("This Design") : placeName(item.place);
+  return placeName(inDesign(item) ? QStringLiteral("design") : item.place);
 }
 
 // The materials in the picker's order: Default, the design's, then each
@@ -668,7 +668,7 @@ ChoiceTile valueTile(const ToolKind& kind, const MaterialCache& cache, const Com
     tile.title = materialName(cache, key);
     tile.image = colorSwatch(item != nullptr ? item->displayColor : QColor(), kTileSwatch);
     tile.detail = key == defaultKey() ? QObject::tr("No material of its own")
-                  : item != nullptr   ? (inDesign(*item) ? QObject::tr("This Design") : placeName(item->place))
+                  : item != nullptr   ? materialSection(*item)
                                       : QString();
   } else {
     const Appearance* found = key == defaultKey() ? nullptr : findAppearance(cache.appearances, key);

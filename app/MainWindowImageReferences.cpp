@@ -453,7 +453,7 @@ void MainWindow::logImageCalibrationPlaces() {
   for (const ImageReferenceShown& image : m_imageCalibration->images()) {
     for (const auto& place : places) {
       const ImagePoint p = imagePointAt(image, place.across, place.down);
-      const QPoint at = m_viewer->mapTo(this, m_viewer->toWidget(gp_Pnt(p[0], p[1], p[2])));
+      const QPoint at = m_viewer->mapTo(window(), m_viewer->toWidget(gp_Pnt(p[0], p[1], p[2])));
       qDebug().noquote() << QStringLiteral("Calibrate %1 %2 at %3,%4")
                                 .arg(image.name, QString::fromLatin1(place.name))
                                 .arg(at.x())

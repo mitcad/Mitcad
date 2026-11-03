@@ -25,6 +25,10 @@
 //! 4. A vertex finds its faces each by rule 2.
 //! 5. The stored name stays as it is; the feature warns that it found the
 //!    face, edge or vertex under another name.
+//!
+//! An edge name that finds nothing by these rules still fails; its error
+//! lists a few existing edges that share one of its faces as suggestions
+//! (mitcad#1187, [`with_edge_suggestions`]), never taken in its place.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -348,6 +352,175 @@ pub(crate) fn find_edge<K: Kernel>(
     }
 }
 
+/// At most this many suggestions follow an edge name that finds no edge
+/// (mitcad#1187).
+const EDGE_SUGGESTIONS: usize = 5;
+
+/// An existing edge that an edge name finding none may have meant: how
+/// plausible it is (0 best), its name, and the face it has in place of
+/// one of the name's faces with that face of the name (none for an edge
+/// between the same faces).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Suggestion {
+    rank: u8,
+    edge: String,
+    instead: Option<(String, String)>,
+}
+
+/// True when the key of `face` names `target` (a chamfer or fillet made
+/// on an edge of it, a shell's offset of it), at any depth.
+fn mentions(face: &FaceName, target: &FaceName) -> bool {
+    let nested = |f: &FaceName| f.matches(target) || mentions(f, target);
+    match &face.key {
+        Some(RoleKey::Edge(edge)) => edge.faces().iter().any(nested),
+        Some(RoleKey::Vertex(vertex)) => vertex.faces().iter().any(nested),
+        Some(RoleKey::Face(inner)) => nested(inner.as_ref()),
+        _ => false,
+    }
+}
+
+/// The face a face of an edge name stands for on the shape (rules 1 and
+/// 2): itself when it finds a face, else the one face most like it; None
+/// when it finds none or several.
+fn resolved<K: Kernel>(faces: &mut Faces<'_, K>, face: &FaceName) -> Option<FaceName> {
+    let found = faces.candidates(face).ok()?;
+    if found.exact {
+        return Some(face.clone());
+    }
+    match found.faces.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// `candidate` as a suggestion for `edge`, whose faces were found as
+/// `found` (None where not found): None unless it has one of them. Best
+/// are edges between both faces found (another `#k`), then those whose
+/// other face was made on the name's other face, then those whose other
+/// face is like it (rule 2), then the rest.
+fn suggestion(
+    edge: &EdgeName,
+    found: &[Option<FaceName>; 2],
+    candidate: &EdgeName,
+) -> Option<Suggestion> {
+    let [p, q] = candidate.faces();
+    for (i, face) in found.iter().enumerate() {
+        let Some(face) = face else {
+            continue;
+        };
+        let other = if p.matches(face) {
+            q
+        } else if q.matches(face) {
+            p
+        } else {
+            continue;
+        };
+        let missing = &edge.faces()[1 - i];
+        let other_found = found[1 - i].as_ref();
+        let rank = if other_found.is_some_and(|f| other.matches(f)) {
+            0
+        } else if mentions(other, missing) || other_found.is_some_and(|f| mentions(other, f)) {
+            1
+        } else if likeness(missing, other).is_some() {
+            2
+        } else {
+            3
+        };
+        return Some(Suggestion {
+            rank,
+            edge: candidate.to_string(),
+            instead: (rank > 0).then(|| (other.to_string(), missing.to_string())),
+        });
+    }
+    None
+}
+
+/// The existing edges of the shape that share a face with an edge name
+/// that finds no edge, best first, at most [`EDGE_SUGGESTIONS`], and how
+/// many more there are. Nothing when the name finds its edges, neither of
+/// its faces is found (rules 1 and 2) or the kernel cannot list edges.
+/// Bounded on large bodies: one listing of the edges, of which only the
+/// names that hold a found face's text are read, and only the best kept.
+fn edge_suggestions<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    edge: &EdgeName,
+) -> (Vec<Suggestion>, usize) {
+    let none = (Vec::new(), 0);
+    if kernel.count_edges(shape, edge) > 0 {
+        return none;
+    }
+    let mut faces = Faces::new(kernel, shape);
+    let [a, b] = edge.faces();
+    let found = [resolved(&mut faces, a), resolved(&mut faces, b)];
+    let texts: Vec<String> = found.iter().flatten().map(ToString::to_string).collect();
+    if texts.is_empty() {
+        return none;
+    }
+    let Ok(listed) = kernel.edges(shape) else {
+        return none;
+    };
+    let mut best: Vec<Suggestion> = Vec::with_capacity(EDGE_SUGGESTIONS + 1);
+    let mut total = 0;
+    for info in listed {
+        let Some(name) = info.name else {
+            continue;
+        };
+        if !texts.iter().any(|t| name.contains(t.as_str())) {
+            continue;
+        }
+        let Ok(candidate) = EdgeName::from_str(&name) else {
+            continue;
+        };
+        let Some(item) = suggestion(edge, &found, &candidate) else {
+            continue;
+        };
+        total += 1;
+        if best.len() < EDGE_SUGGESTIONS || best.last().is_some_and(|last| item < *last) {
+            let at = best.partition_point(|s| *s <= item);
+            best.insert(at, item);
+            best.truncate(EDGE_SUGGESTIONS);
+        }
+    }
+    let more = total - best.len();
+    (best, more)
+}
+
+/// `message` about an edge name that finds no edge of the body, followed
+/// by the existing edges of the body that share one of its faces
+/// (mitcad#1187), each with its face in place of the name's other face:
+/// suggestions only, never taken in the name's place. The message alone
+/// when there are none.
+pub fn with_edge_suggestions<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    body: BodyUid,
+    edge: &EdgeName,
+    message: String,
+) -> String {
+    let (best, more) = edge_suggestions(kernel, shape, edge);
+    if best.is_empty() {
+        return message;
+    }
+    let items: Vec<String> = best
+        .iter()
+        .map(|s| match &s.instead {
+            Some((other, missing)) => format!("{} ({other} instead of {missing})", s.edge),
+            None => s.edge.clone(),
+        })
+        .collect();
+    let more = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "{message}; existing edges of body {body} that share a face with it \
+         (suggestions only, not applied): {}{more}",
+        items.join(", ")
+    )
+}
+
 /// Rule 4 for a vertex: None when every face of its name finds its face,
 /// else the vertex of the faces found. Of tied faces only the one that
 /// meets another face of the vertex counts.
@@ -529,7 +702,8 @@ impl<K: Kernel> EvalContext<'_, K> {
     }
 
     /// The name the kernel gets for an edge of the body (rules 1, 3 and 5);
-    /// an edge that is gone is explained as before.
+    /// an edge that is gone is explained as before, with the edges it may
+    /// have meant as suggestions (mitcad#1187).
     pub fn edge_on(
         &mut self,
         body: BodyUid,
@@ -544,8 +718,21 @@ impl<K: Kernel> EvalContext<'_, K> {
                 self.found_renamed("edge", edge, &found, maker);
                 Ok(found)
             }
-            Err(lost) => Err(lost.message(|| self.missing_edge(body, edge))),
+            Err(lost) => Err(lost.message(|| self.missing_edge_on(body, shape, edge))),
         }
+    }
+
+    /// [`EvalContext::missing_edge`] followed by the existing edges of the
+    /// shape that share a face with the name, as suggestions only
+    /// ([`with_edge_suggestions`], mitcad#1187).
+    pub(crate) fn missing_edge_on(
+        &self,
+        body: BodyUid,
+        shape: &K::Shape,
+        edge: &EdgeName,
+    ) -> String {
+        let message = self.missing_edge(body, edge);
+        with_edge_suggestions(self.kernel, shape, body, edge, message)
     }
 
     /// [`EvalContext::edge_on`] for each edge.
@@ -637,6 +824,7 @@ pub(crate) fn vertex_for<R: super::geom_ref::Resolver>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{MockKernel, MockShape};
 
     fn face(text: &str) -> FaceName {
         text.parse().unwrap()
@@ -698,5 +886,116 @@ mod tests {
         let piece = face("F3:side(c1[c4,c2])#1");
         assert!(renamed_candidates(&pieces, &piece).len() == 1);
         assert!(renamed_candidates(&faces(&["F3:side(c1[c4,c9])#0"]), &piece).is_empty());
+    }
+
+    /// A mock body of the faces and the edges between them.
+    fn body(faces: &[&str], edges: &[(&str, &str)]) -> MockShape {
+        MockShape {
+            history: String::new(),
+            faces: faces.iter().copied().map(face).collect(),
+            edges: edges.iter().map(|(a, b)| (face(a), face(b))).collect(),
+            bounds: None,
+            parts: Vec::new(),
+        }
+    }
+
+    /// The message `lost` about `edge` on the body, with its suggestions.
+    fn suggested(shape: &MockShape, edge: &str) -> String {
+        let edge: EdgeName = edge.parse().unwrap();
+        let body = BodyUid::new(FeatureUid(2), 0);
+        let kernel = MockKernel::default();
+        with_edge_suggestions(&kernel, shape, body, &edge, "lost".to_owned())
+    }
+
+    /// The text before the suggestions.
+    const HEAD: &str = "lost; existing edges of body F2.b0 that share a face with it \
+                        (suggestions only, not applied): ";
+
+    /// The edge between two faces, by its text.
+    fn between(a: &str, b: &str) -> String {
+        EdgeName::new(face(a), face(b)).to_string()
+    }
+
+    /// The suggestion of the edge between `kept` and `other`, which has
+    /// `other` in place of `missing`.
+    fn instead(kept: &str, other: &str, missing: &str) -> String {
+        let o = face(other).to_string();
+        let m = face(missing).to_string();
+        format!("{} ({o} instead of {m})", between(kept, other))
+    }
+
+    /// One face of the name found: its one edge is suggested, with the face
+    /// it meets in place of the name's other face.
+    #[test]
+    fn one_face_found_suggests_its_edge() {
+        let shape = body(
+            &["F2:a", "F2:c", "F2:d"],
+            &[("F2:a", "F2:c"), ("F2:c", "F2:d")],
+        );
+        // F2:b is not on the body and nothing is like it.
+        assert_eq!(
+            suggested(&shape, "E{F2:a|F2:b}"),
+            format!("{HEAD}{}", instead("F2:a", "F2:c", "F2:b"))
+        );
+    }
+
+    #[test]
+    fn several_suggestions_come_best_first_and_are_bounded() {
+        let side = "F2:side(c1[c4,c2])";
+        // The name's other face is gone; two faces tie for it (rule 2).
+        let missing = "F2:side(c2[c1,c3])";
+        let like = "F2:side(c2[c1,c7])";
+        let tie = "F2:side(c2[c7,c3])";
+        let chamfer = format!("F3:chamfer({})", between(side, missing));
+        let rest = ["F6:a", "F6:b", "F6:c", "F6:d", "F6:e"];
+        let mut faces = vec![side, like, tie, chamfer.as_str()];
+        faces.extend(rest);
+        let mut edges = vec![(side, like), (like, tie), (chamfer.as_str(), side)];
+        edges.extend(rest.iter().map(|r| (side, *r)));
+        let shape = body(&faces, &edges);
+        // The face made on the missing edge first, then the face like the
+        // missing one, then the rest by name: five of seven.
+        let expected = [
+            instead(side, &chamfer, missing),
+            instead(side, like, missing),
+            instead(side, "F6:a", missing),
+            instead(side, "F6:b", missing),
+            instead(side, "F6:c", missing),
+        ];
+        assert_eq!(
+            suggested(&shape, &between(side, missing)),
+            format!("{HEAD}{} and 2 more", expected.join(", "))
+        );
+    }
+
+    #[test]
+    fn another_edge_between_the_same_faces_comes_first() {
+        let shape = body(
+            &["F2:a", "F2:c", "F2:d"],
+            &[("F2:a", "F2:d"), ("F2:a", "F2:c")],
+        );
+        // One edge lies between F2:a and F2:c: #1 finds none.
+        assert_eq!(
+            suggested(&shape, "E{F2:a|F2:c}#1"),
+            format!(
+                "{HEAD}{}, {}",
+                between("F2:a", "F2:c"),
+                instead("F2:a", "F2:d", "F2:c")
+            )
+        );
+    }
+
+    #[test]
+    fn no_face_found_or_no_edge_there_suggests_nothing() {
+        let shape = body(&["F2:a", "F2:c"], &[("F2:a", "F2:c")]);
+        assert_eq!(suggested(&shape, "E{F2:x|F2:y}"), "lost");
+        let lone = body(&["F2:a", "F2:c"], &[]);
+        assert_eq!(suggested(&lone, "E{F2:a|F2:b}"), "lost");
+    }
+
+    #[test]
+    fn an_edge_that_exists_gets_no_suggestions() {
+        let shape = body(&["F2:a", "F2:c"], &[("F2:a", "F2:c")]);
+        assert_eq!(suggested(&shape, "E{F2:a|F2:c}"), "lost");
     }
 }

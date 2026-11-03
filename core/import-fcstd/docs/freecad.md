@@ -771,6 +771,38 @@ models leave these out.
   sketch attached to its face comes in where FreeCAD placed it, on an
   origin plane parallel to it.
 
+## Chosen circles, points and faces of a sketch; holes off its plane (mitcad#1195)
+
+- A Hole whose `Profile` names edges of its sketch, with `AllowMultiFace`
+  (`(Sketch003, [Edge2, Edge3])`), drills at those circles and arcs only
+  (before: at every circle of the sketch, also where a pocket of its other
+  circles had cut already); vertices of the sketch's shape are the
+  sketch's points there, and an element FreeCAD marks missing
+  (`?Vertex8`) drills nothing. Without `AllowMultiFace` the whole sketch.
+- A Pad's or Pocket's `Profile` of chosen faces of a sketch
+  (`(Sketch012, [InternalFace2])`, FreeCAD 26.x; the faces of the areas
+  the sketch's curves bound, a ring and the disc inside it apart, kept in
+  the sketch's `InternalShape`): the sketch's regions whose inner point
+  lies inside those faces' boundaries in the sketch's plane.
+- A Hole at circular edges of a feature that lie at one distance along
+  the sketch's normal from the sketch whose circles they are (the far end
+  of a pad of that sketch): the holes start on the plane through them, a
+  fixed plane, at the centres the sketch gives (partial: they do not
+  follow a later change of the sketch).
+- A tapered hole with a cosmetic thread (a pipe tap hole): the hole with
+  its taper, the thread left out with a note (MitCad's thread goes on a
+  cylindrical wall; FreeCAD's cosmetic thread adds no geometry).
+- External geometry whose link FreeCAD itself lost (the extension's
+  missing flag, no `ExternalGeometry` link) stays fixed in place with the
+  warning above.
+- A Coincident (or a tangency joining two ends) whose points FreeCAD's own
+  stored geometry keeps more than 1e-3 mm apart joins nothing (mitcad#1194):
+  FreeCAD's solver could not meet it (a join to a stale copy of external
+  geometry whose link is gone, `?Face63`, 525.6 mm off) and kept its
+  geometry. Joining them moved the solved sketch (226 mm), which was then
+  not imported and its pocket fell back; the constraint is left out
+  (`FreeCAD's geometry does not meet it`), the sketch partial.
+
 ## Carried binders in the report (mitcad#1100)
 
 A binder is `included`, at information level, when every geometric use

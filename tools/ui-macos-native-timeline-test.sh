@@ -58,5 +58,28 @@ ui_expect_log '^TestDriver: done' 'the AppKit timeline: hover, tooltips and grou
 for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints'; do
   ui_expect_no_log "$problem" "no $problem"
 done
+cat > "$MITCAD_TEST_WORK/filtered-group.json" << 'EOF'
+[
+  {"cmd":"add_feature","name":"Root first","def":{"type":"box","plane":"xy","corner":[0,0],
+    "length":10,"width":10,"height":10,"operation":"new_body"}},
+  {"cmd":"create_component","name":"Child"},
+  {"cmd":"add_feature","name":"Child middle","def":{"type":"box","plane":"xy","corner":[20,0],
+    "length":10,"width":10,"height":10,"operation":"new_body"}},
+  {"cmd":"activate_component","component":"C0"},
+  {"cmd":"add_feature","name":"Root last","def":{"type":"box","plane":"xy","corner":[40,0],
+    "length":10,"width":10,"height":10,"operation":"new_body"}},
+  {"cmd":"group_features","features":["F1","F2","F3"],"name":"G"}
+]
+EOF
+"$cli" run "$MITCAD_TEST_WORK/filtered-group.json" --save "$MITCAD_TEST_WORK/filtered-group.mitcad" \
+  > "$UI_OUT/filtered-group-setup.log" 2>&1 || { cat "$UI_OUT/filtered-group-setup.log" >&2; exit 1; }
+MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$here/ui-scripts/native-macos-filtered-group.mitcad-ui \
+  ui_run_app filtered-group --ui=native --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/filtered-group.mitcad"
+ui_expect_log '^TestDriver: done' 'the folded group survives a filtered middle and head'
+if grep -Eq '^TestDriver: FAIL([[:space:]]|$)' "$UI_LOG_FILE"; then
+  ui_fail 'the filtered group driver reported a failed assertion'
+else
+  ui_pass 'the filtered group assertions passed'
+fi
 if [ "$UI_FAILURES" -gt 0 ]; then ui_log_tail; exit 1; fi
 echo 'PASS: the AppKit timeline hover, tooltips and groups'

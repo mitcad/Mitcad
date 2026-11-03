@@ -412,14 +412,15 @@ fn timeline_moves_and_captured_positions_place_occurrences() {
         [30.0, 0.0, 0.0]
     ));
 
-    // A grounded occurrence does not move.
+    // A grounded occurrence that the move lists moves and stays grounded
+    // there (mitcad#1196); its own placement and a capture are refused.
     doc.set_occurrence_grounded(o1, true).unwrap();
-    let status = doc.status(moved.uid).unwrap().clone();
-    assert!(
-        matches!(&status, FeatureStatus::Failed(m) if m.contains("grounded")),
-        "{status:?}"
-    );
-    assert!(near(doc.placement(o1).unwrap().translation, [0.0; 3]));
+    assert_eq!(doc.status(moved.uid), Some(&FeatureStatus::Ok));
+    assert!(near(
+        doc.placement(o1).unwrap().translation,
+        [30.0, 0.0, 0.0]
+    ));
+    assert!(doc.assembly().occurrence(o1).unwrap().grounded);
     assert!(
         doc.set_occurrence_transform(o1, shift(1.0, 0.0, 0.0), true)
             .is_err()

@@ -490,7 +490,7 @@ void MainWindow::startAnnotationPick(const QString& name, const QString& field, 
       kinds = SelectFilter(SelectKind::Face | SelectKind::Edge);
     }
     for (const auto& [item, at] : m_viewer->pickPoints(kinds)) {
-      const QPoint point = m_viewer->mapTo(this, at);
+      const QPoint point = m_viewer->mapTo(window(), at);
       qDebug().noquote() << QStringLiteral("Pick %1 %2/%3%4 at %5,%6")
                                 .arg(SelectionItem::kindName(item.kind), item.owner, item.name,
                                      item.occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + item.occurrence)

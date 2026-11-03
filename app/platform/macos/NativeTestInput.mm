@@ -20,6 +20,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QProgressBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStandardItemModel>
@@ -54,12 +55,13 @@
 #include "platform/NativeDialogs.hpp"
 #include "platform/NativeForms.hpp"
 #include "platform/NativeMacWindow.hpp"
-#include "NativeNavigationGuide.hpp"
 #include "NativeMessageBand.hpp"
+#include "NativeNavigationGuide.hpp"
 #include "NativeColorField.hpp"
 #include "NativeTableCells.hpp"
 #include "NativeColors.hpp"
 #include "browser/DocumentSnapshot.hpp"
+#include "browser/LibraryPicker.hpp"
 #include "browser/TimelinePresentation.hpp"
 #include "framework/CachePreferences.hpp"
 #include "framework/CommandSession.hpp"
@@ -67,6 +69,7 @@
 #include "framework/Icons.hpp"
 #include "framework/SettingsWindow.hpp"
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
 
 // Public selectors on the same feature controls used by pointer input.
 @protocol MITCADNativeHistoryFeatureTest <NSObject>
@@ -180,6 +183,11 @@ bool presented(NSWindow* window) {
 }
 
 NSWindow* documentWindow() {
+  if (auto* manager = WindowManager::instance()) {
+    if (MainWindow* presenter = manager->activeWindow()) {
+      if (void* native = nativeDialogWindow(presenter)) return (__bridge NSWindow*)native;
+    }
+  }
   for (NSWindow* window in NSApp.windows) {
     if ([window.identifier isEqualToString:@"native.documentWindow"]) return window;
   }
@@ -765,6 +773,18 @@ bool textMatches(const QString& identifier, const QRegularExpression& expression
   return textOf(identifier, text) && expression.match(text).hasMatch();
 }
 
+bool accessibilityLabelOf(const QString& identifier, QString& label) {
+  NSView* view = tableCell(identifier);
+  if (view == nil || !viewVisible(view)) return false;
+  NSString* text = view.accessibilityLabel;
+  if (text.length == 0 && [view isKindOfClass:NSTableCellView.class]) {
+    text = ((NSTableCellView*)view).textField.accessibilityLabel;
+  }
+  if (text.length == 0) return false;
+  label = qt(text);
+  return true;
+}
+
 bool enabled(const QString& identifier, bool expected) {
   NSView* view = findControl(identifier);
   return [view isKindOfClass:NSControl.class] && bool(((NSControl*)view).enabled) == expected;
@@ -1231,6 +1251,7 @@ bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, c
   std::vector<Cell> cells;
   int runs = 0;
   QStringList actualSelected;
+  QSet<QString> verifiedGroups;
   for (int index = 0; index < features.size(); ++index) {
     const QJsonObject feature = features[index].toObject();
     const QString uid = feature.value(QStringLiteral("uid")).toString();
@@ -1282,9 +1303,7 @@ bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, c
         error = QStringLiteral("feature '%1' of the folded group '%2' remains visible, enabled or selected").arg(uid, group);
         return false;
       }
-      const QString previous = index > 0 ? features[index - 1].toObject().value(QStringLiteral("uid")).toString()
-                                         : QString();
-      if (index > 0 && folded.value(previous) == group) continue;
+      if (verifiedGroups.contains(group)) continue;
       NSView* cell = identifiedView(strip, QStringLiteral("native.history.group.") + group);
       const NSRect frame = [cell convertRect:cell.bounds toView:strip];
       if (!viewVisible(cell) || std::abs(frame.size.width - timeline::cell) > 1 ||
@@ -1300,6 +1319,7 @@ bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, c
         return false;
       }
       cells.push_back({index, frame, false});
+      verifiedGroups.insert(group);
       continue;
     }
     if (button.hidden) {
@@ -1757,6 +1777,10 @@ bool formControls(CommandHost& host, QString& error) {
   {
     CommandSession session(def, host);
     auto form = createNativeCommandForm(session);
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      form->setMessage(QStringLiteral("Repeated native form message"), NoticeLevel::Warning);
+    }
+    form->setMessage(QString(), NoticeLevel::Hint);
     NSView* root = (__bridge NSView*)form->nativeView();
     [root.widthAnchor constraintEqualToConstant:280].active = YES;
     CommandState state;
@@ -2141,6 +2165,55 @@ bool messageDetailsContract(QString& error) {
     error = QStringLiteral("native alert response no longer matches its QMessageBox button");
     return false;
   }
+  return true;
+}
+
+bool pickerFallback(QString& error) {
+  if (qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+    error = QStringLiteral("the picker fallback fixture requires a UI script"); return false;
+  }
+  NSWindow* previous = NSApp.keyWindow;
+  NSResponder* responder = previous.firstResponder;
+  NSWindow* fixture = [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 320, 240)
+      styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+  fixture.releasedWhenClosed = NO;
+  fixture.title = QObject::tr("Picker").toNSString();
+  fixture.contentView = nil;
+  [fixture makeKeyAndOrderFront:nil];
+  QPointer<LibraryPicker> picker;
+  const auto cleanup = [&] {
+    if (picker) picker->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    [fixture orderOut:nil];
+    [fixture close];
+    if (previous != nil) {
+      [previous makeKeyAndOrderFront:nil];
+      [previous makeFirstResponder:responder];
+    }
+  };
+  if (NSApp.keyWindow != fixture || fixture.contentView != nil) {
+    error = QStringLiteral("the unavailable-content key window was not established"); cleanup(); return false;
+  }
+  const QVector<PickerEntry> entries{{QStringLiteral("one"), QStringLiteral("Synthetic choice"),
+                                     QStringLiteral("This Design"), QImage(), QString()}};
+  picker = LibraryPicker::open(nullptr, QStringLiteral("Picker fallback regression"),
+      QStringLiteral("Fallback picker"), entries, QStringLiteral("one"), QPoint(120, 140), {});
+  QCoreApplication::processEvents(QEventLoop::AllEvents);
+  NSView* native = picker ? (__bridge NSView*)reinterpret_cast<void*>(picker->winId()) : nil;
+  const bool visible = picker && picker->isVisible() && !picker->testAttribute(Qt::WA_DontShowOnScreen) &&
+                       !picker->testAttribute(Qt::WA_ShowWithoutActivating) && native.window.visible;
+  if (!visible) {
+    error = QStringLiteral("failed AppKit opening did not show the real Qt LibraryPicker window");
+    cleanup(); return false;
+  }
+  cleanup();
+  if (picker) {
+    error = QStringLiteral("the fallback Qt picker did not delete on its normal close"); return false;
+  }
+  if (previous != nil && (NSApp.keyWindow != previous || previous.firstResponder != responder)) {
+    error = QStringLiteral("the fallback fixture did not restore the previous key window and responder"); return false;
+  }
+  qInfo().noquote() << QStringLiteral("Native picker fallback verified: unavailable AppKit content, visible Qt picker, normal deletion");
   return true;
 }
 
@@ -3170,7 +3243,7 @@ bool screenshot(const QString& path, QOpenGLWidget* viewport) {
       covered += QRect(origin.x() + qFloor(rect.origin.x * scaleX), origin.y() + qFloor(rect.origin.y * scaleY),
                        qCeil(rect.size.width * scaleX), qCeil(rect.size.height * scaleY));
     };
-    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.ribbon", @"native.messageBand", @"navigationBar"]) {
+    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.chatCard", @"native.ribbon", @"native.messageBand", @"navigationBar"]) {
       cover(identifiedView(content, qt(identifier)));
     }
     // The orientation cube's arrows, beside the viewport host.
@@ -3476,6 +3549,13 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
                                                              : view.alphaValue >= 0.99 && opacity >= 0.99);
   }
   if (states == QStringList{QStringLiteral("artwork")}) return mac::navigationGuideArtwork(view, detail);
+  if (states == QStringList{QStringLiteral("checked")} || states == QStringList{QStringLiteral("unchecked")}) {
+    NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
+    const bool checked = states.front() == QLatin1String("checked");
+    detail = QStringLiteral("native button '%1': visible %2, state %3")
+                 .arg(identifier).arg(viewVisible(button)).arg(button != nil ? button.state : -2);
+    return viewVisible(button) && button.state == (checked ? NSControlStateValueOn : NSControlStateValueOff);
+  }
   if (states == QStringList{QStringLiteral("caption")}) {
     NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
     if (button == nil) { detail = QStringLiteral("no native button for its displayed caption"); return false; }
@@ -5086,7 +5166,8 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   const NSTimeInterval time = NSProcessInfo.processInfo.systemUptime + (clickCount - 1) * 0.02;
   const int steps = NSEqualPoints(start, end) ? 0 : 6;
   const bool slider = [view isKindOfClass:NSSlider.class];
-  const bool paced = slider || [view isKindOfClass:NSTableHeaderView.class];
+  const bool split = [view.accessibilityRole isEqualToString:NSAccessibilitySplitterRole];
+  const bool paced = slider || split || [view isKindOfClass:NSTableHeaderView.class];
   const auto postFollowup = [window, start, end, steps, clickCount](int step, NSTimeInterval timestamp) {
     const bool release = step > steps;
     const CGFloat part = release ? 1 : CGFloat(step) / CGFloat(steps);
@@ -5101,6 +5182,7 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
     // Focus acquisition during mouseDown may discard already queued mouse
     // events. Real future motion arrives after that transition, while the
     // control tracks; produce it there instead of pre-queuing future input.
+    // Split dividers use NSWindow's nested event-tracking loop as well.
     trackingInput = [NSTimer timerWithTimeInterval:0.01 repeats:YES block:^(NSTimer* timer) {
       postFollowup(++delivered, NSProcessInfo.processInfo.systemUptime);
       if (delivered > steps) [timer invalidate];
@@ -5587,7 +5669,7 @@ bool formLayout(const QStringList& entries, QString& error) {
   return true;
 }
 
-bool configurationLayout(QString& detail) {
+bool configurationLayout(QString& detail, bool framesOnly) {
   NSView* host = findControl(QStringLiteral("native.configuration"));
   NSScrollView* scroll = [host isKindOfClass:NSScrollView.class] ? (NSScrollView*)host : nil;
   QWidget* source = nullptr;
@@ -5596,6 +5678,23 @@ bool configurationLayout(QString& detail) {
   }
   if (!scroll || !source || !viewVisible(scroll)) {
     detail = QStringLiteral("no visible native configuration card with its shared presenter"); return false;
+  }
+  NSView* content = documentWindow().contentView;
+  NSView* configuration = identifiedView(content, QStringLiteral("native.configurationCard"));
+  const NSRect configurationFrame = [configuration convertRect:configuration.bounds toView:content];
+  if (!viewVisible(configuration) || !NSContainsRect(content.bounds, configurationFrame)) {
+    detail = QStringLiteral("the Configuration card is outside the document bounds"); return false;
+  }
+  for (const QString& id : {QStringLiteral("native.inspectorCard"), QStringLiteral("native.chatCard")}) {
+    NSView* other = identifiedView(content, id);
+    if (viewVisible(other) && NSIntersectsRect(configurationFrame, [other convertRect:other.bounds toView:content])) {
+      detail = QStringLiteral("the Configuration card overlaps %1").arg(id); return false;
+    }
+  }
+  if (framesOnly) {
+    qInfo().noquote() << QStringLiteral("Native Configuration card bounds verified: %1, no inspector or Chat overlap")
+                             .arg(qt(NSStringFromRect(configurationFrame)));
+    return true;
   }
   [scroll layoutSubtreeIfNeeded];
   const NSRect viewport = NSInsetRect(scroll.contentView.bounds, -1, -1);
@@ -6454,9 +6553,78 @@ bool systemSliderDrag(NSSlider* slider, NSPoint from, NSPoint to, QString& error
 
 } // namespace
 
+namespace {
+
+char g_splitDragGeometryKey;
+
+struct SplitGeometry {
+  NSWindow* window = nil;
+  bool horizontal = true;
+  double position = 0;
+  double length = 0;
+  double windowLength = 0;
+};
+
+bool splitGeometry(const QString& identifier, SplitGeometry& geometry, QString& error) {
+  NSView* divider = findControl(identifier);
+  if (divider == nil || ![divider.accessibilityRole isEqualToString:NSAccessibilitySplitterRole] ||
+      divider.superview == nil || divider.window == nil || !viewVisible(divider)) {
+    error = QStringLiteral("no live native split divider '%1'").arg(identifier); return false;
+  }
+  NSWindow* window = divider.window;
+  [window layoutIfNeeded];
+  // A presenter rebuild can replace the native views. Measure only the
+  // live control, never a detached view retained across a refresh.
+  if (findControl(identifier) != divider || divider.window != window || divider.superview == nil ||
+      !viewVisible(divider)) {
+    error = QStringLiteral("native split '%1' changed during layout").arg(identifier); return false;
+  }
+  NSView* split = divider.superview;
+  geometry.window = window;
+  geometry.horizontal = NSHeight(divider.bounds) > NSWidth(divider.bounds);
+  geometry.position = geometry.horizontal ? NSMinX(divider.frame) - NSMinX(split.bounds)
+                                           : NSMinY(divider.frame) - NSMinY(split.bounds);
+  geometry.length = geometry.horizontal ? NSWidth(split.bounds) : NSHeight(split.bounds);
+  geometry.windowLength = geometry.horizontal ? NSWidth(window.contentView.bounds) : NSHeight(window.contentView.bounds);
+  return true;
+}
+
+} // namespace
+
+bool splitDragRetained(const QString& identifier, QString& error) {
+  SplitGeometry actual;
+  if (!splitGeometry(identifier, actual, error)) return false;
+  NSDictionary* records = objc_getAssociatedObject(actual.window, &g_splitDragGeometryKey);
+  NSDictionary* expected = records[identifier.toNSString()];
+  const double position = [expected[@"position"] doubleValue];
+  const double length = [expected[@"length"] doubleValue];
+  const double windowLength = [expected[@"windowLength"] doubleValue];
+  if (expected == nil || actual.horizontal != [expected[@"horizontal"] boolValue] ||
+      std::abs(actual.position - position) > 1 || std::abs(actual.length - length) > 1 ||
+      std::abs(actual.windowLength - windowLength) > 1) {
+    error = QStringLiteral("native split '%1': position %2/%3, extent %4/%5, window %6/%7, recorded %8")
+        .arg(identifier).arg(actual.position).arg(position).arg(actual.length).arg(length)
+        .arg(actual.windowLength).arg(windowLength).arg(expected != nil);
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Native split drag retained: %1 position %2, extent %3, window %4")
+      .arg(identifier).arg(actual.position).arg(actual.length).arg(actual.windowLength);
+  return true;
+}
+
 bool pointerDrag(const QString& identifier, double from, double to, QString& error, bool fromKnob) {
   NSView* view = findControl(identifier);
   if (view == nil) { error = QStringLiteral("no native control '%1'").arg(identifier); return false; }
+  const bool isSplit = [view.accessibilityRole isEqualToString:NSAccessibilitySplitterRole];
+  SplitGeometry splitBefore;
+  if (isSplit) {
+    if (!splitGeometry(identifier, splitBefore, error)) return false;
+    view = findControl(identifier);
+    if (view == nil || view.window != splitBefore.window || !viewVisible(view) ||
+        ![view.accessibilityRole isEqualToString:NSAccessibilitySplitterRole]) {
+      error = QStringLiteral("native split '%1' changed before its drag").arg(identifier); return false;
+    }
+  }
   const NSRect bounds = view.bounds;
   const CGFloat y = NSMidY(bounds);
   NSPoint start = NSMakePoint(NSMinX(bounds) + bounds.size.width * from, y);
@@ -6482,6 +6650,31 @@ bool pointerDrag(const QString& identifier, double from, double to, QString& err
   }
   if (!(isSlider ? systemSliderDrag((NSSlider*)view, start, end, error) : pointerEvents(view, start, end, error))) {
     return false;
+  }
+  if (isSplit) {
+    SplitGeometry after;
+    if (!splitGeometry(identifier, after, error)) return false;
+    const double delta = end.x - start.x;
+    const double moved = after.position - splitBefore.position;
+    if (!splitBefore.horizontal || after.window != splitBefore.window || !after.horizontal ||
+        moved * delta <= 0 || std::abs(moved) < 4 || std::abs(moved) > std::abs(delta) + 2 ||
+        std::abs(after.length - splitBefore.length) > 1 ||
+        std::abs(after.windowLength - splitBefore.windowLength) > 1) {
+      error = QStringLiteral("native split drag '%1': position %2 -> %3, pointer delta %4, extent %5 -> %6, window %7 -> %8")
+          .arg(identifier).arg(splitBefore.position).arg(after.position).arg(delta)
+          .arg(splitBefore.length).arg(after.length).arg(splitBefore.windowLength).arg(after.windowLength);
+      return false;
+    }
+    NSMutableDictionary* records = objc_getAssociatedObject(after.window, &g_splitDragGeometryKey);
+    if (records == nil) {
+      records = [NSMutableDictionary dictionary];
+      objc_setAssociatedObject(after.window, &g_splitDragGeometryKey, records, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    records[identifier.toNSString()] = @{@"position": @(after.position), @"length": @(after.length),
+                                        @"windowLength": @(after.windowLength), @"horizontal": @(after.horizontal)};
+    qInfo().noquote() << QStringLiteral("Native split dragged: %1 position %2 -> %3, pointer delta %4, extent %5, window %6")
+        .arg(identifier).arg(splitBefore.position).arg(after.position).arg(delta).arg(after.length).arg(after.windowLength);
+    return true;
   }
   const NSRect frame = [view convertRect:view.bounds toView:nil];
   // A drag past either end of a slider's track leaves it at that end.

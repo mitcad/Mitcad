@@ -222,13 +222,25 @@ Ui-ExpectNew 'Autosave removed for Untitled' 'saving removed the autosaved files
 $left = @(Get-ChildItem $script:UiAutosave | ForEach-Object { $_.Name })
 if ($left.Count -ne 1 -or $left[0] -ne "$session.lock") { Ui-Fail "left in the recovery folder: $($left -join ', ')" }
 Write-Host 'ok   only the lock of the session is left'
+# New opens a second document beside the saved one (mitcad#1172); opening
+# the saved path then activates its window instead of reading it again, as
+# workflow-recovery.mitcad-ui checks on Linux and macOS.
+$saved = Ui-LastMatch 'Document window active: (window-[0-9]+)'
+if (-not $saved) { Ui-Fail 'no active document window logged' }
 Ui-Step 'new (Ctrl+N)'                   { Ui-Key 'ctrl+n' }
 Ui-ExpectNew 'New document' 'an empty document'
+Ui-ExpectNew 'Document window created: ' 'in a document window of its own'
+$open = Ui-LastMatch 'Document window created: window-[0-9]+ \(([0-9]+) open\)'
+if ($open -ne '2') { Ui-Fail "documents open after New: '$open', expected 2" }
+Write-Host 'ok   the saved design stays open beside it'
 Ui-Mark
 Ui-Step 'open (Ctrl+O)'                  { Ui-Key 'ctrl+o' }
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Open$' $project }
-Ui-ExpectNew "Opened $workLogged/block.mitcad" 'opened through the dialog'
-Ui-ExpectNew 'Bodies shown: F2.b0' 'the body recomputed and shown'
+Ui-ExpectNew "Document window active: $saved" 'the saved design''s window activated through the dialog'
+if (Ui-NewLines | Where-Object { $_.Contains("Opened $workLogged/block.mitcad") }) {
+  Ui-Fail 'the open design was read again'
+}
+Write-Host 'ok   the open design was not read again'
 Ui-Mark
 Ui-Step 'physical properties (F8)'       { Ui-Key 'F8' }
 Ui-ExpectNew 'Physical properties: Body1 in Component1:1 volume' 'the properties dialog opened'

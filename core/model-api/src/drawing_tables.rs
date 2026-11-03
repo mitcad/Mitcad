@@ -61,6 +61,8 @@ pub(super) struct TableEdit {
     origin: Option<TableOrigin>,
     #[serde(default)]
     levels: Option<Levels>,
+    #[serde(default)]
+    group_identical: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     title: Option<Option<String>>,
 }
@@ -85,6 +87,9 @@ impl TableEdit {
         }
         if let Some(origin) = self.origin {
             table.origin = origin;
+        }
+        if let Some(group_identical) = self.group_identical {
+            table.group_identical = group_identical;
         }
         if let Some(levels) = self.levels {
             table.levels = levels;
@@ -114,15 +119,35 @@ pub(super) struct PartsList {
     /// How many occurrences below the drawing's component its view's
     /// subject lies.
     pub(super) depth: usize,
-    pub(super) items: Vec<(RowKey, u32)>,
+    pub(super) items: Vec<(RowKey, Vec<OccurrenceUid>, u32)>,
     pub(super) data: TableData,
     pub(super) label: String,
 }
 
 impl PartsList {
     /// The number of the row this key has, if it has one.
-    pub(super) fn item(&self, key: RowKey) -> Option<u32> {
-        self.items.iter().find(|(k, _)| *k == key).map(|(_, n)| *n)
+    pub(super) fn item(&self, key: RowKey, path: &[OccurrenceUid]) -> Option<u32> {
+        let placement = match (key, self.levels) {
+            (RowKey::Body(_), _) => &[][..],
+            (RowKey::Component(_), Levels::Top) => path.get(..=self.depth)?,
+            (RowKey::Component(_), Levels::Parts) => path,
+        };
+        if let Some((_, _, number)) = self
+            .items
+            .iter()
+            .find(|(k, p, _)| *k == key && p == placement)
+        {
+            return Some(*number);
+        }
+        // Another view can show a different placement of the same part.
+        // Preserve that legacy lookup only when its row is unambiguous.
+        let mut numbers = self
+            .items
+            .iter()
+            .filter(|(k, _, _)| *k == key)
+            .map(|(_, _, n)| *n);
+        let first = numbers.next()?;
+        numbers.all(|n| n == first).then_some(first)
     }
 }
 
@@ -384,7 +409,8 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
         // it, not the occurrence itself.
         let depth = view.subject_depth;
         let mut keys: Vec<(RowKey, Vec<Vec<OccurrenceUid>>)> = Vec::new();
-        for s in &self.bodies_seen(view) {
+        let seen = self.bodies_seen(view);
+        for s in &seen {
             let Some(key) = row_of(assembly, s.body, &s.path, settings.levels, depth) else {
                 continue;
             };
@@ -403,6 +429,87 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
             }
         }
         let list: Vec<PartsListRow> = self.parts_list();
+        // Every grouped source key keeps the same item number, including
+        // balloons attached to a component other than the representative.
+        type Group = (
+            RowKey,
+            Vec<(RowKey, Vec<OccurrenceUid>)>,
+            usize,
+            Option<mitcad_model::PartSignature>,
+            Vec<String>,
+        );
+        let mut groups: Vec<Group> = Vec::new();
+        for (key, placements) in &keys {
+            let bodies = match key {
+                RowKey::Body(body) => vec![*body],
+                RowKey::Component(component) => self.component_bodies(*component),
+            };
+            for placement in placements {
+                let mut signature = if !settings.group_identical {
+                    None
+                } else if let (RowKey::Component(component), Levels::Top) = (key, settings.levels) {
+                    self.component_part_signature(*component, view.component, placement)
+                } else {
+                    self.part_signature(&bodies)
+                };
+                let mut materials =
+                    if let (RowKey::Component(component), Levels::Top) = (key, settings.levels) {
+                        if let Some(signature) = &signature {
+                            signature.materials.clone()
+                        } else {
+                            self.component_part_materials(*component, view.component, placement)
+                                .unwrap_or_default()
+                        }
+                    } else {
+                        bodies
+                            .iter()
+                            .map(|body| {
+                                let path = if matches!(key, RowKey::Body(_)) {
+                                    seen.iter()
+                                        .find(|s| s.body == *body)
+                                        .map(|s| s.path.as_slice())
+                                        .unwrap_or(placement)
+                                } else {
+                                    placement
+                                };
+                                self.body_material_under(*body, view.component, path)
+                                    .0
+                                    .id
+                                    .clone()
+                            })
+                            .collect()
+                    };
+                materials.sort();
+                materials.dedup();
+                if let Some(signature) = &mut signature {
+                    signature.materials = materials.clone();
+                }
+                let group = if settings.group_identical {
+                    signature.as_ref().and_then(|s| {
+                        groups
+                            .iter_mut()
+                            .find(|g| g.3.as_ref().is_some_and(|other| other.matches(s)))
+                    })
+                } else {
+                    groups.iter_mut().find(|g| g.0 == *key)
+                };
+                if let Some(group) = group {
+                    group.1.push((*key, placement.clone()));
+                    group.2 += 1;
+                    group.4.extend(materials);
+                    group.4.sort();
+                    group.4.dedup();
+                } else {
+                    groups.push((
+                        *key,
+                        vec![(*key, placement.clone())],
+                        1,
+                        signature,
+                        materials,
+                    ));
+                }
+            }
+        }
         let mut columns = settings.shown_columns(false);
         let shown = columns.len();
         // Sorted by a column it does not show too: its cells, left off.
@@ -418,18 +525,25 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
         if !columns.contains(&sort) {
             columns.push(sort.clone());
         }
-        let mut rows: Vec<(RowKey, Vec<String>)> = keys
+        let mut rows: Vec<(usize, Vec<String>)> = groups
             .iter()
-            .map(|(key, placements)| {
-                let quantity = match key {
-                    RowKey::Body(_) => 1,
-                    RowKey::Component(_) => placements.len(),
-                };
+            .enumerate()
+            .map(|(index, (key, _, quantity, _, materials))| {
                 let cells = columns
                     .iter()
-                    .map(|c| self.parts_cell(*key, c, quantity, &list))
+                    .map(|c| {
+                        if super::libraries::physical_material_column(c) && !materials.is_empty() {
+                            return materials
+                                .iter()
+                                .filter_map(|id| self.material(id))
+                                .map(|m| m.name.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                        }
+                        self.parts_cell(*key, c, *quantity, &list)
+                    })
                     .collect();
-                (*key, cells)
+                (index, cells)
             })
             .collect();
         sorted(
@@ -458,17 +572,17 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
             if let Some(i) = item {
                 cells[i] = number.to_string();
             }
-            items.push((*key, number));
-            let quantity =
-                keys.iter()
-                    .find(|(k, _)| *k == *key)
-                    .map_or(1, |(k, placements)| match k {
-                        RowKey::Body(_) => 1,
-                        RowKey::Component(_) => placements.len(),
-                    });
+            let group = &groups[*key];
+            items.extend(
+                group
+                    .1
+                    .iter()
+                    .map(|(key, path)| (*key, path.clone(), number)),
+            );
+            let quantity = group.2;
             words.push(format!(
                 "{number} {} x{quantity}",
-                self.parts_cell(*key, "name", quantity, &list)
+                self.parts_cell(group.0, "name", quantity, &list)
             ));
         }
         Ok(PartsList {

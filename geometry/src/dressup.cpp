@@ -3113,8 +3113,143 @@ ShapePtr fillet(const std::string& feature, const Shape& body, const std::vector
   return fillet(feature, body, {set});
 }
 
+namespace detail {
+// The chamfer as the geometry kernel builds it, its errors as they come.
+ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
+                             ChamferCorner corner);
+} // namespace detail
+
+namespace {
+
+// Up to three names of a list, then how many more.
+std::string some_names(const std::vector<std::string>& names) {
+  std::string text;
+  for (std::size_t i = 0; i < names.size() && i < 3; ++i) {
+    text += (i == 0 ? "" : ", ") + names[i];
+  }
+  if (names.size() > 3) {
+    text += " and " + std::to_string(names.size() - 3) + " more";
+  }
+  return text;
+}
+
+// What a chamfer the geometry kernel failed to build was asked for, for
+// its error (mitcad#1185): the selected edges, and the faces the chains of
+// them (with the tangent chains the sets follow) end against: those at a
+// chain's end vertex beside its last edge's own two faces, where a bevel
+// has to stop. "edge E{…}, its chain ending against face F3:chamfer(…)".
+std::string chamfer_context(const Shape& body, const std::vector<ChamferSet>& sets, const std::vector<int>& owner) {
+  std::vector<std::string> selected;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    if (owner[static_cast<std::size_t>(edge)] >= 0) {
+      const std::string& name = body.edge_name(edge);
+      selected.push_back(name.empty() ? "an unnamed edge" : name);
+    }
+  }
+  std::string text = (selected.size() == 1 ? "edge " : std::to_string(selected.size()) + " edges (") +
+                     some_names(selected) + (selected.size() == 1 ? "" : ")");
+  std::vector<int> chain = owner;
+  std::vector<char> follows;
+  for (const ChamferSet& set : sets) {
+    follows.push_back(follows_own_chain(set) ? 1 : 0);
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    detail::follow_tangent_chains(body, chain, follows);
+  } catch (const Standard_Failure&) {
+    chain = owner;
+  }
+  using Ancestors = NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
+  Ancestors edges_at;
+  Ancestors faces_at;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_EDGE, edges_at);
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_FACE, faces_at);
+  std::set<std::string> seen;
+  std::vector<std::string> against;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    if (chain[static_cast<std::size_t>(edge)] < 0) {
+      continue;
+    }
+    const std::array<int, 2> own = body.edge_faces(edge);
+    const TopoDS_Edge& current = TopoDS::Edge(body.edge(edge));
+    if (TopExp::FirstVertex(current).IsSame(TopExp::LastVertex(current))) {
+      continue; // (a closed edge has no end)
+    }
+    for (const TopoDS_Vertex& vertex : {TopExp::FirstVertex(current), TopExp::LastVertex(current)}) {
+      const int iv = edges_at.FindIndex(vertex);
+      if (vertex.IsNull() || iv == 0) {
+        continue;
+      }
+      int chained = 0;
+      for (const TopoDS_Shape& other : edges_at.FindFromIndex(iv)) {
+        const int index = body.edge_index(other);
+        chained += index >= 0 && chain[static_cast<std::size_t>(index)] >= 0 ? 1 : 0;
+      }
+      if (chained != 1) {
+        continue;
+      }
+      const int jv = faces_at.FindIndex(vertex);
+      if (jv == 0) {
+        continue;
+      }
+      for (const TopoDS_Shape& face : faces_at.FindFromIndex(jv)) {
+        const int index = body.face_index(face);
+        if (index < 0 || index == own[0] || index == own[1] || body.face_names(index).empty()) {
+          continue;
+        }
+        const std::string& name = body.face_names(index).front();
+        if (seen.insert(name).second) {
+          against.push_back(name);
+        }
+      }
+    }
+  }
+  if (!against.empty()) {
+    text += std::string(selected.size() == 1 ? ", its chain" : ", their chains") + " ending against " +
+            (against.size() == 1 ? "face " : "faces ") + some_names(against);
+  }
+  return text;
+}
+
+} // namespace
+
+// A chamfer that the geometry kernel failed to build: its error says what
+// was asked (chamfer_context), the kernel's own message kept as the detail.
+// The message keeps its start ("chamfer: …", "chamfer failed …"), by which
+// the .f3d import tells a failure of the kernel (kernel_failure).
 ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
                  ChamferCorner corner) {
+  try {
+    return detail::chamfer_unexplained(feature, input, sets, corner);
+  } catch (const std::invalid_argument&) {
+    throw;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    if (message.find("out of memory") != std::string::npos) {
+      throw;
+    }
+    std::string context;
+    try {
+      OCC_CATCH_SIGNALS
+      context = chamfer_context(input, sets, select_edges(input, sets));
+    } catch (...) {
+      throw error;
+    }
+    const std::string raw = "chamfer: ";
+    if (message.compare(0, raw.size(), raw) == 0) {
+      throw std::runtime_error(raw + "the geometry kernel could not build the bevel of " + context +
+                               " (kernel error: " + message.substr(raw.size()) + ")");
+    }
+    throw std::runtime_error(message + " (" + context + ")");
+  }
+}
+
+namespace detail {
+
+ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
+                             ChamferCorner corner) {
   detail::require_surfaces(input.occt(), "chamfer");
   for (const ChamferSet& set : sets) {
     const ChamferSpec& spec = set.spec;
@@ -3145,6 +3280,8 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
   require_closed(input.occt(), result->occt(), "chamfer");
   return result;
 }
+
+} // namespace detail
 
 ShapePtr chamfer(const std::string& feature, const Shape& body, const std::vector<std::string>& edges,
                  const ChamferSpec& spec) {

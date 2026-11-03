@@ -1,4 +1,4 @@
-# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090, 1100, 1110
+# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090, 1100, 1110, 1120
 
 The edge overflow of [0010 to 0019 and 0050 to 0077](fillet-edge-overflow.md)
 for chamfers (mitcad#240, mitcad#263). `geometry/tests/test_chamfer_overflow.cpp`
@@ -28,6 +28,10 @@ chamfer alone. Later chamfer cases from stored designs: 0440 in
 - **1090** limits a corner's sharp edge only by a common point that lies on
   it: a convex and a concave chamfer meeting where a sharp edge goes on got
   a corner 32 mm high at one end of a bracket (mitcad#1005).
+- **1120** builds a walk's guide that lies wholly past an end of the spine
+  as the spine's straight extension: a chamfer whose chain runs on past its
+  start into a face beyond, up to an earlier chamfer, failed there
+  (mitcad#1185).
 - **1100** builds the corner of two bevels or roundings that take away the
   faces at a concave edge and meet at its far end, a vertex of the shape:
   a pocket whose walls are as high as the bevel of their top edges
@@ -377,6 +381,43 @@ inside the face) are as before. The blind hole's bevel and rounding build
 at their size: the wall gone, the blend meeting the hole's floor at its
 edge, the volumes those of the exact shapes.
 
+## 1120: a chamfer's chain run on past its start into a face beyond
+
+### 1120-chfi3d-guide-wholly-past-an-end-of-the-spine-is-its-straight-extension
+
+A plate whose top long edges are chamfered 2, its end then cut round to a
+rounded octagon (45 degree sides, corners of radius 4): a chamfer of 2 on
+one of the 45 degree top edges takes the chain of tangent edges along the
+cut (diagonal, arc, end, arc, diagonal). Each diagonal ends against the
+earlier chamfer's face, and beyond the diagonal's top edge its vertical
+face goes on tangentially into a corner's cylinder. The chain's analytic
+pieces (`ChFi3d_KPartCutToEnd`) run on past both ends of the spine up to
+where the bevel's lower contact leaves the diagonal's face; the rest, over
+the cylinder up to the earlier chamfer's face, is walked. At the chain's
+end the walk's guide is the last edges and their extension. At its start
+the guide lay wholly before the spine's start, from the extension to the
+first piece's start, a parameter before the first edge's start:
+`ChFi3d_PerformElSpine` trimmed the first edge from its start to that
+parameter, a trim that ran backwards, and the guide doubled back along the
+edge. The walk from the piece stalled within a hundredth of a millimetre,
+the first sections of its piece were never set, and `ChFi3d_FilDS` put the
+piece's point index into the DS as a vertex's: the topological build read
+the solid as a vertex (`TopoDS_Builder::Add`).
+
+A guide wholly before the spine's start, or wholly past its end, is now
+the spine's straight extension there, as where an analytic piece took the
+whole edge (the guide's existing `cepadur` case, a line through the
+guide's end along its tangent), at an end of the spine no other blend
+meets: `PerformSetOfKPart` tells `ChFi3d_PerformElSpine` which ends are
+free (its new `StraightPastEnds`). Where another blend meets the spine at
+that vertex, the corner between them cuts what the walk makes past it,
+and the guide stays as before: the diagonal chamfered together with its
+edge on the earlier chamfer's face and the corner's edge there (a corner
+of two chamfers at the diagonal's end) built before, and with a guide on
+past the vertex its corner failed. The plate's chamfer builds with both
+ends of its chain alike, valid and closed, its centre of mass on the
+plate's plane of symmetry within 1e-9 mm.
+
 ## Reports and tests
 
 - 0140 to 0149: mitcad#240, mitcad#263 and
@@ -402,3 +443,10 @@ edge, the volumes those of the exact shapes.
   blind hole's rim chamfered and filleted 2 with OCCT alone, valid and
   with the exact volume, fails without it; the model's chamfer and fillet
   at their size, no info, the volumes within 1e-6).
+- 1120: mitcad#1185 and `geometry/tests/test_chamfer_end_against_chamfer.cpp`
+  (the plate's chain chamfered from one diagonal with OCCT alone: one
+  contour of five edges, valid and closed, symmetric about the plate's
+  plane, the volume removed pinned; it fails without the patch with
+  `TopoDS_Builder::Add`. Through the geometry facade the same, and the
+  diagonal with the two edges beyond it on the earlier chamfer's face, a
+  corner of two chamfers, which a guide on past every end broke).

@@ -7,6 +7,7 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
@@ -660,6 +661,120 @@ void test_loft_rails() {
   CHECK(throws_with([&] { loft(pointed); }, "unsupported: loft rails with a point section"));
 }
 
+// A regular octagon of lines c<first>..c<first + 7> counter-clockwise round
+// the origin, its corners `radius` from it, its sides along the axes,
+// named as the sketch names them.
+Region octagon(int first, double radius) {
+  const auto curve = [first](int k) { return "c" + std::to_string(first + (k + 8) % 8); };
+  Region region;
+  region.loops.emplace_back();
+  std::string name = "r{";
+  for (int i = 0; i < 8; ++i) {
+    const double a = kPi / 8 + kPi / 4 * i;
+    const double b = a + kPi / 4;
+    Segment line;
+    line.kind = SegmentKind::Line;
+    line.start = gp_Pnt2d(radius * std::cos(a), radius * std::sin(a));
+    line.end = gp_Pnt2d(radius * std::cos(b), radius * std::sin(b));
+    line.name = curve(i) + "[" + curve(i - 1) + "," + curve(i + 1) + "]";
+    name += (i == 0 ? "" : ",") + line.name;
+    region.loops.front().segments.push_back(line);
+  }
+  region.name = name + "}";
+  return region;
+}
+
+// The region with a round hole of `radius` round the origin, the circle
+// c<curve>.
+Region with_hole(Region region, int curve, double radius) {
+  region.loops.push_back(circle(curve, 0, 0, radius).loops.front());
+  return region;
+}
+
+bool valid(const Shape& shape) { return BRepCheck_Analyzer(shape.occt()).IsValid(); }
+
+// The number of wires of the body's face `name`: its holes and its outer
+// boundary.
+int wires_of(const Shape& body, const std::string& name) {
+  const std::vector<int> faces = body.find_faces(name);
+  if (faces.size() != 1) {
+    return -1;
+  }
+  int count = 0;
+  for (TopExp_Explorer w(body.face(faces.front()), TopAbs_WIRE); w.More(); w.Next()) {
+    ++count;
+  }
+  return count;
+}
+
+// Face sections with holes loft their outer boundary (mitcad#1183); sketch
+// regions with holes are still refused (test_sweeps.cpp).
+void test_loft_face_holes() {
+  // The post of the tangent and smooth lofts above with a 5 mm hole down
+  // its middle: the same lofts, the hole left out.
+  const ShapePtr ring = extrude("F2", {with_hole(circle(1, 0, 0, 10), 2, 5)}, 0, 20);
+  CHECK_NEAR(volume(*ring), kPi * 75 * 20);
+  LoftSpec up;
+  up.feature = "F7";
+  LoftSection top;
+  top.kind = LoftSection::Kind::Face;
+  top.body = ring;
+  top.face = "F2:end(r{c1})";
+  up.sections = {top, region_at(40, circle(3, 0, 0, 5))};
+  // Free: the frustum from the outer circle to the 5 mm one 20 mm above.
+  const ShapePtr frustum = loft(up);
+  CHECK(valid(*frustum));
+  CHECK_NEAR_TOL(volume(*frustum), kPi * 20 * (100 + 50 + 25) / 3, 1e-6);
+  CHECK(faces_named(*frustum, "F7:start(F2:end(r{c1}))") == 1 && faces_named(*frustum, "F7:end(r{c3})") == 1);
+  CHECK(faces_named(*frustum, "F7:side(" + edge("F2:side(c1)", "F2:end(r{c1})") + ")") == 1);
+  const double seam = std::sqrt(425.0);
+  up.start = condition(LoftEnd::Kind::Tangent);
+  const ShapePtr tangent = loft(up);
+  CHECK(valid(*tangent) && edge_names_unique(*tangent));
+  CHECK_NEAR_TOL(volume(*tangent), kPi * (40 * seam / 7 + 27700.0 / 21), 1e-6);
+  up.start = condition(LoftEnd::Kind::Smooth);
+  const ShapePtr smooth = loft(up);
+  CHECK(valid(*smooth) && edge_names_unique(*smooth));
+  CHECK_NEAR_TOL(volume(*smooth), kPi * (67675 * seam / 12012 + 405595.0 * 20 / 6006), 1e-6);
+  // The ring keeps its hole.
+  CHECK(wires_of(*ring, "F2:end(r{c1})") == 2 && ring->find_faces("F2:side(c2)").size() == 1);
+
+  // An octagonal ring to a round one on another body: the octagon 20 mm
+  // to its corners with an 8 mm hole, 10 high, up to the bottom of a
+  // 12 mm ring with a 6 mm hole from z = 40 to 50; free, and tangent to
+  // the octagon's walls and smooth to the round ring's wall.
+  const Region eight = octagon(1, 20);
+  const ShapePtr lower = extrude("F2", {with_hole(eight, 9, 8)}, 0, 10);
+  const ShapePtr upper = extrude("F3", {with_hole(circle(11, 0, 0, 12), 12, 6)}, 40, 50);
+  LoftSpec bridge;
+  bridge.feature = "F5";
+  LoftSection from;
+  from.kind = LoftSection::Kind::Face;
+  from.body = lower;
+  from.face = face_name("F2", "end", eight.name);
+  LoftSection to;
+  to.kind = LoftSection::Kind::Face;
+  to.body = upper;
+  to.face = "F3:start(r{c11})";
+  bridge.sections = {from, to};
+  // Between the round ring's outline and the octagon's over the 30 mm.
+  const double round_area = kPi * 144;
+  const double octagon_area = 2 * std::sqrt(2.0) * 400;
+  for (const auto& [start, end] :
+       {std::pair{LoftEnd::Kind::Free, LoftEnd::Kind::Free}, {LoftEnd::Kind::Tangent, LoftEnd::Kind::Smooth}}) {
+    bridge.start = condition(start);
+    bridge.end = condition(end);
+    const ShapePtr bridged = loft(bridge);
+    CHECK(valid(*bridged) && edge_names_unique(*bridged));
+    const double v = volume(*bridged);
+    CHECK(v > round_area * 30 && v < octagon_area * 30);
+    CHECK(faces_named(*bridged, "F5:start(" + from.face + ")") == 1 &&
+          faces_named(*bridged, "F5:end(" + to.face + ")") == 1);
+    CHECK(faces_named(*bridged, "F5:side(" + edge("F2:side(c1[c8,c2])", from.face) + ")") == 1);
+  }
+  CHECK(wires_of(*lower, from.face) == 2 && wires_of(*upper, to.face) == 2);
+}
+
 } // namespace
 
 void skin_tests() {
@@ -669,6 +784,7 @@ void skin_tests() {
   guarded("gordon surfaces", test_gordon);
   guarded("lofts with end conditions", test_loft_conditions);
   guarded("lofts with rails", test_loft_rails);
+  guarded("lofts from faces with holes", test_loft_face_holes);
 }
 
 } // namespace test

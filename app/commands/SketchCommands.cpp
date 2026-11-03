@@ -618,19 +618,62 @@ void addConvertProjected(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
-// A point of the sketch where exactly two lines of one kind end (the drawn
-// ones, else the construction ones): a corner Sketch Fillet rounds
-// (mitcad#867; the model's `sketch.fillet` with `points`).
-bool cornerOfTwoLines(const sketch::SketchModel& model, const QString& point) {
+// Whether the end `point` of the line or arc `own` and an end of another line
+// or arc of the kind are one corner although they are two points (mitcad#1192,
+// as a Trim made them): at the same place (within the model's join gap of
+// 0.01 mm) and held together by a point-to-point coincident, or by a
+// point-on-curve of one end on the other curve. The model merges them first.
+bool heldCorner(const sketch::SketchModel& model, const QString& point, const sketch::CurveData& own) {
+  const std::optional<sketch::V2> at = model.pointAt(point);
+  if (!at) {
+    return false;
+  }
+  const auto holds = [&model](const QString& a, const QString& b) {
+    return std::any_of(model.constraints.cbegin(), model.constraints.cend(),
+                       [&a, &b](const sketch::ConstraintData& k) {
+                         return k.active && k.type == QStringLiteral("coincident") && k.refs.size() == 2 &&
+                                k.refs.at(0) == a && k.refs.at(1) == b;
+                       });
+  };
+  for (const sketch::CurveData& other : model.curves) {
+    if (other.id == own.id || other.construction != own.construction || !(other.isLine() || other.isArc())) {
+      continue;
+    }
+    for (const QString& end : {other.start, other.end}) {
+      const std::optional<sketch::V2> there = model.pointAt(end);
+      if (end.isEmpty() || end == point || !there || sketch::dist(*at, *there) > 0.01) {
+        continue;
+      }
+      if (holds(point, end) || holds(end, point) || holds(point, other.id) || holds(end, own.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// A point of the sketch where exactly two lines or circular arcs of one kind
+// end (the drawn ones, else the construction ones), or one of them whose end
+// is held to another's (heldCorner): a corner Sketch Fillet rounds
+// (mitcad#867, arcs mitcad#1192; the model's `sketch.fillet` with `points`).
+bool filletCorner(const sketch::SketchModel& model, const QString& point) {
   for (const bool construction : {false, true}) {
     int lines = 0;
     int others = 0;
+    const sketch::CurveData* ending = nullptr;
     for (const sketch::CurveData& curve : model.curves) {
       if (curve.construction == construction && (curve.start == point || curve.end == point)) {
-        ++(curve.isLine() ? lines : others);
+        const bool rounds = curve.isLine() || curve.isArc();
+        ++(rounds ? lines : others);
+        if (rounds) {
+          ending = &curve;
+        }
       }
     }
     if (lines + others > 0) {
+      if (lines == 1 && others == 0 && ending != nullptr) {
+        return heldCorner(model, point, *ending);
+      }
       return lines == 2 && others == 0;
     }
   }
@@ -639,27 +682,28 @@ bool cornerOfTwoLines(const sketch::SketchModel& model, const QString& point) {
 
 // Sketch Fillet (mitcad#867): two lines, a closed chain of lines (a whole
 // rectangle), lines and corner points, several corners at once with one
-// radius dimension and the arcs Equal; one undo step.
+// radius dimension and the arcs Equal; one undo step. Circular arcs as lines
+// (mitcad#1192): a corner where an arc ends together with a line or an arc.
 void addFillet(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.fillet", QObject::tr("Sketch Fillet"), "sketch-fillet", "MODIFY",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.pinned = true;
-  def.tooltip = QObject::tr("Rounds line corners with tangent arcs: two lines, a chain or corner points");
+  def.tooltip = QObject::tr("Rounds corners of lines and arcs: two curves, a chain or corner points");
   def.keywords = {QStringLiteral("round corners"), QStringLiteral("rounded rectangle")};
   def.inputs = {
-      selectionInput(QStringLiteral("corners"), QObject::tr("Lines or Corners"),
+      selectionInput(QStringLiteral("corners"), QObject::tr("Curves or Corners"),
                      SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
           .withAccepts([&c](const SelectionItem& item) {
             if (item.owner != c.uid()) {
               return false;
             }
-            if (item.geometry == QStringLiteral("line")) {
+            if (item.geometry == QStringLiteral("line") || item.geometry == QStringLiteral("arc")) {
               return true;
             }
-            return c.model().pointAt(item.name).has_value() && cornerOfTwoLines(c.model(), item.name);
+            return c.model().pointAt(item.name).has_value() && filletCorner(c.model(), item.name);
           })
-          .withTooltip(QObject::tr("Two lines: their corner; more lines: every corner where two end together; "
+          .withTooltip(QObject::tr("Two lines or arcs: their corner; more: every corner where two end together; "
                                    "a point: its corner")),
       valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("2")),
   };
@@ -670,7 +714,7 @@ void addFillet(CommandRegistry& registry, SketchController& c) {
       (c.model().pointAt(item.name) ? points : curves).append(item.name);
     }
     if (points.isEmpty() && curves.size() < 2) {
-      return Built::failure(QObject::tr("Pick two lines, a chain of lines or corner points."),
+      return Built::failure(QObject::tr("Pick two lines or arcs, a chain of them or corner points."),
                             QStringLiteral("corners"));
     }
     QJsonObject cmd = base(c, "sketch.fillet");

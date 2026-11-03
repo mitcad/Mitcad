@@ -53,8 +53,8 @@ for option, title, index in [("Size", "Screws.Size [Text]", 0), ("Length", "Scre
     if native:
         add("expect-native-enabled configurationsEditDomain true")
     add("mark")
-    press("Edit Domain…", "configurationsEditDomain")
-    add("focus-dialog '^Option Domain$'", f"expect-log 'Option Domain dialog opened for {option}'")
+    press("Edit Possible Values…", "configurationsEditDomain")
+    add("focus-dialog '^Possible Values$'", f"expect-log 'Possible Values dialog opened for {option}'")
     if native:
         add("native-pointer-click domainColumn")
     else:
@@ -177,7 +177,7 @@ def import_csv():
 # Removed M5 falls back to M3, and the same import moves Length too.
 import_csv()
 add("expect-log 'Imported table Screws from Screws.csv:'",
-    "expect-log 'Configuration moves: .*Size M5 → M3: its allowed values Screws.Size'",
+    "expect-log 'Configuration moves: .*Size M5 → M3: its possible values Screws.Size'",
     "expect-model-bodies 1 1600", "expect-model-parameter Length 16", "expect-model-parameter HeadDia 5.5", "expect-undo-depth ${beforeImport} 1",
     f"screenshot-dialog '${{MITCAD_TEST_WORK}}/table-csv-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'")
 press("OK")

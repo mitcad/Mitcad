@@ -33,6 +33,9 @@ bool replaceText(const QString& identifier, const QString& text, QString& error)
 bool choose(const QString& identifier, const QString& title, QString& error);
 bool duplicateChoices(CommandHost& host, QString& error);
 bool widgetRefreshContract(QString& error);
+// Real LibraryPicker fallback with a visible key window lacking content;
+// restores the previous key window/responder and closes the Qt picker.
+bool pickerFallback(QString& error);
 bool formControls(CommandHost& host, QString& error);
 bool disclosureLayout(QString& error);
 bool triggerAction(const QString& identifier, QString& error);
@@ -41,6 +44,9 @@ bool activate(const QString& identifier, QString& error);
 bool select(const QString& identifier, QString& error, Qt::KeyboardModifiers modifiers = {});
 bool expand(const QString& identifier, QString& error);
 bool textOf(const QString& identifier, QString& text);
+// Reads the actual AppKit accessibility label, including a model cell's
+// semantic description, without substituting the shared widget's text.
+bool accessibilityLabelOf(const QString& identifier, QString& label);
 bool textMatches(const QString& identifier, const QRegularExpression& expression);
 bool enabled(const QString& identifier, bool expected);
 bool visible(const QString& identifier, bool expected);
@@ -147,8 +153,9 @@ bool formLayout(const QStringList& entries, QString& error);
 bool settingsLayout(const QString& page, QString& error);
 // Read-only configuration-card geometry, complete captions and slider
 // travel/knob exposure, plus one full reachable Browser row below it;
-// never scrolls a clipped control or row into view.
-bool configurationLayout(QString& detail);
+// never scrolls a clipped control or row into view. framesOnly checks the
+// simultaneous card bounds and separation without asserting control sizes.
+bool configurationLayout(QString& detail, bool framesOnly = false);
 // Read the actual visible group row: full-width caption, no clipping, and
 // the shared tree item's selection policy. Does not scroll or create rows.
 bool spannedHeading(const QString& table, const QRegularExpression& caption, QString& detail);
@@ -184,6 +191,8 @@ bool pointerButton(const QRegularExpression& expression, QString& error);
 // Drag the actual header divider, then compare its width after ordinary UI refreshes.
 bool resizeHeader(const QString& identifier, int logicalColumn, double delta, QString& error);
 bool headerResizeRetained(const QString& identifier, int logicalColumn, QString& error);
+// Compare the live divider position with its last real, substantial pointer drag.
+bool splitDragRetained(const QString& identifier, QString& error);
 // Held sliders require their actual knob and guarded WindowServer input
 // with already granted posting access. Other controls use fractional starts.
 bool pointerDrag(const QString& identifier, double from, double to, QString& error, bool fromKnob = false);
@@ -212,6 +221,7 @@ inline bool replaceText(const QString&, const QString&, QString&) { return false
 inline bool choose(const QString&, const QString&, QString&) { return false; }
 inline bool duplicateChoices(CommandHost&, QString&) { return false; }
 inline bool widgetRefreshContract(QString&) { return false; }
+inline bool pickerFallback(QString&) { return false; }
 inline bool formControls(CommandHost&, QString&) { return false; }
 inline bool disclosureLayout(QString&) { return false; }
 inline bool triggerAction(const QString&, QString&) { return false; }
@@ -220,6 +230,7 @@ inline bool activate(const QString&, QString&) { return false; }
 inline bool select(const QString&, QString&, Qt::KeyboardModifiers = {}) { return false; }
 inline bool expand(const QString&, QString&) { return false; }
 inline bool textOf(const QString&, QString&) { return false; }
+inline bool accessibilityLabelOf(const QString&, QString&) { return false; }
 inline bool textMatches(const QString&, const QRegularExpression&) { return false; }
 inline bool enabled(const QString&, bool) { return false; }
 inline bool visible(const QString&, bool) { return false; }
@@ -282,7 +293,7 @@ inline bool placeholderBounds(const QString&, const QString&, QString&) { return
 inline bool textBounds(const QString&, const QString&, QString&) { return false; }
 inline bool formLayout(const QStringList&, QString&) { return false; }
 inline bool settingsLayout(const QString&, QString&) { return false; }
-inline bool configurationLayout(QString&) { return false; }
+inline bool configurationLayout(QString&, bool = false) { return false; }
 inline bool spannedHeading(const QString&, const QRegularExpression&, QString&) { return false; }
 inline bool firstVisibleRow(const QString&, const QRegularExpression&, QString&) { return false; }
 inline bool colorField(const QString&, const QString&, const QString&, bool, const QString&, QString&) { return false; }
@@ -296,6 +307,7 @@ inline bool pointerChoice(const QString&, const QString&, const QStringList&, QS
 inline bool pointerButton(const QRegularExpression&, QString&) { return false; }
 inline bool resizeHeader(const QString&, int, double, QString&) { return false; }
 inline bool headerResizeRetained(const QString&, int, QString&) { return false; }
+inline bool splitDragRetained(const QString&, QString&) { return false; }
 inline bool pointerDrag(const QString&, double, double, QString&, bool = false) { return false; }
 inline bool resizeDialog(int, int, QString&) { return false; }
 inline bool layoutContract(QString&) { return false; }

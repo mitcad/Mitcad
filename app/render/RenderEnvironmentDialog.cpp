@@ -936,6 +936,7 @@ void RenderEnvironmentDialog::stopAiming() {
   }
   m_aimFilter.remove();
   m_message->clear();
+  setErrorStyleSheet(m_message); // after a missed click's hint
 }
 
 bool RenderEnvironmentDialog::eventFilter(QObject* watched, QEvent* event) {
@@ -957,6 +958,9 @@ bool RenderEnvironmentDialog::eventFilter(QObject* watched, QEvent* event) {
   const QPointF at = static_cast<QMouseEvent*>(event)->position();
   const auto hit = render::surfaceAt(m_viewer, at);
   if (!hit) {
+    // A missed click is a hint, not an error (mitcad#1174): the secondary
+    // text's colour until the aim ends.
+    setRoleStyleSheet(m_message, ColorRole::TextSecondary);
     m_message->setText(tr("No face there: click a body's face (Esc cancels)."));
     qDebug().noquote() << "Render light aim: no face there";
     return true;

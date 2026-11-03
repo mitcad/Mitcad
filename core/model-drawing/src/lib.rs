@@ -34,6 +34,9 @@ pub mod dwg;
 pub mod dxf;
 pub mod pdf;
 pub mod sheet;
+// Dimensions snapped to the spacing of the one placed before
+// (mitcad#1173).
+pub mod spacing;
 pub mod svg;
 pub mod tables;
 pub mod template;

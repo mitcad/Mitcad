@@ -21,12 +21,18 @@
 #      design); opened again, the bar's Color set to Black moves Length
 #      from 1200 to 1000 mm, the notice names the rule, the body follows and
 #      the bar's range ends at 1000 mm.
-#   5. Rows: a new row (Black, 1000 mm) whose Length is typed as 1500 is
-#      refused with the rule's name.
+#   5. Opened again, the Options tab's Value column shows the current
+#      values (Black, 1000 mm; mitcad#968). Rows: a new row (Black,
+#      1000 mm) whose Length is typed as 1500 is refused with the rule's
+#      name.
 #   6. Rows: Add Column… (mitcad#999) makes Extra a column of the table,
-#      which becomes closed, each row's value 0 mm; Row1's Extra typed as
-#      100 and Row1 applied: the body is 900 mm long. Remove Column takes
-#      it out again, and the parameter stays (Add Column offers it).
+#      which becomes closed (Only these rows), each row's value 0 mm;
+#      Row1's Extra typed as 100 and Row1 applied: the body is 900 mm long.
+#      Remove Column takes it out again, and the parameter stays (Add
+#      Column offers it).
+#   7. Only these rows stays on: Black in the bar adjusts Length from
+#      800 mm to the listed row's 1000 mm, the notice naming Only these
+#      rows; the body follows (1100 mm with Extra's 100 mm).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-configurations-test.sh [screenshot.png]
@@ -210,6 +216,10 @@ ui_focus_main
 ui_mark
 ui_step "Configurations (search)"        ui_command "Configurations"
 ui_expect_new "Configurations window opened" "the window opened"
+# The Value column (mitcad#968) shows the current values the bar's choice
+# and the rule's adjustment left.
+ui_expect_new "Configurations options: Color (Black, White) = Black; Length (300 mm … 2000 mm, step 10 mm) = 1000 mm" \
+  "the Value column shows the current values"
 ui_focus_dialog '^Configurations$'
 ui_step "the Rows tab"                   ui_click_logged "Configurations tab Rows"
 ui_expect_new "Configurations add row at" "the Rows page"
@@ -257,6 +267,21 @@ ui_expect_new "Add Column dialog opened: Extra, New Parameter" "the parameter st
 ui_step "cancel (Esc)"                   ui_key Escape
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Configurations: column .* added" &&
   ui_fail "the cancelled Add Column added a column"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- 7. Only these rows (mitcad#968): only the listed combinations, as before"
+last_rows=$(grep -o 'Configurations rows: [a-z]*' "$UI_LOG" | tail -1)
+[ "$last_rows" = "Configurations rows: closed" ] && echo "ok   Only these rows stays on without the column" ||
+  ui_fail "Only these rows is off after Remove Column: ${last_rows:-no rows line}"
+ui_focus_dialog '^Configurations$'
+ui_step "close the window (Esc)"         ui_key Escape
+ui_focus_main
+ui_mark
+ui_step "the bar's Color: Black"         ui_choose_text "Configuration bar Color" "Black"
+ui_expect_new "Configuration chosen: Color = Black" "Black chosen"
+ui_expect_new "Configuration moves: Length 800 mm → 1000 mm: Only these rows" \
+  "Length is adjusted to the listed row Row2, Only these rows named"
+expect_volume 440000 "20 x 20 x (1000 + 100)"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
 ui_finish "UI configurations test"

@@ -14,9 +14,9 @@
 namespace mitcad {
 namespace {
 
-// A library as the UI names it.
+// A library as the UI names it, as the managers' groups (mitcad#1135).
 QString placeTitle(const QString& library) {
-  return library == QStringLiteral("project") ? QObject::tr("Project") : QObject::tr("My library");
+  return library == QStringLiteral("project") ? QObject::tr("This project") : QObject::tr("My library");
 }
 
 QStringList strings(const QJsonValue& value) {

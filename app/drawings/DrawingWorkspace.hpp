@@ -44,8 +44,12 @@
 // (<n>): <the model's pick>" and "Drawing pick: nothing at x,y" (an
 // annotation tool's clicks), "Drawing hover: <what>" (what a click would
 // pick, "nothing"), "Drawing shortcut ignored: E", "Drawing view <n>
-// scale: 1:1.5 (0.667)" (its panel's Scale field and the model's scale) and
-// "Drawing scale refused: <text>" (mitcad#1169).
+// scale: 1:1.5 (0.667)" (its panel's Scale field and the model's scale),
+// "Drawing scale refused: <text>" (mitcad#1169), and for dimension spacing
+// (mitcad#1173) "Drawing snap: 12.00 mm x2" (the snap shown while a
+// dimension is placed or dragged), "Drawing dimension placed: line_offset
+// -24.00, beyond 12.00 mm, snapped to 12.00 mm x2 of annotation 1" (or
+// "free" with Alt, "not snapped") and "Drawing dimension moved: …".
 //
 // A cut sheet (mitcad#853) opens here too: its parts are the sheet's views
 // (dragged to move them, turned from their menu or their panel's Rotation),
@@ -123,6 +127,12 @@ public:
   // Exports the drawing to a file (pdf, svg, dxf by its extension); false
   // with the model's reason shown.
   bool exportTo(const QString& path);
+  // File › Print (mitcad#1089): the drawing's sheets (a cut sheet's one) as
+  // SVG files in `folder`, as its export writes them, without a status
+  // message; empty with the model's reason in `error` when they could not be
+  // written. The drawing's name.
+  QStringList writeSheetsSvg(const QString& folder, QString& error);
+  QString name() const { return m_name; }
   // Add Revision (the bar's button and the command drawing.add_revision,
   // mitcad#707 phase 4): asks for its description, date and author.
   void addRevision();
@@ -230,6 +240,18 @@ private:
   // The sheet's preview of what is placed after an annotation tool's
   // picks: their points as the model found them.
   void showPlacingPreview();
+  // Dimension spacing (mitcad#1173): where a dimension placed (annotation
+  // 0) or dragged alone snaps, the model's `drawing_snap` for the command
+  // the click or the drag would run, asked at once and then at most every
+  // 30 ms while the pointer moves; shown on the sheet with its hint.
+  void snapRequested(int annotation, QPointF point, bool freely);
+  void snapNow();
+  // The `drawing_snap` answer for a command; false when it was not asked
+  // (no such command, the model computing) or failed.
+  bool askSnap(const QJsonObject& command, bool freely, QJsonObject* answer);
+  // The command a placing click at `at` (sheet mm) would run, when the
+  // tool places a dimension; empty otherwise.
+  QJsonObject placingCommand(QPointF at) const;
   // Runs a model command; false with its reason in the status bar.
   bool run(const QJsonObject& command, QJsonObject* result = nullptr);
   // Runs one field's change of a view after the event that made it (the
@@ -304,6 +326,15 @@ private:
   // The hover's question waits for the job that computes the model
   // (mitcad#753).
   bool m_hoverWaits = false;
+  // Dimension spacing (mitcad#1173): what is snapped next (the dragged
+  // annotation, 0 while one is placed; the pointer or the drag; Alt), the
+  // timer that spaces the questions, the snap logged last.
+  QTimer* m_snapTimer = nullptr;
+  bool m_snapPending = false;
+  int m_snapAnnotation = 0;
+  QPointF m_snapPoint;
+  bool m_snapFree = false;
+  QString m_loggedSnap;
 
   QVBoxLayout* m_column = nullptr; // the bar over the sheet and the panel
   std::function<QWidget*(const QString&)> m_ribbonPlace; // setRibbonTools

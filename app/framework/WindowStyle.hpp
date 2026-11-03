@@ -179,8 +179,13 @@ private:
   // The Windows 11 frame (platform/WindowsFrame.hpp), once the window has its
   // native handle.
   void applyFrame();
+  // The top-level window that shows the window when it is not one itself
+  // (a document frame, mitcad#1172): watched, and in the window's colour.
+  void watchHost();
+  void styleHost();
 
   QPointer<QMainWindow> m_window;
+  QPointer<QWidget> m_host;
   QPointer<QToolBar> m_toolBar;
   QList<QPointer<QDockWidget>> m_docks;
   QString m_font;          // the family set, or empty

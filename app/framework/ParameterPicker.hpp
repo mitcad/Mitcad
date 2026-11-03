@@ -68,7 +68,12 @@ private:
   // The labels as the view shows them now, in the order they are drawn.
   std::vector<Label> layout() const;
   int labelAt(const QPointF& position) const;
+  // "Parameter label <source> <name> at x,y": where the labels are for the
+  // camera now (logged as it changes, also where nothing is painted, as in
+  // a Windows test session); "... drawn at x,y": where a paint put them
+  // (mitcad#1179: the drawn labels follow the camera).
   void logPlaces();
+  void logDrawn(const std::vector<Label>& labels);
 
   OcctViewer& m_viewer;
   EventFilterGuard m_viewerFilter{this};
@@ -78,6 +83,7 @@ private:
   int m_hover = -1;
   bool m_pressed = false; // a press on a label: its release is not the view's
   QString m_logged;
+  QString m_loggedDrawn;
 };
 
 // Gathers what a picker shows from the model: the dimensions with

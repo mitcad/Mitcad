@@ -3,8 +3,9 @@
 
 The AppKit frontend uses the existing CAD model, commands, file formats,
 undo history, imports and OCCT viewport. Its outer window and general
-controls are AppKit. The shared session owns a single document; enabling
-the frontend does not introduce multiple documents or a new renderer.
+controls are AppKit. Each window retains its own document session, undo
+history, selection and controllers; a process may own several windows.
+Both macOS frontends use system window tabs. Qt remains the default frontend.
 
 ## Design contract
 
@@ -122,6 +123,37 @@ test named `app.ui-macos-native-*` gets the full label without more work;
 one with another name goes into `mitcad_native_other_tests` there.
 
 ## Interaction
+
+The Window menu creates a separate window, switches between open designs and
+provides the system's Show Tab Bar, Show All Tabs and Merge All Windows
+commands. New Window remains separate even when the system prefers opening
+new documents in tabs; it can subsequently join a tab group. New and Open
+follow the document reuse and current-window preferences shared by both
+frontends. There is no additional Qt document tab bar on macOS.
+
+AppKit installs the active document's menu actions when its window becomes
+key. Closing another document does not restore a stale menu or application
+delegate. Native dialogs and popovers resolve their shared presenter's parent
+chain to that document's NSWindow, including controller callbacks that finish
+while a different document is active. Native secondary windows retain their
+own ownership. Hidden system tabs pause their viewport and retained rendered
+view worker until the tab is shown again. Each native document's Window menu
+binds the tab-bar, tab-overview, merge and zoom selectors to that document's
+NSWindow, and Bring All to Front to NSApplication. AppKit therefore validates
+and dispatches each entry against its actual owner.
+
+The in-process `system-window-menu` test command dispatches an enabled entry
+from the specified document's actual menu: Qt's `QMenu::toNSMenu()` bridge or
+that AppKit document's own Window menu. Qt uses the native menu item's normal
+target-action route to its QAction; AppKit verifies and uses the native item's
+existing owning target through `NSApplication::sendAction:to:from:`. The helper
+requires `MITCAD_TEST_INPUT` and verifies application window ownership. It neither
+requests foreground activation nor requires a key window. The subsequent tab
+count assertion reads actual NSWindow group membership. This covers
+programmatic menu dispatch and the resulting system grouping, not physical
+menu tracking or WindowServer foreground-input acceptance. See the
+[Qt menu bridge](https://doc.qt.io/qt-6/qmenu.html#toNSMenu) and
+[AppKit target-action API](https://developer.apple.com/documentation/appkit/nsapplication/sendaction(_:to:from:)).
 
 - The native shell follows the default Qt layout: Undo/Redo and the
   Solid/Build/Make workspace selector on the left, the document title in the
@@ -290,6 +322,12 @@ Hovering a folded cell previews all its features, and its tooltip names
 the group and its size. The native strip logs `Timeline group <name> at
 x,y` as the Qt strip does, in the window's points;
 `app.ui-macos-native-timeline` checks hover, tooltips and groups.
+Its three-feature fixture also folds a group whose component filter hides
+the middle feature, then its head. The layout check verifies each folder
+cell once even across a hidden run, and the folder's hover and tooltip
+callbacks carry the shared group's head. Search highlights its matches;
+the component filter controls which timeline features are hidden
+(mitcad#1153).
 Command search result rows keep each command's shared CAD icon, at the shared
 search's 18 points, beside its name and shortcut: the same artwork as the
 ribbon and menus in the palette's light or dark rendering, dimmed with the
@@ -338,8 +376,8 @@ shared pins (`Ribbon::pin`, `Ribbon::unpin`) and
 `MainWindow::editShortcuts`, so the log lines and the saved
 `toolbarPins/<TAB>` setting are those of the Qt ribbon. The tests' menu
 comparison with the retained Qt menus leaves these entries out (their
-tag). The Qt view's navigation bar (mitcad#1086) is not made in the
-AppKit frontend, so a drawing has nothing more to hide.
+tag). The Qt navigation widget is not made in the AppKit frontend; its
+native counterpart shares the drawing's visibility rules (mitcad#1099).
 
 `app.ui-macos-native-familiar` pins Sweep from the Create menu, starts it
 from its button in the Create group, unpins it from that button's menu,
@@ -428,16 +466,39 @@ which filters; Up and Down move its current entry over the shown ones;
 Return or a click on an entry chooses it; Escape or a click outside closes
 it. The entries keep their swatches and headings, so the choosing, the
 filtering and the log lines are the Qt picker's.
+A reused presenter is detached from the old popover before its asynchronous
+close animation finishes. The old delegate cannot cancel or hide a newly
+opened picker. An opening that finds no window content, or gets no shown
+popover window, returns to the caller's ordinary Qt picker with the native
+display flags cleared (mitcad#1153).
+
+The native Materials colour-parity test keeps picker animations enabled
+(`MITCAD_TEST_PICKER_ANIMATIONS=1` with its UI script). With Add…'s popover
+open, it sends two separate actual Add… presses through AppKit's event queue:
+the outside press dismisses the transient popover, and the next press
+reopens it while the close animation is running. Its native-only 50 ms
+driver timer and zero settling delay let the event loop run between the
+presses; the Qt reference run keeps its normal timing. It waits for the close
+animation, then verifies and captures the actual new popover's search and
+rows remain visible. Its retired-close diagnostic must confirm the new
+popover was already shown when the old delegate completed, proving the
+asynchronous overlap occurred. This repeats in light and dark appearances. The
+secondary UI test's `expect-native-picker-fallback` establishes a real
+visible key window without a content view, calls `LibraryPicker::open`,
+and verifies the fallback's visible Qt window and normal delete-on-close
+before restoring the previous key window and responder. It requires a UI
+script; it does not replace the opening result or disable animations.
 Send to Slicer's Printer and Process choices use the same popover
 (mitcad#1122): the short label on the closed button, the full name as its
 tooltip, vendor or printer headings, source tags at the right, the current
 choice checked, New printer… or New process… below a separator, and
-Edit printers and processes… last, which opens Printers and Processes on
-the current choice; no button sits beside the field (mitcad#1134). The
-shared command session receives the choice, preserving its undo step.
-`app.ui-macos-native-print-picker` checks search, Return, Down, Escape,
-pointer selection, new-profile creation, Edit printers and processes…
-with no button beside the rows, and undo on synthetic profiles.
+Edit printers… or Edit processes… last, which opens the Printers or the
+Processes manager (mitcad#1135) on the current choice; no button sits
+beside the field (mitcad#1134). The shared command session receives the
+choice, preserving its undo step. `app.ui-macos-native-print-picker`
+checks search, Return, Down, Escape, pointer selection, new-profile
+creation, Edit printers… and Edit processes… with no button beside the
+rows, and undo on synthetic profiles.
 The Materials window's
 appearances are one list with Add…, Remove and Make Default beside it
 (mitcad#1083), all ordinary Qt controls: the bridge presents the list as
@@ -752,8 +813,12 @@ The AppKit frontend does the same (`NativeMacWindow.mm`,
   (`setConfigurationView(nullptr)`). The bar's scroll view keeps its
   identifier `native.configuration`; the row combo is captioned Row
   (`ConfigurationBar::setHeaderTitled`). The card is as wide as Browser,
-  and at least 230 points (Projects' least), the width its one-row options
-  need, within the free canvas.
+  and normally at least 230 points (Projects' least), the width its one-row
+  options need, within the free canvas. The upper limit reserves both the
+  inspector and the shown Chat card, so a narrow window can narrow it to
+  the Browser's width rather than overlap either right-hand card. The
+  native configuration-parity regression checks all three actual frames
+  together at the narrow size (mitcad#1153).
 - The form has one row per option, its caption, field and slider side by
   side as in the Qt bar, the row combo beside its caption: the bar no
   longer opts in to the grid's wrapping (`nativeResponsiveLayout`), which
@@ -856,6 +921,10 @@ tooltip and action (Reset to size), and `labelFor`, `enabled` and
 `autoText` follow the state. OK and Cancel (Send to Slicer's Send)
 are a footer that the window keeps under the inputs, which scroll above
 it, as the shared panel's page does.
+Repeated messages with unchanged text and level still refresh their
+appearance, but do not repeat the message-box log or request another layout.
+The native secondary regression sets the same warning three times and
+requires exactly one message-box log (mitcad#1153).
 
 Each value field has the shared `fx` button beside it. Its menu lists the
 design's parameters by the shared suggestion rules, with those the field
@@ -900,6 +969,61 @@ buttons and Edit Parameters in view, then creates, inserts, names and
 edits a parameter through the `fx` menu and the shared dialogs. For 3D
 Print it checks Send and Cancel whole under the scrolling inputs.
 
+### Print managers by place (mitcad#1158)
+
+Materials, Printers and Processes keep their shared Make-tab locations and
+three separate modeless windows. Each uses the complete shared presenter:
+the search and place headings with counts (This design, This project when
+a project is open, My library, Built-in), the movable list/editor divider,
+the selected item's name, own-place editing line and settings categories.
+Materials also retains its class groups, appearance swatches and default
+mark, appearance actions and material variants. Native outlines, fields,
+images, category selectors and menus bind the shared models and actions;
+no separate native print-library model is introduced.
+
+New and Duplicate ask where, Copy to offers the other places, and Use in
+this design keeps its shared visibility rules. Built-in fields remain
+read only, with Duplicate beside the lock. Import into is before Import
+from Slicer. Without a design, the same managers show the available
+libraries and Built-in; no This design group or destination is added.
+Validation, change-elsewhere questions and delete confirmations use the
+shared handlers, including one model undo step per committed edit.
+
+F2 on a writable item selects its native Name field. New or Duplicate
+focuses the resulting field (Density for a new material that needs it),
+and the appearance list forwards Delete and Backspace to its shared
+Remove action. `requestNativeFocus` explicitly transfers these requests
+and the field's UTF-16 selection after a native refresh; ordinary data
+refreshes never request keyboard focus. Item views opt into their own
+unmodified keys with `NativeModelKeysProperty`; other table keys retain
+AppKit's normal editing and navigation. A native divider stores its user
+sizes on the retained splitter (`nativeSplitUserSizes`) and sends the
+shared `splitterMoved` signal, so rebuilding settings does not reset the
+list width or restart Materials' automatic width fitting. Explicit user
+sizes outrank preferred content widths, while still yielding to pane minima
+and the window size. The manager regression requires a real divider move
+of at least four points, then checks its actual native position and split
+width after the settings rebuild (`expect-native-split-retained`); the
+three matching-window captures also remain available for visual review.
+The local AppKit pointer helper gives split dividers the same future motion
+in event-tracking mode as table headers, after dispatching the actual
+queued press. `MITCAD_LOG_NATIVE_EDITS=1` logs the divider's received
+events, requested constraint and actual pane size to distinguish missing
+input from a layout constraint that prevents motion.
+
+The manager controls have stable identifiers: `printProfilesList` or
+`materialsList`, `printManagerSearch`, `printProfileName` or `materialName`,
+`printManagerEditing`, `printManagerBuiltInDuplicate`, `printManagerCopyTo`
+and the bottom `printManagerNew`, `printManagerDuplicate`,
+`printManagerDelete`, `printManagerUse` (profiles only) and
+`printManagerClose`. Place cells use `printManager.group.<place>`;
+profile cells use `printManager.item.<place>/<id>`, material cells keep
+`material.<place>/<id>`. These are the actual first-column cell identifiers
+from `NativeControlIdentifierRole`, not separate row-view identifiers.
+The divider is
+`printManagerSplit.divider.0`. These identifiers expose the actual native
+controls for regression input and accessibility checks.
+
 ### The Chat card (mitcad#1075)
 
 View › Chat (`view.chat`, last in the View menu as in Qt), ⌘⇧L and the
@@ -916,7 +1040,9 @@ the presenter bridge in the Qt panel's order: the agent or the agent
 choice, New Conversation and the panel's menu, the model, the
 conversation with its tool-call group rows, approval cards and notices,
 the state line, the privacy notice, the setup's action, and the message
-field with Selection, View and Send (Stop while the agent works). The
+field with Selection, Comments, View and Send (Stop while the agent works).
+Comments (`chatAttachComments`, mitcad#1120) starts on and sends the open
+comments with the message through the same shared controller as Qt. The
 controls keep the Qt panel's object names (`chatInput`, `chatSend`,
 `chatAllowOnce`, ...) as identifiers. The conversation takes the height the
 other rows leave.
@@ -935,6 +1061,13 @@ until the next rebuild. An agent's Markdown answer is shown as its plain
 text; its links are not yet clickable in the card. Showing the card gives
 the message field the keyboard when the agent is ready; hiding it while
 the field has the keyboard returns it to the canvas.
+While a drawing suppresses the card, View › Chat records the requested
+state and logs `Native chat card deferred (a drawing is open)`; the card
+stays hidden and receives no focus request. Closing the drawing restores
+that request. The toolbar's Chat button follows actual card visibility
+when Drawing hides or restores it; the View item's checked state keeps
+the requested state. The native familiar-workflow regression checks both states
+(mitcad#1153).
 
 `app.ui-macos-native-chat` (`tools/ui-macos-native-chat-test.sh`) installs
 the chat's scripted test agent as a signed-in Claude Code, as the Qt chat
@@ -959,9 +1092,15 @@ and the menus' commands for its menu. A button (`native.quickAccess.<id>`)
 is the command's CAD artwork and state and runs it as the menus do; after
 them a separator and the ⋮ (`native.quickAccessMenu`, DotsButton's three
 dots) open the group's menu: while folded the commands themselves, then
-File, Edit, View and Tools with their commands as checks, and Reset to
-Default. A check or the reset changes the shared setting through
-`QuickAccessSettings` once the menu has closed. The group folds into its ⋮
+File, Edit, View and Tools with their commands as checks, Reset to
+Default and Hide Quick-Access Toolbar (mitcad#1189). A check, the reset or
+the hide changes the shared setting through `QuickAccessSettings` once the
+menu has closed. Settings › Display › Show quick-access toolbar and the
+hide are one setting (`quickAccess/visible`): `QuickAccessNotifier` makes
+`refreshNativeActions` hand `setQuickAccess` its `visible`, and a group
+that is not visible is hidden whole, its ⋮ too; the workspace item's
+stack view detaches it, so the item closes up after the tabs, and nothing
+folds ("Native quick access hidden", "Native quick access shown"). The group folds into its ⋮
 by `TitleBar::updateQuickFold`'s rule: when the document's name, from the
 unfolded group's right to the project, agent and search items, 16 points
 off each, would have less room than its width (at most the title's 220
@@ -971,28 +1110,35 @@ points).
 opens a saved plate and checks the default buttons, Save disabled with
 "no unsaved changes" in its tooltip and enabled once the origin's light
 bulb changed the display state, View › Look At checked in the ⋮ menu
-adding a button before Preferences, Reset to Default, and the group folded
-in a narrow window and unfolded in a wide one.
+adding a button before Preferences, Reset to Default, the group folded
+in a narrow window and unfolded in a wide one, and Hide Quick-Access
+Toolbar hiding the whole group.
 
 ### The navigation bar (mitcad#1099)
 
 The Qt bar of mitcad#1086 has an AppKit counterpart: the capsule card
 `navigationBar` at the bottom centre of the view, just above the message
-band's row (mitcad#1098) as in the Floating layout, with Look At, Fit, Visual Style, Layout Grid and Snap
-to Grid in the Qt bar's order and CAD artwork (`navigationBar_<command>`,
+band's row (mitcad#1098) as in the Floating layout, with Look At, Fit,
+Visual Style, Layout Grid, Snap to Grid and Comment Pins in the Qt bar's
+order and CAD artwork (`navigationBar_<command>`,
 the Qt buttons' names). `MainWindow::createNativeNavigationBar` gives the
 commands; their checks, enabled states and tooltips (the registry's name
 and shortcut) come from the native action snapshot, and a click runs the
 command as its View menu item does, so a toggle in the bar, the View menu,
 a shortcut or the Sketch Palette is one action. Changes made outside the
-native window (the palette's Snap to grid) refresh the snapshot. Visual
-Style pops up the View menu's style commands with the current one checked,
+native window (the palette's Snap to grid) refresh the snapshot. Comment
+Pins (`navigationBar_view.comment_pins`, mitcad#1120) keeps the shared
+pin visibility setting; its VoiceOver label is the command's name and
+its checked state follows View › Comment Pins. The numbered pins remain
+Qt children of the embedded viewport, above its geometry and below the
+native floating cards. Visual Style pops up the View menu's style commands
+with the current one checked,
 its tooltip naming the current style. Preferences › Display › Show the
 navigation bar (`view/navigationBar`) shows and hides it; an open drawing
 hides it with the other cards. The bar's place, tooltips, the buttons' and
 View menu items' checks and the pop-up's entries are logged (`Native
 navigation bar …`). `app.ui-macos-native-navigation-bar`
-(`tools/ui-macos-native-test.sh navigation-bar`) checks the five buttons
+(`tools/ui-macos-native-test.sh navigation-bar`) checks the six buttons
 and Fit's shortcut, Snap to Grid in step with View › Grid and Snaps both
 ways, Wireframe from the pop-up, Look At in a sketch on XZ after Isometric
 View, and the palette's Snap to grid.
@@ -1792,7 +1938,8 @@ case checks the text before a choice, after it and after its undo.
 
 `tools/ui-macos-slicer-parity-test.sh` exercises the New printer/process
 choices, profile category and field edits, file import with Details, and
-installed-preset imports into the design and My Library. Its local synthetic
+installed-preset imports into the design and into My library (the Processes
+manager's Import into box, mitcad#1135). Its local synthetic
 folders are supplied through the existing `slicer_presets` query's `folders`
 argument; `MITCAD_TEST_SLICER_FOLDERS` is honored only while an explicit
 `MITCAD_TEST_INPUT` script is running. It never substitutes the user's home

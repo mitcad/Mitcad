@@ -43,7 +43,8 @@ public:
   // The folder of the design's project (its library); empty outside one.
   virtual QString projectFolder() const = 0;
   // Whether a design stands behind the model: its bodies, its choices,
-  // Assign, Save to and Use in this design. False for My Library.
+  // Assign, Copy to This design and Use in this design. False for the
+  // libraries' own model (a manager without a design, mitcad#1135).
   virtual bool hasDesign() const { return true; }
   // Answers read ahead (LibraryItemsHost::setAnswers) are read again from
   // the files: before a look that must see what is there now (Import from
@@ -84,7 +85,8 @@ private:
   DocumentHost& m_host;
 };
 
-// A model of its own for My Library (mitcad#704): an empty design that
+// A model of its own for the managers without a design (mitcad#704,
+// mitcad#1135): an empty design that
 // is never shown or saved. The library commands (`create_material`,
 // `edit_print_profile`, ... with `library`, `import_print_profile` into a
 // library) read and write the libraries' files and leave the open design
@@ -118,5 +120,35 @@ private:
   QString m_project;
   QString m_lastError;
 };
+
+// The model a print manager (Materials, Printers, Processes; mitcad#1135)
+// works through: the open design's, or with no design open
+// (DocumentHost::designOpen) a model of its own that holds none
+// (LibraryItemsHost), whose commands change only the libraries, so that
+// the empty window does not become a changed design.
+class ManagerHosts {
+public:
+  explicit ManagerHosts(DocumentHost& host) : m_document(host), m_design(host) {}
+
+  // Chooses the model for an opening; true when it is another than
+  // before.
+  bool choose();
+  PrintItemsHost& current();
+  // Whether the managers work on the open design.
+  bool onDesign() const { return m_onDesign; }
+  LibraryItemsHost& library() { return m_library; }
+
+private:
+  DocumentHost& m_document;
+  DesignItemsHost m_design;
+  LibraryItemsHost m_library;
+  bool m_onDesign = true;
+};
+
+// What a manager of `kind` (material, printer or process) asks of the
+// model as it opens, as its panel asks it (mitcad#1018, mitcad#1135): the
+// items by place, the print keys and the design's rest;
+// readAhead reads them off the UI thread when the manager has no design.
+QVector<QJsonObject> managerRequests(const QString& kind, const QString& project);
 
 } // namespace mitcad

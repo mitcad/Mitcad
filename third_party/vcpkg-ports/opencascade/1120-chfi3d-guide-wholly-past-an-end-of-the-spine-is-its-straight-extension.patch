@@ -1,0 +1,138 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: a guide wholly before the spine's start, or wholly
+past its end, is the spine's straight extension there (mitcad#1185).
+
+The case: a plate whose top long edges are chamfered 2, its end then cut
+round to a rounded octagon (45 degree sides, corners of radius 4). A
+chamfer of 2 on one of the 45 degree top edges takes the chain of tangent
+edges along the cut (diagonal, arc, end, arc, diagonal). Each diagonal
+ends against the earlier chamfer's face, and beyond the diagonal's top
+edge its vertical face goes on tangentially into a corner's cylinder. The
+analytic pieces of the chain (ChFi3d_KPartCutToEnd) run on past both ends
+of the spine up to where the bevel's lower contact leaves the diagonal's
+face; the rest, over the cylinder up to the earlier chamfer's face, is
+walked. At the chain's end the walk's guide is the last edges and their
+extension. At its start the guide lay wholly before the spine's start,
+from the extension to the first piece's start, a parameter before the
+first edge's start; ChFi3d_PerformElSpine trimmed the first edge from its
+start to that parameter, a trim that ran backwards, and the guide doubled
+back along the edge. The walk from the piece stalled within a hundredth
+of a millimetre, the first sections of its piece were never set, and
+ChFi3d_FilDS put the piece's point index into the DS as a vertex's: the
+topological build read the solid as a vertex (TopoDS_Builder::Add).
+
+Such a guide is now built as the spine's straight extension, as where an
+analytic piece took the whole edge (the guide's "cepadur" case, already a
+line through the guide's end along its tangent), at an end of the spine no
+other blend meets: PerformSetOfKPart tells ChFi3d_PerformElSpine which
+ends are free (its new StraightPastEnds). Where another blend meets the
+spine at that vertex, the corner between them cuts what the walk makes
+past it, and the guide stays as before: the diagonal chamfered together
+with its edge on the earlier chamfer's face and the corner's edge there
+(a corner of two chamfers at the diagonal's end) built before, and with a
+guide on past the vertex its corner failed. The plate's chamfer builds
+with both ends of the chain alike: valid, closed, its centre of mass on
+the plate's plane of symmetry within 1e-9 mm.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 865a08f3..6e8099da 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -7011,7 +7011,8 @@ Standard_EXPORT void ChFi3d_PerformElSpine(occ::handle<ChFiDS_ElSpine>& HES,
+                                            occ::handle<ChFiDS_Spine>&   Spine,
+                                            const GeomAbs_Shape          continuity,
+                                            const double                 tol,
+-                                           const bool                   IsOffset)
++                                           const bool                   IsOffset,
++                                           const int                    StraightPastEnds)
+ {
+ 
+   bool                           periodic, Bof, checkdeb, cepadur, bIsSmooth;
+@@ -7212,6 +7213,26 @@ Standard_EXPORT void ChFi3d_PerformElSpine(occ::handle<ChFiDS_ElSpine>& HES,
+   {
+     cepadur = true;
+   }
++  // A guide wholly before the spine's start (or wholly past its end), at
++  // an end of the spine no other blend meets (StraightPastEnds: 1 its
++  // start, 2 its end): an analytic piece of the first edge was cut on
++  // beyond the spine's start (ChFi3d_KPartCutToEnd) and the walk goes on
++  // from it into the extension. The edge has no part of the guide, and its
++  // trim from the edge's start to the guide's end, a parameter before that
++  // start, ran backwards: the guide doubled back along the edge, the walk
++  // from the piece stalled within a hundredth of a millimetre, and its
++  // piece's first sections were left unset (a chamfer ending against an
++  // earlier chamfer's face: the DS read the solid as a vertex,
++  // TopoDS_Builder::Add). The guide is the spine's straight extension
++  // there, as where a piece took the whole edge. (Where another blend meets
++  // the spine there, the corner between them cuts what the walk makes past
++  // the vertex: the guide is as before.)
++  if (!periodic && WF < WL
++      && ((WL < Spine->FirstParameter(1) + tol && (StraightPastEnds & 1) != 0)
++          || (WF > Spine->LastParameter(nbed) - tol && (StraightPastEnds & 2) != 0)))
++  {
++    cepadur = true;
++  }
+   //
+   // Petite veru pour les cas ou un KPart a bouffe l arete
+   // sans parvenir a terminer. On tire une droite.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index dce45a7b..3c1b6e5a 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -465,7 +465,8 @@ Standard_EXPORT void ChFi3d_PerformElSpine(occ::handle<ChFiDS_ElSpine>& HES,
+                                            occ::handle<ChFiDS_Spine>&   Spine,
+                                            const GeomAbs_Shape          continuity,
+                                            const double                 tol,
+-                                           const bool                   IsOffset = false);
++                                           const bool                   IsOffset = false,
++                                           const int                    StraightPastEnds = 0);
+ 
+ TopoDS_Face ChFi3d_EnlargeFace(const occ::handle<ChFiDS_Spine>&        Spine,
+                                const occ::handle<BRepAdaptor_Surface>& HS,
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index d71cd1cd..4c4a518f 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -18897,18 +18897,39 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+     }
+   }
+ 
++  // The ends of the spine no other blend meets: a guide wholly past such an
++  // end is the spine's straight extension (ChFi3d_PerformElSpine).
++  int aFreeEnds = 0;
++  if (!Spine->IsPeriodic())
++  {
++    for (int k = 0; k < 2; k++)
++    {
++      const TopoDS_Vertex aV    = k == 0 ? Spine->FirstVertex() : Spine->LastVertex();
++      bool                aMeet = aV.IsNull();
++      for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(myListStripe); it.More() && !aMeet; it.Next())
++      {
++        const occ::handle<ChFiDS_Spine>& aSp = it.Value()->Spine();
++        aMeet = it.Value() != Stripe && !aSp.IsNull()
++                && (aSp->FirstVertex().IsSame(aV) || aSp->LastVertex().IsSame(aV));
++      }
++      if (!aMeet)
++      {
++        aFreeEnds |= k == 0 ? 1 : 2;
++      }
++    }
++  }
+   NCollection_List<occ::handle<ChFiDS_ElSpine>>&          ll = Spine->ChangeElSpines();
+   NCollection_List<occ::handle<ChFiDS_ElSpine>>::Iterator ILES(ll);
+   for (; ILES.More(); ILES.Next())
+   {
+-    ChFi3d_PerformElSpine(ILES.ChangeValue(), Spine, myConti, tolesp);
++    ChFi3d_PerformElSpine(ILES.ChangeValue(), Spine, myConti, tolesp, false, aFreeEnds);
+   }
+   if (Spine->Mode() == ChFiDS_ConstThroatWithPenetrationChamfer)
+   {
+     NCollection_List<occ::handle<ChFiDS_ElSpine>>& offsetll = Spine->ChangeOffsetElSpines();
+     for (ILES.Initialize(offsetll); ILES.More(); ILES.Next())
+     {
+-      ChFi3d_PerformElSpine(ILES.ChangeValue(), Spine, myConti, tolesp, true);
++      ChFi3d_PerformElSpine(ILES.ChangeValue(), Spine, myConti, tolesp, true, aFreeEnds);
+     }
+   }
+   Spine->SplitDone(true);

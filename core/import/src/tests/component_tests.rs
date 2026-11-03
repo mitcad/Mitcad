@@ -733,6 +733,112 @@ fn a_cut_and_paste_whose_features_cannot_go_transfers_the_body() {
     }
 }
 
+/// A cut pasted into the component it came from (mitcad#1175): where the
+/// file's history keeps the item as the body and a copy of it, the item
+/// is that copy in place, checked against its state, and no base feature
+/// brings the copy for the items after it; where its state is the body as
+/// it was, nothing is moved or added.
+#[test]
+fn a_cut_pasted_into_its_own_component_is_the_copy_its_state_keeps() {
+    let kernel = || TestKernel {
+        edge_points: true,
+        ..TestKernel::default()
+    };
+    let first = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(kernel());
+    import_design(
+        &mut reference,
+        &timeline_dump(first.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let block = shapes(&reference)[0].clone();
+    // The block and its copy in place, as the file stores them.
+    add(
+        &mut reference,
+        json!({"type": "move", "bodies": ["F2.b0"], "copy": true,
+               "transform": {"type": "free", "matrix": [[1.0, 0.0, 0.0, 0.0],
+                                                        [0.0, 1.0, 0.0, 0.0],
+                                                        [0.0, 0.0, 1.0, 0.0]]}}),
+    );
+    let copied = shapes(&reference);
+    assert_eq!(copied.len(), 2);
+    let points: Vec<[f64; 3]> = block
+        .edges
+        .iter()
+        .take(3)
+        .map(|(a, b)| edge_point(a, b).map(|x| x / 10.0))
+        .collect();
+    let body = json!({"kind": "body", "objectType": "BRepBody",
+                      "_f3d": {"recipe": "body", "entities": [[{"tag": "304", "kind": 7, "ops": []}]],
+                               "edge_points": points}});
+    let mut items = first;
+    items.push(
+        json!({"index": 2, "name": "CutPasteBodies1", "objectType": "CopyPasteBodies",
+               "detail": {"sourceBody": [body]}, "_f3d": {"base_name": "CutPasteBodies"}}),
+    );
+    let replay = |pasted: Vec<MockShape>| {
+        let mut geometry = TestGeometry {
+            states: vec![Vec::new(), vec![block.clone()], pasted],
+            items: HashMap::from([(1, 1), (2, 2)]),
+            ..TestGeometry::default()
+        };
+        let mut doc = Document::new(kernel());
+        let report = import_design(
+            &mut doc,
+            &timeline_dump(items.clone()),
+            &mut geometry,
+            &Options::default(),
+        );
+        (report, doc)
+    };
+    // The body and its copy.
+    let (report, doc) = replay(copied);
+    let text = report.text();
+    let paste = &report.items[2];
+    assert_eq!(paste.outcome, Outcome::Parametric, "{text}");
+    assert_eq!(paste.verified, Some(true), "{text}");
+    assert!(
+        paste
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("adds its copy")),
+        "{text}"
+    );
+    let uid: FeatureUid = paste.features[0].parse().unwrap();
+    match &doc.feature(uid).unwrap().def {
+        FeatureDef::Move(m) => assert!(m.copy, "{text}"),
+        other => panic!("{other:?}\n{text}"),
+    }
+    assert_eq!(doc.bodies().len(), 2, "{text}");
+    assert!(
+        doc.features().all(|f| f.def.type_name() != "base"),
+        "{text}"
+    );
+    assert!(report.warnings.is_empty(), "{text}");
+    // The body as it was: nothing to move, nothing added.
+    let (report, doc) = replay(vec![block.clone()]);
+    let text = report.text();
+    let paste = &report.items[2];
+    assert_eq!(paste.outcome, Outcome::Parametric, "{text}");
+    assert!(paste.features.is_empty(), "{text}");
+    assert!(
+        paste
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("in the component already")),
+        "{text}"
+    );
+    assert_eq!(doc.bodies().len(), 1, "{text}");
+    assert!(
+        doc.features().all(|f| f.def.type_name() != "base"),
+        "{text}"
+    );
+}
+
 /// An occurrence inside a component placed several times (Pin in Plate,
 /// Plate placed 10 cm apart twice): the file gives the occurrence's
 /// placement after each item per path, in the root component. Its

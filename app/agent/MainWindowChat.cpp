@@ -113,6 +113,31 @@ void MainWindow::createChat() {
   host.setWorking = [this](const QString& agentName) { m_agentIndicator->setChatWorking(agentName); };
   host.whenIdle = [this](std::function<void()> call) { whenIdle(this, std::move(call)); };
   host.openUrl = [](const QString& url) { openExternalUrl(QUrl(url)); };
+  // The open comments (mitcad#1119), shortened to what the agent needs:
+  // the full comment is in mitcad://comments.
+  host.comments = [this]() -> QJsonArray {
+    if (modelBusy()) {
+      return {};
+    }
+    QJsonArray open;
+    try {
+      const QJsonArray comments =
+          query({{QStringLiteral("query"), QStringLiteral("comments")}, {QStringLiteral("status"), QStringLiteral("open")}})
+              .toObject()
+              .value(QStringLiteral("comments"))
+              .toArray();
+      for (const QJsonValue& value : comments) {
+        const QJsonObject comment = value.toObject();
+        open.append(QJsonObject{{QStringLiteral("id"), comment.value(QStringLiteral("id"))},
+                                {QStringLiteral("text"), comment.value(QStringLiteral("text"))},
+                                {QStringLiteral("label"), comment.value(QStringLiteral("label"))},
+                                {QStringLiteral("author"), comment.value(QStringLiteral("author"))}});
+      }
+    } catch (const std::exception& error) {
+      qInfo().noquote() << QStringLiteral("Chat: no comments: %1").arg(QString::fromUtf8(error.what()));
+    }
+    return open;
+  };
   m_chat = new agent::ChatController(std::move(host), this);
 
   QAction* action = m_registry->action(QStringLiteral("view.chat"));

@@ -57,14 +57,15 @@ struct BindingActions;
 //
 // - Options: the options in choice order (dragged, or Move Up and Move
 //   Down), Add Option… (an existing user parameter or a new one), Remove
-//   Option, and per option its domain (Edit Domain…: a list, a range, or
-//   a column of one of the design's tables, mitcad#849),
-//   its default (the option's own value), its comment and whether it is
-//   driven.
+//   Option, and per option its possible values (its domain; Edit Possible
+//   Values…: a list, a range, or a column of one of the design's tables,
+//   mitcad#849), its current Value (mitcad#968: a By Formula option's
+//   evaluated value, its expression in the tooltip), its comment and
+//   whether it is By Formula.
 // - Rows: a sheet of the rows with a column per option (and per other
 //   parameter of a closed table), Designation, Part Number and Supplier
-//   URL; Closed, Add Row (the current values), Generate Rows from Table…
-//   (a row per key of a table's column, mitcad#849), Delete Row, Set as
+//   URL; Only these rows (the table closed), Add Row (the current
+//   values), Generate Rows from Table… (a row per key of a table's column, mitcad#849), Delete Row, Set as
 //   Default, Add Column… and Remove Column (a closed table's parameter
 //   columns, mitcad#999), Import CSV… and Export CSV… (the rows as CSV,
 //   mitcad#1044) and Apply; blocks of cells are copied, pasted and emptied
@@ -94,10 +95,10 @@ private:
   enum OptionColumn {
     kOptionName,
     kOptionUnit,
-    kOptionDomain,
-    kOptionDefault,
+    kOptionDomain, // Possible Values
+    kOptionValue,  // the current value (mitcad#968)
     kOptionComment,
-    kOptionDriven,
+    kOptionFormula, // By Formula
     kOptionUsedBy // mitcad#862
   };
 

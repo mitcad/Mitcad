@@ -26,9 +26,10 @@
 #      printer is set.
 #   4. No button beside Printer or Process (mitcad#1134; the same in
 #      tools/ui-print-picker-test.sh and ui-print-settings-test.sh on
-#      Linux): Edit printers and processes..., the pickers' last row,
-#      opens Printers and Processes on the chosen printer, then on the
-#      chosen process; the choices stay.
+#      Linux): Edit printers... and Edit processes..., the pickers' last
+#      rows, open the Printers manager on the chosen printer and the
+#      Processes manager on the chosen process (mitcad#1135); the choices
+#      stay.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-print-settings-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -214,26 +215,29 @@ Ui-FocusMain
 Ui-ExpectNew '3D Print printer: design/acme-lab-x1-carbon-0-4-nozzle' 'the design''s printer is set'
 Ui-ExpectNew 'Panel Send to Slicer input printer shows: X1 Carbon' 'the field shows the model and the nozzle'
 
-Write-Host '--- 4. Edit printers and processes..., the pickers'' last row (mitcad#1134)'
-# The box's options as logged: New printer... and last Edit printers and
-# processes... (the log's ellipses matched as \S*).
+Write-Host '--- 4. Edit printers... and Edit processes..., the pickers'' last rows (mitcad#1134, mitcad#1135)'
+# The box's options as logged: New printer... and last Edit printers...
+# (the log's ellipses matched as \S*).
 $listed = Ui-LastLineWith 'Panel Send to Slicer options printer: '
-if ("$listed" -notmatch '\| --- \| New printer\S*\s\| Edit printers and processes\S*$') {
+if ("$listed" -notmatch '\| --- \| New printer\S*\s\| Edit printers\S*$') {
   Ui-Fail "the Printer box lists '$listed'"
 }
-Write-Host 'ok   Edit printers and processes... last, below New printer...'
+Write-Host 'ok   Edit printers... last, below New printer...'
 foreach ($kind in @('Printer', 'Process')) {
   $key = $kind.ToLowerInvariant()
+  # The row's words and the manager it opens.
+  $row = if ($kind -eq 'Printer') { 'Edit printers' } else { 'Edit processes' }
+  $manager = if ($kind -eq 'Printer') { 'Printers' } else { 'Processes' }
   Ui-Mark
   Ui-Step "open $kind"                   { Ui-ClickLogged "Panel Send to Slicer input $key" }
   Ui-ExpectNew "$kind picker opened: " 'the picker opened'
   Ui-FocusDialog "^$kind Picker$"
-  Ui-Step 'type Edit printers'           { Ui-Type 'Edit printers' }
-  Ui-ExpectNew "$kind picker search: Edit printers, first Edit printers and processes" 'the search finds the row'
+  Ui-Step "type $row"                    { Ui-Type $row }
+  Ui-ExpectNew "$kind picker search: $row, first $row" 'the search finds the row'
   Ui-Step 'choose (Enter)'               { Ui-Key 'Return' }
-  Ui-ExpectNew "$kind picker chose: Edit printers and processes" 'Edit printers and processes... chosen'
+  Ui-ExpectNew "$kind picker chose: $row" "$row... chosen"
   Ui-ExpectNew "3D Print $key edit: " "on the design's $key"
-  Ui-ExpectNew 'Printers and processes opened' 'Printers and Processes opened'
+  Ui-ExpectNew "$manager opened" "the $manager manager opened"
   if ($kind -eq 'Printer') {
     Ui-ExpectNew '3D Print printer edit: design/acme-lab-x1-carbon-0-4-nozzle' 'the chosen printer'
     Ui-ExpectNew 'Profile selected: printer Acme Lab X1 Carbon 0.4 nozzle (design)' 'selected in the window'
@@ -241,10 +245,10 @@ foreach ($kind in @('Printer', 'Process')) {
     # (On Slicer default the window opens with none selected.)
     Ui-ExpectNew 'Profile selected: process ' 'the chosen process selected in the window'
   }
-  Ui-Step 'close it (Escape)'            { Ui-FocusDialog '^Printers and Processes$'; Ui-Key 'Escape'; Ui-FocusMain }
+  Ui-Step 'close it (Escape)'            { Ui-FocusDialog "^$manager`$"; Ui-Key 'Escape'; Ui-FocusMain }
   Ui-Sync
   $changed = @(Ui-NewLines) | Where-Object { $_.Contains("3D Print ${key}: ") } | Select-Object -Last 1
-  if ($changed) { Ui-Fail "Edit printers and processes... changed the ${key}: $changed" }
+  if ($changed) { Ui-Fail "$row... changed the ${key}: $changed" }
   Write-Host "ok   the $key stays"
 }
 $shown = Ui-LastLineWith 'Panel Send to Slicer input printer shows: '

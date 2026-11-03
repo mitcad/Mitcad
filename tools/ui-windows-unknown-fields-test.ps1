@@ -5,7 +5,7 @@
 # (mitcad#1132) in the build VM (tools/ui-windows-lib.ps1 says how the input
 # is posted); the Linux counterpart is tools/ui-unknown-fields-test.sh. The
 # demo block saved, then two top-level fields this MitCad does not know
-# (comments and next_comment) added to its file:
+# (future_notes and next_future_note) added to its file:
 #   1. Floating: opening warns, naming them ("Status warning" in the log).
 #      Save (Ctrl+S) asks first: Cancel leaves the file as it is; Save As
 #      writes a new file without them and leaves the old one as it is.
@@ -29,7 +29,7 @@ $copy = Join-Path $work 'copy.mitcad'
 # The app logs paths with forward slashes.
 function Logged([string]$Path) { return $Path -replace '\\', '/' }
 $designLogged = Logged $design
-$warning = 'Status warning: This design was written by a newer MitCad: comments, next_comment not read. ' +
+$warning = 'Status warning: This design was written by a newer MitCad: future_notes, next_future_note not read. ' +
   'Saving over it drops them.'
 
 # A path typed into a file dialog's focused field, then Enter.
@@ -44,7 +44,7 @@ function Type-Into-Dialog([string]$Title, [string]$Path) {
 
 function Has-Fields([string]$Path) {
   $text = [IO.File]::ReadAllText($Path)
-  return $text.Contains('"comments"') -or $text.Contains('"next_comment"')
+  return $text.Contains('"future_notes"') -or $text.Contains('"next_future_note"')
 }
 
 # The value of parameter d3 the file holds.
@@ -64,7 +64,7 @@ Ui-StopApp
 $text = [IO.File]::ReadAllText($design)
 $brace = $text.IndexOf('{')
 if ($brace -lt 0) { Ui-Fail "no JSON object in $design" }
-$added = "`n  ""comments"": [{""id"": ""N1"", ""text"": ""Check the wall""}],`n  ""next_comment"": 2,"
+$added = "`n  ""future_notes"": [{""id"": ""N1"", ""text"": ""Check the wall""}],`n  ""next_future_note"": 2,"
 [IO.File]::WriteAllText($design, $text.Substring(0, $brace + 1) + $added + $text.Substring($brace + 1))
 if (-not (Has-Fields $design)) { Ui-Fail 'the fields were not added' }
 Write-Host 'ok   the file has the newer fields'
@@ -72,12 +72,12 @@ Write-Host 'ok   the file has the newer fields'
 Write-Host '--- 1. Floating: the warning; Save asks, Cancel, then Save As'
 Ui-StartApp 'floating' @('--open', $design, '--set', 'd3=35', '--chrome=floating')
 Ui-ExpectLog "Opened $designLogged" 'opened'
-Ui-ExpectLog "Unknown fields of $designLogged not read: comments, next_comment" 'the fields named in the log'
+Ui-ExpectLog "Unknown fields of $designLogged not read: future_notes, next_future_note" 'the fields named in the log'
 Ui-ExpectLog $warning 'the warning on opening'
 $before = (Get-FileHash $design).Hash
 Ui-Mark
 Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
-Ui-ExpectNew "Save drops unknown fields: ${designLogged}: comments, next_comment" 'Save asks first'
+Ui-ExpectNew "Save drops unknown fields: ${designLogged}: future_notes, next_future_note" 'Save asks first'
 Ui-FocusDialog '^MitCad$'
 Ui-Step 'cancel (Escape)'                { Ui-Key 'Escape' }
 Ui-FocusMain
@@ -86,7 +86,7 @@ if ((Get-FileHash $design).Hash -ne $before) { Ui-Fail 'Cancel wrote the file' }
 Write-Host 'ok   Cancel keeps the file as it is'
 Ui-Mark
 Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
-Ui-ExpectNew "Save drops unknown fields: ${designLogged}: comments, next_comment" 'Save asks again'
+Ui-ExpectNew "Save drops unknown fields: ${designLogged}: future_notes, next_future_note" 'Save asks again'
 Ui-FocusDialog '^MitCad$'
 Ui-Step 'Save As (A)'                    { Ui-Key 'a' }
 Ui-ExpectNew 'Save drops unknown fields: save as' 'Save As chosen'
@@ -105,7 +105,7 @@ Ui-ExpectLog "Opened $designLogged" 'opened'
 Ui-ExpectLog $warning 'the warning on opening'
 Ui-Mark
 Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
-Ui-ExpectNew "Save drops unknown fields: ${designLogged}: comments, next_comment" 'Save asks first'
+Ui-ExpectNew "Save drops unknown fields: ${designLogged}: future_notes, next_future_note" 'Save asks first'
 Ui-FocusDialog '^MitCad$'
 Ui-Step 'Save and Drop Them (S)'         { Ui-Key 's' }
 Ui-FocusMain

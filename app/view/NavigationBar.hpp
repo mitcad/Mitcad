@@ -15,8 +15,8 @@ namespace mitcad {
 class CommandRegistry;
 
 // The navigation bar at the bottom of the view (mitcad#1086): Look At, Fit,
-// Visual Style (a drop-down of the styles), Layout Grid and Snap to Grid,
-// in every workspace and in sketches. Its buttons are the View menu's own
+// Visual Style (a drop-down of the styles), Layout Grid, Snap to Grid and
+// Comment Pins (mitcad#1119), in every workspace and in sketches. Its buttons are the View menu's own
 // actions (QToolButton::setDefaultAction), so their checks, enabled states
 // and tooltips (the command's name, its tooltip and its shortcut, as the
 // registry gives them) are the menu's: Snap to Grid toggled in the bar, in
@@ -77,6 +77,7 @@ private:
   QList<QAction*> m_styles;
   QAction* m_grid = nullptr;
   QAction* m_snap = nullptr;
+  QAction* m_pins = nullptr; // Comment Pins (mitcad#1119)
   QTimer* m_logTimer = nullptr;
   QString m_loggedPlace;
   QString m_loggedButtons;

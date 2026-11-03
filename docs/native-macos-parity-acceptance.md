@@ -125,7 +125,7 @@ preserves its evidence and all unrun inventory. Never overwrite a failed run.
 | 19 | `settings-textures` | Settings Textures: production entry; pictures, fields and labels |
 | 20 | `shortcuts` | Keyboard Shortcuts: production entry; normal/narrow hierarchy and filtering |
 | 21 | `print` | 3D Print: production entry; compact fields and visible primary/cancel actions |
-| 22 | `profiles` | Printers and Processes: production entry; list, editor fields and actions |
+| 22 | `profiles` | Processes (once Printers and Processes, mitcad#1135): production entry; grouped list, editor fields and actions |
 | 23 | `materials` | Materials: production entry; list, fields and assignment actions |
 | 24 | `properties` | Properties: production entry; readable results and closing action |
 | 25 | `export` | Export: production entry; format choices and action order; no file exported |

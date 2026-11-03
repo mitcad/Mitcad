@@ -9,6 +9,22 @@ expect-native-visible configurationField_Length true
 expect-native-visible configurationChooser_Color true
 capture-undo-depth before
 expect-native-configuration-layout
+# All three cards share a narrow window; read their simultaneous frames,
+# without scrolling controls into view or hiding either right-hand card.
+native-action solid.box
+native-action view.chat
+expect-native-visible native.chatCard true
+expect-native-visible native.inspectorCard true
+native-resize 820 820
+expect-native-visible native.configurationCard true
+expect-native-visible native.chatCard true
+expect-native-visible native.inspectorCard true
+expect-native-configuration-layout frames
+# Capture the actual native cards; framebuffer composition omits these cards.
+screenshot-screen '${MITCAD_TEST_WORK}/configuration-chat-narrow-${MITCAD_TEST_COLOR_SCHEME}.png'
+native-action view.chat
+native-click commandCancel
+native-resize 1280 820
 # The full visible slider, including both endpoints, is real pointer input.
 mark
 native-pointer-drag configurationSlider_Length knob 1
@@ -52,9 +68,12 @@ focus-dialog '^Configurations$'
 # (macos-native-configurations-empty.mitcad-ui shows them).
 expect-native-visible configurationsOptions true
 expect-native-visible configurationsOptions.empty false
+# The approved words (mitcad#968), as the native controls show them.
+expect-native-text configurationsEditDomain '^Edit Possible Values'
 native-choice configurationsTabs Rows
 expect-native-visible configurationsRows true
 expect-native-visible configurationsRows.empty false
+expect-native-text configurationsClosed '^Only these rows$'
 native-choice configurationsTabs Rules
 expect-log 'Configurations page Rules'
 expect-native-visible ruleCanvas true

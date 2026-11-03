@@ -34,4 +34,17 @@ ConeOutput face_cone(const geometry::Shape& shape, rust::Str face) {
   return out;
 }
 
+std::shared_ptr<geometry::Shape> projected_emboss(rust::Str feature, const Frame& frame,
+                                                  rust::Slice<const Region> regions, const geometry::Shape& body,
+                                                  rust::Str face, const EmbossProjection& projection) {
+  geometry::EmbossProjectSpec spec;
+  spec.feature = std::string(feature);
+  spec.frame = to_geometry(frame);
+  spec.regions = to_geometry(regions);
+  spec.face = std::string(face);
+  spec.direction = gp_Vec(projection.direction[0], projection.direction[1], projection.direction[2]);
+  spec.depth = projection.depth;
+  return geometry::projected_emboss(body, spec);
+}
+
 } // namespace mitcad::bridge

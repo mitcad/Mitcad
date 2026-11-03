@@ -12,6 +12,7 @@
 #include <QAction>
 #include <QColor>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QCompleter>
 #include <QEvent>
 #include <QFont>
@@ -35,6 +36,7 @@
 #include <QPushButton>
 #include <QRect>
 #include <QRectF>
+#include <QSet>
 #include <QSettings>
 #include <QSize>
 #include <QSignalBlocker>
@@ -113,6 +115,15 @@ QIcon swatch(const QColor& color) {
   return QIcon(pixmap);
 }
 
+// How deep a row is in the list: 0 for a place's heading.
+int depthOf(const QTreeWidgetItem* row) {
+  int depth = 0;
+  for (const QTreeWidgetItem* parent = row->parent(); parent != nullptr; parent = parent->parent()) {
+    ++depth;
+  }
+  return depth;
+}
+
 const QStringList& groupOrder() {
   // The classes' groups (mitcad#655, mitcad#1102): FDM plastics hold the
   // filaments.
@@ -121,54 +132,145 @@ const QStringList& groupOrder() {
 
 } // namespace
 
-MaterialsDialog::MaterialsDialog(DocumentHost& host, QWidget* parent) : QDialog(parent), m_designHost(host) {
+MaterialsDialog::MaterialsDialog(DocumentHost& host, QWidget* parent) : QDialog(parent), m_hosts(host) {
   setWindowTitle(tr("Materials"));
+  setObjectName(QStringLiteral("materialsManager"));
   setWindowIcon(themeIcon(QStringLiteral("material")));
   resize(960, 640);
+  m_hosts.choose();
   auto* layout = new QVBoxLayout(this);
-  m_panel = new MaterialsPanel(m_designHost, QStringLiteral("Materials"));
-  layout->addWidget(m_panel);
+  // Import from Slicer… (mitcad#829, mitcad#1135): a slicer's filaments
+  // into the place chosen in the box before it, the default as New's.
+  m_import = new SlicerImportBar(m_hosts.current(), QStringLiteral("Materials"));
+  m_import->target = [this] { return defaultPlace(m_hosts.onDesign()); };
+  layout->addWidget(m_import);
+  m_panel = new MaterialsPanel(m_hosts.current(), QStringLiteral("Materials"));
+  layout->addWidget(m_panel, 1);
   m_panel->editAppearances = [this] {
     if (editAppearances) {
       editAppearances();
     }
   };
-  // The user's library without a design (mitcad#704): no result of this
-  // window, so after the list's actions (mitcad#1019); Close at the end.
-  auto* editLibrary = new QPushButton(tr("Edit &Library…"));
-  editLibrary->setToolTip(tr("Your own materials, printers and processes, kept apart from the design"));
-  auto* close = new QPushButton(tr("Close"));
-  m_panel->addListButton(editLibrary, QStringLiteral("edit_library"));
-  m_panel->addButton(close, QStringLiteral("close"));
-  mac::styleDialog(this);
-  connect(editLibrary, &QPushButton::clicked, this, [this] {
-    qDebug().noquote() << QStringLiteral("Materials: Edit Library…");
-    if (openMyLibrary) {
-      openMyLibrary();
+  // The first material the import brought, selected where it went.
+  connect(m_import, &SlicerImportBar::imported, this, [this](const SlicerImportResult& result) {
+    if (!m_hosts.onDesign()) {
+      m_changed = true;
+    }
+    QString id;
+    for (const QJsonValue& value : result.answer.value(QStringLiteral("materials")).toArray()) {
+      if (id.isEmpty()) {
+        id = value.isObject() ? text(value.toObject(), "id") : value.toString();
+      }
+    }
+    for (const QJsonValue& value : result.answer.value(QStringLiteral("items")).toArray()) {
+      if (id.isEmpty() && text(value.toObject(), "kind") == QStringLiteral("material")) {
+        id = text(value.toObject(), "id");
+      }
+    }
+    if (id.isEmpty()) {
+      m_panel->refresh();
+      return;
+    }
+    m_panel->showItem(result.into + QLatin1Char('/') + id);
+  });
+  connect(m_panel, &MaterialsPanel::changed, this, [this] {
+    if (!m_hosts.onDesign()) {
+      m_changed = true;
     }
   });
+  auto* close = new QPushButton(tr("Close"));
+  close->setObjectName(QStringLiteral("printManagerClose"));
+  m_panel->addButton(close, QStringLiteral("close"));
+  mac::styleDialog(this);
   connect(close, &QPushButton::clicked, this, &QDialog::reject);
 }
 
 MaterialsDialog::~MaterialsDialog() {
-  // The panel before the host it works through.
+  // The panel and the import before the models they work through.
   delete m_panel;
+  delete m_import;
 }
 
-void MaterialsDialog::refresh() { m_panel->refresh(); }
+void MaterialsDialog::open(const QString& key) {
+  if (m_hosts.choose()) {
+    m_panel->setHost(m_hosts.current(), false);
+    m_import->setHost(m_hosts.current());
+  }
+  m_import->setPlaces(m_panel->places(), defaultPlace(m_hosts.onDesign()));
+  if (m_hosts.onDesign()) {
+    if (key.isEmpty()) {
+      m_panel->refresh();
+    } else {
+      m_panel->showItem(key);
+    }
+    return;
+  }
+  // Without a design (mitcad#1135): the libraries are read off the UI
+  // thread (mitcad#1018), the list fills when they came.
+  const int reading = ++m_reads;
+  readAhead(this, managerRequests(QStringLiteral("material"), m_hosts.library().projectFolder()),
+            [this, reading, key](const QueryAnswers& answers, qint64 readMs) {
+              if (reading != m_reads || m_hosts.onDesign()) {
+                return;
+              }
+              m_hosts.library().setAnswers(answers);
+              QElapsedTimer timer;
+              timer.start();
+              if (key.isEmpty()) {
+                m_panel->refresh();
+              } else {
+                m_panel->showItem(key);
+              }
+              qDebug().noquote() << QStringLiteral("Materials loaded: read %1 ms, list %2 ms")
+                                        .arg(readMs)
+                                        .arg(timer.elapsed());
+            });
+}
+
+void MaterialsDialog::refresh() {
+  // A design opened or changed meanwhile: on its model now.
+  if (m_hosts.choose()) {
+    m_panel->setHost(m_hosts.current(), false);
+    m_import->setHost(m_hosts.current());
+  }
+  m_import->setPlaces(m_panel->places(), defaultPlace(m_hosts.onDesign()));
+  ++m_reads; // read now: a reading under way shows nothing older
+  m_panel->refresh();
+}
 
 void MaterialsDialog::showItem(const QString& key) { m_panel->showItem(key); }
 
+void MaterialsDialog::hideEvent(QHideEvent* event) {
+  QDialog::hideEvent(event);
+  qDebug().noquote() << QStringLiteral("Materials closed%1").arg(m_changed ? QStringLiteral(" after changes")
+                                                                          : QString());
+  if (m_changed) {
+    m_changed = false;
+    emit libraryChanged();
+  }
+}
+
 MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWidget* parent)
-    : QWidget(parent), m_host(host), m_log(logName) {
+    : QWidget(parent), m_host(&host), m_log(logName) {
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   auto* splitter = new QSplitter(Qt::Horizontal);
+  splitter->setObjectName(QStringLiteral("printManagerSplit"));
 
-  // The list, grouped by class (mitcad#655): one search in the window, the
-  // settings', so the list has none and no group filter.
+  // The search across the groups, then the list grouped by place and in
+  // each place by class (mitcad#655, mitcad#1135).
+  auto* side = new QWidget;
+  auto* sideBox = new QVBoxLayout(side);
+  sideBox->setContentsMargins(0, 0, 0, 0);
+  m_search = new QLineEdit;
+  m_search->setObjectName(QStringLiteral("printManagerSearch"));
+  m_search->setPlaceholderText(tr("Search materials"));
+  m_search->setAccessibleName(tr("Search"));
+  m_search->setClearButtonEnabled(true);
+  sideBox->addWidget(m_search);
   m_list = new QTreeWidget;
   m_list->setObjectName(QStringLiteral("materialsList"));
+  m_list->setAccessibleName(tr("Materials by place and class"));
   m_list->setColumnCount(2);
   m_list->setHeaderHidden(true);
   m_list->setIconSize(QSize(18, 18));
@@ -190,16 +292,19 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_list->setRootIsDecorated(false);
   m_list->setItemsExpandable(false);
   m_list->setIndentation(kListIndent);
-  splitter->addWidget(m_list);
+  sideBox->addWidget(m_list, 1);
+  splitter->addWidget(side);
 
-  // The editor of the selected one: the header both windows share (its
-  // name to edit, Built-in, Save to), then the tabs: General (Class,
-  // Density, Appearances) and the print settings' (mitcad#655).
+  // The editor of the selected one: the header the managers share (its
+  // name to edit, Built-in, Copy to), the line that says where it is
+  // edited (mitcad#1135), then the tabs: General (Class, Density,
+  // Appearances) and the print settings' (mitcad#655).
   m_editor = new QWidget;
   auto* editorBox = new QVBoxLayout(m_editor);
   editorBox->setContentsMargins(8, 0, 0, 0);
-  editorBox->addLayout(itemHeader(&m_name, &m_usedState, &m_saved, &m_builtIn, &m_headerDuplicate, &m_saveTo));
+  editorBox->addLayout(itemHeader(&m_name, &m_usedState, &m_builtIn, &m_headerDuplicate, &m_copyTo, &m_editing));
   m_name->setObjectName(QStringLiteral("materialName"));
+  editorBox->addWidget(m_editing);
   // Nothing selected: a quiet line, not a blank side.
   m_emptyState = new QLabel(tr("No material selected"));
   m_emptyState->setAlignment(Qt::AlignCenter);
@@ -241,6 +346,8 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   appearancesRow->setSpacing(8);
   m_appearanceList = new QTreeWidget;
   m_appearanceList->setObjectName(QStringLiteral("materialAppearances"));
+  m_appearanceList->setProperty(NativeModelKeysProperty,
+                               QVariantList{int(Qt::Key_Delete), int(Qt::Key_Backspace)});
   m_appearanceList->setAccessibleName(tr("Appearances"));
   m_appearanceList->setColumnCount(2);
   m_appearanceList->setHeaderHidden(true);
@@ -289,7 +396,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_form->setEndPage(m_variants, tr("Variants"));
   m_variants->printers = [this] {
     QJsonArray rows;
-    for (const LibraryItem& item : queryLibraryItems(m_host.model(), QStringLiteral("printer"), itemsProject())) {
+    for (const LibraryItem& item : queryLibraryItems(m_host->model(), QStringLiteral("printer"), project())) {
       rows.append(item.row);
     }
     return rows;
@@ -319,18 +426,31 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   layout->addWidget(m_message);
   m_buttons = new QHBoxLayout;
   m_new = new QPushButton(tr("New ▾"));
+  m_new->setObjectName(QStringLiteral("printManagerNew"));
   m_duplicate = new QPushButton(tr("Duplicate"));
+  m_duplicate->setObjectName(QStringLiteral("printManagerDuplicate"));
   m_delete = new QPushButton(tr("Delete"));
+  m_delete->setObjectName(QStringLiteral("printManagerDelete"));
   m_buttons->addWidget(m_new);
   m_buttons->addWidget(m_duplicate);
   m_buttons->addWidget(m_delete);
   m_buttons->addStretch(1);
   layout->addLayout(m_buttons);
   // Enter in a field saves it: no button takes Enter.
-  for (QPushButton* button : {m_headerDuplicate, m_saveTo, m_new, m_duplicate, m_delete, m_addAppearance,
+  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_addAppearance,
                               m_removeAppearance, m_defaultAppearance}) {
     mac::auxiliaryButton(button);
   }
+
+  connect(m_search, &QLineEdit::textChanged, this, [this](const QString& wanted) {
+    rebuildList();
+    int shown = 0;
+    for (const LibraryItem& item : std::as_const(m_items)) {
+      shown += matchesSearch(item, wanted) && m_places.contains(item.place) ? 1 : 0;
+    }
+    qDebug().noquote() << QStringLiteral("%1 search: %2, %3 shown").arg(m_log, wanted).arg(shown);
+    logRows();
+  });
 
   connect(m_class, &QComboBox::activated, this, [this](int index) {
     const LibraryItem* item = current();
@@ -345,7 +465,6 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
     }
     m_currentKey = item->data(0, kKeyRole).toString();
     const LibraryItem* chosen = current();
-    m_currentDesignId = chosen != nullptr ? chosen->designId() : QString();
     setMessage(QString());
     showCurrent();
     qDebug().noquote() << QStringLiteral("Material selected: %1")
@@ -367,7 +486,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
       return;
     }
     const std::optional<double> density = parsePlainNumber(m_density->text());
-    const double now = designFields(*item, m_designMaterials, m_library).value(QStringLiteral("density")).toDouble();
+    const double now = itemFields(*item, m_designMaterials, QJsonObject()).value(QStringLiteral("density")).toDouble();
     if (!density || *density <= 0.0) {
       m_densityError->setText(tr("Use a value above 0 g/cm³."));
       m_densityError->show();
@@ -386,7 +505,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
       return;
     }
     // The appearances of its class first (mitcad#1102).
-    const QStringList offered = offeredAppearances(designFields(*item, m_designMaterials, m_library));
+    const QStringList offered = offeredAppearances(itemFields(*item, m_designMaterials, QJsonObject()));
     m_addPopover->open(m_addAppearance, QString(), offered, item->materialClass);
   });
   connect(m_removeAppearance, &QPushButton::clicked, this, &MaterialsPanel::removeAppearance);
@@ -407,7 +526,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
         qDebug().noquote() << QStringLiteral("%1 appearance selected: %2").arg(m_log, appearanceName(selected));
       }
     }
-    showAppearances(designFields(*item, m_designMaterials, m_library), !item->readOnly);
+    showAppearances(itemFields(*item, m_designMaterials, QJsonObject()), !item->readOnly);
   };
   connect(m_appearanceList, &QTreeWidget::currentItemChanged, this, selectionChanged);
   connect(m_appearanceList, &QTreeWidget::itemSelectionChanged, this, selectionChanged);
@@ -425,48 +544,38 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
             edit({{QStringLiteral("variant"), variant}}, what);
           });
   connect(m_variants, &MaterialVariantsPage::layoutChanged, this, &MaterialsPanel::scheduleLogPlaces);
-  connect(m_saveTo, &QPushButton::clicked, this, &MaterialsPanel::saveTo);
+  connect(m_copyTo, &QPushButton::clicked, this, &MaterialsPanel::copyTo);
   connect(m_new, &QPushButton::clicked, this, &MaterialsPanel::newMaterial);
-  connect(m_duplicate, &QPushButton::clicked, this, &MaterialsPanel::duplicate);
-  connect(m_headerDuplicate, &QPushButton::clicked, this, &MaterialsPanel::duplicate);
+  connect(m_duplicate, &QPushButton::clicked, this, [this] { duplicate(m_duplicate); });
+  connect(m_headerDuplicate, &QPushButton::clicked, this, [this] { duplicate(m_headerDuplicate); });
   connect(m_delete, &QPushButton::clicked, this, &MaterialsPanel::remove);
 }
 
 MaterialsPanel::~MaterialsPanel() = default;
 
-void MaterialsPanel::setLibrary(const QString& library, bool read) {
-  if (library == m_libraryPlace) {
-    return;
-  }
-  m_libraryPlace = library;
+void MaterialsPanel::setHost(PrintItemsHost& host, bool read) {
+  m_host = &host;
   m_currentKey.clear();
-  m_currentDesignId.clear();
   m_loggedRows.clear();
+  m_loggedEditing.clear();
+  m_keys = PrintKeyTable(); // asked of the new model
   if (read) {
     refresh();
   } else {
     m_items.clear();
+    m_places.clear();
     rebuildList();
     showCurrent();
   }
 }
 
-QString MaterialsPanel::itemsProject() const {
-  // My library is the same wherever the design is: no project's items.
-  return m_libraryPlace == QStringLiteral("user") ? QString() : m_host.projectFolder();
-}
+QString MaterialsPanel::project() const { return m_host->projectFolder(); }
+
+QStringList MaterialsPanel::places() const { return writablePlaces(hasDesign(), !project().isEmpty()); }
 
 void MaterialsPanel::addButton(QPushButton* button, const QString& name) {
   mac::auxiliaryButton(button);
   m_buttons->addWidget(button);
-  m_windowButtons.append({name, button});
-}
-
-void MaterialsPanel::addListButton(QPushButton* button, const QString& name) {
-  mac::auxiliaryButton(button);
-  const int at = m_buttons->indexOf(m_delete) + 1;
-  m_buttons->insertSpacing(at, 16);
-  m_buttons->insertWidget(at + 1, button);
   m_windowButtons.append({name, button});
 }
 
@@ -479,10 +588,16 @@ const LibraryItem* MaterialsPanel::current() const {
 
 void MaterialsPanel::showItem(const QString& key) {
   m_currentKey = key;
-  m_currentDesignId.clear();
   refresh();
+  // A picker's key of a library item: the design's copy of it, which the
+  // design uses (mitcad#1135).
+  const LibraryItem* found = current();
+  if (found != nullptr && !found->copy.isEmpty() && hasDesign()) {
+    m_currentKey = QStringLiteral("design/") + found->copy;
+    rebuildList();
+    showCurrent();
+  }
   if (const LibraryItem* item = current()) {
-    m_currentDesignId = item->designId();
     if (m_list->currentItem() != nullptr) {
       m_list->scrollToItem(m_list->currentItem());
     }
@@ -491,32 +606,32 @@ void MaterialsPanel::showItem(const QString& key) {
 }
 
 void MaterialsPanel::refresh() {
-  const QString project = itemsProject();
   QString error;
-  m_items = queryLibraryItems(m_host.model(), QStringLiteral("material"), project, &error);
-  if (inLibrary()) {
-    // A library's items and the built-in ones to duplicate (mitcad#704).
-    QVector<LibraryItem> kept;
-    for (const LibraryItem& item : std::as_const(m_items)) {
-      if (item.place == m_libraryPlace || item.readOnly) {
-        kept.append(item);
-      }
+  m_items.clear();
+  QStringList order;
+  for (const LibraryItem& item :
+       queryPlaceItems(m_host->model(), QStringLiteral("material"), project(), &order, &error)) {
+    // Without a design its model's empty design is no place (mitcad#1135).
+    if (hasDesign() || item.place != QStringLiteral("design")) {
+      m_items.append(item);
     }
-    m_items = kept;
   }
+  if (order.isEmpty()) {
+    order = writablePlaces(true, !project().isEmpty());
+    order << QStringLiteral("mitcad");
+  }
+  if (!hasDesign()) {
+    order.removeAll(QStringLiteral("design"));
+  }
+  m_places = order;
   try {
-    m_designMaterials = m_host.model().queryArray(QStringLiteral("materials"));
-    QJsonObject libraryQuery{{QStringLiteral("query"), QStringLiteral("print_library")}};
-    if (!project.isEmpty()) {
-      libraryQuery.insert(QStringLiteral("project"), project);
-    }
-    m_library = m_host.model().queryObject(libraryQuery);
-    m_appearances = appearancesOf(m_host.model().queryArray(QStringLiteral("appearances")));
-    m_bodies = m_host.model().queryArray(QStringLiteral("bodies"));
+    m_designMaterials = m_host->model().queryArray(QStringLiteral("materials"));
+    m_appearances = appearancesOf(m_host->model().queryArray(QStringLiteral("appearances")));
+    m_bodies = m_host->model().queryArray(QStringLiteral("bodies"));
     // The design's slicer: whose percentages the fields offer (mitcad#655).
-    m_dialect = designDialectOf(m_host.model());
+    m_dialect = designDialectOf(m_host->model());
     if (m_keys.isEmpty()) {
-      m_keys = PrintKeyTable(m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("print_keys")}}));
+      m_keys = PrintKeyTable(m_host->model().queryObject({{QStringLiteral("query"), QStringLiteral("print_keys")}}));
     }
   } catch (const std::exception& e) {
     error = QString::fromUtf8(e.what());
@@ -524,22 +639,20 @@ void MaterialsPanel::refresh() {
   if (!error.isEmpty()) {
     setMessage(error, true);
   }
-  // The selected item where it went: Save to puts it into a library, a
-  // removed library item the design uses stays as the design's.
   if (current() == nullptr) {
-    if (const LibraryItem* copy = findDesignCopy(m_items, m_currentDesignId)) {
-      m_currentKey = copy->key();
-    }
+    m_currentKey.clear();
   }
   // The appearances, the design's and the library's, with Edit
-  // Appearances… last (none in My Library, which has no design).
+  // Appearances… last (none without a design).
   m_addPopover->setAppearances(m_appearances);
-  if (editAppearances) {
+  if (editAppearances && hasDesign()) {
     m_addPopover->editAppearances = [this] {
       if (editAppearances) {
         editAppearances();
       }
     };
+  } else {
+    m_addPopover->editAppearances = nullptr;
   }
   rebuildList();
   showCurrent();
@@ -556,6 +669,7 @@ void MaterialsPanel::refresh() {
     }
     field->setFocus(Qt::OtherFocusReason);
     field->selectAll();
+    requestNativeFocus(field);
   }
 }
 
@@ -608,39 +722,39 @@ void MaterialsPanel::rebuildList() {
       selected = row;
     }
   };
-  // By class, in the query's order (the built-in ones first, then by
-  // name); no places (mitcad#655). In a library its own items by class,
-  // then the built-in ones under Built-in (mitcad#704).
-  for (const QString& group : groupOrder()) {
-    QTreeWidgetItem* groupRow = nullptr;
+  // By place (mitcad#1135), each a heading with its count, then in each
+  // place by class in the query's order (the built-in ones first, then by
+  // name, mitcad#655); the search across the places.
+  const QString wanted = m_search->text();
+  for (const QString& place : std::as_const(m_places)) {
+    int count = 0;
     for (const LibraryItem& item : std::as_const(m_items)) {
-      const QString itemGroup = groupOrder().contains(item.group) ? item.group : QStringLiteral("other");
-      if (itemGroup != group || (inLibrary() && item.readOnly)) {
-        continue;
-      }
-      if (groupRow == nullptr) {
-        groupRow = heading(materialGroupTitle(group), group);
-      }
-      addRow(groupRow, item);
+      count += item.place == place && matchesSearch(item, wanted) ? 1 : 0;
     }
-  }
-  if (inLibrary()) {
-    QTreeWidgetItem* builtIn = nullptr;
-    for (const LibraryItem& item : std::as_const(m_items)) {
-      if (item.readOnly) {
-        if (builtIn == nullptr) {
-          builtIn = heading(placeName(QStringLiteral("mitcad")), QStringLiteral("built_in"));
+    QTreeWidgetItem* placeRow = heading(placeHeading(place, count), place);
+    placeRow->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.group.") + place);
+    for (const QString& group : groupOrder()) {
+      QTreeWidgetItem* groupRow = nullptr;
+      for (const LibraryItem& item : std::as_const(m_items)) {
+        const QString itemGroup = groupOrder().contains(item.group) ? item.group : QStringLiteral("other");
+        if (item.place != place || itemGroup != group || !matchesSearch(item, wanted)) {
+          continue;
         }
-        addRow(builtIn, item);
+        if (groupRow == nullptr) {
+          groupRow = new QTreeWidgetItem(placeRow, {materialGroupTitle(group)});
+          groupRow->setFlags(Qt::ItemIsEnabled);
+          groupRow->setFirstColumnSpanned(true);
+          groupRow->setData(1, kKeyRole, group);
+          groupRow->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.class.") + place +
+                                                             QLatin1Char('.') + group);
+          groupRow->setForeground(0, themeColor(ColorRole::TextSecondary, m_list->palette()));
+        }
+        addRow(groupRow, item);
       }
     }
   }
   m_list->expandAll();
-  if (selected != nullptr) {
-    m_list->setCurrentItem(selected);
-  } else {
-    m_currentKey.clear();
-  }
+  m_list->setCurrentItem(selected);
   m_building = false;
   fitListWidth();
   scheduleLogPlaces();
@@ -650,7 +764,7 @@ int MaterialsPanel::listWidthNeeded() const {
   int widest = 0;
   for (QTreeWidgetItemIterator it(m_list); *it != nullptr; ++it) {
     QTreeWidgetItem* row = *it;
-    const int indent = row->parent() != nullptr ? m_list->indentation() : 0;
+    const int indent = depthOf(row) * m_list->indentation();
     widest = std::max(widest, indent + cellHint(m_list, indexOfItem(m_list, row, 0)).width());
   }
   return widest + m_list->header()->sectionSize(1) + 2 * m_list->frameWidth() +
@@ -683,7 +797,7 @@ QStringList MaterialsPanel::cutNames() const {
     if (row->data(0, kKeyRole).toString().isEmpty()) {
       continue;
     }
-    const int indent = row->parent() != nullptr ? m_list->indentation() : 0;
+    const int indent = depthOf(row) * m_list->indentation();
     if (indent + cellHint(m_list, indexOfItem(m_list, row, 0)).width() > room) {
       cut << row->text(0);
     }
@@ -710,13 +824,14 @@ void MaterialsPanel::showCurrent() {
   m_emptyState->setVisible(item == nullptr);
   m_name->setVisible(item != nullptr);
   m_form->setVisible(item != nullptr);
+  m_editing->setVisible(item != nullptr);
   if (item == nullptr) {
     m_name->clear();
     m_name->setReadOnly(true);
     m_builtIn->hide();
-    m_saved->hide();
     m_usedState->hide();
-    m_saveTo->hide();
+    m_copyTo->hide();
+    m_editing->clear();
     m_density->clear();
     showAppearances(QJsonObject(), false);
     m_class->setCurrentIndex(-1);
@@ -729,22 +844,24 @@ void MaterialsPanel::showCurrent() {
   // The material's density is shown once, in General; its colour is its
   // appearance (mitcad#1055): no colour field.
   m_form->setHiddenKeys({QStringLiteral("filament_density"), QStringLiteral("filament_colour")});
-  // What the design prints with (mitcad#655): its copy when it has one.
-  const QJsonObject fields = designFields(*item, m_designMaterials, m_library);
+  // Its own fields where it lives (mitcad#1135).
+  const QJsonObject fields = itemFields(*item, m_designMaterials, QJsonObject());
   const bool editable = !item->readOnly;
   if (!m_name->hasFocus() || !m_name->isModified()) {
     m_name->setText(item->name);
     m_name->setModified(false);
   }
   m_name->setReadOnly(!editable);
-  // Built-in or the user's own, no place (mitcad#655); Save to only for
-  // the user's own that is in no library yet.
   m_builtIn->setVisible(item->readOnly);
-  // In a library every item is the library's: no saved state (mitcad#704).
-  showSavedState(m_saved, inLibrary() ? nullptr : item);
   m_usedState->setVisible(!item->designId().isEmpty() && m_usedIds.contains(item->designId()));
-  m_saveTo->setVisible(item->unsaved() && m_host.hasDesign());
-  m_saveTo->setText(saveToText(!m_host.projectFolder().isEmpty()));
+  m_copyTo->setVisible(!copyTargets(*item, hasDesign(), !project().isEmpty()).isEmpty());
+  // Where it is edited and whom an edit reaches, one line (mitcad#1135).
+  const QString line = editingLine(*item);
+  m_editing->setText(line);
+  if (isVisible() && item->key() + line != m_loggedEditing) {
+    m_loggedEditing = item->key() + line;
+    qDebug().noquote() << QStringLiteral("%1 editing: %2").arg(m_log, line);
+  }
   const double density = fields.value(QStringLiteral("density")).toDouble(1.0);
   m_density->setText(printNumberText(density));
   m_density->setReadOnly(!editable);
@@ -790,7 +907,7 @@ void MaterialsPanel::showCurrent() {
     if (!colour.isEmpty()) {
       query.insert(QStringLiteral("color"), colour);
     }
-    const QJsonObject defaults = m_host.model().queryObject(query);
+    const QJsonObject defaults = m_host->model().queryObject(query);
     for (const QString& key : {QStringLiteral("purge_into"), QStringLiteral("purge_out")}) {
       placeholders.insert(key, defaults.value(key));
     }
@@ -809,7 +926,7 @@ QStringList MaterialsPanel::presetChoices(const QString& key, const QString& sli
   QStringList names;
   // The filament presets of the slicer installed here (`slicer_presets`:
   // the Bambu-family slicers' own and the user's).
-  for (const QJsonValue& entry : installedSlicers(m_host, inLibrary() ? m_libraryPlace : QStringLiteral("design"))) {
+  for (const QJsonValue& entry : installedSlicers(*m_host, defaultPlace(hasDesign()))) {
     const QJsonObject found = entry.toObject();
     if (found.value(QStringLiteral("dialect")).toString() != slicer) {
       continue;
@@ -836,27 +953,27 @@ QStringList MaterialsPanel::presetChoices(const QString& key, const QString& sli
 }
 
 bool MaterialsPanel::canChange() {
-  if (m_host.canChangePrintSettings()) {
+  if (m_host->canChangePrintSettings()) {
     return true;
   }
-  setMessage(m_host.changeBlockedReason(), true);
+  setMessage(m_host->changeBlockedReason(), true);
   return false;
 }
 
 bool MaterialsPanel::run(const QJsonObject& command, QJsonObject* result) {
-  if (m_host.runModelCommand(command, result)) {
+  if (m_host->runModelCommand(command, result)) {
     setMessage(QString());
-    m_host.commandInputsChanged();
+    m_host->commandInputsChanged();
     emit changed();
     return true;
   }
-  if (!m_host.lastCancelled()) {
+  if (!m_host->lastCancelled()) {
     const LibraryItem* item = current();
-    setMessage(plainModelError(m_host.lastError(), m_keys, command, item != nullptr ? item->name : QString()),
+    setMessage(plainModelError(m_host->lastError(), m_keys, command, item != nullptr ? item->name : QString()),
                true); // plain words (mitcad#655)
   }
   qDebug().noquote() << QStringLiteral("%1: %2 refused: %3").arg(m_log)
-                            .arg(command.value(QStringLiteral("cmd")).toString(), m_host.lastError());
+                            .arg(command.value(QStringLiteral("cmd")).toString(), m_host->lastError());
   return false;
 }
 
@@ -885,10 +1002,10 @@ void MaterialsPanel::edit(const QJsonObject& change, const QString& what, const 
     // Edited while another design's change waits: asked first
     // (mitcad#655).
     if (target.changed && !changeAsked(target)) {
-      run(askChangedElsewhere(this, target, m_log, itemsProject()));
+      run(askChangedElsewhere(this, target, m_log, project()));
     }
     QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_material")}};
-    nameItem(command, target, itemsProject());
+    nameItem(command, target, project());
     for (auto it = change.begin(); it != change.end(); ++it) {
       command.insert(it.key(), it.value());
     }
@@ -897,10 +1014,10 @@ void MaterialsPanel::edit(const QJsonObject& change, const QString& what, const 
       qDebug().noquote() << QStringLiteral("Material %1 (%2) %3").arg(target.name, target.place, what);
     }
     refresh();
-    if (!done && !field.isEmpty() && !m_host.lastCancelled()) {
+    if (!done && !field.isEmpty() && !m_host->lastCancelled()) {
       // A refusal of a print setting under its field (mitcad#655).
       setMessage(QString());
-      m_form->setError(field, m_keys.plainText(m_host.lastError()));
+      m_form->setError(field, m_keys.plainText(m_host->lastError()));
     }
   });
 }
@@ -908,7 +1025,7 @@ void MaterialsPanel::edit(const QJsonObject& change, const QString& what, const 
 void MaterialsPanel::makeDefaultAppearance(const QString& id) {
   const LibraryItem* item = current();
   if (item == nullptr || item->readOnly || id.isEmpty() ||
-      id == text(designFields(*item, m_designMaterials, m_library), "appearance")) {
+      id == text(itemFields(*item, m_designMaterials, QJsonObject()), "appearance")) {
     return;
   }
   // One of its list becomes the default, the old one staying in the list
@@ -1100,7 +1217,7 @@ void MaterialsPanel::appearanceMenu(const QPoint& at) {
   m_appearanceList->setCurrentItem(row);
   const QString id = row->data(0, kKeyRole).toString();
   const bool editable = !item->readOnly;
-  const bool isDefault = id == text(designFields(*item, m_designMaterials, m_library), "appearance");
+  const bool isDefault = id == text(itemFields(*item, m_designMaterials, QJsonObject()), "appearance");
   QMenu menu(this);
   QAction* makeDefault = menu.addAction(tr("Make Default"));
   makeDefault->setEnabled(editable && !isDefault);
@@ -1120,7 +1237,7 @@ void MaterialsPanel::addAppearance(const QString& id) {
   if (item == nullptr || item->readOnly || id.isEmpty()) {
     return;
   }
-  QStringList list = offeredAppearances(designFields(*item, m_designMaterials, m_library));
+  QStringList list = offeredAppearances(itemFields(*item, m_designMaterials, QJsonObject()));
   if (list.contains(id)) {
     // Offered already: selected.
     for (int row = 0; row < m_appearanceList->topLevelItemCount(); ++row) {
@@ -1143,7 +1260,7 @@ void MaterialsPanel::removeAppearance() {
   if (item == nullptr || item->readOnly || id.isEmpty()) {
     return;
   }
-  const QJsonObject fields = designFields(*item, m_designMaterials, m_library);
+  const QJsonObject fields = itemFields(*item, m_designMaterials, QJsonObject());
   QStringList list = offeredAppearances(fields);
   list.removeAll(id);
   // The default removed: the next one is the default (the model's rule:
@@ -1163,9 +1280,7 @@ void MaterialsPanel::newMaterial() {
   if (!canChange()) {
     return;
   }
-  // Its class (mitcad#655); made in this design and selected, put into a
-  // library only by Save to; in My Library made in its library
-  // (mitcad#704).
+  // Its class (mitcad#655), then where it goes (mitcad#1135); selected.
   QMenu menu(this);
   QStringList titles;
   for (const QString& materialClass : materialClasses()) {
@@ -1191,13 +1306,15 @@ void MaterialsPanel::newMaterial() {
   } else if (materialClass == QStringLiteral("resin")) {
     command.insert(QStringLiteral("density"), 1.15);
   }
-  inPlace(command);
+  const QString place = askWhere(m_new, QStringLiteral("new"));
+  if (place.isEmpty()) {
+    return;
+  }
+  inPlace(command, place);
   QJsonObject result;
   const bool created = run(command, &result);
   if (created) {
-    const QString place = inLibrary() ? m_libraryPlace : QStringLiteral("design");
     m_currentKey = place + QLatin1Char('/') + text(result, "id");
-    m_currentDesignId = inLibrary() ? QString() : text(result, "id");
     m_pendingFocus = m_currentKey;
     m_pendingDensity = materialClass == QStringLiteral("other");
     qDebug().noquote() << QStringLiteral("Material created: %1 in %2").arg(text(result, "id"), place);
@@ -1205,43 +1322,48 @@ void MaterialsPanel::newMaterial() {
   refresh();
 }
 
-void MaterialsPanel::inPlace(QJsonObject& command) const {
-  if (inLibrary()) {
-    command.insert(QStringLiteral("library"), m_libraryPlace);
-    if (!itemsProject().isEmpty()) {
-      command.insert(QStringLiteral("project"), itemsProject());
+QString MaterialsPanel::askWhere(QPushButton* anchor, const QString& what) {
+  return choosePlaceAmong(anchor, QStringLiteral("%1 %2").arg(m_log, what), places(), defaultPlace(hasDesign()));
+}
+
+void MaterialsPanel::inPlace(QJsonObject& command, const QString& place) const {
+  // In a library a file of its own; in the design nothing to add.
+  if (place != QStringLiteral("design")) {
+    command.insert(QStringLiteral("library"), place);
+    if (!project().isEmpty()) {
+      command.insert(QStringLiteral("project"), project());
     }
   }
 }
 
-void MaterialsPanel::duplicate() {
+void MaterialsPanel::duplicate(QPushButton* anchor) {
   const LibraryItem* item = current();
   if (item == nullptr || !canChange()) {
     return;
   }
   const LibraryItem source = *item;
-  const QString project = itemsProject();
-  // The user's own copy in this design, selected (mitcad#655): the
-  // design's copy of the source when it has one, else the library's
-  // item, with the appearance it carries. In My Library the copy is made
-  // in its library (mitcad#704), from a built-in one by its id.
-  const QJsonValue basedOn = source.library.isEmpty() || !source.inDesign.isEmpty()
+  const QString place = askWhere(anchor, QStringLiteral("duplicate"));
+  if (place.isEmpty()) {
+    return;
+  }
+  // The user's own copy (mitcad#655) where they chose (mitcad#1135):
+  // from the design's item or a built-in one by its id, else from the
+  // library's item with the appearance it carries.
+  const QJsonValue basedOn = source.library.isEmpty()
                                  ? QJsonValue(source.designId())
                                  : QJsonValue(QJsonObject{{QStringLiteral("library"), source.library},
                                                           {QStringLiteral("id"), source.id}});
   // The model names it after the source ("PLA (copy)").
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("create_material")},
                       {QStringLiteral("based_on"), basedOn}};
-  if (!project.isEmpty() && basedOn.isObject()) {
-    command.insert(QStringLiteral("project"), project);
+  if (!project().isEmpty() && basedOn.isObject()) {
+    command.insert(QStringLiteral("project"), project());
   }
-  inPlace(command);
+  inPlace(command, place);
   QJsonObject result;
   const bool created = run(command, &result);
   if (created) {
-    const QString place = inLibrary() ? m_libraryPlace : QStringLiteral("design");
     m_currentKey = place + QLatin1Char('/') + text(result, "id");
-    m_currentDesignId = inLibrary() ? QString() : text(result, "id");
     m_pendingFocus = m_currentKey;
     qDebug().noquote() << QStringLiteral("Material duplicated: %1 as %2 in %3").arg(source.name, text(result, "id"), place);
   }
@@ -1294,35 +1416,34 @@ void MaterialsPanel::remove() {
     return;
   }
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("delete_material")}};
-  nameItem(command, target, itemsProject());
+  nameItem(command, target, project());
   if (run(command)) {
     qDebug().noquote() << QStringLiteral("Material deleted: %1 (%2)").arg(target.name, target.place);
   }
   refresh();
 }
 
-void MaterialsPanel::saveTo() {
+void MaterialsPanel::copyTo() {
   const LibraryItem* item = current();
-  if (item == nullptr || !item->unsaved() || !canChange()) {
+  if (item == nullptr || !canChange()) {
     return;
   }
-  const LibraryItem target = *item;
-  const QString project = m_host.projectFolder();
-  const QString library = choosePlace(m_saveTo, m_log + QStringLiteral(" save_to"), !project.isEmpty());
-  if (library.isEmpty()) {
+  const LibraryItem source = *item;
+  // The other places (mitcad#1135); a copy keeps a link to its source only
+  // as before (copyCommand).
+  const QStringList targets = copyTargets(source, hasDesign(), !project().isEmpty());
+  const QString place = choosePlaceAmong(m_copyTo, m_log + QStringLiteral(" copy_to"), targets, targets.value(0));
+  if (place.isEmpty()) {
     return;
   }
-  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("save_to_print_library")},
-                      {QStringLiteral("library"), library},
-                      {QStringLiteral("kind"), QStringLiteral("material")},
-                      {QStringLiteral("id"), target.designId()}};
-  if (!project.isEmpty()) {
-    command.insert(QStringLiteral("project"), project);
-  }
-  if (run(command)) {
-    m_currentDesignId = target.designId();
-    m_currentKey.clear(); // found again by its design copy
-    qDebug().noquote() << QStringLiteral("Material saved to %1: %2").arg(library, target.name);
+  QJsonObject result;
+  if (run(copyCommand(source, place, project()), &result)) {
+    qDebug().noquote() << QStringLiteral("Material copied to %1: %2").arg(place, source.name);
+    // The copy selected; a design's item saved into a library stays
+    // selected, its copy now.
+    if (!text(result, "id").isEmpty()) {
+      m_currentKey = place + QLatin1Char('/') + text(result, "id");
+    }
   }
   refresh();
 }
@@ -1330,12 +1451,12 @@ void MaterialsPanel::saveTo() {
 void MaterialsPanel::askChanges() {
   const LibraryItem* item = current();
   if (item == nullptr || !item->changed || changeAsked(*item) || !isVisible() ||
-      !m_host.canChangePrintSettings()) {
+      !m_host->canChangePrintSettings()) {
     return;
   }
   const LibraryItem target = *item;
   // Use the changes or Keep these, one undo step either way (mitcad#655).
-  const QJsonObject command = askChangedElsewhere(this, target, m_log, itemsProject());
+  const QJsonObject command = askChangedElsewhere(this, target, m_log, project());
   if (run(command)) {
     qDebug().noquote() << QStringLiteral("Material %1: %2").arg(target.name, command.value(QStringLiteral("cmd")).toString());
   }
@@ -1404,12 +1525,23 @@ void MaterialsPanel::logRows() {
                 .arg(item.group.isEmpty() ? QStringLiteral("other") : item.group, item.id, item.name, item.place,
                      item.changed ? QStringLiteral(" changed") : QString());
   }
-  const QString logged = rows.join(QLatin1Char('\n'));
+  // The places as the list shows them (mitcad#1135), "This design 1 | ...".
+  QStringList groups;
+  for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+    QTreeWidgetItem* heading = m_list->topLevelItem(i);
+    int count = 0;
+    for (int j = 0; j < heading->childCount(); ++j) {
+      count += heading->child(j)->childCount();
+    }
+    groups << QStringLiteral("%1 %2").arg(placeName(heading->data(1, kKeyRole).toString())).arg(count);
+  }
+  const QString logged = rows.join(QLatin1Char('\n')) + QLatin1Char('|') + groups.join(QLatin1Char('|'));
   if (logged == m_loggedRows) {
     return;
   }
   m_loggedRows = logged;
   qDebug().noquote() << QStringLiteral("%1: %2 items").arg(m_log).arg(rows.size());
+  qDebug().noquote() << QStringLiteral("%1 groups: %2").arg(m_log, groups.join(QStringLiteral(" | ")));
   for (const QString& row : std::as_const(rows)) {
     qDebug().noquote() << QStringLiteral("%1 row: %2").arg(m_log).arg(row);
   }
@@ -1425,6 +1557,7 @@ void MaterialsPanel::showEvent(QShowEvent* event) {
   m_loggedRows.clear();
   m_loggedPlaces.clear();
   m_loggedNames.clear();
+  m_loggedEditing.clear();
   logRows();
   // Once the window is laid out: the list as wide as its names.
   TestSync::singleShot(0, this, [this] {
@@ -1445,6 +1578,7 @@ bool MaterialsPanel::eventFilter(QObject* watched, QEvent* event) {
       static_cast<QKeyEvent*>(event)->key() == Qt::Key_F2 && current() != nullptr && !current()->readOnly) {
     m_name->setFocus(Qt::OtherFocusReason);
     m_name->selectAll();
+    requestNativeFocus(m_name);
     return true;
   }
   // Delete or Backspace on an appearance's row: Remove.
@@ -1474,6 +1608,9 @@ void MaterialsPanel::logPlaces() {
     return QStringLiteral("%1,%2").arg(global.x()).arg(global.y());
   };
   QStringList lines;
+  // Each row by its place and name; by its name alone the first of that
+  // name (This design's before a library's, mitcad#1135).
+  QSet<QString> named;
   for (QTreeWidgetItemIterator it(m_list); *it != nullptr; ++it) {
     QTreeWidgetItem* row = *it;
     const QString key = row->data(0, kKeyRole).toString();
@@ -1482,14 +1619,19 @@ void MaterialsPanel::logPlaces() {
       continue;
     }
     const LibraryItem* item = findItem(m_items, key);
-    lines << QStringLiteral("%1 item %2 at %3").arg(m_log)
-                 .arg(item != nullptr ? item->name : key,
-                      at(m_list->viewport(), QPoint(60, rect.center().y())));
+    const QString name = item != nullptr ? item->name : key;
+    const QString place = at(m_list->viewport(), QPoint(60, rect.center().y()));
+    if (!named.contains(name)) {
+      named.insert(name);
+      lines << QStringLiteral("%1 item %2 at %3").arg(m_log).arg(name, place);
+    }
+    lines << QStringLiteral("%1 %2 item %3 at %4").arg(m_log, key.section(QLatin1Char('/'), 0, 0), name, place);
   }
   QVector<std::pair<QString, QWidget*>> widgets{
+      {QStringLiteral("search"), m_search},
       {QStringLiteral("name"), m_name},
       {QStringLiteral("class"), m_class},
-      {QStringLiteral("save_to"), m_saveTo},
+      {QStringLiteral("copy_to"), m_copyTo},
       {QStringLiteral("header_duplicate"), m_headerDuplicate},
       {QStringLiteral("density"), m_density},
       {QStringLiteral("appearance_add"), m_addAppearance},
@@ -1498,7 +1640,7 @@ void MaterialsPanel::logPlaces() {
       {QStringLiteral("new"), m_new},
       {QStringLiteral("duplicate"), m_duplicate},
       {QStringLiteral("delete"), m_delete}};
-  // The window's buttons (Edit Library…, Close).
+  // The window's buttons (Close).
   for (const auto& [name, button] : std::as_const(m_windowButtons)) {
     widgets.append(std::pair<QString, QWidget*>(name, button));
   }

@@ -87,6 +87,7 @@ model, library, work = map(Path, sys.argv[1:4])
 frontend, scheme = sys.argv[4:]
 design = json.loads(model.read_text())
 assert not design.get("print_profiles"), "undo left imported/created profiles in the design"
+assert not design.get("materials"), "a library-only import added a design material"
 fine = json.loads((library / "print/processes/fine.json").read_text())
 assert abs(fine["profile"]["values"]["layer_height"] - 0.12) < 1e-9
 copy = json.loads((library / "print/processes/fine-2.json").read_text())
@@ -100,7 +101,7 @@ assert not (library / "print/printers/bench-x.json").exists(), "the unticked pri
 for surface in ["file", "review", "preset", "library", "copy-review", "material"]:
     image = work / f"slicer-{surface}-{frontend}-{scheme}.png"
     assert image.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), f"missing {surface} screenshot"
-print("Verified: review cancellation, design undo, unchanged geometry, Fine and its copy, material classification, excluded printer and captures")
+print("Verified: review cancellation, design undo, library file undo/redo, unchanged geometry, Fine and its copy, material classification, excluded printer and captures")
 PY
   done
 done

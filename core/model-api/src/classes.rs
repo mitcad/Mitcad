@@ -339,6 +339,16 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("delete_center_of_mass", Model),
     // The design's summary (mitcad#1088).
     ("set_design_summary", Model),
+    // Comments pinned to the model for an AI agent (mitcad#1119); the MCP
+    // layer names their author and keeps resolving to the user.
+    ("add_comment", Model),
+    ("edit_comment", Model),
+    ("reply_comment", Model),
+    ("retarget_comment", Model),
+    ("address_comment", Model),
+    ("resolve_comment", Model),
+    ("reopen_comment", Model),
+    ("delete_comment", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -523,10 +533,15 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("center_of_mass", Model),
     // The design's summary and statistics (mitcad#1088).
     ("design_properties", Model),
+    // Comments pinned to the model for an AI agent (mitcad#1119).
+    ("comments", Model),
     // The top-level fields of the design file a newer MitCad wrote, and
     // whether saving to a path drops them (mitcad#1132): about the saved
     // file.
     ("unknown_fields", FileIo),
+    // Where a dimension placed or dragged on a drawing snaps to
+    // (mitcad#1173).
+    ("drawing_snap", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

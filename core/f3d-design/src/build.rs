@@ -2379,6 +2379,17 @@ impl Builder<'_> {
                 if let Some(loops) = self.profile_loops(fid) {
                     x.other.insert("_f3d_profile_loops".to_owned(), loops);
                 }
+                // The texts its text profiles name (mitcad#1177), how many
+                // profiles it selects, and whether all are the texts'.
+                let texts = self.text_profiles(fid);
+                if !texts.is_empty() {
+                    let count = self.profiles(fid).map_or(0, |p| p.len());
+                    let only = inputs_of(self.seg, fid, PROFILE_SOURCE).is_empty();
+                    x.other.insert(
+                        "_f3d_text_profiles".to_owned(),
+                        serde_json::json!({"texts": texts, "profiles": count, "only": only}),
+                    );
+                }
                 // Text profiles whose text is gone (mitcad#332).
                 let missing = self.missing_text_profiles(fid);
                 if !missing.is_empty() {

@@ -529,6 +529,14 @@ public:
     return warning;
   }
 
+  void setPaused(bool paused) override { m_session->set_pause(paused); }
+  bool isPaused() const override {
+    std::string status;
+    std::string detail;
+    m_session->progress.get_status(status, detail);
+    return status == "Rendering Paused";
+  }
+
   void setView(const ViewData& view) override {
     if (view.width <= 0 || view.height <= 0) {
       return;

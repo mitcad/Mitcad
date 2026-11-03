@@ -3,7 +3,7 @@
 # check-all sources: app/files app/MainWindow.cpp app/MainWindow.hpp core/model/src/file core/model/src/document.rs
 # check-all sources: core/model-api/src/lib.rs tools/cli
 # A design a newer MitCad wrote (mitcad#1132): its top-level fields this
-# MitCad does not know (here `comments` and `next_comment`) are ignored.
+# MitCad does not know (here `future_notes` and `next_future_note`) are ignored.
 #   1. mitcad-cli: opening says they were not read; a save over the file
 #      says on stderr that it drops them, and writes without asking.
 #   2. Floating: opening warns, naming them (the message band; "Status
@@ -40,8 +40,8 @@ expect_file() {
 }
 
 # The warning on opening, as the status line logs it.
-WARNING="Status warning: This design was written by a newer MitCad: comments, next_comment not read. Saving over it drops them."
-FIELDS='"comments" in doc, "next_comment" in doc'
+WARNING="Status warning: This design was written by a newer MitCad: future_notes, next_future_note not read. Saving over it drops them."
+FIELDS='"future_notes" in doc, "next_future_note" in doc'
 
 ui_start_display
 
@@ -56,8 +56,8 @@ python3 -c '
 import json, sys
 path = sys.argv[1]
 doc = json.load(open(path))
-doc["comments"] = [{"id": "N1", "text": "Check the wall"}]
-doc["next_comment"] = 2
+doc["future_notes"] = [{"id": "N1", "text": "Check the wall"}]
+doc["next_future_note"] = 2
 json.dump(doc, open(path, "w"), indent=2)
 ' "$FILE" || ui_fail "cannot add the fields"
 expect_file "$FILE" "$FIELDS" "(True, True)" "the file has the newer fields"
@@ -66,10 +66,10 @@ cp "$FILE" "$CLI_FILE"
 echo "--- 1. mitcad-cli: a save over the file says what it drops"
 "$CLI" convert "$CLI_FILE" "$CLI_FILE" > "$WORK/cli.out" 2> "$WORK/cli.err" ||
   { cat "$WORK/cli.out" "$WORK/cli.err"; ui_fail "mitcad-cli convert"; }
-grep -qF "warning: this design was written by a newer MitCad: the fields \`comments\`, \`next_comment\` were not read" \
+grep -qF "warning: this design was written by a newer MitCad: the fields \`future_notes\`, \`next_future_note\` were not read" \
   "$WORK/cli.err" || { cat "$WORK/cli.err"; ui_fail "mitcad-cli did not warn on opening"; }
 echo "ok   opening warns, naming the fields"
-grep -qF "warning: $CLI_FILE: saving over this design drops the fields \`comments\`, \`next_comment\`" \
+grep -qF "warning: $CLI_FILE: saving over this design drops the fields \`future_notes\`, \`next_future_note\`" \
   "$WORK/cli.err" || { cat "$WORK/cli.err"; ui_fail "mitcad-cli did not warn before saving"; }
 echo "ok   saving warns, naming the fields"
 expect_file "$CLI_FILE" "$FIELDS" "(False, False)" "written without asking, without the fields"
@@ -77,13 +77,13 @@ expect_file "$CLI_FILE" "$FIELDS" "(False, False)" "written without asking, with
 echo "--- 2. Floating: the warning; Save asks, Cancel, then Save As"
 ui_start_app --open "$FILE" --set d3=35 --no-native-dialogs --chrome=floating
 ui_expect_log "Opened $FILE" "opened"
-ui_expect_log "Unknown fields of $FILE not read: comments, next_comment" "the fields named in the log"
+ui_expect_log "Unknown fields of $FILE not read: future_notes, next_future_note" "the fields named in the log"
 ui_expect_log "$WARNING" "the warning on opening"
 before=$(sha256sum "$FILE")
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_focus_dialog '^MitCad$'
-ui_expect_new "Save drops unknown fields: $FILE: comments, next_comment" "Save asks first"
+ui_expect_new "Save drops unknown fields: $FILE: future_notes, next_future_note" "Save asks first"
 ui_step "cancel (Esc)"                   ui_key Escape
 ui_focus_main
 ui_expect_new "Save drops unknown fields: cancelled" "cancelled"
@@ -110,7 +110,7 @@ ui_expect_log "$WARNING" "the warning on opening"
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_focus_dialog '^MitCad$'
-ui_expect_new "Save drops unknown fields: $FILE: comments, next_comment" "Save asks first"
+ui_expect_new "Save drops unknown fields: $FILE: future_notes, next_future_note" "Save asks first"
 ui_step "Save and Drop Them (S)"         ui_key s
 ui_focus_main
 ui_expect_new "Save drops unknown fields: save" "the fields dropped"

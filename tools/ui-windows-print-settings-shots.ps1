@@ -25,17 +25,16 @@
 #                               of the project: the Printer and Process
 #                               rows, the line beside the button, Details...
 #   02-import-details.png       Details...: the Import Details window
-#   03-process-quality.png      Edit printers and processes..., the Process
-#                               picker's last row (mitcad#1134): Printers
-#                               and Processes on the process, its first
-#                               tab (Quality)
+#   03-process-quality.png      Edit processes..., the Process picker's
+#                               last row (mitcad#1134): the Processes
+#                               manager on the process, its first tab
+#                               (Quality)
 #   04-process-strength.png     the Strength tab (the tab bar from the
 #                               search field by Tab, then Right)
 #   05-process-advanced.png     the Strength tab with Advanced on
 #   06-process-search.png       the search 'jerk'
-#   07-printer-editor.png       Edit printers and processes... in the
-#                               Printer picker: Printers and Processes on
-#                               the printer
+#   07-printer-editor.png       Edit printers... in the Printer picker:
+#                               the Printers manager on the printer
 #   08-materials.png            Edit Materials, Mount PLA selected in its
 #                               list, its 3D printing section open
 #   09-material-tool.png        The Material tool with Body2 and Body3
@@ -47,7 +46,7 @@
 #                               PETG, asked about once: "Shop PETG was
 #                               changed in another design."
 #   12-3dprint-docked.png       3D Print (3MF) in the Docked chrome
-#   13-printers-processes.png   Edit Printers and Processes (MAKE), opened
+#   13-printers-processes.png   Processes... (MAKE), opened
 #                               on the design's process Shop Fine 0.12
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-print-settings-shots.ps1 -App <mitcad.exe> [-Cli <mitcad-cli.exe>] -Out <dir> [-QtBin dir] [-Scale factor]
@@ -370,7 +369,7 @@ expect-log 'Import details closed' 10
 '@
 Invoke-Shots 'panel' 'floating' @('01-3dprint-panel.png', '02-import-details.png') @($start, $panel)
 
-# Printers and Processes on the process: Edit printers and processes...,
+# The Processes manager on the process (mitcad#1135): Edit processes...,
 # the Process picker's last row (no pencil beside the row, mitcad#1134).
 $openProcess = @'
 mark
@@ -379,15 +378,15 @@ expect-log 'Panel Send to Slicer input process at' 10
 click-logged 'Panel Send to Slicer input process'
 expect-log 'Process picker opened: ' 10
 focus-dialog '^Process Picker$'
-type 'Edit printers'
-expect-log 'Process picker search: Edit printers, first Edit printers and processes' 10
+type 'Edit processes'
+expect-log 'Process picker search: Edit processes, first Edit processes' 10
 key Return
-expect-log 'Process picker chose: Edit printers and processes' 10
-expect-log 'Printers and processes opened' 10
+expect-log 'Process picker chose: Edit processes' 10
+expect-log 'Processes opened' 10
 expect-log 'Profile selected: process Shop Fine 0\.12' 10
-focus-dialog '^Printers and Processes$'
-expect-log 'Profiles settings search at' 10
-expect-log 'Profiles settings tab quality at' 10
+focus-dialog '^Processes$'
+expect-log 'Processes settings search at' 10
+expect-log 'Processes settings tab quality at' 10
 sleep 1000
 '@
 
@@ -397,7 +396,7 @@ screenshot-dialog '${MITCAD_SHOTS_DIR}\03-process-quality.png'
 mark
 focus-widget settingsSearch
 type jerk
-expect-log 'Profiles settings field default_jerk at' 10
+expect-log 'Processes settings field default_jerk at' 10
 sleep 1000
 screenshot-dialog '${MITCAD_SHOTS_DIR}\06-process-search.png'
 '@
@@ -411,19 +410,19 @@ mark
 key Tab
 key Tab
 key Right
-expect-log 'Profiles settings field perimeters at' 10
+expect-log 'Processes settings field perimeters at' 10
 sleep 1000
 screenshot-dialog '${MITCAD_SHOTS_DIR}\04-process-strength.png'
 mark
 button '^Advanced$'
 expect-setting print/advancedSettings true
-expect-log 'Profiles settings field \S+ at' 10
+expect-log 'Processes settings field \S+ at' 10
 sleep 1000
 screenshot-dialog '${MITCAD_SHOTS_DIR}\05-process-advanced.png'
 '@
 Invoke-Shots 'process-strength' 'floating' @('04-process-strength.png', '05-process-advanced.png') @($start, $openProcess, $strength)
 
-# 07: Edit printers and processes... in the Printer picker (mitcad#1134).
+# 07: Edit printers... in the Printer picker (mitcad#1134, mitcad#1135).
 $printer = @'
 mark
 command make.print3d
@@ -432,13 +431,13 @@ click-logged 'Panel Send to Slicer input printer'
 expect-log 'Printer picker opened: ' 10
 focus-dialog '^Printer Picker$'
 type 'Edit printers'
-expect-log 'Printer picker search: Edit printers, first Edit printers and processes' 10
+expect-log 'Printer picker search: Edit printers, first Edit printers' 10
 key Return
-expect-log 'Printer picker chose: Edit printers and processes' 10
-expect-log 'Printers and processes opened' 10
+expect-log 'Printer picker chose: Edit printers' 10
+expect-log 'Printers opened' 10
 expect-log 'Profile selected: printer Bench X 0\.4 nozzle' 10
-focus-dialog '^Printers and Processes$'
-expect-log 'Profiles settings search at' 10
+focus-dialog '^Printers$'
+expect-log 'Printers settings search at' 10
 sleep 1000
 screenshot-dialog '${MITCAD_SHOTS_DIR}\07-printer-editor.png'
 '@
@@ -535,15 +534,15 @@ screenshot '${MITCAD_SHOTS_DIR}\12-3dprint-docked.png'
 '@
 Invoke-Shots 'docked' 'docked' @('12-3dprint-docked.png') @($start, $docked)
 
-# 13: Edit Printers and Processes from its own command (MAKE): the window
+# 13: Processes... from its own command (MAKE, mitcad#1135): the manager
 # opens on the design's process.
 $profiles = @'
 mark
-command make.printers
-expect-log 'Printers and processes opened' 10
+command make.processes
+expect-log 'Processes opened' 10
 expect-log 'Profile selected: process Shop Fine 0\.12' 10
-focus-dialog '^Printers and Processes$'
-expect-log 'Profiles settings tab quality at' 10
+focus-dialog '^Processes$'
+expect-log 'Processes settings tab quality at' 10
 sleep 1000
 screenshot-dialog '${MITCAD_SHOTS_DIR}\13-printers-processes.png'
 '@

@@ -238,7 +238,7 @@ void MainWindow::selectionScopeChanged(const QString& what) {
       }
       for (const QToolButton* button : m_ribbon->findChildren<QToolButton*>()) {
         if (button->defaultAction() == m_sketchFilterAction && button->isVisible()) {
-          const QPoint at = button->mapTo(this, button->rect().center());
+          const QPoint at = button->mapTo(window(), button->rect().center());
           qDebug().noquote() << QStringLiteral("Selection filter button at %1,%2").arg(at.x()).arg(at.y());
         }
       }
@@ -249,7 +249,7 @@ void MainWindow::selectionScopeChanged(const QString& what) {
 void MainWindow::logSketchPickPlaces() {
   qDebug().noquote() << "Sketch pick places:";
   for (const OcctViewer::EdgePlace& place : m_viewer->edgePlaces()) {
-    const QPoint at = m_viewer->mapTo(this, place.at);
+    const QPoint at = m_viewer->mapTo(window(), place.at);
     qDebug().noquote() << QStringLiteral("Sketch pick edge %1/%2 %3 at %4,%5")
                               .arg(place.item.owner, place.item.name,
                                    place.sight == EdgeSight::Occluded ? QStringLiteral("occluded")

@@ -1683,6 +1683,9 @@ record! {
         "material" => material: AssetRef,
         /// Faces with an appearance of their own.
         "faces" => faces: Vec<FaceLook>,
+        /// The body's light bulb (false: hidden), where the record gives
+        /// it (mitcad#1175).
+        "light_bulb" => light_bulb: bool,
     }
 }
 

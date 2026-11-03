@@ -40,6 +40,11 @@ GeneralSettings GeneralSettings::load() {
   if (newDesignUnitChoices().contains(units)) {
     general.newDesignUnits = units;
   }
+  general.openInCurrentWindow = settings.value(QStringLiteral("documents/openInCurrentWindow"), false).toBool();
+  const QString presentation = settings.value(QStringLiteral("documents/openDesignsIn"), general.openDesignsIn).toString();
+  if (presentation == QStringLiteral("tabs") || presentation == QStringLiteral("windows")) {
+    general.openDesignsIn = presentation;
+  }
   return general;
 }
 
@@ -49,6 +54,8 @@ void GeneralSettings::save() const {
   settings.setValue(kAutosaveMinutes, autosaveMinutes);
   settings.setValue(kImportTolerance, importTolerance);
   settings.setValue(kNewDesignUnits, newDesignUnits);
+  settings.setValue(QStringLiteral("documents/openInCurrentWindow"), openInCurrentWindow);
+  settings.setValue(QStringLiteral("documents/openDesignsIn"), openDesignsIn);
 }
 
 bool VersionSettings::complete() const {

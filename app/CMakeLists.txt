@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
-find_package(Qt6 REQUIRED COMPONENTS Svg Network)
+# PrintSupport: File › Print… (mitcad#1089), its printer and print dialog.
+find_package(Qt6 REQUIRED COMPONENTS Svg Network PrintSupport)
 
 # Scheduling/activity support also serves the windowless render worker and
 # CLI. Keep it independent of the QWidget-based native chrome.
@@ -1783,16 +1784,14 @@ target_sources(mitcad PRIVATE
   print/OwnSettingsDialog.cpp
   print/OwnSettingsDialog.hpp
   view/BuildVolume.cpp)
-# My Library (mitcad#704): the panels of Materials and Printers and
-# Processes on the user's or the project's library, through a model of
-# its own.
+# The models the print managers work through (mitcad#704, mitcad#1135):
+# the open design's, or with no design open one of their own on the
+# user's and the project's libraries.
 target_sources(mitcad PRIVATE
   print/PrintItemsHost.cpp
-  print/PrintItemsHost.hpp
-  print/MyLibraryDialog.cpp
-  print/MyLibraryDialog.hpp)
-# Import from Slicer (mitcad#829): the one import of 3D Print, Printers
-# and Processes and My Library, its file dialog, line and Details…; the
+  print/PrintItemsHost.hpp)
+# Import from Slicer (mitcad#829): the one import of 3D Print and the
+# print managers, its file dialog, line and Details…; the
 # presets of an installed slicer to tick (mitcad#830).
 target_sources(mitcad PRIVATE
   print/SlicerImport.cpp
@@ -2099,6 +2098,8 @@ target_sources(mitcad PRIVATE
   agent/CodexAgent.cpp agent/CodexAgent.hpp
   agent/MainWindowChat.cpp
   mcp/ChatGate.hpp)
+# Check again's decisions (mitcad#1155): plain functions of the readiness.
+target_sources(mitcad PRIVATE agent/AccountCheck.hpp)
 # The AppKit frontend's Chat card (mitcad#1075): the same panel through the
 # presenter bridge, in a card whose host keeps the conversation's end in
 # sight.
@@ -2111,6 +2112,8 @@ if(BUILD_TESTING)
   # settings: plain Qt Core.
   target_sources(test_app PRIVATE tests/chat_history.cpp agent/ChatHistoryStore.cpp agent/ChatHistoryStore.hpp
                  agent/ChatSettings.cpp agent/ChatSettings.hpp)
+  # Check again's decisions after the agent's check (mitcad#1155).
+  target_sources(test_app PRIVATE tests/chat_account_check.cpp agent/AccountCheck.hpp)
   # The chat's UI tests' scripted agent (tools/ui-chat-test.py): Claude
   # Code's stream-json (as `claude`) or Codex's app server (as `codex`) on
   # stdin and stdout, the real bridge as its MCP server; no AI. It is never
@@ -2294,6 +2297,32 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/message_log.cpp framework/MessageLog.cpp framework/MessageLog.hpp)
 endif()
 
+# Convert Mesh's panel in the SOLID tab's MODIFY group (mitcad#1082): a mesh
+# body made a faceted or an analytic solid.
+target_sources(mitcad PRIVATE commands/ConvertMeshCommands.cpp)
+
+# File › Print… (mitcad#1089, app/COMMANDS.md "Print"): a drawing's sheets
+# each on a page of its size, a sketch or a cut sheet at 1:1 tiled over
+# pages or fitted to one, the BUILD lists as their PDF lays them out;
+# QPrinter and the system's print dialog of Qt PrintSupport.
+target_sources(mitcad PRIVATE
+  printing/PaperPrint.cpp
+  printing/PaperPrint.hpp
+  printing/SketchPicture.cpp
+  printing/SketchPicture.hpp
+  printing/PrintPanel.cpp
+  printing/PrintPanel.hpp
+  printing/MainWindowPaperPrint.cpp)
+target_link_libraries(mitcad PRIVATE Qt6::PrintSupport)
+if(BUILD_TESTING)
+  # Printing to PDF files through QPrinter: a two-sheet drawing's pages at
+  # their sizes, a 1:1 sketch's tiles and a line's length on them, fit to
+  # page on one page; plain Qt Widgets, Svg and PrintSupport.
+  target_sources(test_app PRIVATE tests/paper_print.cpp printing/PaperPrint.cpp printing/PaperPrint.hpp
+                 printing/SketchPicture.cpp printing/SketchPicture.hpp)
+  target_link_libraries(test_app PRIVATE Qt6::PrintSupport)
+endif()
+
 # The Center of Mass marker (mitcad#1094, app/COMMANDS.md "Center of
 # Mass"): Center of Mass in the Inspect group, the browser's row under
 # Origin, and the marker drawn in the view at the design's center of mass.
@@ -2329,6 +2358,18 @@ if(BUILD_TESTING)
   # The groups, the short names and the sources: plain Qt Core.
   target_sources(test_app PRIVATE tests/profile_picker_rows.cpp print/ProfilePickerRows.cpp
                  print/ProfilePickerRows.hpp)
+endif()
+
+# Comments for AI agents (mitcad#1119, app/COMMANDS.md "Comments"): Add
+# Comment, the numbered pins over the view, the Comments panel and the
+# Agents may resolve comments preference.
+target_sources(mitcad PRIVATE MainWindowComments.cpp view/Comments.cpp view/Comments.hpp
+               view/CommentPinOverlay.cpp view/CommentPinOverlay.hpp view/CommentsWindow.cpp
+               view/CommentsWindow.hpp)
+if(BUILD_TESTING)
+  # The query's comments, the pins' looks, the panel's filter, the log
+  # lines, the targets of picks and the pin's picture: plain Qt Gui.
+  target_sources(test_app PRIVATE tests/comments.cpp view/Comments.cpp view/Comments.hpp)
 endif()
 
 # Send to Slicer's material rows (mitcad#1141, app/COMMANDS.md "Send to
@@ -2381,4 +2422,60 @@ if(BUILD_TESTING)
   # The conversion and the nice values of mm, cm, m, in and ft, the texts
   # Measure shows: plain Qt Core. BrowserPanel.cpp in test_app calls it.
   target_sources(test_app PRIVATE tests/length_units.cpp framework/LengthUnits.cpp framework/LengthUnits.hpp)
+endif()
+
+# Multiple documents in one process, presented as windows or document tabs
+# (mitcad#1172). Each MainWindow retains its own DocumentSession.
+target_sources(mitcad PRIVATE WindowManager.cpp WindowManager.hpp DocumentFrame.cpp DocumentFrame.hpp ViewerVisibility.cpp
+               framework/TestDriverDocuments.cpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE files/Autosave.cpp framework/AppSettings.cpp)
+endif()
+
+# Insert another open document through the shared saved-design insertion workflow (mitcad#1172).
+target_sources(mitcad PRIVATE files/MainWindowOpenDesign.cpp)
+# LaunchServices file opens must reach the same process and retained document
+# owners after native application-delegate forwarding (mitcad#1172).
+if(APPLE AND BUILD_TESTING)
+  # This subdirectory precedes MacUiTests.cmake on a fresh configure.
+  option(MITCAD_MACOS_UI_TESTS "macOS: register the UI test app.ui-macos (opens the app's window briefly)" ON)
+  find_program(BASH_EXECUTABLE bash)
+endif()
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
+  # The CLI sibling is added later; TARGET_FILE resolves at generation time.
+  add_test(NAME app.ui-macos-document-open
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-document-open-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-document-open" qt)
+  set_tests_properties(app.ui-macos-document-open PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-document-open
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-document-open-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-native-document-open" native)
+    set_tests_properties(app.ui-macos-native-document-open PROPERTIES
+      TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+  endif()
+endif()
+
+# Add Print Value… on the Make tab's body card (mitcad#1178, app/COMMANDS.md
+# "The selected body's card"): the settings a body can take as its own,
+# grouped and named as the Properties window shows them, in a searchable
+# picker.
+target_sources(mitcad PRIVATE print/PrintValueChoices.cpp print/PrintValueChoices.hpp print/PrintValuePicker.cpp
+               print/PrintValuePicker.hpp)
+if(BUILD_TESTING)
+  # The choices, their headings and the search: plain Qt Core.
+  target_sources(test_app PRIVATE tests/print_value_choices.cpp print/PrintValueChoices.cpp
+                 print/PrintValueChoices.hpp)
+endif()
+
+# ui_screenshot's encoded-image budget (mitcad#1188): max_bytes, the
+# bounded downscaling and the encodings.
+target_sources(mitcad PRIVATE mcp/ScreenshotBudget.cpp mcp/ScreenshotBudget.hpp)
+if(BUILD_TESTING)
+  # Synthetic images below and over a budget, PNG and JPEG, the bounded
+  # attempts: plain Qt Gui.
+  target_sources(test_app PRIVATE tests/screenshot_budget.cpp mcp/ScreenshotBudget.cpp mcp/ScreenshotBudget.hpp)
 endif()

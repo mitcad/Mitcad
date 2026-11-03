@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "DocumentSession.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -11,6 +12,7 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QList>
 #include <QtLogging>
 
 #include "AppSettings.hpp"
@@ -24,6 +26,13 @@ namespace mitcad {
 namespace {
 
 constexpr std::chrono::milliseconds kBlockFor(50);
+
+// Sessions belong to the application thread; models in flight stay on
+// their worker until whenIdle delivers the current share.
+QList<DocumentSession*>& documentSessions() {
+  static QList<DocumentSession*> sessions;
+  return sessions;
+}
 
 QString commandStage(QString name) {
   name.replace(QLatin1Char('_'), QLatin1Char(' ')).replace(QLatin1Char('.'), QLatin1Char(' '));
@@ -59,7 +68,8 @@ DocumentSession::DocumentSession(bool demo, QObject* parent)
   markSaved();
   m_state.document->set_result_store(rustStr(resultStoreDirectory().toUtf8()),
                                     rustStr(resultStoreBuildId().toUtf8()), rustStr(tr("Untitled").toUtf8()));
-  m_state.document->set_memory_cache_budget(static_cast<std::uint64_t>(CacheSettings::load().memoryMegabytes));
+  documentSessions().append(this);
+  refreshMemoryCacheBudgets();
   collectResultStoreGarbage();
   connect(m_worker.get(), &ModelWorker::jobDone, this, &DocumentSession::completeAsync, Qt::QueuedConnection);
   m_progressTimer.setInterval(100);
@@ -88,6 +98,26 @@ DocumentSession::~DocumentSession() {
   m_job = nullptr;
   m_async.reset();
   delete m_state.activeCommand;
+  documentSessions().removeAll(this);
+  refreshMemoryCacheBudgets();
+}
+
+qint64 DocumentSession::memoryCacheMegabytes() const {
+  return std::max<qint64>(1, CacheSettings::load().memoryMegabytes / std::max<qsizetype>(1, documentSessions().size()));
+}
+
+void DocumentSession::refreshMemoryCacheBudgets() {
+  for (DocumentSession* session : documentSessions()) {
+    if (!session->busy()) {
+      session->m_state.document->set_memory_cache_budget(static_cast<std::uint64_t>(session->memoryCacheMegabytes()));
+    } else if (!session->m_cacheBudgetPending) {
+      session->m_cacheBudgetPending = true;
+      session->whenIdle(session, [session] {
+        session->m_cacheBudgetPending = false;
+        session->m_state.document->set_memory_cache_budget(static_cast<std::uint64_t>(session->memoryCacheMegabytes()));
+      });
+    }
+  }
 }
 
 const Document& DocumentSession::idleDocument() const {

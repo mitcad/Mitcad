@@ -200,6 +200,14 @@ CommandSession::CommandSession(const CommandDef& def, CommandHost& host, const Q
   // The point under the mouse, for a command that previews a click there
   // (CommandDef::hoverPreview, mitcad#417).
   connect(&m_host.viewer(), &OcctViewer::hoverMoved, this, &CommandSession::hoverMoved, Qt::QueuedConnection);
+  // The mouse and the clicks anywhere in the view, for a command's point on
+  // a plane (CommandDef::cursorPlane, mitcad#1196).
+  if (m_def.cursorPlane) {
+    connect(&m_host.viewer(), &OcctViewer::pointerMoved, this,
+            [this](const QPointF& position) { pointerMoved(position); });
+    connect(&m_host.viewer(), &OcctViewer::pointerLeft, this, [this] { pointerMoved(std::nullopt); });
+    connect(&m_host.viewer(), &OcctViewer::clickedAt, this, &CommandSession::clickedAt, Qt::QueuedConnection);
+  }
 }
 
 CommandSession::~CommandSession() {
@@ -1626,6 +1634,9 @@ void CommandSession::evaluate(const QString& key) {
     m_presenter->setInputError(key, problem);
     m_presenter->setValueHint(key, hint);
   }
+  if (m_valueBox && key == m_valueBoxKey) {
+    markValueBox(!problem.isEmpty()); // the box in the view too (mitcad#1181)
+  }
   // The line under the field, when it comes, changes or goes (mitcad#994):
   // the rows below move with it.
   if (m_valueHints.value(key) != hint) {
@@ -1785,10 +1796,6 @@ void CommandSession::openValueBox(const QString& key, const QPoint& at) {
   box->setObjectName(QStringLiteral("manipulatorValueBox"));
   // As the value boxes in the view look (ManipulatorOverlay).
   box->setFixedWidth(96);
-  box->setStyleSheet(QStringLiteral("QLineEdit { background: rgba(255, 255, 255, 245); color: %1;"
-                                    " border: 1.5px solid %2; border-radius: 4px; padding: 1px 5px; }")
-                         .arg(viewColor(ColorRole::ViewInk, false).name(),
-                              viewColor(ColorRole::Select, false).name()));
   box->setText(m_state.text(key));
   const QWidget* viewer = &m_host.viewer();
   const QSize size = box->sizeHint().expandedTo(QSize(box->width(), 0));
@@ -1803,6 +1810,7 @@ void CommandSession::openValueBox(const QString& key, const QPoint& at) {
   m_valueBox = box;
   m_valueBoxKey = key;
   m_valueBoxBefore = m_state.text(key);
+  markValueBox(!std::isfinite(m_state.value(key)) && !slot->def->autoText);
   box->show();
   box->raise();
   box->setFocus();
@@ -1832,6 +1840,31 @@ void CommandSession::stepValueBox(bool back) {
   }
 }
 
+void CommandSession::markValueBox(bool invalid) {
+  if (!m_valueBox) {
+    return;
+  }
+  const bool changed = invalid != m_valueBoxInvalid;
+  m_valueBoxInvalid = invalid;
+  // As the value boxes in the view look (ManipulatorOverlay); the error
+  // colour round a text that is not a value.
+  m_valueBox->setStyleSheet(
+      QStringLiteral("QLineEdit { background: rgba(255, 255, 255, 245); color: %1;"
+                     " border: 1.5px solid %2; border-radius: 4px; padding: 1px 5px; }")
+          .arg(viewColor(ColorRole::ViewInk, false).name(),
+               viewColor(invalid ? ColorRole::ErrorBorder : ColorRole::Select, false).name()));
+  if (changed) {
+    qDebug().noquote() << QStringLiteral("Value box %1 %2 %3")
+                              .arg(m_def.name, m_valueBoxKey, invalid ? QStringLiteral("invalid") : QStringLiteral("valid"));
+  }
+}
+
+bool CommandSession::valueBoxRefuses() const {
+  // Not while the typed text waits for the model (numericInputAction): it
+  // is not evaluated yet, and the panel shows what it gives.
+  return m_valueBox && m_valueBoxInvalid && !m_pendingNumbers.contains(m_valueBoxKey);
+}
+
 void CommandSession::closeValueBox(bool keep) {
   if (!m_valueBox) {
     return;
@@ -1857,6 +1890,7 @@ void CommandSession::closeValueBox(bool keep) {
   if (keep && !m_done && m_presenter != nullptr && m_presenter->actions().valueCommitted) {
     m_presenter->actions().valueCommitted(key);
   }
+  m_valueBoxInvalid = false;
   box->removeEventFilter(this);
   box->hide();
   box->deleteLater();
@@ -4243,6 +4277,13 @@ bool CommandSession::eventFilter(QObject* watched, QEvent* event) {
       event->accept();
       return true;
     }
+    if ((closing || stepping) && key->key() != Qt::Key_Escape && valueBoxRefuses()) {
+      // Not a value (mitcad#1181): the box stays, in the error colour, and
+      // nothing changes; Esc puts the value back.
+      qDebug().noquote() << QStringLiteral("Value box %1 %2 refused: %3")
+                                .arg(m_def.name, m_valueBoxKey, m_valueBox->text());
+      return true;
+    }
     if (closing) {
       closeValueBox(key->key() != Qt::Key_Escape);
       return true;
@@ -4702,7 +4743,9 @@ bool CommandSession::escape() {
     return false;
   }
   // What the command's Esc changed (3D Print: the question ended, its rows
-  // hidden): the inputs, the highlights and the preview follow.
+  // hidden; BUILD's chosen plane taken out, mitcad#1196): the inputs, the
+  // highlights and the preview follow.
+  updateHighlights();
   inputsChanged();
   return true;
 }

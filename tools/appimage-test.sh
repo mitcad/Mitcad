@@ -4,7 +4,8 @@
 # it, on a hidden Xvfb display (ui-test-lib.sh); no host but this one is
 # contacted:
 #   1. What it holds: the executables, the desktop file and the icon, Qt's
-#      plugins (X11, OpenGL on X11, SVG images and icons, TLS) with a
+#      plugins (X11, OpenGL on X11, SVG images and icons, TLS, CUPS print
+#      support with the system's libcups, mitcad#1089) with a
 #      qt.conf, OCCT and the licences; every ELF file finds its libraries
 #      inside it or in the system's library folders (ldd with an empty
 #      environment), none in the build's, Qt's or vcpkg's folders, and its
@@ -144,7 +145,7 @@ for file in AppRun mitcad.desktop mitcad.png .DirIcon usr/bin/mitcad usr/bin/mit
   usr/share/applications/mitcad.desktop usr/share/icons/hicolor/256x256/apps/mitcad.png \
   usr/plugins/platforms/libqxcb.so usr/plugins/xcbglintegrations/libqxcb-glx-integration.so \
   usr/plugins/imageformats/libqsvg.so usr/plugins/iconengines/libqsvgicon.so \
-  usr/plugins/tls/libqopensslbackend.so \
+  usr/plugins/tls/libqopensslbackend.so usr/plugins/printsupport/libcupsprintersupport.so \
   usr/share/doc/mitcad/LICENSE usr/share/doc/mitcad/THIRD-PARTY-NOTICES.txt \
   usr/share/doc/mitcad/licenses/droid-sans/LICENSE.txt usr/share/doc/mitcad/licenses/qtkeychain/COPYING; do
   [ -e "$DIR/$file" ] || ui_fail "the AppImage has no $file"
@@ -156,8 +157,9 @@ if [ -e "$(dirname "$0")/../third_party/fonts/iso-lettering/lettering.ttf" ]; th
     [ -e "$DIR/$file" ] || ui_fail "the AppImage has no $file"
   done
 fi
-# Qt's D-Bus module: the keychain's (KWallet, the Secret Service).
-for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do
+# Qt's D-Bus module: the keychain's (KWallet, the Secret Service); Print
+# Support: File › Print (mitcad#1089).
+for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6PrintSupport libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do
   compgen -G "$DIR/usr/lib/$library.so*" > /dev/null || ui_fail "the AppImage has no $library"
 done
 grep -qx 'Exec=mitcad' "$DIR/mitcad.desktop" || ui_fail "the desktop file does not start mitcad"

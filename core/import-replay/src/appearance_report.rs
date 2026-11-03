@@ -33,12 +33,22 @@ pub struct AppearanceReport {
     /// blob's copies of bodies the history holds, bodies taken by later
     /// operations), left out.
     pub not_in_design: usize,
+    /// The file's bodies whose light bulb is off, and the replay's bodies
+    /// hidden for them (mitcad#1175).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hidden: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hidden_set: usize,
     /// The document appearances made.
     pub appearances: Vec<AppearanceEntry>,
     /// The file's physical materials.
     pub physical_materials: Vec<MaterialEntry>,
     /// What did not come in, and why.
     pub gaps: Vec<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl AppearanceReport {

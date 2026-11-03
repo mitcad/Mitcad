@@ -1,0 +1,171 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: where the faces beyond two consecutive edges of a face meet along
+a tangential edge, the images of those edges on the face's offset are not
+intersected with each other: their common vertex is where each crosses
+the offset of the tangential edge (mitcad#1199).
+
+The case: a loft from a polygon to a circle (BRepOffsetAPI_ThruSections)
+whose circle's seam falls on a side of the polygon, offset inwards closed.
+The loft splits that side at its middle, so it becomes two faces tangent
+all along the edge between them (the faces' normals agree there within
+1e-14). Their offsets share that edge's offset. At each end of the edge,
+BRepOffset_Inter2d::ConnexIntByInt walks the wire of the end face (the
+polygon's or the circle's) and intersects the images of its consecutive
+edges on the end face's offset; at the split the two images are the
+curves where the two halves' offsets cut it, and they are tangent there.
+Their intersection (RefEdgeInter, a 2D intersection of two B-splines) was
+ill-conditioned: 2.7 micrometres off along them for a square to a circle
+of radius 15 at 1 mm, 7 at the circle's end. The walks of the two halves
+find the same vertex where each image crosses the offset of the tangential
+edge, transversally and exactly; FuseVertices merged the three into one
+whose tolerance covered the points but kept a parameter on an edge from
+the ill-conditioned intersection, so that the checker found the vertex off
+its curve (BRepCheck_InvalidPointOnCurveOnSurface): the offset invalid at
+most thicknesses, its volume up to 2 cubic millimetres off where it passed.
+
+ConnexIntByInt now skips that intersection (the new MeetAlongTangentEdge
+and IsAnalyticOn): only where the two edges' common vertex is a vertex of
+three edges, the third tangential all along it (the analysis's
+ChFiDS_Tangential, a single interval) with the faces beyond the two edges
+on its two sides, both edges have images, and the images' curves on the
+offset face are not both lines or conics, whose tangent intersections
+the 2D intersector computes exactly (a rounding between planes cut by a
+plane is as before). Every other intersection is as before. The offsets
+are valid single solids, the inner walls the thickness from the outer ones
+within 1e-6 mm, of the volume of the same loft with the seam on a corner
+(no side split) within 3e-5 of it.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index 5f79e3a8..e1e74f8b 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -1825,6 +1825,107 @@ void BRepOffset_Inter2d::Compute(
+   }
+ }
+ 
++//=======================================================================
++// function : MeetAlongTangentEdge
++// purpose  : Whether the offsets of the faces beyond theE1 and theE2
++//            (consecutive edges of theF at theV) meet along a tangential
++//            edge ending at theV: theV is a vertex of three edges, theE1,
++//            theE2 and an edge whose two faces are tangent all along it,
++//            the faces beyond theE1 and theE2 (a face of a loft split by
++//            the seam of a circle; mitcad#1199). The offsets of those two
++//            faces share the offset of that edge, so the images of theE1
++//            and theE2 on the offset of theF (where those faces' offsets
++//            cut it) are tangent where they meet.
++//=======================================================================
++static bool MeetAlongTangentEdge(const TopoDS_Face&        theF,
++                                 const TopoDS_Edge&        theE1,
++                                 const TopoDS_Edge&        theE2,
++                                 const TopoDS_Vertex&      theV,
++                                 const BRepOffset_Analyse& theAnalyse)
++{
++  if (!theAnalyse.HasAncestor(theV) || !theAnalyse.HasAncestor(theE1)
++      || !theAnalyse.HasAncestor(theE2))
++  {
++    return false;
++  }
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aVEdges;
++  for (NCollection_List<TopoDS_Shape>::Iterator it(theAnalyse.Ancestors(theV)); it.More(); it.Next())
++  {
++    if (!BRep_Tool::Degenerated(TopoDS::Edge(it.Value())))
++    {
++      aVEdges.Add(it.Value());
++    }
++  }
++  if (aVEdges.Extent() != 3 || !aVEdges.Contains(theE1) || !aVEdges.Contains(theE2))
++  {
++    return false;
++  }
++  // The faces beyond theE1 and theE2.
++  TopoDS_Shape aF[2];
++  for (int k = 0; k < 2; k++)
++  {
++    int aNb = 0;
++    for (NCollection_List<TopoDS_Shape>::Iterator it(theAnalyse.Ancestors(k == 0 ? theE1 : theE2));
++         it.More();
++         it.Next())
++    {
++      if (!it.Value().IsSame(theF))
++      {
++        aF[k] = it.Value();
++        aNb++;
++      }
++    }
++    if (aNb != 1)
++    {
++      return false;
++    }
++  }
++  if (aF[0].IsSame(aF[1]))
++  {
++    return false;
++  }
++  for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator it(aVEdges); it.More(); it.Next())
++  {
++    const TopoDS_Edge& aE = TopoDS::Edge(it.Key());
++    if (aE.IsSame(theE1) || aE.IsSame(theE2))
++    {
++      continue;
++    }
++    const NCollection_List<BRepOffset_Interval>& aLI = theAnalyse.Type(aE);
++    if (aLI.Extent() != 1 || aLI.First().Type() != ChFiDS_Tangential || !theAnalyse.HasAncestor(aE))
++    {
++      return false;
++    }
++    const NCollection_List<TopoDS_Shape>& aLF = theAnalyse.Ancestors(aE);
++    if (aLF.Extent() != 2)
++    {
++      return false;
++    }
++    return (aLF.First().IsSame(aF[0]) && aLF.Last().IsSame(aF[1]))
++           || (aLF.First().IsSame(aF[1]) && aLF.Last().IsSame(aF[0]));
++  }
++  return false;
++}
++
++//=======================================================================
++// function : IsAnalyticOn
++// purpose  : Whether the curve of theE on theF is a line or a conic,
++//            whose intersections the 2D intersector computes exactly,
++//            also where they are tangent (mitcad#1199).
++//=======================================================================
++static bool IsAnalyticOn(const TopoDS_Edge& theE, const TopoDS_Face& theF)
++{
++  double                          aF, aL;
++  const occ::handle<Geom2d_Curve> aC = BRep_Tool::CurveOnSurface(theE, theF, aF, aL);
++  if (aC.IsNull())
++  {
++    return false;
++  }
++  const GeomAbs_CurveType aType = Geom2dAdaptor_Curve(aC).GetType();
++  return aType == GeomAbs_Line || aType == GeomAbs_Circle || aType == GeomAbs_Ellipse
++         || aType == GeomAbs_Hyperbola || aType == GeomAbs_Parabola;
++}
++
+ //=================================================================================================
+ 
+ bool BRepOffset_Inter2d::ConnexIntByInt(
+@@ -2106,6 +2207,20 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+       {
+         DoInter = false;
+       }
++      if (DoInter && aChoice == 1 && !NE1seq.IsEmpty() && !NE2seq.IsEmpty()
++          && MeetAlongTangentEdge(FI, CurE, NextE, Vref, Analyse)
++          && !(IsAnalyticOn(TopoDS::Edge(NE1seq.Last()), FIO)
++               && IsAnalyticOn(TopoDS::Edge(NE2seq.First()), FIO)))
++      {
++        // The images of CurE and NextE are tangent where they meet, and
++        // not both analytic: their intersection here is ill-conditioned
++        // (micrometres off along them, or none, or several). Their common
++        // vertex is where each crosses the offset of the tangential edge,
++        // on the offsets of the faces beyond them, transversally
++        // (mitcad#1199).
++        CurE = anIdx <= aSeq.Length() ? aSeq(anIdx) : TopoDS_Edge();
++        continue;
++      }
+       if (DoInter)
+       {
+         //------------------------------------

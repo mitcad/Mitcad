@@ -77,6 +77,20 @@ void showMenuImages(QMenu* menu);
 // a window whose client area extends under the title bar and draws its own
 // title (the traffic lights stay). The window must have a native handle.
 void hideNativeTitle(QWidget* window);
+// The Qt frontend uses the same system document tabs as AppKit. The callback
+// follows actual WindowServer occlusion, including a hidden native tab.
+void enableDocumentWindowTabs(QWidget* window, std::function<void(bool)> visibility);
+// Read-only membership of the actual NSWindow tab group (one when ungrouped).
+int documentWindowTabCount(QWidget* window);
+// Actual selected tab of the presenter's owned NSWindow group, independent
+// of application foreground/key status. An unshared window is selected.
+bool documentWindowTabSelected(QWidget* window);
+void addDocumentWindowTabActions(QMenu* menu, QWidget* window);
+// Programmatic UI-script target-action input through the presenter's actual
+// Window menu. Does not require or assert application foreground/key status.
+bool triggerDocumentWindowMenu(QWidget* presenter, const QString& entry, QString& error);
+void prepareDocumentWindowPresentation(QWidget* window, bool separate);
+void minimizeDocumentWindow(QWidget* window);
 
 // Conventions of the menu bar and the standard About panel.
 
@@ -142,6 +156,13 @@ inline bool chooseTestPopup(const QString&, const std::function<void()>& open,
 inline QIcon symbolIcon(const QString&, const QIcon& fallback = {}) { return fallback; }
 inline void showMenuImages(QMenu*) {}
 inline void hideNativeTitle(QWidget*) {}
+inline void enableDocumentWindowTabs(QWidget*, std::function<void(bool)>) {}
+inline int documentWindowTabCount(QWidget*) { return 0; }
+inline bool documentWindowTabSelected(QWidget*) { return false; }
+inline void addDocumentWindowTabActions(QMenu*, QWidget*) {}
+inline bool triggerDocumentWindowMenu(QWidget*, const QString&, QString&) { return false; }
+inline void prepareDocumentWindowPresentation(QWidget*, bool) {}
+inline void minimizeDocumentWindow(QWidget*) {}
 inline void hideMenuImages(QMenu*) {}
 inline void showAboutPanel(const QString&) {}
 

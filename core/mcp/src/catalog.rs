@@ -10,6 +10,12 @@ const ID_CHARS: u64 = 256;
 const NAME_CHARS: u64 = 1024;
 const ENTITY_CHARS: u64 = 4096;
 const PATH_CHARS: u64 = 4096;
+// ui_screenshot's max_bytes (mitcad#1188), the encoded image's bytes: the
+// smallest a caller may ask for, and the default and largest for an image
+// returned inline (well within the 8 MiB frame once in base64). The
+// application's mcp/ScreenshotBudget.hpp has the same numbers.
+pub(crate) const SCREENSHOT_MIN_BYTES: u64 = 4096;
+pub(crate) const SCREENSHOT_INLINE_BYTES: u64 = 5 * 1024 * 1024;
 
 pub(crate) fn tools() -> Vec<Value> {
     let document = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "Explicit document handle returned by document_create or document_open"});
@@ -174,7 +180,7 @@ pub(crate) fn live_tools() -> Vec<Value> {
         match tool["name"].as_str() {
             Some("document_list") => {
                 tool["description"] = json!(
-                    "List the application's open document (its handle, path, name and state) and the folders the user allows agents to save to and open from (folders; empty: none allowed)."
+                    "List every open document (its handle, path, name, active flag and state) and the folders the user allows agents to save to and open from (folders; empty: none allowed)."
                 );
             }
             Some("model_query") => {
@@ -204,10 +210,25 @@ pub(crate) fn live_tools() -> Vec<Value> {
         }
     }
     tools.extend(ui_tools());
+    for tool in &mut tools {
+        if matches!(
+            tool["name"].as_str(),
+            Some("document_list" | "model_reference")
+        ) {
+            continue;
+        }
+        tool["inputSchema"]["properties"]["document"] = json!({
+            "type": "string", "minLength": 1, "maxLength": ID_CHARS,
+            "description": LIVE_DOCUMENT
+        });
+        if let Some(required) = tool["inputSchema"]["required"].as_array_mut() {
+            required.retain(|field| field != "document");
+        }
+    }
     tools
 }
 
-const LIVE_DOCUMENT: &str = "Explicit live document handle returned by document_list";
+const LIVE_DOCUMENT: &str = "Optional live document handle from document_list; omitted uses the active document (chat agents remain bound to their own document)";
 
 /// The application's own state and actions on the open document
 /// (mitcad#265); the application executes them.
@@ -244,6 +265,8 @@ fn ui_tools() -> Vec<Value> {
     });
     let folder_path = json!({"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "A .mitcad file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder); a relative path is relative to the first allowed folder; '..' is refused"});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "x, y, z in millimeters"});
+    // A comment of the design by its id (mitcad#1119).
+    let comment = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A comment's id as the comments resource lists it, e.g. C3: its target and place"});
     vec![
         tool(
             "document_save",
@@ -259,7 +282,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "document_open",
-            "Open a MitCad design (.mitcad) in the application's window in place of the open document, as File > Open does, from a folder the user allows agents to use (document_list lists them). The previous document handle becomes invalid; the result carries the new one. Refused while the open document has unsaved changes unless discard is true, while a sketch or command panel is open, and while a dialog would have to ask the user.",
+            "Open a MitCad design (.mitcad) in the selected application window in place of its document, from a folder the user allows agents to use (document_list lists them). The previous document handle becomes invalid; the result carries the new one. Refused while the open document has unsaved changes unless discard is true, while a sketch or command panel is open, and while a dialog would have to ask the user.",
             json!({
                 "path": folder_path,
                 "discard": {"type": "boolean", "default": false, "description": "Explicitly discard the open document's unsaved changes (they and their recovery data are lost)"}
@@ -270,7 +293,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_state",
-            "The application's state: mode (idle, sketch, command, pick_plane), the active component, the sketch being edited with its Sketch Palette status and warnings (each with the entities it is about), the running command with its inputs and panel messages, the selection, the hint or error line, read-only state, unsaved changes, undo and redo labels, connected agents, and the application's version and build.",
+            "The application's state: mode (idle, sketch, command, pick_plane), the active component, the sketch being edited with its Sketch Palette status and warnings (each with the entities it is about), the running command with its inputs and panel messages, the selection, the hint or error line, read-only state, unsaved changes, undo and redo labels, connected agents, the number of open comments (comments.open: notes the user pinned for an agent; read them first, from the resource mitcad://comments or model_query {\"query\": \"comments\", \"status\": \"open\"}), and the application's version and build.",
             json!({}),
             &[],
             true,
@@ -289,10 +312,11 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_screenshot",
-            "An image of the 3D view as the user sees it, including the sketch overlay, or of the whole window, scaled to fit max_size pixels and the response limit, returned as an MCP image (PNG, or JPEG with format). With path it is written to that file in a folder the user allows agents to use, and only the path, the size and the bytes are returned. width and height, or aspect, render the 3D view offscreen at that size, without the widgets over it, so the picture does not take the window's shape; frame it first with ui_camera's aspect.",
+            "An image of the 3D view as the user sees it, including the sketch overlay, or of the whole window, scaled to fit max_size pixels and then down until its encoded image takes at most max_bytes bytes, returned as an MCP image (PNG, or JPEG with format; the format asked for is kept, and downscaled_for_bytes tells when the budget made it smaller). max_bytes counts the PNG or JPEG bytes (the result's bytes); the image block's base64 is 4/3 of that, and the rest of the response adds under 2 KiB. Its default, 5 MiB, keeps the response within Mitcad's own 8 MiB transport limit; a client with a lower limit of its own passes a smaller max_bytes (e.g. 500000). An image that cannot fit is refused with error_code screenshot_too_large. With path it is written to that file in a folder the user allows agents to use, and only the path, the size and the bytes are returned, at full size unless max_bytes is given. width and height, or aspect, render the 3D view offscreen at that size, without the widgets over it, so the picture does not take the window's shape; frame it first with ui_camera's aspect.",
             json!({
                 "window": {"type": "boolean", "default": false, "description": "The whole window instead of the 3D view"},
                 "max_size": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 1280, "description": "The longer side's largest size in pixels"},
+                "max_bytes": {"type": "integer", "minimum": SCREENSHOT_MIN_BYTES, "maximum": SCREENSHOT_INLINE_BYTES, "description": "The encoded PNG or JPEG image's largest size in bytes (not its base64): the picture is scaled down until it fits. Default 5 MiB for an image returned inline; a file written to path has no limit unless this is given"},
                 "format": {"type": "string", "enum": ["png", "jpeg"], "description": "png (the default, or by the path's extension) or jpeg"},
                 "quality": {"type": "integer", "minimum": 1, "maximum": 100, "default": 90, "description": "A JPEG's quality"},
                 "width": {"type": "integer", "minimum": 16, "maximum": 4096, "description": "Pixels across an offscreen render of the 3D view (with height, or with aspect)"},
@@ -307,13 +331,14 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_select",
-            "Set the application's selection to the given entities, as clicks would, to show the user something; the user can then press Delete or run a command on them. Optionally pan or zoom the view to them.",
+            "Set the application's selection to the given entities, as clicks would, to show the user something; the user can then press Delete or run a command on them. Optionally pan or zoom the view to them. With comment instead of items: select that comment's target (a free point, a parameter or an orphaned comment's target selects nothing) and bring its place into the view.",
             json!({
                 "document": document,
                 "items": {"type": "array", "items": item, "description": "The entities; empty clears the selection"},
+                "comment": comment,
                 "reveal": {"type": "string", "enum": ["none", "pan", "fit"], "default": "pan", "description": "pan: move the view to them when none is in sight, keeping the zoom unless they do not fit; fit: zoom to them"}
             }),
-            &["document", "items"],
+            &["document"],
             false,
             false,
         ),
@@ -333,7 +358,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_camera",
-            "Read or set the 3D view's camera, for inspection screenshots; the view changes at once (no animation) and the result is the camera as it then is. Without arguments it only reads. Given values replace the current camera's: eye and target (points), up, height (mm of the model the view shows at the target, top to bottom), fov (the perspective's vertical field of view in degrees), projection. Then box frames that box, or frame frames the shown bodies (only the isolated ones when the design isolates some) or the selection, seen along the resulting view direction with a small margin, in the part of the view no panel covers.",
+            "Read or set the 3D view's camera, for inspection screenshots; the view changes at once (no animation) and the result is the camera as it then is. Without arguments it only reads. Given values replace the current camera's: eye and target (points), up, height (mm of the model the view shows at the target, top to bottom), fov (the perspective's vertical field of view in degrees), projection. Then box frames that box, or frame frames the shown bodies (only the isolated ones when the design isolates some) or the selection, seen along the resulting view direction with a small margin, in the part of the view no panel covers; or comment selects that comment's target and frames it (a free point or an orphaned comment's place is centred at the current zoom).",
             json!({
                 "eye": point,
                 "target": point,
@@ -349,6 +374,7 @@ fn ui_tools() -> Vec<Value> {
                     "additionalProperties": false
                 },
                 "frame": {"type": "string", "enum": ["none", "shown", "selection"], "default": "none", "description": "shown: the shown bodies (the isolated ones when some are isolated); selection: the selected entities"},
+                "comment": comment,
                 "aspect": {"type": "number", "minimum": 0.1, "maximum": 10, "description": "Frame box or frame for a picture of this width / height (ui_screenshot's aspect, or its width and height) instead of the view's own shape"}
             }),
             &[],
@@ -381,6 +407,25 @@ fn tool(
             "openWorldHint": false
         }
     })
+}
+
+/// What a tool's schema cannot say (mitcad#1119): `ui_select` takes
+/// `items` or `comment`, `ui_camera`'s `comment` frames instead of `box` or
+/// `frame`.
+pub(crate) fn check(name: &str, arguments: &Value) -> Result<(), String> {
+    let has = |key: &str| arguments.get(key).is_some();
+    match name {
+        "ui_select" if has("items") == has("comment") => {
+            Err("ui_select takes either items or comment".to_owned())
+        }
+        "ui_camera"
+            if has("comment")
+                && (has("box") || arguments.get("frame").is_some_and(|f| f != "none")) =>
+        {
+            Err("ui_camera's comment frames that comment: give no box or frame with it".to_owned())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Validate the small, fixed schema vocabulary used by our tool catalog.

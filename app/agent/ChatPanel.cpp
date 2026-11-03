@@ -37,6 +37,7 @@
 #include "../mcp/ConnectAssistantDialog.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../report/ReportCenter.hpp"
+#include "AccountCheck.hpp"
 #include "ChatController.hpp"
 #include "ChatLogic.hpp"
 
@@ -246,8 +247,21 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_secondary->setFlat(true);
   setupLine->addWidget(m_setup);
   setupLine->addWidget(m_secondary);
+  m_checkAccount = new QPushButton(tr("Check again"));
+  m_checkAccount->setObjectName(QStringLiteral("chatCheckAccount"));
+  m_checkAccount->hide();
+  setupLine->addWidget(m_checkAccount);
   setupLine->addStretch(1);
   column->addWidget(m_setupRow);
+  m_accountHelp = new QFrame;
+  m_accountHelp->setObjectName(QStringLiteral("chatAccountHelp"));
+  m_accountHelp->setFrameShape(QFrame::StyledPanel);
+  auto* helpColumn = new QVBoxLayout(m_accountHelp);
+  m_accountHelpText = wrapped(QStringLiteral("chatAccountHelpText"));
+  helpColumn->addWidget(m_accountHelpText);
+  m_accountHelp->hide();
+  column->addWidget(m_accountHelp);
+  connect(m_checkAccount, &QPushButton::clicked, this, [this] { m_chat.checkAccount(); });
   connect(m_setup, &QPushButton::clicked, this, [this] {
     qInfo().noquote() << QStringLiteral("Chat: %1").arg(m_setup->text());
     if (m_setupAction == QStringLiteral("install")) {
@@ -256,6 +270,9 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
       m_chat.signIn();
     } else if (m_setupAction == QStringLiteral("check")) {
       m_chat.refreshSetup(true);
+    } else if (m_setupAction == QStringLiteral("account-help")) {
+      m_accountHelp->setVisible(!m_accountHelp->isVisibleTo(this));
+      emit contentChanged();
     }
   });
   connect(m_secondary, &QPushButton::clicked, this, [this] { emit connectAssistantRequested(); });
@@ -282,6 +299,13 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_attachSelection->setToolTip(tr("The selected items go with the message"));
   m_attachSelection->setCheckable(true);
   m_attachSelection->setChecked(true);
+  // The open comments of the design go with the message (mitcad#1119).
+  m_attachComments = new QToolButton;
+  m_attachComments->setObjectName(QStringLiteral("chatAttachComments"));
+  m_attachComments->setText(tr("Comments"));
+  m_attachComments->setToolTip(tr("The open comments of the design go with the message"));
+  m_attachComments->setCheckable(true);
+  m_attachComments->setChecked(true);
   m_attachView = new QToolButton;
   m_attachView->setObjectName(QStringLiteral("chatAttachView"));
   m_attachView->setText(tr("View"));
@@ -291,6 +315,7 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_send->setObjectName(QStringLiteral("chatSend"));
   m_send->setDefault(true);
   controls->addWidget(m_attachSelection);
+  controls->addWidget(m_attachComments);
   controls->addWidget(m_attachView);
   controls->addStretch(1);
   controls->addWidget(m_send);
@@ -303,7 +328,7 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
       submit();
     }
   });
-  for (QToolButton* toggle : {m_attachSelection, m_attachView}) {
+  for (QToolButton* toggle : {m_attachSelection, m_attachComments, m_attachView}) {
     connect(toggle, &QToolButton::toggled, this, [toggle](bool on) {
       qInfo().noquote() << QStringLiteral("Chat: %1 %2").arg(toggle->text(), on ? QStringLiteral("attached")
                                                                                 : QStringLiteral("not attached"));
@@ -412,7 +437,8 @@ void ChatPanel::submit() {
   m_input->clear();
   if (m_chat.needsPrivacyNotice()) {
     m_waiting = text;
-    m_noticeText->setText(tr("What you write here, the selection and pictures of the view go to %1's service, "
+    m_noticeText->setText(tr("What you write here, the selection, the open comments and pictures of the view go to "
+                             "%1's service, "
                              "whose terms apply. The agent changes this design through MitCad's tools.")
                               .arg(m_chat.agent()->name()));
     m_notice->show();
@@ -424,7 +450,7 @@ void ChatPanel::submit() {
 
 void ChatPanel::send(const QString& text) {
   if (!text.isEmpty()) {
-    m_chat.send(text, m_attachSelection->isChecked(), m_attachView->isChecked());
+    m_chat.send(text, m_attachSelection->isChecked(), m_attachView->isChecked(), m_attachComments->isChecked());
   }
   updateState();
   m_input->setFocus(Qt::OtherFocusReason);
@@ -622,6 +648,7 @@ void ChatPanel::fillRow(QWidget* row, const QJsonObject& entry) {
   // icon, word and colour, not dimmed; information as before.
   const NoticeLevel level = noticeLevelFromModel(entry.value(QStringLiteral("level")).toString());
   if (role(entry) == QStringLiteral("notice") && isProblem(level)) {
+    label->setObjectName(QStringLiteral("chatNotice"));
     label->setTextFormat(Qt::RichText);
     label->setEnabled(true);
     label->setText(noticeHtml(level, text, label->palette()));
@@ -847,9 +874,22 @@ void ChatPanel::updateState() {
   QString action;
   QString actionText;
   bool secondary = false;
+  // The agent itself not usable (not found, too old): its setup comes before
+  // a known account error, and Check again returns once it is found
+  // (mitcad#1155).
+  const bool unusable = agentUnusable(readiness);
+  const bool accountProblem = !m_chat.accountError().isEmpty();
   if (!unavailable.isEmpty()) {
     key = QStringLiteral("unavailable");
     text = unavailable;
+  } else if (m_chat.checkingAccount()) {
+    key = QStringLiteral("checking-account");
+    text = tr("Checking %1's sign-in and account access…").arg(name);
+  } else if (accountProblem && !unusable) {
+    key = QStringLiteral("account-error");
+    text = tr("%1 cannot use this account: %2").arg(name, m_chat.accountError().value(QStringLiteral("reason")).toString());
+    action = QStringLiteral("account-help");
+    actionText = tr("How to fix");
   } else if (m_notice->isVisibleTo(this)) {
     key = QStringLiteral("notice");
     text = tr("Read this once before the first message.");
@@ -913,11 +953,28 @@ void ChatPanel::updateState() {
     }
   }
   m_state->setText(text);
+  setErrorStyleSheet(m_state, key == QStringLiteral("account-error") ? QStringLiteral("color: %1;") : QString());
+  m_checkAccount->setVisible(accountCheckOffered(accountProblem, readiness, m_chat.checkingAccount()));
+  m_checkAccount->setEnabled(activity == ChatController::Activity::Idle);
+  if (!accountProblem || unusable) {
+    m_accountHelp->hide();
+  }
+  m_accountHelpText->setText(agent->id() == QStringLiteral("claude")
+      ? tr("Sign in again with an account allowed to use Claude Code: in a terminal run claude /logout, then claude /login. "
+           "Alternatively set ANTHROPIC_API_KEY for MitCad and restart it, or ask your organization's administrator to enable access. "
+           "For a credit or rate limit, check the account's billing or wait for the limit to reset. "
+           "Then choose Check again. The check sends one short request without your design or conversation; account usage may apply. "
+           "New Conversation (+) starts a fresh process with the latest sign-in.")
+      : tr("Sign in again to Codex in a terminal with codex logout, then codex login, using an account allowed to use Codex. "
+           "For API-key access, configure Codex's API key and restart MitCad. Ask your administrator about access, "
+           "or check billing and wait for a credit or rate limit to reset. "
+           "Then choose Check again. The check sends one short request without your design or conversation; account usage may apply. "
+           "New Conversation (+) starts a fresh process with the latest sign-in."));
   m_setupAction = action;
   m_setup->setText(actionText);
   m_setupRow->setVisible(!action.isEmpty());
   m_secondary->setVisible(secondary);
-  const bool ready = unavailable.isEmpty() && (readiness == ChatAgent::Readiness::Ready ||
+  const bool ready = unavailable.isEmpty() && !accountProblem && !m_chat.checkingAccount() && (readiness == ChatAgent::Readiness::Ready ||
                                                 activity != ChatController::Activity::Idle);
   m_inputRow->setVisible(ready && !m_notice->isVisibleTo(this));
   const bool working = activity == ChatController::Activity::Working ||
@@ -926,9 +983,9 @@ void ChatPanel::updateState() {
   m_send->setText(working ? tr("Stop") : tr("Send"));
   m_send->setProperty("chatAction", working ? QStringLiteral("stop") : QStringLiteral("send"));
   m_send->setEnabled(activity != ChatController::Activity::Stopping);
-  m_new->setEnabled(activity == ChatController::Activity::Idle);
-  m_agentChoice->setEnabled(activity == ChatController::Activity::Idle);
-  m_modelChoice->setEnabled(activity == ChatController::Activity::Idle);
+  m_new->setEnabled(activity == ChatController::Activity::Idle && !m_chat.checkingAccount());
+  m_agentChoice->setEnabled(activity == ChatController::Activity::Idle && !m_chat.checkingAccount());
+  m_modelChoice->setEnabled(activity == ChatController::Activity::Idle && !m_chat.checkingAccount());
   // A missing agent is looked for while the panel shows: installed, it is
   // used without a restart.
   if (readiness == ChatAgent::Readiness::Missing && presented()) {

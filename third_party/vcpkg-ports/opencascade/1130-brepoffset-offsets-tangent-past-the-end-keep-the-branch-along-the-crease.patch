@@ -1,0 +1,287 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: the intersection of the offsets of a convex crease's faces that
+become tangent past the solid's end keeps only the branch along the crease
+(mitcad#1184).
+
+The case: a loft from an octagon to a circle (BRepOffsetAPI_ThruSections),
+shelled 3 mm inwards with both its ends removed, or offset inwards closed.
+At the octagon's corners the loft's ruled faces meet at convex creases that
+flatten to tangency at the circle. Where the walls lean out towards the
+circle, the inward offsets of the two faces at a corner become tangent a
+little past the circle's end (0.16 mm past it for the 3 mm wall) and cross
+there. BRepOffset_Inter3d::ConnexIntByInt intersects the enlarged offset
+faces: the branch along the corner and five to seven more pieces about and
+past the tangency, up to the enlarged faces' ends, all connected, so that
+CheckIntersFF keeps them all. From them MakeLoops rebuilt no inner face for
+most walls: the thick solid was not done (BRepOffset_UnknownError) or came
+out invalid (the body with offset faces of no area), a Geom_OffsetSurface
+evaluation failed on a vertex of such a piece (UpdateTolerance), and the
+closed offset was null or invalid, at every thickness from 0.5 mm. A
+square to a circle that it surrounds failed the same way.
+
+BRepOffset_Tool::Inter3D now keeps only the branch along the edge there
+(the new DropCrossingsPastTangentEnd, after CheckIntersFF): of the edges
+nearest to the edge's middle (a curve the pave filler gives twice, once run
+on past the tangency, the one that runs least far past the end) and the
+edges it goes on into towards the edge's other end where no other edge
+meets them. It acts only where the edge's two faces have parallel normals
+(within 1e-4) at one end of it and not at its middle, the intersection gave
+more than one edge, and that branch runs past the plane of the solid's end
+there, the osculating plane of the face's boundary at that end. Where the
+offsets become tangent before the end (walls leaning in, the end's own
+offset cutting the branch first), and for every other edge, the
+intersection is as before. The shells are valid, both ends open, the inner
+walls the thickness from the outer ones within 1e-6 mm.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index cde0d94a..8f56ff39 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -1438,6 +1438,238 @@ static TopoDS_Edge AssembleEdge(const BOPDS_PDS&                          pDS,
+ 
+ //=================================================================================================
+ 
++//=======================================================================
++// function : DropCrossingsPastTangentEnd
++// purpose  : The intersection of the offsets of the faces of a convex
++//            crease that flattens to tangency at one end of the edge (a
++//            loft from a polygon to a circle: the creases at the corners
++//            vanish where the faces reach the circle; mitcad#1184). The
++//            offsets become tangent near that end, and where that lies
++//            past the solid's end there (outside it) they cross there:
++//            the intersection of the enlarged offset faces is the branch
++//            that follows the edge, and pieces about and past the
++//            tangency, all connected, so that CheckIntersFF keeps them all
++//            and the offset faces cannot be rebuilt from them (the thick
++//            solid not done or invalid, the closed offset null). There
++//            only the branch that follows the edge is kept: the edge
++//            nearest to the edge's middle (of a curve given twice, the one
++//            that runs least far past the end) and the edges it goes on
++//            into towards the edge's other end. Only where the edge's
++//            faces have parallel normals at one end of it and not at its
++//            middle, the intersection gave more than one edge, and the
++//            branch runs past the plane of the end (the osculating plane
++//            of the face's boundary there); elsewhere nothing changes.
++//=======================================================================
++static void DropCrossingsPastTangentEnd(
++  const TopoDS_Edge&                                             RefEdge,
++  const TopoDS_Face&                                             RefFace1,
++  const TopoDS_Face&                                             RefFace2,
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& TrueEdges)
++{
++  if (RefEdge.IsNull() || RefFace1.IsNull() || RefFace2.IsNull() || TrueEdges.Extent() < 2
++      || BRep_Tool::Degenerated(RefEdge))
++  {
++    return;
++  }
++  const double aTolAngle = 1.e-4;
++  // The faces' normals at a point of the edge (by its parameter on it):
++  // the sine of the angle between them, -1 where not computed.
++  const auto aSine = [&](const double theT) {
++    gp_Vec aN[2];
++    for (int k = 0; k < 2; k++)
++    {
++      const TopoDS_Face& aF = k == 0 ? RefFace1 : RefFace2;
++      double             f2d, l2d;
++      const occ::handle<Geom2d_Curve> aPC = BRep_Tool::CurveOnSurface(RefEdge, aF, f2d, l2d);
++      if (aPC.IsNull())
++      {
++        return -1.;
++      }
++      const gp_Pnt2d      aUV = aPC->Value(theT);
++      BRepAdaptor_Surface aS(aF, false);
++      gp_Pnt              aP;
++      gp_Vec              aDU, aDV;
++      aS.D1(aUV.X(), aUV.Y(), aP, aDU, aDV);
++      aN[k] = aDU.Crossed(aDV);
++      if (aN[k].Magnitude() <= gp::Resolution())
++      {
++        return -1.;
++      }
++    }
++    return aN[0].Crossed(aN[1]).Magnitude() / (aN[0].Magnitude() * aN[1].Magnitude());
++  };
++  double                         aT1, aT2;
++  const occ::handle<Geom_Curve>& aC = BRep_Tool::Curve(RefEdge, aT1, aT2);
++  if (aC.IsNull())
++  {
++    return;
++  }
++  const double aSinMid = aSine(0.5 * (aT1 + aT2));
++  const double aSinT1  = aSine(aT1);
++  const double aSinT2  = aSine(aT2);
++  if (aSinMid < 0. || aSinT1 < 0. || aSinT2 < 0. || aSinMid <= aTolAngle)
++  {
++    return;
++  }
++  const bool aTangent1 = aSinT1 <= aTolAngle;
++  const bool aTangent2 = aSinT2 <= aTolAngle;
++  if (aTangent1 == aTangent2)
++  {
++    return;
++  }
++  // The end where the faces are tangent, and the direction out of the
++  // edge there.
++  gp_Pnt aPEnd;
++  gp_Vec aOut;
++  aC->D1(aTangent1 ? aT1 : aT2, aPEnd, aOut);
++  if (aTangent1)
++  {
++    aOut.Reverse();
++  }
++  if (aOut.Magnitude() <= gp::Resolution())
++  {
++    return;
++  }
++  aOut.Normalize();
++  // The plane of the solid's end there: the osculating plane of the face's
++  // other edge at that end (the end's boundary, a circle's arc on the end
++  // of a loft), its normal out of the solid.
++  const TopoDS_Vertex aVEnd = aTangent1 ? TopExp::FirstVertex(RefEdge, false) : TopExp::LastVertex(RefEdge, false);
++  gp_Vec              aEndNormal;
++  for (TopExp_Explorer aEx(RefFace1, TopAbs_EDGE); aEx.More() && aEndNormal.Magnitude() <= gp::Resolution(); aEx.Next())
++  {
++    const TopoDS_Edge& aB = TopoDS::Edge(aEx.Current());
++    if (aB.IsSame(RefEdge) || BRep_Tool::Degenerated(aB))
++    {
++      continue;
++    }
++    TopoDS_Vertex aB1, aB2;
++    TopExp::Vertices(aB, aB1, aB2);
++    if (!aB1.IsSame(aVEnd) && !aB2.IsSame(aVEnd))
++    {
++      continue;
++    }
++    BRepAdaptor_Curve aBC(aB);
++    const double      aTB = aB1.IsSame(aVEnd) ? aBC.FirstParameter() : aBC.LastParameter();
++    gp_Pnt            aP;
++    gp_Vec            aD1, aD2;
++    aBC.D2(aTB, aP, aD1, aD2);
++    const gp_Vec aBin = aD1.Crossed(aD2);
++    if (aD1.Magnitude() > gp::Resolution() && aBin.Magnitude() > 1.e-9 * std::pow(aD1.Magnitude(), 3))
++    {
++      aEndNormal = aBin.Normalized();
++    }
++  }
++  if (aEndNormal.Magnitude() <= gp::Resolution() || std::abs(aEndNormal.Dot(aOut)) < 1.e-3)
++  {
++    return;
++  }
++  if (aEndNormal.Dot(aOut) < 0.)
++  {
++    aEndNormal.Reverse();
++  }
++  // How far an edge's vertices go past the plane of the end.
++  const auto aBeyond = [&](const TopoDS_Edge& theE) {
++    double aMax = RealFirst();
++    for (TopExp_Explorer aV(theE, TopAbs_VERTEX); aV.More(); aV.Next())
++    {
++      aMax = std::max(aMax, gp_Vec(aPEnd, BRep_Tool::Pnt(TopoDS::Vertex(aV.Current()))).Dot(aEndNormal));
++    }
++    return aMax;
++  };
++  // The branch that follows the edge: of the intersection edges nearest to
++  // the edge's middle (the pave filler may give a curve twice, once run on
++  // past the tangency), the one that runs least far past it; then the
++  // edges it goes on into towards the edge's other end, one by one where
++  // no other edge meets them.
++  const gp_Pnt  aPMid = aC->Value(0.5 * (aT1 + aT2));
++  const TopoDS_Vertex aVMid = BRepLib_MakeVertex(aPMid);
++  NCollection_Array1<double> aDist(1, TrueEdges.Extent());
++  double aMinDist = RealLast();
++  for (int i = 1; i <= TrueEdges.Extent(); i++)
++  {
++    BRepExtrema_DistShapeShape aProj(aVMid, TrueEdges(i));
++    aDist(i) = aProj.IsDone() && aProj.NbSolution() > 0 ? aProj.Value() : RealLast();
++    aMinDist = std::min(aMinDist, aDist(i));
++  }
++  if (aMinDist == RealLast())
++  {
++    return;
++  }
++  const double aDistTol = std::max(1.e-4, 1.e-3 * aMinDist);
++  int          aMain    = 0;
++  double       aMainBeyond = RealLast();
++  for (int i = 1; i <= TrueEdges.Extent(); i++)
++  {
++    if (aDist(i) > aMinDist + aDistTol)
++    {
++      continue;
++    }
++    const double aB = aBeyond(TopoDS::Edge(TrueEdges(i)));
++    if (aB < aMainBeyond)
++    {
++      aMainBeyond = aB;
++      aMain       = i;
++    }
++  }
++  // (Only where the branch ends past that plane: there the offsets become
++  // tangent outside the solid's end, and their crossings there are no part
++  // of the result. Where they become tangent before it, the end's own
++  // offset cuts the branch first, and the pieces are left as they were.)
++  if (aMain == 0 || aMainBeyond <= Precision::Confusion())
++  {
++    return;
++  }
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aKept;
++  aKept.Add(TrueEdges(aMain));
++  // On towards the edge's other end.
++  TopoDS_Edge aCur = TopoDS::Edge(TrueEdges(aMain));
++  for (int aStep = 0; aStep < TrueEdges.Extent(); aStep++)
++  {
++    TopoDS_Vertex aV1, aV2;
++    TopExp::Vertices(aCur, aV1, aV2);
++    if (aV1.IsNull() || aV2.IsNull())
++    {
++      break;
++    }
++    const TopoDS_Vertex& aInner =
++      gp_Vec(aPEnd, BRep_Tool::Pnt(aV1)).Dot(aEndNormal) < gp_Vec(aPEnd, BRep_Tool::Pnt(aV2)).Dot(aEndNormal) ? aV1 : aV2;
++    TopoDS_Edge aNext;
++    int         aMeeting = 0;
++    for (int i = 1; i <= TrueEdges.Extent(); i++)
++    {
++      const TopoDS_Edge& aE = TopoDS::Edge(TrueEdges(i));
++      // (Not the curve again: an edge as near the edge's middle as the
++      // branch kept runs along it.)
++      if (aE.IsSame(aCur) || aDist(i) <= aMinDist + aDistTol)
++      {
++        continue;
++      }
++      for (TopExp_Explorer aV(aE, TopAbs_VERTEX); aV.More(); aV.Next())
++      {
++        if (aV.Current().IsSame(aInner))
++        {
++          aMeeting++;
++          aNext = aE;
++          break;
++        }
++      }
++    }
++    if (aMeeting != 1 || aKept.Contains(aNext))
++    {
++      break;
++    }
++    aKept.Add(aNext);
++    aCur = aNext;
++  }
++  if (!aKept.IsEmpty() && aKept.Extent() < TrueEdges.Extent())
++  {
++    TrueEdges = aKept;
++  }
++}
++
++//=================================================================================================
++
+ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+                               const TopoDS_Face&              F2,
+                               NCollection_List<TopoDS_Shape>& L1,
+@@ -1484,6 +1716,7 @@ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+   if (!RefEdge.IsNull())
+   {
+     CheckIntersFF(aPF.PDS(), RefEdge, TrueEdges);
++    DropCrossingsPastTangentEnd(RefEdge, theRefFace1, theRefFace2, TrueEdges);
+   }
+ 
+   bool addPCurve1 = true;

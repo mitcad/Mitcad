@@ -1,0 +1,20 @@
+[
+  {
+    "cmd": "add_feature",
+    "def": {
+      "type": "box",
+      "plane": {
+        "type": "origin",
+        "plane": "xy"
+      },
+      "corner": [
+        0,
+        0
+      ],
+      "length": 10,
+      "width": 20,
+      "height": 30,
+      "operation": "new_body"
+    }
+  }
+]

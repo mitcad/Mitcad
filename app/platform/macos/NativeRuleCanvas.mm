@@ -419,7 +419,8 @@ private:
         else [m_surface addSubview:button];
         m_pieces[key] = button;
       }
-      NSString* caption = ns(piece.text.isEmpty() ? piece.name() : piece.text);
+      // An empty place says what goes there (mitcad#968), not "when.0 socket".
+      NSString* caption = ns(m_canvas->pieceCaption(index));
       if (![button.accessibilityLabel isEqualToString:caption]) button.accessibilityLabel = caption;
       // A marked block's problem (mitcad#1064): the scene draws its outline,
       // the hit target above it carries its tooltip and tells VoiceOver.

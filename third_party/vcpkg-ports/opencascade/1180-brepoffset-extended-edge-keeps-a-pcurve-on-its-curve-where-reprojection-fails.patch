@@ -1,0 +1,91 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: extending an edge keeps a curve on a face that lies on the edge
+all along the edge's own range where reprojecting it fails, instead of
+letting SameParameter replace it (mitcad#1201).
+
+The case: a loft from a square to a circle of radius 20
+(BRepOffsetAPI_ThruSections) whose circle's seam falls on a side, offset
+inwards closed. The loft splits that side into two faces tangent along
+the edge between them, and that edge's offset is shared by the two halves'
+offsets, its curves on both lines u = 10 with v the edge's parameter.
+BRepOffset_Inter2d::ExtentEdge extends it for the intersections: each
+curve is clipped to its surface's bounds, which differ (the halves'
+offset surfaces are extended by different lengths, v to 1.245 and 1.250),
+the 3D curve is rebuilt on the narrower one, and the other is reprojected
+onto its surface (GeomProjLib::Curve2d). That projection failed, and
+SameParameter then replaced the exact line by an approximation off by
+0.2 mm in parameter (v = 1.0065 t - 0.0033 where the surfaces agree). The
+edge came out with that curve on one half, its tolerance raised to 0.14 by
+UpdateTolerance: the offset valid, but that half 3.27 mm2 short and the
+volume 12.7 mm3 short at 0.5 mm (8.1 at 3 mm).
+
+Where the projection fails, a curve that lies on the rebuilt 3D curve
+within its approximation's deviation plus 10 * Precision::Confusion() at
+33 parameters over the edge's own range (the original edge's, within the
+extension) is now kept as it is (the new PCurveFollowsCurve); only
+otherwise SameParameter runs as before. Where the projection succeeds,
+and for every other curve, nothing changes. The offsets' edges stay within
+0.001 mm, and the volume is that of the same loft with the seam on a
+corner within 1e-5.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index e1e74f8b..e0af368f 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -1186,6 +1186,36 @@ static bool ExtendPCurve(const occ::handle<Geom2d_Curve>& aPCurve,
+   return true;
+ }
+ 
++//=======================================================================
++// function : PCurveFollowsCurve
++// purpose  : Whether thePC on theS lies on theC within theTol from theF to
++//            theL at the same parameters (an edge's curves), sampled
++//            (mitcad#1201).
++//=======================================================================
++static bool PCurveFollowsCurve(const occ::handle<Geom2d_Curve>& thePC,
++                               const occ::handle<Geom_Surface>& theS,
++                               const occ::handle<Geom_Curve>&   theC,
++                               const double                     theF,
++                               const double                     theL,
++                               const double                     theTol)
++{
++  if (thePC.IsNull() || theS.IsNull() || theC.IsNull() || !(theF < theL))
++  {
++    return false;
++  }
++  const int aNb = 32;
++  for (int i = 0; i <= aNb; i++)
++  {
++    const double   aT  = theF + (theL - theF) * i / aNb;
++    const gp_Pnt2d aUV = thePC->Value(aT);
++    if (theS->Value(aUV.X(), aUV.Y()).Distance(theC->Value(aT)) > theTol)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
+ //=================================================================================================
+ 
+ //  Modified by skv - Fri Dec 26 17:00:55 2003 OCC4455 Begin
+@@ -1576,7 +1606,17 @@ bool BRepOffset_Inter2d::ExtentEdge(const TopoDS_Edge& E, TopoDS_Edge& NE, const
+                   GeomProjLib::Curve2d(C3d, FirstParOnPC, LastParOnPC, theSurf);
+                 if (ProjPCurve.IsNull())
+                 {
+-                  ProjectionSuccess = false;
++                  // Keep the pcurve where it lies on the curve all along
++                  // the edge's own range (mitcad#1201).
++                  if (!PCurveFollowsCurve(theCurve,
++                                          theSurf,
++                                          C3d,
++                                          std::max(anEf, FirstParOnPC),
++                                          std::min(anEl, LastParOnPC),
++                                          max_deviation + 10. * Precision::Confusion()))
++                  {
++                    ProjectionSuccess = false;
++                  }
+                 }
+                 else
+                 {

@@ -148,6 +148,24 @@ impl LiveMcpSession {
             .map(|response| response.to_string())
             .map_err(crate::ApiError)
     }
+
+    /// The application's comments (mitcad#1119), the `comments` query's
+    /// answer: the `mitcad://comments` resource. The notification to send
+    /// the client when it subscribed and they changed; empty otherwise.
+    pub fn set_mcp_comments(&mut self, comments: &str) -> Result<String, crate::ApiError> {
+        let comments = serde_json::from_str(comments)
+            .map_err(|error| crate::ApiError(format!("invalid comments JSON: {error}")))?;
+        Ok(self
+            .0
+            .set_comments(comments)
+            .map(|notification| notification.to_string())
+            .unwrap_or_default())
+    }
+
+    /// Preferences › AI Assistants › Agents may resolve comments (mitcad#1119).
+    pub fn set_mcp_comment_policy(&mut self, may_resolve: bool) {
+        self.0.set_may_resolve_comments(may_resolve);
+    }
 }
 
 /// Validate one model command before the GUI submits it to its worker.

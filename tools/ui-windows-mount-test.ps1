@@ -21,6 +21,13 @@
 #   4. A drop-in joined afterwards with Joint by its mount frame (the
 #      browser's row of its joint origin) onto a plate's top, in a design
 #      of its own.
+#   5. A selection made before (mitcad#1197): a hole's rim selected, then
+#      Insert from Library > an ISO 4762 M5x16 screw with the parts
+#      library's mount frame (`seat`, a shaft frame under the head; a
+#      synthetic design here, the Linux test takes the generator's):
+#      Place Component starts with the rim as Place On, the screw shown in
+#      the hole; Enter places it, head on the face, a rigid joint to the
+#      hole; no other screw at the origin.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-mount-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -36,7 +43,7 @@ trap { Ui-Fail "the test script stopped: $_ $($_.InvocationInfo.PositionMessage)
 
 Ui-Init $App $Out $QtBin @{
   'assemble.joint_origin' = 'F7'; 'tools.libraries' = 'F8'; 'insert.library_component' = 'F9'
-  'assemble.joint' = 'F11'; 'tools.publish_library' = 'F12' } -StepPause 0
+  'assemble.joint' = 'F11'; 'tools.publish_library' = 'F12'; 'solid.fillet' = 'Shift+F5' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if (-not $git) {
@@ -101,6 +108,21 @@ $scene = Design 'scene' ('{"cmd": "create_component", "name": "Plate"}, ' + (Box
 # The plate a dropped-in lamp is joined to (4.): Plate:1, its top in sight.
 $joinPlate = Design 'join' ('{"cmd": "create_component", "name": "Plate"}, ' + (Box 20 20 100 60 10) +
                             ', {"cmd": "activate_component", "component": "Root"}')
+# 5.: an ISO 4762 M5x16 as the parts library's: a head of 8.5 x 5 on z = 0,
+# a shank of 5 x 16 down, its mount frame `seat` at the origin with z down
+# the shank (make-fastener-library.py's); a plate with a hole of 5.5 mm,
+# Plate:1, 100 x 60 x 10 at (20, 20), the hole at (70, 50) (F1.b0: its top
+# F1:top, the hole's wall F2:side0, the rim their edge).
+Design 'iso4762' ('{"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0], "diameter": 8.5, ' +
+                  '"height": 5, "operation": "new_body"}}, ' +
+                  '{"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0], "diameter": 5, ' +
+                  '"height": -16, "operation": "join", "participants": ["F1.b0"]}}, ' +
+                  (Frame '[0, 0, 0]' '[0, 0, -1]' '{"name": "seat", "kind": "shaft"}')) | Out-Null
+$holed = Design 'holed' ('{"cmd": "create_component", "name": "Plate"}, ' + (Box 20 20 100 60 10) + ', ' + @'
+{"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [70, 50], "diameter": 5.5, "height": 10,
+  "operation": "cut", "participants": ["F1.b0"]}},
+{"cmd": "activate_component", "component": "Root"}
+'@)
 
 $library = Join-Path $work 'mounts'
 $mine = Join-Path $work 'screws'
@@ -122,6 +144,25 @@ foreach ($arguments in @(@('add', '-A'), @('commit', '-q', '-m', 'Mount parts'),
   if ($LASTEXITCODE -ne 0) { Ui-Fail "git $($arguments -join ' '): $($output -join ' / ')" }
 }
 Write-Host 'ok   the library of the synthetic parts, its mounts from the designs'
+
+# The parts library's screw (5.), in a library of its own: its frame from
+# the design, as the parts library's manifest lists it.
+$parts = Join-Path $work 'parts'
+$output = & $cli library init $parts --id test-iso --name 'Test ISO parts' --license CC0-1.0 --author 'Mount Tester'
+if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli library init: $($output -join ' / ')" }
+$output = & $cli library add $parts (Join-Path $work 'iso4762.mitcad') --id iso4762 `
+  --name 'ISO 4762 M5x16' --designation 'ISO 4762 M5x16' --standard 'ISO 4762' --category screws
+if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli library add iso4762: $($output -join ' / ')" }
+$output = & $cli library check $parts
+if ($LASTEXITCODE -ne 0) { Ui-Fail "the ISO parts have errors: $($output -join ' / ')" }
+if (-not (Select-String -Path (Join-Path $parts 'mitcad-library.json') -Pattern '"name": "seat"' -Quiet)) {
+  Ui-Fail 'the screw lists no mount frame'
+}
+foreach ($arguments in @(@('add', '-A'), @('commit', '-q', '-m', 'ISO parts'), @('tag', 'v1.0.0'))) {
+  $output = & $git.Source -C $parts -c user.name=T -c user.email=t@example.invalid @arguments 2>&1
+  if ($LASTEXITCODE -ne 0) { Ui-Fail "git $($arguments -join ' '): $($output -join ' / ')" }
+}
+Write-Host 'ok   the ISO 4762 screw lists its mount frame'
 
 # Check "description" steps...: the saved scene opened by mitcad-cli with
 # the script's expectations.
@@ -503,5 +544,54 @@ Save $joinPlate
 # The lamp's bottom (its frame, flipped onto the face) on the top's middle.
 Check 'the dropped-in lamp stands on the plate''s top, by its mount frame' @(
   "{`"expect`": {`"occurrence`": `"Lamp:1`", `"body`": `"$dropped`", `"center`": [70, 50, 12.5], `"tolerance`": 1e-6}}") $joinPlate
+
+Write-Host '--- 5. A hole''s rim selected before Insert from Library: ISO 4762 placed in the hole (mitcad#1197)'
+Ui-StartApp 'mount-selected' @('--open', $holed)
+Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
+Ui-Mark
+Ui-Step 'Libraries (F8)'                   { Ui-Key 'F8' }
+Ui-FocusDialog '^Libraries$'
+Add-Source $parts
+Ui-Step 'Fetch All (Alt+F)'                { Ui-Key 'alt+f' }
+Ui-ExpectNew "Library fetched: library Test ISO parts (test-iso) from $parts" 'the ISO parts fetched' 30
+Close-Libraries
+# Where a click picks the hole's rim on the plate's top: Fillet logs its
+# edges' places (an idle view logs none), cancelled before the click.
+Ui-Mark
+Ui-Step 'Fillet (Shift+F5)'                { Ui-Key 'shift+F5' }
+Ui-ExpectNew 'Command Fillet started' 'Fillet started'
+Ui-ExpectNew 'Pick places:' 'where the edges are picked'
+$rim = Pick-Of '^(edge F1\.b0/E\{.*F1:top.*F2:|edge F1\.b0/E\{.*F2:.*F1:top)'
+if (-not $rim) { Ui-Fail "the hole's rim on the plate's top is not among the pick places" }
+Write-Host "note: the rim is $rim"
+Ui-Step 'cancel it (Escape)'               { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step "select the rim"                   { Ui-ClickPick "$rim at" }
+Ui-ExpectNew 'Selected: 1 edge' "the hole's rim selected"
+Ui-Mark
+Ui-Step 'Insert from Library (F9)'         { Ui-Key 'F9' }
+Ui-FocusDialog '^Insert from Library$'
+Ui-Step 'search 4762'                      { Ui-Key 'alt+s'; Ui-Type '4762' }
+Ui-ExpectNew "Library search '4762': 1 components" 'the search finds the screw'
+Ui-ExpectNew 'Library browser selected test-iso/iso4762: version ' 'the screw selected'
+Ui-Step 'Insert (Alt+I)'                   { Ui-Key 'alt+i' }
+Ui-FocusMain
+Ui-ExpectNew 'Insert from Library: test-iso/iso4762 has mount frames seat (into a hole, fixed): Place Part' `
+  'the screw has its mount frame: Place Component'
+Ui-ExpectNew 'Command Place Component started' 'Place Component started'
+Ui-ExpectNew 'Place Component: Place On edge' 'the rim selected before is Place On'
+Ui-ExpectNew ': frame seat (shaft), rigid joint, on Plate:1' 'the screw shown in the hole at once, no click' 20
+if (@(Since-Mark 'Inserted component ').Count -ne 0) { Ui-Fail 'a component was dropped in at the origin' }
+Ui-Mark
+Ui-Step 'Place (Enter)'                    { Ui-Key 'Return' }
+Ui-ExpectNew 'Placed part ' 'the screw placed' 30
+Ui-ExpectNew 'by its frame seat on Plate:1: rigid joint Joint' 'a rigid joint to the hole (logged)'
+Ui-ExpectNew 'at (70, 50, 10)' 'its head on the plate''s top, on the hole''s axis'
+Ui-Step 'close (Escape)'                   { Ui-Key 'Escape' }
+Save $holed
+Check 'one screw, fixed in the hole by its joint: none free at the origin' @(
+  '{"expect": {"bodies": 2}}',
+  '{"expect": {"query": {"query": "joints"}, "result": {"joints": [{"kind": "rigid", "solved": true}]}}}',
+  '{"expect": {"query": {"query": "joint_dof", "occurrence": "ISO 4762 M5x16:1"}, "result": {"dof": 0}}}') $holed
 
 Ui-Finish 'UI Windows mount test'

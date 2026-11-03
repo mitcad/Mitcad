@@ -309,7 +309,8 @@ public:
     setObjectName(QStringLiteral("addColumnDialog"));
     setWindowTitle(tr("Add Column"));
     auto* form = new QFormLayout(this);
-    auto* about = new QLabel(tr("A parameter that every row sets, as d, P, s and k of a screw size."));
+    auto* about = new QLabel(tr("A parameter column: a parameter that every row sets, as d, P, s and k of a screw "
+                                "size. It does not become an option."));
     about->setWordWrap(true);
     form->addRow(about);
     m_parameter = new QComboBox;
@@ -334,7 +335,8 @@ public:
     form->addRow(tr("Unit:"), m_unit);
     form->addRow(tr("Value:"), m_value);
     if (!m_table.closed) {
-      auto* closes = new QLabel(tr("The table becomes closed: only its rows' combinations are allowed."));
+      auto* closes = new QLabel(tr("Only these rows turns on: only the combinations listed in the Rows tab are "
+                                   "allowed."));
       closes->setObjectName(QStringLiteral("addColumnCloses"));
       closes->setWordWrap(true);
       form->addRow(closes);
@@ -419,9 +421,9 @@ private:
   QString m_added;
 };
 
-// Edit Domain: what an option can be before the rules, as its parameter's
-// limits: a list (the `values` limit, one value per line), a range (min,
-// max, step), a column of one of the design's tables (the `values` limit
+// Edit Possible Values (the option's domain): what an option can be before
+// the rules, as its parameter's limits: a list (the `values` limit, one
+// value per line), a range (min, max, step), a column of one of the design's tables (the `values` limit
 // as `Table.Column`, mitcad#849: the column's distinct cells) or free. A
 // text option is a list, a text column or free; a number option takes a
 // number column.
@@ -431,7 +433,7 @@ public:
                const std::vector<SuggestedTable>& tables, QWidget* parent)
       : QDialog(parent), m_host(host), m_name(std::move(name)), m_text(text) {
     setObjectName(QStringLiteral("optionDomainDialog"));
-    setWindowTitle(tr("Option Domain"));
+    setWindowTitle(tr("Possible Values"));
     m_unit = parameter.value(QStringLiteral("unit")).toString();
     const QJsonObject limits = parameter.value(QStringLiteral("limits")).toObject();
     m_columnWas = cfg::valuesColumn(parameter);
@@ -445,7 +447,7 @@ public:
     m_step = limits.value(QStringLiteral("step")).toString();
 
     auto* layout = new QVBoxLayout(this);
-    layout->addWidget(new QLabel(tr("What %1 can be before the rules:").arg(m_name)));
+    layout->addWidget(new QLabel(tr("The values %1 can have before rules and rows restrict them:").arg(m_name)));
     auto* kinds = new QHBoxLayout;
     m_list = new QRadioButton(tr("List"));
     m_list->setObjectName(QStringLiteral("domainList"));
@@ -993,7 +995,8 @@ private:
     const QString summary = answer.value(QStringLiteral("summary")).toString();
     QString closes;
     if (answer.value(QStringLiteral("closed")).toBool()) {
-      closes = tr(" The table is closed: only its rows' combinations are allowed.");
+      closes = tr(" Only these rows is on after the import: only the combinations listed in the Rows tab are "
+                  "allowed.");
     }
     m_summary->setText(tr("%1: %2.%3").arg(m_file, summary, closes));
     qDebug().noquote() << QStringLiteral("Rows import preview of %1: %2").arg(m_file, summary);
@@ -1117,15 +1120,26 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
   m_options = tree;
   m_options->setObjectName(QStringLiteral("configurationsOptions"));
   m_options->setColumnCount(7);
-  m_options->setHeaderLabels(
-      {tr("Option"), tr("Unit"), tr("Domain"), tr("Default"), tr("Comment"), tr("Driven"), tr("Used By")});
+  // The approved words (mitcad#968, docs/ui-conventions.md
+  // "Configurations"): Possible Values before restrictions, the current
+  // Value (not a stored default), By Formula.
+  m_options->setHeaderLabels({tr("Option"), tr("Unit"), tr("Possible Values"), tr("Value"), tr("Comment"),
+                              tr("By Formula"), tr("Used By")});
   m_options->headerItem()->setToolTip(kOptionUsedBy, tr("The bindings that follow the option; double-click to "
                                                         "list them in the Bindings tab"));
-  m_options->headerItem()->setToolTip(kOptionDomain, tr("What the option can be before the rules: a list or a range"));
+  m_options->headerItem()->setToolTip(kOptionDomain,
+                                      tr("The values before rules and rows restrict them: a list, a range, a "
+                                         "table column or free"));
   m_options->headerItem()->setToolTip(
-      kOptionDefault, tr("The option's own value: what the design has before a row or a chooser changes it"));
-  m_options->headerItem()->setToolTip(kOptionDriven,
-                                      tr("A driven option follows its formula: no chooser sets it, no rule moves it"));
+      kOptionValue, tr("The current value; for a By Formula option, the value its expression gives"));
+  m_options->headerItem()->setToolTip(kOptionFormula,
+                                      tr("The value is calculated from its expression: neither a chooser nor "
+                                         "automatic adjustment sets it"));
+  QStringList headers;
+  for (int column = 0; column < m_options->columnCount(); ++column) {
+    headers << m_options->headerItem()->text(column);
+  }
+  qDebug().noquote() << QStringLiteral("Configurations options header: %1").arg(headers.join(QStringLiteral(" | ")));
   m_options->setRootIsDecorated(false);
   m_options->setUniformRowHeights(true);
   m_options->setAlternatingRowColors(true);
@@ -1138,10 +1152,11 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
   m_options->header()->resizeSection(kOptionName, 140);
   m_options->header()->resizeSection(kOptionUnit, 60);
   m_options->header()->resizeSection(kOptionDomain, 230);
-  m_options->header()->resizeSection(kOptionDefault, 120);
+  m_options->header()->resizeSection(kOptionValue, 120);
   m_options->header()->setSectionResizeMode(kOptionComment, QHeaderView::Stretch);
   m_options->header()->setStretchLastSection(false);
-  m_options->header()->resizeSection(kOptionDriven, 70);
+  // As wide as its header, By Formula.
+  m_options->header()->setSectionResizeMode(kOptionFormula, QHeaderView::ResizeToContents);
   // As wide as its widest `used by N bindings` (mitcad#862 review: 130 px
   // cut it with larger fonts).
   m_options->header()->setSectionResizeMode(kOptionUsedBy, QHeaderView::ResizeToContents);
@@ -1153,8 +1168,9 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
   m_removeOption = new QPushButton(themeIcon(QStringLiteral("delete")), tr("Remove Option"));
   m_removeOption->setObjectName(QStringLiteral("configurationsRemoveOption"));
   m_removeOption->setToolTip(tr("The parameter stays; the rows no longer set it"));
-  m_editDomain = new QPushButton(tr("Edit Domain…"));
+  m_editDomain = new QPushButton(tr("Edit Possible Values…"));
   m_editDomain->setObjectName(QStringLiteral("configurationsEditDomain"));
+  m_editDomain->setToolTip(tr("The selected option's values before rules and rows restrict them"));
   m_up = new QPushButton(tr("Move Up"));
   m_up->setObjectName(QStringLiteral("configurationsMoveUp"));
   m_down = new QPushButton(tr("Move Down"));
@@ -1180,7 +1196,8 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
     } else if (column == kOptionUsedBy) {
       // The bindings the option drives (mitcad#862).
       showBindings(item->data(kOptionName, kNameRole).toString());
-    } else if ((column == kOptionDefault && item->text(kOptionDriven).isEmpty()) || column == kOptionComment) {
+    } else if ((column == kOptionValue && item->text(kOptionFormula).isEmpty()) || column == kOptionComment) {
+      // A By Formula option's Value is its evaluated value: not edited here.
       m_options->editItem(item, column);
       qDebug().noquote() << QStringLiteral("Editing option %1 %2")
                                 .arg(item->data(kOptionName, kNameRole).toString(),
@@ -1208,9 +1225,12 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   auto* layout = new QVBoxLayout(page);
   layout->addWidget(leadLine(kRowsLead, QStringLiteral("Rows")));
   auto* top = new QHBoxLayout;
-  m_closed = new QCheckBox(tr("Closed"));
+  // The table's `closed` (mitcad#968: named by what it does). Unchecked,
+  // a combination must still keep to the options' possible values and the
+  // rules.
+  m_closed = new QCheckBox(tr("Only these rows"));
   m_closed->setObjectName(QStringLiteral("configurationsClosed"));
-  m_closed->setToolTip(tr("A closed table allows only its rows' combinations; an open one any the rules allow"));
+  m_closed->setToolTip(tr("Allow only the combinations listed in the Rows tab"));
   top->addWidget(m_closed);
   m_current = new QLabel;
   m_current->setObjectName(QStringLiteral("configurationsCurrentRow"));
@@ -1238,11 +1258,12 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   m_deleteRow->setObjectName(QStringLiteral("configurationsDeleteRow"));
   m_defaultRow = new QPushButton(tr("Set as Default"));
   m_defaultRow->setObjectName(QStringLiteral("configurationsDefaultRow"));
-  m_defaultRow->setToolTip(tr("The row a library component is inserted with, and the cascade's fallback"));
+  // The default row: the user guide says what else it is for.
+  m_defaultRow->setToolTip(tr("The row a library component is inserted with when no other row is chosen"));
   m_apply = new QPushButton(tr("Apply"));
   m_apply->setObjectName(QStringLiteral("configurationsApply"));
   m_apply->setToolTip(tr("Set the options to the selected row's values"));
-  // A closed table's parameter columns (mitcad#999).
+  // The parameter columns of a table with Only these rows (mitcad#999).
   m_addColumn = new QPushButton(themeIcon(QStringLiteral("add")), tr("Add Column…"));
   m_addColumn->setObjectName(QStringLiteral("configurationsAddColumn"));
   m_removeColumn = new QPushButton(themeIcon(QStringLiteral("delete")), tr("Remove Column"));
@@ -1419,11 +1440,13 @@ void ConfigurationsDialog::refresh() {
   m_addRow->setEnabled(!m_table.options.isEmpty() || m_table.closed);
   // mitcad#999: an open table becomes closed with its first column.
   m_addColumn->setToolTip(m_table.closed
-                              ? tr("Another parameter that every row sets, as d, P, s and k of a screw size")
-                              : tr("Another parameter that every row sets; the table becomes closed"));
+                              ? tr("A parameter column: another parameter that every row sets, as d, P, s and k "
+                                   "of a screw size")
+                              : tr("A parameter column: another parameter that every row sets; Only these rows "
+                                   "turns on"));
   m_removeColumn->setEnabled(!selectedColumn().isEmpty());
   m_removeColumn->setToolTip(m_table.parameters.isEmpty()
-                                 ? tr("The table has no parameter columns")
+                                 ? tr("The rows have no parameter columns")
                                  : tr("Take the current cell's parameter column out of the table; the parameter "
                                       "stays"));
   m_exportRows->setEnabled(!m_table.rows.isEmpty());
@@ -1493,19 +1516,26 @@ void ConfigurationsDialog::fillOptions() {
       domain = domain.isEmpty() ? valuesFrom : QStringLiteral("%1: %2").arg(valuesFrom, domain);
     }
     item->setText(kOptionDomain, domain);
+    // Possible values, and what is left of them now: the allowed values.
     if (report != nullptr && !report->restrictedBy.isEmpty()) {
-      item->setToolTip(kOptionDomain, tr("Allowed now: %1 (%2)")
-                                          .arg(report->allowed.summary(), report->restrictedBy.join(QStringLiteral(", "))));
+      item->setToolTip(kOptionDomain,
+                       tr("Allowed values now: %1 (restricted by %2)")
+                           .arg(report->allowed.summary(), report->restrictedBy.join(QStringLiteral(", "))));
     } else {
-      item->setToolTip(kOptionDomain, tr("Double-click to edit the domain"));
+      item->setToolTip(kOptionDomain, tr("Double-click to edit the possible values"));
     }
+    // The current value (mitcad#968): a By Formula option's evaluated value,
+    // its expression in the tooltip; never the unevaluated formula.
     const QString expression = parameter.value(QStringLiteral("expression")).toString();
-    item->setText(kOptionDefault, cfg::rowText(isText(name), expression));
+    const cfg::ValueCell value = cfg::valueCell(report, isText(name), expression);
+    item->setText(kOptionValue, value.text);
     item->setText(kOptionComment, parameter.value(QStringLiteral("comment")).toString());
     if (driven) {
-      item->setText(kOptionDriven, tr("Driven"));
-      item->setToolTip(kOptionDriven, tr("Driven by its formula %1: no chooser sets it, no rule moves it").arg(expression));
-      item->setToolTip(kOptionDefault, tr("Driven by its formula"));
+      item->setText(kOptionFormula, tr("By formula"));
+      item->setToolTip(kOptionFormula, tr("Calculated from its expression %1: neither a chooser nor automatic "
+                                          "adjustment sets it")
+                                           .arg(value.expression));
+      item->setToolTip(kOptionValue, tr("Expression: %1").arg(value.expression));
     }
     if (parameter.isEmpty()) {
       // An option without its parameter: an error (mitcad#1051).
@@ -1513,7 +1543,7 @@ void ConfigurationsDialog::fillOptions() {
                 m_options->palette());
       marks << QStringLiteral("%1/name %2").arg(name, noticeLevelName(NoticeLevel::Error));
     }
-    for (const int column : {kOptionDefault, kOptionComment}) {
+    for (const int column : {kOptionValue, kOptionComment}) {
       const QString header = m_options->headerItem()->text(column).toLower();
       const auto refused = m_refused.constFind(QStringLiteral("%1|%2").arg(name, header));
       if (refused != m_refused.cend()) {
@@ -1534,9 +1564,10 @@ void ConfigurationsDialog::fillOptions() {
     if (name == current) {
       m_options->setCurrentItem(item);
     }
+    // A By Formula option with the expression its Value's tooltip shows.
     logged << QStringLiteral("%1 (%2) = %3%4")
-                  .arg(name, domain.isEmpty() ? QStringLiteral("?") : domain, item->text(kOptionDefault),
-                       driven ? QStringLiteral(", driven") : QString());
+                  .arg(name, domain.isEmpty() ? QStringLiteral("?") : domain, item->text(kOptionValue),
+                       driven ? QStringLiteral(", by formula %1").arg(value.expression) : QString());
   }
   const QString text = QStringLiteral("Configurations options: %1")
                            .arg(logged.isEmpty() ? QStringLiteral("none") : logged.join(QStringLiteral("; ")));
@@ -1791,7 +1822,7 @@ void ConfigurationsDialog::editDomain() {
     return;
   }
   DomainDialog dialog(m_host, name, m_parameters.value(name), isText(name), m_tables, this);
-  qDebug().noquote() << QStringLiteral("Option Domain dialog opened for %1").arg(name);
+  qDebug().noquote() << QStringLiteral("Possible Values dialog opened for %1").arg(name);
   prepareModal(&dialog);
   execDialog(&dialog);
   refresh();
@@ -1826,7 +1857,7 @@ void ConfigurationsDialog::optionsDropped() {
 }
 
 void ConfigurationsDialog::optionEdited(QTreeWidgetItem* item, int column) {
-  if (m_building || item == nullptr || (column != kOptionDefault && column != kOptionComment)) {
+  if (m_building || item == nullptr || (column != kOptionValue && column != kOptionComment)) {
     return;
   }
   const QString name = item->data(kOptionName, kNameRole).toString();

@@ -4,6 +4,7 @@
 // The application's own state and actions (ui_state, ui_select, ui_command,
 // ...) are in MainWindowMcpUi.cpp (mitcad#265).
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
 #include "framework/CommandRegistry.hpp"
 
 #include <stdexcept>
@@ -127,13 +128,30 @@ QString MainWindow::mcpBlockedReason(bool editing) const {
 QJsonObject MainWindow::mcpDocumentInfo() const {
   Q_ASSERT(QThread::currentThread() == thread());
   const DocumentSession::Snapshot snapshot = m_documentSession->snapshot();
-  return {{QStringLiteral("document"), m_mcpDocumentId},
-          {QStringLiteral("path"), snapshot.filePath.isEmpty() ? QJsonValue(QJsonValue::Null)
-                                                              : QJsonValue(snapshot.filePath)},
-          {QStringLiteral("name"), snapshot.name},
-          {QStringLiteral("state"), snapshot.document},
-          {QStringLiteral("busy"), snapshot.busy},
-          {QStringLiteral("editable"), mcpBlockedReason(true).isEmpty()}};
+  const QString blocked = mcpBlockedReason(true);
+  QJsonObject info{{QStringLiteral("document"), m_mcpDocumentId},
+                   {QStringLiteral("path"), snapshot.filePath.isEmpty() ? QJsonValue(QJsonValue::Null)
+                                                                       : QJsonValue(snapshot.filePath)},
+                   {QStringLiteral("name"), snapshot.name},
+                   {QStringLiteral("state"), snapshot.document},
+                   {QStringLiteral("busy"), snapshot.busy},
+                   {QStringLiteral("editable"), blocked.isEmpty()}};
+  if (!blocked.isEmpty()) {
+    info.insert(QStringLiteral("blocked_reason"), blocked);
+#ifdef MITCAD_MACOS_NATIVE_UI
+    QJsonArray native;
+    if (m_nativeForm) native.append(QStringLiteral("command_form"));
+    if (m_nativeClosingCommand) native.append(QStringLiteral("closing_command"));
+    if (nativeDialogModalActive()) native.append(QStringLiteral("modal_dialog"));
+    if (m_nativeWindow && m_nativeWindow->modalBlocked()) native.append(QStringLiteral("window_modal"));
+    if (!native.isEmpty()) {
+      info.insert(QStringLiteral("native_blockers"), native);
+      info.insert(QStringLiteral("native_modal_state"),
+                  nativeDialogModalState(m_nativeWindow ? m_nativeWindow->nativeWindow() : nullptr));
+    }
+#endif
+  }
+  return info;
 }
 
 QJsonObject MainWindow::mcpQuery(const QJsonObject& request) const {
@@ -572,9 +590,20 @@ QJsonObject MainWindow::mcpTool(const QString& name, const QJsonObject& argument
     for (const QString& folder : mcp::agentFolders()) {
       folders.append(QDir::toNativeSeparators(folder));
     }
-    return {{QStringLiteral("documents"), QJsonArray{mcpDocumentInfo()}}, {QStringLiteral("folders"), folders}};
+    QJsonArray documents;
+    const auto windows = windowManager() ? windowManager()->windows() : QList<MainWindow*>{this};
+    for (MainWindow* window : windows) {
+      auto info = window->mcpDocumentInfo();
+      info.insert(QStringLiteral("active"), windowManager() ? window == windowManager()->activeWindow() : true);
+      documents.append(info);
+    }
+    return {{QStringLiteral("documents"), documents}, {QStringLiteral("folders"), folders}};
   }
-  // The window's document replaced: no handle (mitcad#402).
+  const QString document = arguments.value(QStringLiteral("document")).toString();
+  if (!document.isEmpty() && document != m_mcpDocumentId) {
+    throw std::runtime_error("No open document with this handle; call document_list after New or Open");
+  }
+  // Replacement is explicit for MCP; UI Open may create a new window.
   if (name == QStringLiteral("document_open")) {
     return mcpOpen(arguments);
   }
@@ -590,9 +619,6 @@ QJsonObject MainWindow::mcpTool(const QString& name, const QJsonObject& argument
   }
   if (name == QStringLiteral("ui_camera")) {
     return mcpCamera(arguments);
-  }
-  if (arguments.value(QStringLiteral("document")).toString() != m_mcpDocumentId) {
-    throw std::runtime_error("No open document with this handle; call document_list after New or Open");
   }
   if (name == QStringLiteral("model_query")) {
     return mcpQuery(arguments.value(QStringLiteral("query")).toObject());

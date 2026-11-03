@@ -85,7 +85,7 @@ public:
   struct Host {
     // The window's current project.
     std::function<ProjectState()> project;
-    // This run's session (a UUID, autosave's too).
+    // This document window's session (a UUID, autosave's too).
     std::function<QString()> session;
     // The design has unsaved changes.
     std::function<bool()> modified;

@@ -15,6 +15,17 @@ use mitcad_model::kernel::Kernel;
 use mitcad_model::{Document, LibraryChange, LibraryPart};
 use mitcad_model_build::prelude::*;
 
+/// Only the physical Material column is contextual. Explicitly qualified
+/// user/library properties keep their existing stored-value semantics.
+pub(super) fn physical_material_column(key: &str) -> bool {
+    let (set, key) = match key.rsplit_once('/') {
+        Some((set, key)) => (Some(set.trim()), key.trim()),
+        None => (None, key.trim()),
+    };
+    key.eq_ignore_ascii_case("Material")
+        && set.is_none_or(|set| set.eq_ignore_ascii_case("Computed"))
+}
+
 /// A library part in `insert_component`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +129,7 @@ pub(crate) trait LibrariesCrateOps<K: Kernel> {
     /// each row's `properties` has the text of each key (`Key` or
     /// `Set/Key`) the component has, stored, from its library or computed.
     fn parts_list_with(&self, keys: &[String]) -> Value;
+    fn bom_list_with(&self, keys: &[String], group_identical: bool) -> Value;
 
     /// The `library_usage` query (mitcad#418, mitcad#518): the library parts
     /// the design uses, BUILD sources and inserted library components
@@ -350,6 +362,53 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             rows.push(row);
         }
         json!({"rows": rows})
+    }
+
+    fn bom_list_with(&self, keys: &[String], group_identical: bool) -> Value {
+        let legacy = self.parts_list_with(keys);
+        let mut rows = Vec::new();
+        for row in self.bom_rows(group_identical) {
+            let mut value = legacy["rows"]
+                .as_array()
+                .and_then(|rows| {
+                    rows.iter().find(|r| {
+                        r["component"] == json!(row.part.component) && r["purchased"] != true
+                    })
+                })
+                .cloned()
+                .unwrap_or_else(|| json!({"component": row.part.component}));
+            value["name"] = json!(row.part.name);
+            value["designation"] = json!(row.part.designation);
+            value["quantity"] = json!(row.part.quantity);
+            value["body"] = json!(row.body);
+            value["group_names"] = json!(row.names);
+            if !row.materials.is_empty() {
+                let material = row
+                    .materials
+                    .iter()
+                    .filter_map(|id| self.material(id))
+                    .map(|material| material.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                for key in keys.iter().filter(|key| physical_material_column(key)) {
+                    if !value["properties"].is_object() {
+                        value["properties"] = json!({});
+                    }
+                    value["properties"][key.as_str()] = json!(material);
+                }
+            }
+            rows.push(value);
+        }
+        // Purchased hardware has no shape and must not be geometry-grouped.
+        rows.extend(
+            legacy["rows"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|r| r["purchased"] == true)
+                .cloned(),
+        );
+        json!({"rows": rows, "group_identical": group_identical})
     }
 
     fn library_usage_json(&self) -> Value {

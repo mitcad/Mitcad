@@ -279,9 +279,11 @@ void setParameterSource(QWidget* window, ParameterSource source) {
 }
 
 const ParameterSource* parameterSourceOf(const QWidget* widget) {
-  for (const QWidget* window = widget != nullptr ? widget->window() : nullptr; window != nullptr;
-       window = window->parentWidget() != nullptr ? window->parentWidget()->window() : nullptr) {
-    if (const auto* holder = dynamic_cast<const SourceHolder*>(window->property(kSourceProperty).value<QObject*>())) {
+  // Every widget up to the top, not only the windows: a document's main
+  // window, which holds the source, is no window of its own inside a
+  // document frame (mitcad#1172).
+  for (const QWidget* parent = widget; parent != nullptr; parent = parent->parentWidget()) {
+    if (const auto* holder = dynamic_cast<const SourceHolder*>(parent->property(kSourceProperty).value<QObject*>())) {
       return &holder->source;
     }
   }

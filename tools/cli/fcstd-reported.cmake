@@ -25,6 +25,30 @@ set(expected
   "7a8cd05b Sketch001 parametric"
   "7a8cd05b Sketch002 parametric"
   "7a8cd05b Sketch018 parametric"
+  # mitcad#1194: a Body shown at the root and linked into a hidden
+  # assembly, its sketch and pad (sketch edit draws its curves: the UI test
+  # app.ui-windows-hidden-occurrence-sketch), and a hole at another pad's
+  # far circles (mitcad#1195).
+  "f4ce0333 Sketch025 parametric"
+  "f4ce0333 Pad007 parametric"
+  "f4ce0333 Hole001 partial"
+  # A sketch joined by a Coincident to a stale copy of external geometry
+  # whose link FreeCAD lost (its points 525.6 mm apart in FreeCAD's own
+  # geometry): the join left out, and the pocket of it replayed.
+  "f4ce0333 Sketch028 partial"
+  "f4ce0333 Pocket parametric"
+  # mitcad#1195 (FreeCAD 26.3): a hole at chosen circles of its sketch,
+  # one at chosen points, pockets of chosen faces of a sketch
+  # (InternalFace), a hole at a pad's far circles (fixed places), a tapered
+  # tap hole without its cosmetic thread, and a sketch whose external
+  # geometry's link FreeCAD lost (kept fixed in place).
+  "bb41188f Hole parametric"
+  "bb41188f Hole001 parametric"
+  "bb41188f Pocket006 parametric"
+  "bb41188f Pocket007 parametric"
+  "bb41188f Hole002 partial"
+  "bb41188f Hole003 partial"
+  "bb41188f Sketch011 partial"
 )
 
 set(ids)

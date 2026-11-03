@@ -26,13 +26,14 @@ class DocumentHost;
 // dockConfigurationPanel: Projects, Configuration, Browser from the top),
 // shown while the bar is present (presenceChanged); the AppKit frontend
 // presents the same widget (MainWindow::refreshNativeWindow).
-// A row preset combo, then a chooser per option in choice order: a combo
-// for a list, a field and a slider for a range (a field alone when a bound
-// is missing or the option is free), the value alone for a driven option.
-// The choosers offer only what the rules allow now (the `configure` query);
-// a choice is the `configure` command, a row `apply_configuration`, each one
-// undo step, and the cascade's moves are shown in a notice under the
-// choosers (and in the status bar). Hidden while the design has no
+// A row chooser (its label Row, mitcad#968), then a chooser per option in
+// choice order: a combo for a list, a field and a slider for a range (a
+// field alone when a bound is missing or the option is free), the value
+// alone for a By Formula option (`driven`). The choosers offer only the
+// allowed values now (the `configure` query); a choice is the `configure`
+// command, a row `apply_configuration`, each one undo step, and the
+// automatic adjustments (the cascade's moves) are shown in a notice under
+// the choosers (and in the status bar). Hidden while the design has no
 // options and no rows.
 //
 // Logged for UI tests: "Configuration bar: Color = White (Black | White);
@@ -41,7 +42,7 @@ class DocumentHost;
 // <option> at x,y" (its combo or field) and "Configuration bar <option>
 // slider at x,y" in the main window's coordinates; "Configuration chosen:
 // Color = Black", "Configuration moves: <the notice>", "Configuration
-// refused: <why>".
+// refused: <why>", "Configuration bar row label: Row".
 class ConfigurationBar : public QWidget {
   Q_OBJECT
 
@@ -55,8 +56,9 @@ public:
   // panel that holds it is shown (presenceChanged).
   bool isPresent() const { return m_present; }
   // In a panel whose header already reads "Configuration" (mitcad#1020:
-  // the Floating card, the Docked dock): the row combo's caption is "Row"
-  // instead of the bar's own bold title.
+  // the Floating card, the Docked dock, the AppKit card): the row chooser's
+  // label is "Row" instead of the bar's own bold title (mitcad#968: the
+  // panel is the Configuration, the chooser chooses a row).
   void setHeaderTitled(bool titled);
 
 signals:
@@ -70,7 +72,7 @@ private:
     QComboBox* combo = nullptr;
     QLineEdit* field = nullptr;
     QSlider* slider = nullptr;
-    QLabel* label = nullptr; // a driven option's value
+    QLabel* label = nullptr; // a By Formula option's value
     int steps = 0;           // the slider's steps over the allowed range
   };
 

@@ -17,7 +17,6 @@
 #include <vector>
 
 #include <QApplication>
-#include <QBuffer>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -62,6 +61,7 @@
 #include "mcp/LiveErrors.hpp"
 #include "mcp/LogRing.hpp"
 #include "mcp/ModalGuard.hpp"
+#include "mcp/ScreenshotBudget.hpp"
 #include "platform/MacChrome.hpp"
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
@@ -213,10 +213,13 @@ bool waitUntil(const std::function<bool()>& done, int milliseconds) {
   return true;
 }
 
-// Commands an agent cannot use: they open file dialogs, other windows or
+// Commands an agent cannot use: they open file dialogs, interactive windows or
 // the system's applications (mitcad#265). Any other modal dialog a command
 // opens is closed at once (mcp::ModalGuard) and the call refused.
 bool opensDialog(const QString& id) {
+  // This creates an empty document owner without a file, modal question or
+  // external application. All existing dialog/file refusals still apply.
+  if (id == QStringLiteral("window.new")) return false;
   for (const char* prefix : {"file.", "help.", "tools.", "insert."}) {
     if (id.startsWith(QLatin1String(prefix))) {
       return true;
@@ -298,6 +301,108 @@ CameraState framedFor(CameraState camera, const Bnd_Box& box, double aspect, dou
   return camera;
 }
 
+// Comments for agents (mitcad#1119): the kinds of a comment's target that
+// name an entity of a body or a sketch, by their field and as ui_select's
+// kind.
+const std::pair<const char*, const char*> kCommentBodyTargets[] = {
+    {"face", "face"}, {"edge", "edge"}, {"vertex", "vertex"}};
+const std::pair<const char*, const char*> kCommentSketchTargets[] = {{"curve", "sketch_curve"},
+                                                                     {"point", "sketch_point"},
+                                                                     {"constraint", "sketch_constraint"},
+                                                                     {"dimension", "sketch_dimension"}};
+
+// A comment as ui_select and ui_camera show it: the comment, its target as
+// an entity as ui_select takes it (none for a free point, a parameter or an
+// orphaned target) and its place in design coordinates (none for a
+// parameter).
+struct CommentShown {
+  QJsonObject comment;
+  QJsonObject entity;
+  std::optional<gp_Pnt> place;
+};
+
+QJsonObject commentEntity(const QJsonObject& target) {
+  const QString occurrence = target.value(QStringLiteral("occurrence")).toString();
+  if (target.contains(QStringLiteral("feature"))) {
+    return {{QStringLiteral("kind"), QStringLiteral("feature")},
+            {QStringLiteral("owner"), target.value(QStringLiteral("feature")).toString()}};
+  }
+  if (target.contains(QStringLiteral("body"))) {
+    QJsonObject entity{{QStringLiteral("kind"), QStringLiteral("body")},
+                       {QStringLiteral("owner"), target.value(QStringLiteral("body")).toString()},
+                       {QStringLiteral("occurrence"), occurrence}};
+    for (const auto& [field, kind] : kCommentBodyTargets) {
+      if (target.contains(QLatin1String(field))) {
+        entity.insert(QStringLiteral("kind"), QLatin1String(kind));
+        entity.insert(QStringLiteral("name"), target.value(QLatin1String(field)).toString());
+      }
+    }
+    return entity;
+  }
+  if (target.contains(QStringLiteral("sketch"))) {
+    QJsonObject entity{{QStringLiteral("kind"), QStringLiteral("sketch")},
+                       {QStringLiteral("owner"), target.value(QStringLiteral("sketch")).toString()}};
+    for (const auto& [field, kind] : kCommentSketchTargets) {
+      if (target.contains(QLatin1String(field))) {
+        entity.insert(QStringLiteral("kind"), QLatin1String(kind));
+        entity.insert(QStringLiteral("name"), target.value(QLatin1String(field)).toString());
+      }
+    }
+    return entity;
+  }
+  // A parameter or a free point: nothing to select.
+  return {};
+}
+
+// The comment `id` of the design, or none.
+std::optional<CommentShown> findComment(const QString& id, const CommandContext& model) {
+  const QJsonArray comments =
+      model.query({{QStringLiteral("query"), QStringLiteral("comments")}}).toObject().value(QStringLiteral("comments")).toArray();
+  for (const QJsonValue& value : comments) {
+    const QJsonObject comment = value.toObject();
+    if (comment.value(QStringLiteral("id")).toString() != id) {
+      continue;
+    }
+    CommentShown shown;
+    shown.comment = comment;
+    if (!comment.value(QStringLiteral("orphaned")).toBool()) {
+      shown.entity = commentEntity(comment.value(QStringLiteral("target")).toObject());
+    }
+    const QJsonArray place = comment.value(QStringLiteral("place")).toArray();
+    if (place.size() == 3 && place[0].isDouble() && place[1].isDouble() && place[2].isDouble()) {
+      shown.place = gp_Pnt(place[0].toDouble(), place[1].toDouble(), place[2].toDouble());
+    }
+    return shown;
+  }
+  return std::nullopt;
+}
+
+// What a ui_select or ui_camera result says of the comment it showed.
+QJsonObject commentJson(const CommentShown& shown) {
+  return {{QStringLiteral("id"), shown.comment.value(QStringLiteral("id"))},
+          {QStringLiteral("label"), shown.comment.value(QStringLiteral("label"))},
+          {QStringLiteral("status"), shown.comment.value(QStringLiteral("status"))},
+          {QStringLiteral("orphaned"), shown.comment.value(QStringLiteral("orphaned"))},
+          {QStringLiteral("place"), shown.comment.value(QStringLiteral("place"))},
+          {QStringLiteral("selected"), !shown.entity.isEmpty()}};
+}
+
+// The comment a ui_select or ui_camera call names (mitcad#1119); refused
+// when the design has none by that id.
+CommentShown mcpComment(const QJsonObject& arguments, const CommandContext& model) {
+  const QString id = arguments.value(QStringLiteral("comment")).toString();
+  std::optional<CommentShown> shown;
+  try {
+    shown = findComment(id, model);
+  } catch (const std::exception& error) {
+    refuse(QObject::tr("The comments could not be read: %1").arg(QString::fromUtf8(error.what())));
+  }
+  if (!shown) {
+    refuse(QObject::tr("The design has no comment %1.").arg(mcp::echoed(id)));
+  }
+  return *shown;
+}
+
 } // namespace
 
 QJsonObject MainWindow::mcpUiState() {
@@ -368,6 +473,19 @@ QJsonObject MainWindow::mcpUiState() {
     state.insert(QStringLiteral("command"), command);
   } else {
     state.insert(QStringLiteral("command"), QJsonValue());
+  }
+  // The open comments for an agent (mitcad#1119): mitcad://comments and
+  // the comments query list them.
+  if (!modelBusy()) {
+    try {
+      const QJsonObject comments =
+          query({{QStringLiteral("query"), QStringLiteral("comments")}, {QStringLiteral("status"), QStringLiteral("open")}})
+              .toObject();
+      state.insert(QStringLiteral("comments"),
+                   QJsonObject{{QStringLiteral("open"), comments.value(QStringLiteral("open")).toInt()}});
+    } catch (const std::exception&) {
+      // A design the comments query cannot read: no count.
+    }
   }
   state.insert(QStringLiteral("app"),
                QJsonObject{{QStringLiteral("version"), QCoreApplication::applicationVersion()},
@@ -495,39 +613,43 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
   }
   const int fullWidth = image.width();
   const int fullHeight = image.height();
-  const auto encode = [jpeg, quality](const QImage& picture) {
-    QByteArray bytes;
-    QBuffer buffer(&bytes);
-    buffer.open(QIODevice::WriteOnly);
-    const bool saved = jpeg ? picture.convertToFormat(QImage::Format_RGB32).save(&buffer, "JPEG", quality)
-                            : picture.save(&buffer, "PNG");
-    return saved ? bytes : QByteArray();
-  };
-  // Within max_size (an explicit size is kept) and, returned in the
-  // response, well within the 8 MiB frame once in base64; a file takes it
-  // at its size.
-  constexpr qsizetype kBudget = 5 * 1024 * 1024;
-  const qsizetype budget = target.isEmpty() ? kBudget : std::numeric_limits<qsizetype>::max();
-  int limit = offscreen ? std::max(image.width(), image.height()) : maxSize;
-  QByteArray bytes;
-  for (int attempt = 0; attempt < 8; ++attempt) {
-    QImage scaled = image;
-    if (scaled.width() > limit || scaled.height() > limit) {
-      scaled = image.scaled(limit, limit, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    bytes = encode(scaled);
-    if (bytes.isEmpty()) {
-      refuse(tr("The image could not be written as %1.").arg(format.toUpper()));
-    }
-    image = scaled;
-    if (bytes.size() <= budget) {
-      break;
-    }
-    limit = std::max(64, std::max(scaled.width(), scaled.height()) * 7 / 10);
+  // Within max_size (an explicit size is kept) and max_bytes, the encoded
+  // image's bytes (mitcad#1188). Returned in the response, 5 MiB by
+  // default: well within Mitcad's 8 MiB frame once in base64, though a
+  // client may have a lower limit of its own. A file takes it at its size
+  // unless max_bytes is given.
+  const bool byteLimit = arguments.contains(QStringLiteral("max_bytes"));
+  qsizetype budget = target.isEmpty() ? mcp::kScreenshotInlineBytes : std::numeric_limits<qsizetype>::max();
+  if (byteLimit) {
+    const qint64 asked = arguments.value(QStringLiteral("max_bytes")).toInteger(mcp::kScreenshotInlineBytes);
+    budget = static_cast<qsizetype>(std::clamp<qint64>(asked, qint64{mcp::kScreenshotMinBytes},
+                                                       qint64{mcp::kScreenshotInlineBytes}));
   }
-  if (bytes.size() > budget) {
-    refuse(tr("The image of the %1 is too large even when scaled down.").arg(what));
+  const int longest = offscreen ? std::max(image.width(), image.height()) : maxSize;
+  const mcp::FittedImage fitted = mcp::fitImage(
+      image, longest, budget, [jpeg, quality](const QImage& picture) { return mcp::encodeImage(picture, jpeg, quality); });
+  if (fitted.bytes.isEmpty()) {
+    refuse(tr("The image could not be written as %1.").arg(format.toUpper()));
   }
+  if (!fitted.fits) {
+    // Compact and actionable; the session stays usable.
+    refuseWith(tr("The image of the %1 takes %2 bytes as %3 even at %4 × %5 pixels, over the %6 bytes allowed. "
+                  "Allow more max_bytes, ask for format jpeg with a lower quality, or write it to a file with path.")
+                   .arg(what)
+                   .arg(fitted.bytes.size())
+                   .arg(format.toUpper())
+                   .arg(fitted.image.width())
+                   .arg(fitted.image.height())
+                   .arg(budget),
+               {{QStringLiteral("error_code"), QStringLiteral("screenshot_too_large")},
+                {QStringLiteral("max_bytes"), static_cast<qint64>(budget)},
+                {QStringLiteral("smallest_bytes"), static_cast<qint64>(fitted.bytes.size())},
+                {QStringLiteral("smallest_width"), fitted.image.width()},
+                {QStringLiteral("smallest_height"), fitted.image.height()},
+                {QStringLiteral("format"), format}});
+  }
+  image = fitted.image;
+  const QByteArray& bytes = fitted.bytes;
   const QString mime = jpeg ? QStringLiteral("image/jpeg") : QStringLiteral("image/png");
   QJsonObject result{{QStringLiteral("format"), format},
                      {QStringLiteral("mime_type"), mime},
@@ -536,7 +658,11 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
                      {QStringLiteral("height"), image.height()},
                      {QStringLiteral("full_width"), fullWidth},
                      {QStringLiteral("full_height"), fullHeight},
-                     {QStringLiteral("bytes"), static_cast<qint64>(bytes.size())}};
+                     {QStringLiteral("bytes"), static_cast<qint64>(bytes.size())},
+                     {QStringLiteral("downscaled_for_bytes"), fitted.downscaled}};
+  if (byteLimit || target.isEmpty()) {
+    result.insert(QStringLiteral("max_bytes"), static_cast<qint64>(budget));
+  }
   if (!target.isEmpty()) {
     // Into the allowed folder: only the path and the size go back.
     QFile file(target);
@@ -598,6 +724,12 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
     refuse(tr("Create Sketch waits for a plane to be picked: pick one or cancel it first."));
   }
   const QString reveal = arguments.value(QStringLiteral("reveal")).toString(QStringLiteral("pan"));
+  // A comment's target instead of items (mitcad#1119): its entity when it
+  // is still in the design, else only its place.
+  std::optional<CommentShown> shown;
+  if (arguments.contains(QStringLiteral("comment"))) {
+    shown = mcpComment(arguments, *this);
+  }
   Selection items;
   for (const QJsonValue& value : arguments.value(QStringLiteral("items")).toArray()) {
     QString problem;
@@ -607,6 +739,20 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
     }
     if (!items.contains(*item)) {
       items.append(*item);
+    }
+  }
+  if (shown && !shown->entity.isEmpty()) {
+    QString problem;
+    const std::optional<SelectionItem> item = readItem(shown->entity, *this, problem);
+    std::vector<gp_Pnt> corners;
+    Selection target;
+    if (item) {
+      target.append(*item);
+    }
+    if (item && mcpItemCorners(target, corners, &problem)) {
+      items.append(*item);
+    } else {
+      shown->entity = QJsonObject();
     }
   }
   if (m_session) {
@@ -628,6 +774,9 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
                        {QStringLiteral("into_command"), true}};
     if (session) {
       picked.insert(QStringLiteral("command"), session->scriptState());
+    }
+    if (shown) {
+      picked.insert(QStringLiteral("comment"), commentJson(*shown));
     }
     return picked;
   }
@@ -659,6 +808,11 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
     if (!mcpItemCorners(items, places, &missing)) {
       refuse(tr("Not in the design: %1").arg(mcp::echoed(missing)));
     }
+    // A comment on a free point, a parameter or a target no longer there:
+    // its place (mitcad#1119).
+    if (shown && places.empty() && shown->place) {
+      places.push_back(*shown->place);
+    }
     setSelection(items);
     if (reveal != QStringLiteral("none")) {
       moved = revealInView(*m_viewer, places, reveal == QStringLiteral("fit"));
@@ -670,6 +824,9 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
                      {QStringLiteral("selection"), selectionJson(m_selection)}};
   if (!sketchItems) {
     result.insert(QStringLiteral("view"), moved);
+  }
+  if (shown) {
+    result.insert(QStringLiteral("comment"), commentJson(*shown));
   }
   if (reveal != QStringLiteral("none")) {
     // Where the view goes, not where its animation is now: the reply's
@@ -758,6 +915,13 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
     }
     return gp_XYZ(array[0].toDouble(), array[1].toDouble(), array[2].toDouble());
   };
+  // A comment's target to select and frame (mitcad#1119): the model must
+  // be idle to read it.
+  std::optional<CommentShown> shown;
+  if (arguments.contains(QStringLiteral("comment"))) {
+    mcpRefuseBusy();
+    shown = mcpComment(arguments, *this);
+  }
   // Stage the camera where the view is going. Even settling an animation
   // changes the viewer, so defer it until every argument has been checked.
   CameraState camera = m_viewer->pendingCamera();
@@ -821,7 +985,40 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   QString framed = QStringLiteral("none");
   Bnd_Box box;
   const QString frame = arguments.value(QStringLiteral("frame")).toString(QStringLiteral("none"));
-  if (arguments.contains(QStringLiteral("box"))) {
+  // A comment's target, selected when the window is idle, and the point
+  // centred when the target has no shape (mitcad#1119).
+  Selection commentTarget;
+  std::optional<gp_Pnt> centre;
+  if (shown) {
+    if (arguments.contains(QStringLiteral("box")) || frame != QStringLiteral("none")) {
+      refuse(tr("Give either comment, box or frame."));
+    }
+    std::vector<gp_Pnt> corners;
+    if (!shown->entity.isEmpty()) {
+      QString problem;
+      const std::optional<SelectionItem> item = readItem(shown->entity, *this, problem);
+      if (item) {
+        commentTarget.append(*item);
+      }
+      if (commentTarget.isEmpty() || !mcpItemCorners(commentTarget, corners, &problem)) {
+        commentTarget.clear();
+        corners.clear();
+        shown->entity = QJsonObject();
+      }
+    }
+    for (const gp_Pnt& corner : corners) {
+      box.Add(corner);
+    }
+    if (box.IsVoid()) {
+      if (!shown->place) {
+        refuse(tr("Comment %1 has no place in the view (it is on %2).")
+                   .arg(shown->comment.value(QStringLiteral("id")).toString(),
+                        shown->comment.value(QStringLiteral("label")).toString()));
+      }
+      centre = shown->place;
+    }
+    framed = QStringLiteral("comment");
+  } else if (arguments.contains(QStringLiteral("box"))) {
     if (frame != QStringLiteral("none")) {
       refuse(tr("Give either box or frame, not both."));
     }
@@ -854,7 +1051,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   if (hasAspect && (!std::isfinite(aspect) || aspect < 0.1 || aspect > 10.0)) {
     refuse(tr("aspect must be between 0.1 and 10."));
   }
-  if (hasAspect && box.IsVoid()) {
+  if (hasAspect && box.IsVoid() && !centre) {
     refuse(tr("aspect frames a box or frame (shown or selection): give one of them."));
   }
   // All refusals above leave the live viewer (including animation) alone.
@@ -872,11 +1069,27 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   } else if (!box.IsVoid()) {
     m_viewer->frameBox(box);
     m_viewer->settleCamera();
+  } else if (centre) {
+    // A point: at the middle of the view, at the zoom it has.
+    CameraState now = m_viewer->pendingCamera();
+    const gp_Vec shift(now.target, *centre);
+    now.eye.Translate(shift);
+    now.target.Translate(shift);
+    m_viewer->setCamera(now);
+    m_viewer->settleCamera();
+  }
+  // The comment's target selected as ui_select would, when no sketch,
+  // command or plane pick takes the selection.
+  if (shown && m_mode == Mode::Idle && !m_session) {
+    setSelection(commentTarget);
   }
   QJsonObject result{{QStringLiteral("camera"), mcpCameraJson()}, {QStringLiteral("framed"), framed},
                      {QStringLiteral("changed"), set || framed != QStringLiteral("none")}};
   if (hasAspect) {
     result.insert(QStringLiteral("aspect"), aspect);
+  }
+  if (shown) {
+    result.insert(QStringLiteral("comment"), commentJson(*shown));
   }
   if (set || framed != QStringLiteral("none")) {
     const QJsonObject now = result.value(QStringLiteral("camera")).toObject();

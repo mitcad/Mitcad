@@ -1089,6 +1089,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_CORE_DUMPS=1` | Linux: `mitcad-cli`, `mitcad_run_parallel` and the corpus tests may leave core dumps (see *Core dumps* below). |
 | `MITCAD_RENDER_SAMPLES`, `MITCAD_RENDER_TEST_SCENE=1`, `MITCAD_RENDER_WORKER` | The rendered view's samples per pixel; the fixed test scene instead of the document; another render worker than `mitcad-render` next to the app ([rendering.md](rendering.md)). |
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
+| `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
@@ -1204,6 +1205,24 @@ recovery, projects and thumbnails go to a temp folder, and
 through the in-process test driver (`MITCAD_TEST_INPUT`), so it works over
 SSH. Helpers: [tools/ui-macos-lib.sh](../tools/ui-macos-lib.sh) (bash 3.2,
 BSD userland).
+
+`app.ui-macos-native-print-managers` exercises Materials, Printers and
+Processes by place (mitcad#1158). Its macOS wrapper creates a synthetic box
+in a project, separate project and user print items, and a local base
+library fetched from a temporary Git repository. It needs neither the
+network nor an installed component library. The native input checks both
+profile windows at once, place counts and search, the project's editing
+line, F2 name selection and Return, settings edits, Copy to, New, Use in
+this design, and the built-in read-only state with Duplicate's destination
+menu. Materials additionally checks actual appearance swatches, Default,
+and Delete/Backspace. Three fixed-size Printer captures show the divider
+before and after a genuine pointer drag and after choosing a library
+printer whose dialect rebuilds the settings rows. The orchestrator
+visually compares the divider positions; this is evidence for manual
+review, not an automated width assertion. The wrapper verifies the written
+library files, then starts a fresh application without a design and checks the remaining
+library groups and editing. Screenshots and logs stay in the test output;
+the shared macOS harness owns the Aqua lock for each application run.
 
 Before `focus-widget` attempts focus, its diagnostics record Qt's active
 popup, active window, target and lookup window. Every matching named field
@@ -1774,6 +1793,10 @@ runs one step after another. Build and lint use half the cores unless
   platform. On Windows a new executable gets the UTF-8 code page with
   `mitcad_utf8_code_page(<target>)` (`cmake/Utf8CodePage.cmake`), so that
   its `argv` and file names are UTF-8 too.
+- A `QSettings` key never uses the group `general` (in any case): an INI
+  file (the settings on Linux) writes it as Qt's `[%General]` section and
+  reads it back as `General/...`, so the value is lost after a restart
+  there (mitcad#1190). Give the setting a group of its own.
 - Match the surrounding style and comment density.
 - Terms (project, design, component, occurrence, body), the names of
   controls and the style of every user-facing text (capitalization,

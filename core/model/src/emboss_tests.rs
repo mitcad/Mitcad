@@ -165,6 +165,8 @@ fn without_a_face_the_sketch_plane_is_the_start() {
         depth: "d9".to_owned(),
         mode: EmbossMode::Raise,
         participants: Vec::new(),
+        projection: false,
+        direction: None,
     }))
     .unwrap();
     assert_eq!(
@@ -328,19 +330,25 @@ fn refusals() {
         zero.contains("the emboss depth must be greater than zero"),
         "{zero}"
     );
-    // A side face of the block is neither planar nor cylindrical to the
-    // mock.
-    let side = crate::test_support::side(b.extrude, 1, 0).to_string();
-    let uid = b
+    // A projection without a face to project onto (mitcad#1091).
+    let mut unplaced = emboss(sketch, &region, None, 1.0, "raise");
+    unplaced["projection"] = json!(true);
+    let unplaced = b
         .doc
-        .add_feature(
-            &def(emboss(sketch, &region, Some((b.body, &side)), 1.0, "raise")),
-            None,
-        )
-        .unwrap()
-        .uid;
+        .add_feature(&def(unplaced), None)
+        .unwrap_err()
+        .to_string();
     assert!(
-        error(&b.doc, uid).contains("is neither planar, cylindrical nor conical"),
+        unplaced.contains("needs the face to project the profiles onto"),
+        "{unplaced}"
+    );
+    // A projection direction in the sketch plane (XY: the X axis).
+    let top = format!("F2:end({})", b.region);
+    let mut sideways = emboss(sketch, &region, Some((b.body, &top)), 1.0, "raise");
+    sideways["direction"] = json!("x");
+    let uid = b.doc.add_feature(&def(sideways), None).unwrap().uid;
+    assert!(
+        error(&b.doc, uid).contains("the projection direction lies in the sketch plane"),
         "{}",
         error(&b.doc, uid)
     );
@@ -424,5 +432,143 @@ fn an_extrusion_wraps_its_profiles_onto_a_cylinder() {
         error(&doc, uid).contains("must be cylindrical or conical"),
         "{}",
         error(&doc, uid)
+    );
+}
+
+/// A ball: Sphere1 (F1, Body1 F1.b0, its face F1:side0), 40 across about
+/// the origin.
+fn ball() -> (Document<MockKernel>, BodyUid) {
+    let mut doc = Document::new(MockKernel::default());
+    let uid = doc
+        .add_feature(
+            &def(
+                json!({"type": "sphere", "plane": "xy", "center": [0, 0], "diameter": 40,
+                "operation": "new_body"}),
+            ),
+            None,
+        )
+        .unwrap()
+        .uid;
+    (doc, BodyUid::new(uid, 0))
+}
+
+/// Projection (mitcad#1091): a face that is neither planar, cylindrical
+/// nor conical takes the profiles projected along the sketch normal,
+/// raised (a positive depth) or sunk (a negative one); the definition
+/// says nothing of it, and the kernel's refusals name the face.
+#[test]
+fn any_other_face_takes_the_profiles_projected() {
+    let (mut doc, ball) = ball();
+    // Sketch2 (F2) on XY through the centre: a 10 x 10 square.
+    let (sketch, region) = rectangle(&mut doc, SketchPlane::Xy, [-5.0, -5.0], [10.0, 10.0]);
+    let on_ball = Some((ball, "F1:side0"));
+    let uid = doc
+        .add_feature(&def(emboss(sketch, &region, on_ball, 1.0, "raise")), None)
+        .unwrap()
+        .uid;
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(last_spec(&doc), "project F3 onto F1:side0 along 0 0 1 by 1");
+    let raised = history(&doc, ball);
+    assert!(
+        raised.starts_with("join(") && raised.ends_with(",project(F3:F1:side0 by 1))"),
+        "{raised}"
+    );
+    let named = faces(&doc, ball);
+    assert!(named.contains(&format!("F3:end({region})")), "{named:?}");
+    let FeatureDef::Emboss(made) = &doc.feature(uid).unwrap().def else {
+        panic!("an emboss");
+    };
+    assert!(!made.projection && made.direction.is_none());
+    let saved = doc.to_json();
+    assert!(
+        !saved.contains("\"projection\"") && !saved.contains("\"direction\""),
+        "{saved}"
+    );
+
+    // Sunk 2: into the material.
+    doc.edit_feature(uid, &def(emboss(sketch, &region, on_ball, 2.0, "sink")))
+        .unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&doc),
+        "project F3 onto F1:side0 along 0 0 1 by -2"
+    );
+    assert!(
+        history(&doc, ball).starts_with("cut("),
+        "{}",
+        history(&doc, ball)
+    );
+
+    // The kernel's refusal (a profile partly off the face) fails the
+    // feature, the face named. A depth not computed before: the recompute
+    // would hand out the cached result of raised 1 without the kernel.
+    doc.kernel().fail.borrow_mut().insert("projected_emboss");
+    doc.edit_feature(uid, &def(emboss(sketch, &region, on_ball, 1.5, "raise")))
+        .unwrap();
+    assert!(
+        error(&doc, uid).contains("to project onto face F1:side0: projected_emboss failed"),
+        "{}",
+        error(&doc, uid)
+    );
+}
+
+/// A cylindrical face takes the projection when the definition asks for
+/// it, or gives a direction; a planar face when it gives a direction (a
+/// face's normal here).
+#[test]
+fn a_cylinder_or_a_plane_takes_the_projection_when_asked() {
+    let (mut doc, rod) = rod();
+    // Sketch2 (F3) on XZ (normal +Y), beside the rod.
+    let (sketch, region) = rectangle(&mut doc, SketchPlane::Xz, [-5.0, 10.0], [10.0, 6.0]);
+    let mut projected = emboss(sketch, &region, Some((rod, "F2:side(c1)")), 1.5, "raise");
+    projected["projection"] = json!(true);
+    let uid = doc.add_feature(&def(projected.clone()), None).unwrap().uid;
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&doc),
+        "project F4 onto F2:side(c1) along 0 1 0 by 1.5"
+    );
+    assert_eq!(
+        history(&doc, rod),
+        "join(prism(F2:0..30),project(F4:F2:side(c1) by 1.5))"
+    );
+    let FeatureDef::Emboss(made) = &doc.feature(uid).unwrap().def else {
+        panic!("an emboss");
+    };
+    assert!(made.projection);
+
+    // A fixed direction (made a unit vector) implies the projection.
+    projected.as_object_mut().unwrap().remove("projection");
+    projected["direction"] = json!({"origin": [0, 0, 0], "direction": [0, 2, 1]});
+    doc.edit_feature(uid, &def(projected)).unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&doc),
+        "project F4 onto F2:side(c1) along 0 0.894427191 0.447213595 by 1.5"
+    );
+
+    // The block's top face, along the normal of that face itself.
+    let mut b = block();
+    let top = format!("F2:end({})", b.region);
+    let (sketch, region) = rectangle(&mut b.doc, SketchPlane::Xy, [10.0, 10.0], [10.0, 5.0]);
+    let mut along_face = emboss(sketch, &region, Some((b.body, &top)), 2.0, "raise");
+    along_face["direction"] = json!({"body": b.body, "face": top});
+    let uid = b.doc.add_feature(&def(along_face), None).unwrap().uid;
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!("project F4 onto {top} along 0 0 1 by 2")
+    );
+    // Without a direction the top face is extruded from, as before.
+    b.doc
+        .edit_feature(
+            uid,
+            &def(emboss(sketch, &region, Some((b.body, &top)), 2.0, "raise")),
+        )
+        .unwrap();
+    assert!(
+        last_spec(&b.doc).starts_with("extrude F4"),
+        "{}",
+        last_spec(&b.doc)
     );
 }

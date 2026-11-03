@@ -14,7 +14,7 @@ use crate::ids::{ID_RESERVE, LARGEST_U32_ID, LARGEST_U64_ID, leaves_reserve};
 /// Refuses a design one of whose counted ids is in the reserve: the ids of
 /// components, occurrences and features, occurrences' numbers, sketch
 /// entities and constraints, library sources, drawings and their views,
-/// annotations, cut-sheet parts and export counts.
+/// annotations, cut-sheet parts, export counts and comments.
 pub(super) fn check(state: &DocState) -> Result<(), FileError> {
     let assembly = &state.assembly;
     for (i, c) in assembly.components.iter().enumerate() {
@@ -140,6 +140,26 @@ pub(super) fn check(state: &DocState) -> Result<(), FileError> {
                 LARGEST_U32_ID,
             ));
         }
+    }
+    // Comments (mitcad#1119): their ids, and the largest the next one
+    // counts on from.
+    for (i, comment) in state.comments.iter().enumerate() {
+        if !leaves_reserve(comment.id) {
+            return Err(refused(
+                &format!("comments[{i}]"),
+                "comment id",
+                comment.name(),
+                format!("C{LARGEST_U32_ID}"),
+            ));
+        }
+    }
+    if !leaves_reserve(state.next_comment.saturating_sub(1)) {
+        return Err(refused(
+            "next_comment",
+            "comment id",
+            format!("C{}", state.next_comment),
+            format!("C{LARGEST_U32_ID}"),
+        ));
     }
     Ok(())
 }

@@ -18,3 +18,6 @@ mod parallel_recompute_tests;
 mod save_component_tests;
 // Transparent bodies and occurrences (mitcad#1093).
 mod transparency_tests;
+
+// Read-only bill-of-materials grouping (mitcad#1176).
+mod bom_tests;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -384,7 +385,16 @@ void MainWindow::createNativeWindow() {
     refreshNativeWindow();
   };
   callbacks.requestClose = [this] { return requestNativeClose(); };
-  callbacks.closed = [] { QCoreApplication::quit(); };
+  callbacks.closed = [this] {
+    if (m_windowManager) m_windowManager->windowClosed(this);
+    else QCoreApplication::quit();
+  };
+  callbacks.requestQuit = [this] {
+    if (m_windowManager) m_windowManager->quit();
+    else if (requestNativeClose()) QCoreApplication::quit();
+  };
+  callbacks.activated = [this] { if (m_windowManager) m_windowManager->setActiveWindow(this); };
+  callbacks.presentationVisible = [this](bool visible) { setDocumentVisible(visible); };
   callbacks.openFile = [this](const QString& path) {
     whenIdle(this, [this, path] { openExternalFile(path); });
   };
@@ -465,6 +475,12 @@ void MainWindow::createNativeWindow() {
     qDebug().noquote() << QStringLiteral("Quick access reset to the default");
     refreshNativeActions();
   };
+  // Its Hide Quick-Access Toolbar (mitcad#1189): the shared setting, whose
+  // notifier refreshes the toolbar (below).
+  callbacks.quickAccessHidden = [] {
+    qDebug().noquote() << QStringLiteral("Hide Quick-Access Toolbar chosen");
+    QuickAccessSettings::saveVisible(false);
+  };
   // The message band above the timeline (mitcad#1098): the shared
   // messages' × and their history's rows, as the Qt band's.
   callbacks.messageClosed = [this] { m_messages->close(); };
@@ -477,6 +493,13 @@ void MainWindow::createNativeWindow() {
     throw std::runtime_error(m_nativeWindow->embeddingError().toStdString());
   }
   m_nativeWindow->setMessages(&m_messages->log());
+  // The quick-access group shown or hidden (mitcad#1189), from Settings ›
+  // Display or the group's menu: at once.
+  connect(&QuickAccessNotifier::instance(), &QuickAccessNotifier::visibilityChanged, this, [this](bool visible) {
+    qDebug().noquote() << (visible ? QStringLiteral("Quick access toolbar shown")
+                                   : QStringLiteral("Quick access toolbar hidden"));
+    refreshNativeActions();
+  });
   connect(m_messages, &MessageCenter::changed, this, [this] {
     if (m_nativeWindow) m_nativeWindow->setMessages(&m_messages->log());
   });
@@ -497,7 +520,7 @@ void MainWindow::createNativeWindow() {
   };
   connect(m_viewer, &OcctViewer::cubeArrowsChanged, this, showCubeArrows);
   showCubeArrows();
-  setNativeDialogWindow(m_nativeWindow->nativeWindow());
+  bindNativeDialogWindow(this, m_nativeWindow->nativeWindow());
   connect(m_controller->browser(), &BrowserPanel::contentHeightChanged, this, [this] {
     m_nativeSnapshotKey.clear();
     QTimer::singleShot(0, this, [this] { refreshNativeWindow(); });
@@ -809,7 +832,7 @@ void MainWindow::refreshNativeActions() {
     }
   };
   for (QAction* top : menuBar()->actions()) {
-    if (top->menu() && menuLabel(top->text()) != QStringLiteral("Window")) {
+    if (top->menu()) {
       addMenu(addMenu, top->menu(), menuLabel(top->text()));
     }
   }
@@ -902,6 +925,7 @@ void MainWindow::refreshNativeActions() {
   }
   mac::NativeMacQuickAccess quick;
   quick.chosen = QuickAccessSettings::load().chosen;
+  quick.visible = QuickAccessSettings::loadVisible(); // mitcad#1189
   quick.shown = quickAccessShown(quick.chosen, QuickAccessGroup::availableIds(*m_registry, quickMenus));
   const auto reason = [this](const QString& id) {
     const CommandDef* def = m_registry->find(id);
@@ -1042,6 +1066,7 @@ void MainWindow::refreshNativeWindow() {
       for (auto item = first; item <= last; ++item) {
         if (item->filtered) continue;
         item->group = group.name;
+        item->groupFirst = group.first;
         item->groupCollapsed = group.collapsed;
       }
     }

@@ -6324,6 +6324,45 @@ fn external_geometry_whose_link_is_missing_is_fixed_from_its_copy() {
     assert_eq!(kinds, ["coincident"], "{def}");
 }
 
+#[test]
+fn a_join_to_a_stale_external_copy_freecad_does_not_meet_is_left_out() {
+    // (mitcad#1194) The copy of external geometry whose link is gone lies
+    // 500 mm from where the sketch's own line is, though a Coincident joins
+    // the line's start to the copy's end: FreeCAD's solver kept its
+    // geometry. Joining the points moved the sketch, which was then not
+    // imported; the join is left out and the line stays where FreeCAD has
+    // it.
+    let profile = format!(
+        "{}{}{}",
+        external_copy(&[segment([0.0, 0.0], [40.0, 0.0], true)]),
+        geometry(&[segment([540.0, 0.0], [540.0, 20.0], false)]),
+        constraints(&[constrain(1, 0.0, &[(0, 1), (-3, 2)], "", true)])
+    );
+    let xml = document(&[("Sketcher::SketchObject", "Profile", profile)]);
+    let (doc, report) = import_with(
+        fcstd(&xml, None, &[]),
+        Vec::new(),
+        MockKernel::default(),
+        false,
+    );
+    let s = &report.sketches[0];
+    assert_eq!(s.outcome, ObjectOutcome::Partial, "{s:?}");
+    assert!(s.feature.is_some(), "{s:?}");
+    assert!(
+        s.dropped.iter().any(
+            |d| d.contains("FreeCAD's geometry does not meet it (its points 500.000 mm apart)")
+        ),
+        "{s:?}"
+    );
+    let def = sketch_def(&doc, &report, "Profile");
+    let line = def["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "point" && e["at"] == json!([540.0, 0.0]));
+    assert!(line.is_some(), "{def}");
+}
+
 // Binders of another Body's sketch (mitcad#963).
 
 #[test]

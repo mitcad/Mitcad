@@ -61,6 +61,7 @@
 #include "../framework/Theme.hpp"
 #include "../platform/MacChrome.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/QuickAccess.hpp"
 // 3D Print's slicer (mitcad#13).
 #include "../files/Print3d.hpp"
 #include "../update/UpdatePreferences.hpp"
@@ -81,6 +82,8 @@
 #include "../platform/MacDialogs.hpp"
 // The Sketch page: the first dimension scales the sketch (mitcad#860).
 #include "../sketch/SketchPreferences.hpp"
+// Preferences › AI Assistants › Agents may resolve comments (mitcad#1119).
+#include "Comments.hpp"
 // General: ask to activate the component of a picked face (mitcad#960).
 #include "../browser/ActivateQuestion.hpp"
 
@@ -207,7 +210,10 @@ QString schemeName(NavigationScheme scheme) {
 struct PreferencePage {
   const char* id;
   const char* name;
-  const char* keywords; // separated by spaces
+  // Separated by spaces; an underscore is a space within a keyword, so
+  // that the search finds a phrase ("quick_access_toolbar" for "quick
+  // access", mitcad#1189).
+  const char* keywords;
 };
 
 const PreferencePage kPreferencePages[] = {
@@ -215,7 +221,8 @@ const PreferencePage kPreferencePages[] = {
      "autosave recovery activate component ask picked face units inch new design"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
-     "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda ghost inactive components pick priority layout docked floating browser background rows card"},
+     "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda ghost inactive components pick priority layout docked floating browser background rows card "
+     "quick_access_toolbar quick-access toolbar"},
     {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
     {"cloud", QT_TRANSLATE_NOOP("View", "Cloud"),
      "git remote sync push fetch version control author email name mqtt live broker"},
@@ -227,7 +234,7 @@ const PreferencePage kPreferencePages[] = {
     {"textures", QT_TRANSLATE_NOOP("View", "Textures"), "texture folders maps materials appearance images"},
     // The folders for designs, which AI assistants save to and open from
     // (mitcad#402).
-    {"agents", QT_TRANSLATE_NOOP("View", "AI Assistants"), "mcp agent agents ai folders save open connection assistant assistants designs codex claude"},
+    {"agents", QT_TRANSLATE_NOOP("View", "AI Assistants"), "mcp agent agents ai folders save open connection assistant assistants designs codex claude comments resolve"},
     // Folders of font files for sketch text (mitcad#473).
     {"fonts", QT_TRANSLATE_NOOP("View", "Fonts"), "font folders text ttf otf woff typeface"},
     // The first dimension scales the sketch (mitcad#860).
@@ -617,6 +624,9 @@ void ViewController::registerCommands() {
     page.id = QStringLiteral("tools.preferences.%1").arg(id);
     page.name = tr("Preferences: %1").arg(name);
     page.keywords = QString::fromLatin1(entry.keywords).split(QLatin1Char(' '));
+    for (QString& keyword : page.keywords) {
+      keyword.replace(QLatin1Char('_'), QLatin1Char(' '));
+    }
     page.tooltip = tr("Preferences, opened on its %1 page").arg(name);
     page.run = [this, id] { showPreferences(id); };
     m_registry.add(page);
@@ -687,6 +697,18 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
   named->addAction(action(QStringLiteral("view.set_home")));
   named->addAction(action(QStringLiteral("view.reset_home")));
   view->addAction(action(QStringLiteral("view.annotations")));      // mitcad#702
+  // The comments for AI agents and their pins (mitcad#1119,
+  // MainWindowComments.cpp, which keeps Comment Pins' check after this):
+  // Comment Pins checked as the setting says, before the navigation bar
+  // takes the action.
+  if (QAction* comments = action(QStringLiteral("view.comments"))) {
+    view->addAction(comments);
+  }
+  if (QAction* pins = action(QStringLiteral("view.comment_pins"))) {
+    pins->setCheckable(true);
+    pins->setChecked(commentPinsShown());
+    view->addAction(pins);
+  }
   view->addAction(action(QStringLiteral("view.export_snapshot"))); // mitcad#649
   view->addSeparator();
   // PreferencesRole: "Settings..." (Cmd+,) in the application menu on macOS,
@@ -1134,6 +1156,20 @@ void ViewController::showPreferences(const QString& page) {
   newDesignUnits->setCurrentText(general->newDesignUnits);
   newDesignUnits->setToolTip(tr("The length unit new designs start in; opened files keep their own"));
   generalForm->addRow(tr("Default &units for new designs:"), newDesignUnits);
+  auto* openInCurrent = new QCheckBox(tr("Open in the current window"));
+  openInCurrent->setObjectName(QStringLiteral("openInCurrentWindow"));
+  openInCurrent->setChecked(general->openInCurrentWindow);
+  control(generalForm, openInCurrent);
+  auto* openDesignsIn = new QComboBox;
+  openDesignsIn->setObjectName(QStringLiteral("openDesignsIn"));
+  openDesignsIn->addItem(tr("Tabs"), QStringLiteral("tabs"));
+  openDesignsIn->addItem(tr("Windows"), QStringLiteral("windows"));
+  openDesignsIn->setCurrentIndex(openDesignsIn->findData(general->openDesignsIn));
+#ifdef Q_OS_MACOS
+  // The system supplies tabs for macOS windows; never add Qt document tabs.
+  openDesignsIn->setEnabled(false);
+#endif
+  generalForm->addRow(tr("Open designs in:"), openDesignsIn);
   // Create Sketch and the Construct commands on another component's face
   // ask whether to activate it (mitcad#960); the question's Don't ask
   // again turns this off. Saved when the dialog is accepted, at once in
@@ -1250,6 +1286,30 @@ void ViewController::showPreferences(const QString& page) {
   agentsColumn->setContentsMargins(0, 0, 0, 0);
   agentsColumn->addWidget(agentsBox, 1);
   agentsColumn->addWidget(chatBox);
+  // Comments for AI agents (mitcad#1119): whether an agent may resolve
+  // them itself (the MCP bridge refuses its resolve_comment otherwise).
+  // Saved when the dialog is accepted, at once in the Settings window.
+  QWidget* commentsBox = section(tr("Comments"));
+  auto* commentsForm = new QFormLayout(commentsBox);
+  auto* agentsResolve = new QCheckBox(tr("A&gents may resolve comments"));
+  agentsResolve->setObjectName(QStringLiteral("agentsMayResolveComments"));
+  agentsResolve->setChecked(agentsMayResolveComments());
+  agentsResolve->setToolTip(tr("Lets an AI agent resolve comments itself, not only mark them addressed"));
+  control(commentsForm, agentsResolve);
+  const auto applyAgentsResolve = [agentsResolve] {
+    const bool on = agentsResolve->isChecked();
+    if (on == agentsMayResolveComments()) {
+      return;
+    }
+    saveAgentsMayResolveComments(on);
+    qDebug().noquote() << QStringLiteral("Preferences: agents may resolve comments %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(agentsResolve, &QCheckBox::toggled, host, applyAgentsResolve);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, agentsResolve, applyAgentsResolve);
+  }
+  agentsColumn->addWidget(commentsBox);
   groups.insert(QStringLiteral("agents"), agentsPage);
   // Font folders for sketch text (mitcad#473).
   auto* fontsBox = new sketch::FontPreferencesBox;
@@ -1455,6 +1515,29 @@ void ViewController::showPreferences(const QString& page) {
     layoutChoice->setToolTip(tr("Docked: panels in docks around the 3D view; Floating: cards over it"));
     display->addRow(tr("&Layout:"), layoutChoice);
   }
+  // The quick-access group (mitcad#1189), beside the Layout: shown by
+  // default; unchecked, it is not shown in either layout (nor in the AppKit
+  // toolbar), and its choice of commands stays for when it is shown again.
+  auto* quickAccess = new QCheckBox(tr("Show &quick-access toolbar"));
+  quickAccess->setObjectName(QStringLiteral("quickAccessVisible"));
+  quickAccess->setChecked(QuickAccessSettings::loadVisible());
+  quickAccess->setToolTip(tr("The buttons of the commands you chose, after the workspace tabs"));
+  control(display, quickAccess);
+  const auto applyQuickAccess = [quickAccess] {
+    if (QuickAccessSettings::saveVisible(quickAccess->isChecked())) {
+      qDebug().noquote() << QStringLiteral("Preferences: quick-access toolbar %1")
+                                .arg(quickAccess->isChecked() ? QStringLiteral("shown") : QStringLiteral("hidden"));
+    }
+  };
+  if (window != nullptr) {
+    // The Settings window stays open: the group's own Hide Quick-Access
+    // Toolbar unchecks it there too.
+    connect(&QuickAccessNotifier::instance(), &QuickAccessNotifier::visibilityChanged, quickAccess,
+            [quickAccess](bool visible) {
+              const QSignalBlocker blocker(quickAccess);
+              quickAccess->setChecked(visible);
+            });
+  }
   // The layout chosen when the window opened or last applied.
   const auto layoutApplied = std::make_shared<int>(layoutChoice != nullptr ? layoutChoice->currentData().toInt() : -1);
   // The Browser's background in the Floating layout (mitcad#419): its card,
@@ -1545,15 +1628,18 @@ void ViewController::showPreferences(const QString& page) {
     connect(ghostInactive, &QCheckBox::toggled, host, applyGhostInactive);
     connect(activePickPriority, &QCheckBox::toggled, host, applyActivePickPriority);
     connect(navigationBar, &QCheckBox::toggled, host, applyNavigationBar);
+    connect(quickAccess, &QCheckBox::toggled, host, applyQuickAccess);
   } else {
     connect(dialog.get(), &QDialog::accepted, ghostInactive, applyGhostInactive);
     connect(dialog.get(), &QDialog::accepted, activePickPriority, applyActivePickPriority);
     connect(dialog.get(), &QDialog::accepted, navigationBar, applyNavigationBar);
+    connect(dialog.get(), &QDialog::accepted, quickAccess, applyQuickAccess);
   }
   groups.insert(QStringLiteral("display"), displayBox);
 
   *commit = [this, general, top, bottom, navigation, camera, cubeProjection, background,
-             autosave, minutes, importTolerance, newDesignUnits, cacheBox, updatesBox, slicerBox, remoteBox,
+             autosave, minutes, importTolerance, newDesignUnits, openInCurrent, openDesignsIn,
+             cacheBox, updatesBox, slicerBox, remoteBox,
              renderDevice, debugLog, debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice,
              layoutApplied] {
     // Font folders for sketch text (mitcad#473).
@@ -1622,6 +1708,8 @@ void ViewController::showPreferences(const QString& page) {
     chosen.autosaveMinutes = minutes->value();
     chosen.importTolerance = importTolerance->value();
     chosen.newDesignUnits = newDesignUnits->currentText();
+    chosen.openInCurrentWindow = openInCurrent->isChecked();
+    chosen.openDesignsIn = openDesignsIn->currentData().toString();
     chosen.save();
     // No open design changes: the next new one takes it (mitcad#1036).
     if (chosen.newDesignUnits != general->newDesignUnits) {
@@ -1775,6 +1863,8 @@ void ViewController::showPreferences(const QString& page) {
     connect(minutes, &QSpinBox::valueChanged, host, changed);
     connect(importTolerance, &QDoubleSpinBox::valueChanged, host, changed);
     connect(newDesignUnits, &QComboBox::currentIndexChanged, host, changed);
+    connect(openInCurrent, &QCheckBox::toggled, host, changed);
+    connect(openDesignsIn, &QComboBox::currentIndexChanged, host, changed);
     connect(cacheBox, &CachePreferencesBox::changed, host, changed);
     connect(texturesBox, &TexturePreferencesBox::changed, host, changed);
     connect(agentsBox, &mcp::AgentPreferencesBox::changed, host, changed);

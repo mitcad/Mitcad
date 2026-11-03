@@ -125,6 +125,9 @@ struct TextData {
   bool flipX = false;
   bool flipY = false;
   bool outlined = false; // the model gave its glyph outlines
+  // Those outlines' curves, every contour's (File › Print draws them,
+  // mitcad#1089; the view draws the model's own).
+  std::vector<Curve2> outline;
   QString fontFile;      // the font file its font comes from (mitcad#473)
   // A QR code of `text` (mitcad#473): `height` is a module's size, `at` its
   // lower left corner; `ecc` its error correction (L, M, Q, H).

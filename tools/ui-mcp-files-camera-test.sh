@@ -327,6 +327,25 @@ expect '.width == 512 and .height == 256 and .mime_type == "image/png"' "aspect 
 jq -e '[.result.content[] | select(.type == "image" and .mimeType == "image/png")] | length == 1' \
   "$WORK/answer.json" > /dev/null || ui_fail "ui_screenshot did not return an image block"
 echo "ok   the screenshot is an MCP image block"
+# mitcad#1188: max_bytes bounds the encoded image, PNG kept; the response is
+# its base64 and under 2 KiB more. A file takes the full size without it.
+mcp_tool ui_screenshot '{"aspect": 2, "max_size": 1024, "max_bytes": 8192}'
+expect '.bytes <= 8192 and .max_bytes == 8192 and .format == "png"
+  and .downscaled_for_bytes == (.width < 1024)' "max_bytes bounds the image returned inline"
+SHOT_BYTES=$(jq -r '.bytes' "$WORK/result.json")
+jq -r '.result.content[] | select(.type == "image") | .data' "$WORK/answer.json" | base64 -d > "$WORK/budget.png"
+[ "$(wc -c < "$WORK/budget.png")" -eq "$SHOT_BYTES" ] || ui_fail "the image block is not the reported $SHOT_BYTES bytes"
+[ "$(head -c 4 "$WORK/budget.png" | od -An -tx1 | tr -d ' \n')" = "89504e47" ] || ui_fail "budget.png is not a PNG"
+RESPONSE_BYTES=$(($(wc -c < "$WORK/answer.json") - 1))
+[ "$RESPONSE_BYTES" -le $(((SHOT_BYTES + 2) / 3 * 4 + 2048)) ] ||
+  ui_fail "the response of $RESPONSE_BYTES bytes is more than the base64 of $SHOT_BYTES bytes and 2 KiB"
+echo "ok   the response is the image's base64 and $((RESPONSE_BYTES - (SHOT_BYTES + 2) / 3 * 4)) bytes more"
+mcp_tool ui_screenshot '{"path": "shots-full.png", "aspect": 2, "max_size": 1024}'
+expect '.width == 1024 and .height == 512 and (has("max_bytes") | not) and .downscaled_for_bytes == false' \
+  "a file takes the full size without max_bytes"
+mcp_tool ui_screenshot '{"path": "shots-small.png", "aspect": 2, "max_size": 1024, "max_bytes": 8192}'
+expect '.bytes <= 8192 and .max_bytes == 8192' "a file with max_bytes keeps to it"
+[ "$(wc -c < "$ALLOWED/shots-small.png")" -le 8192 ] || ui_fail "shots-small.png is over 8192 bytes"
 
 mcp_tool model_query "$(jq -cn --arg d "$DOC" '{document: $d, query: {query: "print_thickness", minimum: 6}}')"
 expect '(.result.bodies[0] | has("triangles") | not) and .result.thin_triangles > 0' \

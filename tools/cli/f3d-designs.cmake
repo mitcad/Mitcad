@@ -2,8 +2,9 @@
 # Single .f3d designs checked item by item (mitcad#311): each found by its
 # content id (the first 8 hex digits of its SHA-256) under the folders of
 # MITCAD_F3D_CORPUS and MITCAD_F3D_BACKUP (each one folder or several
-# separated by ':' or ';'), imported with mitcad-cli import-f3d with the
-# import trace on. Per design:
+# separated by ':' or ';') and the folders beside them whose names end in
+# `-reported` (files reported with import faults, kept apart; mitcad#1175),
+# imported with mitcad-cli import-f3d with the import trace on. Per design:
 #
 # - the items named parametric come in parametric, and only the items
 #   named as falling back fall back (the others of the file's own base
@@ -18,7 +19,10 @@
 # - where a design gives a time limit (a fifth field, seconds in a release
 #   build, SLOWER times that in a debug build), the import takes no longer
 #   (mitcad#642): about ten times its usual time, so that only a large
-#   regression fails, as the recompute speed tests do.
+#   regression fails, as the recompute speed tests do;
+# - where a design gives a volume tolerance (a sixth field, relative), every
+#   body stored in the file has a body in the import whose volume is within
+#   it, and every body the file hides is hidden (mitcad#1175).
 #
 # With SLOWER the imports also try an item from its own start, the route
 # tried first, SLOWER times as long (mitcad-cli import-f3d
@@ -52,7 +56,8 @@
 cmake_minimum_required(VERSION 3.24)
 
 # <id>|<items parametric, comma separated>|<items that fall back>[|<items
-# whose inputs may be inferred>[|<time limit, seconds in a release build>]]; an
+# whose inputs may be inferred>[|<time limit, seconds in a release build>[|<volume
+# tolerance of the final bodies, relative>]]]; an
 # item may be named by its place on the timeline, `#<index>` (in every list
 # since mitcad#719: names a user gave items stay out of this file).
 set(designs
@@ -144,7 +149,19 @@ set(designs
     # turn with them. Nothing falls back.
     # The holes whose inputs are not all read (unknown) are named with the
     # inferred ones; the items the user named are given by their places.
-    "3282222f|Extrude1,Extrude2,Extrude3,Extrude4,Extrude5,Extrude9,Extrude10,Hole1,Hole2,Hole3,Hole5,Hole6,Hole7,Hole8,C-Pattern2,C-Pattern6,#24,#32,C-Pattern8,#38,#39,#41,#42,#43,#44,#46,#48,#49,#50,#51,#53,#54,#55,#56,#57||Plane2,Plane3,Hole2,Hole3,Hole5,Hole6,Hole7,Hole8,#24,#32,#41,#43,#49")
+    "3282222f|Extrude1,Extrude2,Extrude3,Extrude4,Extrude5,Extrude9,Extrude10,Hole1,Hole2,Hole3,Hole5,Hole6,Hole7,Hole8,C-Pattern2,C-Pattern6,#24,#32,C-Pattern8,#38,#39,#41,#42,#43,#44,#46,#48,#49,#50,#51,#53,#54,#55,#56,#57||Plane2,Plane3,Hole2,Hole3,Hole5,Hole6,Hole7,Hole8,#24,#32,#41,#43,#49"
+    # A reported drill index (27 items, mitcad#1175): a blank cut and pasted
+    # into its own component, which the file keeps as the blank (hidden)
+    # and a copy of it, then 15 holes in the copy's flange, a boss with
+    # embossed sizes and holes. The paste comes in as a copy in place (no
+    # base feature before the holes), the holes parametric, the hidden blank
+    # hidden, and both bodies have the stored volumes. The holes' places
+    # are where the history removes material (inferred). The sizes run
+    # round a circle below it (the text-path constraint's placements,
+    # mitcad#1177): the sketch (#6) gives the text along its path, and the
+    # emboss (#24) selects the text's 59 letters (read), with no base
+    # feature after it.
+    "528e5029|#5,#6,#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#24,#25,#26||#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#25,#26||1e-6")
 
 # Seconds as the trace gives them (two decimals) in hundredths.
 function(hundredths seconds out)
@@ -185,10 +202,21 @@ foreach(variable MITCAD_F3D_CORPUS MITCAD_F3D_BACKUP)
     foreach(folder IN LISTS value)
       if(IS_DIRECTORY "${folder}")
         list(APPEND folders "${folder}")
+        # The reported files beside it (mitcad#1175).
+        get_filename_component(parent "${folder}" DIRECTORY)
+        file(GLOB reported LIST_DIRECTORIES true "${parent}/*-reported")
+        foreach(r IN LISTS reported)
+          if(IS_DIRECTORY "${r}")
+            list(APPEND folders "${r}")
+          endif()
+        endforeach()
       endif()
     endforeach()
   endif()
 endforeach()
+if(folders)
+  list(REMOVE_DUPLICATES folders)
+endif()
 if(NOT folders AND NOT DEFINED DESIGN)
   message("f3d designs: skipped (MITCAD_F3D_CORPUS and MITCAD_F3D_BACKUP name no folder)")
   return()
@@ -281,15 +309,19 @@ foreach(design IN LISTS designs)
   list(GET fields 2 falling)
   set(inferred "")
   set(limit "")
+  set(volumes "")
   list(LENGTH fields field_count)
   if(field_count GREATER 3)
     list(GET fields 3 inferred)
   endif()
   if(field_count GREATER 4)
     list(GET fields 4 limit)
-    if(DEFINED SLOWER)
+    if(limit AND DEFINED SLOWER)
       math(EXPR limit "${limit} * ${SLOWER}")
     endif()
+  endif()
+  if(field_count GREATER 5)
+    list(GET fields 5 volumes)
   endif()
   string(REPLACE "," ";" parametric "${parametric}")
   string(REPLACE "," ";" falling "${falling}")
@@ -362,6 +394,39 @@ foreach(design IN LISTS designs)
   endforeach()
   if(NOT fell STREQUAL falling)
     list(APPEND problems "${id}: falling back: '${fell}', expected '${falling}'")
+  endif()
+  # The final bodies against those stored in the file, and the bodies the
+  # file hides (mitcad#1175).
+  if(volumes)
+    string(JSON body_count LENGTH "${report}" designs 0 bodies)
+    if(body_count EQUAL 0)
+      list(APPEND problems "${id}: no stored body compared")
+    else()
+      math(EXPR last_body "${body_count} - 1")
+      foreach(b RANGE ${last_body})
+        string(JSON file GET "${report}" designs 0 bodies ${b} file)
+        string(JSON dv ERROR_VARIABLE dv_missing GET "${report}" designs 0 bodies ${b} volume_difference)
+        if(dv_missing)
+          list(APPEND problems "${id}: the stored body ${file} has no body in the import")
+          continue()
+        endif()
+        string(REGEX REPLACE "^-" "" dv_abs "${dv}")
+        if(dv_abs GREATER volumes)
+          list(APPEND problems "${id}: the body of ${file} differs in volume by ${dv} (relative), more than ${volumes}")
+        endif()
+      endforeach()
+    endif()
+    string(JSON hidden ERROR_VARIABLE hidden_missing GET "${report}" designs 0 appearances hidden)
+    string(JSON hidden_set ERROR_VARIABLE hidden_set_missing GET "${report}" designs 0 appearances hidden_set)
+    if(hidden_missing)
+      set(hidden 0)
+    endif()
+    if(hidden_set_missing)
+      set(hidden_set 0)
+    endif()
+    if(NOT hidden EQUAL hidden_set)
+      list(APPEND problems "${id}: ${hidden_set} of the file's ${hidden} hidden bodies hidden")
+    endif()
   endif()
   # The phases' times from the trace.
   file(STRINGS "${WORK}/${id}.trace" reading REGEX "file read: inputs found in [0-9.]+ s")

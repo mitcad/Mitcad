@@ -594,6 +594,22 @@ pub fn layout(
             .get(&path.curve)
             .cloned()
             .ok_or_else(|| format!("{what}: the path c{} has no geometry", path.curve.0))?;
+        let closed = curve.is_closed();
+        // A whole circle runs from where it starts (its `start_angle`,
+        // mitcad#1177), all the way round.
+        let curve = match curve {
+            Curve2::Circle {
+                center,
+                radius,
+                start,
+            } if start != 0.0 => Curve2::Arc {
+                center,
+                radius,
+                start,
+                end: start + std::f64::consts::TAU,
+            },
+            other => other,
+        };
         let table = ArcLength::new(&curve);
         let total = table.total();
         let order: Vec<usize> = lines.iter().flatten().copied().collect();
@@ -608,7 +624,6 @@ pub fn layout(
                 TextAlign::Right => total - w,
             }
         };
-        let closed = curve.is_closed();
         let mut x = 0.0;
         for k in order {
             let a = advance(k);
@@ -619,7 +634,14 @@ pub fn layout(
             let [p, d1, _] = curve.eval(table.param(s.clamp(0.0, total)));
             let t = unit(d1);
             let n = perp(t);
-            let lift = if path.above { 0.0 } else { -ascender };
+            // Below the path the text hangs from its top: the capitals'
+            // top when `height` is theirs (mitcad#1177), else the
+            // ascender.
+            let lift = match (path.above, cap) {
+                (true, _) => 0.0,
+                (false, true) => -text.height,
+                (false, false) => -ascender,
+            };
             let origin = add(p, add(scale(t, -a / 2.0), scale(n, lift)));
             placements.push((
                 k,

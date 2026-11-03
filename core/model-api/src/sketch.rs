@@ -231,6 +231,8 @@ named_enum! {
             #[serde(default)]
             ink_top: bool,
             #[serde(default)]
+            no_kerning: bool,
+            #[serde(default)]
             glyphs: Option<mitcad_model::sketch::StoredGlyphs>,
             /// A font file instead of an installed font (mitcad#473).
             #[serde(default)]
@@ -280,6 +282,8 @@ named_enum! {
             pen_align: Option<bool>,
             #[serde(default)]
             ink_top: Option<bool>,
+            #[serde(default)]
+            no_kerning: Option<bool>,
             /// A font file (mitcad#473); "" leaves it for the installed `font`.
             #[serde(default)]
             font_file: Option<String>,
@@ -2254,6 +2258,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     line_spacing,
                     pen_align,
                     ink_top,
+                    no_kerning,
                     glyphs,
                     font_file,
                     value,
@@ -2276,6 +2281,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         line_spacing,
                         pen_align,
                         ink_top,
+                        no_kerning,
                         ..SketchText::new(EntityUid(0), &text, at.unwrap_or_default(), height)
                     };
                     // A text from a text parameter (mitcad#664) needs none of
@@ -2325,6 +2331,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     line_spacing,
                     pen_align,
                     ink_top,
+                    no_kerning,
                     font_file,
                     value,
                     ..
@@ -2393,6 +2400,9 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     }
                     if let Some(v) = ink_top {
                         t.ink_top = v;
+                    }
+                    if let Some(v) = no_kerning {
+                        t.no_kerning = v;
                     }
                     // A font file chosen, left for an installed font, or
                     // read again for a new string or style (mitcad#473).

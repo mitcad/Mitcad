@@ -35,6 +35,7 @@
 #include <QPoint>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QStandardItem>
@@ -858,6 +859,8 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       suggest.label = QStringLiteral("%1 %2").arg(m_def.name, input.label);
       suggest.naming = true;
       ParameterField::attach(row.edit, suggest);
+    } else {
+      row.edit->installEventFilter(this); // Tab to the next field (mitcad#1181)
     }
     field = row.edit;
     break;
@@ -869,6 +872,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       auto* tile = new TileButton([this, key] { emit buttonClicked(key); });
       tile->setToolTip(input.tooltip);
       row.tile = tile;
+      tile->installEventFilter(this); // Tab to the next field (mitcad#1181)
       field = tile;
       break;
     }
@@ -906,6 +910,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
         }
       });
       row.table = table;
+      table->installEventFilter(this); // Tab to the next field (mitcad#1181)
       field = table;
       break;
     }
@@ -2145,11 +2150,26 @@ bool CommandPanel::eventFilter(QObject* watched, QEvent* event) {
   default:
     break;
   }
+  if (event->type() == QEvent::KeyPress && watched->isWidgetType()) {
+    // Tab and Shift+Tab step through the panel's own fields (mitcad#1181);
+    // with Ctrl, Alt or Cmd held the key is not ours.
+    const auto* key = static_cast<const QKeyEvent*>(event);
+    const Qt::KeyboardModifiers held =
+        key->modifiers() & ~Qt::KeyboardModifiers(Qt::ShiftModifier | Qt::KeypadModifier);
+    if ((key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) && held == Qt::NoModifier &&
+        stepFocus(static_cast<QWidget*>(watched),
+                  key->key() == Qt::Key_Backtab || key->modifiers().testFlag(Qt::ShiftModifier))) {
+      return true;
+    }
+  }
   // A click in a field counts as the user giving it the keyboard, also when
   // it has it already (the panel put it there as it opened, mitcad#587).
   const bool pressed = event->type() == QEvent::MouseButtonPress;
   if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut || pressed) {
     for (const auto& row : m_rows) {
+      if (row->edit == watched && row->input->type != InputDef::Type::Value) {
+        continue; // a text field: only Tab (above)
+      }
       if (row->edit == watched && event->type() == QEvent::FocusOut) {
         // Left, a long expression shows from its start again (mitcad#656);
         // a name picked from the view still goes where the cursor was. Not
@@ -2169,6 +2189,63 @@ bool CommandPanel::eventFilter(QObject* watched, QEvent* event) {
     }
   }
   return QWidget::eventFilter(watched, event);
+}
+
+QWidget* CommandPanel::tabStop(const Row& row) {
+  if (row.edit != nullptr) {
+    return row.edit;
+  }
+  if (row.tile != nullptr) {
+    return row.tile;
+  }
+  return row.table;
+}
+
+bool CommandPanel::stepFocus(QWidget* from, bool back) {
+  // The fields in the panel's order, not in the window's focus chain: that
+  // follows the order in which the widgets got their parents and were
+  // moved between them: a field on the line of the row before it
+  // (InputDef::besidePrevious: Hole's Distance 1 and Distance 2 beside
+  // their references) is moved there with that row's own widgets after
+  // both were made, and Tab from Distance 2 did not reach the fields under
+  // it (mitcad#1181). A floating card that is a window of its own (the
+  // macOS glass) has a chain of its own too.
+  std::vector<std::pair<QWidget*, QString>> stops;
+  qsizetype at = -1;
+  for (const Row* row : orderedRows()) {
+    QWidget* stop = tabStop(*row);
+    if (stop == nullptr) {
+      continue;
+    }
+    const bool current = stop == from;
+    if (!current && (!stop->isVisibleTo(this) || !stop->isEnabled() || !row->field->isVisibleTo(this))) {
+      continue;
+    }
+    if (current) {
+      at = static_cast<qsizetype>(stops.size());
+    }
+    stops.emplace_back(stop, row->key);
+  }
+  if (at < 0 || stops.size() < 2) {
+    return false;
+  }
+  const qsizetype count = static_cast<qsizetype>(stops.size());
+  const auto& [next, nextKey] = stops[static_cast<std::size_t>((at + (back ? count - 1 : 1)) % count)];
+  // In sight in a long panel, as Qt's own Tab scrolls to the field.
+  for (QWidget* above = parentWidget(); above != nullptr; above = above->parentWidget()) {
+    if (auto* area = qobject_cast<QScrollArea*>(above)) {
+      area->ensureWidgetVisible(next);
+      break;
+    }
+  }
+  next->setFocus(back ? Qt::BacktabFocusReason : Qt::TabFocusReason);
+  if (auto* edit = qobject_cast<QLineEdit*>(next)) {
+    edit->selectAll(); // typed over, as a field Tab reaches
+  }
+  qDebug().noquote() << QStringLiteral("Panel %1 %2: %3 -> %4")
+                            .arg(m_def.name, back ? QStringLiteral("Shift+Tab") : QStringLiteral("Tab"),
+                                 stops[static_cast<std::size_t>(at)].second, nextKey);
+  return true;
 }
 
 bool CommandPanel::insertIntoValue(const QString& key, const QString& text) {

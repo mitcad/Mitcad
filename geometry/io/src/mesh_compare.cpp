@@ -8,9 +8,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
-#include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
-#include <GProp_GProps.hxx>
 #include <Geom_Surface.hxx>
 #include <OSD_Parallel.hxx>
 #include <Poly_Triangulation.hxx>
@@ -25,6 +23,8 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
+
+#include "mitcad/analysis/common.hpp"
 
 namespace mitcad::io {
 
@@ -185,9 +185,7 @@ MeshComparison compare_meshing(const std::vector<TopoDS_Shape>& shapes, const Me
           face.surface = surface_name(BRepAdaptor_Surface(entry.a, false).GetType());
           face.tolerance = std::max(a.linear_deflection, face_deviation_floor(entry.a, a.linear_deflection,
                                                                               a.face_triangles));
-          GProp_GProps properties;
-          BRepGProp::SurfaceProperties(entry.a, properties);
-          face.area = properties.Mass();
+          face.area = analysis::surface_properties(entry.a).Mass();
         } catch (const Standard_Failure&) {
           face.area = -1.0;
         }

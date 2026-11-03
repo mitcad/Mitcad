@@ -112,14 +112,14 @@ const BALLOON_ROW: f64 = 12.0;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AddAnnotationCommand {
-    drawing: String,
+    pub(super) drawing: String,
     #[serde(default)]
-    view: Option<u32>,
+    pub(super) view: Option<u32>,
     /// A text note's sheet.
     #[serde(default)]
     sheet: usize,
     #[serde(rename = "type")]
-    kind: String,
+    pub(super) kind: String,
     #[serde(default)]
     picks: Vec<PickInput>,
     #[serde(default)]
@@ -127,7 +127,7 @@ pub(super) struct AddAnnotationCommand {
     /// Where its dimension line or text goes on the sheet; a text note's
     /// place.
     #[serde(default)]
-    at: Option<P2>,
+    pub(super) at: Option<P2>,
     #[serde(default)]
     format: Option<AnnotationFormat>,
     #[serde(default)]
@@ -167,11 +167,11 @@ pub(super) struct AddAnnotationCommand {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct EditAnnotationCommand {
-    drawing: String,
-    annotation: u32,
+    pub(super) drawing: String,
+    pub(super) annotation: u32,
     /// A drag on the sheet: its line or text moves.
     #[serde(default, rename = "move")]
-    shift: Option<P2>,
+    pub(super) shift: Option<P2>,
     /// Its dimension line or text through this sheet point; a text note's
     /// new place.
     #[serde(default)]
@@ -256,6 +256,7 @@ struct Candidate {
 /// A view drawn, with what its annotations need: its index among the
 /// sheet's drawn views and the bodies it shows.
 pub(super) struct ViewAt<'a> {
+    pub(super) component: ComponentUid,
     pub(super) placed: &'a PlacedView,
     pub(super) shown: Vec<Shown>,
     /// A detail's circle (view mm): picks outside it are not seen.
@@ -949,6 +950,27 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
         component: ComponentUid,
         shown: &[Shown],
     ) -> Vec<(FeatureUid, Transform)>;
+
+    // Dimension spacing (mitcad#1173, `drawing_spacing.rs`).
+
+    /// The annotation an `add_drawing_annotation` of `kind` would make
+    /// first (the first of a series), not yet placed, and how its view
+    /// sees its picks.
+    fn placing_annotation(
+        &self,
+        view: &ViewAt<'_>,
+        c: &AddAnnotationCommand,
+        kind: AnnotationType,
+        id: u32,
+    ) -> Result<(ViewAnnotation, Vec<Seen>), ApiError>;
+
+    /// How its view sees an annotation's picks now; why not, when one is
+    /// gone.
+    fn annotation_seen(
+        &self,
+        view: &ViewAt<'_>,
+        annotation: &ViewAnnotation,
+    ) -> Result<Vec<Seen>, String>;
 }
 
 impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
@@ -1125,6 +1147,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let square = self.square_bodies(sheet, id, &shown, &placed.spec);
         let from_an_angle = angled(&placed.spec);
         Ok(ViewAt {
+            component: drawing.component,
             placed,
             shown,
             circle,
@@ -1294,24 +1317,9 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             Some(Series::Baseline) => (1..picks.len()).map(|i| vec![0, i]).collect(),
             Some(Series::Chain) => (1..picks.len()).map(|i| vec![i - 1, i]).collect(),
         };
-        let along = match kind {
-            // On a pictorial view, aligned unless given: its picks' true
-            // distance.
-            AnnotationType::Linear => {
-                Some(
-                    c.along
-                        .unwrap_or_else(|| match (found.first(), found.last()) {
-                            _ if view.pictorial_for(&picks) => Along::Aligned,
-                            (Some(a), Some(b)) if found.len() >= 2 => {
-                                annotate::default_along(&[a.seen, b.seen])
-                            }
-                            _ => Along::Horizontal,
-                        }),
-                )
-            }
-            AnnotationType::Ordinate => Some(c.along.unwrap_or(Along::Horizontal)),
-            _ => c.along,
-        };
+        // On a pictorial view, aligned unless given: its picks' true
+        // distance.
+        let along = along_of(kind, c.along, &view, &picks, &found);
         if view.pictorial_for(&picks)
             && let Some(why) = pictorial_refusal(kind, along)
         {
@@ -1883,7 +1891,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                                             l.levels,
                                             l.depth,
                                         )?;
-                                        l.item(key)
+                                        l.item(key, pick.path())
                                     })
                             });
                             match number {
@@ -2009,6 +2017,77 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             .into_iter()
             .map(|(sketch, _, transform)| (sketch, transform))
             .collect()
+    }
+
+    fn placing_annotation(
+        &self,
+        view: &ViewAt<'_>,
+        c: &AddAnnotationCommand,
+        kind: AnnotationType,
+        id: u32,
+    ) -> Result<(ViewAnnotation, Vec<Seen>), ApiError> {
+        let (picks, _) = self.picks_of(view, &c.picks, kind.wants())?;
+        let found: Vec<Found> = picks
+            .iter()
+            .map(|p| self.resolve_found(view, p))
+            .collect::<Result<_, _>>()
+            .map_err(ApiError)?;
+        // As add_drawing_annotation makes it: its direction from all the
+        // picks, a series' first of its first two.
+        let along = along_of(kind, c.along, view, &picks, &found);
+        let count = if c.series.is_some() {
+            picks.len().min(2)
+        } else {
+            picks.len()
+        };
+        let mut annotation = ViewAnnotation::new(id, kind, picks[..count].to_vec());
+        annotation.along = along;
+        let points = view.true_distance(kind, along, &annotation.picks);
+        let seen = found[..count]
+            .iter()
+            .map(|f| shown_seen(points, f))
+            .collect();
+        Ok((annotation, seen))
+    }
+
+    fn annotation_seen(
+        &self,
+        view: &ViewAt<'_>,
+        annotation: &ViewAnnotation,
+    ) -> Result<Vec<Seen>, String> {
+        let points = view.true_distance(annotation.kind, annotation.along, &annotation.picks);
+        annotation
+            .picks
+            .iter()
+            .map(|p| self.resolve_found(view, p).map(|f| shown_seen(points, &f)))
+            .collect()
+    }
+}
+
+/// The direction a new dimension of these picks measures along (as
+/// `add_drawing_annotation` gives it): the one given, else on a pictorial
+/// view aligned (its picks' true distance), else as its picks lie.
+fn along_of(
+    kind: AnnotationType,
+    given: Option<Along>,
+    view: &ViewAt<'_>,
+    picks: &[ViewPick],
+    found: &[Found],
+) -> Option<Along> {
+    match kind {
+        AnnotationType::Linear => {
+            Some(
+                given.unwrap_or_else(|| match (found.first(), found.last()) {
+                    _ if view.pictorial_for(picks) => Along::Aligned,
+                    (Some(a), Some(b)) if found.len() >= 2 => {
+                        annotate::default_along(&[a.seen, b.seen])
+                    }
+                    _ => Along::Horizontal,
+                }),
+            )
+        }
+        AnnotationType::Ordinate => Some(given.unwrap_or(Along::Horizontal)),
+        _ => given,
     }
 }
 

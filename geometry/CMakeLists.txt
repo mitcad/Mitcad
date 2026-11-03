@@ -187,9 +187,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/motion_contact.cpp
   include/mitcad/geometry/motion_contact.hpp)
-# Emboss: profiles wrapped onto cylinders (mitcad#458).
+# Emboss: profiles wrapped onto cylinders (mitcad#458), projected onto any face (mitcad#1091).
 target_sources(mitcad_geometry PRIVATE
   src/emboss.cpp
+  src/emboss_projection.cpp
+  src/emboss_projection.hpp
   include/mitcad/geometry/emboss.hpp)
 # Boundary Fill: the cells tool bodies enclose (mitcad#457).
 target_sources(mitcad_geometry PRIVATE
@@ -651,6 +653,34 @@ if(BUILD_TESTING)
   target_link_libraries(test_chamfer_sharp_corner PRIVATE mitcad_geometry mitcad_geometry_io mitcad_warnings)
   add_test(NAME geometry.chamfer_sharp_corner COMMAND test_chamfer_sharp_corner)
   set_tests_properties(geometry.chamfer_sharp_corner PROPERTIES TIMEOUT 60)
+  # A chamfer whose chain runs on past its start into a face beyond and ends
+  # against an earlier chamfer, alike at both ends, with the port's patch
+  # 1120 (mitcad#1185).
+  add_executable(test_chamfer_end_against_chamfer tests/test_chamfer_end_against_chamfer.cpp)
+  target_link_libraries(test_chamfer_end_against_chamfer PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.chamfer_end_against_chamfer COMMAND test_chamfer_end_against_chamfer)
+  set_tests_properties(geometry.chamfer_end_against_chamfer PROPERTIES TIMEOUT 60)
+  # Lofts from a polygon to a circle shelled with both ends open and offset
+  # closed, with the port's patches 1130 and 1190 (mitcad#1184, mitcad#1193).
+  add_executable(test_shell_loft_to_circle tests/test_shell_loft_to_circle.cpp)
+  target_link_libraries(test_shell_loft_to_circle PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.shell_loft_to_circle COMMAND test_shell_loft_to_circle)
+  set_tests_properties(geometry.shell_loft_to_circle PROPERTIES TIMEOUT 300)
+  # Reported volumes and areas against exact values and OCCT's adaptive
+  # Gauss-Kronrod integration, lofts and their shells included (mitcad#1200).
+  add_executable(test_accurate_volumes tests/test_accurate_volumes.cpp)
+  target_link_libraries(test_accurate_volumes PRIVATE mitcad_geometry TKMesh mitcad_warnings)
+  add_test(NAME geometry.accurate_volumes COMMAND test_accurate_volumes)
+  set_tests_properties(geometry.accurate_volumes PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # Closed inward offsets of lofts from a polygon to a circle whose seam
+  # splits a side, with the port's patch 1160 (mitcad#1199).
+  add_executable(test_offset_loft_circle_seam tests/test_offset_loft_circle_seam.cpp)
+  target_link_libraries(test_offset_loft_circle_seam PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.offset_loft_circle_seam COMMAND test_offset_loft_circle_seam)
+  set_tests_properties(geometry.offset_loft_circle_seam PROPERTIES TIMEOUT 300)
 endif()
 
 # Data exchange and analysis services, separate libraries on top of OCCT.

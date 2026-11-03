@@ -22,3 +22,5 @@ mod section_curve_tests;
 // Project of another sketch's curves and points (mitcad#904).
 mod face_bounded_profiles_tests;
 mod sketch_projection_tests;
+// Driven dimensions used by their own sketch's dimensions (mitcad#1116).
+mod sketch_driven_uses_tests;

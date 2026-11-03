@@ -163,6 +163,10 @@ mod ffi {
             design_folder: &str,
         ) -> Result<String>;
         fn mcp_export_drawing(self: &Document, command: &str) -> Result<String>;
+        /// Comments for agents (mitcad#1119): the live comments resource
+        /// (the notification to send, or empty) and the resolve policy.
+        fn set_mcp_comments(self: &mut LiveMcpSession, comments: &str) -> Result<String>;
+        fn set_mcp_comment_policy(self: &mut LiveMcpSession, may_resolve: bool);
 
         fn new_document() -> Box<Document>;
         /// A new, empty design: Root and an empty component Component1,

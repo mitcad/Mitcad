@@ -8,10 +8,12 @@
 #include <utility>
 #include <vector>
 
+#include <QHelpEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QStringList>
+#include <QToolTip>
 #include <QtLogging>
 
 #include "../OcctViewer.hpp"
@@ -499,6 +501,19 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
   case QEvent::Resize:
     resize(m_viewer.size());
     return false;
+  case QEvent::ToolTip: {
+    // A value box says what a click on it does (mitcad#1181).
+    const auto* help = static_cast<const QHelpEvent*>(event);
+    const int box = boxAt(help->pos());
+    if (box < 0) {
+      return false;
+    }
+    QToolTip::showText(help->globalPos(),
+                       tr("%1: click to type a value; Enter keeps it, Esc cancels")
+                           .arg(m_handles[static_cast<std::size_t>(box)].label),
+                       &m_viewer, m_boxes[static_cast<std::size_t>(box)].toAlignedRect());
+    return true;
+  }
   case QEvent::WindowBlocked:
     // A modal dialog took the input (a long computation's progress, P7),
     // and with it the release: a drag ends at the value it has.
@@ -757,7 +772,10 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
         painter.setBrush(color);
         painter.drawEllipse(anchor, 2.0, 2.0);
       }
-      painter.setPen(QPen(color, 1.0));
+      // Under the mouse, the box stands out in the selection's blue: a
+      // click there types the value (mitcad#1181; its tooltip says so).
+      const bool boxHovered = static_cast<int>(i) == m_boxHover;
+      painter.setPen(QPen(boxHovered ? kActiveColor : color, boxHovered ? 2.0 : 1.0));
       painter.setBrush(QColor(0xff, 0xff, 0xff, 235));
       painter.drawRoundedRect(m_boxes[i], 4, 4);
       painter.setPen(kInk);

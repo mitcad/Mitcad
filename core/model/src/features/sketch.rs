@@ -22,9 +22,11 @@ use crate::datum::{DatumKind, DatumPlane};
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{Curve3, Kernel, KernelError};
 use crate::links::OccurrenceLink;
-use crate::parameters::ParamId;
+use crate::parameters::{ParamId, Parameters};
 use crate::profile::SketchFrame;
-use crate::sketch::{Projection, ProjectionSource, SketchEntityRef, project};
+use crate::sketch::driven::DrivenUses;
+use crate::sketch::solve::{SolveError, Solved};
+use crate::sketch::{ConstraintUid, Projection, ProjectionSource, SketchEntityRef, project};
 use crate::topo::{CurveId, FaceName, TopoName};
 use crate::transform::Transform;
 
@@ -147,6 +149,114 @@ impl LinkedReferences for SketchDef {
     }
 }
 
+/// The driving dimensions of `def` whose values use reference parameters of
+/// its own driven dimensions (mitcad#1116), directly or through other
+/// parameters' expressions, with those driven dimensions.
+pub(crate) fn driven_uses(def: &SketchDef, params: &Parameters) -> DrivenUses {
+    let own: BTreeMap<ParamId, ConstraintUid> = def
+        .dimensions
+        .iter()
+        .filter_map(|d| Some((d.reference?, d.id)))
+        .collect();
+    let mut uses = DrivenUses::new();
+    if own.is_empty() {
+        return uses;
+    }
+    let table = params.table();
+    for d in &def.dimensions {
+        let Some(value) = d.value else {
+            continue;
+        };
+        let mut found = BTreeSet::new();
+        let mut seen = BTreeSet::from([value]);
+        let mut todo = vec![value];
+        while let Some(p) = todo.pop() {
+            if let Some(driven) = own.get(&p) {
+                found.insert(*driven);
+            }
+            for dependency in table.get(p).map(|p| p.dependencies()).unwrap_or_default() {
+                if seen.insert(*dependency) {
+                    todo.push(*dependency);
+                }
+            }
+        }
+        if !found.is_empty() {
+            uses.insert(d.id, found);
+        }
+    }
+    uses
+}
+
+/// Solves a sketch whose driving dimensions use its own driven ones
+/// (`uses`, mitcad#1116) in stages ([`crate::sketch::driven`]): each stage
+/// leaves out the users whose references are not known yet, and evaluates
+/// the parameters with the references known so far at their measured
+/// values. `stored` is the definition, `followed` the one whose linked
+/// projections moved, if any. The reads recorded are those of the last,
+/// whole solve: the users' values as the measured references give them,
+/// which the recompute then sets into the references, so that the next
+/// recompute finds the same values and keeps the result.
+fn solve_using_driven<K: Kernel>(
+    stored: &SketchDef,
+    followed: Option<&SketchDef>,
+    uses: &DrivenUses,
+    ctx: &mut super::EvalContext<'_, K>,
+    name: &dyn Fn(ParamId) -> String,
+) -> Result<Solved, String> {
+    let params = ctx.env.params;
+    let def = followed.unwrap_or(stored);
+    let references: BTreeMap<ConstraintUid, ParamId> = def
+        .dimensions
+        .iter()
+        .filter_map(|d| Some((d.id, d.reference?)))
+        .collect();
+    let mut reads: Vec<(ParamId, Option<u64>)> = Vec::new();
+    let solved = crate::sketch::driven::solve_staged(def, uses, name, &mut |held, known| {
+        let local;
+        let values: &Parameters = if known.is_empty() {
+            params
+        } else {
+            let mut copy = params.clone();
+            for (d, value) in known {
+                if let Some(id) = references.get(d) {
+                    copy.set_measured(*id, *value)
+                        .map_err(|e| SolveError::new(e.to_string()))?;
+                }
+            }
+            local = copy;
+            &local
+        };
+        reads.clear();
+        let mut value = |id: ParamId| -> Result<f64, String> {
+            reads.push((id, values.read_bits(id)));
+            // A text parameter (mitcad#664) gives no number.
+            if values.text(id).is_some() {
+                return Err(format!(
+                    "parameter {} is a text, not a number",
+                    values.name(id)
+                ));
+            }
+            values
+                .value(id)
+                .ok_or_else(|| format!("parameter {} does not exist", values.name(id)))
+        };
+        let held_stored = stored.holding(held);
+        match followed {
+            None => held_stored.solve_with(&mut value, name),
+            Some(followed) => crate::sketch::project::solve_followed(
+                &held_stored,
+                &followed.holding(held),
+                &mut value,
+                name,
+            ),
+        }
+    });
+    for (id, bits) in reads {
+        ctx.reads.push(crate::recompute::Read::Param(id, bits));
+    }
+    solved.map_err(|e| e.message)
+}
+
 /// The features a projection's source names: those of its topological
 /// name, or the sketch whose curve or point it is (mitcad#904).
 pub(crate) fn topo_features(source: &ProjectionSource) -> BTreeSet<FeatureUid> {
@@ -201,16 +311,23 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             .map(|id| (id, ctx.param_name(id)))
             .collect();
         let name = |id| names.get(&id).cloned().unwrap_or_default();
-        let solved = match &followed {
-            None => def.solve_with(&mut |id| ctx.param(id), &name),
-            Some(followed) => crate::sketch::project::solve_followed(
-                self,
-                followed,
-                &mut |id| ctx.param(id),
-                &name,
-            ),
-        }
-        .map_err(|e| e.message)?;
+        // Driving dimensions that use the sketch's own driven ones are
+        // solved after them (mitcad#1116).
+        let uses = driven_uses(def, ctx.env.params);
+        let solved = if uses.is_empty() {
+            match &followed {
+                None => def.solve_with(&mut |id| ctx.param(id), &name),
+                Some(followed) => crate::sketch::project::solve_followed(
+                    self,
+                    followed,
+                    &mut |id| ctx.param(id),
+                    &name,
+                ),
+            }
+            .map_err(|e| e.message)?
+        } else {
+            solve_using_driven(self, followed.as_ref(), &uses, ctx, &name)?
+        };
         // A line or round curve the constraints collapsed leaves no region
         // (mitcad#365).
         if let Some(warning) = solved.status.degenerate_warning() {

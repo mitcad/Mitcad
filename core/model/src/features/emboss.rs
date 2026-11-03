@@ -6,6 +6,13 @@
 //! face they are wrapped onto the cylinder: laid out by arc length around
 //! it, not projected, and raised or sunk radially, so that a profile keeps
 //! its widths on the face and its walls stand at right angles to it.
+//!
+//! Projection (mitcad#1091): on any face, the profiles are projected onto
+//! it along the sketch normal or a `direction` and raised from it or sunk
+//! into it along its normals, so the top follows the face (an offset of the
+//! projected region). Spheres, tori and free-form faces always take it; a
+//! planar, cylindrical or conical face takes it with `projection` or a
+//! `direction`.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +20,20 @@ use super::extrude::{
     Operation, ProfileRef, apply_operation, check_participants, check_profiles, participant_bodies,
     profile_references, profile_regions, profile_set,
 };
+use super::geom_ref::{GeomRef, Want};
 use super::mapping::map_params;
 use super::reference::FaceRef;
-use super::{CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse};
+use super::{
+    CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse, is_false,
+};
 use crate::ids::BodyUid;
 use crate::kernel::{
-    Axis, Bound, EmbossWrapSpec, ExtrudeFeatureSpec, ExtrudeSide, ExtrudeStart, Kernel, Plane,
-    SideEnd, Target,
+    Axis, Bound, EmbossProjectSpec, EmbossWrapSpec, ExtrudeFeatureSpec, ExtrudeSide, ExtrudeStart,
+    Kernel, Plane, SideEnd, Target,
 };
 use crate::parameters::ParamId;
 use crate::profile::{ProfileRegion, SketchFrame};
-use mitcad_vec3::dot;
+use mitcad_vec3::{dot, unit};
 
 /// Whether the profiles stand up from the face or go down into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -58,8 +68,9 @@ pub struct EmbossDef<P = ParamId> {
     #[serde(deserialize_with = "profile_set")]
     pub profiles: Vec<ProfileRef>,
     /// The face the profiles are raised from or sunk into: a planar face,
-    /// or a cylindrical face they are wrapped onto. None: the sketch plane,
-    /// raised along the sketch normal.
+    /// a cylindrical or conical face they are wrapped onto, or any other
+    /// face they are projected onto. None: the sketch plane, raised along
+    /// the sketch normal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face: Option<FaceRef>,
     pub depth: P,
@@ -69,6 +80,16 @@ pub struct EmbossDef<P = ParamId> {
     /// bodies without a face.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub participants: Vec<BodyUid>,
+    /// The profiles projected onto the face (mitcad#1091) instead of
+    /// wrapped onto a cylinder or cone or extruded from a plane. Faces of
+    /// other kinds always take them so.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub projection: bool,
+    /// The direction the profiles are projected along instead of the sketch
+    /// normal: an axis, an edge or a sketch line, or a plane or planar face
+    /// (its normal). Implies the projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<GeomRef>,
 }
 
 impl<P> EmbossDef<P> {
@@ -82,7 +103,15 @@ impl<P> EmbossDef<P> {
             depth: param,
             mode: copy,
             participants: clone,
+            projection: copy,
+            direction: clone,
         }
+    }
+
+    /// Whether the profiles are projected whatever the face (a planar,
+    /// cylindrical or conical face otherwise takes them its own way).
+    fn projects(&self) -> bool {
+        self.projection || self.direction.is_some()
     }
 
     /// The bodies it works on when none are listed: the face's.
@@ -105,6 +134,9 @@ impl FeatureInfo for EmbossDef {
         for body in &self.participants {
             references.body(*body);
         }
+        if let Some(direction) = &self.direction {
+            direction.add_to(&mut references);
+        }
         references
     }
 
@@ -112,6 +144,16 @@ impl FeatureInfo for EmbossDef {
         check_profiles(ctx, &self.profiles)?;
         if let Some(face) = &self.face {
             face.check(ctx)?;
+        } else if self.projects() {
+            return Err(
+                "a projected emboss needs the face to project the profiles onto".to_owned(),
+            );
+        }
+        if let Some(direction) = &self.direction {
+            direction
+                .check(ctx, Want::Axis)
+                .or_else(|_| direction.check(ctx, Want::Plane))
+                .map_err(|e| format!("the projection direction: {e}"))?;
         }
         check_participants(ctx, self.mode.operation(), &self.participants)
     }
@@ -259,8 +301,9 @@ pub(crate) fn wrapped_tool<K: Kernel>(
 }
 
 impl EmbossDef {
-    /// The tool body: the profiles extruded from a plane, or wrapped onto
-    /// a cylinder and grown radially; faces named after the feature.
+    /// The tool body: the profiles extruded from a plane, wrapped onto a
+    /// cylinder and grown radially, or projected onto the face and grown
+    /// along its normals; faces named after the feature.
     fn tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -282,17 +325,18 @@ impl EmbossDef {
                 depth,
             );
         };
+        if self.projects() {
+            return self.projected(ctx, frame, regions, face, depth, raise);
+        }
         if let Some(tool) = wrapped_tool(ctx, frame, regions, face, depth, raise)? {
             return Ok(tool);
         }
         let shape = ctx.surface_body(face.body)?;
         let found = ctx.face_on(face.body, &shape, &face.face)?;
-        let plane = ctx.kernel.face_plane(&shape, &found).map_err(|e| {
-            format!(
-                "face {} is neither planar, cylindrical nor conical, which an emboss needs: {e}",
-                face.face
-            )
-        })?;
+        let Ok(plane) = ctx.kernel.face_plane(&shape, &found) else {
+            // A sphere, a torus, a free-form face: projected (mitcad#1091).
+            return self.projected(ctx, frame, regions, face, depth, raise);
+        };
         // Along the sketch normal, out of the material or into it.
         let facing = dot(normal, plane.normal);
         if facing.abs() < ALONG_AXIS {
@@ -324,6 +368,43 @@ impl EmbossDef {
         self.extrude(ctx, frame, regions, direction, start, depth)
     }
 
+    /// The tool of the profiles projected onto the face along the sketch
+    /// normal or the direction and grown along the face's normals
+    /// (mitcad#1091).
+    fn projected<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        frame: SketchFrame,
+        regions: &[ProfileRegion],
+        face: &FaceRef,
+        depth: f64,
+        raise: bool,
+    ) -> Result<K::Shape, String> {
+        let direction = match &self.direction {
+            Some(reference) => direction_of(ctx, reference)?,
+            None => frame.normal(),
+        };
+        if dot(direction, frame.normal()).abs() < ALONG_AXIS {
+            return Err(
+                "the projection direction lies in the sketch plane: it must cross it".to_owned(),
+            );
+        }
+        let shape = ctx.surface_body(face.body)?;
+        let found = ctx.face_on(face.body, &shape, &face.face)?;
+        let spec = EmbossProjectSpec {
+            feature: ctx.uid,
+            frame,
+            regions,
+            body: &shape,
+            face: &found,
+            direction,
+            depth: if raise { depth } else { -depth },
+        };
+        ctx.kernel
+            .projected_emboss(&spec)
+            .map_err(|e| format!("to project onto face {}: {e}", face.face))
+    }
+
     fn extrude<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -348,4 +429,21 @@ impl EmbossDef {
         };
         ctx.kernel.extrude_feature(&spec).map_err(|e| e.to_string())
     }
+}
+
+/// The unit vector of a projection's direction: an axis's (an edge, a
+/// sketch line, a face of revolution), else a plane's normal (a planar
+/// face, an origin or construction plane).
+fn direction_of<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    reference: &GeomRef,
+) -> Result<[f64; 3], String> {
+    let along = match ctx.axis(reference) {
+        Ok(axis) => axis.direction,
+        Err(not_axis) => match ctx.plane(reference) {
+            Ok(plane) => plane.normal(),
+            Err(_) => return Err(format!("the projection direction: {not_axis}")),
+        },
+    };
+    unit(along).ok_or_else(|| "the projection direction has no length".to_owned())
 }

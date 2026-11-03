@@ -5,6 +5,7 @@
 # check-all sources: app/MainWindowMeasurements.cpp app/MainWindowSheet.cpp app/files/MainWindowPrint.cpp
 # check-all sources: core/model-api/src/body_notes.rs core/model-api/src/cut_sheets.rs core/model/src/document/annotations.rs tools/cli
 # check-all sources: core/model-api/src/annotations.rs app/view/MeasurementOverlay.cpp app/framework/CommandSession.cpp
+# check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
 # The Make tab (mitcad#1049) through the real UI, in the Floating layout,
 # then in the Docked one, on a design mitcad-cli makes: a sheet-metal
 # plate with its flat pattern (Body1) and a 40 x 30 x 10 block with a
@@ -16,8 +17,8 @@
 #     Image… alone).
 #   - The Make tab's groups Materials, Annotate, 3D Print and Laser with
 #     their menus; no CNC group.
-#   - Each moved command run from its new place: Edit Materials…, Edit
-#     Printers and Processes…, Print Analysis, Send to Slicer (once 3D
+#   - Each moved command run from its new place: Edit Materials…,
+#     Printers… and Processes… (mitcad#1135), Print Analysis, Send to Slicer (once 3D
 #     Print) and Export Flat Pattern… (its DXF written); Export Face as
 #     DXF… on Body2's top face from the Laser group and from the face's
 #     context menu.
@@ -30,7 +31,15 @@
 #   - Body2 selected on the Make tab: the card shows its material and its
 #     print settings with Walls 5 set on the body; Walls typed 3 in the
 #     card is set on the body, and one Undo puts 5 back. On the Solid tab
-#     there is no card.
+#     there is no card. The Make section lies inside the selection card,
+#     its frame whole, with the same margin on both sides (mitcad#1178; the
+#     design has a process of a long name, which made it wider).
+#   - Body1 selected on the Make tab (mitcad#1178): no Create row; no print
+#     values of its own; Add Print Value… opens the picker, "Walls" typed
+#     and Enter add the process's 2 walls to Body1 as a row with the
+#     body's icon, its field focused, and the Browser marks Body1; 4 typed
+#     there is set on the body; its remove button clears it (no row: the
+#     process's Walls again), and one Undo puts 4 back.
 #   - The Browser marks Body2 (its own Walls) on the Make tab, not Body1,
 #     and nothing on the Solid tab.
 #   - Docked: the Make tab with its four groups.
@@ -66,7 +75,8 @@ cat > "$WORK/make.json" << EOF
   {"cmd":"create_print_profile","kind":"process","name":"Standard","values":{"layer_height":0.2,"perimeters":2}},
   {"cmd":"set_property","owner":"C0","set":"Print Printer","key":"profile","value":"bench"},
   {"cmd":"set_property","owner":"C0","set":"Print Process","key":"profile","value":"standard"},
-  {"cmd":"set_property","owner":"F5.b0","set":"Print Process","key":"perimeters","value":5}
+  {"cmd":"set_property","owner":"F5.b0","set":"Print Process","key":"perimeters","value":5},
+  {"cmd":"create_print_profile","kind":"process","name":"Fine detail 0.12 mm layers with extra walls and a slow outer wall","values":{"layer_height":0.12}}
 ]
 EOF
 "$CLI" run "$WORK/make.json" --save "$WORK/make.mitcad" > "$WORK/cli.log" 2>&1 ||
@@ -74,6 +84,25 @@ EOF
 
 # menu_line "TAB/GROUP": the entries of that group's menu as last logged.
 menu_line() { grep -F "Ribbon menu $1: " "$UI_LOG" | tail -1 | sed "s|.*Ribbon menu $1: ||"; }
+
+# section_fits NAME: the selection card's NAME section (Make, Create) as
+# last logged (mitcad#1178): inside the card and what of it shows, its
+# right frame whole, with the same margin on both sides unless the page
+# scrolls.
+section_fits() {
+  local line l r cl cr vr
+  line=$(grep -F "Selection card section $1: " "$UI_LOG" | tail -1)
+  [ -n "$line" ] || ui_fail "no place logged for the $1 section"
+  read -r l r cl cr vr <<< "$(sed -n 's/.*: \(-*[0-9]*\)\.\.\(-*[0-9]*\) of card \(-*[0-9]*\)\.\.\(-*[0-9]*\), visible to \(-*[0-9]*\).*/\1 \2 \3 \4 \5/p' <<< "$line")"
+  [ -n "$vr" ] || ui_fail "the $1 section's place unread: $line"
+  { [ "$l" -ge "$cl" ] && [ "$r" -le "$cr" ] && [ "$r" -le "$vr" ]; } ||
+    ui_fail "the $1 section runs past the card: $line"
+  if [[ $line != *", scrolled" ]]; then
+    local d=$(((l - cl) - (cr - r)))
+    [ "${d#-}" -le 1 ] || ui_fail "the $1 section's margins differ (left $((l - cl)), right $((cr - r))): $line"
+  fi
+  echo "ok   the $1 section inside the card ($l..$r of $cl..$cr, visible to $vr)"
+}
 
 # group_menu "TAB/GROUP" "entries": opens the group's menu, checks its
 # entries exactly and closes it.
@@ -142,7 +171,7 @@ echo "ok   Body1 not marked"
 group_menu "MAKE/MATERIALS" "Edit Materials… | Material"
 group_menu "MAKE/ANNOTATE" \
   "Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations…"
-group_menu "MAKE/3D PRINT" "Print Analysis | Send to Slicer | Edit Printers and Processes…"
+group_menu "MAKE/3D PRINT" "Print Analysis | Send to Slicer | Printers… | Processes…"
 group_menu "MAKE/LASER" "Export Flat Pattern… | Export Face as DXF…"
 
 echo "--- The moved commands from their new places"
@@ -153,9 +182,15 @@ ui_focus_dialog '^Materials$'
 ui_step "close it (Esc)"                   ui_key Escape
 ui_focus_main
 ui_mark
-ui_step "Edit Printers and Processes…"     ui_click_logged "Ribbon button make.printers"
-ui_expect_new "Printers and processes opened" "Printers and Processes from the 3D Print group"
-ui_focus_dialog '^Printers and Processes$'
+ui_step "Printers…"                        ui_click_logged "Ribbon button make.printers"
+ui_expect_new "Printers opened" "the Printers manager from the 3D Print group (mitcad#1135)"
+ui_focus_dialog '^Printers$'
+ui_step "close it (Esc)"                   ui_key Escape
+ui_focus_main
+ui_mark
+ui_step "Processes…"                       ui_click_logged "Ribbon button make.processes"
+ui_expect_new "Processes opened" "the Processes manager from the 3D Print group"
+ui_focus_dialog '^Processes$'
 ui_step "close it (Esc)"                   ui_key Escape
 ui_focus_main
 ui_mark
@@ -307,6 +342,55 @@ ui_expect_new "own: Walls = 3 (body Body2)" "the card shows 3"
 ui_mark
 ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
 ui_expect_new "own: Walls = 5 (body Body2)" "one undo step: 5 again"
+ui_expect_new "Selection card section Make: " "the Make section's place logged"
+section_fits Make
+
+echo "--- Add Print Value… and the remove button (mitcad#1178)"
+ui_mark
+ui_step "select Body1 in the Browser"      ui_click_logged "Browser Root/Bodies/Body1"
+ui_expect_new "Make card: Body1: " "Body1's card"
+ui_expect_new "process Standard (component Root); own: none" "no print values of its own"
+ui_expect_new "Make card add value at" "Add Print Value… placed"
+# The row is logged only when it changes, from "none" at start: no line
+# yet means none.
+create="$(grep -F 'Selection card create: ' "$UI_LOG" | tail -1)"
+[ -z "$create" ] || [ "$create" = "Selection card create: none" ] ||
+  ui_fail "a Create row on the Make tab: $create"
+echo "ok   no Create row on the Make tab"
+ui_mark
+ui_step "Add Print Value…"                 ui_click_logged "Make card add value"
+ui_expect_new "Add print value opened for Body1: " "the picker opened"
+ui_focus_dialog '^Add Print Value$'
+xdotool type --delay 40 "Walls"
+ui_expect_new "Add print value search: Walls: " "Walls searched"
+grep -F "Add print value search: " "$UI_LOG" | tail -1 | grep -qF ", current perimeters" ||
+  ui_fail "Walls is not the current setting: $(grep -F 'Add print value search: ' "$UI_LOG" | tail -1)"
+echo "ok   Walls first"
+ui_step "add (Enter)"                      ui_key Return
+ui_focus_main
+ui_expect_new "Add print value chose perimeters" "Walls chosen"
+ui_expect_new "Make card Walls added: 2" "added to Body1 at the process's 2"
+ui_expect_new "process Standard (component Root); own: Walls = 2 (body Body1)" "its row on the body"
+ui_expect_new "Make card value perimeters icon body" "with the body's icon"
+ui_expect_new "Make card value perimeters focused" "its field focused"
+ui_expect_new "Make card remove perimeters at" "its remove button"
+ui_expect_new "Root/Bodies/Body1: Own print settings: Walls" "the Browser marks Body1"
+ui_mark
+ui_step "Walls' field"                     ui_click_logged "Make card value perimeters"
+ui_key ctrl+a
+xdotool type --delay 40 "4"
+ui_step "confirm (Enter)"                  ui_key Return
+ui_expect_new "Make card Walls set: 4" "4 typed is set on the body"
+ui_expect_new "own: Walls = 4 (body Body1)" "the card shows 4"
+ui_expect_new "Selection card section Make: " "the Make section's place logged"
+section_fits Make
+ui_mark
+ui_step "remove Walls"                     ui_click_logged "Make card remove perimeters"
+ui_expect_new "Make card Walls removed" "the remove button clears it on the body"
+ui_expect_new "process Standard (component Root); own: none" "no row: the process's Walls again"
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "own: Walls = 4 (body Body1)" "one undo step: 4 again"
 ui_mark
 ui_step "the Solid tab"                    ui_click_logged "Ribbon tab SOLID"
 ui_expect_new "Ribbon tab shown: SOLID" "the Solid tab shown"

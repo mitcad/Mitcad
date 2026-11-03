@@ -124,8 +124,9 @@ pub struct RuleProblem {
     pub message: String,
 }
 
-/// The name a closed table's restriction goes by in moves and refusals.
-pub const CLOSED_TABLE: &str = "the configuration table is closed";
+/// The name a closed table's restriction goes by in moves, refusals and
+/// `restricted_by`: the Rows tab's checkbox that closes it (mitcad#968).
+pub const CLOSED_TABLE: &str = "Only these rows";
 
 /// What the cascade did to the parameters: the moves, in option order,
 /// and the rules still broken after them.

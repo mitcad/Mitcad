@@ -17,12 +17,18 @@
 #      a seventh button, before Preferences in the menus' order, and is
 #      kept in the settings (quickAccess/commands). In a narrow window the
 #      group folds into its menu before the design's name would be cut,
-#      and unfolds in a wide one again.
-#   2. Docked: the choice read back from the settings (Look At still
-#      there); Reset to Default in the group's menu (a right-click on the
-#      group) brings back the default set; Save disabled, enabled after an
-#      edit, disabled once saved; Look At checked again: the seventh
-#      button.
+#      and unfolds in a wide one again. Preferences, found by the command
+#      search ("quick access", mitcad#1189), Display › Show quick-access
+#      toolbar off hides the group at once: the title row's part is gone;
+#      on shows it again with the same seven buttons. Hide Quick-Access
+#      Toolbar at the end of the group's menu hides it, the choice of
+#      commands kept in the settings.
+#   2. Docked: the group hidden at the start (the setting read back);
+#      Preferences shows it again with the choice read back (Look At
+#      still there); Reset to Default in the group's menu (a right-click on
+#      the group) brings back the default set; Save disabled, enabled
+#      after an edit, disabled once saved; Look At checked again: the
+#      seventh button; Preferences hides the group in this layout too.
 # The Windows counterpart is tools/ui-windows-quick-access-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -46,7 +52,7 @@ cat > "$WORK/plate.json" << 'JSON'
 JSON
 "$CLI" run "$WORK/plate.json" --save "$PLATE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 CONF=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
-DEFAULTS=(file.new_design file.open file.save file.print file.design_properties tools.preferences)
+DEFAULTS=(file.new_design file.open file.save file.design_properties file.print tools.preferences)
 
 # group_line: the group's last "Quick access: " line, without its prefix.
 group_line() { grep '^Quick access: ' "$UI_LOG" | tail -1 | sed 's/^Quick access: //'; }
@@ -141,10 +147,57 @@ open_menu() {
   fi
   ui_expect_new "Context menu: " "the group's menu opened"
   tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Context menu: " | tail -1 |
-    grep -q "File | Edit | View | Tools | Reset to Default$" ||
+    grep -q "File | Edit | View | Tools | Reset to Default | Hide Quick-Access Toolbar$" ||
     ui_fail "the group's menu: $(grep '^Context menu: ' "$UI_LOG" | tail -1)"
   tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Context menu View: " | tail -1 | grep -q "Look At" ||
     ui_fail "the group's View submenu has no Look At"
+}
+
+# toggle_preference layout shown|hidden: Preferences found by the command
+# search ("quick access" is a phrase of the Display page's settings,
+# mitcad#1189), Show quick-access toolbar (Alt+Q) toggled, OK: the group
+# shown or hidden at once.
+toggle_preference() {
+  ui_mark
+  ui_step "Preferences (search: quick access)" ui_command "quick access"
+  ui_expect_new "Command search chose tools.preferences.display" "$1: the search finds the setting's page"
+  ui_expect_new "Preferences opened: Display, " "$1: Preferences on its Display page"
+  ui_focus_dialog '^Preferences$'
+  ui_step "Show quick-access toolbar (Alt+Q)" ui_key alt+q
+  ui_step "OK (Enter)"                     ui_key Return
+  ui_focus_main
+  ui_expect_new "Preferences: quick-access toolbar $2" "$1: the preference saved ($2)"
+  ui_expect_new "Quick access toolbar $2" "$1: the group $2 at once"
+}
+
+# title_part with|without: the last "Floating cards" line, waited for, has
+# the title row's quick-access part (titleQuickAccess) or has not; the
+# tabs' part is there either way.
+title_part() {
+  local line=""
+  for _ in $(seq 1 25); do
+    line=$(grep -o "^Floating cards: .*" "$UI_LOG" | tail -1)
+    if [ "$1" = with ] && grep -qF "; titleQuickAccess " <<< "$line"; then break; fi
+    if [ "$1" = without ] && ! grep -qF "; titleQuickAccess " <<< "$line"; then break; fi
+    sleep 0.2
+  done
+  grep -qF "titleTabs " <<< "$line" || ui_fail "no title row tabs among the Floating cards: '$line'"
+  if [ "$1" = with ]; then
+    grep -qF "; titleQuickAccess " <<< "$line" || ui_fail "the title row has no quick-access part: '$line'"
+    echo "ok   the title row's quick-access part is there"
+  else
+    grep -qF "; titleQuickAccess " <<< "$line" && ui_fail "the title row still has its quick-access part: '$line'"
+    echo "ok   the title row's quick-access part is gone"
+  fi
+}
+
+# expect_hidden_setting layout: the settings say hidden, and the choice of
+# commands (with Look At) is kept.
+expect_hidden_setting() {
+  ui_sync
+  grep -q "^visible=false" "$CONF" || ui_fail "$1: the group is not hidden in the settings ($CONF)"
+  grep -q "view.look_at" "$CONF" || ui_fail "$1: the choice of commands was not kept ($CONF)"
+  echo "ok   $1: hidden in the settings, the choice of commands kept"
 }
 
 ui_start_display
@@ -167,12 +220,31 @@ grep "^Quick access file.save " "$UI_LOG" | tail -1 | grep -q "out of sight" ||
 ui_mark
 ui_step "a wide window"                  xdotool windowsize "$UI_WINDOW" 1280 800
 ui_expect_new "Quick access unfolded" "floating: unfolded in a wide window"
+title_part with
+toggle_preference floating hidden
+title_part without
+expect_hidden_setting "floating, from Preferences"
+toggle_preference floating shown
+ui_expect_new "Quick access: " "floating: the group made again"
+expect_group "floating: shown again with the same buttons" view.look_at
+title_part with
+open_menu
+ui_mark
+ui_menu_choose "Hide Quick-Access Toolbar"
+ui_expect_new "Hide Quick-Access Toolbar chosen" "floating: Hide Quick-Access Toolbar chosen"
+ui_expect_new "Quick access toolbar hidden" "floating: the group hidden from its menu"
+title_part without
+expect_hidden_setting "floating, from the group's menu"
 ui_stop_app
 
-echo "--- 2. Docked: read back, Reset to Default, Save, Look At"
+echo "--- 2. Docked: hidden at the start, shown, Reset to Default, Save, Look At, hidden"
 cp "$PLATE" "$WORK/docked.mitcad"
 ui_start_app --chrome=docked --no-native-dialogs --open "$WORK/docked.mitcad"
 ui_expect_log "Opened $WORK/docked.mitcad" "opened"
+ui_expect_log "Quick access toolbar hidden" "docked: the group hidden at the start"
+ui_sync
+grep -q "^Quick access menu at " "$UI_LOG" && ui_fail "docked: the hidden group's menu is in sight"
+toggle_preference docked shown
 expect_group "docked: the choice read back from the settings" view.look_at
 open_menu right
 ui_mark
@@ -183,6 +255,8 @@ expect_group "docked: the default group"
 grep -q "view.look_at" "$CONF" && ui_fail "docked: Look At still in the settings"
 save_steps docked "$WORK/docked.mitcad"
 add_look_at docked right
+toggle_preference docked hidden
+expect_hidden_setting "docked, from Preferences"
 ui_stop_app
 
 ui_finish "Quick-access group"

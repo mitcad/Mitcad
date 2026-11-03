@@ -934,6 +934,17 @@ pub(super) trait AnalysisOps<K: Kernel> {
 
     /// Body attributes in the `bodies` query, when they are not the default.
     fn add_body_attributes(&self, uid: BodyUid, value: &mut Value);
+
+    /// What places a component's coordinates in the design (mitcad#1119: a
+    /// comment's body or free point), as a pick's are placed: the
+    /// occurrence given (which must place `owner`), else the owner's only
+    /// placement; none in the root. `what` names it in an error.
+    fn component_transform(
+        &self,
+        owner: Option<ComponentUid>,
+        occurrence: Option<&OccurrencePath>,
+        what: &str,
+    ) -> Result<Transform, ApiError>;
 }
 
 impl<K: Kernel> AnalysisOps<K> for Document<K> {
@@ -1283,6 +1294,15 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                 value["warnings"] = json!(warnings);
             }
         }
+    }
+
+    fn component_transform(
+        &self,
+        owner: Option<ComponentUid>,
+        occurrence: Option<&OccurrencePath>,
+        what: &str,
+    ) -> Result<Transform, ApiError> {
+        self.selection_transform(owner, occurrence, what)
     }
 }
 

@@ -1798,6 +1798,21 @@ pub trait Kernel: Send {
         Err(KernelError::Unsupported("dogbones"))
     }
 
+    // Emboss by projection: profiles projected onto any face (mitcad#1091;
+    // `features::emboss`).
+
+    /// The tool of an emboss whose profiles are projected onto a face
+    /// ([`EmbossProjectSpec`]) and raised from it or sunk into it along the
+    /// face's normals. The body is left as it is. A profile whose
+    /// projection falls partly or wholly off the face is an error that
+    /// names it.
+    fn projected_emboss(
+        &self,
+        _spec: &EmbossProjectSpec<'_, Self::Shape>,
+    ) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported("profiles projected onto faces"))
+    }
+
     // Topology counts for Physical Properties (mitcad#1095).
 
     /// How many distinct faces, edges and vertices the shape has (an edge
@@ -2895,6 +2910,38 @@ pub struct DogboneSpec<'a, S> {
     pub diameter: f64,
     pub extra: f64,
     pub kind: DogboneKind,
+}
+
+// Emboss by projection: profiles projected onto any face (mitcad#1091).
+
+/// Input of [`Kernel::projected_emboss`]: the regions of the sketch at
+/// `frame` projected along `direction` (a unit vector, not in the sketch
+/// plane) onto the face `face` of `body` (every piece the name resolves
+/// to), and raised from it by `depth` (mm) along the face's normals, out of
+/// the material, or sunk into it when `depth` is negative: the top or floor
+/// is the projected region offset by `depth`, and the walls stand along the
+/// face's normals on the region's boundary, so the profile's lines follow
+/// the face wherever it curves.
+///
+/// The line through a sketch point along the direction may meet the face
+/// more than once (a sphere twice): each profile takes the piece of the
+/// face nearest ahead of the sketch plane along the direction, else the
+/// nearest behind it. A profile whose projection does not lie wholly on
+/// that piece (part of it off the face, or past where the face turns away
+/// from the direction) is refused with an error that names its region.
+///
+/// Faces are named after `feature` as an extrusion's: `start(<region>)` on
+/// the face, `end(<region>)` the offset, `side(<segment>)` the walls.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbossProjectSpec<'a, S> {
+    pub feature: FeatureUid,
+    pub frame: SketchFrame,
+    pub regions: &'a [ProfileRegion],
+    pub body: &'a S,
+    /// The face's name in the body: the reference as it is found there.
+    pub face: &'a FaceName,
+    pub direction: [f64; 3],
+    pub depth: f64,
 }
 
 // Topology counts (mitcad#1095).

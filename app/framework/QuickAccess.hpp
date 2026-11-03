@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QKeySequence>
+#include <QObject>
 #include <QString>
 #include <QStringList>
 
@@ -34,6 +35,30 @@ struct QuickAccessSettings {
 
   // Checks or unchecks a command; false when nothing changed.
   bool setChosen(const QString& id, bool on);
+
+  // Whether the group shows at all (mitcad#1189, Preferences › Display ›
+  // Show quick-access toolbar, and the group's Hide Quick-Access Toolbar):
+  // "quickAccess/visible", shown without a key. Hidden, the choice of
+  // commands stays as it is, so that showing it again brings back the
+  // same buttons.
+  static QString visibleKey();
+  static bool loadVisible();
+  // Saves it at once and tells QuickAccessNotifier; false when it was
+  // already so.
+  static bool saveVisible(bool visible);
+};
+
+// Tells the group in either layout, the AppKit toolbar's group and an open
+// Settings window that the group was shown or hidden (saveVisible), from
+// Preferences or the group's own menu. Plain Qt Core.
+class QuickAccessNotifier : public QObject {
+  Q_OBJECT
+
+public:
+  static QuickAccessNotifier& instance();
+
+signals:
+  void visibilityChanged(bool visible);
 };
 
 // The commands the group shows: those of `chosen` that are in `available`

@@ -68,6 +68,15 @@ MINE=$WORK/mine
 BARE=$WORK/mine-remote.git
 g() { git -C "$1" -c user.name=T -c user.email=t@example.invalid "${@:2}" > /dev/null; }
 
+# The fasteners have mount frames (mitcad#1197): Insert starts Place
+# Component, and Enter without a pick drops the part in at the origin as
+# before; drop_in presses it, closed is Escape after the drop-in's lines.
+drop_in() {
+  ui_expect_new "Command Place Component started" "Place Component for a fastener's mount frame"
+  ui_step "drop it in (Enter)"             ui_key Return
+}
+closed() { ui_step "close Place Component (Escape)" ui_key Escape; }
+
 # field_names "edges": "Version, Standard, ..." of "Version 96, Standard 96, ...".
 field_names() {
   local names="" entry
@@ -236,8 +245,10 @@ ui_step "the older version (Alt+V, Down)"  eval 'ui_key alt+v; ui_sync; ui_key D
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.0.0 (" "v1.0.0 chosen"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
 ui_focus_main
+drop_in
 ui_expect_new "Inserted component ISO 4762 M5x16 (linked) from mitcad-parts v1.0.0 (" "the screw inserted, linked"
 ui_expect_volume "New body ISO 4762 M5x16 ([^)]*): volume \([0-9.]*\) mm3" 560.1463214427537 "the screw at v1.0.0"
+closed
 ui_mark
 ui_step "Insert from Library again"        ui_command "Insert from Library"
 ui_focus_dialog '^Insert from Library$'
@@ -245,7 +256,9 @@ ui_step "search nut"                       xdotool type --delay 40 "hexagon nut"
 ui_expect_new "Library browser selected mitcad-parts/iso4032: version v1.1.0 (" "the nut"
 ui_step "a copy (Alt+P), Insert (Alt+I)"   eval 'ui_key alt+p; ui_sync; ui_key alt+i'
 ui_focus_main
+drop_in
 ui_expect_new "Inserted component ISO 4032 M5 (copy) from mitcad-parts v1.1.0 (" "the nut copied"
+closed
 
 echo "--- 4. Library Components"
 ui_mark
@@ -388,8 +401,10 @@ ui_expect_new "Part picker group Favorites: 1 parts, first mitcad-parts/iso4032"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
 ui_focus_main
 ui_expect_new "Part picker chose mitcad-parts/iso4032" "chosen in the picker"
+drop_in
 # The nut copied in 3. has the name: the new component is "(1)".
 ui_expect_new "Inserted component ISO 4032 M5 (1) (linked) from mitcad-parts " "the nut inserted"
+closed
 ui_mark
 ui_step "Insert from Library again"        ui_command "Insert from Library"
 ui_focus_dialog '^Insert from Library$'
@@ -573,7 +588,9 @@ ui_expect_new "Library size M6x8" "M6x8 chosen"
 ui_expect_new "Library browser row M6x8: designation DIN 912 M6x8" "the designation follows the standard"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
 ui_focus_main
+drop_in
 ui_expect_new "Inserted component DIN 912 M6x8 (linked) from mitcad-parts v1.1.0" "the part named by DIN 912"
+closed
 
 ui_stop_app
 ui_finish "component libraries and the community library"

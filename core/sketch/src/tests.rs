@@ -1360,3 +1360,103 @@ fn plane_crossings_of_lines_conics_splines_and_points() {
     let found = plane_crossings(&Curve3::Point([4.0, 0.0, 1.0]), origin, normal);
     assert!(same(found, &[[4.0, 0.0, 1.0]]));
 }
+
+/// A text hanging below a whole circle that starts a quarter turn round
+/// (mitcad#1177): it reads along the circle from its start, outside it,
+/// with the capitals' top on the circle and the baseline a text height
+/// further out.
+#[test]
+fn a_text_below_a_circle_hangs_from_its_capitals_from_the_circles_start() {
+    use crate::geometry::{Curve2, P2, dot, sub};
+    use crate::kernel::{FontGlyphs, Glyph};
+    use std::collections::BTreeMap;
+    // A box glyph half an em wide and one high; the capitals are an em high.
+    let square = vec![
+        vec![[0.0, 0.0], [0.5, 0.0]],
+        vec![[0.5, 0.0], [0.5, 1.0]],
+        vec![[0.5, 1.0], [0.0, 1.0]],
+        vec![[0.0, 1.0], [0.0, 0.0]],
+    ];
+    let glyph = Glyph {
+        advance: 0.5,
+        contours: vec![square],
+    };
+    let glyphs = FontGlyphs {
+        family: "Box".into(),
+        fallback: false,
+        ascender: 1.25,
+        descender: -0.25,
+        cap_height: 1.0,
+        line_spacing: 1.5,
+        glyphs: vec![glyph.clone(), glyph],
+    };
+    let text: SketchText = serde_json::from_value(serde_json::json!({
+        "id": "t1", "text": "II", "at": [0.0, 0.0], "height": 2.0,
+        "cap_height": true, "path": {"curve": "c1", "above": false}
+    }))
+    .unwrap();
+    let circle = |start: f64| {
+        BTreeMap::from([(
+            EntityUid(1),
+            Curve2::Circle {
+                center: [0.0, 0.0],
+                radius: 10.0,
+                start,
+            },
+        )])
+    };
+    let corners = |start: f64| -> Vec<P2> {
+        let outline = text::layout(&text, &glyphs, &BTreeMap::new(), &circle(start)).unwrap();
+        outline
+            .contours
+            .iter()
+            .flat_map(|c| c.parts.iter())
+            .map(|p| match p {
+                Curve2::Line { a, .. } => *a,
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    let at = corners(PI / 2.0);
+    assert_eq!(at.len(), 8);
+    let radius = |p: &P2| p[0].hypot(p[1]);
+    // Each glyph's top edge runs along the circle (its corners a chord
+    // half an advance off its middle), its baseline 2 mm further out.
+    let (top, base) = (10.0f64.hypot(0.5), 12.0f64.hypot(0.5));
+    for p in &at {
+        let r = radius(p);
+        assert!(
+            (r - top).abs() < 1e-9 || (r - base).abs() < 1e-9,
+            "{p:?}: {r} (top {top}, baseline {base})"
+        );
+    }
+    // From the start a quarter turn round, counter-clockwise: the first
+    // glyph's middle 0.5 mm along the circle, the second's 1.5 mm.
+    let angle = |p: &P2| p[1].atan2(p[0]);
+    let middle = |k: usize| {
+        let four = &at[4 * k..4 * k + 4];
+        let x = four.iter().map(|p| p[0]).sum::<f64>() / 4.0;
+        let y = four.iter().map(|p| p[1]).sum::<f64>() / 4.0;
+        angle(&[x, y])
+    };
+    assert!(
+        (middle(0) - (PI / 2.0 + 0.05)).abs() < 1e-6,
+        "{}",
+        middle(0)
+    );
+    assert!(
+        (middle(1) - (PI / 2.0 + 0.15)).abs() < 1e-6,
+        "{}",
+        middle(1)
+    );
+    // The glyph's own up (its second side, from its baseline to its top)
+    // points to the centre.
+    let up = sub(at[2], at[1]);
+    let out = at[1];
+    assert!(dot(up, out) < 0.0, "{up:?} {out:?}");
+    // A circle that starts on the x axis puts the text there.
+    let at = corners(0.0);
+    let x = at[..4].iter().map(|p| p[0]).sum::<f64>() / 4.0;
+    let y = at[..4].iter().map(|p| p[1]).sum::<f64>() / 4.0;
+    assert!((angle(&[x, y]) - 0.05).abs() < 1e-6);
+}

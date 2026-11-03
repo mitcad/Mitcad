@@ -141,3 +141,28 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_ag
   set_tests_properties("${chat_ui_test}" PROPERTIES TIMEOUT 900 ${selection_ui_alone}
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
+
+# Read-only BOM grouping and actual shown CSV/PDF on the default Qt frontend.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform)
+  set(bom_ui_test "app.ui-${selection_ui_platform}-bom-grouping")
+  if(APPLE)
+    add_test(NAME "${bom_ui_test}"
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-bom-grouping-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-bom-grouping")
+  else()
+    selection_ui_command_prefix(380)
+    add_test(NAME "${bom_ui_test}"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-bom-grouping-test.py"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-bom-grouping"
+              "$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+  set_tests_properties("${bom_ui_test}" PROPERTIES TIMEOUT 240 SKIP_RETURN_CODE 77 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${bom_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()

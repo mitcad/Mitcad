@@ -11,3 +11,5 @@ mod feature_tests;
 mod follow_up_tests;
 mod model_follow_tests;
 mod pick_tests;
+// Dimension spacing (mitcad#1173).
+mod spacing_tests;

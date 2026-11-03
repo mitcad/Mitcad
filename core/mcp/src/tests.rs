@@ -588,7 +588,9 @@ fn live_profile_requires_initialization_and_describes_application_ownership() {
     assert!(session.finish(json!({}), false).is_err());
     let response = live_response(session.prepare(initialize()).unwrap()).unwrap();
     let instructions = response["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.contains("document already open"));
+    assert!(instructions.contains("documents open in the Mitcad application"));
+    assert!(instructions.contains("Pass document to target a specific design"));
+    assert!(instructions.contains("omitting it uses the active design"));
     assert!(instructions.contains("document_list"));
     assert!(instructions.contains("Disconnecting leaves"));
     // References before fixed planes (mitcad#1137).
@@ -648,6 +650,24 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             .unwrap();
         assert!(description.contains("document_list"));
         assert!(!description.contains("document_create"));
+        assert!(
+            !tool["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("document"))
+        );
+    }
+    // Headless clients still choose an explicit document; only live focus
+    // supplies a default target.
+    for tool in crate::catalog::tools() {
+        if tool["inputSchema"]["properties"].get("document").is_some() {
+            assert!(
+                tool["inputSchema"]["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("document"))
+            );
+        }
     }
     // The live save writes to the document's own path, or with path into a
     // folder the user allows (mitcad#265, mitcad#402); the application
@@ -664,8 +684,8 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             .collect::<Vec<_>>(),
         ["document", "overwrite", "path"]
     );
-    assert_eq!(save["inputSchema"]["required"], json!(["document"]));
-    // The live open takes no handle: it replaces the document.
+    assert_eq!(save["inputSchema"]["required"], json!([]));
+    // The live open optionally targets a window: it replaces that document.
     let open = tools
         .iter()
         .find(|tool| tool["name"] == "document_open")
@@ -706,16 +726,15 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             .unwrap()
             .contains("allows agents")
     );
-    assert_eq!(
-        export["inputSchema"]["required"],
-        json!(["document", "path", "format"])
-    );
+    assert_eq!(export["inputSchema"]["required"], json!(["path", "format"]));
 }
 
 #[test]
 fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
     let mut session = ready_live();
     for (name, arguments) in [
+        ("ui_state", json!({"document": ""})),
+        ("ui_state", json!({"document": 2})),
         ("ui_log", json!({"since": -1})),
         ("ui_log", json!({"limit": "10"})),
         ("ui_screenshot", json!({"max_size": 10})),
@@ -725,6 +744,9 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
         ("ui_screenshot", json!({"width": 8, "height": 600})),
         ("ui_screenshot", json!({"aspect": 20})),
         ("ui_screenshot", json!({"path": ""})),
+        ("ui_screenshot", json!({"max_bytes": 100})),
+        ("ui_screenshot", json!({"max_bytes": 6 * 1024 * 1024})),
+        ("ui_screenshot", json!({"max_bytes": "small"})),
         ("ui_camera", json!({"aspect": 0})),
         ("ui_select", json!({"document": "live-1"})),
         (
@@ -739,7 +761,6 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
             "ui_select",
             json!({"document": "live-1", "items": [], "reveal": "spin"}),
         ),
-        ("ui_command", json!({"id": "sketch.finish"})),
         (
             "ui_command",
             json!({"document": "live-1", "finish": "later"}),
@@ -750,10 +771,6 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
             json!({"document": "live-1", "path": "x.mitcad", "overwrite": "yes"}),
         ),
         ("document_open", json!({})),
-        (
-            "document_open",
-            json!({"path": "x.mitcad", "document": "live-1"}),
-        ),
         ("ui_camera", json!({"eye": [0, 0]})),
         ("ui_camera", json!({"eye": [0, 0, 1, 2]})),
         ("ui_camera", json!({"target": [0, "a", 1]})),
@@ -762,7 +779,6 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
         ("ui_camera", json!({"projection": "fisheye"})),
         ("ui_camera", json!({"box": {"min": [0, 0, 0]}})),
         ("ui_camera", json!({"frame": "all"})),
-        ("ui_camera", json!({"document": "live-1"})),
     ] {
         let response =
             live_response(session.prepare(call(name, arguments.clone())).unwrap()).unwrap();
@@ -770,6 +786,14 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
     }
     for (name, arguments) in [
         ("ui_state", json!({})),
+        ("ui_state", json!({"document": "live-2"})),
+        ("ui_camera", json!({"document": "live-2"})),
+        ("ui_command", json!({"id": "sketch.finish"})),
+        ("model_query", json!({"query": {"query": "bodies"}})),
+        (
+            "document_open",
+            json!({"path": "x.mitcad", "document": "live-2"}),
+        ),
         ("ui_log", json!({"since": 12, "limit": 50})),
         ("ui_screenshot", json!({"window": true, "max_size": 800})),
         (
@@ -778,6 +802,14 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
                    "height": 600, "overwrite": true}),
         ),
         ("ui_screenshot", json!({"aspect": 1.5, "max_size": 1024})),
+        (
+            "ui_screenshot",
+            json!({"max_bytes": 500000, "format": "jpeg"}),
+        ),
+        (
+            "ui_screenshot",
+            json!({"path": "shots/view.png", "max_bytes": 4096}),
+        ),
         ("ui_camera", json!({"frame": "shown", "aspect": 1.333})),
         (
             "ui_select",
@@ -880,7 +912,7 @@ fn live_failure_result_retains_applied_state_and_releases_pending_call() {
 fn live_notifications_and_invalid_tool_arguments_never_become_pending() {
     let mut session = ready_live();
     for arguments in [
-        json!({"command": {"cmd": "undo"}}),
+        json!({"document": "", "command": {"cmd": "undo"}}),
         json!({"document": "live-1", "command": []}),
         json!({"document": "live-1", "command": {}, "extra": true}),
     ] {
@@ -889,6 +921,15 @@ fn live_notifications_and_invalid_tool_arguments_never_become_pending() {
         assert_eq!(response["error"]["code"], -32602);
         assert!(session.finish(json!({}), false).is_err());
     }
+    // The live profile deliberately permits the active-document fallback.
+    assert!(matches!(
+        session
+            .prepare(call("model_command", json!({"command": {"cmd": "undo"}})))
+            .unwrap(),
+        PreparedMessage::Tool { name, arguments }
+            if name == "model_command" && arguments == json!({"command": {"cmd": "undo"}})
+    ));
+    session.finish(json!({}), false).unwrap();
     let mut notification = call(
         "model_command",
         json!({
@@ -1195,6 +1236,58 @@ fn live_screenshots_are_image_blocks_after_their_text() {
     assert_eq!(response["result"]["structuredContent"], written);
 }
 
+/// The application's screenshot of exactly `bytes` encoded bytes within
+/// that max_bytes, as `mcpScreenshot` answers it.
+fn budget_screenshot(bytes: u64) -> Value {
+    let base64 = "A".repeat(bytes.div_ceil(3) as usize * 4);
+    json!({"format": "png", "mime_type": "image/png", "of": "view", "width": 4096,
+           "height": 2048, "full_width": 4096, "full_height": 2048, "bytes": bytes,
+           "downscaled_for_bytes": true, "max_bytes": bytes, "image_base64": base64})
+}
+
+#[test]
+fn a_screenshot_budget_counts_the_encoded_image_and_a_refusal_keeps_the_session() {
+    // max_bytes counts the encoded image (mitcad#1188): the response is its
+    // base64 and under 2 KiB more, up to the 5 MiB default within the
+    // 8 MiB frame.
+    let mut session = ready_live();
+    for bytes in [
+        catalog::SCREENSHOT_MIN_BYTES,
+        500_000,
+        catalog::SCREENSHOT_INLINE_BYTES,
+    ] {
+        session
+            .prepare(call("ui_screenshot", json!({"max_bytes": bytes})))
+            .unwrap();
+        let response = session.finish(budget_screenshot(bytes), false).unwrap();
+        assert_eq!(response["result"]["isError"], false, "{bytes}");
+        let data = response["result"]["content"][1]["data"].as_str().unwrap();
+        assert_eq!(data.len() as u64, bytes.div_ceil(3) * 4);
+        let size = response.to_string().len();
+        assert!(size > data.len(), "{bytes}");
+        assert!(size - data.len() < 2048, "{bytes}: {size}");
+        assert!(size <= MAX_FRAME_BYTES);
+    }
+    // An image that cannot fit is a compact tool error; the next call runs.
+    session
+        .prepare(call("ui_screenshot", json!({"max_bytes": 4096})))
+        .unwrap();
+    let refused = json!({"error": "The image of the view takes 5000 bytes as PNG ...",
+                         "error_code": "screenshot_too_large", "max_bytes": 4096,
+                         "smallest_bytes": 5000, "smallest_width": 64, "smallest_height": 32,
+                         "format": "png"});
+    let response = session.finish(refused.clone(), true).unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(response["result"]["content"].as_array().unwrap().len(), 1);
+    assert_eq!(response["result"]["structuredContent"], refused);
+    assert!(matches!(
+        session.prepare(call("ui_state", json!({}))).unwrap(),
+        PreparedMessage::Tool { .. }
+    ));
+    let response = session.finish(json!({"mode": "model"}), false).unwrap();
+    assert_eq!(response["result"]["isError"], false);
+}
+
 /// A timeline of `n` features and `bodies` bodies, as the queries answer.
 fn snapshot(features: usize, bodies: usize) -> Value {
     let features: Vec<Value> = (1..=features)
@@ -1481,4 +1574,472 @@ fn long_client_strings_are_refused_and_never_echoed_whole() {
         "{message}"
     );
     assert!(message.len() < 512, "{}", message.len());
+}
+
+// Comments for agents (mitcad#1119): the live comments resource and its
+// subscription, ui_select and ui_camera with a comment, the author of
+// comment commands and the resolve policy.
+
+fn initialize_as(client: &str) -> Value {
+    request(
+        json!(1),
+        "initialize",
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": client, "version": "1"}
+        }),
+    )
+}
+
+fn ready_live_as(client: &str) -> LiveSession {
+    let mut session = LiveSession::new();
+    let response = live_response(session.prepare(initialize_as(client)).unwrap()).unwrap();
+    assert!(response.get("result").is_some());
+    assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
+    session
+}
+
+/// A `comments` query's answer as the model gives it.
+fn comments_answer(status: &str, resolution: Option<&str>) -> Value {
+    let open = usize::from(status == "open");
+    let revision = if status == "open" { 1 } else { 2 };
+    json!({
+        "comments": [{
+            "id": "C1",
+            "text": "make this hole an M6 thread",
+            "target": {"body": "F2.b0", "face": "F2:side(c1[c4,c2])"},
+            "status": status,
+            "orphaned": false,
+            "author": "user",
+            "resolution": resolution,
+            "replies": [],
+            "created": "2026-11-01T17:59:00Z",
+            "label": "Hole1 › side face",
+            "place": [10.0, 5.0, 2.5]
+        }],
+        "open": open,
+        "revision": revision
+    })
+}
+
+fn live_tool(prepared: PreparedMessage) -> (String, Value) {
+    match prepared {
+        PreparedMessage::Tool { name, arguments } => (name, arguments),
+        PreparedMessage::Response(response) => panic!("expected a tool call, got {response:?}"),
+    }
+}
+
+#[test]
+fn live_comments_resource_is_listed_and_read_from_the_application() {
+    let mut session = LiveSession::new();
+    let response = live_response(session.prepare(initialize()).unwrap()).unwrap();
+    assert_eq!(
+        response["result"]["capabilities"],
+        json!({"tools": {}, "resources": {"subscribe": true}})
+    );
+    // The instructions send the agent to the open comments first.
+    let instructions = response["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("mitcad://comments"));
+    assert!(instructions.contains("address_comment"));
+    assert!(instructions.contains("same model_command array"));
+    assert!(instructions.contains("ui_state's comments.open"));
+    assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
+    let list = live_response(
+        session
+            .prepare(request(json!(3), "resources/list", json!({})))
+            .unwrap(),
+    )
+    .unwrap();
+    let uris: Vec<_> = list["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|resource| resource["uri"].as_str().unwrap())
+        .collect();
+    assert_eq!(uris, [COMMANDS_URI, COMMENTS_URI]);
+    assert_eq!(
+        list["result"]["resources"][1]["mimeType"],
+        "application/json"
+    );
+    let read = request(json!(4), "resources/read", json!({"uri": COMMENTS_URI}));
+    // Not given yet: an error, no tool call.
+    let response = live_response(session.prepare(read.clone()).unwrap()).unwrap();
+    assert_eq!(response["error"]["code"], -32002);
+    // The application gives the comments query's answer.
+    assert!(
+        session
+            .set_comments(comments_answer("open", None))
+            .is_none()
+    );
+    let response = live_response(session.prepare(read).unwrap()).unwrap();
+    let contents = &response["result"]["contents"][0];
+    assert_eq!(contents["uri"], COMMENTS_URI);
+    assert_eq!(contents["mimeType"], "application/json");
+    let text: Value = serde_json::from_str(contents["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text, comments_answer("open", None));
+    assert_eq!(text["comments"][0]["label"], "Hole1 › side face");
+    assert!(session.finish(json!({}), false).is_err());
+    // The headless server has neither the resource nor subscriptions.
+    let mut headless = ready();
+    let response = headless
+        .handle(request(json!(5), "resources/list", json!({})))
+        .unwrap();
+    assert_eq!(response["result"]["resources"].as_array().unwrap().len(), 1);
+    let response = headless
+        .handle(request(
+            json!(6),
+            "resources/read",
+            json!({"uri": COMMENTS_URI}),
+        ))
+        .unwrap();
+    assert_eq!(response["error"]["code"], -32002);
+    let response = headless
+        .handle(request(
+            json!(7),
+            "resources/subscribe",
+            json!({"uri": COMMENTS_URI}),
+        ))
+        .unwrap();
+    assert_eq!(response["error"]["code"], -32601);
+}
+
+#[test]
+fn live_comments_subscription_is_notified_on_add_and_on_address() {
+    let mut session = ready_live();
+    // Before the subscription a change sends nothing.
+    assert!(
+        session
+            .set_comments(json!({"comments": [], "open": 0, "revision": 0}))
+            .is_none()
+    );
+    for (params, code) in [
+        (json!({}), -32602),
+        (json!({"uri": 3}), -32602),
+        (json!({"uri": "mitcad://elsewhere"}), -32002),
+    ] {
+        let response = live_response(
+            session
+                .prepare(request(json!(8), "resources/subscribe", params))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["error"]["code"], code);
+    }
+    let response = live_response(
+        session
+            .prepare(request(
+                json!(9),
+                "resources/subscribe",
+                json!({"uri": COMMENTS_URI}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response, json!({"jsonrpc": "2.0", "id": 9, "result": {}}));
+    let updated = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": COMMENTS_URI}
+    });
+    // The user adds a comment.
+    assert_eq!(
+        session.set_comments(comments_answer("open", None)),
+        Some(updated.clone())
+    );
+    // The same answer again (a refresh that changed nothing): no message.
+    assert!(
+        session
+            .set_comments(comments_answer("open", None))
+            .is_none()
+    );
+    // The agent addresses it.
+    assert_eq!(
+        session.set_comments(comments_answer("addressed", Some("M6 thread added"))),
+        Some(updated)
+    );
+    let response = live_response(
+        session
+            .prepare(request(
+                json!(10),
+                "resources/read",
+                json!({"uri": COMMENTS_URI}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    let text: Value =
+        serde_json::from_str(response["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text["comments"][0]["status"], "addressed");
+    assert_eq!(text["comments"][0]["resolution"], "M6 thread added");
+    assert_eq!(text["open"], 0);
+    // Unsubscribed: no more messages.
+    live_response(
+        session
+            .prepare(request(
+                json!(11),
+                "resources/unsubscribe",
+                json!({"uri": COMMENTS_URI}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        session
+            .set_comments(comments_answer("resolved", Some("M6 thread added")))
+            .is_none()
+    );
+    // A session that has not finished initializing is not notified.
+    let mut early = LiveSession::new();
+    live_response(early.prepare(initialize()).unwrap()).unwrap();
+    assert!(early.set_comments(comments_answer("open", None)).is_none());
+}
+
+#[test]
+fn live_ui_state_counts_the_open_comments() {
+    let mut session = ready_live();
+    let response = live_response(
+        session
+            .prepare(request(json!(3), "tools/list", json!({})))
+            .unwrap(),
+    )
+    .unwrap();
+    let tools = response["result"]["tools"].as_array().unwrap();
+    let state = tools
+        .iter()
+        .find(|tool| tool["name"] == "ui_state")
+        .unwrap();
+    assert!(
+        state["description"]
+            .as_str()
+            .unwrap()
+            .contains("number of open comments (comments.open")
+    );
+    // The application's count comes back as it gave it.
+    let (name, _) = live_tool(session.prepare(call("ui_state", json!({}))).unwrap());
+    assert_eq!(name, "ui_state");
+    let response = session
+        .finish(json!({"mode": "idle", "comments": {"open": 2}}), false)
+        .unwrap();
+    assert_eq!(
+        response["result"]["structuredContent"]["comments"]["open"],
+        2
+    );
+    assert_eq!(response["result"]["isError"], false);
+}
+
+#[test]
+fn live_ui_select_and_ui_camera_take_a_comment() {
+    let mut session = ready_live();
+    for (name, arguments) in [
+        ("ui_select", json!({"document": "live-1", "comment": "C3"})),
+        (
+            "ui_select",
+            json!({"document": "live-1", "comment": "C3", "reveal": "fit"}),
+        ),
+        ("ui_camera", json!({"comment": "C3"})),
+        (
+            "ui_camera",
+            json!({"comment": "C3", "aspect": 1.5, "frame": "none"}),
+        ),
+    ] {
+        let (tool, given) = live_tool(session.prepare(call(name, arguments.clone())).unwrap());
+        assert_eq!(tool, name);
+        assert_eq!(given, arguments);
+        session.finish(json!({}), false).unwrap();
+    }
+    for (name, arguments) in [
+        // items or comment, one of them.
+        ("ui_select", json!({"document": "live-1"})),
+        (
+            "ui_select",
+            json!({"document": "live-1", "comment": "C3", "items": []}),
+        ),
+        ("ui_select", json!({"document": "live-1", "comment": ""})),
+        ("ui_select", json!({"document": "live-1", "comment": 3})),
+        // The comment is what ui_camera frames.
+        (
+            "ui_camera",
+            json!({"comment": "C3", "box": {"min": [0, 0, 0], "max": [1, 1, 1]}}),
+        ),
+        ("ui_camera", json!({"comment": "C3", "frame": "selection"})),
+        ("ui_camera", json!({"comment": "x".repeat(257)})),
+    ] {
+        let response =
+            live_response(session.prepare(call(name, arguments.clone())).unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{name} {arguments}");
+        assert!(session.finish(json!({}), false).is_err());
+    }
+}
+
+#[test]
+fn comment_commands_are_written_by_the_mcp_client() {
+    let mut session = ready_live_as("claude-code");
+    let command = json!([
+        {"cmd": "add_comment", "text": "check this wall", "target": {"feature": "F7"}, "author": "user"},
+        {"cmd": "reply_comment", "id": "C1", "text": "done"},
+        {"cmd": "address_comment", "id": "C2", "resolution": "Hole1 is now M6", "author": "someone"},
+        {"cmd": "reopen_comment", "id": "C3", "text": "not yet"},
+        {"cmd": "reopen_comment", "id": "C4"},
+        {"cmd": "edit_comment", "id": "C5", "text": "new text"},
+        {"cmd": "add_feature", "def": {"type": "box"}}
+    ]);
+    let (_, arguments) = live_tool(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": command}),
+            ))
+            .unwrap(),
+    );
+    let entries = arguments["command"].as_array().unwrap();
+    for (i, entry) in entries.iter().take(4).enumerate() {
+        assert_eq!(entry["author"], "claude-code", "{i}");
+    }
+    // A reopen without its reply, an edit and other commands are left as
+    // they are.
+    assert!(entries[4].get("author").is_none());
+    assert!(entries[5].get("author").is_none());
+    assert!(entries[6].get("author").is_none());
+    assert_eq!(entries[0]["text"], "check this wall");
+    session.finish(json!({"applied": true}), false).unwrap();
+    // One command object too.
+    let (_, arguments) = live_tool(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command":
+                    {"cmd": "add_comment", "text": "mine", "target": {"parameter": "width"}}}),
+            ))
+            .unwrap(),
+    );
+    assert_eq!(arguments["command"]["author"], "claude-code");
+    session.finish(json!({"applied": true}), false).unwrap();
+    // A client never writes as the user; the name is one printable line.
+    for (client, author) in [
+        ("user", "agent"),
+        ("USER", "agent"),
+        ("  ", "agent"),
+        ("codex\n mcp\tclient", "codex mcp client"),
+    ] {
+        let mut session = ready_live_as(client);
+        let (_, arguments) = live_tool(
+            session
+                .prepare(call(
+                    "model_command",
+                    json!({"document": "live-1", "command":
+                        {"cmd": "add_comment", "text": "x", "target": {"feature": "F1"}, "author": "user"}}),
+                ))
+                .unwrap(),
+        );
+        assert_eq!(arguments["command"]["author"], author, "{client:?}");
+    }
+    let long = "n".repeat(500);
+    assert_eq!(comments::author_name(&long).chars().count(), 80);
+    // The headless server names its client the same way.
+    let mut headless = Session::new(MockBackend::default());
+    headless.handle(initialize_as("claude-code")).unwrap();
+    assert!(headless.handle(initialized()).is_none());
+    headless
+        .handle(call(
+            "model_command",
+            json!({"document": "D1", "command":
+                {"cmd": "address_comment", "id": "C1", "resolution": "done", "author": "user"}}),
+        ))
+        .unwrap();
+    assert_eq!(
+        headless.backend.calls[0].1["command"]["author"],
+        "claude-code"
+    );
+}
+
+#[test]
+fn resolve_comment_is_refused_unless_the_user_allows_agents_to_resolve() {
+    let mut session = ready_live_as("claude-code");
+    let resolve = json!({"cmd": "resolve_comment", "id": "C1"});
+    let response = live_response(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": resolve.clone()}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    // A tool error, not a call the application runs.
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(
+        response["result"]["structuredContent"]["error"],
+        RESOLVE_REFUSED
+    );
+    assert_eq!(response["result"]["structuredContent"]["applied"], false);
+    assert!(session.finish(json!({}), false).is_err());
+    // In an array, nothing of it runs and the entry is named.
+    let response = live_response(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": [
+                    {"cmd": "address_comment", "id": "C1", "resolution": "done"},
+                    resolve.clone()
+                ]}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    let refusal = &response["result"]["structuredContent"];
+    assert_eq!(refusal["entry"], 1);
+    assert_eq!(refusal["undone"], 0);
+    assert!(
+        refusal["error"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("commands[1]: {RESOLVE_REFUSED}"))
+    );
+    // Reopening stays allowed.
+    live_tool(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": {"cmd": "reopen_comment", "id": "C1"}}),
+            ))
+            .unwrap(),
+    );
+    session.finish(json!({"applied": true}), false).unwrap();
+    // With the preference on, the application runs it.
+    session.set_may_resolve_comments(true);
+    let (name, arguments) = live_tool(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": resolve.clone()}),
+            ))
+            .unwrap(),
+    );
+    assert_eq!(name, "model_command");
+    assert_eq!(arguments["command"], resolve);
+    session.finish(json!({"applied": true}), false).unwrap();
+    // Off again: refused again.
+    session.set_may_resolve_comments(false);
+    assert!(
+        live_response(
+            session
+                .prepare(call(
+                    "model_command",
+                    json!({"document": "live-1", "command": resolve.clone()}),
+                ))
+                .unwrap(),
+        )
+        .is_some()
+    );
+    // The headless server has no such preference: it always refuses.
+    let mut headless = ready();
+    let response = headless
+        .handle(call(
+            "model_command",
+            json!({"document": "D1", "command": resolve}),
+        ))
+        .unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert!(headless.backend.calls.is_empty());
 }

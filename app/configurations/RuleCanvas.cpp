@@ -946,6 +946,22 @@ QString RuleCanvas::pieceProblem(std::size_t index) const {
   return index < m_items.size() ? m_items[index]->toolTip() : QString();
 }
 
+QString RuleCanvas::pieceCaption(std::size_t index) const {
+  if (index >= m_pieces.size()) {
+    return {};
+  }
+  const Piece& piece = m_pieces[index];
+  // An empty place, or the place at a list's end ("+"): what goes there
+  // (mitcad#968), never the log's "when.0 socket".
+  if (piece.role == Piece::Role::Socket || piece.role == Piece::Role::Slot) {
+    return QStringLiteral("Empty place: %1").arg(emptyPlaceHint(m_rule, piece.path));
+  }
+  if (piece.role == Piece::Role::Add) {
+    return emptyPlaceHint(m_rule, piece.path);
+  }
+  return piece.text.isEmpty() ? piece.name() : piece.text;
+}
+
 QString RuleCanvas::validationText() const {
   QString text = isProblem(m_validation) ? noticeLevelName(m_validation) : QStringLiteral("none");
   QStringList places;

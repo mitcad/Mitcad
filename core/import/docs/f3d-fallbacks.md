@@ -541,3 +541,17 @@ tests cover matching and different existing solids, existing sheets, verified
 and fallback replay, worker copies and undo/redo; `core.exchange` checks the
 same case with the synthetic hidden steel cube and an existing aluminum cube.
 
+
+## Final bodies that differ from the stored ones (mitcad#1175)
+
+The replay matches a state within 1e-3 relative (`history::RELATIVE`),
+so a final body that close to the stored one came in without a word. The
+final comparison (`compare_final`) now adds one warning,
+`DesignReport::body_differences`, that names (the first five of) the
+final bodies that are not those stored in the file: a stored body the
+replay has none for, a body whose volume differs by more than 1e-6
+relative (`BODY_VOLUME_TOLERANCE`) or whose faces differ in number (the
+report's `bodies[].file_faces` and `mitcad_faces`), and a replayed body
+the file does not store. Like every warning it is among the import's
+notices, which the application shows after the import. Where a fallback
+brought the stored bodies, they agree and nothing is said.

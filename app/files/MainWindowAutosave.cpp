@@ -8,6 +8,7 @@
 // Recover Designs, the work that sessions which did not end normally
 // left; a document restored from it, and Save over its file.
 #include "../MainWindow.hpp"
+#include "../WindowManager.hpp"
 
 #include <cstddef>
 #include <utility>
@@ -20,6 +21,7 @@
 #include <QJsonObject>
 #include <QLockFile>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QTimer>
 #include <QtLogging>
@@ -96,6 +98,9 @@ void MainWindow::recoverAtStart() {
 }
 
 void MainWindow::recoverDocuments(bool atStart) {
+  const QPointer<MainWindow> owner(this);
+  const QPointer<WindowManager> manager(windowManager());
+  const bool managed = !manager.isNull();
   if (modelBusy() || m_import) {
     showError(tr("Recover Designs waits until the design is computed or imported."));
     return;
@@ -112,20 +117,54 @@ void MainWindow::recoverDocuments(bool atStart) {
   for (const RecoverableSession& session : sessions) {
     qInfo().noquote() << QStringLiteral("Recoverable %1").arg(session.describe());
   }
-  const std::optional<std::size_t> chosen = askRecovery(this, sessions);
-  if (!chosen) {
+  const std::vector<std::size_t> chosen = askRecovery(this, sessions);
+  if (!owner || (managed && !manager)) return;
+  if (chosen.empty()) {
     if (!sessions.empty()) {
       qInfo().noquote() << QStringLiteral("Recovery: later, %1 document(s) kept").arg(sessions.size());
     }
     return;
   }
-  restoreRecovered(sessions[*chosen]);
-  // The others' locks go with `sessions`: their files stay for later.
+  bool reused = false;
+  for (std::size_t index : chosen) {
+    if (!owner || (managed && !manager)) break;
+    if (index >= sessions.size() || sessions[index].damaged()) continue;
+    RecoverableSession& session = sessions[index];
+    QPointer<MainWindow> target;
+    if (manager && !session.path.isEmpty()) target = manager->findByPath(session.path);
+    if (!target && !reused && !owner->designOpen()) {
+      target = owner;
+      reused = true;
+    }
+    const bool created = !target && manager;
+    if (created) target = manager->createWindow(false, owner);
+    if (!owner || (managed && !manager)) break;
+    if (!target) {
+      if (managed) continue;
+      // A standalone host without a process window manager can restore
+      // one design; never replace a design just restored with another.
+      if (reused) break;
+      target = owner;
+      reused = true;
+    }
+    const bool restored = target->restoreRecovered(session);
+    if (!owner || (managed && !manager)) break;
+    if (!target) continue;
+    if (restored) {
+      if (manager) manager->present(target);
+    } else if (created && manager && !target->designOpen()) {
+      manager->closeWindow(target);
+    }
+  }
+  // Unselected or failed sessions keep their files; only the locks go.
 }
 
 bool MainWindow::restoreRecovered(RecoverableSession& session) {
+  const QPointer<MainWindow> owner(this);
   const QString name = session.document;
-  if (!maybeSave()) {
+  const bool saved = maybeSave();
+  if (!owner) return false;
+  if (!saved) {
     qInfo().noquote() << QStringLiteral("Recovery of %1 cancelled").arg(name);
     return false;
   }
@@ -154,11 +193,15 @@ bool MainWindow::restoreRecovered(RecoverableSession& session) {
     }
     return document;
   };
-  if (error.isEmpty() && !installDocument(name, path, read, error) && error.isEmpty()) {
-    // Cancelled: the window's document stays, the session for later.
-    qInfo().noquote() << QStringLiteral("Recovering %1 cancelled").arg(name);
-    showHint(tr("Recovering %1 canceled; it can be recovered later.").arg(name));
-    return false;
+  if (error.isEmpty()) {
+    const bool installed = installDocument(name, path, read, error);
+    if (!owner) return false;
+    if (!installed && error.isEmpty()) {
+      // Cancelled: the window's document stays, the session for later.
+      qInfo().noquote() << QStringLiteral("Recovering %1 cancelled").arg(name);
+      showHint(tr("Recovering %1 canceled; it can be recovered later.").arg(name));
+      return false;
+    }
   }
   if (!error.isEmpty()) {
     const QString message = tr("Could not recover %1:\n%2").arg(name, error);

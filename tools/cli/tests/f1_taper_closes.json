@@ -1,0 +1,20 @@
+[
+ {"comment": "A taper that closes the profile partway (mitcad#1186): a C of lines, a 23 x 44 block less a 20 x 40 bite from its left side, leaving strips 2 wide at the bottom and the top. Leaning in by 45 degrees over 3 mm, their walls meet 1 mm up; the error names them (Sketch1 F1, Extrude1 F2)."},
+ {"cmd": "sketch.create"},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 0], "end": [23, 0]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [23, 0], "end": [23, 44]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [23, 44], "end": [0, 44]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 44], "end": [0, 42]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 42], "end": [20, 42]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [20, 42], "end": [20, 2]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [20, 2], "end": [0, 2]},
+ {"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 2], "end": [0, 0]},
+ {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c22,c4],c4[c1,c7],c7[c4,c10],c10[c7,c13],c13[c10,c16],c16[c13,c19],c19[c16,c22],c22[c19,c1]}"}],
+   "extent": {"type": "distance", "distance": 3, "taper": -0.7853981633974483}, "operation": "new_body"}},
+ {"expect": {"feature": "Extrude1", "status": "error", "error_contains": "the taper failed: leaning by 45 degrees, the walls F2:side(c1[c22,c4]) and F2:side(c19[c16,c22])", "bodies": 0}},
+ {"expect": {"feature": "Extrude1", "status": "error", "error_contains": "2 mm apart in the profile, meet 1 mm from the sketch plane, before the extrusion's end 3 mm from it: the taper closes the profile there"}},
+ {"comment": "The same profile leaning in by 15 degrees (its walls move 0.8 mm) builds."},
+ {"cmd": "edit_feature", "uid": "F2", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c22,c4],c4[c1,c7],c7[c4,c10],c10[c7,c13],c13[c10,c16],c16[c13,c19],c19[c16,c22],c22[c19,c1]}"}],
+   "extent": {"type": "distance", "distance": 3, "taper": -0.2617993877991494}, "operation": "new_body"}},
+ {"expect": {"feature": "Extrude1", "status": "ok", "bodies": 1}}
+]

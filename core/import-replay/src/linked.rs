@@ -377,6 +377,71 @@ pub(crate) fn choices(
         .collect()
 }
 
+/// Where a curve follows the coincident copies of one edge in several
+/// bodies of the sketch's own component (a body and its copy in place,
+/// mitcad#1175), the copy in `body`, the body whose face the sketch lies
+/// on: each projects the same curve. The others stay as they are.
+pub(crate) fn prefer_own_body(choices: &mut [Choice], edges: &[EdgeSource], body: BodyUid) {
+    for choice in choices {
+        if choice.candidates.len() < 2 {
+            continue;
+        }
+        let first = &edges[choice.candidates[0]];
+        let copies = choice.candidates.iter().all(|&k| {
+            let e = &edges[k];
+            e.path.is_none() && same_curve(&e.curve, &first.curve)
+        });
+        if !copies {
+            continue;
+        }
+        let own: Vec<usize> = choice
+            .candidates
+            .iter()
+            .copied()
+            .filter(|&k| edges[k].body == body)
+            .collect();
+        if own.len() == 1 {
+            choice.candidates = own;
+        }
+    }
+}
+
+/// Whether two edges' curves are the same within the geometric tolerance.
+fn same_curve(a: &CurveGeometry, b: &CurveGeometry) -> bool {
+    let tol = refs::geometric_tolerance();
+    let near = |p: &[f64; 3], q: &[f64; 3]| geom::distance(*p, *q) <= tol;
+    match (a, b) {
+        (CurveGeometry::Line { start, end }, CurveGeometry::Line { start: s2, end: e2 }) => {
+            near(start, s2) && near(end, e2)
+        }
+        (
+            CurveGeometry::Circle {
+                center,
+                radius,
+                start,
+                end,
+                ..
+            },
+            CurveGeometry::Circle {
+                center: c2,
+                radius: r2,
+                start: s2,
+                end: e2,
+                ..
+            },
+        ) => near(center, c2) && (radius - r2).abs() <= tol && near(start, s2) && near(end, e2),
+        (
+            CurveGeometry::Other { kind, start, end },
+            CurveGeometry::Other {
+                kind: k2,
+                start: s2,
+                end: e2,
+            },
+        ) => kind == k2 && near(start, s2) && near(end, e2),
+        _ => false,
+    }
+}
+
 /// For the snap: each linked curve with the edge it is to be put on first,
 /// the first of the projection rule's candidates.
 pub(crate) fn preferred(choices: &[Choice]) -> Vec<(usize, usize)> {

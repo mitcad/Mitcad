@@ -64,6 +64,11 @@ ParameterPicker::ParameterPicker(OcctViewer& viewer, const QString& command)
     update();
     logPlaces();
   });
+  // Drawn again once the camera rests (mitcad#1179): the repaints above are
+  // asked for while the view draws its frame, and a platform that drops
+  // such a request would leave the labels where the camera had them
+  // before; this one comes from the event loop after the frames.
+  connect(&viewer, &OcctViewer::cameraRested, this, [this] { update(); });
 }
 
 ParameterPicker::~ParameterPicker() = default;
@@ -83,6 +88,7 @@ void ParameterPicker::setContent(std::vector<Sketch> sketches, QHash<QString, QS
   // (mitcad#768).
   setVisible(!shown.isEmpty());
   m_logged.clear();
+  m_loggedDrawn.clear();
   update();
   logPlaces();
 }
@@ -239,6 +245,25 @@ void ParameterPicker::paintEvent(QPaintEvent*) {
     painter.drawRoundedRect(label.rect, 3.0, 3.0);
     painter.setPen(label.driven ? kDrivenTextColor : kTextColor);
     painter.drawText(label.rect, Qt::AlignCenter, label.text);
+  }
+  logDrawn(labels);
+}
+
+void ParameterPicker::logDrawn(const std::vector<Label>& labels) {
+  QStringList lines;
+  for (const Label& label : labels) {
+    const QPoint at = mapTo(window(), label.rect.center().toPoint());
+    lines << QStringLiteral("Parameter label %1 %2 drawn at %3,%4")
+                 .arg(label.source, label.name)
+                 .arg(at.x())
+                 .arg(at.y());
+  }
+  const QString logged = lines.join(QLatin1Char('\n'));
+  if (logged != m_loggedDrawn) {
+    m_loggedDrawn = logged;
+    for (const QString& line : lines) {
+      qDebug().noquote() << line;
+    }
   }
 }
 

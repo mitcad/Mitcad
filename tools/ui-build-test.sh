@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/build app/commands/BuildCommands.cpp app/framework app/library app/OcctViewer.cpp
+# check-all sources: app/build app/commands/BuildCommands.cpp app/commands/MoveCommands.cpp app/framework app/library app/OcctViewer.cpp app/printing
 # check-all sources: core/model/src/build core/model-build core/model-api/src core/vcs/src/library tools/cli
 # The BUILD tab (mitcad#375) through the real UI, with a small library of
 # synthetic BUILD parts made here (mitcad-cli: a 20 x 20 profile of I-type
@@ -49,7 +49,8 @@
 #      Ends: an end of the third profile mitred and bored (end machining).
 #   7. Save, reopen: the parts are there (their sources in the design);
 #      Cut List: its rows (one with a 45 degree end), Copy as CSV, Save as
-#      PDF.
+#      PDF, Print (to a PDF file in place of the system's dialog,
+#      mitcad#1089).
 #   8. The part picker (mitcad#418), with a 30 profile of another system
 #      in the library's next version: opened from Profile's Part tile
 #      (mitcad#427), the groups as a tree (mitcad#527: Slot profile with its
@@ -70,6 +71,19 @@
 #      profile without Place, on its side the next one; a plain click only
 #      previews; a Shift + click whose placement fails makes nothing and
 #      shows the reason.
+#  11. The first profile anywhere on a plane (mitcad#1196), on a design
+#      with a block away from the origin: XY chosen by its icon (the
+#      preview at its origin, the view's hint asks where; Esc takes the
+#      plane out, the panel stays), the mouse far from the icon moves the
+#      preview along, the click there places it there (its end A at the
+#      click, away from the origin); a face of the block still in one
+#      click; Move/Copy with the first profile clicked before moves its
+#      occurrence (Move Object Components), and a click on the second one
+#      in Move/Copy takes its occurrence too; no move refuses a body of
+#      another component. In a new design (Component1 the host) the first
+#      profile on the root's XY (Enter: grounded at its origin), clicked,
+#      Move 100 mm: it moves, the panel says it stays grounded, and the
+#      saved design has it grounded.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-build-test.sh
@@ -85,6 +99,10 @@ export MITCAD_LIBRARIES_DIR=$WORK/cache
 LIB=$WORK/test-profiles
 FILE=$WORK/frame.mitcad
 PDF=$WORK/cut-list.pdf
+# File › Print (mitcad#1089): the Cut List's Print… prints to this PDF in
+# place of the system's dialog.
+PRINTED=$WORK/printed-list.pdf
+export MITCAD_TEST_PRINT_PDF=$PRINTED
 g() { git -C "$1" -c user.name=T -c user.email=t@example.invalid "${@:2}" > /dev/null; }
 
 RECT='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
@@ -220,6 +238,16 @@ placed_occurrence() { sed -n 's/^Placed .* as .* (\([O0-9/]*\)), length.*/\1/p' 
 placed_name() { sed -n 's/^Placed .* as \(.*\) ([O0-9/]*), length.*/\1/p' "$UI_LOG" | tail -1; }
 # The body the placement logged last ("New body <name> (<uid>): volume ...").
 placed_body() { sed -n 's/^New body .* (\(F[0-9]*\.b[0-9]*\)): volume.*/\1/p' "$UI_LOG" | tail -1; }
+# body_row OCCURRENCE BODY: the browser row of a placed part's body
+# ("Browser Root/.../<name>:1/Bodies/Body2"), from the log's names.
+body_row() {
+  local name label
+  name=$(grep -F "($1), length" "$UI_LOG" | sed -n 's/^Placed .* as \(.*\) ([O0-9/]*), length.*/\1/p' | tail -1)
+  label=$(sed -n "s/^New body \([^ ]*\) ($2): volume.*/\1/p" "$UI_LOG" | tail -1)
+  [ -n "$name" ] && [ -n "$label" ] || ui_fail "no names of $1 and $2"
+  grep -F "/$name:" "$UI_LOG" | grep -F "/Bodies/$label at " |
+    sed -n 's/^\(Browser Root\/.*\) at -\{0,1\}[0-9]*,-\{0,1\}[0-9]*$/\1/p' | tail -1
+}
 # faces_of BODY TEXT: the faces of a body a click can pick now (after the
 # last "Pick places:"), whose names contain the text, one per line: a
 # derived part's sides are "<F>:part(F2:side(c1[c4,c2]))", its ends
@@ -478,7 +506,7 @@ ui_show_origin
 ui_mark
 ui_step "on the root's XY plane"           ui_click_logged "Datum xy"
 ui_expect_new "Inspect Profile: place grounded, length 1000.00 mm (typed), square ends; adds to Component1" \
-  "on the XY plane, the root's plane picked from Component1: grounded at the click"
+  "on the XY plane, the root's plane picked from Component1: grounded at its origin until a click says where (mitcad#1196)"
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed Profile 20 test as " "placed by a pick on the XY plane" 30
 no_policy_message
@@ -942,6 +970,11 @@ ui_expect_new "Build list PDF written: $PDF (" "the PDF written"
 ui_expect_new "Cut List of frame" "with the design's name"
 [ "$(head -c 5 "$PDF")" = "%PDF-" ] || ui_fail "$PDF is no PDF"
 echo "ok   $PDF is a PDF"
+ui_step "Print (Alt+I)"                    ui_key alt+i
+ui_expect_new "Print dialog skipped (test): printing to $PRINTED" "the print path, the test's PDF in place of the dialog"
+ui_expect_new "Printed Cut List: 1 page(s) to $PRINTED" "the cut list printed as its PDF lays it out"
+[ "$(head -c 5 "$PRINTED")" = "%PDF-" ] || ui_fail "$PRINTED is no PDF"
+echo "ok   the printed cut list is a PDF"
 ui_step "close (Escape)"                   ui_key Escape
 ui_focus_main
 ui_stop_app
@@ -1232,11 +1265,11 @@ ui_step "Profile in the same design"       ui_command "Profile"
 ui_expect_new "BUILD profile starts with test-profiles/$SECOND: " "the part placed last in this design"
 ui_expect_new "Panel Profile tile part: $(part_name "$SECOND")" "its tile"
 ui_step "Close (Escape)"                   ui_key Escape
+# New opens the new design in a document window of its own (mitcad#1172),
+# without a question about the changed one, which stays open beside it.
 ui_mark
 ui_step "new design (Ctrl+N)"              ui_key ctrl+n
-ui_focus_dialog '^MitCad$'
-ui_step "don't save (D)"                   ui_key d
-ui_focus_main
+ui_expect_new "Document window created: " "the new design in a window of its own"
 ui_expect_new "New document" "a new design"
 ui_mark
 ui_step "Profile in the new design"        ui_command "Profile"
@@ -1288,6 +1321,174 @@ no_placement "a failed Shift+click makes nothing"
 ui_mark
 ui_step "Close (Escape)"                   ui_key Escape
 ui_expect_new "Closed Profile after 2" "Close keeps the two"
+ui_stop_app
 
+echo "--- 11. The first profile anywhere on a plane, and Move on a placed one (mitcad#1196)"
+# A design with only its root and a block (F1.b0) on the XY plane away
+# from the origin.
+design "$WORK/plane.mitcad" << 'EOF'
+[{"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+  "corner": [250, 250], "length": 100, "width": 100, "height": 40, "operation": "new_body"}}]
+EOF
+ui_start_app --open "$WORK/plane.mitcad" --no-native-dialogs
+ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+# The origin shown first, so that the fit takes in it and the block.
+ui_show_origin
+ui_step "fit the view (F6)"                ui_key F6
+ui_mark
+ui_step "Profile (command search)"         ui_command "Profile"
+ui_expect_new "BUILD profile adds to Root (a ground placement)" "the root, the active component"
+ui_step "a typed length of 200"            ui_type_in "Panel Profile input length" "200"
+ui_show_origin
+# XY's icon chooses the plane; the preview waits at its origin.
+ui_mark
+ui_step "XY by its icon"                   ui_click_logged "Datum xy"
+ui_expect_new "BUILD plane chosen: plane xy; the next click places on it, Enter at its origin" \
+  "the click on XY's icon chooses the plane"
+ui_expect_new "View hint Profile: Click where on the plane it goes, or press Enter for the plane's origin" \
+  "the view's hint asks where on the plane"
+expect_inspect "; end A at 0.0, 0.0, 0.0;" "the preview at the plane's origin before the mouse moves"
+# Esc takes the plane out again, the panel stays.
+ui_mark
+ui_step "Esc"                              ui_key Escape
+ui_expect_new "BUILD plane choice taken out (Esc): plane xy" "Esc takes the plane out"
+ui_sync
+! tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Closed Profile" || ui_fail "Esc closed the panel"
+echo "ok   the panel stays"
+ui_mark
+ui_step "XY by its icon again"             ui_click_logged "Datum xy"
+ui_expect_new "BUILD plane chosen: plane xy" "XY chosen again"
+# A point of the view far from the icon (the lower left, else the lower
+# right): the preview follows the mouse there on XY, wherever the mouse
+# is, and the click places the profile there.
+read -r IX IY <<< "$(ui_logged_at "Datum xy")"
+read -r FX FY <<< "$(ui_view_at 20 80)"
+if [ $(((FX - IX) * (FX - IX) + (FY - IY) * (FY - IY))) -lt 22500 ]; then
+  read -r FX FY <<< "$(ui_view_at 80 80)"
+fi
+ui_mark
+ui_step "the mouse far from the icon"      xdotool mousemove "$FX" "$FY"
+ui_expect_new "BUILD on plane xy: the preview follows the mouse" "the preview follows the mouse on XY"
+ui_mark
+ui_step "a click there"                    xdotool click 1
+ui_expect_new "BUILD plane click: plane xy at " "the click says where on XY"
+AT11=$(grep "^BUILD plane click: plane xy at " "$UI_LOG" | tail -1 | sed 's/.* at //')
+expect_inspect "Inspect Profile: place geometry" "; end A at $AT11;" "the preview starts at the click ($AT11)"
+awk -v p="$AT11" 'BEGIN { split(p, c, ", "); exit !(sqrt(c[1] * c[1] + c[2] * c[2]) > 50 && c[3] + 0 == 0) }' ||
+  ui_fail "the click's point $AT11 is not on XY away from its origin"
+echo "ok   on XY, away from its origin"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the first profile placed at the click" 30
+P11=$(placed_occurrence)
+B11=$(placed_body)
+[ -n "$P11" ] && [ -n "$B11" ] || ui_fail "no occurrence or body of the profile placed on XY"
+# A face still takes one click: the block's, on a plane placement.
+ui_step "Placement: on a plane"            ui_click_logged "Panel Profile input place=plane"
+refresh_picks "Profile"
+FACE11=$(faces_of "F1.b0" ":" | head -1)
+[ -n "$FACE11" ] || ui_fail "no face of the block to pick"
+ui_mark
+ui_step "a face of the block"              pick_face "F1.b0" "$FACE11"
+expect_inspect "Inspect Profile: place geometry" "a face places in one click"
+! tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^BUILD plane chosen" || ui_fail "a face click chose a plane"
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the second profile placed on the face" 30
+P11B=$(placed_occurrence)
+B11B=$(placed_body)
+[ -n "$P11B" ] && [ -n "$B11B" ] || ui_fail "no occurrence or body of the profile placed on the face"
+ui_mark
+ui_step "Close (Escape)"                   ui_key Escape
+ui_expect_new "Closed Profile after 2" "Close keeps the two"
+# Move on a profile clicked before: its occurrence moves, not its body.
+# Its body's row in the browser is clicked: the middle of its box in the
+# view can be on an edge, which Move/Copy would take as its axis.
+ROW11=$(body_row "$P11" "$B11")
+[ -n "$ROW11" ] || ui_fail "no browser row of the first profile's body"
+ui_mark
+ui_step "click the first profile"          ui_click_logged "$ROW11"
+ui_expect_new "Selected: 1 body" "the profile clicked"
+ui_mark
+ui_step "Move/Copy (command search)"       ui_command "Move/Copy"
+ui_expect_new "Command Move/Copy started" "Move/Copy started"
+ui_expect_new "Move/Copy: the selection is of another component than the active one: moving $P11 (Move Object: Components)" \
+  "the profile's occurrence, not its body"
+ui_expect_new "Panel Move/Copy choices: move_type=components" "Move Object: Components"
+ui_expect_new "Panel Move/Copy input tx at" "the panel is laid out"
+ui_step "30 mm along X"                    ui_type_in "Panel Move/Copy input tx" "30"
+ui_expect_new "Preview Move/Copy: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Moved 1 components (" "the profile's occurrence moved"
+ui_step "Escape (clear the selection)"     ui_key Escape
+# Move with nothing selected, the second profile clicked in it.
+ui_mark
+ui_step "Move/Copy, nothing selected"      ui_command "Move/Copy"
+ui_expect_new "Command Move/Copy started" "Move/Copy started"
+ui_expect_new "Panel Move/Copy input tx at" "the panel is laid out"
+ui_mark
+ui_step "click the second profile"         ui_click_logged "Body $B11B in $P11B"
+ui_expect_new "is of another component than the active one: moving $P11B (Move Object: Components)" \
+  "a click on the profile takes its occurrence"
+ui_step "-30 mm along X"                 ui_type_in "Panel Move/Copy input tx" "-30"
+ui_expect_new "Preview Move/Copy: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Moved 1 components (" "the second profile's occurrence moved"
+! grep -q "a feature works on the bodies of its own component" "$UI_LOG" ||
+  ui_fail "a move refused a body of another component"
+echo "ok   no move refused a body of another component"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+# A new design, Component1 the host: the first profile on the root's XY
+# (Enter, at its origin) is grounded; Move moves it 100 mm, and it stays
+# grounded there (the panel says so instead of refusing).
+ui_start_app --no-native-dialogs
+ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_mark
+ui_step "Profile (command search)"         ui_command "Profile"
+ui_expect_new "BUILD profile adds to Component1 (a ground placement)" "a new design: adds to Component1"
+ui_step "a typed length of 200"            ui_type_in "Panel Profile input length" "200"
+ui_show_origin
+ui_mark
+ui_step "the root's XY by its icon"        ui_click_logged "Datum xy"
+ui_expect_new "BUILD plane chosen: plane xy" "the root's XY chosen"
+ui_step "Place at its origin (Enter)"      ui_key Return
+ui_expect_new "BUILD on plane xy: placed at its origin" "Enter places it at the plane's origin"
+ui_expect_new "Placed " "the first profile placed, grounded" 30
+P12=$(placed_occurrence)
+B12=$(placed_body)
+[ -n "$P12" ] && [ -n "$B12" ] || ui_fail "no occurrence or body of the grounded profile"
+ui_step "Close (Escape)"                   ui_key Escape
+ui_step "fit the view (F6)"                ui_key F6
+ROW12=$(body_row "$P12" "$B12")
+[ -n "$ROW12" ] || ui_fail "no browser row of the grounded profile's body"
+ui_mark
+ui_step "click the grounded profile"       ui_click_logged "$ROW12"
+ui_expect_new "Selected: 1 body" "the profile clicked"
+ui_mark
+ui_step "Move/Copy (command search)"       ui_command "Move/Copy"
+# Its path in the design (O1/O2: in Component1), which Placed logs by its
+# last uid.
+ui_expect_new "Move/Copy: the selection is of another component than the active one: moving " \
+  "the grounded profile's occurrence"
+MOVED12=$(sed -n 's/^Move\/Copy: the selection is of another component than the active one: moving \([^ ]*\) (Move Object: Components)$/\1/p' "$UI_LOG" | tail -1)
+[ -n "$MOVED12" ] && [ "${MOVED12##*/}" = "$P12" ] || ui_fail "Move/Copy moves '$MOVED12', not the grounded profile's $P12"
+echo "ok   it moves $MOVED12 (Move Object: Components)"
+ui_expect_new "Panel Move/Copy input tx at" "the panel is laid out"
+ui_step "100 mm along X"                   ui_type_in "Panel Move/Copy input tx" "100"
+ui_expect_new "Preview Move/Copy: ok" "previewed, not refused"
+ui_expect_new "Panel Move/Copy note: Grounded: it stays grounded at the new place." "the panel says it stays grounded"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Moved 1 components (" "the grounded profile moved"
+! tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q " is grounded" || ui_fail "the move was refused as grounded"
+ui_mark
+ui_step "save as (Ctrl+Shift+S)"           ui_key ctrl+shift+s
+ui_type_path "Save As" "$WORK/grounded.mitcad"
+ui_focus_main
+ui_expect_new "Saved $WORK/grounded.mitcad" "saved"
+GROUNDED=$(python3 -c 'import json, sys; doc = json.load(open(sys.argv[1]))
+print([o.get("grounded", False) for o in doc["occurrences"] if o["uid"] == sys.argv[2]])' \
+  "$WORK/grounded.mitcad" "${P12##*/}") || ui_fail "cannot read the saved design"
+[ "$GROUNDED" = "[True]" ] || ui_fail "the moved profile ${P12##*/} is not grounded: $GROUNDED"
+echo "ok   the moved profile is still grounded"
 ui_stop_app
 ui_finish "the BUILD tab"

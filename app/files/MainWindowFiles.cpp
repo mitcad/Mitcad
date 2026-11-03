@@ -6,10 +6,12 @@
 // Save, Save As, Save with Description (P12d), Version History (P12e),
 // Design Properties (mitcad#1088, browser/DesignPropertiesDialog.cpp), the
 // Project submenu (mitcad#89, MainWindowProjects.cpp), Import, Export,
-// Recover Designs (P8c, MainWindowAutosave.cpp); the INSERT group's Insert
+// Print (mitcad#1089, printing/MainWindowPaperPrint.cpp), Recover Designs
+// (P8c, MainWindowAutosave.cpp); the INSERT group's Insert
 // Mesh and Insert DXF, and Insert Component in the ASSEMBLE group; files
 // dropped on the window.
 #include "../MainWindow.hpp"
+#include "../WindowManager.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -37,6 +39,7 @@
 
 #include "../browser/BrowserController.hpp"
 #include "../browser/DocumentSnapshot.hpp"
+#include "../framework/AppSettings.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/IdleCall.hpp"
@@ -159,7 +162,7 @@ void MainWindow::registerFileCommands() {
   runs.close = [this] { closeDocument(); };
   runs.save = [this] { save(); };
   runs.saveAs = [this] { saveAs(); };
-  runs.exit = [this] { close(); };
+  runs.exit = [this] { if (m_windowManager != nullptr) m_windowManager->quit(); else close(); };
   // A change since it was saved (the title's mark, which updateWindowTitle
   // keeps; it refreshes Save's state too), an untitled design, or a
   // read-only window, whose Save offers a copy or a new version.
@@ -181,6 +184,15 @@ void MainWindow::registerFileCommands() {
     d.run = std::move(run);
     return d;
   };
+  // Register before createActions(), so the menu and command search share
+  // the same live shortcut action in every document window (mitcad#1172).
+  CommandDef newWindow = def("window.new", tr("New Window"), "new-design", tr("Opens another document window"),
+                             [this] { if (m_windowManager != nullptr) m_windowManager->newWindow(this); });
+  newWindow.shortcut = QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N);
+  newWindow.mode = CommandDef::Mode::Any;
+  newWindow.duringCommands = true;
+  newWindow.tab.clear();
+  m_registry->add(newWindow);
   CommandDef mesh = def("insert.mesh", tr("Insert Mesh"), "insert-mesh",
                         tr("Brings an STL or OBJ mesh in as a mesh body"), [this] { insertMesh(); });
   mesh.pinned = true;
@@ -217,6 +229,12 @@ void MainWindow::registerFileCommands() {
   component.pinned = true;
   component.keywords = {QStringLiteral("assembly"), QStringLiteral("external"), QStringLiteral("mitcad")};
   m_registry->add(component);
+  CommandDef openDesign = def("insert.open_design", tr("From an Open Design…"), "insert-component",
+                              tr("Inserts another open design from its saved file, linked or as a copy"),
+                              [this] { insertOpenDesign(); });
+  openDesign.keywords = {QStringLiteral("window"), QStringLiteral("tab"), QStringLiteral("assembly"),
+                        QStringLiteral("component")};
+  m_registry->add(openDesign);
   CommandDef importDef = def("file.import", tr("Import…"), "import",
                              tr("Brings in STEP, IGES, STL, DXF and other CAD files, or opens them as designs"),
                              [this] { importFile(); });
@@ -247,6 +265,9 @@ void MainWindow::registerFileCommands() {
                          QStringLiteral("dxf"), QStringLiteral("dwg"), QStringLiteral("print"),
                          QStringLiteral("blueprint")};
   m_registry->add(drawingDef);
+  // Print… (mitcad#1089, printing/MainWindowPaperPrint.cpp): the drawing,
+  // the BUILD lists or the open sketch on paper.
+  m_registry->add(paperPrintCommand());
   // A drawing kept in the design (mitcad#707, drawings/MainWindowDrawings.cpp):
   // in the root's Drawings folder, opened at once.
   CommandDef createDrawingDef = def("file.create_drawing", tr("Create Drawing…"), "drawing",
@@ -260,8 +281,10 @@ void MainWindow::registerFileCommands() {
   // Send to Slicer (mitcad#13, mitcad#234, MainWindowPrint.cpp; once 3D
   // Print): a panel in the Make tab's 3D Print group (mitcad#1049).
   m_registry->add(print3dCommand());
-  // Printers and Processes (mitcad#655): next to Send to Slicer.
+  // The Printers and the Processes managers (mitcad#655, mitcad#1135):
+  // next to Send to Slicer.
   m_registry->add(printersCommand());
+  m_registry->add(processesCommand());
   CommandDef recover = def("file.recover", tr("Recover Designs…"), "recover",
                            tr("Restores changes that were not saved when MitCad last ended without closing"),
                            [this] { recoverDocuments(false); });
@@ -295,7 +318,7 @@ void MainWindow::registerFileCommands() {
 
 void MainWindow::createFileMenu() {
   // mitcad#175: the document commands, saving and versions, the Project
-  // submenu, import and export, recovery, Exit. Send to Slicer and Insert
+  // submenu, import and export, Print (mitcad#1089), recovery, Exit. Send to Slicer and Insert
   // Component are on the ribbon (the Make tab, ASSEMBLE), Render Image too
   // (RENDER) and in View > Visual Style.
   QMenu* file = menuBar()->addMenu(tr("&File"));
@@ -356,6 +379,8 @@ void MainWindow::createFileMenu() {
   command(file, "file.export", tr("&Export…"));
   command(file, "file.create_drawing", tr("Create Dra&wing…"));
   command(file, "file.export_drawing", tr("Export &Drawing…"));
+  file->addSeparator();
+  command(file, "file.print", tr("Prin&t…"));
   file->addSeparator();
   command(file, "file.recover", tr("Recover Desi&gns…"));
 #ifndef Q_OS_MACOS
@@ -457,12 +482,15 @@ void MainWindow::openPath(const QString& path) {
   if (deferForNativeCommand([this, path] { openPath(path); })) {
     return;
   }
-  if (!maybeSave()) {
+  // Replacing this design asks about its changes first (as in openDocument).
+  const bool replacing = m_windowManager == nullptr || GeneralSettings::load().openInCurrentWindow;
+  if (replacing && !maybeSave()) {
     return;
   }
   QString error;
   m_askImportChoices = true;
-  const bool opened = openFile(path, error);
+  const bool opened = m_windowManager != nullptr ? m_windowManager->openFile(this, path, error, replacing) != nullptr
+                                                 : openFile(path, error);
   m_askImportChoices = false;
   if (!opened && !error.isEmpty()) { // empty: cancelled
     const QString message = tr("Could not open %1:\n%2").arg(QDir::toNativeSeparators(path), error);
@@ -478,10 +506,13 @@ void MainWindow::openExternalFile(const QString& path) {
   if (usesNativeUi()) {
     present();
   } else {
-    if (isMinimized()) {
-      showNormal();
+    // The top-level window: a document frame's while this main window is
+    // one of its pages (mitcad#1172).
+    QWidget* top = window();
+    if (top->isMinimized()) {
+      top->showNormal();
     }
-    raise();
+    top->raise();
     activateWindow();
   }
   if (fileKind(path) == FileKind::None) {
@@ -562,6 +593,10 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
 }
 
 void MainWindow::closeDocument() {
+  if (m_windowManager != nullptr && m_windowManager->windows().size() > 1) {
+    m_windowManager->closeWindow(this);
+    return;
+  }
   if (deferForNativeCommand([this] { closeDocument(); })) {
     return;
   }
@@ -651,15 +686,20 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
     ok = importCad(path, 1.0, &reason);
     break;
   case FileKind::Mesh: {
-    double unit = 1.0;
+    MeshInsertChoice choice;
     if (interactive) {
-      const std::optional<double> chosen = askMeshUnit(this, path);
+      const std::optional<MeshInsertChoice> chosen = askMeshInsert(this, path);
       if (!chosen) {
         return false;
       }
-      unit = *chosen;
+      choice = *chosen;
     }
-    ok = importCad(path, unit, &reason);
+    const int depth = undoDepth();
+    QJsonObject imported;
+    ok = importCad(path, choice.unitMillimetres, &reason, &imported);
+    if (ok && choice.convert) {
+      convertInsertedMeshes(path, imported, choice, depth);
+    }
     break;
   }
   case FileKind::Drawing:
@@ -682,7 +722,7 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   return ok;
 }
 
-bool MainWindow::importCad(const QString& path, double unitMillimetres, QString* error) {
+bool MainWindow::importCad(const QString& path, double unitMillimetres, QString* error, QJsonObject* imported) {
   if (!canChangeModel()) {
     *error = changeBlockedReason();
     return false;
@@ -696,6 +736,9 @@ bool MainWindow::importCad(const QString& path, double unitMillimetres, QString*
     *error = m_lastError;
     return false;
   }
+  if (imported != nullptr) {
+    *imported = result;
+  }
   const QJsonArray bodies = result.value(QStringLiteral("bodies")).toArray();
   qInfo().noquote() << QStringLiteral("Imported %1 as %2: %3 body(ies)")
                            .arg(QFileInfo(path).fileName(), result.value(QStringLiteral("name")).toString())
@@ -703,6 +746,48 @@ bool MainWindow::importCad(const QString& path, double unitMillimetres, QString*
   showImported(*this, QFileInfo(path).fileName(), result);
   m_viewer->fitAll();
   return true;
+}
+
+void MainWindow::convertInsertedMeshes(const QString& path, const QJsonObject& imported,
+                                       const MeshInsertChoice& choice, int depth) {
+  const QString file = QFileInfo(path).fileName();
+  int converted = 0;
+  QStringList refused;
+  for (const QJsonValue& value : imported.value(QStringLiteral("bodies")).toArray()) {
+    const QJsonObject body = value.toObject();
+    if (body.value(QStringLiteral("kind")).toString() != QStringLiteral("mesh")) {
+      continue;
+    }
+    const QString uid = body.value(QStringLiteral("uid")).toString();
+    const QString name = body.value(QStringLiteral("name")).toString();
+    const QJsonObject def{{QStringLiteral("type"), QStringLiteral("mesh_convert")},
+                          {QStringLiteral("body"), uid},
+                          {QStringLiteral("tolerance"), QStringLiteral("%1 mm").arg(choice.tolerance)},
+                          {QStringLiteral("mode"), QStringLiteral("faceted")},
+                          {QStringLiteral("angle"), QStringLiteral("%1 deg").arg(choice.angleDegrees)}};
+    QJsonObject command = cmd("add_feature");
+    command.insert(QStringLiteral("def"), def);
+    QJsonObject result;
+    if (runModelCommand(command, &result)) {
+      ++converted;
+      qInfo().noquote() << QStringLiteral("Insert Mesh converted %1 (%2) to a solid by %3")
+                               .arg(name, uid, result.value(QStringLiteral("name")).toString());
+    } else {
+      refused << QStringLiteral("%1: %2").arg(name, m_lastError);
+      qWarning().noquote() << QStringLiteral("Insert Mesh did not convert %1 (%2): %3").arg(name, uid, m_lastError);
+    }
+  }
+  if (converted > 0 && undoDepth() > depth + 1) {
+    runCommand(cmd("merge_undo", {{QStringLiteral("depth"), depth}, {QStringLiteral("label"), tr("Insert %1").arg(file)}}));
+  }
+  if (!refused.isEmpty()) {
+    // The mesh body stays, shown; the model refused the conversion and
+    // changed nothing.
+    showWarning(tr("Inserted %1 as a mesh body; not converted to a solid: %2")
+                    .arg(file, refused.join(QStringLiteral("; "))));
+  } else if (converted > 0) {
+    showHint(tr("Inserted %1 as a solid; the mesh body is kept, hidden.").arg(file));
+  }
 }
 
 bool MainWindow::importDrawing(const QString& path, bool interactive, QString* error) {

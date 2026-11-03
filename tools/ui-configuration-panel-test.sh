@@ -30,6 +30,8 @@
 # Usage: tools/ui-configuration-panel-test.sh
 
 source "$(dirname "$0")/ui-test-lib.sh"
+# New and Open replace the design, as these steps expect (mitcad#1172).
+ui_open_in_current_window
 
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 WORK=$(mktemp -d /tmp/mitcad-ui-configuration-panel.XXXXXX)

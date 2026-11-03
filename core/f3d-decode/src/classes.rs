@@ -41,6 +41,10 @@ pub const SKETCH_ELLIPSE: &str = "FF23079A-D99C-47AB-940E-2F4E18F022AB";
 pub const SKETCH_CURVE: &str = "9FF71F46-205F-484B-A2B5-A245D0D8FE33";
 pub const SKETCH_TEXT: &str = "E0618268-3A06-450E-9E94-7CF4C2E66802";
 pub const SKETCH_CONSTRAINT: &str = "60403D47-0C49-49B0-BDE8-1679608164A2";
+/// The constraint that ties a sketch text to its path (a subclass of
+/// [`SKETCH_CONSTRAINT`], mitcad#1177): it keeps each character's
+/// placement before its sketch reference.
+pub const TEXT_PATH_CONSTRAINT: &str = "9D30FCDC-EA07-4141-93E2-918B1A59E962";
 /// Base class of all sketch dimensions.
 pub const SKETCH_DIMENSION: &str = "855F0A64-6286-4FFC-B918-BC394F600107";
 pub const LINEAR_DIMENSION: &str = "8C780195-72C0-4A56-A911-E43AB14357F2";

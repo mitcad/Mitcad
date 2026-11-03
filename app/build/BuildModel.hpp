@@ -16,6 +16,7 @@
 #include <QVector>
 
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -70,9 +71,15 @@ std::optional<gp_Pnt> pickPoint(const QString& key, const CommandState& state, c
 // `at` of build_place and build_panel for the input's first item:
 // `occurrence` (from the BUILD host), `geometry`, `point` (in the
 // host's coordinates). None, with the reason, when it cannot
-// be given.
+// be given. A plane whose pick has no point (mitcad#1196: chosen, the
+// click that says where still to come) gives no `point`: the model takes
+// the plane's origin.
 std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, const CommandContext& context,
                                 QString& problem);
+// An origin or construction plane's frame in the design (mitcad#1196: the
+// first part on a chosen plane): the `datum` query's, moved by the item's
+// occurrence; none for another item or when the model cannot say.
+std::optional<gp_Ax3> planeOf(const SelectionItem& item, const CommandContext& context);
 // The item a reference of the model's answers stands for in the view
 // (`{"occurrence", "geometry"}`, the occurrence from the BUILD
 // host): faces, edges and bodies.

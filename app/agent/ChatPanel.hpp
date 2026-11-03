@@ -27,7 +27,8 @@
 // panel: <state>" give its state (unavailable, checking, missing,
 // outdated, signed-out, signing-in, ready, starting, working, stopping,
 // notice); its controls have object names (chatInput, chatSend,
-// chatAttachSelection, chatAttachView, chatSetup, chatNew, chatAllowOnce,
+// chatAttachSelection, chatAttachComments, chatAttachView, chatSetup,
+// chatNew, chatAllowOnce,
 // chatAlwaysAllow, chatDeny, chatContinue, chatAgentChoice,
 // chatModelChoice, chatToolGroupHead); the log lines "Chat tool group: 3
 // calls, 1 failed" (when a group's counts change) and "Chat tool group
@@ -151,9 +152,13 @@ private:
   QWidget* m_setupRow = nullptr;
   QPushButton* m_setup = nullptr;
   QPushButton* m_secondary = nullptr;
+  QPushButton* m_checkAccount = nullptr;
+  QFrame* m_accountHelp = nullptr;
+  QLabel* m_accountHelpText = nullptr;
   QWidget* m_inputRow = nullptr;
   QPlainTextEdit* m_input = nullptr;
   QToolButton* m_attachSelection = nullptr;
+  QToolButton* m_attachComments = nullptr; // the open comments (mitcad#1119)
   QToolButton* m_attachView = nullptr;
   QPushButton* m_send = nullptr;
 

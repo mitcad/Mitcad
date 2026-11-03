@@ -210,6 +210,10 @@ pub(crate) struct LibraryItemsQuery {
     /// The project's folder, when the design is in one.
     #[serde(default)]
     project: Option<String>,
+    /// Each item where it lives, a design's copy and its library item as
+    /// two rows (mitcad#1135: the print managers' list model).
+    #[serde(default)]
+    by_place: bool,
 }
 
 fn item_kind(text: &str) -> Result<ItemKind, ApiError> {
@@ -488,6 +492,9 @@ impl<K: Kernel> PrintProfilesOps<K> for Document<K> {
     fn library_items_query(&self, query: &LibraryItemsQuery) -> Result<Value, ApiError> {
         let kind = item_kind(&query.kind)?;
         let libraries = self.print_libraries(query.project.as_deref().map(Path::new));
+        if query.by_place {
+            return Ok(self.library_items_by_place_json(&libraries, kind));
+        }
         Ok(self.library_items_json(&libraries, kind))
     }
 

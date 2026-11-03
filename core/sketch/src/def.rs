@@ -6,7 +6,7 @@
 //! patterns and offsets, their checks and the solve, and the evaluated
 //! output ([`SketchOutput`]).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use serde::de::Error as _;
@@ -1032,6 +1032,35 @@ impl SketchDef {
                     .flat_map(|g| g.contours.iter().flatten().flatten())
                     .map(|p| p[1])
                     .fold(0.0, f64::max);
+            }
+            // Without kerning (mitcad#1177): each character's advance is
+            // its own, as the font gives it for the character alone.
+            if t.no_kerning {
+                let mut own: BTreeMap<char, f64> = BTreeMap::new();
+                for (c, g) in t.text.chars().zip(glyphs.glyphs.iter_mut()) {
+                    if c == '\n' {
+                        continue;
+                    }
+                    let advance = match own.get(&c) {
+                        Some(a) => *a,
+                        None => {
+                            let one = c.to_string();
+                            let request = FontRequest {
+                                text: &one,
+                                ..text::request(t)
+                            };
+                            let a = kernel
+                                .font_glyphs(&request)
+                                .map_err(|e| format!("text t{}: {e}", t.id.0))?
+                                .glyphs
+                                .first()
+                                .map_or(g.advance, |alone| alone.advance);
+                            own.insert(c, a);
+                            a
+                        }
+                    };
+                    g.advance = advance;
+                }
             }
             // The outlines the file stored with the text while its font is
             // missing (mitcad#416).

@@ -17,8 +17,8 @@ use crate::assembly::{
 };
 use crate::configurations::Configurations;
 use crate::document::{
-    Analysis, Annotation, BodyAttributes, DisplayState, DocState, ImageReference, NamedView,
-    TimelineGroup, check_components,
+    Analysis, Annotation, BodyAttributes, Comment, DisplayState, DocState, ImageReference,
+    NamedView, TimelineGroup, check_components,
 };
 use crate::expr::ParamLimits;
 use crate::expr::{
@@ -142,6 +142,13 @@ struct FileOut<'a> {
     // when there are any.
     #[serde(skip_serializing_if = "crate::tables::Tables::is_empty")]
     tables: &'a crate::tables::Tables,
+    // Comments (mitcad#1119), when there are any, with the number the next
+    // one takes where it is not one past the largest listed (the largest
+    // was deleted). A design without comments leaves both out.
+    #[serde(skip_serializing_if = "<[Comment]>::is_empty")]
+    comments: &'a [Comment],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_comment: Option<u32>,
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -511,12 +518,21 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
             .collect(),
         image_references: &state.image_references,
         tables: &state.tables,
+        comments: &state.comments,
+        next_comment: next_comment_out(state),
         statistics,
     };
     let mut json =
         serde_json::to_string_pretty(&file).expect("the design file schema always serializes");
     json.push('\n');
     json
+}
+
+/// The `next_comment` a file keeps (mitcad#1119): only with comments, and
+/// only where it is not one past the largest of them, which reading takes.
+fn next_comment_out(state: &DocState) -> Option<u32> {
+    let largest = state.comments.iter().map(|c| c.id).max()?;
+    (state.next_comment > largest.saturating_add(1)).then_some(state.next_comment)
 }
 
 fn no_appearances(appearances: &[Appearance]) -> bool {
@@ -792,7 +808,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 38] = [
+const TOP_FIELDS: [&str; 40] = [
     "format",
     "version",
     "units",
@@ -849,6 +865,9 @@ const TOP_FIELDS: [&str; 38] = [
     "tables",
     // The height of the annotations' texts (mitcad#894).
     "annotation_text_height",
+    // Comments and the next comment's number (mitcad#1119).
+    "comments",
+    "next_comment",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1328,6 +1347,36 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             }
         },
     };
+    // Comments (mitcad#1119): each as a command could have made it, each id
+    // once; the next id one past the largest ever used. Their targets are
+    // found when they are asked for, so one whose target is gone loads.
+    let mut file_comments: Vec<Comment> = Vec::new();
+    for (i, c) in array(&mut top, "comments", false)?.into_iter().enumerate() {
+        let comment = serde_json::from_value::<Comment>(c)
+            .map_err(|e| schema(format!("comments[{i}]: {e}")))?;
+        comment
+            .check()
+            .map_err(|e| invalid(format!("comments[{i}] ({}): {e}", comment.name())))?;
+        if file_comments.iter().any(|c| c.id == comment.id) {
+            return Err(invalid(format!(
+                "comments[{i}]: comment {} is listed more than once",
+                comment.name()
+            )));
+        }
+        file_comments.push(comment);
+    }
+    let next_comment = match top.remove("next_comment") {
+        None => 1,
+        Some(value) => value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| schema("\"next_comment\" must be a number from 1"))?,
+    };
+    let next_comment = file_comments
+        .iter()
+        .map(|c| c.id.saturating_add(1))
+        .fold(next_comment, u32::max);
     // Purge volumes set by hand (mitcad#705): each valid, each pair once. A
     // pair of a material the design no longer has is kept as it is.
     let purge_volumes = array(&mut top, "purge_volumes", false)?
@@ -1795,6 +1844,8 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.print_profiles = print_profiles;
     state.annotations = annotations;
     state.annotation_text_height = annotation_text_height;
+    state.comments = file_comments;
+    state.next_comment = next_comment;
     state.purge_volumes = purge_volumes;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {

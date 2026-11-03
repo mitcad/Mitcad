@@ -199,22 +199,44 @@ fn a_lost_edge_names_the_feature_that_removed_it() {
     // The lost face changes nothing the cache knows of; edit the join.
     b.doc.set_parameter("d6", 31.0).unwrap();
     let fillet = b.fillet(&[&corner1], 2.0);
+    let FeatureStatus::Failed(message) = b.status(fillet) else {
+        panic!("the fillet did not fail");
+    };
+    let (head, suggestions) = message.split_once("; ").expect("suggestions");
     assert_eq!(
-        b.status(fillet),
-        FeatureStatus::Failed(format!("edge {corner1} no longer exists after Extrude2"))
+        head,
+        format!("edge {corner1} no longer exists after Extrude2")
     );
+    // The face left suggests its other edges (mitcad#1187), none taken.
+    let (kept, lost) = (side(b.extrude, 1, 0), side(b.extrude, 1, 1));
+    let others = [
+        side(b.extrude, 1, 3),
+        FaceName::start(b.extrude, b.region.clone()),
+        FaceName::end(b.extrude, b.region.clone()),
+    ];
+    for other in others {
+        let edge = EdgeName::new(kept.clone(), other.clone());
+        let item = format!("{edge} ({other} instead of {lost})");
+        assert!(suggestions.contains(&item), "{item} in {suggestions}");
+    }
+    assert!(!suggestions.contains(" more"), "{suggestions}");
     assert_eq!(b.doc.kernel().count("fillet"), 0);
     assert!(b.history(b.body).starts_with("join("));
     let _ = join;
 
-    // An edge that never existed.
+    // An edge that never existed: four edges of each face, five shown.
     let mut b = block();
     let nowhere = EdgeName::new(side(b.extrude, 1, 0), side(b.extrude, 1, 2));
     let fillet = b.fillet(&[&nowhere], 2.0);
-    assert_eq!(
-        b.status(fillet),
-        FeatureStatus::Failed(format!("the body has no edge {nowhere}"))
+    let FeatureStatus::Failed(message) = b.status(fillet) else {
+        panic!("the fillet did not fail");
+    };
+    let head = format!(
+        "the body has no edge {nowhere}; existing edges of body F2.b0 that share a face \
+         with it (suggestions only, not applied): "
     );
+    assert!(message.starts_with(&head), "{message}");
+    assert!(message.ends_with(" and 3 more"), "{message}");
 }
 
 #[test]

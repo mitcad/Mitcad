@@ -131,6 +131,9 @@ focus-main
 # the Browser; Close Drawing back on Build with the cards.
 native-choice native.workspaces Build
 expect-native-visible native.ribbon.group.timber true
+native-action view.chat
+expect-native-visible native.chatCard true
+expect-native-style native.chatButton checked
 mark
 command file.create_drawing
 focus-dialog '^Create Drawing$'
@@ -149,8 +152,20 @@ expect-native-present native.ribbon.group.construct false
 expect-native-visible native.sidebar true
 expect-native-visible native.historyCard false
 expect-native-visible native.inspectorCard false
+expect-native-visible native.chatCard false
+expect-native-style native.chatButton unchecked
 expect-native-layout
 screenshot '${MITCAD_TEST_WORK}/familiar-drawing.png'
+# The View item still holds the requested state while Drawing hides Chat.
+# Turn that wish off, then request it again to exercise deferred showing.
+native-action view.chat
+mark
+native-action view.chat
+expect-log '^Native chat card deferred \(a drawing is open\)$'
+expect-native-visible native.chatCard false
+expect-native-style native.chatButton unchecked
+expect-no-log '^Native chat card shown:'
+expect-no-log '^Native chat card: no message field to focus$'
 mark
 native-click native.ribbon.drawing.close
 expect-log 'Drawing closed'
@@ -159,5 +174,10 @@ expect-log 'Native workspaces: Solid, Build, Make \(shown Build\)'
 expect-log 'Native cards: all \(the drawing closed\)'
 expect-native-visible native.ribbon.group.timber true
 expect-native-visible native.historyCard true
+expect-native-visible native.chatCard true
+expect-native-style native.chatButton checked
+native-action view.chat
+expect-native-visible native.chatCard false
+expect-native-style native.chatButton unchecked
 expect-native-layout
 native-choice native.workspaces Solid

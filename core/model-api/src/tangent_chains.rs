@@ -11,6 +11,7 @@ use super::ApiError;
 use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::ids::BodyUid;
+use mitcad_model::internal::features::with_edge_suggestions;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::topo::{EdgeName, FaceName};
 
@@ -45,10 +46,13 @@ impl<K: Kernel> TangentChainsOps<K> for Document<K> {
             ));
         }
         let kernel = self.kernel();
-        // The one item asked for, which must be in the body.
+        // The one item asked for, which must be in the body; a missing edge
+        // lists the edges it may have meant (mitcad#1187).
         let item = if let Some(edge) = &query.edge {
             if kernel.count_edges(shape, edge) == 0 {
-                return Err(ApiError(format!("the body has no edge {edge}")));
+                let message = format!("the body has no edge {edge}");
+                let message = with_edge_suggestions(kernel, shape, query.body, edge, message);
+                return Err(ApiError(message));
             }
             Some(edge.to_string())
         } else if let Some(face) = &query.face {

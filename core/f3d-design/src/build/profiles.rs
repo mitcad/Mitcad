@@ -150,6 +150,27 @@ impl Builder<'_> {
             .collect()
     }
 
+    /// The sketch texts an item's text profiles name that the sketch has,
+    /// by their sketch-local ids (`t0`; mitcad#1177: an extrusion of a
+    /// text's letters, whose profiles have no loops of sketch curves).
+    pub(super) fn text_profiles(&self, fid: u64) -> Vec<String> {
+        let seg = self.seg;
+        let mut out = Vec::new();
+        for src in inputs_of(seg, fid, PROFILE_SOURCE_2) {
+            let Some(text) = super::super::decode::target_id(seg, src)
+                .filter(|&t| seg.guid_of(t) == Some(SKETCH_TEXT))
+            else {
+                continue;
+            };
+            if let Some((_, id)) = self.local_ids.get(&text)
+                && !out.contains(id)
+            {
+                out.push(id.clone());
+            }
+        }
+        out
+    }
+
     /// The loops of the profiles an item selected, in the dump's terms
     /// (`_f3d_profile_loops`): per profile its `loops` and `children` (lists
     /// of loops), each loop `outer` and its `curves`, each curve its ids

@@ -110,6 +110,10 @@ void MainWindow::insertFromLibrary(bool community) {
   if (!canChangeModel()) {
     return;
   }
+  // What was selected before the command (mitcad#1197): Place Component's
+  // Place On where it takes it (a hole's rim or round face, an axis, a
+  // flat face or a plane).
+  const Selection before = m_selection;
   LibraryBrowser browser(community, this);
   // The picker's In this design (mitcad#418).
   browser.setUsedParts(usedLibraryParts(model()));
@@ -130,7 +134,9 @@ void MainWindow::insertFromLibrary(bool community) {
     library.insert(QStringLiteral("standard"), choice.standard);
   }
   // A part with mount frames (mitcad#525): Place Part, where a click snaps a
-  // frame to a face, a hole or a grid and Enter drops it in as below.
+  // frame to a face, a hole or a grid and Enter drops it in as below. The
+  // selection made before is its Place On when it takes it, the part shown
+  // there at once (mitcad#1197).
   const QVector<MountFrameInfo> frames = mountFramesOf(choice.mounts);
   if (!frames.isEmpty()) {
     *m_mountPart =
@@ -141,7 +147,7 @@ void MainWindow::insertFromLibrary(bool community) {
     }
     qInfo().noquote() << QStringLiteral("Insert from Library: %1/%2 has mount frames %3: Place Part")
                              .arg(choice.library, choice.component, names.join(QStringLiteral(", ")));
-    startCommand(QString::fromLatin1(kMountPartCommand), {}, nullptr);
+    startCommand(QString::fromLatin1(kMountPartCommand), before, nullptr);
     return;
   }
   QJsonObject result;
@@ -168,8 +174,13 @@ void MainWindow::insertFromLibrary(bool community) {
                                     choice.config.isEmpty() ? QStringLiteral("no row")
                                                             : QStringLiteral("row %1").arg(choice.config));
     }
-    showHint(tr("Inserted %1 from %2 %3.")
-                 .arg(result.value(QStringLiteral("name")).toString(), choice.library, choice.version));
+    // At the origin, never silently (mitcad#1197): the message band says
+    // so and how to place it.
+    qInfo().noquote() << QStringLiteral("Insert from Library: %1/%2 has no mount frame: dropped in at the origin")
+                             .arg(choice.library, choice.component);
+    showStatus(tr("Inserted %1 at the origin: no mount frame; join it with Joint.")
+                   .arg(result.value(QStringLiteral("name")).toString()),
+               NoticeLevel::Information);
     m_viewer->fitAll();
   }
 }

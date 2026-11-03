@@ -86,6 +86,11 @@ pub mod scale;
 // Constraints a drawing tool adds automatically, only when safe
 // (mitcad#1024).
 pub mod auto;
+// Driven dimensions used by driving dimensions of their own sketch, solved
+// in stages (mitcad#1116).
+pub mod driven;
+// Sketch Fillet at corners of arcs (mitcad#1192).
+mod fillet;
 
 #[cfg(test)]
 mod tests;
@@ -292,8 +297,9 @@ pub enum EntityKind {
         center: EntityUid,
         radius: f64,
         /// Where the circle starts, counter-clockwise from the sketch x
-        /// axis (radians): the seam of the cylinder it makes. Zero unless
-        /// an import set it (a circle drawn here starts on the x axis).
+        /// axis (radians): the seam of the cylinder it makes, and where a
+        /// text along it starts. Zero unless an import set it (a circle
+        /// drawn here starts on the x axis).
         #[serde(default, rename = "start_angle", skip_serializing_if = "is_zero")]
         start: f64,
     },
@@ -1646,6 +1652,12 @@ pub struct SketchText {
     /// `cap_height`) or the font's ascender. The `.ipt` import sets it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ink_top: bool,
+    /// The characters advance by their own widths, without the font's
+    /// kerning between pairs of them. The `.f3d` import sets it for a text
+    /// on a path (mitcad#1177: the file's characters along a path keep
+    /// their widths, a pair of ones too).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_kerning: bool,
     /// The outlines a file stores for the text's characters (mitcad#416),
     /// used as their shapes while the font is not installed and the text
     /// is still the one they are the outlines of (`text.rs`).
@@ -1813,6 +1825,7 @@ impl SketchText {
             line_spacing: 0.0,
             pen_align: false,
             ink_top: false,
+            no_kerning: false,
             glyphs: None,
             font_file: None,
             code: None,
@@ -1860,7 +1873,8 @@ impl TextVAlign {
 }
 
 /// A text along a curve: on its left side (`above`, in the curve's
-/// direction) or hanging below it; `fit` spreads the characters over the
+/// direction) or hanging below it from its top (the capitals' top with
+/// `cap_height`, else the ascender); `fit` spreads the characters over the
 /// whole curve.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

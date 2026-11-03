@@ -25,8 +25,11 @@ BrowserPanel native MITCADModelOutlineView: the Browser's rows, selection, light
 CapsuleButton native renderWidget: the Sketch Palette's QToolButton, as an AppKit button
 CapsuleFrame replaced setRibbon: the capsule behind the Qt ribbon's groups and title row controls
 CardShadow replaced MITCADFloatingCard: the Floating cards' shadow
+ChatPanel native renderWidget: the Chat card's full shared panel, including the Selection, Comments and View attachment toggles (NativeChatCard.mm)
 ColorFieldButton native NativeColorField: the print settings' colour swatch (NativeColorFieldProperty)
 CommandSearch replaced showCommandSearch: the toolbar's command search
+CommentPinOverlay shared the comments' numbered pins over the embedded 3D view; the native navigation bar and View menu share the Comment Pins action (mitcad#1120)
+CommentsWindow native renderWidget: the Comments window's six-column outline and replies, status filters and comment actions (mitcad#1120)
 Divider replaced MITCADNativeWindowDelegate: between the Qt title row's controls; the AppKit toolbar
 DotsButton replaced quickDotsImage: the quick-access group's ⋮ (mitcad#1113), a button with the same three dots after the group's commands in the toolbar's workspace item; its menu as the Qt group's
 DrawingSheetView shared the drawing sheet, in the drawing workspace over the 3D view
@@ -40,8 +43,10 @@ Hairline replaced rebuildQuickGroup: the line between the quick-access group's c
 LinkButton replaced createNativeCommandForm: a note's link in the Qt Command panel
 ManipulatorOverlay shared the command's handles over the 3D view
 MeasurementOverlay shared the measurements over the 3D view
+MaterialsPanel native renderWidget: the Materials manager's place/class outline, appearance swatches and actions, own-place header and full settings; shared keyboard actions and retained split sizes (mitcad#1158)
 MiddleElideComboBox replaced createNativeCommandForm: a choice with icons in the Qt Command panel; searchable choices use NativePicker with short labels, groups, source tags and current checks
 ModeBanner shared the mode's banner over the 3D view
+NavigationBar replaced setNavigationBar: the native capsule's shared View commands, including Comment Pins with its name and checked state
 NavigationGuide native createNativeNavigationGuide: the Navigation settings' mouse pictures
 NoteText replaced createNativeCommandForm: a note's text in the Qt Command panel
 OptionTree native MitcadNativeEmptyText: the empty Options tree's hint (kNoOptions, Configurations) in the bridge's outline (NativeEmptyTextProperty)
@@ -50,6 +55,7 @@ PanelTitleBar replaced MITCADFloatingCard: a Docked panel's title
 ParameterPicker shared the parameter labels over the 3D view
 PillTabBar replaced setRibbon: the AppKit ribbon's workspace tabs
 ProjectIndicator replaced setProjectStatus: the toolbar's project status
+ProfilesPanel native renderWidget: separate Printers and Processes managers, place groups and search, own-place editing and full settings, destination menus, read-only built-ins and no-design libraries (mitcad#1158)
 RenderFrameOverlay shared the render frame over the 3D view
 RenderLightsOverlay shared the lights over the 3D view
 Ribbon replaced setRibbon: the AppKit ribbon

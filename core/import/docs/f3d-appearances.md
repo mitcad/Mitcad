@@ -146,6 +146,29 @@ An occurrence the file hides is hidden in MitCad
 (one occurrence in MitCad, a path per placement in the file) follows its
 first path.
 
+### Bodies' light bulbs (mitcad#1175)
+
+A body record (class `D3937028`, the appearances' body record below)
+of class version 19 keeps the body's light bulb after its browser node
+GUID: `str16 GUID | f64 volume (cm³) | f64 | u32 | u32 1 | u8 0 | u32 |
+u8 1 | u8 light bulb` (1 on, 0 off). The decoder gives it as the body's
+`light_bulb` in `_f3d.appearance.bodies` (`appearance::light_bulb`); a
+record of another version or laid out otherwise gives none, and its body
+stays shown. The import hides a body whose light bulb is off
+(`set_body_visible`), the replayed body the final comparison matched
+with the stored one; the report's `appearances.hidden` and `hidden_set`
+count them (`hidden bodies: x/y`).
+
+Checked against the display scene the files keep (`mitcad-f3d-inspect
+meshes`, the body's key its record's id in the key's last 8 digits): in
+a sample of 50 designs of the corpora, 1 of the 54 version-19 bodies
+whose light bulb is off has a mesh there (a body the file's preview does
+not show either), against 119 of the 188 that are on (the others have
+their faces listed without triangles, or are not in the scene: in hidden
+occurrences, not in the design); and in a reported drill index the hidden body (a blank kept beside the copy the
+holes were cut in) has no mesh and the file's preview shows the holes.
+Shown, that blank covered the holes in MitCad.
+
 ## Appearances and materials
 
 The file's appearances and physical materials (mitcad#228): the decoder

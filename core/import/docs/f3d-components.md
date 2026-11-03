@@ -1073,3 +1073,24 @@ their class (`core/f3d-decode/src/classes.rs`, `ITEM_TYPES` and
 Items of classes still unknown keep the type `?<default name>`
 ("unknown timeline item").
 
+
+## A cut pasted into its own component (mitcad#1175)
+
+A cut and paste of bodies (`CutPasteBodies`) whose bodies are the
+destination component's already moves nothing: their features went with
+an earlier cut. The file may also keep such an item as a copy: in a
+reported drill index the blank was cut and pasted into the component it
+came from, and the item's own history state holds the blank and a copy
+of it, in which the later holes are cut (the blank hidden). The
+translation (`ops::cut_paste_command`) asks the item's state
+(`Importer::state_is_current`): where it is not the bodies as they are,
+the item is a copy in place (a `move` that copies with the identity),
+which the usual route checks against the state; otherwise it moves
+nothing, as before. Before, the copy was missing, a base feature brought
+the file's state before the first hole, and every hole cut that base
+feature's body.
+
+A linked sketch curve that then follows the coincident copies of one
+edge in two bodies (`linked::prefer_own_body`) follows the copy in the
+body whose face the sketch lies on: each projects the same curve, and
+without the choice the curve stayed fixed geometry.

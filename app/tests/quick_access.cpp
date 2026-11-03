@@ -7,7 +7,9 @@
 // value, unknown ids kept), written at once and reset; the group shows the
 // chosen commands this build has, in the menus' order; its tooltips name
 // the command and its key, and why it is disabled, in at most 80
-// characters.
+// characters. Whether the group shows at all (mitcad#1189) is a setting of
+// its own, shown by default, told to the group when it changes, and leaves
+// the choice of commands as it is.
 #include "files/FileCommands.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/QuickAccess.hpp"
@@ -18,7 +20,9 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QKeySequence>
+#include <QList>
 #include <QMetaType>
+#include <QObject>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -99,6 +103,8 @@ void fileCommandTests() {
   }
   CHECK(registry.action(QStringLiteral("file.save"))->shortcut().toString(QKeySequence::PortableText) ==
         QStringLiteral("Ctrl+S"));
+  // A dialog command's tooltip names it without its ellipsis: "Save As: …".
+  CHECK(registry.action(QStringLiteral("file.save_as"))->toolTip().startsWith(QStringLiteral("Save As: ")));
   // The commands run what they are given.
   registry.action(QStringLiteral("file.open"))->trigger();
   CHECK(opened == 1);
@@ -190,6 +196,49 @@ void shownTests() {
   CHECK(longTip.size() == 80 && longTip.startsWith(QStringLiteral("Save (")));
 }
 
+// Whether the group shows at all (mitcad#1189): shown without a key, saved
+// at once and told to the group, the choice of commands kept while hidden.
+void visibilityTests() {
+  const QString key = QuickAccessSettings::visibleKey();
+  CHECK(key == QStringLiteral("quickAccess/visible"));
+  QSettings().remove(key);
+  QSettings().remove(QuickAccessSettings::settingsKey());
+  // No key: shown.
+  CHECK(QuickAccessSettings::loadVisible());
+  QList<bool> told;
+  const QMetaObject::Connection connection =
+      QObject::connect(&mitcad::QuickAccessNotifier::instance(), &mitcad::QuickAccessNotifier::visibilityChanged,
+                       [&told](bool visible) { told.append(visible); });
+  // Shown already: nothing saved, nothing told.
+  CHECK(!QuickAccessSettings::saveVisible(true));
+  CHECK(!QSettings().contains(key));
+  CHECK(told.isEmpty());
+  // A choice of commands, then the group hidden: the choice stays.
+  QuickAccessSettings chosen = QuickAccessSettings::load();
+  CHECK(chosen.setChosen(QStringLiteral("view.look_at"), true));
+  chosen.save();
+  CHECK(QuickAccessSettings::saveVisible(false));
+  CHECK(QSettings().contains(key) && !QSettings().value(key).toBool());
+  CHECK(!QuickAccessSettings::loadVisible());
+  CHECK((told == QList<bool>{false}));
+  CHECK(QuickAccessSettings::load().chosen == chosen.chosen);
+  CHECK(QuickAccessSettings::load().chosen.contains(QStringLiteral("view.look_at")));
+  // Hidden again: no change, nothing told.
+  CHECK(!QuickAccessSettings::saveVisible(false));
+  CHECK(told.size() == 1);
+  // Reset to Default changes the commands, not whether the group shows.
+  QuickAccessSettings::reset();
+  CHECK(!QuickAccessSettings::loadVisible());
+  // Shown again, with the commands the settings have (the defaults after
+  // the reset).
+  CHECK(QuickAccessSettings::saveVisible(true));
+  CHECK(QuickAccessSettings::loadVisible());
+  CHECK((told == QList<bool>{false, true}));
+  CHECK(QuickAccessSettings::load().chosen == QuickAccessSettings::defaults());
+  QObject::disconnect(connection);
+  QSettings().remove(key);
+}
+
 } // namespace
 
 int quickAccessTests() {
@@ -209,6 +258,7 @@ int quickAccessTests() {
   fileCommandTests();
   settingsTests();
   shownTests();
+  visibilityTests();
 
   QSettings().clear();
   QCoreApplication::setOrganizationName(organization);

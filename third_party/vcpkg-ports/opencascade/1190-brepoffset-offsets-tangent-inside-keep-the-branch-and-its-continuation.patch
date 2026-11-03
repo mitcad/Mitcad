@@ -1,0 +1,541 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: where the offsets of a convex crease's faces become tangent
+inside the solid, the intersection is the branch along the crease and its
+continuation past the tangency, as one edge; a vertex that takes another's
+place covers the other's points (mitcad#1193).
+
+The case: a loft from a square to a circle inside it or through its
+corners (BRepOffsetAPI_ThruSections), whose walls lean in towards the
+circle, shelled inwards with both its ends removed, or with one, or offset
+inwards closed. At the corners the loft's ruled faces meet at convex
+creases that flatten to tangency at the circle. Patch 1130 covers walls
+leaning out, where the inward offsets of a corner's two faces become
+tangent past the circle's end. Leaning in, they become tangent inside the
+solid (0.1 mm below the circle's end for a 1 mm wall, on it where the
+circle runs through the corners), and the walls extended to the removed
+end cross past the tangency along the branch's continuation and two
+branches turning sideways, all starting tangent there. The pave filler
+gives them as pieces joined by pieces of a few microns, not always
+connected, sometimes the branch along the crease and a sideways one as one
+curve. Patch 1130 left them all (the branch ends before the end plane),
+and MakeLoops could not rebuild the inner walls from them: the thick solid
+was not done (BRepOffset_UnknownError) or came out invalid, the closed
+offset invalid or empty, for most thicknesses from 0.5 to 3 mm. Keeping
+only the branch and its continuation as those pieces does not help:
+AssembleEdge glues them into an edge of a tolerance of 50 mm, which Inter3D
+drops, and the corners have no intersection edge at all.
+
+DropCrossingsPastTangentEnd now finds where the offsets become tangent (the
+tangent end's nearest point on the offset face) and, where that lies inside
+the solid or within 1 % of the offset past its end, makes one edge
+(theMerged): the branch along the crease (the edge 1130 picks) up to 1 %
+of the offset before the tangency, the piece of the intersection, of all
+its pieces, from within 5 % of the offset of the tangency that goes on
+most nearly in the branch's direction from 1 % past it (and on into the
+pieces that go on from its far end in that direction, where it is short),
+and a curve tangent to both between them, each piece parametrised by its
+length.
+Inter3D gives that edge, with its curves on both offset faces, as the
+intersection. Past the tangency the walls, extended to a removed end, thus
+meet along the branch's continuation; the sideways crossings, slivers of
+hundredths of a millimetre in the extension up to the end, are left out.
+Only where the crease's faces are tangent at one end of the edge and not
+at its middle and the intersection gave more than one piece; a single edge
+that runs on along the branch itself is left as it is. Where the tangency
+lies further past the end, 1130 is unchanged.
+
+BRepOffset_MakeLoops substitutes vertices (myVerVerMap) and gives the new
+one the old one's points on the edges' curves, which may lie further from
+it than either's tolerance: the closed offset's and the one-end shell's
+vertex where a corner's edge meets the end's offset was off its own
+section edge by 6.4e-5 against a tolerance of 5.7e-5 (BRepCheck
+InvalidPointOnCurve), and so in the closed offset of a square to a circle
+of radius 20 (walls leaning out) at 2 mm. The new vertex's tolerance now
+covers the points it takes over, with a margin of 0.1 % (CoverPoints); a
+substitution whose points lay within the tolerance keeps it, but for the
+margin.
+
+The shells are valid, both ends open, with the volumes the one-end shells
+and the closed offset give (within 0.05 mm3), the inner walls the
+thickness from the outer ones within 1e-6 mm. OCCT's default (not
+adaptive) volume integration of these bodies is off by up to 0.3 % (it is
+exact with an accuracy given, and on a mesh).
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
+@@ -17,6 +17,10 @@
+ #include <BRep_Builder.hxx>
+ #include <BRep_Tool.hxx>
+ #include <BRep_TVertex.hxx>
++#include <BRep_PointRepresentation.hxx>
++#include <Geom2d_Curve.hxx>
++#include <Geom_Curve.hxx>
++#include <Geom_Surface.hxx>
+ #include <BRepAlgo_AsDes.hxx>
+ #include <BRepAlgo_Loop.hxx>
+ #include <BRepOffset_Analyse.hxx>
+@@ -32,8 +36,44 @@
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <NCollection_Map.hxx>
+ 
++#include <algorithm>
+ #include <cstdio>
+ 
++//=======================================================================
++// function : CoverPoints
++// purpose  : The tolerance of a vertex that takes the place of another,
++//            widened to cover the other's points on its edges' curves,
++//            which it takes over (mitcad#1193): the two may lie apart by
++//            more than their tolerances.
++//=======================================================================
++static void CoverPoints(const occ::handle<BRep_TVertex>& theNew, const occ::handle<BRep_TVertex>& theOld)
++{
++  double aTol = theNew->Tolerance();
++  for (NCollection_List<occ::handle<BRep_PointRepresentation>>::Iterator aIt(theOld->Points()); aIt.More();
++       aIt.Next())
++  {
++    const occ::handle<BRep_PointRepresentation>& aPR = aIt.Value();
++    gp_Pnt                                       aP;
++    if (aPR->IsPointOnCurve() && !aPR->Curve().IsNull())
++    {
++      aP = aPR->Curve()->Value(aPR->Parameter());
++    }
++    else if (aPR->IsPointOnCurveOnSurface() && !aPR->PCurve().IsNull() && !aPR->Surface().IsNull())
++    {
++      const gp_Pnt2d aUV = aPR->PCurve()->Value(aPR->Parameter());
++      aP                 = aPR->Surface()->Value(aUV.X(), aUV.Y());
++    }
++    else
++    {
++      continue;
++    }
++    aP.Transform(aPR->Location().Transformation());
++    // (With a margin: the checker compares the squared distances.)
++    aTol = std::max(aTol, 1.001 * aP.Distance(theNew->Pnt()));
++  }
++  theNew->Tolerance(aTol);
++}
++
+ BRepOffset_MakeLoops::BRepOffset_MakeLoops() = default;
+ 
+ //=================================================================================================
+@@ -167,6 +207,7 @@
+             {
+               NewTV->Tolerance(TV->Tolerance());
+             }
++            CoverPoints(NewTV, TV);
+             NewTV->ChangePoints().Append(TV->ChangePoints());
+             AsDes->Replace(V, NewV);
+             BB.Remove(E, V);
+@@ -439,6 +480,7 @@
+             {
+               NewTV->Tolerance(TV->Tolerance());
+             }
++            CoverPoints(NewTV, TV);
+             NewTV->ChangePoints().Append(TV->ChangePoints());
+             AsDes->Replace(V, NewV);
+             BB.Remove(E, V);
+@@ -649,6 +691,7 @@
+             {
+               NewTV->Tolerance(TV->Tolerance());
+             }
++            CoverPoints(NewTV, TV);
+             NewTV->ChangePoints().Append(TV->ChangePoints());
+             AsDes->Replace(V, NewV);
+             BB.Remove(E, V);
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -37,6 +37,7 @@
+ #include <BRepOffset_Interval.hxx>
+ #include <NCollection_List.hxx>
+ #include <BRepTools.hxx>
++#include <BSplCLib.hxx>
+ #include <BRepTools_Modifier.hxx>
+ #include <BRepTools_WireExplorer.hxx>
+ #include <BRepTopAdaptor_FClass2d.hxx>
+@@ -61,6 +62,7 @@
+ #include <Geom2dInt_GInter.hxx>
+ #include <Geom_BezierSurface.hxx>
+ #include <Geom_BSplineCurve.hxx>
++#include <Geom_BezierCurve.hxx>
+ #include <Geom_Conic.hxx>
+ #include <Geom_ConicalSurface.hxx>
+ #include <Geom_Curve.hxx>
+@@ -72,10 +74,13 @@
+ #include <Geom_SurfaceOfLinearExtrusion.hxx>
+ #include <Geom_SurfaceOfRevolution.hxx>
+ #include <Geom_TrimmedCurve.hxx>
++#include <GeomAdaptor_Curve.hxx>
+ #include <GeomAdaptor_Surface.hxx>
+ #include <GeomAPI.hxx>
+ #include <GeomAPI_ExtremaCurveCurve.hxx>
+ #include <GeomAPI_ProjectPointOnCurve.hxx>
++#include <GeomAPI_ProjectPointOnSurf.hxx>
++#include <GeomConvert.hxx>
+ #include <GeomConvert_ApproxCurve.hxx>
+ #include <GeomConvert_CompCurveToBSplineCurve.hxx>
+ #include <GeomInt_IntSS.hxx>
+@@ -1459,15 +1464,27 @@
+ //            middle, the intersection gave more than one edge, and the
+ //            branch runs past the plane of the end (the osculating plane
+ //            of the face's boundary there); elsewhere nothing changes.
++//            Where the walls lean in towards that end, the offsets become
++//            tangent inside the solid or on its end (mitcad#1193): the
++//            branch along the edge runs up to the tangency, and past it
++//            the offsets cross along its continuation and two branches
++//            turning sideways, all starting tangent there and joined by
++//            pieces of a few microns, not always connected. There one
++//            edge is made of the branch and its continuation (theMerged),
++//            so that the walls, extended to a removed end face, meet along
++//            one edge.
+ //=======================================================================
+ static void DropCrossingsPastTangentEnd(
+-  const TopoDS_Edge&                                             RefEdge,
+-  const TopoDS_Face&                                             RefFace1,
+-  const TopoDS_Face&                                             RefFace2,
+-  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& TrueEdges)
++  const TopoDS_Edge&                                                   RefEdge,
++  const TopoDS_Face&                                                   RefFace1,
++  const TopoDS_Face&                                                   RefFace2,
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>&       TrueEdges,
++  const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& AllEdges,
++  const TopoDS_Face&                                                   OffsetFace1,
++  TopoDS_Edge&                                                         theMerged)
+ {
+-  if (RefEdge.IsNull() || RefFace1.IsNull() || RefFace2.IsNull() || TrueEdges.Extent() < 2
+-      || BRep_Tool::Degenerated(RefEdge))
++  if (RefEdge.IsNull() || RefFace1.IsNull() || RefFace2.IsNull() || TrueEdges.IsEmpty()
++      || AllEdges.Extent() < 2 || BRep_Tool::Degenerated(RefEdge))
+   {
+     return;
+   }
+@@ -1612,11 +1629,277 @@
+       aMain       = i;
+     }
+   }
++  if (aMain == 0)
++  {
++    return;
++  }
++  // Where the offsets become tangent: the tangent end's point on the offset
++  // surface (its nearest point there, along the normal).
++  GeomAPI_ProjectPointOnSurf aOnOffset(aPEnd, BRep_Tool::Surface(OffsetFace1));
++  if (!aOnOffset.IsDone() || aOnOffset.NbPoints() == 0)
++  {
++    return;
++  }
++  const gp_Pnt aPQ         = aOnOffset.NearestPoint();
++  const double aOffsetDist = aOnOffset.LowerDistance();
++  // About the tangency the pieces of the intersection lie within a few
++  // microns of each other: a neighbourhood of 5 % of the offset. The
++  // branch is cut, and its continuation starts, 1 % of the offset before
++  // and past the tangency.
++  const double aNear = 0.05 * aOffsetDist;
++  const double aStep = 0.01 * aOffsetDist;
++  if (aStep > Precision::Confusion() && gp_Vec(aPEnd, aPQ).Dot(aEndNormal) <= aStep)
++  {
++    // The tangency inside the solid or on its end: the branch along the edge
++    // up to the tangency and its continuation past it, as one edge.
++    // An edge's curve from its point nearest to the tangency (within the
++    // neighbourhood) to its end away from it, oriented towards the tangency
++    // or away from it; theFarDist the distance of that end.
++    const auto aPiece = [&](const TopoDS_Edge& theE, const bool theTowards, double& theFarDist) {
++      theFarDist = -1.;
++      double                         aF, aL;
++      const occ::handle<Geom_Curve>& aCurve = BRep_Tool::Curve(theE, aF, aL);
++      if (aCurve.IsNull())
++      {
++        return occ::handle<Geom_BSplineCurve>();
++      }
++      const double aDistF = aCurve->Value(aF).Distance(aPQ);
++      const double aDistL = aCurve->Value(aL).Distance(aPQ);
++      double       aTQ    = aDistF <= aDistL ? aF : aL;
++      double       aDistQ = std::min(aDistF, aDistL);
++      GeomAPI_ProjectPointOnCurve aOnC(aPQ, aCurve, aF, aL);
++      if (aOnC.NbPoints() > 0 && aOnC.LowerDistance() < aDistQ)
++      {
++        aTQ    = aOnC.LowerDistanceParameter();
++        aDistQ = aOnC.LowerDistance();
++      }
++      if (aDistQ > aNear)
++      {
++        return occ::handle<Geom_BSplineCurve>();
++      }
++      const bool   aFarIsLast = aDistL >= aDistF;
++      const double aT0        = aFarIsLast ? aTQ : aF;
++      const double aT1        = aFarIsLast ? aL : aTQ;
++      theFarDist              = std::max(aDistF, aDistL);
++      if (aT1 - aT0 <= Precision::PConfusion())
++      {
++        return occ::handle<Geom_BSplineCurve>();
++      }
++      occ::handle<Geom_BSplineCurve> aBS =
++        GeomConvert::CurveToBSplineCurve(new Geom_TrimmedCurve(aCurve, aT0, aT1));
++      if (!aBS.IsNull() && aFarIsLast == theTowards)
++      {
++        aBS->Reverse();
++      }
++      return aBS;
++    };
++    const TopoDS_Edge&             aMainE   = TopoDS::Edge(TrueEdges(aMain));
++    double                         aMainFar = 0.;
++    occ::handle<Geom_BSplineCurve> aB1      = aPiece(aMainE, true, aMainFar);
++    if (aB1.IsNull() || aMainFar <= aNear)
++    {
++      return;
++    }
++    const gp_Vec aDir = gp_Vec(aB1->StartPoint(), aB1->EndPoint()).Normalized();
++    // The continuation: of all the pieces of the intersection (it may start
++    // a few microns from the branch's end, not connected to it), the one
++    // from about the tangency that goes on most nearly in the branch's
++    // direction.
++    occ::handle<Geom_BSplineCurve> aB2;
++    TopoDS_Edge                    aB2Edge;
++    double                         aBest = -2.;
++    double                         aTol  = BRep_Tool::Tolerance(aMainE);
++    for (int i = 1; i <= AllEdges.Extent(); i++)
++    {
++      if (AllEdges(i).IsSame(aMainE))
++      {
++        continue;
++      }
++      double                               aFar  = 0.;
++      const occ::handle<Geom_BSplineCurve> aCand = aPiece(TopoDS::Edge(AllEdges(i)), false, aFar);
++      if (aCand.IsNull() || aFar <= aNear)
++      {
++        continue;
++      }
++      const double aCos = gp_Vec(aPQ, aCand->EndPoint()).Normalized().Dot(aDir);
++      if (aCos > aBest)
++      {
++        aBest = aCos;
++        aB2   = aCand;
++        aB2Edge = TopoDS::Edge(AllEdges(i));
++        aTol  = std::max(BRep_Tool::Tolerance(aMainE), BRep_Tool::Tolerance(TopoDS::Edge(AllEdges(i))));
++      }
++    }
++    // (A single edge that itself runs on along the branch is left as it
++    // is.)
++    {
++      double                               aFar  = 0.;
++      const occ::handle<Geom_BSplineCurve> aRest = aPiece(aMainE, false, aFar);
++      if (!aRest.IsNull() && aFar > aNear && aRest->StartPoint().Distance(aB1->EndPoint()) <= Precision::Confusion()
++          && gp_Vec(aPQ, aRest->EndPoint()).Normalized().Dot(aDir) > aBest)
++      {
++        if (TrueEdges.Extent() == 1)
++        {
++          return;
++        }
++        aBest = gp_Vec(aPQ, aRest->EndPoint()).Normalized().Dot(aDir);
++        aB2   = aRest;
++        aB2Edge.Nullify();
++        aTol  = BRep_Tool::Tolerance(aMainE);
++      }
++    }
++    if (aB2.IsNull() || aBest < 0.5)
++    {
++      return;
++    }
++    // (The continuation may be a short piece: on into the edges that go on
++    // from its far end in the branch's direction.)
++    for (int aStep = 0; !aB2Edge.IsNull() && aStep < AllEdges.Extent(); aStep++)
++    {
++      TopoDS_Vertex aV1, aV2;
++      TopExp::Vertices(aB2Edge, aV1, aV2);
++      if (aV1.IsNull() || aV2.IsNull())
++      {
++        break;
++      }
++      const gp_Pnt         aEnd  = aB2->EndPoint();
++      const TopoDS_Vertex& aFarV = BRep_Tool::Pnt(aV1).Distance(aEnd) <= BRep_Tool::Pnt(aV2).Distance(aEnd) ? aV1 : aV2;
++      const gp_Pnt         aFarP = BRep_Tool::Pnt(aFarV);
++      TopoDS_Edge                    aNext;
++      occ::handle<Geom_BSplineCurve> aNextC;
++      double                         aNextCos = 0.9;
++      for (int i = 1; i <= AllEdges.Extent(); i++)
++      {
++        const TopoDS_Edge& aE = TopoDS::Edge(AllEdges(i));
++        if (aE.IsSame(aMainE) || aE.IsSame(aB2Edge))
++        {
++          continue;
++        }
++        TopoDS_Vertex aE1, aE2;
++        TopExp::Vertices(aE, aE1, aE2);
++        double                         aF, aL;
++        const occ::handle<Geom_Curve>& aCurve = BRep_Tool::Curve(aE, aF, aL);
++        if (aCurve.IsNull() || aE1.IsNull() || aE2.IsNull() || (!aE1.IsSame(aFarV) && !aE2.IsSame(aFarV))
++            || aE1.IsSame(aE2))
++        {
++          continue;
++        }
++        occ::handle<Geom_BSplineCurve> aC =
++          GeomConvert::CurveToBSplineCurve(new Geom_TrimmedCurve(aCurve, aF, aL));
++        if (aC.IsNull())
++        {
++          continue;
++        }
++        if (aC->StartPoint().Distance(aFarP) > aC->EndPoint().Distance(aFarP))
++        {
++          aC->Reverse();
++        }
++        const gp_Vec aOn(aFarP, aC->EndPoint());
++        if (aOn.Magnitude() > gp::Resolution() && aOn.Normalized().Dot(aDir) > aNextCos)
++        {
++          aNextCos = aOn.Normalized().Dot(aDir);
++          aNext    = aE;
++          aNextC   = aC;
++        }
++      }
++      if (aNext.IsNull())
++      {
++        break;
++      }
++      GeomConvert_CompCurveToBSplineCurve aChain(aB2);
++      if (!aChain.Add(aNextC, 2. * BRep_Tool::Tolerance(aFarV) + Precision::Confusion(), true))
++      {
++        break;
++      }
++      aB2     = aChain.BSplineCurve();
++      aTol    = std::max(aTol, BRep_Tool::Tolerance(aNext));
++      aB2Edge = aNext;
++    }
++    // The two may run past each other about the tangency: the branch is cut
++    // a little before it and the continuation a little past it (along the
++    // branch's direction; where they end or start further away, there),
++    // joined by a curve tangent to both, so that the edge does not turn
++    // back on itself.
++    const auto aAt = [&](const occ::handle<Geom_BSplineCurve>& theC, const double theH) {
++      double     aLo = theC->FirstParameter(), aHi = theC->LastParameter();
++      const auto aH  = [&](const double theU) { return gp_Vec(aPQ, theC->Value(theU)).Dot(aDir) - theH; };
++      if (aH(aLo) >= 0.)
++      {
++        return aLo;
++      }
++      if (aH(aHi) <= 0.)
++      {
++        return aHi;
++      }
++      for (int k = 0; k < 100 && aHi - aLo > Precision::PConfusion(); k++)
++      {
++        const double aMid = 0.5 * (aLo + aHi);
++        (aH(aMid) < 0. ? aLo : aHi) = aMid;
++      }
++      return 0.5 * (aLo + aHi);
++    };
++    const double aU1 = aAt(aB1, -aStep);
++    const double aU2 = aAt(aB2, aStep);
++    if (aU1 <= aB1->FirstParameter() + Precision::PConfusion() || aU2 >= aB2->LastParameter() - Precision::PConfusion())
++    {
++      return;
++    }
++    if (aU1 < aB1->LastParameter())
++    {
++      aB1->Segment(aB1->FirstParameter(), aU1);
++    }
++    if (aU2 > aB2->FirstParameter())
++    {
++      aB2->Segment(aU2, aB2->LastParameter());
++    }
++    gp_Pnt aP0, aP3;
++    gp_Vec aT0, aT3;
++    aB1->D1(aB1->LastParameter(), aP0, aT0);
++    aB2->D1(aB2->FirstParameter(), aP3, aT3);
++    const double aGap = aP0.Distance(aP3);
++    if (aT0.Magnitude() <= gp::Resolution() || aT3.Magnitude() <= gp::Resolution()
++        || aGap <= Precision::Confusion())
++    {
++      return;
++    }
++    NCollection_Array1<gp_Pnt> aPoles(1, 4);
++    aPoles(1) = aP0;
++    aPoles(2) = aP0.Translated(aT0.Normalized() * (aGap / 3.));
++    aPoles(3) = aP3.Translated(aT3.Normalized() * (-aGap / 3.));
++    aPoles(4) = aP3;
++    const occ::handle<Geom_BSplineCurve> aJoin =
++      GeomConvert::CurveToBSplineCurve(new Geom_BezierCurve(aPoles));
++    // Each piece parametrised by its length, so that the edge's parameter
++    // runs evenly along it.
++    const auto aByLength = [](const occ::handle<Geom_BSplineCurve>& theC, const double theStart) {
++      GeomAdaptor_Curve          aGC(theC);
++      const double               aLen = GCPnts_AbscissaPoint::Length(aGC);
++      NCollection_Array1<double> aKnots(1, theC->NbKnots());
++      theC->Knots(aKnots);
++      BSplCLib::Reparametrize(theStart, theStart + aLen, aKnots);
++      theC->SetKnots(aKnots);
++      return theStart + aLen;
++    };
++    aByLength(aB2, aByLength(aJoin, aByLength(aB1, 0.)));
++    GeomConvert_CompCurveToBSplineCurve aConcat(aB1);
++    if (!aConcat.Add(aJoin, Precision::Confusion(), true, false)
++        || !aConcat.Add(aB2, Precision::Confusion(), true, false))
++    {
++      return;
++    }
++    BRepLib_MakeEdge aMakeEdge(aConcat.BSplineCurve());
++    if (!aMakeEdge.IsDone())
++    {
++      return;
++    }
++    theMerged = aMakeEdge.Edge();
++    BRep_Builder().UpdateEdge(theMerged, std::max(aTol, Precision::Confusion()));
++    return;
++  }
+   // (Only where the branch ends past that plane: there the offsets become
+   // tangent outside the solid's end, and their crossings there are no part
+-  // of the result. Where they become tangent before it, the end's own
+-  // offset cuts the branch first, and the pieces are left as they were.)
+-  if (aMain == 0 || aMainBeyond <= Precision::Confusion())
++  // of the result.)
++  if (aMainBeyond <= Precision::Confusion())
+   {
+     return;
+   }
+@@ -1716,7 +1999,44 @@
+   if (!RefEdge.IsNull())
+   {
+     CheckIntersFF(aPF.PDS(), RefEdge, TrueEdges);
+-    DropCrossingsPastTangentEnd(RefEdge, theRefFace1, theRefFace2, TrueEdges);
++    // All the pieces of the intersection, connected or not.
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aAllEdges;
++    for (int iFF = 0; iFF < aPF.PDS()->InterfFF().Length(); ++iFF)
++    {
++      const NCollection_DynamicArray<BOPDS_Curve>& aCurves = aPF.PDS()->InterfFF()(iFF).Curves();
++      for (int iC = 0; iC < aCurves.Length(); ++iC)
++      {
++        for (NCollection_List<occ::handle<BOPDS_PaveBlock>>::Iterator aItPB(aCurves(iC).PaveBlocks());
++             aItPB.More();
++             aItPB.Next())
++        {
++          aAllEdges.Add(aPF.PDS()->Shape(aItPB.Value()->Edge()));
++        }
++      }
++    }
++    TopoDS_Edge aMerged;
++    DropCrossingsPastTangentEnd(RefEdge, theRefFace1, theRefFace2, TrueEdges, aAllEdges, F1, aMerged);
++    if (!aMerged.IsNull())
++    {
++      // The branch and its continuation as one edge, with its curves on
++      // both offset faces.
++      L1.Clear();
++      L2.Clear();
++      const occ::handle<IntTools_Context>& aCtx = aPF.Context();
++      BOPTools_AlgoTools2D::BuildPCurveForEdgeOnFace(aMerged, F1, aCtx);
++      BOPTools_AlgoTools2D::BuildPCurveForEdgeOnFace(aMerged, F2, aCtx);
++      BRepLib::SameParameter(aMerged, Precision::Confusion(), true);
++      TopAbs_Orientation aO1, aO2;
++      OrientSection(aMerged, F1, F2, aO1, aO2);
++      if (Side == TopAbs_OUT)
++      {
++        aO1 = TopAbs::Reverse(aO1);
++        aO2 = TopAbs::Reverse(aO2);
++      }
++      L1.Append(aMerged.Oriented(aO1));
++      L2.Append(aMerged.Oriented(aO2));
++      return;
++    }
+   }
+ 
+   bool addPCurve1 = true;

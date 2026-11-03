@@ -171,6 +171,10 @@ public:
   // The problem a marked piece shows as its tooltip (mitcad#1064), empty
   // when it has none: native adapters give it to their hit targets.
   QString pieceProblem(std::size_t index) const;
+  // What a piece is called for accessibility (mitcad#968): its text; an
+  // empty place "Empty place: Choose an option" (emptyPlaceHint), the
+  // place at a list's end its hint ("Add a condition"); else its name.
+  QString pieceCaption(std::size_t index) const;
   std::optional<QPoint> pieceCenter(const QString& name) const;
   // The same deepest-piece hit test as mouse input: native drag adapters
   // may delete a block on a palette drop only when the press began on one.

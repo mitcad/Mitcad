@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "SlicerImport.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <utility>
 
 #include <QAction>
+#include <QComboBox>
 #include <QDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -15,6 +17,7 @@
 #include <QMenu>
 #include <QPoint>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QVector>
 #include <QtLogging>
@@ -178,7 +181,7 @@ bool runPrintImport(PrintItemsHost& host, QJsonObject command, const QString& fi
 }
 
 SlicerImportBar::SlicerImportBar(PrintItemsHost& host, const QString& logName, QWidget* parent)
-    : QWidget(parent), m_host(host), m_log(logName) {
+    : QWidget(parent), m_host(&host), m_log(logName) {
   m_row = new QHBoxLayout(this);
   m_row->setContentsMargins(0, 0, 0, 0);
   m_line = new QLabel;
@@ -189,20 +192,63 @@ SlicerImportBar::SlicerImportBar(PrintItemsHost& host, const QString& logName, Q
   m_details->hide();
   m_import = new QPushButton(tr("Import from Slicer…"));
   m_import->setObjectName(QStringLiteral("slicerImportButton"));
+  // Where the import goes, chosen before it (the managers, mitcad#1135):
+  // shown only when there is more than one place.
+  m_into = new QComboBox;
+  m_into->setObjectName(QStringLiteral("slicerImportInto"));
+  m_into->setAccessibleName(tr("Import into"));
+  m_into->setToolTip(tr("Where Import from Slicer puts what it reads"));
+  m_into->hide();
   m_row->addStretch(1);
   m_row->addWidget(m_line);
   m_row->addWidget(m_details);
+  m_row->addWidget(m_into);
   m_row->addWidget(m_import);
   for (QPushButton* button : {m_details, m_import}) {
     mac::auxiliaryButton(button);
   }
   connect(m_import, &QPushButton::clicked, this, &SlicerImportBar::importClicked);
+  connect(m_into, &QComboBox::currentIndexChanged, this, [this] {
+    qDebug().noquote() << QStringLiteral("%1 import into: %2").arg(m_log, m_into->currentText());
+    // The slicer's presets are marked against the place chosen.
+    findSlicersAhead();
+  });
   connect(m_details, &QPushButton::clicked, this, [this] { ImportDetailsDialog::showReport(m_summary, window()); });
 }
 
 SlicerImportBar::~SlicerImportBar() = default;
 
-QString SlicerImportBar::into() const { return target ? target() : QStringLiteral("design"); }
+QString SlicerImportBar::into() const {
+  if (m_into->count() > 0) {
+    return m_into->currentData().toString();
+  }
+  return target ? target() : QStringLiteral("design");
+}
+
+void SlicerImportBar::setHost(PrintItemsHost& host) {
+  m_host = &host;
+  clear();
+}
+
+void SlicerImportBar::setPlaces(const QStringList& places, const QString& current) {
+  QStringList shown;
+  for (int i = 0; i < m_into->count(); ++i) {
+    shown << m_into->itemData(i).toString();
+  }
+  if (shown == places) {
+    return; // the user's choice stays
+  }
+  {
+    const QSignalBlocker block(m_into);
+    m_into->clear();
+    for (const QString& place : places) {
+      m_into->addItem(placeName(place), place);
+    }
+    m_into->setCurrentIndex(std::max(0, static_cast<int>(places.indexOf(current))));
+  }
+  m_into->setVisible(places.size() > 1);
+  scheduleLogPlaces();
+}
 
 void SlicerImportBar::clear() {
   m_line->hide();
@@ -216,14 +262,14 @@ void SlicerImportBar::findSlicers() {
   // opens a menu of a file or a slicer's presets. A look ahead under way
   // is older.
   ++m_finds;
-  showSlicers(installedSlicers(m_host, into(), &m_merge));
+  showSlicers(installedSlicers(*m_host, into(), &m_merge));
 }
 
 void SlicerImportBar::findSlicersAhead() {
   // Off the UI thread (mitcad#1018): an installed slicer's presets are
   // many files. For the button's text only; a click looks again.
   QJsonObject query;
-  if (!slicersQuery(m_host, into(), &query)) {
+  if (!slicersQuery(*m_host, into(), &query)) {
     return;
   }
   const int finding = ++m_finds;
@@ -248,12 +294,12 @@ void SlicerImportBar::showSlicers(const QJsonArray& slicers) {
 }
 
 void SlicerImportBar::importClicked() {
-  if (!m_host.canChangePrintSettings()) {
-    showRefusal(m_host.changeBlockedReason());
+  if (!m_host->canChangePrintSettings()) {
+    showRefusal(m_host->changeBlockedReason());
     return;
   }
   // Looked for again, in the files: a slicer may have come or gone since.
-  m_host.readAgain();
+  m_host->readAgain();
   findSlicers();
   if (m_slicers.isEmpty()) {
     importFile();
@@ -283,7 +329,7 @@ void SlicerImportBar::importFile() {
   }
   SlicerImportResult result;
   QString error;
-  if (!runSlicerImport(m_host, path, into(), m_log, &result, &error)) {
+  if (!runSlicerImport(*m_host, path, into(), m_log, &result, &error)) {
     if (!error.isEmpty()) {
       showRefusal(error);
     }
@@ -312,7 +358,7 @@ void SlicerImportBar::importPresets(int index) {
                                            : tr("%1 presets").arg(names.size());
   SlicerImportResult result;
   QString error;
-  if (!runPrintImport(m_host, dialog.command(), what, into(), m_log, &result, &error)) {
+  if (!runPrintImport(*m_host, dialog.command(), what, into(), m_log, &result, &error)) {
     if (!error.isEmpty()) {
       showRefusal(error);
     }
@@ -328,7 +374,7 @@ void SlicerImportBar::showImported(const SlicerImportResult& result) {
   m_line->show();
   m_details->setVisible(!m_summary.details.isEmpty());
   // A running command's panel (3D Print's) follows the design.
-  m_host.commandInputsChanged();
+  m_host->commandInputsChanged();
   emit imported(result);
   scheduleLogPlaces();
 }
@@ -365,7 +411,8 @@ void SlicerImportBar::logPlaces() {
   }
   const QPoint origin = window()->parentWidget()->window()->mapToGlobal(QPoint(0, 0));
   QStringList lines;
-  const std::pair<const char*, QWidget*> widgets[] = {{"import", m_import}, {"details", m_details}};
+  const std::pair<const char*, QWidget*> widgets[] = {
+      {"import", m_import}, {"details", m_details}, {"import_into", m_into}};
   for (const auto& [name, widget] : widgets) {
     if (widget->isVisibleTo(this)) {
       const QPoint global = widget->mapToGlobal(widget->rect().center()) - origin;

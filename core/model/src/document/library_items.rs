@@ -448,6 +448,138 @@ impl<K: Kernel> Document<K> {
         answer
     }
 
+    /// The `library_items` query by place (`by_place`, mitcad#1135): the
+    /// managers' one list model, each item where it lives and nowhere else.
+    /// First every item of the kind the design has (place `design`, a copy
+    /// of a library item too, with its `source` and `changed`), then each
+    /// library item with its own fields, shadowed ones too (`shadowed`),
+    /// the project's, the user's and MitCad's (the built-in materials the
+    /// design does not replace first, in their order), each place by name.
+    /// A library row names the design's copy of it (`copy`) and whether the
+    /// design uses that copy (`copy_used`); its own `in_design`, `chosen`,
+    /// `bodies` and the like are the copy row's. `places` lists the places
+    /// in that order: `design`, `project` (with a project), `user`, `mitcad`.
+    pub fn library_items_by_place_json(&self, libraries: &Libraries, kind: ItemKind) -> Value {
+        let by_name = |rows: &mut Vec<Value>| {
+            rows.sort_by_key(|row| row["name"].as_str().unwrap_or_default().to_lowercase());
+        };
+        // This design: every item of the kind it has.
+        let design: Vec<(ItemData, Option<&material::MaterialOrigin>)> = match kind {
+            ItemKind::Material => self
+                .state
+                .materials
+                .iter()
+                .map(|m| (material_item(m.clone()), m.origin.as_ref()))
+                .collect(),
+            _ => self
+                .state
+                .print_profiles
+                .iter()
+                .filter(|p| ItemKind::of_profile(p.kind) == kind)
+                .map(|p| (ItemData::Profile(p.clone()), p.origin.as_ref()))
+                .collect(),
+        };
+        let mut design_rows = Vec::new();
+        for (data, origin) in design {
+            let id = data.id().to_owned();
+            let source = origin.and_then(|o| {
+                let library = LibraryKind::parse(&o.library)?;
+                libraries.find(Some(library), kind, &o.id)
+            });
+            let changed = source.is_some_and(|item| self.library_changed(&id, item));
+            let mut row = self.item_row(&data, None, Some(id), changed, false);
+            if let Some(item) = source {
+                row["source"] = json!({
+                    "library": item.library.id(),
+                    "place": item.library.place(),
+                    "id": item.data.id(),
+                    "name": item.data.name(),
+                });
+            }
+            design_rows.push(row);
+        }
+        by_name(&mut design_rows);
+        // The libraries: each item with its own fields.
+        let mut places: [Vec<Value>; 3] = Default::default();
+        for item in libraries.items.iter().filter(|i| i.data.kind() == kind) {
+            let copy = self
+                .state
+                .copies_of(item.library, kind, item.data.id())
+                .into_iter()
+                .next();
+            let used = copy
+                .as_deref()
+                .is_some_and(|c| self.design_item_used(kind, c));
+            let mut row = self.item_row(&item.data, Some(item.library), None, false, false);
+            row["shadowed"] = json!(item.shadowed);
+            row["copy"] = json!(copy);
+            row["copy_used"] = json!(used);
+            let at = match item.library {
+                LibraryKind::Project => 0,
+                LibraryKind::User => 1,
+                LibraryKind::Base => 2,
+            };
+            places[at].push(row);
+        }
+        for rows in &mut places {
+            by_name(rows);
+        }
+        let mut rows = design_rows;
+        let [project, user, base] = places;
+        rows.extend(project);
+        rows.extend(user);
+        if kind == ItemKind::Material {
+            for m in material::built_in() {
+                if self.state.materials.iter().any(|d| d.id == m.id) {
+                    continue;
+                }
+                rows.push(self.item_row(
+                    &material_item(m.clone()),
+                    None,
+                    Some(m.id.clone()),
+                    false,
+                    true,
+                ));
+            }
+        }
+        rows.extend(base);
+        let mut shown = vec!["design"];
+        if libraries.folder(LibraryKind::Project).is_some() {
+            shown.push("project");
+        }
+        shown.extend(["user", "mitcad"]);
+        let mut answer = json!({"items": rows, "places": shown, "problems": libraries.problems});
+        let profile = match kind {
+            ItemKind::Printer => Some(ProfileKind::Printer),
+            ItemKind::Process => Some(ProfileKind::Process),
+            ItemKind::Material => None,
+        };
+        if let Some(profile) = profile {
+            answer["print_overrides"] = json!(self.print_overrides(profile));
+        }
+        answer
+    }
+
+    /// Whether the design uses its item `id` of a kind: bodies or
+    /// components name a material, the design or an owner chose a profile.
+    fn design_item_used(&self, kind: ItemKind, id: &str) -> bool {
+        match kind {
+            ItemKind::Material => {
+                !self.bodies_with_material(id).is_empty()
+                    || !self.components_with_material(id).is_empty()
+            }
+            ItemKind::Printer | ItemKind::Process => {
+                let profile = if kind == ItemKind::Printer {
+                    ProfileKind::Printer
+                } else {
+                    ProfileKind::Process
+                };
+                self.state.design_profile(profile).as_deref() == Some(id)
+                    || !self.state.profile_owners(profile, id).is_empty()
+            }
+        }
+    }
+
     /// The fields a row shows for a library item: its design copy's when
     /// the design has one (what the design uses, mitcad#655), under the
     /// item's id; else the item's.

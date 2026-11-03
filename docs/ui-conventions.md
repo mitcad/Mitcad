@@ -145,6 +145,15 @@ not a level of its own, and MitCad has no separate assembly file.
 | **Material note** | A note on a body whose text is the body's material, written from the design so that it follows a change of the material (mitcad#1049). UI: *Material* (the Make tab's Annotate group); *Material* in the Annotations window's Kind. | `MeasureKind::Material` |
 | **Process note** | A note on a body whose text is its printer and process profiles and the print values set on the body, its occurrence or its component (`Printer: Bench / Process: Standard / Walls: 5`), written from the design (mitcad#1049). UI: *Process Note*; *Process note* in the Annotations window's Kind. | `MeasureKind::ProcessNote` |
 
+### Comments
+
+| Term | What it is | In the code |
+|---|---|---|
+| **Comment** | A note pinned to a feature, a body, a face, an edge, a vertex, a sketch's curve, point, constraint or dimension, a parameter or a free point, that tells an AI agent (or a colleague) what to change there: "make this hole an M6 thread". Numbered `C1`, `C2` …, shown as a numbered pin in the view and listed in the **Comments** panel. Not an *annotation* (a dimension or note of the design itself) and not a parameter's *comment* field. UI: *Comments*, *Add Comment*; in commands and the model `comment` (`add_comment`). | `Comment`, `CommentTarget` (`core/model/src/document/comments.rs`), `api/comments.rs` |
+| **Open**, **Addressed**, **Resolved** | A comment's status: waiting for the work; done by the agent (or the user), with a **resolution** that says what was done; accepted by the user. **Reopen** makes it open again, with a reply that says why. | `CommentStatus` |
+| **Orphaned** | A comment whose target is no longer found (a feature removed the face, the feature was deleted): it stays at its last known place until its target is found again or it is **retargeted**. A flag, not a status. | `Comment::orphaned`, `retarget_comment` |
+| **Reply** | A message under a comment, by the user or an agent. | `CommentReply`, `reply_comment` |
+
 ### Drawings
 
 | Term | What it is | In the code |
@@ -180,16 +189,49 @@ not a level of its own, and MitCad has no separate assembly file.
 
 ### Configurations
 
-The configuration words (row, domain, driven, closed, socket, cascade)
-are decided in mitcad#968; their texts follow this page's general rules.
+The configuration words were decided by the owner on 2 November 2026
+(mitcad#968); their texts follow this page's general rules. The code, the
+JSON, the command names and the test logs may keep *Domain*, *driven*,
+*closed*, *socket*, *cascade* and *moves*; user-facing text in the
+configuration context does not. A *driven dimension*, slicer presets, a
+table's rows in general and the other uses of these words outside
+configurations are not affected.
 
 | Term | What it is | In the code |
 |---|---|---|
-| **Configuration** | A design's options, rows and rules: the design as a family of products. UI: the *Configurations…* window, the *Configuration* bar. Not a configuration of the program (that is a preference or a setting). | `Configurations` (`core/model-base/src/configurations.rs`), `ConfigurationsDialog`, `ConfigurationBar` |
-| **Option** | A user parameter that the configuration names, chosen by the user in the options' order. Not a command's option in its panel, which user-facing text calls an input or a setting where both could be meant. **Driven option**: one whose expression is a formula; nothing chooses it. | `Configurations::options`, `OptionReport` |
-| **Domain** | What an option can be before the rules: a list, a range or free. **Allowed values**: what the rules leave of it now. | `Domain` |
-| **Row** | A named preset of option values, with its designation, part number and supplier URL. Not a row of a table in general where both could be meant. A **closed** configuration allows only its rows' combinations; an **open** one any that the rules allow. | `ConfigurationRow` |
-| **Rule** | A condition and what it allows or forbids; rules only narrow. **Move**: an option the cascade changes to an allowed value after a change; **refused**: a change no move can repair. | `ConfigurationRule`, `ConfigurationMove` |
+| **Configurations** | The design's configuration capabilities: its options, rows, rules and bindings; the design as a family of products. UI: the *Configurations…* window, the *Configuration* bar and panel. Not another name for a saved row, and not a configuration of the program (that is a preference or a setting). | `Configurations` (`core/model-base/src/configurations.rs`), `ConfigurationsDialog`, `ConfigurationBar` |
+| **Option** | A user parameter included in the configuration. Its value is chosen by the user or calculated by a formula (*By formula*). Not a command's input or a setting, which user-facing text calls an input or a setting where both could be meant. | `Configurations::options`, `OptionReport` |
+| **Row**, **configuration row** | A named, saved combination of option values. A row may also set other parameters (its *parameter columns*) and carry bill-of-materials data (designation, part number, supplier URL). *Row* within the configuration UI; *configuration row* where an ordinary table row could be meant. Not *preset*, and not *configuration*. UI: the *Rows* tab, the bar's *Row* chooser. | `ConfigurationRow` |
+| **Combination** | Option values considered together, such as Black and 1000 mm. An allowed combination need not have a saved row. | `configure` `values`, `RuleViolation` |
+| **Possible values** | The option's defined values before configuration restrictions: a list, a range, the values of a table column, or no value limits of its own. Replaces *Domain* in user-facing text. UI: the Options tab's *Possible Values* column, *Edit Possible Values…*. | `Domain`, `OptionReport::domain` |
+| **Allowed values** | The possible values left after the restrictions for the current choices: the rules, and *Only these rows*. Distinct from possible values: Length's possible values 300–2000 mm leave, after choosing Black, the allowed values 300–1000 mm under the rule *Black is short*. UI: the bar's choosers offer them; tooltips *Allowed values: …*, *Restricted by …*. | `OptionReport::allowed`, `restricted_by` |
+| **Value** | The option's current text or evaluated number. Replaces the misleading Options column *Default*. UI: the Options tab's *Value* column. | `OptionReport::value`, `text`; `configurations::valueCell` |
+| **Expression** | What determines a value; the value is its evaluated result. An unevaluated formula is never shown as the current value: a By Formula option's Value is its result, its expression in the tooltip. | `OptionReport::expression` |
+| **By formula** | The option's value is calculated from its expression rather than chosen in the configuration controls; neither a chooser nor automatic adjustment sets it. A neutral state, not a problem. Replaces *Driven* for options. UI: the *By Formula* column, the tooltip *By formula: …*. | `OptionReport::driven` |
+| **Default row** | The row used, for example, when a library component is inserted without another row chosen; automatic adjustment of a text option prefers its value. A real default, distinct from the current Value. UI: *Set as Default* (its name in bold). | `Configurations::default` |
+| **Only these rows** | The checkbox that restricts the allowed combinations to the rows listed in the Rows tab; its tooltip "Allow only the combinations listed in the Rows tab". Unchecked, a combination must still keep to the possible values and the rules. Replaces *Closed*; user-facing text describes the restriction rather than teaching open and closed tables. The restriction's name in moves and refusals is *Only these rows*. | `Configurations::closed`, `CLOSED_TABLE` |
+| **Rule** | A condition and the restrictions it puts on the allowed values or combinations. A rule narrows or refuses choices; it is not a formula or an assignment that computes a parameter. | `ConfigurationRule` |
+| **Parameter column** | A row column that sets a parameter other than an option, such as a screw's diameter or pitch. Such a parameter is not a user-selectable option. UI: *Add Column…*, *Remove Column*. | `Configurations::parameters` |
+| **Binding** | A property that follows a value, a condition or an expression. UI: the *Bindings* tab, whose filter is *Option:* (it filters the bindings by option). | `BindingEntry` |
+
+**Describing the behaviour.**
+
+- MitCad checks the options in their order and, when necessary, adjusts
+  later values to allowed values. Say so in plain words; *cascade* is not
+  a word users need. It is the options' order, not an order in which the
+  rules run.
+- An automatic value change is an **adjustment** (*adjust*, *automatic
+  adjustment*), not a *move*. Move/Copy and the structure moves keep their
+  words.
+- **Refused** is a configuration change that was not applied, with its
+  reason and rule. The levels ([Messages and severity](#3-messages-and-severity)):
+  an automatic adjustment is Information, a refused change an Error, and
+  By formula a neutral state.
+- An incomplete rule's **empty place** (a **dashed place** when its look
+  is meant), not a socket or a slot. Say the next action where it is
+  known: *Choose an option*, *Enter a value*, *Add a condition*, *Add an
+  action* (`emptyPlaceHint`). Dashed empty places stay distinct from the
+  error and warning outlines and badges.
 
 ### UI surfaces
 
@@ -351,15 +393,15 @@ are the frontends' own.
 |---|---|---|---|
 | **Error** | The result is missing: the work stopped, and the user must act to get it. | A feature that produces nothing; an export not written; a configuration change refused; a file that cannot be read; conflicting constraints; a sketch that did not converge. | *Failed* for features and commands, *Refused* for configuration changes, *Could not …* in messages |
 | **Warning** | It ran, but something is wrong or left out; the user should check it. | A fillet that lost some of its edges (one that produces nothing is an error); a partial or fallback import; skipped import items; a broken annotation; geometry outside the build volume; overhangs; redundant constraints; an export that dropped textures. | *Warning*; *Broken* for annotations |
-| **Information** | A neutral fact that needs no action. | "Done.", a cascade moved an option, an import note, unmet inactive constraints. | none |
+| **Information** | A neutral fact that needs no action. | "Done.", an option adjusted automatically to an allowed value, an import note, unmet inactive constraints. | none |
 | **Success** | Only where the user asked for a check and the answer is yes. | "Connected", "fits", "up to date" after Check for Updates. | ✓ |
 | **Hint** | The next step of a running command; not a severity. | "Pick a face", the mode banner. | none |
 | **Progress** | Work in progress; not a severity. | "Computing preview…" | none |
 
 **States are not severities.** *Suppressed*, *rolled back*, *inactive*,
-*hidden*, *pending* and *driven* describe an object, not a problem; they
-are drawn as states (dimmed, struck, dashed) and never with error or
-warning colors or icons.
+*hidden*, *pending*, *driven* (a dimension) and *By formula* (an option)
+describe an object, not a problem; they are drawn as states (dimmed,
+struck, dashed) and never with error or warning colors or icons.
 
 **Where the levels come from.** A feature's level comes from one
 function of the model (`feature_level`, `feature_notices`): failed an
@@ -428,7 +470,8 @@ Where the window's messages are shown and kept (mitcad#1042,
 - **Lifetime by level.** A hint, progress, information or a success
   shows for 6 s, a warning for 10 s. An error stays until the user
   closes it or starts the next command: a command with a panel, a tool,
-  or an edit of a feature; an action (Undo, a view, Save) leaves it. A
+  or an edit of a feature; an action (Undo, a view, Save) leaves it, but
+  another design clears it (below). A
   message of a lower level does not replace an error or a warning that
   shows; it goes to the history only. A newer message of the same or a
   higher level replaces it.
@@ -443,6 +486,16 @@ Where the window's messages are shown and kept (mitcad#1042,
   again. Esc or a click elsewhere closes it. In the Docked layout the
   status bar keeps its line (the level's icon and the text, until the
   next message) and its history button opens the same history.
+- **Another design.** Starting, opening or otherwise replacing the
+  window's design (New, Open, Open Recent, a file from the system,
+  recovery, an import into a new design) clears the band: its message,
+  an error too, and its stub go, and the band shows nothing until the
+  next message (mitcad#1174). The Docked status line is cleared the same
+  way. The history keeps the messages.
+- **A missed click is a hint.** A click that picks nothing (a drawing
+  pick off the views or away from their edges, a light aimed at no face)
+  says what to click as a hint, which fades: it is no error and shows no
+  *Failed:*.
 
 ## 4. Colors
 

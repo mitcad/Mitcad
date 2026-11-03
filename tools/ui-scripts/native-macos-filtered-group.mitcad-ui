@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# A folded three-feature group with a filtered middle, then filtered head.
+wait-idle
+native-resize 1280 820
+expect-native-history
+native-pointer-click native.history.group.G
+expect-log '^Timeline group G collapsed$'
+mark
+native-popup native.history.filter Root
+expect-log '^Timeline filter: Root: 2 of 3 features$'
+expect-native-visible native.history.F1 false
+expect-native-visible native.history.F2 false
+expect-native-visible native.history.F3 false
+expect-native-visible native.history.filteredRun.1 true
+expect-native-history
+# Search only highlights matches; the component filter hides the middle.
+native-focus native.historyStrip
+native-key-event Ctrl+f
+native-type native.timelineSearch Root
+expect-log '^Timeline search "Root": 2 matches'
+expect-native-history
+key Escape
+focus-main
+native-hover native.history.group.G enter
+expect-timeline-hover F1,F2,F3
+expect-native-tooltip native.history.group.G '(?s)^G.*3 feature'
+native-hover native.history.group.G leave
+mark
+native-popup native.history.filter Child
+expect-log '^Timeline filter: Child: 1 of 3 features$'
+expect-native-history
+native-hover native.history.group.G enter
+expect-timeline-hover F2
+expect-native-tooltip native.history.group.G '(?s)^G.*1 feature'
+native-hover native.history.group.G leave
+screenshot '${MITCAD_TEST_WORK}/filtered-group-head.png'
+native-popup native.history.filter 'All Components'
+expect-native-history
+expect-never '^TestDriver: FAIL|OCCT view event failed'

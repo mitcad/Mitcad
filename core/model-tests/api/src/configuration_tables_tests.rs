@@ -152,7 +152,7 @@ fn a_table_edit_that_removes_the_current_value_moves_the_option() {
     assert_eq!(moves[0]["from"], "M5");
     assert_eq!(moves[0]["to"], "M3");
     assert_eq!(moves[0]["to_expression"], "'M3'");
-    assert_eq!(moves[0]["rule"], "its allowed values Screws.Size");
+    assert_eq!(moves[0]["rule"], "its possible values Screws.Size");
     let report = query(&doc, json!({"query": "configure"}));
     assert_eq!(texts(&report["options"][0]["domain"]), ["M3", "M4", "M6"]);
     // The edit and the move are one undo step.
@@ -416,7 +416,7 @@ fn a_csv_import_that_removes_the_current_value_lists_its_moves() {
     assert_eq!(moves[0]["option"], "Size");
     assert_eq!(moves[0]["from"], "M5");
     assert_eq!(moves[0]["to"], "M3");
-    assert_eq!(moves[0]["rule"], "its allowed values Screws.Size");
+    assert_eq!(moves[0]["rule"], "its possible values Screws.Size");
     assert_eq!(doc.undo_label(), Some("Import Table Screws"));
     // The same file again changes nothing and moves nothing: the earlier
     // import's moves are not its own.

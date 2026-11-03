@@ -10,6 +10,11 @@ previews built from temporary geometry. The overlay uses the placed
 dimension renderer for their extension lines, arrows and sectors; typed
 values continue to reach the model through the existing sketch commands.
 
+The chat's Rust protocol adapter classifies account failures separately
+from failed model tools. The application keeps a known account failure
+until an explicit sign-in check and a bounded, context-free probe succeed;
+the probe cannot use the document's tools or replace its conversation.
+
 ## Layers
 
 | Part | Language | Responsibility |
@@ -1297,6 +1302,15 @@ the `Shape` type.
   `Kernel::triangle_mesh` (adapted from SolidCraft,
   `third_party/solidcraft/mesh_convert.rs`) and built by `Kernel::extrude`,
   so the faces are named as an extrusion's; no kernel function of its own.
+  Its Faceted solid mode (mitcad#1082, `features/mesh_convert/faceted.rs`)
+  takes any closed mesh: welding, orientation and the merge into planar
+  faces are Rust, the solid is `Kernel::boundary_body` (the IFC import's
+  builder) adopted under the feature's face names, a new body; adding the
+  feature hides the mesh body in the same undo step
+  (`document/mesh_convert.rs`), keeping a Show When condition of the body,
+  which it holds back while the conversion is in the timeline
+  (mitcad#1157). The app's panel and Insert Mesh's Convert
+  to solid make it.
 
 ## Topological naming
 
@@ -1346,7 +1360,10 @@ them through operations and derives edge names.
   stored name and the feature warns (`… found as … after a change in
   Sketch1`). Every feature that resolves a face, edge or vertex on a body
   goes through this one resolver; face appearances use the same likeness
-  but take every tied face.
+  but take every tied face. An edge found by none of these still fails;
+  its error lists at most five existing edges that share one of its found
+  faces, best first, as suggestions that nothing takes (mitcad#1187,
+  `with_edge_suggestions`).
 - A face may carry several names. When a boolean splits a face, pieces get
   `#k` in geometric order; a reference without `#k` means all pieces.
   The order (`piece_order`, `geometry/src/util.hpp`) compares the pieces'
@@ -1424,7 +1441,12 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
   vertical), length, angle, radius, diameter, arc length. A driving
   dimension is bound to a parameter (`d<n>`); a driven one only measures,
   into a read-only reference parameter that features after the sketch
-  can use (mitcad#231). A definition may name a user parameter as a
+  can use (mitcad#231), and the sketch's own driving dimensions that
+  cannot move what it measures: the sketch then solves in stages, the
+  users of unknown references left out until those are measured, and a
+  dependency cycle (by constraint connectivity through entities not
+  already fully constrained without the users) is refused
+  (mitcad#1116, `mitcad_sketch::driven`). A definition may name a user parameter as a
   driven dimension's reference, which the sketch then takes over: the
   importers map a source file's parameter of a driven dimension so
   (mitcad#250). A constraint or dimension can be **inactive**: kept and
@@ -1989,6 +2011,26 @@ not recompute.
   not clipped again. The panel's measurement is an inspection's
   `laterQuery`, answered through `CommandHost::measureLater` (at once, as a
   query, for other hosts).
+- **Insert an open design** (`app/files/MainWindowOpenDesign.cpp`, mitcad#1172):
+  `insert.open_design` lists the other live `WindowManager` documents by stable
+  window handle. The shared Qt combo and dialog also use the native macOS
+  adapters. A modified or unnamed source asks to save through its own controller
+  before `insertComponent(path)` reads the saved file and asks Linked/Copy. The
+  original destination is retained through source activation and save dialogs;
+  QPointer and registry checks reject closed owners. Self references are excluded
+  by document identity and `sameFilePath`, including aliases. No document model
+  or undo history is transferred between windows.
+- **Document windows** (`app/WindowManager`, mitcad#1172): one process owns
+  several `MainWindow`s, each retaining its own `DocumentSession`, worker,
+  command, selection and undo history. The manager assigns stable UI window
+  handles, tracks the active document, canonicalizes open paths to avoid
+  duplicates, and routes New/Open either to an empty Untitled window or a
+  new document. The optional current-window preference retains replacement.
+  Frontends subscribe to `windowAdded` and provide presentation through
+  `setPresenter`; document frames never move model state between owners.
+  Accepted closes unregister the document before deferred widget deletion;
+  Quit applies each document's existing save and lock guards in order, and
+  a cancellation stops it. The last closed document ends the process.
 - **Document owner** (`app/framework/DocumentSession`): owns the Rust
   document, model worker, active command, selection, mode and file/recovery
   state. `MainWindow` retains reference aliases for existing workflows.
@@ -2010,7 +2052,10 @@ not recompute.
   `model_command`, `model_export`, `model_reference`, `document_save`, `document_open` and the application's
   own `ui_state`, `ui_log`, `ui_screenshot`, `ui_select`, `ui_command` and
   `ui_camera` against the
-  window's actual `DocumentSession` (mitcad#265, `app/MainWindowMcp.cpp`,
+  target window's actual `DocumentSession`. One process listener routes
+  optional document handles through `WindowManager`; omitted handles use
+  its active window, while chat markers retain their owning document
+  (mitcad#1172; mitcad#265, `app/MainWindowMcp.cpp`,
   `app/MainWindowMcpUi.cpp`). Save As (`document_save` with a path) and
   Open reach only the folders for designs (`app/mcp/AgentFolders`:
   Preferences › AI Assistants, `--mcp-folder`; none by default, mitcad#402), live
@@ -2054,7 +2099,9 @@ not recompute.
   versions of the `bodies` query, `recompute_times`); the live
   `model_export` writes into the folders for designs with the headless
   server's command and checks (`Document::mcp_export_plan`), and
-  `ui_screenshot` returns an MCP image block (mitcad#689).
+  `ui_screenshot` returns an MCP image block (mitcad#689) within a
+  caller-selectable encoded-image budget, `max_bytes`
+  (`app/mcp/ScreenshotBudget.cpp`, mitcad#1188).
 - **Chat panel** (`app/agent`, `core/mcp/src/chat.rs`, mitcad#947,
   [ai-chat.md](ai-chat.md)): the user's own agent through its own native
   interface, one class per agent behind `agent::ChatAgent` (Claude Code's
@@ -2240,9 +2287,21 @@ not recompute.
   make Qt's context current on. Linux: a GLX 4.5 compatibility context
   with a hidden helper window (a core profile makes OCCT read Qt's pbuffer
   and crash). Windows: WGL, the window of Qt's offscreen surface. macOS: a
-  4.1 core context, the highest Apple offers; `macSurfaceFormat()` is the
-  default `QSurfaceFormat` before `QApplication` exists, because contexts
-  of different profiles cannot share there, and the drawable is the
+  4.1 core context, the highest Apple offers. `viewportSurfaceFormat()` sets
+  the existing platform format as the default before `QApplication` exists,
+  so the global share context and viewports have compatible profiles.
+  `Qt::AA_ShareOpenGLContexts` is also selected before the application:
+  Qt retains each viewport's same context when a document moves between
+  top-level frames, preserving its OCCT shaders, meshes and selection.
+  This follows Qt's documented [QOpenGLWidget context-sharing lifecycle](https://doc.qt.io/qt-6/qopenglwidget.html#resource-initialization-and-cleanup).
+  A native drawable change still replaces OCCT's context wrapper. During
+  `SetWindow`, the old wrapper stays alive until the shared shader manager
+  points at the new wrapper; otherwise releasing the old owner can clear
+  that pointer even though Qt's native context remains valid. Each paint
+  binds the manager to the view's current OCCT wrapper after Qt activates
+  the native context. `MITCAD_LOG_GL_BINDINGS=1` logs the Qt/current/OCCT
+  wrapper and shader-manager identities and the explicit ownership check.
+  The macOS drawable is the
   top-level window's `NSView`. The GL assumptions stay in the surface
   format and `occtDrawable()`, so that another backend stays local (OCCT
   has no Metal one). The orientation cube and pick widths scale with the
@@ -2367,6 +2426,14 @@ selectable label and only body/Total section headings are emphasized. This
 keeps both frontends' two-column report semantics without flattening an
 HTML table or drawing interactive widgets as images.
 
+The Comments window uses the same bridge for its six-column native outline,
+reply hierarchy, status filters and actions. Its shared presenter retains
+selection and scroll state while model commands refresh the rows; selecting
+a comment selects and frames its target. Model accessibility roles carry
+the full comment and reply content into AppKit rows. Comment pins remain
+shared viewport overlays, and the native navigation bar and chat panel use
+the shared Comment Pins action and Comments attachment toggle.
+
 Child windows of a presenter (context menus, message boxes) are not part of
 its native structure, so they never rebuild its controls or move their
 keyboard focus. A presenter can opt its outline into row drags
@@ -2482,7 +2549,11 @@ without a focused widget forwards keys to the main window's focus widget
 (`GlassCard::forwardKey`); a command panel that focuses a value field
 activates its card window first when another window of the same main window
 has the keys (`focusField` in `CommandPanel.cpp`); logged positions are in
-host window coordinates (`GlassCard::mapToHost`).
+host window coordinates (`GlassCard::mapToHost`). Their visibility follows the
+owning `FloatingLayout` page as well as the physical window: switching document
+tabs hides every native card, and background message updates only change its
+requested state. Returning to the page restores that state. Moving the document
+to another frame also replaces the layout's physical-window event filter.
 
 Dialogs modal to the main window are sheets on macOS (`app/framework/Dialogs`:
 `prepareModal`, `sheetWarning`, `sheetInformation`, `sheetQuestion`). On
@@ -2509,6 +2580,14 @@ from taking Return. Escape follows each dialog's close/cancel path, including
 stopping an active or queued final render. Icon-only controls retain their
 accessible names and tooltips. Shared UI labels use the single ellipsis
 character; menu/log-name normalization accepts both forms.
+
+The AppKit print managers use the shared `MaterialsPanel` and
+`ProfilesPanel` controllers, including own-place library editing and
+no-design operation. The platform bridge preserves their outlines,
+swatches, settings and destination menus. Explicit field-focus requests
+carry F2 and newly created items' focus/selection to AppKit; opted-in
+appearance-list keys call the shared removal handler. Native divider
+sizes survive presenter rebuilds through the retained splitter.
 
 **The platform layer.** `app/platform/MacChrome.hpp` declares the
 AppKit-only functions in `mitcad::mac`: SF Symbols as icons in the palette's
@@ -2597,7 +2676,20 @@ replacement succeeds, so failed or interrupted updates preserve the last
 completed generation. Recovery still accepts metadata version 1 with its
 fixed `<session UUID>.mitcad` snapshot. Snapshot names are validated before
 recovery reads them; obsolete generations are removed after publication or
-when the session is discarded.
+when the session is discarded. Every document window owns its own UUID,
+manager, write pool and lock, so a normal close removes only that
+window's records. Recovery selects all healthy records and restores each
+into a separate document owner, reusing an initial empty window once.
+Live/lock/remote controllers remain document-owned; their session comes
+from that document's autosave UUID. Library updates, favourites, broker
+credentials/notices and the debug log remain process services. The debug
+log's design fact lists all open document paths.
+
+`DocumentSession` divides the configured process model-cache budget among
+live document owners, returning shares when an owner closes. A busy model
+receives the current share through `whenIdle`, after its worker releases
+it. Loading a replacement uses that owner's share, rather than the full
+process budget. The on-disk result store remains shared.
 
 Code: `Document::save_file` (atomic: temp file renamed over),
 `load_design`, `from_json_at`, `from_json_in` with a `BlobStore`
@@ -3203,7 +3295,9 @@ names from the top (`groups`, from the categories' `parent` and path
 names), and the app merges groups of the same names across libraries
 (`PartGroupTree`). A part with mount frames is placed by Place Component
 (`app/commands/MountCommands.cpp`), a panel of the framework whose
-preview is the model's `mount_preview`.
+preview is the model's `mount_preview`; the selection made before Insert
+from Library is its preselection, so a hole's rim selected first is its
+Place On (mitcad#1197).
 
 ### Live assistant window selection
 

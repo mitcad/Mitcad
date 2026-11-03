@@ -18,7 +18,14 @@ namespace mitcad {
 
 namespace {
 
-const char* const kSetting = "general/askActivateComponent";
+// The preference, in a group of its own (mitcad#1190): an INI file (the
+// settings on Linux) writes a group "general" as the section [%General]
+// and reads its keys back as "General/..." after a restart, so a key of
+// the group "general" was saved but read as unset there.
+const char* const kSetting = "components/askActivate";
+// Where it was saved before: the Windows registry and the macOS
+// preferences read it back as written, an INI file as "General/...".
+const char* const kOldSettings[] = {"general/askActivateComponent", "General/askActivateComponent"};
 const QString kRootComponent = QStringLiteral("C0");
 
 // The origin's planes, axes and point: the active component's own.
@@ -94,17 +101,38 @@ QString literal(const QString& name) {
   return escaped;
 }
 
+// A value saved under an old key moves to the preference's key, once (a
+// value already under the new key stays); the old keys are removed.
+void moveOldSetting(QSettings& settings) {
+  const QString key = QLatin1String(kSetting);
+  for (const char* const old : kOldSettings) {
+    const QString oldKey = QLatin1String(old);
+    if (!settings.contains(oldKey)) {
+      continue;
+    }
+    if (!settings.contains(key)) {
+      settings.setValue(key, settings.value(oldKey));
+    }
+    settings.remove(oldKey);
+  }
+}
+
 } // namespace
 
 bool askToActivateComponent() {
-  const QSettings settings;
+  QSettings settings;
+  moveOldSetting(settings);
   if (settings.contains(QLatin1String(kSetting))) {
     return settings.value(QLatin1String(kSetting)).toBool();
   }
   return qgetenv("MITCAD_ASK_ACTIVATE_COMPONENT").trimmed() != "0";
 }
 
-void saveAskToActivateComponent(bool on) { QSettings().setValue(QLatin1String(kSetting), on); }
+void saveAskToActivateComponent(bool on) {
+  QSettings settings;
+  moveOldSetting(settings);
+  settings.setValue(QLatin1String(kSetting), on);
+}
 
 QString ActivateQuestion::text() const {
   return QObject::tr("The %1 belongs to %2, but %3 is active.").arg(kind, picked, active);

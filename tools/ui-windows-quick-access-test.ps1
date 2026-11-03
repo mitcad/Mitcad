@@ -17,11 +17,16 @@
 #      unchanged saved design, enabled after an edit (a fillet on the top
 #      face), disabled again once saved (Ctrl+S). View > Look At checked in
 #      the group's menu shows a seventh button, before Preferences, kept in
-#      the settings.
-#   2. Floating: the choice read back from the settings; Reset to Default
-#      in the group's menu brings back the default set; Save disabled,
-#      enabled after an edit, disabled once saved; Look At checked again:
-#      the seventh button.
+#      the settings. Preferences > Display > Show quick-access toolbar
+#      (mitcad#1189) off hides the group at once, on shows it again with
+#      the same seven buttons; Hide Quick-Access Toolbar at the end of the
+#      group's menu hides it, the choice of commands kept in the settings.
+#   2. Floating: the group hidden at the start (the setting read back), the
+#      title row without its part; Preferences shows it again with the
+#      choice read back and the title row's part; Reset to Default in the
+#      group's menu brings back the default set; Save disabled, enabled
+#      after an edit, disabled once saved; Look At checked again: the
+#      seventh button; Preferences hides it, the title row's part gone.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-quick-access-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -32,7 +37,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{} -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'tools.preferences.display' = 'Shift+F8' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -56,7 +61,7 @@ Set-Content -Encoding ascii $plateScript @'
 $made = & $Cli run $plateScript --save $plate
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $plate)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
 $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
-$defaults = @('file.new_design', 'file.open', 'file.save', 'file.print', 'file.design_properties', 'tools.preferences')
+$defaults = @('file.new_design', 'file.open', 'file.save', 'file.design_properties', 'file.print', 'tools.preferences')
 
 # Expect-Group "description" extra...: the last "Quick access: " line shows
 # the default commands this build has, in order, with the extra ids before
@@ -136,7 +141,7 @@ function Open-Menu {
   Ui-Step 'right-click the group'          { Ui-Click ($dots[0] - 12) $dots[1] 3 }
   Ui-ExpectNew 'Context menu: ' "the group's menu opened"
   $script:Top = @("$(Ui-LastMatch '^Context menu: (.*)$')" -split ' \| ')
-  if (($script:Top -join ' | ') -notmatch 'File \| Edit \| View \| Tools \| Reset to Default$') {
+  if (($script:Top -join ' | ') -notmatch 'File \| Edit \| View \| Tools \| Reset to Default \| Hide Quick-Access Toolbar$') {
     Ui-Fail "the group's menu: $($script:Top -join ' | ')"
   }
 }
@@ -187,6 +192,51 @@ function Add-LookAt([string]$Layout) {
   Write-Host "ok   ${Layout}: a button more, kept in the settings"
 }
 
+# Toggle-Preference "layout" shown|hidden: Preferences on its Display page
+# (Shift+F8, tools.preferences.display), Show quick-access toolbar (Alt+Q)
+# toggled, OK: the group shown or hidden at once (mitcad#1189).
+function Toggle-Preference([string]$Layout, [string]$State) {
+  Ui-Mark
+  Ui-Step 'Preferences: Display (Shift+F8)' { Ui-Key 'shift+F8' }
+  Ui-ExpectNew 'Preferences opened: Display, ' "${Layout}: Preferences on its Display page"
+  Ui-FocusDialog '^Preferences$'
+  Ui-Step 'Show quick-access toolbar (Alt+Q)' { Ui-Key 'alt+q' }
+  Ui-Step 'OK (Enter)'                    { Ui-Key 'Return' }
+  Ui-FocusMain
+  Ui-ExpectNew "Preferences: quick-access toolbar $State" "${Layout}: the preference saved ($State)"
+  Ui-ExpectNew "Quick access toolbar $State" "${Layout}: the group $State at once"
+}
+
+# Expect-TitlePart with|without: the last "Floating cards" line, waited
+# for, has the title row's quick-access part (titleQuickAccess) or has not.
+function Expect-TitlePart([string]$Want) {
+  $line = $null
+  for ($i = 0; $i -lt 30; $i++) {
+    $line = "$(Ui-LastMatch '^(Floating cards: .*)$')"
+    $has = $line.Contains('; titleQuickAccess ')
+    if (($Want -eq 'with' -and $has) -or ($Want -eq 'without' -and -not $has)) { break }
+    Start-Sleep -Milliseconds 200
+  }
+  if (-not $line.Contains('titleTabs ')) { Ui-Fail "no title row tabs among the Floating cards: '$line'" }
+  $has = $line.Contains('; titleQuickAccess ')
+  if ($Want -eq 'with' -and -not $has) { Ui-Fail "the title row has no quick-access part: '$line'" }
+  if ($Want -eq 'without' -and $has) { Ui-Fail "the title row still has its quick-access part: '$line'" }
+  Write-Host "ok   the title row's quick-access part $(if ($has) { 'is there' } else { 'is gone' })"
+}
+
+# Expect-HiddenSetting "description": the settings say hidden, and the
+# choice of commands (with Look At) is kept.
+function Expect-HiddenSetting([string]$Description) {
+  Ui-Sync
+  if (-not (Select-String -Path $ini -Pattern '^visible=false' -Quiet)) {
+    Ui-Fail "${Description}: the group is not hidden in the settings ($ini)"
+  }
+  if (-not (Select-String -Path $ini -Pattern 'view.look_at' -SimpleMatch -Quiet)) {
+    Ui-Fail "${Description}: the choice of commands was not kept ($ini)"
+  }
+  Write-Host "ok   ${Description}: hidden in the settings, the choice of commands kept"
+}
+
 Write-Host '--- 1. Docked: the default group, Save, Look At'
 $docked = Join-Path $work 'docked.mitcad'
 Copy-Item $plate $docked
@@ -195,13 +245,28 @@ Ui-ExpectLog 'Opened ' 'opened' | Out-Null
 Expect-Group 'docked: the default group'
 Save-Steps 'docked'
 Add-LookAt 'docked'
+Toggle-Preference 'docked' 'hidden'
+Expect-HiddenSetting 'docked, from Preferences'
+Toggle-Preference 'docked' 'shown'
+Ui-ExpectNew 'Quick access: ' 'docked: the group made again'
+Expect-Group 'docked: shown again with the same buttons' @('view.look_at')
+Open-Menu
+Ui-Mark
+Choose-Top 'Hide Quick-Access Toolbar'
+Ui-ExpectNew 'Hide Quick-Access Toolbar chosen' 'docked: Hide Quick-Access Toolbar chosen'
+Ui-ExpectNew 'Quick access toolbar hidden' 'docked: the group hidden from its menu'
+Expect-HiddenSetting "docked, from the group's menu"
 Ui-StopApp
 
-Write-Host '--- 2. Floating: read back, Reset to Default, Save, Look At'
+Write-Host '--- 2. Floating: hidden at the start, shown, Reset to Default, Save, Look At, hidden'
 $floating = Join-Path $work 'floating.mitcad'
 Copy-Item $plate $floating
 Ui-StartApp 'quick-access-floating' @('--chrome=floating', '--open', $floating)
 Ui-ExpectLog 'Opened ' 'opened' | Out-Null
+Ui-ExpectLog 'Quick access toolbar hidden' 'floating: the group hidden at the start' | Out-Null
+Expect-TitlePart 'without'
+Toggle-Preference 'floating' 'shown'
+Expect-TitlePart 'with'
 Expect-Group 'floating: the choice read back from the settings' @('view.look_at')
 Open-Menu
 Ui-Mark
@@ -211,6 +276,9 @@ Ui-ExpectNew 'Quick access: ' 'floating: the group made again'
 Expect-Group 'floating: the default group'
 Save-Steps 'floating'
 Add-LookAt 'floating'
+Toggle-Preference 'floating' 'hidden'
+Expect-TitlePart 'without'
+Expect-HiddenSetting 'floating, from Preferences'
 Ui-StopApp
 
 Ui-Finish 'Quick-access group'

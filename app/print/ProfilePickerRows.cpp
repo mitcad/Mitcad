@@ -89,7 +89,8 @@ QString profileSource(const LibraryItem& item) {
     return QObject::tr("My library");
   }
   if (item.place == QStringLiteral("project")) {
-    return QObject::tr("Project");
+    // The managers' group name (mitcad#1135).
+    return QObject::tr("This project");
   }
   // The design's own: imported from a 3MF (its origin names the file), or
   // made in the design.

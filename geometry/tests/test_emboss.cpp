@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Emboss: profiles wrapped onto cylinders (mitcad#458). Volumes are
 // analytic: a region of area A in the sketch, wrapped onto the cylinder of
-// radius r and grown radially to R, is A |R^2 - r^2| / (2 r).
+// radius r and grown radially to R, is A |R^2 - r^2| / (2 r). Profiles
+// projected onto a sphere, a B-spline face and a plane (mitcad#1091).
 
 #include <algorithm>
 #include <cmath>
@@ -18,12 +19,27 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
+#include <BRepTools.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_Array2.hxx>
+#include <Precision.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Pln.hxx>
+#include <gp_Pnt2d.hxx>
 
+#include "../src/emboss_projection.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/emboss.hpp"
 #include "mitcad/geometry/text.hpp"
@@ -370,6 +386,317 @@ void test_refusals() {
   CHECK(test::throws_with([&] { wrapped_emboss(flat); }, "no depth"));
 }
 
+// --- Projection onto any face (mitcad#1091)
+
+// Points inside a face: a grid over its parameters, those inside it.
+std::vector<gp_Pnt> inner_points(const TopoDS_Face& face) {
+  double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  BRepTopAdaptor_FClass2d inside(face, Precision::PConfusion());
+  const BRepAdaptor_Surface surface(face);
+  std::vector<gp_Pnt> points;
+  constexpr int kGrid = 12;
+  for (int i = 0; i <= kGrid; ++i) {
+    for (int j = 0; j <= kGrid; ++j) {
+      const gp_Pnt2d uv(u0 + (u1 - u0) * i / kGrid, v0 + (v1 - v0) * j / kGrid);
+      if (inside.Perform(uv) == TopAbs_IN) {
+        points.push_back(surface.Value(uv.X(), uv.Y()));
+      }
+    }
+  }
+  return points;
+}
+
+// The one face of a tool a name gives.
+TopoDS_Face face_named(const Shape& tool, const std::string& name) {
+  const std::vector<int> found = tool.find_faces(name);
+  CHECK(found.size() == 1);
+  return found.empty() ? TopoDS_Face() : tool.face(found.front());
+}
+
+double area_of(const TopoDS_Face& face) {
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props);
+  return props.Mass();
+}
+
+// A ball of radius 20 about the origin (the sphere's poles on Z, its seam
+// on +X), its face named F1:side0.
+Shape ball() {
+  const TopoDS_Shape solid = BRepPrimAPI_MakeSphere(gp_Pnt(0.0, 0.0, 0.0), 20.0).Shape();
+  const TopExp_Explorer face(solid, TopAbs_FACE);
+  return Shape(solid, {{face.Current(), {"F1:side0"}}});
+}
+
+// The spec of a sketch on XY (normal +Z) projected along +Z onto `face`.
+EmbossProjectSpec projection_on_xy(const std::vector<Region>& regions, const std::string& face, double depth) {
+  EmbossProjectSpec spec;
+  spec.feature = "F3";
+  spec.regions = regions;
+  spec.face = face;
+  spec.direction = gp_Vec(0.0, 0.0, 1.0);
+  spec.depth = depth;
+  return spec;
+}
+
+// A square projected onto the ball along +Z from the XY plane through its
+// centre (the upper half, the nearest ahead) and raised or sunk 1 along the
+// sphere's normals: the top lies on the sphere of radius 21 (or 19), the
+// bottom on the ball over the square, and the walls along the radii, so
+// the volume is the bottom's solid angle (its area / 20^2) times
+// |R^3 - 20^3| / 3. Off the pole and the seam, and over the pole.
+void test_a_square_projected_onto_a_sphere() {
+  const Shape body = ball();
+  for (const double depth : {1.0, -1.0}) {
+    const ShapePtr tool = projected_emboss(body, projection_on_xy({rectangle(3.0, 3.0, 6.0, 6.0)}, "F1:side0", depth));
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK(solids(tool->occt()) == 1);
+    for (int i = 1; i <= 4; ++i) {
+      CHECK(tool->find_faces("F3:side(r1c" + std::to_string(i) + ")").size() == 1);
+    }
+    const TopoDS_Face bottom = face_named(*tool, "F3:start(r1)");
+    const TopoDS_Face top = face_named(*tool, "F3:end(r1)");
+    const std::vector<gp_Pnt> on_ball = inner_points(bottom);
+    const std::vector<gp_Pnt> over = inner_points(top);
+    CHECK(on_ball.size() > 10 && over.size() > 10);
+    double worst = 0.0;
+    for (const gp_Pnt& p : on_ball) {
+      worst = std::max(worst, std::abs(p.Distance(gp::Origin()) - 20.0));
+      CHECK(p.Z() > 0.0 && p.X() > 3.0 - 1e-6 && p.X() < 9.0 + 1e-6 && p.Y() > 3.0 - 1e-6 && p.Y() < 9.0 + 1e-6);
+    }
+    for (const gp_Pnt& p : over) {
+      worst = std::max(worst, std::abs(p.Distance(gp::Origin()) - (20.0 + depth)));
+    }
+    CHECK(worst < 1e-6);
+    const double outer = depth > 0.0 ? 21.0 : 20.0;
+    const double inner = depth > 0.0 ? 20.0 : 19.0;
+    const double shell = area_of(bottom) / 400.0 * (std::pow(outer, 3) - std::pow(inner, 3)) / 3.0;
+    CHECK_NEAR_TOL(volume_of(tool->occt()), shell, 1e-5);
+    // Joined to the ball (raised) or cut from it (sunk).
+    const double before = volume_of(body.occt());
+    if (depth > 0.0) {
+      BRepAlgoAPI_Fuse fuse(body.occt(), tool->occt());
+      CHECK(fuse.IsDone() && BRepCheck_Analyzer(fuse.Shape()).IsValid());
+      CHECK_NEAR_TOL(volume_of(fuse.Shape()) - before, shell, 1e-5);
+    } else {
+      BRepAlgoAPI_Cut cut(body.occt(), tool->occt());
+      CHECK(cut.IsDone() && BRepCheck_Analyzer(cut.Shape()).IsValid());
+      CHECK_NEAR_TOL(before - volume_of(cut.Shape()), shell, 1e-5);
+    }
+  }
+  // Over the pole (the seam runs through the square: walls may come in
+  // pieces).
+  const ShapePtr pole = projected_emboss(body, projection_on_xy({rectangle(-5.0, -5.0, 10.0, 10.0)}, "F1:side0", 1.0));
+  CHECK(BRepCheck_Analyzer(pole->occt()).IsValid());
+  CHECK(solids(pole->occt()) == 1);
+  CHECK(!pole->find_faces("F3:side(r1c2)").empty());
+  double worst = 0.0;
+  for (const gp_Pnt& p : inner_points(face_named(*pole, "F3:end(r1)"))) {
+    worst = std::max(worst, std::abs(p.Distance(gp::Origin()) - 21.0));
+  }
+  CHECK(worst < 1e-6);
+  // Bounds: the top reaches the pole of the sphere of radius 21.
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(pole->occt(), box, false, false);
+  double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
+  box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  CHECK(std::abs(zmax - 21.0) < 1e-5);
+}
+
+// A bump: a B-spline face over [-20, 20] x [-20, 20], 6 high in the middle,
+// its normal up; named F1:bump.
+occ::handle<Geom_BSplineSurface> bump_surface() {
+  NCollection_Array2<gp_Pnt> poles(1, 4, 1, 4);
+  for (int i = 1; i <= 4; ++i) {
+    for (int j = 1; j <= 4; ++j) {
+      const bool middle = (i == 2 || i == 3) && (j == 2 || j == 3);
+      poles(i, j) = gp_Pnt(-20.0 + 40.0 * (i - 1) / 3.0, -20.0 + 40.0 * (j - 1) / 3.0, middle ? 6.0 : 0.0);
+    }
+  }
+  NCollection_Array1<double> knots(1, 2);
+  knots(1) = 0.0;
+  knots(2) = 1.0;
+  NCollection_Array1<int> multiplicities(1, 2);
+  multiplicities(1) = 4;
+  multiplicities(2) = 4;
+  return new Geom_BSplineSurface(poles, knots, knots, multiplicities, multiplicities, 3, 3);
+}
+
+Shape bump() {
+  const TopoDS_Face face = BRepBuilderAPI_MakeFace(bump_surface(), Precision::Confusion()).Face();
+  return Shape(face, {{face, {"F1:bump"}}});
+}
+
+// A square projected onto the bump along +Z and raised 1 along its
+// normals: every point of the top lies 1 from the bump, the bottom on it
+// over the square.
+void test_a_square_projected_onto_a_bspline_face() {
+  const Shape body = bump();
+  const occ::handle<Geom_BSplineSurface> surface = bump_surface();
+  const ShapePtr tool = projected_emboss(body, projection_on_xy({rectangle(-3.0, -3.0, 6.0, 6.0)}, "F1:bump", 1.0));
+  CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+  CHECK(solids(tool->occt()) == 1);
+  for (int i = 1; i <= 4; ++i) {
+    CHECK(tool->find_faces("F3:side(r1c" + std::to_string(i) + ")").size() == 1);
+  }
+  const std::vector<gp_Pnt> on_bump = inner_points(face_named(*tool, "F3:start(r1)"));
+  const std::vector<gp_Pnt> over = inner_points(face_named(*tool, "F3:end(r1)"));
+  CHECK(on_bump.size() > 10 && over.size() > 10);
+  double worst = 0.0;
+  for (const gp_Pnt& p : on_bump) {
+    GeomAPI_ProjectPointOnSurf projection(p, surface);
+    CHECK(projection.NbPoints() > 0);
+    if (projection.NbPoints() > 0) {
+      worst = std::max(worst, projection.LowerDistance());
+    }
+    CHECK(p.X() > -3.0 - 1e-6 && p.X() < 3.0 + 1e-6 && p.Y() > -3.0 - 1e-6 && p.Y() < 3.0 + 1e-6);
+  }
+  for (const gp_Pnt& p : over) {
+    GeomAPI_ProjectPointOnSurf projection(p, surface);
+    CHECK(projection.NbPoints() > 0);
+    if (projection.NbPoints() > 0) {
+      worst = std::max(worst, std::abs(projection.LowerDistance() - 1.0));
+    }
+    // Above the bump.
+    CHECK(p.Z() > 1.0);
+  }
+  CHECK(worst < 1e-6);
+  // The volume about the bottom's area by the depth.
+  const double bottom = area_of(face_named(*tool, "F3:start(r1)"));
+  CHECK(std::abs(volume_of(tool->occt()) - bottom) < 0.05 * bottom);
+}
+
+// Along a direction off the sketch normal: a 4 x 4 square at the origin of
+// XY projected along (1, 0, 1) onto the top of a box 10 high lands 10
+// further along X; raised 1 along the top's normal (straight up).
+void test_a_direction_shifts_the_projection() {
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(-20.0, -20.0, 0.0), 40.0, 40.0, 10.0).Shape();
+  TopoDS_Face top;
+  for (TopExp_Explorer f(box, TopAbs_FACE); f.More(); f.Next()) {
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(f.Current(), props);
+    if (std::abs(props.CentreOfMass().Z() - 10.0) < 1e-9) {
+      top = TopoDS::Face(f.Current());
+    }
+  }
+  CHECK(!top.IsNull());
+  const Shape body(box, {{top, {"F1:top"}}});
+  EmbossProjectSpec spec = projection_on_xy({rectangle(0.0, 0.0, 4.0, 4.0)}, "F1:top", 1.0);
+  for (const bool slanted : {false, true}) {
+    spec.direction = slanted ? gp_Vec(1.0, 0.0, 1.0) : gp_Vec(0.0, 0.0, 1.0);
+    const ShapePtr tool = projected_emboss(body, spec);
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK_NEAR(volume_of(tool->occt()), 16.0);
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(face_named(*tool, "F3:start(r1)"), props);
+    CHECK_NEAR(props.Mass(), 16.0);
+    const gp_Pnt centre = props.CentreOfMass();
+    const double x = slanted ? 12.0 : 2.0;
+    CHECK(std::abs(centre.X() - x) < 1e-6 && std::abs(centre.Y() - 2.0) < 1e-6 && std::abs(centre.Z() - 10.0) < 1e-6);
+    Bnd_Box bounds;
+    BRepBndLib::AddOptimal(tool->occt(), bounds, false, false);
+    double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
+    bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    CHECK(std::abs(xmin - (x - 2.0)) < 1e-6 && std::abs(xmax - (x + 2.0)) < 1e-6);
+    CHECK(std::abs(zmin - 10.0) < 1e-6 && std::abs(zmax - 11.0) < 1e-6);
+  }
+}
+
+// mitcad#1154: along a slanted direction "nearest ahead of the sketch
+// plane" is measured along the direction's lines. A 6 x 6 square on XY
+// about (-45, 0) projected along (1, 0, 1) onto a ball of radius 20 about
+// (-30, 0, 30): the line from the square's middle meets the ball's
+// underside at z = 10.5 and its top at z = 34.5, both ahead of the plane,
+// so the emboss stands on the underside, below the ball's centre (a
+// measure along the direction alone put the underside behind the plane
+// and the top ahead, and built it on the top). Raised 1 along the
+// sphere's normals, the walls along its radii: the volume is the bottom's
+// solid angle times (21^3 - 20^3) / 3.
+void test_a_slanted_direction_takes_the_near_side_of_a_ball() {
+  const gp_Pnt centre(-30.0, 0.0, 30.0);
+  const TopoDS_Shape solid = BRepPrimAPI_MakeSphere(centre, 20.0).Shape();
+  const TopExp_Explorer ball_face(solid, TopAbs_FACE);
+  const Shape body(solid, {{ball_face.Current(), {"F1:side0"}}});
+  EmbossProjectSpec spec = projection_on_xy({rectangle(-48.0, -3.0, 6.0, 6.0)}, "F1:side0", 1.0);
+  spec.direction = gp_Vec(1.0, 0.0, 1.0);
+  const ShapePtr tool = projected_emboss(body, spec);
+  CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+  CHECK(solids(tool->occt()) == 1);
+  const TopoDS_Face bottom = face_named(*tool, "F3:start(r1)");
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(bottom, props);
+  CHECK(props.CentreOfMass().Z() < 30.0);
+  // Every point of the bottom on the ball, on its underside.
+  const std::vector<gp_Pnt> on_ball = inner_points(bottom);
+  CHECK(on_ball.size() > 10);
+  double worst = 0.0;
+  for (const gp_Pnt& p : on_ball) {
+    worst = std::max(worst, std::abs(p.Distance(centre) - 20.0));
+    CHECK(p.Z() < 30.0);
+  }
+  CHECK(worst < 1e-6);
+  for (int i = 1; i <= 4; ++i) {
+    CHECK(!tool->find_faces("F3:side(r1c" + std::to_string(i) + ")").empty());
+  }
+  const double shell = area_of(bottom) / 400.0 * (std::pow(21.0, 3) - std::pow(20.0, 3)) / 3.0;
+  CHECK_NEAR_TOL(volume_of(tool->occt()), shell, 1e-5);
+  Bnd_Box bounds;
+  BRepBndLib::AddOptimal(tool->occt(), bounds, false, false);
+  double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
+  bounds.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  CHECK(zmax < 30.0);
+}
+
+// mitcad#1154: a point inside a face whose inside the grid over its
+// parameters misses: a strip 0.01 wide along two edges of a 10 x 10 square
+// (an L), every grid point at least 0.5 from its edges. The point lies in
+// the strip, inside the face, and the normal is the plane's.
+void test_a_point_inside_a_sliver() {
+  BRepBuilderAPI_MakePolygon polygon;
+  polygon.Add(gp_Pnt(0.0, 0.0, 0.0));
+  polygon.Add(gp_Pnt(10.0, 0.0, 0.0));
+  polygon.Add(gp_Pnt(10.0, 0.01, 0.0));
+  polygon.Add(gp_Pnt(0.01, 0.01, 0.0));
+  polygon.Add(gp_Pnt(0.01, 10.0, 0.0));
+  polygon.Add(gp_Pnt(0.0, 10.0, 0.0));
+  polygon.Close();
+  const TopoDS_Face face = BRepBuilderAPI_MakeFace(gp_Pln(gp::XOY()), polygon.Wire(), true).Face();
+  gp_Pnt point;
+  gp_Vec normal;
+  CHECK(detail::inner_point(face, point, normal));
+  CHECK(std::abs(point.Z()) < 1e-6);
+  const bool in_strip = point.X() > -1e-6 && point.Y() > -1e-6 && point.X() < 10.0 + 1e-6 && point.Y() < 10.0 + 1e-6 &&
+                        (point.X() < 0.01 + 1e-6 || point.Y() < 0.01 + 1e-6);
+  CHECK(in_strip);
+  // The plane's parameters are its x and y.
+  BRepTopAdaptor_FClass2d inside(face, Precision::PConfusion());
+  CHECK(inside.Perform(gp_Pnt2d(point.X(), point.Y())) == TopAbs_IN);
+  CHECK(std::abs(std::abs(normal.Z()) - 1.0) < 1e-6);
+}
+
+// Profiles that fall partly off the face, or past where it turns away from
+// the direction, or miss it, are refused with their region named; the
+// direction must cross the sketch plane.
+void test_projection_refusals() {
+  const Shape sphere = ball();
+  CHECK(test::throws_with(
+      [&] { projected_emboss(sphere, projection_on_xy({rectangle(15.0, -5.0, 10.0, 10.0)}, "F1:side0", 1.0)); },
+      "the profile r1 falls partly off face F1:side0"));
+  CHECK(test::throws_with(
+      [&] { projected_emboss(sphere, projection_on_xy({rectangle(30.0, 30.0, 6.0, 6.0)}, "F1:side0", 1.0)); },
+      "the profile r1 misses face F1:side0"));
+  const Shape surface = bump();
+  CHECK(test::throws_with(
+      [&] { projected_emboss(surface, projection_on_xy({rectangle(17.0, -3.0, 6.0, 6.0)}, "F1:bump", 1.0)); },
+      "the profile r1 falls partly off face F1:bump"));
+  EmbossProjectSpec sideways = projection_on_xy({rectangle(3.0, 3.0, 6.0, 6.0)}, "F1:side0", 1.0);
+  sideways.direction = gp_Vec(1.0, 0.0, 0.0);
+  CHECK(test::throws_with([&] { projected_emboss(sphere, sideways); }, "lies in the sketch plane"));
+  CHECK(test::throws_with(
+      [&] { projected_emboss(sphere, projection_on_xy({rectangle(3.0, 3.0, 6.0, 6.0)}, "F1:side9", 1.0)); },
+      "no face F1:side9"));
+}
+
 } // namespace
 
 int main() {
@@ -379,6 +706,13 @@ int main() {
   test::guarded("refusals", test_refusals);
   test::guarded("text wrapped on a cylinder", test_text_wrapped_on_a_cylinder);
   test::guarded("a rectangle developed on a cone", test_a_rectangle_developed_on_a_cone);
+  test::guarded("a square projected onto a sphere", test_a_square_projected_onto_a_sphere);
+  test::guarded("a square projected onto a B-spline face", test_a_square_projected_onto_a_bspline_face);
+  test::guarded("a direction shifts the projection", test_a_direction_shifts_the_projection);
+  test::guarded("projection refusals", test_projection_refusals);
+  test::guarded("a slanted direction takes the near side of a ball",
+                test_a_slanted_direction_takes_the_near_side_of_a_ball);
+  test::guarded("a point inside a sliver", test_a_point_inside_a_sliver);
   if (test::failures == 0) {
     std::puts("test_emboss: all checks passed");
   }

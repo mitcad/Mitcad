@@ -16,7 +16,17 @@
 //! counter-clockwise from its lowest corner, a hole clockwise, a circle one
 //! curve). The body keeps its id, name and appearance; the mesh it was
 //! stays as the features before this one left it.
+//!
+//! The Faceted solid mode (mitcad#1082, `faceted.rs`) takes any closed
+//! mesh instead: its vertices welded within the tolerance, its triangles
+//! oriented and merged into planar faces within an angle, built by
+//! [`Kernel::boundary_body`] as a new body (`<feature>.b0`, faces named
+//! `<feature>:import(<n>)`); the mesh body stays, and adding the feature
+//! hides it (`document/mesh_convert.rs`).
 
+mod faceted;
+#[cfg(test)]
+mod faceted_tests;
 #[path = "../../../../third_party/solidcraft/mesh_convert.rs"]
 mod prism;
 #[cfg(test)]
@@ -35,17 +45,45 @@ use crate::parameters::ParamId;
 use crate::profile::{ProfileLoop, ProfileRegion, ProfileSegment, SegmentGeometry};
 use crate::topo::{RegionKey, SegmentKey};
 
+pub use faceted::{Faceted, MAX_ANGLE, MAX_TRIANGLES, faceted_solid};
 pub use prism::{
     MAX_TOLERANCE, MIN_TOLERANCE, Prism, SectionLoop, SectionRegion, convert_prismatic_mesh,
 };
 
+/// How a mesh body is converted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvertMode {
+    /// One profile extruded straight, rebuilt in place as planes and
+    /// cylinders (mitcad#462); the default of a definition without `mode`.
+    #[default]
+    Analytic,
+    /// Any closed mesh as a new solid of planar faces (mitcad#1082).
+    Faceted,
+}
+
+fn is_analytic(mode: &ConvertMode) -> bool {
+    *mode == ConvertMode::Analytic
+}
+
+/// The angle within which Faceted solid merges neighbouring triangles when
+/// the definition gives none (0.5 degrees, in radians).
+pub const DEFAULT_ANGLE: f64 = 0.5 * std::f64::consts::PI / 180.0;
+
 /// A mesh body (`body`) rebuilt as planes and cylinders within `tolerance`
-/// (mm, 0.000001 to 1).
+/// (mm, 0.000001 to 1), or with `mode` `faceted` made a new solid of planar
+/// faces: vertices welded within `tolerance`, neighbouring triangles merged
+/// within `angle` (radians; 0.5 degrees when left out).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(bound(deserialize = "P: Deserialize<'de>"))]
 pub struct MeshConvertDef<P = ParamId> {
     pub body: BodyUid,
     pub tolerance: P,
+    #[serde(default, skip_serializing_if = "is_analytic")]
+    pub mode: ConvertMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<P>,
 }
 
 impl<P> MeshConvertDef<P> {
@@ -56,7 +94,15 @@ impl<P> MeshConvertDef<P> {
         MeshConvertDef {
             body: copy,
             tolerance: param,
+            mode: copy,
+            angle: option,
         }
+    }
+
+    /// The mesh body a new feature hides (`document/mesh_convert.rs`):
+    /// Faceted solid's, which stays beside the solid made of it.
+    pub fn replaced_mesh(&self) -> Option<BodyUid> {
+        (self.mode == ConvertMode::Faceted).then_some(self.body)
     }
 }
 
@@ -70,6 +116,17 @@ fn check_tolerance(value: f64) -> Result<(), String> {
     }
 }
 
+fn check_angle(value: f64) -> Result<(), String> {
+    if value.is_finite() && value > 0.0 && value <= MAX_ANGLE {
+        Ok(())
+    } else {
+        Err(format!(
+            "the angle must be more than 0 and at most 30 degrees, got {}°",
+            value.to_degrees()
+        ))
+    }
+}
+
 impl FeatureInfo for MeshConvertDef {
     fn references(&self) -> References {
         let mut references = References::default();
@@ -78,11 +135,23 @@ impl FeatureInfo for MeshConvertDef {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        if self.angle.is_some() && self.mode == ConvertMode::Analytic {
+            return Err(
+                "an angle is Faceted solid's (mode faceted); the analytic conversion \
+                        has none"
+                    .to_owned(),
+            );
+        }
         ctx.body(self.body)
     }
 
     fn check_values(&self, value: &dyn Fn(ParamId) -> f64) -> Result<(), String> {
-        check_tolerance(value(self.tolerance))
+        check_tolerance(value(self.tolerance))?;
+        self.angle.map_or(Ok(()), |angle| check_angle(value(angle)))
+    }
+
+    fn creates_bodies(&self) -> bool {
+        self.mode == ConvertMode::Faceted
     }
 }
 
@@ -112,6 +181,14 @@ impl<K: Kernel> Evaluate<K> for MeshConvertDef {
             .kernel
             .triangle_mesh(&shape, &AS_STORED)
             .map_err(|e| format!("the mesh's triangles: {e}"))?;
+        if self.mode == ConvertMode::Faceted {
+            let angle = match self.angle {
+                Some(id) => ctx.param(id)?,
+                None => DEFAULT_ANGLE,
+            };
+            check_angle(angle)?;
+            return faceted_output(ctx, &mesh, tolerance, angle);
+        }
         let prism = convert_prismatic_mesh(&mesh, tolerance)?;
         let regions = profile_regions(&prism);
         let solid = ctx
@@ -145,6 +222,58 @@ impl<K: Kernel> Evaluate<K> for MeshConvertDef {
             ..FeatureOutput::default()
         })
     }
+}
+
+/// Faceted solid: the mesh's planar faces built by the kernel as a new
+/// body, its faces named `<feature>:import(<n>)`; refused unless every
+/// shell became a solid of every face with the mesh's volume (within the
+/// tolerance times the area).
+fn faceted_output<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    mesh: &crate::exchange::TriangleMesh,
+    tolerance: f64,
+    angle: f64,
+) -> Result<FeatureOutput<K::Shape>, String> {
+    let faceted = faceted_solid(mesh, tolerance, angle)?;
+    let faces = faceted.boundary.faces.len();
+    let (built, report) = ctx
+        .kernel
+        .boundary_body(&faceted.boundary)
+        .map_err(|e| format!("the faceted solid: {e}"))?;
+    if report.left_out > 0 || !report.solid {
+        let mut message = format!(
+            "the {faces} planar faces of the mesh do not build a closed solid ({} left out); no \
+             geometry was converted",
+            report.left_out
+        );
+        if let Some(first) = report.messages.first() {
+            message.push_str(&format!(": {first}"));
+        }
+        return Err(message);
+    }
+    let (solid, _) = ctx
+        .kernel
+        .adopt_shape(ctx.uid, &built, 0)
+        .map_err(|e| format!("the faceted solid's faces: {e}"))?;
+    if matches!(ctx.kernel.is_valid(&solid), Ok(false)) {
+        return Err("the faceted solid is not valid; no geometry was converted".to_owned());
+    }
+    // The kernel's solid holds the mesh's volume (a kernel that does not
+    // measure is trusted).
+    if let Ok(properties) = ctx.kernel.mass_properties(&solid) {
+        let expected = faceted.volume;
+        if (properties.volume - expected).abs() > tolerance * faceted.area + 1e-6 * expected {
+            return Err(format!(
+                "the faceted solid's volume {} mm³ is not the mesh's {expected} mm³; no geometry \
+                 was converted",
+                properties.volume
+            ));
+        }
+    }
+    Ok(FeatureOutput {
+        changes: vec![BodyChange::Set(BodyUid::new(ctx.uid, 0), solid)],
+        ..FeatureOutput::default()
+    })
 }
 
 /// The section as the kernel's profile regions, its edges numbered as

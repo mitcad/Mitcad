@@ -70,10 +70,41 @@ Assistant uses). When MitCad was started with `--no-mcp`, the panel says
 so.
 
 Before your first message to an agent, the panel says once what leaves
-your computer: what you write, the selection and pictures of the view go
-to the agent's service (Anthropic for Claude Code, OpenAI for Codex),
+your computer: what you write, the selection, the open comments and
+pictures of the view go to the agent's service (Anthropic for Claude Code, OpenAI for Codex),
 whose terms apply. The notice is shown once for each agent.
 **Continue** sends the message.
+
+## Account and sign-in problems
+
+An agent can be signed in while its account cannot use the service. An
+organization may disable access, a sign-in may expire, an API key may be
+missing or invalid, or a credit or rate limit may be reached. These failures
+stay in the state line in the error colour; the panel stops saying **ready**
+and shows the failure once in the conversation. A failed CAD tool does not
+change the account state.
+
+**How to fix** opens help inside the panel. For Claude Code, sign in again
+with an allowed account (`claude /logout`, then `claude /login` in a terminal),
+set `ANTHROPIC_API_KEY` for MitCad and restart it, or ask your organization's
+administrator to enable access. For Codex, use `codex logout`, then `codex
+login`, or configure its API key. Check billing or wait for a usage limit to
+reset where applicable.
+
+Choose **Check again** after correcting the account. It checks sign-in and
+sends one short request in a fresh process, with no design, conversation,
+selection or picture attached and no permission to call MitCad's tools.
+The request may use the account's allowance. The error clears only after
+the request succeeds; a failed or timed-out check keeps it visible. A check
+that fails for another reason (no network, a timeout) keeps the account's
+reason in the state line and says why in a notice. When the agent itself
+is no longer found, the check ends at once and the panel shows the agent's
+setup (**Install**) instead; **Check again** returns once it is found.
+Messages written while the failing message ran are not sent; a notice says
+how many.
+**New conversation** (+) also ends the old process, so the next conversation
+uses the latest sign-in. Automatic setup checks alone do not clear a known
+account failure.
 
 ## Messages
 
@@ -97,6 +128,11 @@ the same way (the history keeps each call as before;
 
 - **Selection** (on by default): the selected items go with the message,
   as `ui_state` gives them to an agent, so "round these edges" knows which.
+- **Comments** (on by default): the design's open comments go with the
+  message, each with its id, text, target and author, so "do the
+  comments" knows what to do. The agent addresses each one with a short
+  note after its change, in the same undo step; you resolve them in the
+  Comments panel ([MCP: Comments for agents](mcp.md#comments-for-agents)).
 - **View**: a picture of the view goes with the message.
 - While the agent works the button is **Stop** (also Esc in the field). A
   message you send meanwhile waits and goes when the agent is done.
@@ -203,7 +239,8 @@ For Codex the panel starts one `codex app-server` process per
 conversation and speaks its JSON-RPC over stdin and stdout, one JSON
 object per line: `initialize` and `initialized`, then `thread/start` (or
 `thread/resume` with the thread id of the design's conversation), one
-`turn/start` per message (its text, the selection as a second text and
+`turn/start` per message (its text, the selection and the open comments
+as a second text and
 the picture of the view as a `data:` URL), `turn/interrupt` for **Stop**,
 and `model/list` for the model choice. The answer streams in from
 `item/agentMessage/delta`; `mcpToolCall` items are the tool rows, and

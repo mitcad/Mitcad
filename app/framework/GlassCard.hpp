@@ -128,8 +128,8 @@ public:
   // view while a drawing takes it); then shown or hidden as last asked.
   void setSuppressed(bool suppressed);
   bool isSuppressed() const { return m_suppressed; }
-  // A windowed card follows its host window: it is shown only while the
-  // host is, and again when the host comes back.
+  // A windowed card follows its owning document page, including tab
+  // changes inside a visible host window, and retains its requested state.
   void hostVisibilityChanged(bool hostVisible);
   void setVisible(bool visible) override;
 

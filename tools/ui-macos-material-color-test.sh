@@ -38,10 +38,17 @@ for scheme in light dark; do
     MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_INPUT=$UI_OUT/colors.mitcad-ui \
       ui_run_app "$scheme" --ui=qt --no-native-dialogs --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/colors.mitcad"
   else
-    MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_INPUT=$UI_OUT/colors.mitcad-ui \
+    export MITCAD_TEST_PICKER_ANIMATIONS=1
+    # Separate pointer steps need an AppKit event-loop turn, while the
+    # original popover's close animation is still in progress.
+    MITCAD_TEST_STEP_MS=50 MITCAD_TEST_SETTLE_MS=0 \
+      MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_INPUT=$UI_OUT/colors.mitcad-ui \
       ui_run_app "$scheme" --ui=native --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/colors.mitcad"
   fi
   ui_expect_log 'TestDriver: done' "$frontend/$scheme: explicit, inherited and unset appearances shown, the picker closed"
+  if [ "$frontend" = native ]; then
+    ui_expect_log '^Native picker animations: on$' 'the actual NSPopover lifecycle ran with animations enabled'
+  fi
   for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints' 'Native Mac canvas:' 'OCCT view event failed:'; do
     ui_expect_no_log "$problem" "$frontend/$scheme: no $problem"
   done

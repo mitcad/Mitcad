@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # The AppKit frontend's navigation bar (mitcad#1099), run by
 # tools/ui-macos-native-test.sh navigation-bar with an empty new design:
-# the bar at the bottom centre of the view with the Qt bar's five buttons
+# the bar at the bottom centre of the view with the Qt bar's six buttons
 # and Fit's shortcut (⌘0 on macOS) in its tooltip; Snap to Grid in the bar
 # and View › Grid and Snaps › Snap to Grid in step both ways; the Visual
 # Style pop-up's Wireframe is the View menu's style; in a sketch on XZ,
@@ -18,8 +18,9 @@ expect-native-visible navigationBar_view.fit true
 expect-native-visible navigationBar_view.visual_style true
 expect-native-visible navigationBar_view.grid true
 expect-native-visible navigationBar_view.snap_grid true
+expect-native-visible navigationBar_view.comment_pins true
 expect-ever 'Native navigation bar tooltips: Look At.* \| Fit \([^)]+\) \| Visual Style: .* \| Layout Grid.* \| Snap to Grid'
-expect-ever 'Native navigation bar states: .*Layout Grid on \(View menu on\), Snap to Grid on \(View menu on\), Visual Style Shaded with Visible Edges Only'
+expect-ever 'Native navigation bar states: .*Layout Grid on \(View menu on\), Snap to Grid on \(View menu on\), Comment Pins on \(View menu on\), Visual Style Shaded with Visible Edges Only'
 screenshot '${MITCAD_TEST_WORK}/native-navigation-bar.png'
 
 # Snap to Grid: the bar's button turns the View menu's item off, the View
@@ -32,6 +33,16 @@ mark
 native-action view.snap_grid
 wait-log 'Snap to grid on'
 wait-log 'Native navigation bar states: .*Snap to Grid on \(View menu on\)'
+
+# Comment Pins is the same checked View action in the native bar.
+mark
+native-click navigationBar_view.comment_pins
+wait-log 'Comment pins hidden'
+wait-log 'Native navigation bar states: .*Comment Pins off \(View menu off\)'
+mark
+native-action view.comment_pins
+wait-log 'Comment pins shown'
+wait-log 'Native navigation bar states: .*Comment Pins on \(View menu on\)'
 
 # Visual Style: the pop-up lists the styles, Wireframe chosen there is the
 # View menu's style; the View menu's default style is the bar's again.

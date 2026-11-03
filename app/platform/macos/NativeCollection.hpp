@@ -11,6 +11,7 @@
 //   part picker's PartGrid): its group tree as a source list with stars
 //   and folding, its rows of filters and its grid, in usable bounds;
 // - QSplitter as panes in its sizes and stretch, with draggable dividers;
+//   user sizes follow the retained presenter across native view rebuilds;
 // - a modeless presenter with "nativeUtilityWindow" in a floating panel
 //   that leaves the keyboard with the document until a field needs it.
 // The presenters' roles and methods are named by properties; the list is

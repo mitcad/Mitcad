@@ -680,3 +680,199 @@ fn an_extension_keeps_the_extent_constraints_out() {
     extend(&mut d, "c1", [9.0, 0.0]);
     assert_eq!(sketch(&d)["dimensions"], json!([]));
 }
+
+// --- Trim ends on the points there (mitcad#1191)
+
+fn trim(d: &mut Document<MockKernel>, curve: &str, at: [f64; 2]) -> Value {
+    command(
+        d,
+        json!({"cmd": "sketch.trim", "sketch": "F1", "curve": curve, "at": at}),
+    )
+}
+
+/// The ids of the points within 1e-3 mm of a position.
+fn points_at(s: &Value, at: [f64; 2]) -> Vec<String> {
+    let apart = |p: &Value| {
+        let (x, y) = (p[0].as_f64().unwrap(), p[1].as_f64().unwrap());
+        (x - at[0]).hypot(y - at[1])
+    };
+    s["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "point" && apart(&e["at"]) <= 1e-3)
+        .map(|e| e["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The start and end of a curve.
+fn ends(s: &Value, curve: &str) -> [String; 2] {
+    let e = entity(s, curve);
+    ["start", "end"].map(|k| e[k].as_str().unwrap_or_default().to_owned())
+}
+
+/// The sketch solves without redundant or conflicting constraints.
+fn assert_clean(s: &Value) {
+    assert!(s["error"].is_null(), "{s}");
+    assert!(
+        s["redundant"].as_array().is_none_or(|r| r.is_empty()),
+        "{s}"
+    );
+    assert!(
+        s["conflicts"].as_array().is_none_or(|c| c.is_empty()),
+        "{s}"
+    );
+}
+
+#[test]
+fn two_tangent_circles_trimmed_one_after_the_other_share_their_end() {
+    // The reported case: two round curves touching (a tangent constraint),
+    // each trimmed at the contact. A circle of radius 10 about the origin
+    // (c2) and one of radius 5 about (15, 0) (c4) touch at (10, 0); a
+    // vertical line across each (c7 at x = 8, c10 at x = 12) cuts each
+    // circle twice more.
+    let mut d = Document::new(MockKernel::default());
+    command(
+        &mut d,
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+            {"id": "p1", "type": "point", "at": [0.0, 0.0]},
+            {"id": "c2", "type": "circle", "center": "p1", "radius": 10.0},
+            {"id": "p3", "type": "point", "at": [15.0, 0.0]},
+            {"id": "c4", "type": "circle", "center": "p3", "radius": 5.0},
+            {"id": "p5", "type": "point", "at": [8.0, -12.0]},
+            {"id": "p6", "type": "point", "at": [8.0, 12.0]},
+            {"id": "c7", "type": "line", "start": "p5", "end": "p6"},
+            {"id": "p8", "type": "point", "at": [12.0, -8.0]},
+            {"id": "p9", "type": "point", "at": [12.0, 8.0]},
+            {"id": "c10", "type": "line", "start": "p8", "end": "p9"}],
+            "constraints": [{"id": "k11", "type": "tangent", "a": "c2", "b": "c4"}]}}),
+    );
+    let before = sketch(&d);
+    assert_clean(&before);
+    // The piece of c2 from the contact up to c7 goes: c2 ends at the
+    // contact, on c4.
+    trim(&mut d, "c2", [9.5, 3.1]);
+    let s = sketch(&d);
+    assert_eq!(entity(&s, "c2")["type"], "arc", "{s}");
+    let joint = points_at(&s, [10.0, 0.0]);
+    assert_eq!(joint.len(), 1, "{s}");
+    let joint = joint[0].clone();
+    assert!(ends(&s, "c2").contains(&joint), "{s}");
+    // The piece of c4 from c10 to the contact goes: c4 ends at the same
+    // point, with no second point beside it.
+    trim(&mut d, "c4", [10.3, 1.7]);
+    let s = sketch(&d);
+    assert_eq!(entity(&s, "c4")["type"], "arc", "{s}");
+    assert_eq!(
+        points_at(&s, [10.0, 0.0]),
+        std::slice::from_ref(&joint),
+        "{s}"
+    );
+    assert!(ends(&s, "c2").contains(&joint), "{s}");
+    assert!(ends(&s, "c4").contains(&joint), "{s}");
+    // Only the ends on the lines are held by point-on-curve constraints;
+    // the tangent stays.
+    let on = constraints_of(&s, "coincident");
+    assert_eq!(on.len(), 2, "{s}");
+    assert!(on.iter().all(|k| k["point"] != joint.as_str()), "{s}");
+    assert_eq!(constraints_of(&s, "tangent").len(), 1, "{s}");
+    // As free as the circles were (each trim's new freedoms are taken by
+    // its ends), and no constraint redundant.
+    assert_clean(&s);
+    assert_eq!(s["dof"], before["dof"], "{s}");
+}
+
+#[test]
+fn two_crossing_lines_trimmed_both_ways_share_one_point() {
+    // c1 from (0, 0) to (20, 0) and c4 from (10, -10) to (10, 10) cross at
+    // (10, 0); trimmed in either order, they make an L.
+    let (c1, c4) = (("c1", [15.0, 0.0]), ("c4", [10.0, 5.0]));
+    for order in [[c1, c4], [c4, c1]] {
+        let mut d = with_sketch();
+        line(&mut d, json!([0, 0]), json!([20, 0])); // c1
+        line(&mut d, json!([10, -10]), json!([10, 10])); // c4
+        for (curve, at) in order {
+            trim(&mut d, curve, at);
+        }
+        let s = sketch(&d);
+        let joint = points_at(&s, [10.0, 0.0]);
+        assert_eq!(joint.len(), 1, "{order:?}: {s}");
+        assert_eq!(ends(&s, "c1")[1], joint[0], "{order:?}: {s}");
+        assert_eq!(ends(&s, "c4")[1], joint[0], "{order:?}: {s}");
+        assert!(constraints_of(&s, "coincident").is_empty(), "{s}");
+        assert_eq!(count(&s, "point"), 3, "{s}");
+        assert_clean(&s);
+        assert_eq!(s["dof"], 6, "two lines sharing a point: {s}");
+    }
+}
+
+#[test]
+fn a_trim_at_a_t_keeps_its_point_on_the_crossing_line() {
+    let mut d = with_sketch();
+    line(&mut d, json!([0, 0]), json!([20, 0])); // c1: p2, p3
+    line(&mut d, json!([10, -10]), json!([10, 10])); // c4: p5, p6
+    trim(&mut d, "c1", [15.0, 0.0]);
+    let s = sketch(&d);
+    let end = ends(&s, "c1")[1].clone();
+    assert!(near(&entity(&s, &end)["at"], [10.0, 0.0]), "{s}");
+    let on = constraints_of(&s, "coincident");
+    assert_eq!(on.len(), 1, "{s}");
+    assert_eq!(on[0]["point"], end.as_str());
+    assert_eq!(on[0]["entity"], "c4");
+    // The crossing line is not split.
+    assert_eq!(ends(&s, "c4"), ["p5", "p6"].map(String::from), "{s}");
+    assert_eq!(count(&s, "line"), 2);
+}
+
+#[test]
+fn a_trim_at_a_lone_point_ends_there_held_on_the_crossing_line() {
+    let mut d = with_sketch();
+    line(&mut d, json!([0, 0]), json!([20, 0])); // c1
+    line(&mut d, json!([10, -10]), json!([10, 10])); // c4
+    let lone = command(
+        &mut d,
+        json!({"cmd": "sketch.add_point", "sketch": "F1", "at": [10, 0]}),
+    );
+    let lone = lone["entities"][0].as_str().unwrap().to_owned();
+    trim(&mut d, "c1", [15.0, 0.0]);
+    let s = sketch(&d);
+    assert_eq!(ends(&s, "c1")[1], lone, "{s}");
+    assert_eq!(
+        points_at(&s, [10.0, 0.0]),
+        std::slice::from_ref(&lone),
+        "{s}"
+    );
+    let on = constraints_of(&s, "coincident");
+    assert_eq!(on.len(), 1, "{s}");
+    assert_eq!(on[0]["point"], lone.as_str());
+    assert_eq!(on[0]["entity"], "c4");
+    assert_clean(&s);
+}
+
+#[test]
+fn a_trim_at_a_projected_point_is_held_there_by_a_constraint() {
+    // A projected line ends on the user's line: the trimmed end is a point
+    // of its own, coincident with the projected end.
+    let mut d = Document::new(MockKernel::default());
+    command(
+        &mut d,
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+            {"id": "p1", "type": "point", "at": [0.0, 0.0]},
+            {"id": "p2", "type": "point", "at": [20.0, 0.0]},
+            {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+            {"id": "p4", "type": "point", "at": [10.0, -10.0], "fixed": true, "reference": true},
+            {"id": "p5", "type": "point", "at": [10.0, 0.0], "fixed": true, "reference": true},
+            {"id": "c6", "type": "line", "start": "p4", "end": "p5", "fixed": true,
+             "reference": true}]}}),
+    );
+    trim(&mut d, "c3", [15.0, 0.0]);
+    let s = sketch(&d);
+    let end = ends(&s, "c3")[1].clone();
+    assert_ne!(end, "p5", "{s}");
+    assert!(near(&entity(&s, &end)["at"], [10.0, 0.0]), "{s}");
+    let held = constraints_of(&s, "coincident");
+    assert_eq!(held.len(), 1, "{s}");
+    assert_eq!(held[0]["point"], end.as_str());
+    assert_eq!(held[0]["entity"], "p5");
+    assert_eq!(ends(&s, "c6"), ["p4", "p5"].map(String::from), "{s}");
+}

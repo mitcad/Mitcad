@@ -14,7 +14,7 @@
 //
 // Control: one JSON object per line. The application writes commands to
 // the worker's stdin ({"cmd": "device" | "memory" | "scene" | "environment" |
-// "view" | "samples" | "stop", ...}); the worker answers on stdout
+// "view" | "samples" | "pause" | "stop", ...}); the worker answers on stdout
 // ({"event": "hello" | "ready" | "device" | "scene" | "frame" | "done" |
 // "status" | "warning" | "error", ...}). Warnings are recoverable and
 // do not describe why a process later stopped. A scene names its bodies with their meshes'
@@ -54,8 +54,9 @@ namespace mitcad::render {
 // "device", the devices in "ready", the event "device" when the CPU takes
 // over, the job's "device"; 7: materials of faces and textures, the faces'
 // triangles in the meshes, mitcad#53; 8: user lights in "environment", the
-// frame's second plane with the ground's catcher factors, mitcad#54).
-constexpr std::uint32_t kProtocolVersion = 8;
+// frame's second plane with the ground's catcher factors, mitcad#54;
+// 9: mandatory interactive worker pause/resume for hidden documents).
+constexpr std::uint32_t kProtocolVersion = 9;
 // The worker's executable, next to the application's (".exe" on Windows).
 constexpr const char* kWorkerName = "mitcad-render";
 constexpr std::uint32_t kFrameMagic = 0x4d524631; // "MRF1"

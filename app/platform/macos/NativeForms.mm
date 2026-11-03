@@ -582,6 +582,7 @@ public:
     // highlight box the panel's width, in the level's fill, with its symbol
     // and word, kept until the next message replaces it; hints, progress
     // and information as plain secondary text.
+    const bool changed = text != m_messageText || level != m_messageLevel;
     m_messageText = text;
     m_messageLevel = level;
     const bool boxed = isProblem(level) && !text.isEmpty();
@@ -611,14 +612,18 @@ public:
                                         initWithString:nativeString(text)
                                             attributes:@{NSFontAttributeName : font, NSForegroundColorAttributeName : NSColor.labelColor}]];
       m_message.attributedStringValue = shown;
-      // As the Qt panel logs it, for UI tests.
-      qDebug().noquote() << QStringLiteral("Panel %1 message box: %2: %3")
-                                .arg(m_def.name, noticeLevelName(level), text);
     } else {
       m_message.stringValue = nativeString(text);
       m_message.textColor = NSColor.secondaryLabelColor;
     }
     m_message.hidden = text.isEmpty();
+    // Refresh the appearance above, but log and lay out only a changed
+    // message, as the shared Qt panel does.
+    if (!changed) return;
+    if (boxed) {
+      qDebug().noquote() << QStringLiteral("Panel %1 message box: %2: %3")
+                                .arg(m_def.name, noticeLevelName(level), text);
+    }
     requestLayout();
   }
 

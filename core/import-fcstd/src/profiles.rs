@@ -22,14 +22,16 @@ use std::borrow::Cow;
 
 use mitcad_freecad::LinkRef;
 use mitcad_freecad::Object;
+use mitcad_import_base::geom::{cross, dot, norm, sub};
 use mitcad_model::sketch::regions::{self, Region, RegionCurve};
-use mitcad_model::{BodyUid, ComponentUid, EntityUid, FaceName, Kernel};
+use mitcad_model::{BodyUid, ComponentUid, Curve3, ElementKind, EntityUid, FaceName, Kernel};
 use serde_json::{Value, json};
 
 use super::Importer;
-use super::elements::sub_name;
+use super::elements::{element_index, sub_name};
 use super::features::{Profile, in_polygon, interior_point, region_depths};
 use super::history::SketchMade;
+use super::sketches::transform_curve;
 // Profiles of several faces (mitcad#543).
 use super::history::Candidate;
 
@@ -265,6 +267,13 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .object(&link.object)
             .cloned()
             .ok_or_else(|| format!("no {}", link.object))?;
+        if link
+            .subs
+            .iter()
+            .all(|s| sub_name(s).starts_with("InternalFace"))
+        {
+            return self.internal_face_profile(link, sketch, component);
+        }
         let mut ids: Vec<EntityUid> = Vec::new();
         for sub in &link.subs {
             let name = sub_name(sub);
@@ -314,6 +323,156 @@ impl<K: Kernel> Importer<'_, '_, K> {
             regions: material,
         })
     }
+
+    /// Chosen faces of a sketch (`Profile` = (sketch, `InternalFace<n>`, …),
+    /// mitcad#1195): FreeCAD's sketch keeps the faces its curves bound in
+    /// its `InternalShape` (a face for each area, rings and the discs
+    /// inside them apart), and the feature sweeps the chosen ones. They are
+    /// the sketch's regions whose inner point lies inside one of those
+    /// faces' boundaries, in the sketch's plane.
+    fn internal_face_profile(
+        &mut self,
+        link: &LinkRef,
+        sketch: SketchMade,
+        component: ComponentUid,
+    ) -> Result<Profile, String> {
+        let data = self.sources[0]
+            .file
+            .property_shape_data(&link.object, "InternalShape")
+            .ok()
+            .flatten()
+            .ok_or_else(|| format!("{} has no stored faces (InternalShape)", link.object))?;
+        let (shape, _) = self
+            .doc
+            .kernel()
+            .import_brep(mitcad_model::FeatureUid(0), &data, 0)
+            .map_err(|e| format!("{}'s stored faces: {e}", link.object))?;
+        let place = self
+            .place_of(&link.object, true)
+            .ok_or_else(|| format!("{} is not placed", link.object))?;
+        if place.component != component {
+            return Err(format!("{} is in another component", link.object));
+        }
+        let frame = sketch.frame;
+        let to_sketch = |p: [f64; 3]| {
+            let d = sub(p, frame.origin);
+            [dot(d, frame.x_axis), dot(d, frame.y_axis)]
+        };
+        // Each chosen face's boundary in the sketch's plane, as segments.
+        let mut faces: Vec<Vec<([f64; 2], [f64; 2])>> = Vec::new();
+        for part in &link.subs {
+            let name = sub_name(part);
+            let index = element_index(name, "InternalFace")
+                .ok_or_else(|| format!("{}.{name} is not a face", link.object))?;
+            let element = self
+                .doc
+                .kernel()
+                .indexed_element(&shape, ElementKind::Face, index)
+                .ok()
+                .flatten()
+                .ok_or_else(|| format!("{}.{name} is not in its stored faces", link.object))?;
+            // Placed as the sketch's shape, or in the sketch's own
+            // coordinates (its plane z = 0): whichever lies in its plane.
+            let placed: Vec<Vec<[f64; 3]>> = element
+                .curves
+                .iter()
+                .map(|c| curve_points(&transform_curve(c, &place.transform)))
+                .collect();
+            let off_plane = |p: &[f64; 3]| dot(sub(*p, frame.origin), frame.normal()).abs();
+            let in_plane = placed
+                .iter()
+                .flatten()
+                .all(|p| off_plane(p) <= 1e-6 * (1.0 + norm(*p)));
+            let mut segments = Vec::new();
+            for (curve, points) in element.curves.iter().zip(&placed) {
+                let points: Vec<[f64; 2]> = if in_plane {
+                    points.iter().copied().map(to_sketch).collect()
+                } else {
+                    curve_points(curve).iter().map(|p| [p[0], p[1]]).collect()
+                };
+                segments.extend(points.windows(2).map(|w| (w[0], w[1])));
+            }
+            if segments.is_empty() {
+                return Err(format!("{}.{name} has no boundary", link.object));
+            }
+            faces.push(segments);
+        }
+        let output = self
+            .doc
+            .sketch_output(sketch.uid)
+            .ok_or("the sketch did not solve")?;
+        let regions: Vec<String> = output
+            .region_info
+            .iter()
+            .filter(|r| {
+                interior_point(r).is_some_and(|p| faces.iter().any(|f| inside_segments(f, p)))
+            })
+            .map(|r| r.profile.key.to_string())
+            .collect();
+        if regions.is_empty() {
+            return Err(format!(
+                "the chosen faces of {} hold none of its regions",
+                link.object
+            ));
+        }
+        Ok(Profile {
+            sketch,
+            outer: None,
+            regions,
+        })
+    }
+}
+
+/// Points along a curve, close enough to stand for it in an inside test:
+/// a line's ends, 96 steps of a conic, a spline's poles.
+fn curve_points(curve: &Curve3) -> Vec<[f64; 3]> {
+    match curve {
+        Curve3::Point(p) => vec![*p],
+        Curve3::Line { start, end } => vec![*start, *end],
+        Curve3::Conic {
+            center,
+            normal,
+            x_axis,
+            major,
+            minor,
+            start,
+            end,
+            closed,
+        } => {
+            const STEPS: u32 = 96;
+            let end = if *closed {
+                start + std::f64::consts::TAU
+            } else {
+                *end
+            };
+            let y_axis = cross(*normal, *x_axis);
+            (0..=STEPS)
+                .map(|k| {
+                    let t = start + (end - start) * f64::from(k) / f64::from(STEPS);
+                    let (c, s) = (t.cos(), t.sin());
+                    std::array::from_fn(|i| {
+                        center[i] + major * c * x_axis[i] + minor * s * y_axis[i]
+                    })
+                })
+                .collect()
+        }
+        Curve3::BSpline { poles, .. } => poles.clone(),
+        Curve3::Helix { .. } => Vec::new(),
+    }
+}
+
+/// Whether a point is inside the loops the segments make (even-odd: the
+/// segments' order does not matter).
+fn inside_segments(segments: &[([f64; 2], [f64; 2])], p: [f64; 2]) -> bool {
+    let mut inside = false;
+    for (a, b) in segments {
+        if (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
+        {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 #[cfg(test)]
@@ -410,5 +569,37 @@ mod tests {
             let e = face_extrusion_extent(extent).unwrap_err();
             assert!(e.contains("by distances"), "{e}");
         }
+    }
+
+    #[test]
+    fn a_ring_face_holds_the_ring_not_the_disc_inside_it() {
+        // (mitcad#1195) A sketch's stored face of a ring between circles of
+        // radius 7 and 9: its boundary curves in any order, the inner one
+        // first.
+        let circle = |radius: f64| Curve3::Conic {
+            center: [10.0, 20.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            major: radius,
+            minor: radius,
+            start: 0.0,
+            end: 0.0,
+            closed: true,
+        };
+        let mut segments = Vec::new();
+        for c in [circle(7.0), circle(9.0)] {
+            let points: Vec<[f64; 2]> = curve_points(&c).iter().map(|p| [p[0], p[1]]).collect();
+            segments.extend(points.windows(2).map(|w| (w[0], w[1])));
+        }
+        // The ring's inner point, the disc's, and one outside both.
+        assert!(inside_segments(&segments, [18.0, 20.0]));
+        assert!(!inside_segments(&segments, [10.0, 20.0]));
+        assert!(!inside_segments(&segments, [20.0, 20.0]));
+        // A line stands for itself by its ends.
+        let line = Curve3::Line {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        };
+        assert_eq!(curve_points(&line).len(), 2);
     }
 }

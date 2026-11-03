@@ -2,6 +2,7 @@
 # check-all sources: app/framework/Ribbon.cpp app/MainWindowMake.cpp app/print/MakeBodyCard.cpp app/browser/BrowserPanel.cpp
 # check-all sources: core/model-api/src/body_notes.rs core/model-api/src/cut_sheets.rs tools/cli
 # check-all sources: core/model-api/src/annotations.rs app/MainWindowMeasurements.cpp app/view/MeasurementOverlay.cpp
+# check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
 # Input-driven Windows UI test of the Make tab (mitcad#1049) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-make-tab-test.sh on Linux, on its design: a sheet-metal plate
@@ -12,7 +13,7 @@
 #      Annotate, 3D Print and Laser, their menus; no CNC group. The Browser
 #      marks Body2 on the Make tab.
 #   2. The moved commands from the Make tab's buttons: Edit Materials...,
-#      Edit Printers and Processes..., Print Analysis, Send to Slicer and
+#      Printers... and Processes... (mitcad#1135), Print Analysis, Send to Slicer and
 #      Export Flat Pattern... (its DXF written); Export Face as DXF... on
 #      Body2's top face.
 #   3. The Annotate group places each kind: Dimension and Note from their
@@ -21,7 +22,14 @@
 #      Material and Process Note by shortcuts of the test's (their menu entries are
 #      in the Linux test: the input goes to the main window's places only).
 #   4. Body2's card on the Make tab: Walls 5 set on the body, typed 3 there,
-#      one Undo back to 5; none on the Solid tab, nor markers.
+#      one Undo back to 5; the Make section inside the selection card, its
+#      frame whole, the same margin on both sides (mitcad#1178: the design
+#      has a process of a long name, which made it wider). Body1's card
+#      (mitcad#1178): no Create row, no print values of its own; Add Print
+#      Value... and "Walls" typed in its picker add the process's 2 walls
+#      to Body1 with the body's icon, its field focused; 4 typed there is
+#      set; its remove button clears it; one Undo puts 4 back. None on the
+#      Solid tab, nor markers.
 #   5. The Floating layout: the Make tab and Dimension from it.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-make-tab-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -64,7 +72,8 @@ Set-Content -Encoding ascii $modelJson @'
   {"cmd":"create_print_profile","kind":"process","name":"Standard","values":{"layer_height":0.2,"perimeters":2}},
   {"cmd":"set_property","owner":"C0","set":"Print Printer","key":"profile","value":"bench"},
   {"cmd":"set_property","owner":"C0","set":"Print Process","key":"profile","value":"standard"},
-  {"cmd":"set_property","owner":"F5.b0","set":"Print Process","key":"perimeters","value":5}
+  {"cmd":"set_property","owner":"F5.b0","set":"Print Process","key":"perimeters","value":5},
+  {"cmd":"create_print_profile","kind":"process","name":"Fine detail 0.12 mm layers with extra walls and a slow outer wall","values":{"layer_height":0.12}}
 ]
 '@
 $output = & $cli run $modelJson --save $design 2>&1
@@ -106,6 +115,22 @@ function Annotate([string]$Start, [string]$Command, [string]$Pick) {
   Ui-Step "pick $Pick"                     { Ui-ClickPick $Pick }
 }
 
+# Section-Fits "Make": the selection card's section as last logged
+# (mitcad#1178): inside the card and what of it shows, its right frame
+# whole, with the same margin on both sides unless the page scrolls.
+function Section-Fits([string]$Name) {
+  $line = "$(Ui-LastLineWith "Selection card section ${Name}: ")"
+  $m = [regex]::Match($line, ': (-?\d+)\.\.(-?\d+) of card (-?\d+)\.\.(-?\d+), visible to (-?\d+)')
+  if (-not $m.Success) { Ui-Fail "no place logged for the $Name section ($line)" }
+  $l = [int]$m.Groups[1].Value; $r = [int]$m.Groups[2].Value
+  $cl = [int]$m.Groups[3].Value; $cr = [int]$m.Groups[4].Value; $vr = [int]$m.Groups[5].Value
+  if ($l -lt $cl -or $r -gt $cr -or $r -gt $vr) { Ui-Fail "the $Name section runs past the card: $line" }
+  if (-not $line.EndsWith(', scrolled') -and [Math]::Abs(($l - $cl) - ($cr - $r)) -gt 1) {
+    Ui-Fail "the $Name section's margins differ (left $($l - $cl), right $($cr - $r)): $line"
+  }
+  Write-Host "ok   the $Name section inside the card ($l..$r of $cl..$cr, visible to $vr)"
+}
+
 $top = 'face F5.b0/F5:end(r{c1'
 $cbore = 'face F5.b0/F6:hole0.cbore_wall'
 
@@ -126,7 +151,7 @@ if (Ui-LastLineWith 'Ribbon MAKE/CNC') { Ui-Fail 'a CNC group without commands' 
 Ui-ExpectNew 'Browser Make markers: Root/Bodies/Body2: Own print settings: Walls' 'Body2 marked'
 Group-Menu 'MAKE/MATERIALS' 'Edit Materials... | Material'
 Group-Menu 'MAKE/ANNOTATE' 'Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations...'
-Group-Menu 'MAKE/3D PRINT' 'Print Analysis | Send to Slicer | Edit Printers and Processes...'
+Group-Menu 'MAKE/3D PRINT' 'Print Analysis | Send to Slicer | Printers... | Processes...'
 Group-Menu 'MAKE/LASER' 'Export Flat Pattern... | Export Face as DXF...'
 
 Write-Host '--- 2. The moved commands from their new places'
@@ -135,9 +160,13 @@ Ui-Step 'Edit Materials...'                { Ui-ClickLogged 'Ribbon button solid
 Ui-ExpectNew 'Materials opened' 'the Materials window'
 Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Materials$'; Ui-Key 'Escape'; Ui-FocusMain }
 Ui-Mark
-Ui-Step 'Edit Printers and Processes...'   { Ui-ClickLogged 'Ribbon button make.printers' }
-Ui-ExpectNew 'Printers and processes opened' 'Printers and Processes'
-Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Printers and Processes$'; Ui-Key 'Escape'; Ui-FocusMain }
+Ui-Step 'Printers...'                      { Ui-ClickLogged 'Ribbon button make.printers' }
+Ui-ExpectNew 'Printers opened' 'the Printers manager (mitcad#1135)'
+Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Printers$'; Ui-Key 'Escape'; Ui-FocusMain }
+Ui-Mark
+Ui-Step 'Processes...'                     { Ui-ClickLogged 'Ribbon button make.processes' }
+Ui-ExpectNew 'Processes opened' 'the Processes manager'
+Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Processes$'; Ui-Key 'Escape'; Ui-FocusMain }
 Ui-Mark
 Ui-Step 'Print Analysis'                   { Ui-ClickLogged 'Ribbon button inspect.print_analysis' }
 Ui-ExpectNew 'Command Print Analysis started' 'Print Analysis'
@@ -224,6 +253,49 @@ Ui-ExpectNew 'own: Walls = 3 (body Body2)' 'the card shows 3'
 Ui-Mark
 Ui-Step 'undo (Ctrl+Z)'                    { Ui-Key 'ctrl+z' }
 Ui-ExpectNew 'own: Walls = 5 (body Body2)' 'one undo step: 5 again'
+Ui-ExpectNew 'Selection card section Make: ' 'the Make section''s place logged'
+Section-Fits 'Make'
+
+Write-Host '--- 4b. Add Print Value... and the remove button (mitcad#1178)'
+Ui-Mark
+Ui-Step 'select Body1 in the Browser'      { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
+Ui-ExpectNew 'Make card: Body1: ' 'Body1''s card'
+Ui-ExpectNew 'process Standard (component Root); own: none' 'no print values of its own'
+Ui-ExpectNew 'Make card add value at' 'Add Print Value... placed'
+# The row is logged only when it changes, from "none" at start: no line
+# yet means none.
+$create = "$(Ui-LastLineWith 'Selection card create: ' -Start)"
+if ($create -ne '' -and $create -ne 'Selection card create: none') { Ui-Fail "a Create row on the Make tab: $create" }
+Write-Host 'ok   no Create row on the Make tab'
+Ui-Mark
+Ui-Step 'Add Print Value...'               { Ui-ClickLogged 'Make card add value' }
+Ui-ExpectNew 'Add print value opened for Body1: ' 'the picker opened'
+Ui-Step 'search Walls'                     { Ui-FocusDialog '^Add Print Value$'; Ui-Type 'Walls' }
+Ui-ExpectNew 'Add print value search: Walls: ' 'Walls searched'
+$search = "$(Ui-LastLineWith 'Add print value search: ')"
+if (-not $search.Contains(', current perimeters')) { Ui-Fail "Walls is not the current setting: $search" }
+Write-Host 'ok   Walls first'
+Ui-Step 'add (Enter)'                      { Ui-Key 'Return'; Ui-FocusMain }
+Ui-ExpectNew 'Add print value chose perimeters' 'Walls chosen'
+Ui-ExpectNew 'Make card Walls added: 2' 'added to Body1 at the process''s 2'
+Ui-ExpectNew 'process Standard (component Root); own: Walls = 2 (body Body1)' 'its row on the body'
+Ui-ExpectNew 'Make card value perimeters icon body' 'with the body''s icon'
+Ui-ExpectNew 'Make card value perimeters focused' 'its field focused'
+Ui-ExpectNew 'Make card remove perimeters at' 'its remove button'
+Ui-ExpectNew 'Root/Bodies/Body1: Own print settings: Walls' 'the Browser marks Body1'
+Ui-Mark
+Ui-Step 'Walls 4'                          { Ui-ClickLogged 'Make card value perimeters'; Ui-SyncOr 200; Ui-Key 'ctrl+a'; Ui-Type '4'; Ui-Key 'Return' }
+Ui-ExpectNew 'Make card Walls set: 4' '4 typed is set on the body'
+Ui-ExpectNew 'own: Walls = 4 (body Body1)' 'the card shows 4'
+Ui-ExpectNew 'Selection card section Make: ' 'the Make section''s place logged'
+Section-Fits 'Make'
+Ui-Mark
+Ui-Step 'remove Walls'                     { Ui-ClickLogged 'Make card remove perimeters' }
+Ui-ExpectNew 'Make card Walls removed' 'the remove button clears it on the body'
+Ui-ExpectNew 'process Standard (component Root); own: none' 'no row: the process''s Walls again'
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                    { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'own: Walls = 4 (body Body1)' 'one undo step: 4 again'
 Ui-Mark
 Ui-Step 'the Solid tab'                    { Ui-ClickLogged 'Ribbon tab SOLID' }
 Ui-ExpectNew 'Make card: none' 'no card on the Solid tab'

@@ -70,6 +70,27 @@ bool QuickAccessSettings::setChosen(const QString& id, bool on) {
   return true;
 }
 
+QString QuickAccessSettings::visibleKey() { return QStringLiteral("quickAccess/visible"); }
+
+bool QuickAccessSettings::loadVisible() { return QSettings().value(visibleKey(), true).toBool(); }
+
+bool QuickAccessSettings::saveVisible(bool visible) {
+  if (loadVisible() == visible) {
+    return false;
+  }
+  {
+    QSettings settings;
+    settings.setValue(visibleKey(), visible);
+  }
+  emit QuickAccessNotifier::instance().visibilityChanged(visible);
+  return true;
+}
+
+QuickAccessNotifier& QuickAccessNotifier::instance() {
+  static QuickAccessNotifier notifier;
+  return notifier;
+}
+
 QStringList quickAccessShown(const QStringList& chosen, const QStringList& available) {
   QStringList shown;
   for (const QString& id : available) {

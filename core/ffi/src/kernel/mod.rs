@@ -2596,6 +2596,28 @@ impl Kernel for OcctKernel {
         dogbone::ffi::dogbone_tool(occt(spec.body)?, &dogbone).map_err(failed)
     }
 
+    // Emboss by projection onto any face (mitcad#1091; emboss.rs).
+
+    fn projected_emboss(
+        &self,
+        spec: &mitcad_model::kernel::EmbossProjectSpec<'_, Self::Shape>,
+    ) -> Result<Self::Shape, KernelError> {
+        let regions: Vec<profile::ffi::Region> = spec.regions.iter().map(profile::region).collect();
+        let projection = emboss::ffi::EmbossProjection {
+            direction: spec.direction,
+            depth: spec.depth,
+        };
+        emboss::ffi::projected_emboss(
+            &spec.feature.to_string(),
+            &profile::frame(&spec.frame),
+            &regions,
+            occt(spec.body)?,
+            &spec.face.to_string(),
+            &projection,
+        )
+        .map_err(failed)
+    }
+
     // Topology counts for Physical Properties (mitcad#1095; topology.rs).
 
     fn topology_counts(

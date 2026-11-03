@@ -35,6 +35,9 @@ struct MessageEntry {
 //   or starts the next command (commandStarted).
 // - Faded or closed, the band shows the latest message as a one-line stub,
 //   which opens the history.
+// - Another design in the window (New, Open, recovery; mitcad#1174) clears
+//   the band: neither the message shown in full nor the stub stays, until
+//   the next message (clear). The history keeps them.
 // - The history keeps this session's messages, newest first, at most
 //   kMaxEntries of them; nothing is saved.
 class MessageLog {
@@ -65,12 +68,18 @@ public:
   // The next command started: an error shown in full becomes the stub.
   // Returns whether the band changed.
   bool commandStarted();
+  // Another design in the window (mitcad#1174): the band shows nothing,
+  // neither a message in full (an error too) nor the stub, until the next
+  // message; the history keeps them. Returns whether the band changed.
+  bool clear();
 
   Shown shown() const;
   // The message shown in full; null unless shown() is Full.
   const MessageEntry* full() const { return m_full ? &*m_full : nullptr; }
-  // The latest message, which the stub shows; null without a message.
+  // The latest message; null without a message.
   const MessageEntry* latest() const { return m_entries.empty() ? nullptr : &m_entries.front(); }
+  // The message the stub shows (the latest); null unless shown() is Stub.
+  const MessageEntry* stub() const { return shown() == Shown::Stub ? &m_entries.front() : nullptr; }
 
   // The session's messages, newest first.
   const std::deque<MessageEntry>& entries() const { return m_entries; }
@@ -79,6 +88,7 @@ public:
 private:
   std::deque<MessageEntry> m_entries;
   std::optional<MessageEntry> m_full; // shown in full
+  bool m_cleared = false;             // no stub until the next message (clear)
 };
 
 } // namespace mitcad

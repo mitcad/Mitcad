@@ -100,6 +100,40 @@ void bandTests() {
   CHECK(log.latest()->text == QStringLiteral("Two"));
 }
 
+// Another design in the window (mitcad#1174): the band shows nothing, an
+// error neither, nor the stub, until the next message; the history keeps
+// them.
+void clearTests() {
+  MessageLog log;
+  CHECK(!log.clear()); // nothing shown: nothing changes
+  CHECK(log.shown() == MessageLog::Shown::None);
+
+  // An error in full: gone, without its stub.
+  CHECK(log.add(QStringLiteral("Nothing to pick there"), NoticeLevel::Error, QString(), at(0)));
+  CHECK(log.clear());
+  CHECK(log.shown() == MessageLog::Shown::None);
+  CHECK(log.full() == nullptr && log.stub() == nullptr);
+  CHECK(log.latest()->text == QStringLiteral("Nothing to pick there")); // in the history
+  CHECK(log.size() == 1);
+  CHECK(!log.expire() && !log.close() && !log.commandStarted());
+  // A cleared status line brings no stub back.
+  CHECK(!log.add(QString(), NoticeLevel::Hint, QString(), at(1)));
+  CHECK(log.shown() == MessageLog::Shown::None);
+
+  // The next message is shown in full, then its stub as before.
+  CHECK(log.add(QStringLiteral("Create a sketch"), NoticeLevel::Hint, QString(), at(2)));
+  CHECK(log.shown() == MessageLog::Shown::Full);
+  CHECK(log.expire());
+  CHECK(log.shown() == MessageLog::Shown::Stub);
+  CHECK(log.stub()->text == QStringLiteral("Create a sketch"));
+
+  // A stub: gone too.
+  CHECK(log.clear());
+  CHECK(log.shown() == MessageLog::Shown::None);
+  CHECK(!log.clear());
+  CHECK(log.size() == 2);
+}
+
 void historyTests() {
   MessageLog log;
   log.add(QStringLiteral("Fillet2: too large"), NoticeLevel::Error, QStringLiteral("F5"), at(0));
@@ -132,6 +166,7 @@ int messageLogTests() {
   failures = 0;
   lifetimeTests();
   bandTests();
+  clearTests();
   historyTests();
   return failures;
 }

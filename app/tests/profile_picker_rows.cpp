@@ -131,7 +131,7 @@ void processRows() {
   CHECK(rows.size() == 2);
   if (rows.size() == 2) {
     CHECK(describe(rows.at(0)) == QStringLiteral("Acme X1C | 0.20mm Standard | This design | design/standard"));
-    CHECK(describe(rows.at(1)) == QStringLiteral("Other | Draft | Project | project/draft"));
+    CHECK(describe(rows.at(1)) == QStringLiteral("Other | Draft | This project | project/draft"));
   }
   // None names a printer: no groups.
   const QVector<ProfilePickerRow> plain = mitcad::profilePickerRows({items.at(1)}, QStringLiteral("process"));

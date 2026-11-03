@@ -175,6 +175,16 @@
 //! height of the annotations' texts set for the design (mm, 0.1 to 1000)
 //! is `annotation_text_height`, left out for the automatic one.
 //!
+//! Comments (mitcad#1119), when there are any: `comments` (`id` `C<n>`,
+//! `text`, `target` as the `comments` query gives it, `status`, `"orphaned":
+//! true`, `author`, `resolution`, `addressed_by`, `replies` {`author`,
+//! `text`, `created`}, `created`, `place` the last known place), see
+//! `document/comments.rs`; `next_comment`, the number the next id takes,
+//! only where it is not one past the largest listed. A design without
+//! comments leaves both out, so older versions read it. Builds without
+//! comment support treat both as unknown top-level fields: builds with
+//! mitcad#1132 ignore them with a warning; earlier builds refuse them.
+//!
 //! Purge volumes set by hand (mitcad#705), when there are any:
 //! `purge_volumes` (`[{"from", "to", "volume"}]`: material ids and mm³),
 //! see [`crate::print_purge`]; a pair of a material the design no longer
@@ -241,10 +251,10 @@
 //! not see them.
 //!
 //! Top-level fields this build does not know (mitcad#1132) are ignored:
-//! a newer MitCad wrote them (comments, say), and a field added later
+//! a newer MitCad wrote them (`future_notes`, say), and a field added later
 //! must not keep an older build from opening the design. Opening names
 //! them in a warning ([`crate::Document::load_warnings`]: "this design was
-//! written by a newer MitCad: the fields `comments`, `next_comment` were
+//! written by a newer MitCad: the fields `future_notes`, `next_future_note` were
 //! not read") and keeps them with the file they were read from
 //! ([`Document::unknown_fields`]). This build cannot write them back, so
 //! saving over that file drops them ([`Document::fields_dropped_by_saving`]
@@ -392,7 +402,7 @@ fn quoted_list(fields: &[String]) -> String {
 
 /// The warning on opening a design with unknown top-level fields
 /// (mitcad#1132): "this design was written by a newer MitCad: the field
-/// `comments` was not read".
+/// `future_notes` was not read".
 pub fn unknown_fields_warning(fields: &[String]) -> String {
     let (noun, verb) = if fields.len() == 1 {
         ("field", "was")

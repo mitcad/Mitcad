@@ -116,15 +116,18 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
     if (name == QLatin1String("fit-main-frame")) {
       // A process-local available-frame scenario: use this window's real
       // titlebar/border size, without changing the display or user settings.
-      const QSize frame = m_main->frameGeometry().size() - m_main->size();
-      m_main->resize(available - frame);
+      QWidget* top = topWindow();
+      const QSize frame = top->frameGeometry().size() - top->size();
+      top->resize(available - frame);
       m_notBefore = std::max(m_notBefore, m_clock.elapsed() + 300);
     } else {
       whenReady([this, available] {
-        const QSize frame = m_main->frameGeometry().size();
+        const QWidget* top = topWindow();
+        if (top == nullptr) return false;
+        const QSize frame = top->frameGeometry().size();
         m_waitDetail = QStringLiteral("actual frame %1x%2, client %3x%4, minimum %5x%6, available %7x%8")
-            .arg(frame.width()).arg(frame.height()).arg(m_main->width()).arg(m_main->height())
-            .arg(m_main->minimumSizeHint().width()).arg(m_main->minimumSizeHint().height())
+            .arg(frame.width()).arg(frame.height()).arg(top->width()).arg(top->height())
+            .arg(top->minimumSizeHint().width()).arg(top->minimumSizeHint().height())
             .arg(available.width()).arg(available.height());
         qInfo().noquote() << QStringLiteral("Compact main frame: %1").arg(m_waitDetail);
         return frame.width() <= available.width() && frame.height() <= available.height();

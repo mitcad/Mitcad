@@ -604,9 +604,15 @@ private:
   void closeValueBox(bool keep);
   // Tab in the field: the next handle's value box (`back`: the previous).
   void stepValueBox(bool back);
+  // The box's text evaluated (mitcad#1181): an error border while it is
+  // not a value, as the panel's field shows it; Enter and Tab then keep
+  // the box open (a refusal logged), Esc puts the value back.
+  void markValueBox(bool invalid);
+  bool valueBoxRefuses() const;
   QPointer<QLineEdit> m_valueBox;
   QString m_valueBoxKey;
   QString m_valueBoxBefore;
+  bool m_valueBoxInvalid = false;
   // OK of a command that makes a component in a root with modelled bodies
   // (mitcad#171): asks whether the root's features move into a component
   // first. False when the user cancels; `done` when the move did the
@@ -751,6 +757,14 @@ private:
   // The point under the mouse moved (CommandDef::hoverPreview, mitcad#417):
   // the command's preview again when the command says so.
   void hoverMoved(const SelectionItem& item);
+  // The mouse over the view and a click there, for a command's point on a
+  // plane (CommandDef::cursorPlane, mitcad#1196; CommandSessionHover.cpp):
+  // the last position (none: off the view) and whether a move waits for
+  // the model to be idle.
+  void pointerMoved(std::optional<QPointF> position);
+  void clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers);
+  std::optional<QPointF> m_pointer;
+  bool m_pointerWaits = false;
 
   // Visibility changes while the panel is open (mitcad#295;
   // CommandSessionVisibility.cpp), in their order, to run again where the

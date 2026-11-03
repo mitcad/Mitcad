@@ -92,9 +92,9 @@ Prepared prepare(const std::string& feature, const LoftSection& section, std::si
                                   (faces.empty() ? " does not exist" : " is in several pieces"));
     }
     const TopoDS_Face face = body->face(faces.front());
-    if (wire_count(face) > 1) {
-      throw std::invalid_argument("unsupported: a loft " + which + " with holes");
-    }
+    // A face with holes lofts its outer boundary, as a face without them
+    // (mitcad#1183); the face itself, holes and all, stays what tangent and
+    // smooth ends measure from.
     prepared.named.wire = BRepTools::OuterWire(face);
     for (TopExp_Explorer e(prepared.named.wire, TopAbs_EDGE); e.More(); e.Next()) {
       if (const std::optional<std::string> name = body->name_of_edge(e.Current())) {

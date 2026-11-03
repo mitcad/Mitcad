@@ -2375,22 +2375,14 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             .to_owned());
         }
         if cut {
-            return self.cut_paste_command(&sources);
+            return self.cut_paste_command(item, &sources);
         }
-        let bodies: Vec<String> = sources
+        let bodies: Vec<BodyUid> = sources
             .iter()
-            .map(|r| self.body_of(r).map(|b| b.to_string()))
+            .map(|r| self.body_of(r))
             .collect::<Option<_>>()
             .ok_or("a copied body was not found")?;
-        let identity = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ];
-        let mut c = Candidate::new(json!({"type": "move", "bodies": bodies, "copy": true,
-            "transform": {"type": "free", "matrix": identity}}));
-        c.input_provenance = InputProvenance::Read;
-        Ok(vec![c])
+        Ok(vec![copy_in_place(&bodies)])
     }
 
     /// The Move to Component commands of a cut and paste: the bodies cut
@@ -2399,7 +2391,11 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     /// go, a body transfer moves the bodies alone (the second). The bodies
     /// a feature ties together stay in their component unless `together`:
     /// that command is the last, a guess the history must confirm.
-    fn cut_paste_command(&self, sources: &[Reference]) -> Result<Vec<Candidate>, String> {
+    fn cut_paste_command(
+        &mut self,
+        item: &TimelineItem,
+        sources: &[Reference],
+    ) -> Result<Vec<Candidate>, String> {
         let bodies: Vec<BodyUid> = sources
             .iter()
             .map(|r| self.body_of(r))
@@ -2423,8 +2419,20 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         let destination = self.component;
         // Bodies that are the destination's already (their features went
         // with an earlier cut: the features that made them also made the
-        // bodies of that cut): nothing is left to move.
+        // bodies of that cut): nothing is left to move. Or a cut pasted into
+        // the component it came from, which the file's history keeps as a
+        // copy: the body stays and its copy is added (mitcad#1175). The
+        // item's own state in the history tells them apart: where it is not
+        // the bodies as they are, the copy, which the usual route checks
+        // against it.
         if source == destination {
+            if item.index.is_some_and(|i| !self.state_is_current(i)) {
+                let copy = copy_in_place(&bodies).with_note(
+                    "pasted into the component it was cut from: the file's history keeps the \
+                     body and adds its copy",
+                );
+                return Ok(vec![copy]);
+            }
             let mut stays = Candidate::new(json!({"cmd": "none",
                 "bodies": bodies.iter().map(ToString::to_string).collect::<Vec<_>>()}))
             .with_note("its bodies are in the component already: they went with an earlier cut");
@@ -4370,6 +4378,22 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         }
         Ok(candidates)
     }
+}
+
+/// A copy of `bodies` that stays where they are (a `move` that copies with
+/// the identity), the translation of a copy and paste in the bodies' own
+/// component.
+fn copy_in_place(bodies: &[BodyUid]) -> Candidate {
+    let identity = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ];
+    let bodies: Vec<String> = bodies.iter().map(ToString::to_string).collect();
+    let mut c = Candidate::new(json!({"type": "move", "bodies": bodies, "copy": true,
+        "transform": {"type": "free", "matrix": identity}}));
+    c.input_provenance = InputProvenance::Read;
+    c
 }
 
 /// Items that bring bodies and leave no tool (mitcad#641): a pattern or

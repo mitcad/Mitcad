@@ -218,6 +218,15 @@ foreach(entry IN ITEMS "wood-screw|26|screw" "connector-screw|5|screw" "ring-nai
   expect_field("${id}" "${kind}" wood kind)
   expect_field("${id}" "axis" frames 0 name)
   expect_field("${id}" "shaft" frames 0 kind)
+  # Its axis is a mount frame too (mitcad#1197): Insert from Library
+  # places it into a hole by Place Component.
+  foreach(pair "name|axis" "kind|shaft" "joint|rigid")
+    string(REPLACE "|" ";" pair "${pair}")
+    list(GET pair 0 key)
+    list(GET pair 1 wanted)
+    string(JSON value ERROR_VARIABLE missing GET "${manifest}" components ${index} mounts 0 ${key})
+    same("${value}" "${wanted}" "${id}: mounts 0 ${key}")
+  endforeach()
 endforeach()
 expect_field(wood-screw "40 mm" rows 4.5x40 wood length)
 expect_field(wood-screw "4.5 mm" rows 4.5x40 wood diameter)

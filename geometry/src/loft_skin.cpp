@@ -70,6 +70,24 @@ constexpr double kSewing = 1.0e-6;
 
 constexpr double kHalfPi = 1.57079632679489661923;
 
+// A face section's own face as the loft's cap, without its holes: the loft
+// takes only its outer boundary (mitcad#1183). A face without holes is
+// itself.
+TopoDS_Face without_holes(const TopoDS_Face& face) {
+  const TopoDS_Face forward = TopoDS::Face(face.Oriented(TopAbs_FORWARD));
+  int wires = 0;
+  for (TopExp_Explorer w(forward, TopAbs_WIRE); w.More(); w.Next()) {
+    ++wires;
+  }
+  if (wires <= 1) {
+    return face;
+  }
+  TopoDS_Face outer = TopoDS::Face(forward.EmptyCopied());
+  BRep_Builder().Add(outer, BRepTools::OuterWire(forward));
+  outer.Orientation(face.Orientation());
+  return outer;
+}
+
 gp_Pnt centre_of(const TopoDS_Shape& shape) {
   if (shape.ShapeType() == TopAbs_VERTEX) {
     return BRep_Tool::Pnt(TopoDS::Vertex(shape));
@@ -1369,7 +1387,7 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     if (cap.IsDone()) {
       faces.emplace_back(cap.Face(), *caps);
     } else if (!sections[index].face.IsNull()) {
-      faces.emplace_back(sections[index].face, *caps);
+      faces.emplace_back(without_holes(sections[index].face), *caps);
     } else {
       throw std::runtime_error("a cap of the loft could not be built");
     }

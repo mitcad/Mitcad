@@ -29,7 +29,7 @@ wait-log '^Native quick access file\.save enabled: Save \(.+\)$'
 # order before Preferences, kept in the settings.
 mark
 native-popup native.quickAccessMenu 'View/Look At'
-wait-log '^Native quick access menu: File \| Edit \| View \| Tools \| Reset to Default$'
+wait-log '^Native quick access menu: File \| Edit \| View \| Tools \| Reset to Default \| Hide Quick-Access Toolbar$'
 wait-log '^Quick access added view\.look_at$'
 wait-log '^Native quick access: file\.new_design, .*file\.save, .*view\.look_at, tools\.preferences$'
 expect-native-visible native.quickAccess.view.look_at true
@@ -52,3 +52,13 @@ mark
 native-resize 1440 900
 wait-log '^Native quick access unfolded$' 10
 expect-native-visible native.quickAccess.file.save true
+
+# Hide Quick-Access Toolbar in the group's menu (mitcad#1189): the whole
+# group, its ⋮ too, hidden from the shared setting.
+mark
+native-popup native.quickAccessMenu 'Hide Quick-Access Toolbar'
+wait-log '^Native quick access menu: File \| Edit \| View \| Tools \| Reset to Default \| Hide Quick-Access Toolbar$'
+wait-log '^Hide Quick-Access Toolbar chosen$'
+wait-log '^Native quick access hidden$'
+expect-native-visible native.quickAccessMenu false
+expect-native-visible native.quickAccess.file.save false

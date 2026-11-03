@@ -288,6 +288,10 @@ public:
   // update that changes nothing does not.
   virtual SceneChanges updateScene(const SceneUpdate& update) = 0;
   virtual void setView(const ViewData& view) = 0;
+  // Retains the scene and accumulated samples while a document is hidden.
+  virtual void setPaused(bool paused) = 0;
+  // Acknowledged by the render thread, rather than the requested pause flag.
+  virtual bool isPaused() const { return false; }
   virtual void setSamples(int samples) = 0;
   // Sample counts at which the render also shows a denoised preview at
   // full resolution (besides its first frame and the last one); none by

@@ -50,13 +50,18 @@ void setPaths(QVector<DocumentSnapshot::Occurrence>& occurrences, const QString&
   }
 }
 
+// The first occurrence of `component`, depth first; with `shownOnly`, the
+// first one shown with every occurrence above it.
 QString findOccurrence(const QVector<DocumentSnapshot::Occurrence>& occurrences,
-                       const QString& component) {
+                       const QString& component, bool shownOnly) {
   for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+    if (shownOnly && !occurrence.visible) {
+      continue;
+    }
     if (occurrence.component == component) {
       return occurrence.path;
     }
-    const QString inside = findOccurrence(occurrence.children, component);
+    const QString inside = findOccurrence(occurrence.children, component, shownOnly);
     if (!inside.isEmpty()) {
       return inside;
     }
@@ -334,7 +339,14 @@ QString DocumentSnapshot::componentName(const QString& uid) const {
 }
 
 QString DocumentSnapshot::firstOccurrence(const QString& component) const {
-  return component == kRoot ? QString() : findOccurrence(occurrences, component);
+  if (component == kRoot) {
+    return QString();
+  }
+  // A shown one first (mitcad#1194): an imported component whose first
+  // occurrence is in a hidden assembly, and shown at another place, is
+  // drawn, picked and its sketches edited where the view shows it.
+  const QString shown = findOccurrence(occurrences, component, true);
+  return shown.isEmpty() ? findOccurrence(occurrences, component, false) : shown;
 }
 
 bool DocumentSnapshot::isOccurrenceShown(const QString& path) const {
@@ -603,6 +615,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("dogbone"), QStringLiteral("dogbone")},
       // Mortise and Tenon (mitcad#1012).
       {QStringLiteral("mortise_tenon"), QStringLiteral("mortise-tenon")},
+      // Convert Mesh (mitcad#462, mitcad#1082).
+      {QStringLiteral("mesh_convert"), QStringLiteral("convert-mesh")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

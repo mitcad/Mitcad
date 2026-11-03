@@ -37,6 +37,9 @@ target_link_libraries(mitcad_geometry_io
   PUBLIC TKernel TKMath TKG3d TKBRep TKMesh
   PRIVATE TKTopAlgo TKShHealing TKXSBase TKDE TKDESTEP TKDEIGES TKDESTL TKDEOBJ TKRWMesh
           TKLCAF TKCAF TKXCAF mitcad_warnings)
+# The faces' true areas of the mesh comparison come from the analysis
+# library's integrals, as every area MitCad reports (mitcad#1200).
+target_link_libraries(mitcad_geometry_io PRIVATE mitcad_geometry_analysis)
 
 if(BUILD_TESTING)
   add_executable(test_geometry_io tests/test_io.cpp)

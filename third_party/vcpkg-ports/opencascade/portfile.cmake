@@ -229,6 +229,13 @@ vcpkg_from_github(
         1090-chfi3d-sharp-edge-limited-only-by-a-common-point-on-it.patch
         1100-chfi3d-two-corner-common-points-at-a-vertex-of-the-pivot.patch
         1110-chfi3d-first-end-snapped-onto-a-closed-edges-vertex-on-a-periodic-face.patch
+        1120-chfi3d-guide-wholly-past-an-end-of-the-spine-is-its-straight-extension.patch
+        1130-brepoffset-offsets-tangent-past-the-end-keep-the-branch-along-the-crease.patch
+        1140-chfi3d-cut-to-end-past-the-vertex-along-a-tangent-edge.patch
+        1160-brepoffset-images-meeting-along-a-tangential-edge-meet-where-they-cross-its-offset.patch
+        1170-chfi3d-cut-to-end-past-the-vertex-along-faces-meeting-on.patch
+        1180-brepoffset-extended-edge-keeps-a-pcurve-on-its-curve-where-reprojection-fails.patch
+        1190-brepoffset-offsets-tangent-inside-keep-the-branch-and-its-continuation.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

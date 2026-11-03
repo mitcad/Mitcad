@@ -461,6 +461,56 @@ void closedTableFillTests() {
   CHECK(cleared.rows.first().value(QStringLiteral("k")) == QStringLiteral("1.86 mm"));
 }
 
+// The Options tab's Value cell (mitcad#968): the current value as the
+// `configure` query reports it, after a change too; a By Formula option's
+// evaluated value with its expression for the tooltip, not edited; the
+// parameter's constant only when there is no report.
+void valueCellTests() {
+  using namespace mitcad::configurations;
+  const auto shelf = [](const char* length, const char* depth) {
+    return readReport(parse(QStringLiteral(R"({"options": [
+        {"name": "Color", "kind": "text", "unit": "Text", "value": "White", "text": "White",
+         "expression": "'White'", "driven": false, "domain": {"kind": "free"}, "allowed": {"kind": "free"}},
+        {"name": "Length", "kind": "number", "unit": "mm", "value": %1, "text": "%1 mm",
+         "expression": "%1 mm", "driven": false, "domain": {"kind": "free"}, "allowed": {"kind": "free"}},
+        {"name": "Depth", "kind": "number", "unit": "mm", "value": %2, "text": "%2 mm",
+         "expression": "Length / 4", "driven": true, "domain": {"kind": "free"}, "allowed": {"kind": "free"}}],
+      "row": null, "moves": [], "refused": null, "problems": []})")
+                                .arg(QLatin1String(length), QLatin1String(depth))
+                                .toUtf8()
+                                .constData()));
+  };
+  const Report before = shelf("1500", "375");
+  const ValueCell color = valueCell(before.option(QStringLiteral("Color")), true, QStringLiteral("'White'"));
+  CHECK(color.text == QStringLiteral("White") && color.editable && color.expression.isEmpty());
+  const ValueCell length = valueCell(before.option(QStringLiteral("Length")), false, QStringLiteral("1500 mm"));
+  CHECK(length.text == QStringLiteral("1500 mm") && length.editable);
+  // By Formula: the evaluated value, never the formula; its expression for
+  // the tooltip; not edited.
+  const ValueCell depth = valueCell(before.option(QStringLiteral("Depth")), false, QStringLiteral("Length / 4"));
+  CHECK(depth.text == QStringLiteral("375 mm"));
+  CHECK(depth.expression == QStringLiteral("Length / 4"));
+  CHECK(!depth.editable);
+  // After a configuration change (Length 1200 mm): both follow the report,
+  // the formula's value too.
+  const Report after = shelf("1200", "300");
+  CHECK(valueCell(after.option(QStringLiteral("Length")), false, QStringLiteral("1200 mm")).text ==
+        QStringLiteral("1200 mm"));
+  CHECK(valueCell(after.option(QStringLiteral("Depth")), false, QStringLiteral("Length / 4")).text ==
+        QStringLiteral("300 mm"));
+  // The value as the model shows it, not as the constant is written.
+  OptionReport metres;
+  metres.name = QStringLiteral("Length");
+  metres.unit = QStringLiteral("mm");
+  metres.valueText = QStringLiteral("1200 mm");
+  metres.expression = QStringLiteral("1.2 m");
+  CHECK(valueCell(&metres, false, QStringLiteral("1.2 m")).text == QStringLiteral("1200 mm"));
+  // No report (the model could not answer): the parameter's constant as the
+  // Rows sheet shows it, a text without its quotes.
+  const ValueCell unreported = valueCell(nullptr, true, QStringLiteral("'Black'"));
+  CHECK(unreported.text == QStringLiteral("Black") && unreported.editable);
+}
+
 } // namespace
 
 int configurationsDataTests() {
@@ -471,6 +521,7 @@ int configurationsDataTests() {
   tableColumnTests();
   parameterColumnTests();
   closedTableFillTests();
+  valueCellTests();
   if (failures == 0) {
     std::printf("configurations data tests passed\n");
   }

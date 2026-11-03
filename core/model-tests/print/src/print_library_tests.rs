@@ -942,8 +942,8 @@ fn an_edit_to_the_library_s_newer_value_reaches_a_copy_that_kept_its_own() {
     assert_eq!(draft_changed(&doc, &project), false);
 }
 
-/// My Library (mitcad#704): a built-in material duplicated into a library
-/// by its id, renamed, its density changed and deleted, and a library's
+/// A library without a design (mitcad#704, mitcad#1135): a built-in
+/// material duplicated into a library by its id, renamed, its density changed and deleted, and a library's
 /// printer duplicated, on an empty design of its own that keeps none of
 /// them.
 #[test]
@@ -1072,4 +1072,84 @@ fn library_items_give_the_parts_of_a_profile_name_for_the_picker() {
         (&draft_row["bare_name"], &draft_row["for_printer"]),
         (&json!("Draft"), &Value::Null)
     );
+}
+
+#[test]
+fn library_items_by_place_list_each_item_where_it_lives() {
+    // mitcad#1135: the print managers' list model. A design's copy and its
+    // library item are two rows, a shadowed library item is listed too.
+    let (mut doc, project) = setup("print-by-place");
+    let path = project.to_string_lossy().to_string();
+    write_item(&project_library(&project), &draft(5, 0.28));
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": "C0", "set": "Print Process",
+               "key": "profile", "value": "draft", "library": "project", "project": path}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_print_profile", "kind": "process", "name": "Mine"}),
+    );
+    let answer = query(
+        &doc,
+        json!({"query": "library_items", "kind": "process", "project": path, "by_place": true}),
+    );
+    assert_eq!(
+        answer["places"],
+        json!(["design", "project", "user", "mitcad"])
+    );
+    let processes = answer["items"].as_array().unwrap().clone();
+    let places: Vec<&str> = processes
+        .iter()
+        .map(|r| r["place"].as_str().unwrap())
+        .filter(|p| *p != "user")
+        .collect();
+    assert_eq!(places, ["design", "design", "project", "mitcad"]);
+    // The design's copy: chosen, its source named.
+    let copy = row(&processes, "design", "draft");
+    assert_eq!(copy["chosen"], true);
+    assert_eq!(copy["library"], Value::Null);
+    assert_eq!(
+        (&copy["source"]["place"], &copy["source"]["id"]),
+        (&json!("project"), &json!("draft"))
+    );
+    assert_eq!(row(&processes, "design", "mine")["chosen"], false);
+    // The project's item with its own fields, naming the copy the design uses.
+    let item = row(&processes, "project", "draft");
+    assert_eq!(item["library"], "project");
+    assert_eq!(
+        (&item["chosen"], &item["in_design"]),
+        (&json!(false), &Value::Null)
+    );
+    assert_eq!(
+        (&item["copy"], &item["copy_used"], &item["shadowed"]),
+        (&json!("draft"), &json!(true), &json!(false))
+    );
+    assert_eq!(item["item"]["values"]["layer_height"], json!(0.28));
+    // The base library's draft, shadowed by the project's, still listed.
+    let base = row(&processes, "mitcad", "draft");
+    assert_eq!(
+        (&base["shadowed"], &base["read_only"], &base["copy"]),
+        (&json!(true), &json!(true), &Value::Null)
+    );
+    // The library changed elsewhere: the design's copy says so.
+    write_item(&project_library(&project), &draft(6, 0.2));
+    let answer = query(
+        &doc,
+        json!({"query": "library_items", "kind": "process", "project": path, "by_place": true}),
+    );
+    let processes = answer["items"].as_array().unwrap().clone();
+    assert_eq!(row(&processes, "design", "draft")["changed"], true);
+    assert_eq!(
+        row(&processes, "project", "draft")["item"]["values"]["layer_height"],
+        json!(0.2)
+    );
+    // Materials: the built-in ones in MitCad's place, after the libraries.
+    let materials = query(
+        &doc,
+        json!({"query": "library_items", "kind": "material", "by_place": true}),
+    );
+    assert_eq!(materials["places"], json!(["design", "user", "mitcad"]));
+    let steel = row(materials["items"].as_array().unwrap(), "mitcad", "steel");
+    assert_eq!(steel["read_only"], true);
 }

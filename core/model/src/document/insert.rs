@@ -30,6 +30,10 @@ impl<K: Kernel> Document<K> {
         }
         let component = component.unwrap_or(self.state.assembly.active);
         self.state.editable(component)?;
+        // Faceted Convert Mesh hides its mesh body (mitcad#1082).
+        if let Some(mesh) = super::mesh_convert::hidden_mesh(def) {
+            return self.add_hiding_mesh(def, name, component, Some(position), mesh);
+        }
         self.check_profiles(def)?;
         // A new component of a component that takes none goes beside it
         // (mitcad#292).

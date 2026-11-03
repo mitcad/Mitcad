@@ -8,6 +8,7 @@
 #include <functional>
 #include <vector>
 
+#include <QDebug>
 #include <QHash>
 #include <QJsonArray>
 #include <QKeySequence>
@@ -120,18 +121,152 @@ QString placedComponent(const QString& path, const CommandContext& context) {
   }
 }
 
+// Whether the occurrence at the path ("O1/O4") is grounded.
+bool groundedAt(const QString& path, const CommandContext& context) {
+  std::function<bool(const QJsonArray&, const QString&)> find = [&](const QJsonArray& tree, const QString& prefix) {
+    for (const QJsonValue& value : tree) {
+      const QJsonObject node = value.toObject();
+      const QString uid = node.value(QStringLiteral("uid")).toString();
+      const QString here = prefix.isEmpty() ? uid : prefix + QLatin1Char('/') + uid;
+      if (here == path) {
+        return node.value(QStringLiteral("grounded")).toBool();
+      }
+      if (path.startsWith(here + QLatin1Char('/'))) {
+        return find(node.value(QStringLiteral("children")).toArray(), here);
+      }
+    }
+    return false;
+  };
+  try {
+    return find(context.queryObject({{QStringLiteral("query"), QStringLiteral("components")}})
+                    .value(QStringLiteral("occurrences"))
+                    .toArray(),
+                QString());
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
 // The component a move works in, kept in its hidden input "component"
 // (mitcad#699): the active one for a new move, the feature's own in an
 // edit (loadTransform).
 const QString kMoveComponent = QStringLiteral("component");
 
-void initMoveComponent(CommandState& state, const CommandContext& context) {
+// The active component's uid (C0, the root's, when the model cannot say).
+QString activeComponent(const CommandContext& context) {
   try {
-    state.setText(kMoveComponent, context.queryObject({{QStringLiteral("query"), QStringLiteral("components")}})
-                                      .value(QStringLiteral("active"))
-                                      .toString(QStringLiteral("C0")));
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("components")}})
+        .value(QStringLiteral("active"))
+        .toString(QStringLiteral("C0"));
   } catch (const std::exception&) {
+    return QStringLiteral("C0");
   }
+}
+
+void initMoveComponent(CommandState& state, const CommandContext& context) {
+  state.setText(kMoveComponent, activeComponent(context));
+}
+
+// --- A body of another component moves as its occurrence (mitcad#1196)
+
+// The occurrence that moves for a body or face of another component than
+// the active one (a BUILD part, any occurrence's body): on the item's
+// occurrence path ("O1/O4"), the occurrence placed in the active component
+// (a BUILD part's own in its host); the item's own occurrence when the
+// path does not pass through the active component (the model then says
+// why it cannot move it); empty for the active component's own geometry,
+// which moves as bodies.
+QString movedOccurrence(const QString& path, const QString& active, const CommandContext& context) {
+  if (path.isEmpty()) {
+    return QString();
+  }
+  const QString own = active.isEmpty() ? QStringLiteral("C0") : active;
+  const QStringList steps = path.split(QLatin1Char('/'));
+  for (qsizetype i = steps.size(); i >= 0; --i) {
+    const QString component =
+        i == 0 ? QStringLiteral("C0") : placedComponent(steps.mid(0, i).join(QLatin1Char('/')), context);
+    if (component == own) {
+      return i == steps.size() ? QString() : steps.mid(0, i + 1).join(QLatin1Char('/'));
+    }
+  }
+  return path;
+}
+
+SelectionItem occurrenceItem(const QString& path) {
+  SelectionItem item{SelectKind::Component, QString(), QString(), QString()};
+  item.occurrence = path;
+  return item;
+}
+
+void addOccurrence(Selection& components, const QString& path) {
+  if (std::none_of(components.begin(), components.end(),
+                   [&path](const SelectionItem& item) { return item.occurrence == path; })) {
+    components.append(occurrenceItem(path));
+  }
+}
+
+// A body of another component clicked while Move Object is Bodies: its
+// occurrence goes to Components instead, and Move Object turns to
+// Components (the panel then shows that input), so that the part moves
+// instead of the model refusing a body of another component. Not beside
+// bodies of the active component picked already: those move as bodies.
+void takeComponentOf(const SelectionItem& item, CommandState& state, const CommandContext& context) {
+  const QString occurrence = movedOccurrence(item.occurrence, state.text(kMoveComponent), context);
+  if (occurrence.isEmpty()) {
+    return;
+  }
+  const Selection& bodies = state.items(QStringLiteral("bodies"));
+  if (std::any_of(bodies.begin(), bodies.end(), [&item](const SelectionItem& body) {
+        return body.owner != item.owner || body.occurrence != item.occurrence;
+      })) {
+    return;
+  }
+  Selection components = state.items(QStringLiteral("components"));
+  addOccurrence(components, occurrence);
+  state.setItems(QStringLiteral("bodies"), {});
+  state.setItems(QStringLiteral("components"), components);
+  state.setChoice(QStringLiteral("move_type"), QStringLiteral("components"));
+  qInfo().noquote() << QStringLiteral("Move/Copy: %1 is of another component than the active one: moving %2 "
+                                      "(Move Object: Components)")
+                           .arg(item.describe(), occurrence);
+}
+
+// The selection made before the command (the view's click on a placed
+// part, its context menu, a browser row): when every body or face in it
+// is of another component than the active one, their occurrences go to
+// Components with the components selected, and Move Object is
+// Components. Any other item keeps the selection as it is.
+void takeComponentsOf(const Selection& selection, CommandState& state, const CommandContext& context) {
+  const QString active = activeComponent(context);
+  QStringList occurrences;
+  for (const SelectionItem& item : selection) {
+    if (item.kind == SelectKind::Component) {
+      continue; // in Components already
+    }
+    if (item.kind != SelectKind::Body && item.kind != SelectKind::Face) {
+      return;
+    }
+    const QString occurrence = movedOccurrence(item.occurrence, active, context);
+    if (occurrence.isEmpty()) {
+      return; // the active component's own geometry: as bodies
+    }
+    if (!occurrences.contains(occurrence)) {
+      occurrences << occurrence;
+    }
+  }
+  if (occurrences.isEmpty()) {
+    return;
+  }
+  Selection components = state.items(QStringLiteral("components"));
+  for (const QString& occurrence : occurrences) {
+    addOccurrence(components, occurrence);
+  }
+  state.setItems(QStringLiteral("bodies"), {});
+  state.setItems(QStringLiteral("components"), components);
+  state.setChoice(QStringLiteral("move_type"), QStringLiteral("components"));
+  qInfo().noquote() << QStringLiteral("Move/Copy: the selection is of another component than the active one: "
+                                      "moving %1 (Move Object: Components)")
+                           .arg(occurrences.join(QStringLiteral(", ")));
 }
 
 // A move's point or axis picked in an occurrence of another component than
@@ -785,8 +920,13 @@ CommandDef moveCommand(const CommandContext& context) {
   def.featureType = QStringLiteral("move");
   def.editsAlso = {QStringLiteral("move_occurrence")};
   const auto bodies = choiceIs(QStringLiteral("move_type"), QStringLiteral("bodies"));
+  // A body of another component moves as its occurrence (mitcad#1196).
   const InputDef bodyObjects =
-      selectionInput(QStringLiteral("bodies"), QObject::tr("Objects"), SelectKind::Body, 1, 0).withVisible(bodies);
+      selectionInput(QStringLiteral("bodies"), QObject::tr("Objects"), SelectKind::Body, 1, 0)
+          .withVisible(bodies)
+          .withOnPick([](const SelectionItem& item, CommandState& state,
+                         const CommandContext& context) { takeComponentOf(item, state, context); },
+                      false);
   const InputDef componentObjects =
       selectionInput(QStringLiteral("components"), QObject::tr("Objects"), SelectKind::Component | SelectKind::Body, 1, 0)
           .withTooltip(QObject::tr("Components in the browser, or a body a component's occurrence places"))
@@ -819,6 +959,11 @@ CommandDef moveCommand(const CommandContext& context) {
                     .withVisible(bodies)
              << pivotInput() << moveComponentInput();
   def.enabled = [&context] { return hasBodies(context); };
+  // Bodies and faces of other components selected before (a placed BUILD
+  // part clicked, mitcad#1196) move as their occurrences.
+  def.preselected = [](const Selection& selection, CommandState& state, const CommandContext& context) {
+    takeComponentsOf(selection, state, context);
+  };
   // Components selected before (a pasted copy, P9) move as components.
   def.init = [](CommandState& state, const CommandContext& context) {
     if (!state.items(QStringLiteral("components")).isEmpty() && state.items(QStringLiteral("bodies")).isEmpty()) {
@@ -836,7 +981,10 @@ CommandDef moveCommand(const CommandContext& context) {
     if (state.choice(QStringLiteral("move_type")) == QStringLiteral("components")) {
       QJsonArray occurrences;
       for (const SelectionItem& item : state.items(QStringLiteral("components"))) {
-        occurrences.append(item.occurrence);
+        // The definition names an occurrence by its uid, the last step of
+        // its path ("O1/O3": a BUILD part in a new design's Component1,
+        // mitcad#1196); `load` gives the path back (occurrencePath).
+        occurrences.append(item.occurrence.section(QLatin1Char('/'), -1));
       }
       result.def = {{QStringLiteral("type"), QStringLiteral("move_occurrence")},
                     {QStringLiteral("occurrences"), occurrences},
@@ -871,6 +1019,18 @@ CommandDef moveCommand(const CommandContext& context) {
 
   def.canEdit = [&context](const QJsonObject& feature) {
     return transformEditable(feature.value(QStringLiteral("transform")).toObject(), context);
+  };
+  // A grounded occurrence moves and stays grounded there (mitcad#1196; the
+  // model's move_occurrence): said under the inputs, not refused.
+  def.note = [](const CommandState& state, const CommandContext& context) -> QString {
+    if (state.choice(QStringLiteral("move_type")) != QStringLiteral("components")) {
+      return QString();
+    }
+    const Selection& components = state.items(QStringLiteral("components"));
+    const bool grounded = std::any_of(components.begin(), components.end(), [&context](const SelectionItem& item) {
+      return groundedAt(item.occurrence, context);
+    });
+    return grounded ? QObject::tr("Grounded: it stays grounded at the new place.") : QString();
   };
   // The bodies or components follow a handle's drag at once (mitcad#838).
   def.dragMotion = moveDragMotion;

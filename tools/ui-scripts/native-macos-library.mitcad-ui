@@ -91,7 +91,13 @@ mark
 key Return
 expect-log 'Part picker chose mitcad-parts/iso4032'
 expect-native-dialog-gone '^Insert from Library$'
+# A fastener has a mount frame (mitcad#1197): Place Component starts,
+# Return without a pick drops it in at the origin, Escape closes it.
+expect-log 'Command Place Component started'
+focus-main
+key Return
 expect-log 'Inserted component .* from mitcad-parts'
+key Escape
 focus-main
 
 # The pointer: a double click on a tile inserts it.
@@ -117,7 +123,13 @@ mark
 native-tiles dblclick libraryResults iso4762
 expect-log 'Part picker chose mitcad-parts/iso4762'
 expect-native-dialog-gone '^Insert from Library$'
+# A fastener has a mount frame (mitcad#1197): Place Component starts,
+# Return without a pick drops it in at the origin, Escape closes it.
+expect-log 'Command Place Component started'
+focus-main
+key Return
 expect-log 'Inserted component .* from mitcad-parts'
+key Escape
 focus-main
 
 # Community Library shares the catalogue.

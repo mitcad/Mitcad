@@ -59,6 +59,35 @@ sleep 300
 screenshot '${MITCAD_TEST_SHOTS}/chat-dark.png'
 native-appearance light
 
+# A service account error stays in the state line, with native actions for
+# help and a context-free recheck. The same error is emitted twice by the
+# scripted agent and must be shown once by the shared controller.
+native-pointer-click chatInput
+type 'account failure'
+mark
+native-key-event Return
+wait-log 'Chat: Claude Code account error: org-disabled' 60
+wait-log 'Chat: turn ended' 60
+expect-widget-property chatPanel chatState account-error
+expect-native-visible chatSetup true
+expect-native-visible chatCheckAccount true
+expect-native-bounds native.chatCard 280
+expect-native-bounds chatState 180
+expect-native-bounds chatSetup 60
+expect-native-bounds chatCheckAccount 75
+native-click chatSetup
+expect-native-visible chatAccountHelpText true
+expect-native-bounds chatAccountHelpText 180
+# Preserve the Chat overlay when the screenshot composes the GL viewport.
+screenshot '${MITCAD_TEST_SHOTS}/chat-account-error.png'
+mark
+native-click chatCheckAccount
+wait-log 'Chat: Claude Code account check passed' 60
+wait-log 'Chat panel: ready' 60
+expect-native-visible chatInput true
+expect-native-visible chatCheckAccount false
+expect-model-bodies 0 0
+
 # The toolbar's Chat button beside the agent indicator hides the card,
 # Command+Shift+L shows it again, View › Chat hides it.
 mark

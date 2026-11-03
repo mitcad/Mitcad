@@ -17,3 +17,5 @@ mod plane_geometry_tests;
 mod body_note_tests;
 // Physical Properties' boxes, counts and component scopes (mitcad#1095).
 mod physical_properties_tests;
+// Comments pinned to the model for an AI agent (mitcad#1119).
+mod comment_tests;

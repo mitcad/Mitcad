@@ -2,7 +2,7 @@
 // The Make tab (mitcad#1049, app/COMMANDS.md "The Make tab"): what making a
 // design needs, by manufacturing method. Its groups are Materials,
 // Annotate, 3D Print and Laser (Ribbon::groups); the commands moved there
-// (Edit Materials…, Edit Printers and Processes…, Print Analysis, Send to
+// (Edit Materials…, Printers… and Processes…, Print Analysis, Send to
 // Slicer, Export Flat Pattern…) keep their ids and are registered where
 // they were. Here:
 //
@@ -23,6 +23,7 @@
 //     print settings differ from their component's (make_differences).
 #include "MainWindow.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -30,6 +31,7 @@
 #include <utility>
 
 #include <QAction>
+#include <QDialog>
 #include <QDir>
 #include <QHash>
 #include <QJsonArray>
@@ -37,6 +39,7 @@
 #include <QJsonValue>
 #include <QStringList>
 #include <QTimer>
+#include <QVector>
 #include <QtLogging>
 
 #include "browser/BrowserController.hpp"
@@ -49,6 +52,8 @@
 #include "framework/TestSync.hpp"
 #include "print/MakeBodyCard.hpp"
 #include "print/PrintKeys.hpp"
+#include "print/PrintValueChoices.hpp"
+#include "print/PrintValuePicker.hpp"
 #include "view/AnnotationDialogs.hpp"
 
 namespace mitcad {
@@ -412,6 +417,11 @@ MakeBodyCard* MainWindow::createMakeCard() {
   connect(card, &MakeBodyCard::valueEdited, this, [this](const QString& set, const QString& key, const QString& typed) {
     QTimer::singleShot(0, this, [this, set, key, typed] { setMakeCardValue(set, key, typed); });
   });
+  connect(card, &MakeBodyCard::addValueRequested, this,
+          [this] { QTimer::singleShot(0, this, [this] { addMakeCardValue(); }); });
+  connect(card, &MakeBodyCard::valueRemoved, this, [this](const QString& set, const QString& key, const QString& name) {
+    QTimer::singleShot(0, this, [this, set, key, name] { removeMakeCardValue(set, key, name); });
+  });
   return card;
 }
 
@@ -476,6 +486,111 @@ void MainWindow::setMakeCardValue(const QString& set, const QString& key, const 
   }
   setMakeCardProperty(set == QLatin1String("printer") ? QStringLiteral("Print Printer") : QStringLiteral("Print Process"),
                       key, value, printKey->name, typed);
+}
+
+void MainWindow::addMakeCardValue() {
+  QString body;
+  QString occurrence;
+  if (!selectedBody(m_selection, &body, &occurrence) || m_makeCard == nullptr) {
+    return;
+  }
+  if (modelBusy()) {
+    whenIdle(this, [this] { addMakeCardValue(); });
+    return;
+  }
+  // The settings the body can take as its own, grouped and named as the
+  // Properties window shows them, with what it prints with now.
+  QVector<PrintValueChoice> choices;
+  try {
+    const PrintKeyTable keys(query({{QStringLiteral("query"), QStringLiteral("print_keys")}}).toObject());
+    QJsonObject settingsQuery{{QStringLiteral("query"), QStringLiteral("print_settings")},
+                              {QStringLiteral("body"), body}};
+    if (!occurrence.isEmpty()) {
+      settingsQuery.insert(QStringLiteral("occurrence"), occurrence);
+    }
+    choices = printValueChoices(keys, query(settingsQuery).toObject());
+  } catch (const std::exception& e) {
+    showError(QString::fromUtf8(e.what()));
+    return;
+  }
+  // Without the pending one: it is on the card already.
+  const QString pendingKey = m_makeCard->pending().key;
+  choices.erase(std::remove_if(choices.begin(), choices.end(),
+                               [&pendingKey](const PrintValueChoice& choice) { return choice.key == pendingKey; }),
+                choices.end());
+  const QString name = bodyName(body);
+  auto* picker = new PrintValuePicker(name, choices, this);
+  picker->setAttribute(Qt::WA_DeleteOnClose);
+  connect(picker, &QDialog::accepted, this, [this, picker, body, name] {
+    const PrintValueChoice* chosen = picker->chosen();
+    if (chosen == nullptr) {
+      return;
+    }
+    const PrintValueChoice choice = *chosen;
+    qDebug().noquote() << QStringLiteral("Add print value chose %1").arg(choice.key);
+    QTimer::singleShot(0, this, [this, choice, body, name] {
+      QString selected;
+      QString selectedOccurrence;
+      if (!selectedBody(m_selection, &selected, &selectedOccurrence) || selected != body || m_makeCard == nullptr) {
+        return; // the selection moved on meanwhile
+      }
+      if (choice.value.isUndefined()) {
+        // Nothing to start from (the slicer's default): a row to type it
+        // in, set when typed.
+        m_makeCard->addPending(
+            MakeCardValue{choice.set, choice.key, choice.name, QString(), QStringLiteral("body"), name});
+        qInfo().noquote() << QStringLiteral("Make card %1 added: no value yet").arg(choice.name);
+      } else if (runModelCommand({{QStringLiteral("cmd"), QStringLiteral("set_property")},
+                                  {QStringLiteral("owner"), body},
+                                  {QStringLiteral("set"), choice.set == QLatin1String("printer")
+                                                              ? QStringLiteral("Print Printer")
+                                                              : QStringLiteral("Print Process")},
+                                  {QStringLiteral("key"), choice.key},
+                                  {QStringLiteral("value"), choice.value}})) {
+        // At the value it prints with now: one undo step.
+        qInfo().noquote() << QStringLiteral("Make card %1 added: %2").arg(choice.name, choice.text);
+        updateMakeCard();
+      } else {
+        showError(tr("%1: %2").arg(choice.name, lastError()));
+        qInfo().noquote() << QStringLiteral("Make card %1: adding refused: %2").arg(choice.name, lastError());
+        updateMakeCard();
+        return;
+      }
+      if (m_makeCard->focusValue(choice.key)) {
+        qDebug().noquote() << QStringLiteral("Make card value %1 focused").arg(choice.key);
+      }
+      // Where its fields are now (UI tests): the pending row changes no
+      // summary, which logs them otherwise.
+      TestSync::singleShot(300, m_makeCard, [this] {
+        for (const QString& line : m_makeCard->places()) {
+          qDebug().noquote() << line;
+        }
+        logSelectionCardSections();
+      });
+    });
+  });
+  picker->open();
+}
+
+void MainWindow::removeMakeCardValue(const QString& set, const QString& key, const QString& name) {
+  QString body;
+  QString occurrence;
+  if (!selectedBody(m_selection, &body, &occurrence)) {
+    return;
+  }
+  // Off the body: the value it inherits (an occurrence's, a component's or
+  // the profile's) applies again; one undo step.
+  if (runModelCommand({{QStringLiteral("cmd"), QStringLiteral("remove_property")},
+                       {QStringLiteral("owner"), body},
+                       {QStringLiteral("set"), set == QLatin1String("printer") ? QStringLiteral("Print Printer")
+                                                                              : QStringLiteral("Print Process")},
+                       {QStringLiteral("key"), key}})) {
+    qInfo().noquote() << QStringLiteral("Make card %1 removed").arg(name);
+  } else {
+    showError(tr("%1: %2").arg(name, lastError()));
+    qInfo().noquote() << QStringLiteral("Make card %1: removing refused: %2").arg(name, lastError());
+  }
+  updateMakeCard();
 }
 
 void MainWindow::updateMakeCard() {
@@ -572,6 +687,7 @@ void MainWindow::updateMakeCard() {
       for (const QString& line : m_makeCard->places()) {
         qDebug().noquote() << line;
       }
+      logSelectionCardSections();
     });
   }
 }

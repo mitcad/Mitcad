@@ -186,6 +186,15 @@ std::optional<BlockPath> blockOfPlace(const Rule& rule, const QString& place);
 // an empty else's slot. Empty for a complete rule (a rule without a name
 // waits for no block).
 std::vector<BlockPath> emptyPlaces(const Rule& rule);
+// What to do at an empty place (mitcad#968; docs/ui-conventions.md, "empty
+// place"): the next action in words, for its mark's tooltip and the
+// AppKit hit target's accessibility label. `path` is a place emptyPlaces
+// gives, or a canvas piece's (an empty socket, the place at a list's end,
+// a then's or else's slot): "Add a condition" (the when, and, or, not,
+// require), "Choose an option" (an action without its option, a compare's
+// or is one of's first side), "Enter a value" (a value), "Choose a table"
+// (combination in table) or "Add an action" (a then or an else).
+QString emptyPlaceHint(const Rule& rule, const BlockPath& path);
 // Whether the children of a block are a list that grows at its end (and,
 // or, is one of, allow only, exclude).
 bool growsAtEnd(BlockKind kind);

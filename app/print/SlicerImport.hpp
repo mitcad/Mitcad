@@ -10,6 +10,7 @@
 
 #include "PrintImportSummary.hpp"
 
+class QComboBox;
 class QHBoxLayout;
 class QLabel;
 class QPushButton;
@@ -19,7 +20,7 @@ namespace mitcad {
 class PrintItemsHost;
 
 // Import from Slicer (mitcad#829): one implementation for 3D Print's
-// panel, Printers and Processes and My Library. The file dialog (a
+// panel and the print managers (mitcad#1135). The file dialog (a
 // slicer's 3MF, preset, bundle or .ini; the import folder remembered),
 // `import_print_profile` with `into` (`design`, whose root then chooses
 // the printer and process read in the same undo step, `user` or
@@ -44,7 +45,7 @@ struct SlicerImportResult {
 // Runs an import command (`import_print_profile`, `import_slicer_presets`)
 // into `into` through `host` (the command gets `into` and the project),
 // `file` naming what it imports in the line and the report, `log` heading
-// the log lines ("3D Print", "Profiles", "My Library"). False when the
+// the log lines ("3D Print", "Printers", "Materials"). False when the
 // model refused it or it was cancelled: `error` (if given) then has the
 // refusal in plain words, empty for a cancel.
 bool runPrintImport(PrintItemsHost& host, QJsonObject command, const QString& file, const QString& into,
@@ -62,7 +63,7 @@ bool runSlicerImport(PrintItemsHost& host, const QString& path, const QString& i
 // query's `merge`).
 QJsonArray installedSlicers(PrintItemsHost& host, const QString& into, QJsonArray* merge = nullptr);
 
-// The row of a print window (My Library, Printers and Processes): the last
+// The row of a print manager (Materials, Printers, Processes): the last
 // import's line, Details… beside it once an import has a report, and
 // Import from Slicer…. With an installed Bambu-family slicer found
 // (mitcad#830) the button is "Import from Slicer ▾", a menu of "From a
@@ -79,7 +80,17 @@ public:
 
   // Where an import goes now: `design`, `user` or `project`.
   std::function<QString()> target;
-  // Hides the line and Details… (My Library's place changed).
+  // The places an import can go (the managers, mitcad#1135:
+  // writablePlaces), `current` chosen unless the user chose another of
+  // them: a box before the button, "Import into", shown with more than
+  // one place, which then stands for `target`. Logs "<log> import into:
+  // My library" when the user chooses and its place as "<log> import_into
+  // at x,y".
+  void setPlaces(const QStringList& places, const QString& current);
+  // Another model to import through (a manager with or without a design);
+  // the line goes.
+  void setHost(PrintItemsHost& host);
+  // Hides the line and Details….
   void clear();
   // The row's layout, for a widget of the window before the line (My
   // Library's place).
@@ -112,12 +123,13 @@ private:
   void scheduleLogPlaces();
   void logPlaces();
 
-  PrintItemsHost& m_host;
+  PrintItemsHost* m_host = nullptr;
   QString m_log;
   QHBoxLayout* m_row = nullptr;
   QLabel* m_line = nullptr;
   QPushButton* m_details = nullptr;
   QPushButton* m_import = nullptr;
+  QComboBox* m_into = nullptr; // setPlaces's box
   PrintImportSummary m_summary;
   QJsonArray m_slicers; // installedSlicers when last looked
   QJsonArray m_merge;   // ... and the target's separate materials of one filament (mitcad#1054)

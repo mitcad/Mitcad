@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -22,6 +23,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSlider>
 #include <QTabBar>
@@ -514,6 +516,26 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   connect(m_table, &QTreeWidget::itemDoubleClicked, this, &ParametersDialog::edit);
   connect(m_table, &QTreeWidget::itemChanged, this, &ParametersDialog::cellEdited);
   connect(m_table, &QTreeWidget::itemSelectionChanged, this, &ParametersDialog::updateButtons);
+  // A user parameter's row: Add Comment… for an AI agent (mitcad#1119).
+  m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(m_table, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+    const QTreeWidgetItem* item = m_table->itemAt(at);
+    if (item == nullptr || item->data(kName, kKindRole).toString() != QStringLiteral("user")) {
+      return;
+    }
+    const QString name = item->data(kName, kNameRole).toString();
+    if (name.isEmpty()) {
+      return;
+    }
+    QMenu menu(this);
+    QAction* comment = menu.addAction(themeIcon(QStringLiteral("comment")), tr("Add Comment…"));
+    connect(comment, &QAction::triggered, this, [this, name] {
+      m_host.addCommentOn({{QStringLiteral("parameter"), name}}, name);
+    });
+    // As the other context menus log their entries (ui_menu_choose).
+    qDebug().noquote() << QStringLiteral("Context menu: %1").arg(tr("Add Comment…"));
+    execMenu(&menu, m_table->viewport()->mapToGlobal(at));
+  });
   refresh();
 }
 
@@ -639,15 +661,17 @@ void ParametersDialog::markOption(QTreeWidgetItem* row, const QJsonObject& param
     return;
   }
   row->setIcon(kName, themeIcon(QStringLiteral("configurations")));
-  QStringList tip{tr("An option of the configuration table (Configurations…)")};
+  // The configuration's words (mitcad#968, docs/ui-conventions.md
+  // "Configurations").
+  QStringList tip{tr("An option of the configuration (Configurations…)")};
   QString logged = name;
   if (option != nullptr && option->driven) {
-    tip << tr("Driven by its formula: no chooser sets it, no rule moves it");
+    tip << tr("By formula: calculated from its expression; neither a chooser nor automatic adjustment sets it");
   }
   if (option != nullptr && !option->restrictedBy.isEmpty()) {
     const configurations::Domain& allowed = option->allowed;
     const QString rules = option->restrictedBy.join(QStringLiteral(", "));
-    const QString narrowed = tr("Narrowed by %1: %2").arg(rules, allowed.summary());
+    const QString narrowed = tr("Allowed values now: %2 (restricted by %1)").arg(rules, allowed.summary());
     tip << narrowed;
     logged += QStringLiteral(" (narrowed by %1: %2)").arg(rules, allowed.summary());
     if (allowed.kind == configurations::Domain::Kind::Range) {
@@ -665,7 +689,7 @@ void ParametersDialog::markOption(QTreeWidgetItem* row, const QJsonObject& param
         if (bound.isEmpty() || bound == own[i]) {
           continue;
         }
-        const QString why = tr("Narrowed to %1 by %2").arg(bound, rules);
+        const QString why = tr("Restricted to %1 by %2").arg(bound, rules);
         if (row->data(column, kOwnLimitRole).toString().isEmpty()) {
           row->setText(column, bound);
           row->setData(column, kFixedLimitRole, bound);

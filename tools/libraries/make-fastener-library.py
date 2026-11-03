@@ -23,7 +23,9 @@ The geometry is simplified for assemblies: heads, shanks, sockets and hex
 flats at their nominal sizes; a screw's head has its top edge rounded or
 chamfered and its shank a cosmetic thread chamfered at the tip (DRESS),
 no other chamfers or fillets. Lengths are measured as the standards do
-(ISO 10642 includes the head).
+(ISO 10642 includes the head). Each part has a mount frame `seat`
+(mitcad#1197, MOUNT_KIND), listed in the manifest's `mounts`, so that
+Insert from Library places it in a hole by Place Component.
 
 A preview is rendered only when its design or the studio setup changed
 since the picture in --out was made (--rerender renders them all);
@@ -285,6 +287,29 @@ HEXAGON ="r{c1[c6,c2],c2[c1,c3],c3[c2,c4],c4[c3,c5],c5[c4,c6],c6[c5,c1]}"
 # plated steel.
 FINISH = {"iso4762": "black_oxide", "iso10642": "black_oxide", "iso4017": "zinc_plated",
           "iso4032": "zinc_plated", "iso7089": "zinc_plated"}
+
+# Each fastener's mount frame (mitcad#1197; docs/libraries.md, "Mount
+# frames"), so that Insert from Library places it by Place Component: a
+# click on a hole's rim or round face seats it, fixed. Every design has it
+# at its origin, z down (-Z): a screw's `shaft` frame on its axis under the
+# head (a countersunk one at its head's top, where the cone meets the
+# face), z along the shank to the tip; a nut's or a washer's `hole` frame
+# on its bearing face, z out of that face.
+MOUNT_NAME = "seat"
+MOUNT_KIND = {"socket": "shaft", "hex": "shaft", "countersunk": "shaft", "nut": "hole", "washer": "hole"}
+
+
+def mount_frame(item):
+    """The command that adds the part's mount frame, a joint origin on a
+    fixed plane at the origin."""
+    return {"cmd": "add_feature", "name": "Mount seat", "def": {
+        "type": "joint_origin", "geometry": {"origin": [0, 0, 0], "normal": [0, 0, -1], "x_axis": [1, 0, 0]},
+        "mount": {"name": MOUNT_NAME, "kind": MOUNT_KIND[item["profile"]]}}}
+
+
+def manifest_mounts(item):
+    """The component's `mounts` in the manifest: the design's frame."""
+    return [{"name": MOUNT_NAME, "kind": MOUNT_KIND[item["profile"]], "joint": "rigid"}]
 
 
 def mm(value):
@@ -918,6 +943,10 @@ def main():
             look = FINISH.get(item["id"], "zinc_plated")
             try:
                 threads = dress_screw(args.cli, item, commands, target, scratch)
+                # The mount frame after the dressing, whose uids stay.
+                failed = previews.apply_checked(args.cli, target, [mount_frame(item)], scratch)
+                if failed:
+                    sys.exit(f"{item['id']}: no mount frame ({failed})")
                 previews.apply_appearance(args.cli, target, look, scratch, item["name"])
             except previews.PreviewError as e:
                 sys.exit(f"{item['id']}: {e}")
@@ -944,6 +973,7 @@ def main():
                 "standard": item["standard"], "keywords": item["keywords"], "preview": preview_path,
                 "license": LICENSE, "designation": item["designation"],
                 "description": f"{len(item['rows'])} sizes, {item['rows'][0]['name']} to {item['rows'][-1]['name']}.",
+                "mounts": manifest_mounts(item),
             }
             rows = manifest_rows(item["rows"])
             if rows:

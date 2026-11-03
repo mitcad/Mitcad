@@ -112,5 +112,8 @@ CommandDef dogboneCommand(const CommandContext& context);
 // MortiseTenonCommands.cpp (mitcad#1012): a tenon on one body's end face
 // and its mortise in another body.
 CommandDef mortiseTenonCommand(const CommandContext& context);
+// ConvertMeshCommands.cpp (mitcad#1082): a mesh body made a solid, faceted
+// or analytic.
+CommandDef convertMeshCommand(const CommandContext& context);
 
 } // namespace mitcad::cmd

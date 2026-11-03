@@ -120,7 +120,8 @@ protected:
   // The accent-coloured controls follow the palette.
   void changeEvent(QEvent* event) override;
   // A value field taking the keyboard or losing it (mitcad#250); the
-  // panel, its fields or a widget it is in moving (mitcad#528).
+  // panel, its fields or a widget it is in moving (mitcad#528); Tab and
+  // Shift+Tab in a field (stepFocus, mitcad#1181).
   bool eventFilter(QObject* watched, QEvent* event) override;
   void showEvent(QShowEvent* event) override;
 
@@ -182,6 +183,15 @@ private:
   void updateNote(Row& row);
   // The rows in the order the panel shows them.
   std::vector<const Row*> orderedRows() const;
+  // The widget of a row that Tab moves the keyboard to: a value or text
+  // field, a tile or a choice's rows; none for the rest.
+  static QWidget* tabStop(const Row& row);
+  // Tab and Shift+Tab in one of the panel's fields (mitcad#1181): the
+  // keyboard to the next or the previous field the panel shows, in the
+  // panel's own order, from the last back to the first; hidden and
+  // disabled fields are skipped. False when `from` is not one of them or
+  // the panel has no other.
+  bool stepFocus(QWidget* from, bool back);
 
   const CommandDef& m_def;
   QFormLayout* m_form = nullptr;

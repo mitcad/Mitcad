@@ -64,6 +64,8 @@ if(BUILD_TESTING)
                                                    --open "${scripts}/thread_old_piece_names.mitcad")
   # Thin walls along open chains and closed loops of sketch curves (mitcad#463).
   add_test(NAME cli.f1_thin_curves COMMAND mitcad-cli run "${scripts}/f1_thin_curves.json")
+  # A taper that closes the profile partway names the walls that meet (mitcad#1186).
+  add_test(NAME cli.f1_taper_closes COMMAND mitcad-cli run "${scripts}/f1_taper_closes.json")
   # Assembly cut scope preserves component-local geometry and split ownership.
   set(cut_scope "${CMAKE_CURRENT_BINARY_DIR}/extrude-cut-scope.mitcad")
   add_test(NAME cli.extrude_cut_scope COMMAND mitcad-cli run "${scripts}/extrude_cut_scope.json" --save "${cut_scope}")
@@ -707,7 +709,8 @@ if(BUILD_TESTING)
   set_tests_properties(solidcraft.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "SolidCraft corpus: skipped")
 
   # Single .f3d designs checked item by item (mitcad#311), found by their
-  # content ids under MITCAD_F3D_CORPUS and MITCAD_F3D_BACKUP: the items
+  # content ids under MITCAD_F3D_CORPUS and MITCAD_F3D_BACKUP and the
+  # `-reported` folders beside them (mitcad#1175): the items
   # named come in parametric, none after a retry on the file's exact state,
   # and reading the file and applying its appearances take less time than
   # the replay, and a design with a time limit (seconds in a release build,
@@ -937,6 +940,10 @@ if(BUILD_TESTING)
   # Emboss (mitcad#458): a rectangle and a text wrapped onto a rod, raised
   # and sunk, a square on its end face, with analytic volumes.
   add_test(NAME cli.emboss COMMAND mitcad-cli run "${scripts}/emboss.json")
+  # Emboss by projection (mitcad#1091): a square and a text projected onto
+  # a ball, a square onto a B-spline face and one partly off it, a square
+  # along a direction onto a box's top.
+  add_test(NAME cli.emboss_projection COMMAND mitcad-cli run "${scripts}/emboss_projection.json")
 
   # Boundary Fill (mitcad#457): the cells of overlapping boxes as new
   # bodies, a cell of two solids cut from and joined to a plate, saved and
@@ -1249,6 +1256,16 @@ if(BUILD_TESTING)
   add_test(NAME cli.mesh_convert_reopen
     COMMAND mitcad-cli run "${scripts}/mesh_convert_reopen.json" --open "${mesh_convert}/mesh_convert.mitcad")
   set_tests_properties(cli.mesh_convert_reopen PROPERTIES FIXTURES_REQUIRED cli_mesh_convert)
+endif()
+
+# Convert Mesh's Faceted solid (mitcad#1082): the plate's STL mesh welded and
+# merged into a new solid of 10 planar faces, the mesh body hidden; a
+# torus's mesh made a faceted solid too.
+if(BUILD_TESTING)
+  set(mesh_convert_faceted "${CMAKE_CURRENT_BINARY_DIR}/mesh-convert-faceted")
+  file(MAKE_DIRECTORY "${mesh_convert_faceted}")
+  add_test(NAME cli.mesh_convert_faceted COMMAND mitcad-cli run "${scripts}/mesh_convert_faceted.json")
+  set_tests_properties(cli.mesh_convert_faceted PROPERTIES WORKING_DIRECTORY "${mesh_convert_faceted}")
 endif()
 
 # Wrap (mitcad#473): Extrude's wrap onto a rod as an emboss, raised and

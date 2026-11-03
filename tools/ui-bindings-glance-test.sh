@@ -25,8 +25,9 @@
 #      (a feature suppressed by a condition); its link opens Configurations
 #      on the Bindings tab.
 #   3. The Bindings tab lists the six bindings (bodies, a face, a feature, an
-#      occurrence), warns about 'paint_purple', filters by Driven by and by
-#      the item search; the Options tab says how many bindings use each
+#      occurrence), warns about 'paint_purple', filters by Option
+#      (mitcad#968) and by the item search; the Options tab says how many
+#      bindings use each
 #      option; Select in Browser shows Box2; Remove Binding of Body2's
 #      appearance keeps paint_black in one undo step, and undo brings the
 #      binding back.
@@ -174,16 +175,17 @@ ui_expect_new "Configurations binding Board:1 Shown: when Color ≠ Red; now sho
 ui_expect_new "Configurations bindings status: 6 bindings, 1 warning" "the status line counts them"
 ui_expect_new "Configurations option Color used by 4 bindings" "Options: Color is used by four bindings"
 ui_expect_new "Configurations option Holes used by 2 bindings" "Options: Holes by two"
-ui_expect_new "Configurations bindings driven by at" "the filter's place is logged"
+ui_expect_new "Configurations bindings driven by at" "the Option filter's place is logged"
+ui_expect_log "Configurations bindings filter label: Option:" "the filter is labelled Option (mitcad#968)"
 ui_expect_new "Configurations binding Body2 Appearance at" "the rows' places are logged"
 [ -n "$SHOTS" ] && ui_capture "$SHOTS/bindings-tab.png"
 
 ui_mark
 ui_focus_dialog '^Configurations$'
-ui_step "Driven by: Holes"                 ui_choose "Configurations bindings driven by" 2
+ui_step "Option: Holes"                    ui_choose "Configurations bindings driven by" 2
 ui_expect_new "Configurations bindings driven by Holes, search '': 2 of 6 bindings" "the bindings Holes drives"
 ui_mark
-ui_step "Driven by: All options"           ui_choose "Configurations bindings driven by" -2
+ui_step "Option: All options"              ui_choose "Configurations bindings driven by" -2
 ui_expect_new "Configurations bindings driven by All options, search '': 6 bindings, 1 warning" "all again"
 ui_mark
 ui_step "search Board"                     ui_type_in "Configurations bindings search" "Board"

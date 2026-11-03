@@ -4,6 +4,7 @@
 #include <memory>
 #include <functional>
 #include <QColorDialog>
+#include <QJsonObject>
 #include <QObject>
 #include <QPoint>
 #include <QUrl>
@@ -49,6 +50,17 @@ inline void requestNativeColumnContents(QObject* header) {
 // Optional QObject* QWidget target: Return commits this field and focuses
 // that presenter, rather than pressing the secondary window's default.
 inline constexpr char NativeReturnTargetProperty[] = "nativeReturnTarget";
+// Explicit focus requests from a retained presenter (for example F2 or a
+// newly made item). Call after setting Qt focus and the field's selection.
+inline constexpr char NativeFocusRequestProperty[] = "nativeFocusRequest";
+inline void requestNativeFocus(QObject* field) {
+  if (field == nullptr) return;
+  const quint64 previous = field->property(NativeFocusRequestProperty).toULongLong();
+  field->setProperty(NativeFocusRequestProperty, QVariant::fromValue(previous + 1));
+}
+// Optional QVariantList of unmodified Qt keys owned by an item view's
+// shared event filter. Ordinary native table navigation stays in AppKit.
+inline constexpr char NativeModelKeysProperty[] = "nativeModelKeys";
 // A NoSelection checklist whose current row is a keyboard cursor, rather
 // than a selection. Arrows publish the visible model row; Space reaches
 // the shared view's event filter, and Tab reaches its
@@ -108,11 +120,14 @@ public:
 };
 
 #if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
-void setNativeDialogWindow(void* nativeNSWindow);
-void* nativeDialogWindow(); // Borrowed document NSWindow; popup anchoring only.
+void bindNativeDialogWindow(QWidget* caller, void* nativeNSWindow);
+void* nativeDialogWindow(QWidget* caller = nullptr); // Borrowed document NSWindow; popup anchoring only.
 bool nativeDialogsActive();
 // Includes tracked sheets and AppKit's standalone modal alert/file panels.
 bool nativeDialogModalActive();
+// Read-only modal identities on the UI thread; the borrowed document window
+// is used only to report ownership, never to change AppKit modal state.
+QJsonObject nativeDialogModalState(void* nativeDocumentWindow);
 void waitNativeUntil(const std::function<bool()>& completed);
 std::unique_ptr<NativeWidgetView> createNativeWidgetView(QWidget* widget);
 // In-process regression instrumentation; counts only changed properties.
@@ -127,10 +142,11 @@ QColor getNativeColor(const QColor& initial, QWidget* parent, const QString& tit
 void showNativeWidget(QWidget* widget);
 QAction* execNativeMenu(QMenu* menu, const QPoint& point);
 #else
-inline void setNativeDialogWindow(void*) {}
-inline void* nativeDialogWindow() { return nullptr; }
+inline void bindNativeDialogWindow(QWidget*, void*) {}
+inline void* nativeDialogWindow(QWidget* = nullptr) { return nullptr; }
 inline bool nativeDialogsActive() { return false; }
 inline bool nativeDialogModalActive() { return false; }
+inline QJsonObject nativeDialogModalState(void*) { return {}; }
 inline void* nativeFileDialogPanel() { return nullptr; }
 inline std::unique_ptr<NativeWidgetView> createNativeWidgetView(QWidget*) { return {}; }
 #endif

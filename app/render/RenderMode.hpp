@@ -50,6 +50,7 @@ public:
   ~RenderMode() override;
 
   void setEnabled(bool enabled);
+  void setDocumentVisible(bool visible);
   bool isEnabled() const { return m_enabled; }
 
   // The document's render settings (the model's `render_settings` query,
@@ -105,6 +106,7 @@ private:
   QPointer<QLabel> m_message;
   QTimer* m_messageTimer;
   bool m_enabled = false;
+  bool m_documentVisible = true;
   bool m_ready = false;
   bool m_scenePending = false;
   // Scene updates: their sequence number, the mesh files the worker has not

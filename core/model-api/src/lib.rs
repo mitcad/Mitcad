@@ -133,6 +133,11 @@ mod physical_extent;
 mod center_of_mass;
 // The design's summary and statistics (mitcad#1088).
 mod design_properties;
+// Comments pinned to the model for an AI agent (mitcad#1119).
+mod comments;
+// Dimensions snapped to the spacing of the one placed before
+// (mitcad#1173).
+mod drawing_spacing;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -166,6 +171,7 @@ pub mod prelude {
     pub use super::drawing::DrawingApi;
     pub(crate) use super::drawing::DrawingOps;
     pub(crate) use super::drawing_annotations::DrawingAnnotationsOps;
+    pub(crate) use super::drawing_spacing::DrawingSpacingOps;
     pub(crate) use super::drawing_tables::DrawingTablesOps;
     pub(crate) use super::drawing_templates::DrawingTemplatesOps;
     pub(crate) use super::drawings::DrawingsOps;
@@ -224,6 +230,8 @@ pub mod prelude {
     pub(crate) use super::center_of_mass::CenterOfMassOps;
     // The design's summary and statistics (mitcad#1088).
     pub(crate) use super::design_properties::DesignPropertiesOps;
+    // Comments pinned to the model (mitcad#1119).
+    pub(crate) use super::comments::CommentsOps;
 }
 
 use std::fmt;
@@ -785,6 +793,8 @@ named_enum! {
             /// Columns of property values: `Key` or `Set/Key` (mitcad#496).
             #[serde(default)]
             properties: Vec<String>,
+            #[serde(default)]
+            group_identical: bool,
         },
         // A row of assembly constraints before it is added: its references' kinds,
         // the types they fit and what they measure (mitcad#148).
@@ -992,6 +1002,9 @@ named_enum! {
         // The design's summary and statistics (mitcad#1088,
         // `design_properties.rs`).
         "design_properties" => DesignProperties,
+        // Comments pinned to the model for an AI agent, with the number of
+        // open ones and a revision (mitcad#1119, `comments.rs`).
+        "comments" => Comments(Box<comments::CommentsQuery>),
         // The top-level fields of the design file a newer MitCad wrote
         // and this build did not read, and whether saving to `path` drops
         // them (mitcad#1132).
@@ -999,6 +1012,9 @@ named_enum! {
             #[serde(default)]
             path: Option<String>,
         },
+        // Where a dimension placed or dragged on a drawing's view snaps
+        // to (mitcad#1173, `drawing_spacing.rs`).
+        "drawing_snap" => DrawingSnap(drawing_spacing::SnapQuery),
     }
 }
 
@@ -1065,6 +1081,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             }
             command => self.run_command(command)?,
         };
+        // The comments' targets as the change left them (mitcad#1119): an
+        // orphan keeps its last known place.
+        self.settle_comments_now();
         Ok(result.to_string())
     }
 
@@ -1338,7 +1357,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // Configuration tables and library parts (mitcad#64).
             Query::Configurations { rules } => self.configurations_json(rules),
             Query::LibraryParts => self.library_parts_json(),
-            Query::PartsList { properties } => self.parts_list_with(&properties),
+            Query::PartsList {
+                properties,
+                group_identical,
+            } => self.bom_list_with(&properties, group_identical),
             // Assembly constraints (mitcad#148).
             Query::ConstraintRow(query) => self.constraint_row_json(&query)?,
             // Move Features into a Component (mitcad#171).
@@ -1499,9 +1521,13 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::CenterOfMass => self.center_of_mass_json()?,
             // The design's summary and statistics (mitcad#1088).
             Query::DesignProperties => self.design_properties_json(),
+            // Comments (mitcad#1119).
+            Query::Comments(query) => self.comments_json(&query)?,
             // The fields of a newer MitCad's design that were not read
             // (mitcad#1132).
             Query::UnknownFields { path } => unknown_fields_json(self, path.as_deref()),
+            // Dimension spacing (mitcad#1173).
+            Query::DrawingSnap(query) => self.drawing_snap_json(&query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

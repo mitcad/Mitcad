@@ -179,6 +179,25 @@ impl FcstdFile {
         Ok((!data.is_empty()).then_some(data))
     }
 
+    /// The B-rep data of another shape property of an object (a sketch's
+    /// `InternalShape`, its faces of the areas its curves bound, mitcad#1195),
+    /// None when it has none or the data is empty.
+    pub fn property_shape_data(
+        &self,
+        object: &str,
+        property: &str,
+    ) -> Result<Option<Vec<u8>>, FcstdError> {
+        let file = match self.document.object(object).and_then(|o| o.value(property)) {
+            Some(value::Value::Shape(s)) => s.file.as_deref(),
+            _ => None,
+        };
+        let Some(file) = file else {
+            return Ok(None);
+        };
+        let data = self.read(file)?;
+        Ok((!data.is_empty()).then_some(data))
+    }
+
     /// The view data of an object, when the file has it.
     pub fn view(&self, object: &str) -> Option<&ViewProvider> {
         self.gui.as_ref()?.get(object)

@@ -88,6 +88,10 @@ NavigationBar::NavigationBar(CommandRegistry& registry, const QList<QAction*>& s
   addCommand(QStringLiteral("view.snap_grid"));
   m_grid = m_registry.action(QStringLiteral("view.grid"));
   m_snap = m_registry.action(QStringLiteral("view.snap_grid"));
+  // The comments' pins shown or hidden (mitcad#1119), the View menu's
+  // Comment Pins.
+  addCommand(QStringLiteral("view.comment_pins"));
+  m_pins = m_registry.action(QStringLiteral("view.comment_pins"));
   updateStyleButton();
 
   m_logTimer = new QTimer(this);
@@ -261,19 +265,21 @@ void NavigationBar::logNow() {
   // The toggles' checks, the buttons' and the View menu's actions', and the
   // visual style.
   QStringList states;
-  QAction* const toggles[] = {m_grid, m_snap};
-  for (QAction* toggle : toggles) {
-    if (toggle == nullptr) {
-      continue;
-    }
+  const auto toggleState = [this](QAction* toggle) {
     bool buttonChecked = false;
     for (const QToolButton* button : std::as_const(m_buttons)) {
       if (button->defaultAction() == toggle) {
         buttonChecked = button->isChecked();
       }
     }
-    states << QStringLiteral("%1 %2 (View menu %3)").arg(plainText(toggle), onOff(buttonChecked),
-                                                        onOff(toggle->isChecked()));
+    return QStringLiteral("%1 %2 (View menu %3)").arg(plainText(toggle), onOff(buttonChecked),
+                                                      onOff(toggle->isChecked()));
+  };
+  QAction* const toggles[] = {m_grid, m_snap};
+  for (QAction* toggle : toggles) {
+    if (toggle != nullptr) {
+      states << toggleState(toggle);
+    }
   }
   QString styleName = QStringLiteral("none");
   for (const QAction* entry : std::as_const(m_styles)) {
@@ -282,6 +288,10 @@ void NavigationBar::logNow() {
     }
   }
   states << QStringLiteral("Visual Style %1").arg(styleName);
+  // After the style, so that the lines before mitcad#1119 read as they did.
+  if (m_pins != nullptr) {
+    states << toggleState(m_pins);
+  }
   const QString line = QStringLiteral("Navigation bar states: %1").arg(states.join(QStringLiteral(", ")));
   if (line != m_loggedStates) {
     m_loggedStates = line;

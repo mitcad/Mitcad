@@ -85,7 +85,12 @@ for theme in light dark; do
   ui_mark
   ui_step "Insert (Alt+I)"                   ui_key alt+i
   ui_focus_main
+  # The screw has a mount frame (mitcad#1197): Place Component, Enter
+  # drops it in at the origin.
+  ui_expect_new "Command Place Component started" "Place Component for the screw"
+  ui_step "drop it in (Enter)"               ui_key Return
   ui_expect_new "Inserted component " "the screw inserted"
+  ui_step "close Place Component (Escape)"   ui_key Escape
   ui_mark
   ui_step "Library Components (command search)"   ui_command "Library Components"
   ui_focus_dialog '^Library Components$'

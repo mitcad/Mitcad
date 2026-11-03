@@ -202,6 +202,11 @@ std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, c
     return std::nullopt;
   }
   const SelectionItem& item = items.first();
+  // A plane chosen without a point (mitcad#1196: the first part on a plane
+  // before the click that says where, or Enter): at the plane's origin.
+  const QJsonObject pick = state.object(key + QStringLiteral("_pick"));
+  const bool atOrigin = item.kind == SelectKind::Plane && str(pick, "item") == item.describe() &&
+                        !pick.contains(QStringLiteral("point"));
   const std::optional<QString> path = pathFromHost(item, context);
   if (!path) {
     // An origin or construction plane or point above the host (the root's
@@ -210,7 +215,13 @@ std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, c
     // coordinates, as Enter grounds it at the origin. (A BUILD part to go
     // on is always under the host.)
     if (item.kind == SelectKind::Plane || item.kind == SelectKind::Point) {
-      if (const std::optional<gp_Pnt> point = pickPoint(key, state, context)) {
+      std::optional<gp_Pnt> point;
+      if (!atOrigin) {
+        point = pickPoint(key, state, context);
+      } else if (const std::optional<gp_Ax3> plane = planeOf(item, context)) {
+        point = plane->Location();
+      }
+      if (point) {
         return QJsonObject{{QStringLiteral("point"), pointJson(inHost(*point, context))}};
       }
     }
@@ -221,10 +232,27 @@ std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, c
   if (!path->isEmpty()) {
     at.insert(QStringLiteral("occurrence"), *path);
   }
-  if (const std::optional<gp_Pnt> point = pickPoint(key, state, context)) {
+  // Without a point the model takes the plane's own origin.
+  if (const std::optional<gp_Pnt> point = atOrigin ? std::nullopt : pickPoint(key, state, context)) {
     at.insert(QStringLiteral("point"), pointJson(inHost(*point, context)));
   }
   return at;
+}
+
+std::optional<gp_Ax3> planeOf(const SelectionItem& item, const CommandContext& context) {
+  if (item.kind != SelectKind::Plane) {
+    return std::nullopt;
+  }
+  const std::optional<cmd::PlaneFrame> frame = cmd::frameOf(item, context);
+  if (!frame) {
+    return std::nullopt;
+  }
+  gp_Ax3 plane(frame->origin, frame->normal, frame->x);
+  // The datum's frame is in the coordinates of the item's component.
+  if (const std::optional<gp_Trsf> placement = worldOf(item.occurrence, context)) {
+    plane.Transform(*placement);
+  }
+  return plane;
 }
 
 std::optional<SelectionItem> itemOfTarget(const QJsonObject& target, const CommandContext& context) {

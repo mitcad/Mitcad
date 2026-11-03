@@ -25,6 +25,8 @@
 # check-all sources: core/tests/test_exchange.cpp
 
 source "$(dirname "$0")/ui-test-lib.sh"
+# New and Open replace the design, as these steps expect (mitcad#1172).
+ui_open_in_current_window
 
 TEST_EXCHANGE=${UI_TEST_EXCHANGE:-$(cd "$(dirname "$UI_APP")/.." && pwd)/core/test_exchange}
 WORK=$(mktemp -d /tmp/mitcad-ui-import-retry.XXXXXX)

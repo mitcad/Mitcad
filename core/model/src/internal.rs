@@ -66,7 +66,7 @@ pub mod features {
     #[cfg(any(test, feature = "testing"))]
     pub use crate::features::extrude::selected_regions;
     pub use crate::features::geom_ref::Resolver;
-    pub use crate::features::renamed::{Lost, find_face};
+    pub use crate::features::renamed::{Lost, find_face, with_edge_suggestions};
     pub use crate::features::slot_label;
     pub use crate::features::surface_bodies::is_mesh;
     pub use crate::features::thread::CREST_ON_FACE;

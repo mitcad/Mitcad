@@ -32,8 +32,9 @@ struct DomainValue {
   QString expression;
 };
 
-// What an option can be: its domain before the rules, or what the rules
-// allow now. A list, a range (each bound may be missing), or free.
+// What an option can be: its domain before the rules (the UI's Possible
+// values), or what the rules allow now (Allowed values). A list, a range
+// (each bound may be missing), or free.
 struct Domain {
   enum class Kind { Free, List, Range };
   Kind kind = Kind::Free;
@@ -100,8 +101,9 @@ struct Report {
   const OptionReport* option(const QString& name) const;
 };
 
-// A row: a named preset of option values (expressions), and in a closed
-// table of other parameters' values too.
+// A row (a configuration row): a named, saved combination of option values
+// (expressions), and in a closed table (Only these rows) of other
+// parameters' values too, its parameter columns.
 struct Row {
   QString name;
   QVector<QPair<QString, QString>> values; // parameter, expression; in the table's order
@@ -284,5 +286,20 @@ Paste pasteBlock(const Table& table, const QVector<SheetColumn>& columns, int ro
 // Delete in the Rows sheet: the cells (row index, column) emptied; a name
 // stays.
 Table clearCells(const Table& table, const QVector<SheetColumn>& columns, const QVector<QPair<int, int>>& cells);
+
+// The Options tab's Value cell (mitcad#968; docs/ui-conventions.md,
+// "Configurations"): the option's current value, not a stored default.
+// An option the user sets shows the value the `configure` query reports
+// (`text`: `1200 mm`, `Black`), else its parameter's constant as the Rows
+// sheet shows it (`expression`, rowText); it is edited there. A By Formula
+// option (`driven`) shows its evaluated value, never the formula: the
+// expression that gives it is the cell's `expression` (its tooltip), and
+// the cell is not edited.
+struct ValueCell {
+  QString text;
+  QString expression; // a By Formula option's expression; empty otherwise
+  bool editable = true;
+};
+ValueCell valueCell(const OptionReport* report, bool text, const QString& expression);
 
 } // namespace mitcad::configurations

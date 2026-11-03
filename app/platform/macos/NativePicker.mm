@@ -135,7 +135,7 @@ AppKitPicker* g_picker = nullptr; // the one open; a new one closes it
 class AppKitPicker final : public QObject {
 public:
   AppKitPicker(QWidget* presenter, QLineEdit* search, QListWidget* list)
-      : m_presenter(presenter), m_search(search), m_list(list) {
+      : m_presenter(presenter), m_search(search), m_list(list), m_name(presenter->objectName()) {
     m_target = [MitcadNativePickerTarget new];
     m_target->owner = this;
     m_images = [NSMutableDictionary dictionary];
@@ -197,7 +197,12 @@ public:
     controller.view = content;
     m_popover = [NSPopover new];
     m_popover.behavior = NSPopoverBehaviorTransient;
-    m_popover.animates = qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT");
+    m_popover.animates = qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") ||
+                         qEnvironmentVariableIntValue("MITCAD_TEST_PICKER_ANIMATIONS") == 1;
+    if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+      qInfo().noquote() << QStringLiteral("Native picker animations: %1")
+                               .arg(m_popover.animates ? QStringLiteral("on") : QStringLiteral("off"));
+    }
     m_popover.contentSize = NSMakeSize(width, height);
     m_popover.contentViewController = controller;
     m_popover.delegate = m_target;
@@ -228,7 +233,7 @@ public:
   }
 
   // Shows it under the control `anchor` names, else under the pointer.
-  void open(const QString& anchor) {
+  bool open(const QString& anchor) {
     reload();
     NSView* view = anchorView(anchor);
     if (view != nil) {
@@ -240,18 +245,14 @@ public:
       NSWindow* window = NSApp.keyWindow != nil ? NSApp.keyWindow : (__bridge NSWindow*)nativeDialogWindow();
       NSView* content = window.contentView;
       if (content == nil) {
-        closed();
-        return;
+        return false;
       }
       const NSPoint at = [content convertPoint:[window convertPointFromScreen:NSEvent.mouseLocation] fromView:nil];
       [m_popover showRelativeToRect:NSMakeRect(at.x - 1, at.y - 1, 2, 2) ofView:content
                       preferredEdge:content.flipped ? NSRectEdgeMaxY : NSRectEdgeMinY];
     }
     NSWindow* window = m_field.window;
-    if (window == nil) {
-      closed();
-      return;
-    }
+    if (!m_popover.shown || window == nil) return false;
     // Found by focus-dialog as the Qt picker window is.
     window.title = ns(m_presenter->windowTitle());
     window.identifier = ns(m_presenter->objectName());
@@ -261,6 +262,7 @@ public:
     qInfo().noquote() << QStringLiteral("Native picker %1 at %2: %3 rows")
                              .arg(m_presenter->objectName(), view != nil ? anchor : QStringLiteral("the pointer"))
                              .arg(m_rows.size());
+    return true;
   }
 
   // The list's shown entries, its current one selected.
@@ -422,6 +424,20 @@ public:
   void chooseCurrent() { send(m_list, Qt::Key_Return); }
   void cancel() { send(m_search, Qt::Key_Escape); }
 
+  // A closing popover may finish its animation after this presenter has
+  // been reused. Its delegate must no longer cancel or hide that presenter.
+  void detachPresenter() {
+    m_detached = true;
+    if (m_presenter != nullptr) {
+      m_presenter->removeEventFilter(this);
+      QObject::disconnect(m_presenter.data(), nullptr, this, nullptr);
+    }
+    if (m_list != nullptr) QObject::disconnect(m_list.data(), nullptr, this, nullptr);
+    m_presenter = nullptr;
+    m_search = nullptr;
+    m_list = nullptr;
+  }
+
   void close() {
     if (m_popover.shown) {
       [m_popover close]; // popoverDidClose: closed()
@@ -437,6 +453,11 @@ public:
       return;
     }
     m_done = true;
+    if (m_detached && !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+      const bool successorShown = g_picker != nullptr && g_picker != this && g_picker->m_popover.shown;
+      qInfo().noquote() << QStringLiteral("Native picker retired close: %1, successor %2")
+                               .arg(m_name, successorShown ? QStringLiteral("shown") : QStringLiteral("absent"));
+    }
     if (m_presenter != nullptr && m_presenter->isVisible()) {
       cancel();
     }
@@ -486,6 +507,7 @@ private:
   QPointer<QWidget> m_presenter;
   QPointer<QLineEdit> m_search;
   QPointer<QListWidget> m_list;
+  const QString m_name;
   std::vector<int> m_rows; // the list's rows shown, in order
   MitcadNativePickerTarget* __strong m_target = nil;
   NSPopover* __strong m_popover = nil;
@@ -494,6 +516,7 @@ private:
   NSMutableDictionary<NSNumber*, NSImage*>* __strong m_images = nil;
   bool m_syncing = false;
   bool m_done = false;
+  bool m_detached = false;
 };
 
 bool showNativePicker(QWidget* presenter, QLineEdit* search, QListWidget* list, const QString& anchor) {
@@ -502,6 +525,7 @@ bool showNativePicker(QWidget* presenter, QLineEdit* search, QListWidget* list, 
   }
   if (AppKitPicker* open = g_picker) {
     g_picker = nullptr;
+    open->detachPresenter();
     open->close();
   }
   // Shown for its own show, filtering and logs, never on the screen.
@@ -510,8 +534,18 @@ bool showNativePicker(QWidget* presenter, QLineEdit* search, QListWidget* list, 
   presenter->show();
   auto* picker = new AppKitPicker(presenter, search, list);
   g_picker = picker;
-  picker->open(anchor);
-  return true;
+  if (picker->open(anchor)) return true;
+  picker->detachPresenter();
+  picker->close();
+  // The caller owns the Qt fallback, including its normal close/delete
+  // lifecycle. Restore the attributes before it shows the presenter.
+  presenter->hide();
+  // A reused presenter can still carry these flags from an earlier
+  // native opening, so neither flag belongs to the Qt fallback.
+  presenter->setAttribute(Qt::WA_DontShowOnScreen, false);
+  presenter->setAttribute(Qt::WA_ShowWithoutActivating, false);
+  qInfo().noquote() << QStringLiteral("Native picker unavailable: using Qt presenter %1").arg(presenter->objectName());
+  return false;
 }
 
 } // namespace mitcad

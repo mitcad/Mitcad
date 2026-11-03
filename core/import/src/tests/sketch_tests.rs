@@ -91,6 +91,54 @@ fn sketch_texts_keep_style_frame_and_path() {
 }
 
 #[test]
+fn a_text_below_a_circle_starts_where_the_files_circle_starts() {
+    // mitcad#1177: a left-aligned text below a construction circle (the
+    // file's text above the circle turned round) ends where the file's
+    // circle starts as a path: Mitcad's text hangs below the circle, right
+    // aligned, the circle starting there.
+    let p = |id: &str, x: f64, y: f64| json!({"id": id, "xyz": [x, y, 0.0]});
+    let start = -84f64.to_radians();
+    let sketch = json!({
+        "index": 0, "name": "Sketch1", "objectType": "Sketch",
+        "detail": {
+            "referencePlane": {"kind": "construction_plane", "name": "XY", "origin": "XY"},
+            "model_frame": {"sketch_to_model": [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+                                                [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]},
+            "points": [p("p0", 0.0, 0.0)],
+            "curves": [{"id": "c0", "type": "SketchCircle", "centerSketchPoint": "p0",
+                        "radius": 4.25, "isConstruction": true,
+                        "geometry": {"type": "Circle3D", "center": [0.0, 0.0, 0.0],
+                                     "normal": [0.0, 0.0, 1.0], "radius": 4.25}}],
+            "texts": [
+                {"id": "t0", "text": "1/16", "height": 0.5, "fontName": "Arial",
+                 "definition": {"_type": "AlongPathTextDefinition",
+                                "path": {"kind": "sketch_entity", "id": "c0"},
+                                "isAbovePath": false,
+                                "horizontalAlignment": "LeftHorizontalAlignment"},
+                 "_f3d": {"kind": 1, "pathStart": start}}
+            ]
+        }
+    });
+    let mut doc = Document::new(MockKernel::default());
+    import(&mut doc, &timeline_dump(vec![sketch]));
+    let s: Value =
+        serde_json::from_str(&doc.query(r#"{"query": "sketch", "uid": "F1"}"#).unwrap()).unwrap();
+    let t = &s["texts"][0];
+    assert_eq!(t["align"], "right", "{t}");
+    assert_eq!(t["path"]["above"], false, "{t}");
+    assert_eq!(t["no_kerning"], true, "{t}");
+    let circle = s["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "circle")
+        .unwrap();
+    assert_eq!(t["path"]["curve"], circle["id"]);
+    let at = circle["start_angle"].as_f64().unwrap();
+    assert!((at - start).abs() < 1e-12, "{circle}");
+}
+
+#[test]
 fn a_text_in_a_box_needs_no_position_of_its_own() {
     // The file's box: its first line runs along the text's baseline (here
     // towards -x, a half turn) from the text's corner; the API gives the

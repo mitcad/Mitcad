@@ -184,7 +184,7 @@ pub enum LoftSection<'a, S> {
         frame: SketchFrame,
         region: &'a ProfileRegion,
     },
-    /// A face of a body (its outer loop).
+    /// A face of a body (its outer loop, also of a face with holes).
     Face { body: &'a S, face: &'a FaceName },
     /// A point, at the start or the end.
     Point([f64; 3]),

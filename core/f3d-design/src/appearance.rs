@@ -324,6 +324,37 @@ fn body_name(seg: &Segment, d: &[u8], entity: u64) -> Option<String> {
     str16_at(d, r.end).map(|(s, _)| s).filter(|s| !s.is_empty())
 }
 
+/// The body record's class version whose light bulb is read
+/// ([`light_bulb`]): the layout was checked on it only.
+const LIGHT_BULB_VERSION: u32 = 19;
+
+/// A body record's light bulb (mitcad#1175): after its browser node GUID,
+/// `f64 volume (cm³) | f64 | u32 | u32 1 | u8 0 | u32 | u8 1 | u8 light
+/// bulb` (1 on, 0 off). Checked against the display scene the files keep
+/// (in a sample of the corpora, of the version-19 records with a light
+/// bulb byte, 1 of 54 off had a mesh there against 119 of 188 on, the
+/// others not meshed: in hidden occurrences, not in the design) and against
+/// a reported design whose preview shows the body hidden
+/// (`docs/f3d-appearances.md`, *Bodies' light bulbs*). None when the record
+/// is not laid out so.
+fn light_bulb(d: &[u8]) -> Option<bool> {
+    (0..d.len().saturating_sub(4)).find_map(|p| {
+        if u32_at(d, p)? != 36 {
+            return None;
+        }
+        let (_, e) = str16_at(d, p).filter(|(s, _)| is_lower_guid(s))?;
+        let tail = d.get(e + 16..e + 31)?;
+        if u32_at(tail, 4)? != 1 || tail[8] != 0 || tail[13] != 1 {
+            return None;
+        }
+        match tail[14] {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    })
+}
+
 /// The design stream's part: the bodies' and occurrences' appearances and
 /// materials, with the assets they name. The faces and the bodies'
 /// records in their blobs are found by [`resolve`].
@@ -366,6 +397,10 @@ pub fn decode(seg: &Segment, doc: &F3dFile) -> AppearanceData {
         let mut body = BodyLook {
             entity: Some(o.id),
             name: body_name(seg, d, o.id),
+            light_bulb: seg
+                .version(o)
+                .filter(|&v| v == LIGHT_BULB_VERSION)
+                .and_then(|_| light_bulb(d)),
             ..BodyLook::default()
         };
         if let Some((blob, selector)) = maps.get(&o.id) {
@@ -801,6 +836,37 @@ mod tests {
         assert!(face_entry(&d, &names[1]).is_none());
         assert!(is_material(&Package::default(), &names[1]));
         assert!(!is_material(&Package::default(), &names[0]));
+    }
+
+    /// A body record's light bulb (mitcad#1175): the byte after its
+    /// browser node GUID, the volume and area and the fields between, as
+    /// the reported drill index's two records keep it.
+    #[test]
+    fn reads_a_body_records_light_bulb() {
+        let record = |count: u32, bulb: u8| {
+            let mut d = vec![0u8; 9];
+            d.extend(s16("0_668"));
+            d.extend(s16("c8324a15-a37e-4b88-aa35-8f76d5ff9d25"));
+            d.extend(656.949_641_729_297_6f64.to_le_bytes());
+            d.extend(0.002_073_461f64.to_le_bytes());
+            d.extend(count.to_le_bytes());
+            d.extend(1u32.to_le_bytes());
+            d.extend([0, 0xac, 0x67, 0x23, 0x00, 1, bulb]);
+            d.extend((-1.0f64).to_le_bytes());
+            d.extend(s16("e78a62d0-01b8-4352-bec6-55ec3ffa1976"));
+            d
+        };
+        assert_eq!(light_bulb(&record(1, 0)), Some(false));
+        assert_eq!(light_bulb(&record(1, 1)), Some(true));
+        // The count before the 1 varies between bodies.
+        assert_eq!(light_bulb(&record(7, 0)), Some(false));
+        // Not laid out so: no light bulb.
+        assert_eq!(light_bulb(&record(1, 2)), None);
+        let mut other = record(1, 0);
+        let at = other.len() - 8 - 4 - 72 - 2;
+        other[at] = 9;
+        assert_eq!(light_bulb(&other), None);
+        assert_eq!(light_bulb(&s16(FACE)), None);
     }
 
     #[test]

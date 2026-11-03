@@ -31,7 +31,7 @@
 //!   points in the order that makes them positive, angles the angle between
 //!   the lines' directions (0 to 180 degrees).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mitcad_freecad::sketch::{
     self as fc, ConstraintType as T, Curve, FIRST_EXTERNAL, GeoRef, H_AXIS, PointPos, V_AXIS,
@@ -143,6 +143,11 @@ enum Found {
     Missing(String),
 }
 
+/// How far apart FreeCAD's stored geometry may keep two points a Coincident
+/// (or a tangency at their ends) joins and still be joined: well past its
+/// solver's precision and the sketch check's 1e-4 mm (mitcad#1194).
+const JOIN_TOLERANCE: f64 = 1e-3;
+
 struct Translator<'a> {
     sketch: &'a fc::Sketch,
     external: &'a [Option<ExternalMap>],
@@ -153,6 +158,9 @@ struct Translator<'a> {
     members: Vec<Vec<usize>>,
     /// Coincident constraints whose merge was refused.
     refused: BTreeSet<usize>,
+    /// Joins whose points FreeCAD's own geometry keeps apart (a stale copy
+    /// of external geometry whose link is gone, mitcad#1194): how far.
+    apart: BTreeMap<usize, f64>,
     class_point: HashMap<usize, u32>,
     curves: HashMap<i32, (u32, Kind)>,
     /// Entity index in `out.entities` by id.
@@ -181,6 +189,7 @@ pub(super) fn translate(
         parent: Vec::new(),
         members: Vec::new(),
         refused: BTreeSet::new(),
+        apart: BTreeMap::new(),
         class_point: HashMap::new(),
         curves: HashMap::new(),
         entity_at: HashMap::new(),
@@ -591,6 +600,16 @@ impl Translator<'_> {
                 || !self.index.contains_key(&b) && b != Vertex::Root
             {
                 continue;
+            }
+            // Points FreeCAD's geometry does not join: the constraint is not
+            // met (its solver kept the geometry it had), and merging them
+            // would move the sketch off FreeCAD's.
+            if let (Some(pa), Some(pb)) = (self.position(a), self.position(b)) {
+                let gap = (pa[0] - pb[0]).hypot(pa[1] - pb[1]);
+                if gap > JOIN_TOLERANCE {
+                    self.apart.insert(i, gap);
+                    continue;
+                }
             }
             if !self.union(a, b) {
                 self.refused.insert(i);
@@ -1088,6 +1107,11 @@ impl Translator<'_> {
         match con.kind {
             T::None | T::InternalAlignment => {}
             T::Coincident => {
+                if let Some(gap) = self.apart.get(&i) {
+                    return Err(format!(
+                        "FreeCAD's geometry does not meet it (its points {gap:.3} mm apart)"
+                    ));
+                }
                 if self.refused.contains(&i) {
                     return Err("it would join two points of one curve".to_owned());
                 }
@@ -1129,6 +1153,11 @@ impl Translator<'_> {
                 _ => return Err("not between two lines".to_owned()),
             },
             T::Perpendicular | T::Tangent => {
+                if let Some(gap) = self.apart.get(&i) {
+                    return Err(format!(
+                        "FreeCAD's geometry does not meet it (its points {gap:.3} mm apart)"
+                    ));
+                }
                 if self.refused.contains(&i) {
                     return Err("it would join two points of one curve".to_owned());
                 }

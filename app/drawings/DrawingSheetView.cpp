@@ -74,6 +74,28 @@ QPen penOf(const QJsonObject& pens, const QString& name) {
 
 double distance(const QPointF& a, const QPointF& b) { return std::hypot(a.x() - b.x(), a.y() - b.y()); }
 
+// A dimension's snap (mitcad#1173): its hint ("12 mm × 2") on a light box
+// beside where it goes (`at`, widget px).
+void paintSnapHint(QPainter& painter, const QPointF& at, const QString& hint) {
+  if (hint.isEmpty()) {
+    return;
+  }
+  painter.save();
+  const QFontMetricsF metrics(painter.font());
+  const QRectF box(at.x() + 10.0, at.y() - 10.0 - metrics.height(), metrics.horizontalAdvance(hint) + 8.0,
+                   metrics.height() + 4.0);
+  // The light chrome surface, a little see-through, under the selection's
+  // blue (a UI color, not the paper's ink).
+  QColor fill = themeColor(ColorRole::Surface, false);
+  fill.setAlpha(220);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(fill);
+  painter.drawRoundedRect(box, 3.0, 3.0);
+  painter.setPen(kSelected);
+  painter.drawText(box, Qt::AlignCenter, hint);
+  painter.restore();
+}
+
 // A key pressed without Ctrl, Alt, Shift or Meta (the keypad's flag aside).
 bool unmodified(const QKeyEvent* key) {
   return !(key->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
@@ -476,6 +498,38 @@ void DrawingSheetView::setPlacingPreview(const QString& kind, const QVector<QPoi
   update();
 }
 
+void DrawingSheetView::setPlacingSnap(bool snapped, const QPointF& at, const QString& hint) {
+  if (snapped == m_snapped && at == m_snapAt && hint == m_snapHint) {
+    return;
+  }
+  m_snapped = snapped;
+  m_snapAt = at;
+  m_snapHint = snapped ? hint : QString();
+  update();
+}
+
+void DrawingSheetView::setDragSnap(bool snapped, const QPointF& delta, const QString& hint) {
+  if (snapped == m_dragSnapped && delta == m_dragSnap && hint == m_snapHint) {
+    return;
+  }
+  m_dragSnapped = snapped;
+  m_dragSnap = delta;
+  m_snapHint = snapped ? hint : QString();
+  update();
+}
+
+bool DrawingSheetView::draggedAlone() const {
+  return m_drag == Drag::Annotation && !m_dragSelection && m_dragMoved;
+}
+
+void DrawingSheetView::askSnap(bool freely) {
+  if (draggedAlone()) {
+    emit annotationDragged(m_dragView, m_dragOffset, freely);
+  } else if (m_placing && m_pick == SheetPick::Picks && m_pointerIn) {
+    emit placingMoved(m_pointer, freely);
+  }
+}
+
 void DrawingSheetView::logPreview(const QString& what) {
   if (what == m_loggedPreview) {
     return;
@@ -516,7 +570,11 @@ void DrawingSheetView::paintPreview(QPainter& painter) const {
   pen.setCosmetic(true);
   painter.setPen(pen);
   painter.setBrush(Qt::NoBrush);
-  const QPointF now = toWidget(m_pointer);
+  // Where a dimension goes: the pointer, or the place it snaps to
+  // (mitcad#1173).
+  const bool snapped = m_snapped && m_placing && m_pick == SheetPick::Picks;
+  const QPointF pointer = snapped ? m_snapAt : m_pointer;
+  const QPointF now = toWidget(pointer);
   if (m_placing && m_pick == SheetPick::Picks && !m_previewPoints.isEmpty()) {
     if (m_previewKind == QStringLiteral("dimension") && m_previewPoints.size() >= 2) {
       // As the model lays a linear dimension out: along the axis its picks
@@ -524,8 +582,8 @@ void DrawingSheetView::paintPreview(QPainter& painter) const {
       const QPointF a = m_previewPoints[0];
       const QPointF b = m_previewPoints[1];
       const bool horizontal = std::abs(a.x() - b.x()) >= std::abs(a.y() - b.y());
-      const QPointF a2 = horizontal ? QPointF(a.x(), m_pointer.y()) : QPointF(m_pointer.x(), a.y());
-      const QPointF b2 = horizontal ? QPointF(b.x(), m_pointer.y()) : QPointF(m_pointer.x(), b.y());
+      const QPointF a2 = horizontal ? QPointF(a.x(), pointer.y()) : QPointF(pointer.x(), a.y());
+      const QPointF b2 = horizontal ? QPointF(b.x(), pointer.y()) : QPointF(pointer.x(), b.y());
       painter.drawLine(toWidget(a), toWidget(a2));
       painter.drawLine(toWidget(b), toWidget(b2));
       QPen line(kSelected, 1.5);
@@ -536,6 +594,9 @@ void DrawingSheetView::paintPreview(QPainter& painter) const {
       // A leader from the pick to where its text or symbol goes.
       painter.drawLine(toWidget(m_previewPoints.last()), now);
       painter.drawRect(QRectF(now.x() - 18.0, now.y() - 9.0, 36.0, 18.0));
+    }
+    if (snapped) {
+      paintSnapHint(painter, now, m_snapHint);
     }
   } else if ((m_placing && (m_pick == SheetPick::Line || m_pick == SheetPick::Circle)) ||
              (m_pick == SheetPick::OutOfView && (m_drag == Drag::OutOfView ? m_dragMoved : viewAt(m_pointer) == 0))) {
@@ -724,6 +785,8 @@ void DrawingSheetView::resetPicks() {
   m_previewKind.clear();
   m_previewPoints.clear();
   m_loggedPreview.clear();
+  m_snapped = false;
+  m_snapHint.clear();
   if (m_drag == Drag::OutOfView) {
     m_drag = Drag::None;
   }
@@ -910,8 +973,14 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
     pen.setCosmetic(true);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
-    const QPointF offset = dragged ? m_dragOffset : QPointF();
-    painter.drawRect(widgetBox(a.box.adjusted(-1.0, -1.0, 1.0, 1.0).translated(offset)));
+    // A dimension dragged alone by its snapped drag (mitcad#1173).
+    const bool snappedDrag = dragged && m_dragSnapped && draggedAlone();
+    const QPointF offset = dragged ? (snappedDrag ? m_dragSnap : m_dragOffset) : QPointF();
+    const QRectF drawn = widgetBox(a.box.adjusted(-1.0, -1.0, 1.0, 1.0).translated(offset));
+    painter.drawRect(drawn);
+    if (snappedDrag) {
+      paintSnapHint(painter, drawn.topRight(), m_snapHint);
+    }
   }
   // What a click would pick under the pointer, light (mitcad#725), and
   // what an annotation tool picked so far, in the handles' orange
@@ -1071,6 +1140,7 @@ void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
   setFocus(Qt::MouseFocusReason);
   const QPointF at = toSheet(event->position());
   m_dragMoved = false;
+  m_dragSnapped = false;
   if (event->button() == Qt::MiddleButton) {
     m_drag = Drag::Pan;
     m_dragFrom = event->position();
@@ -1159,6 +1229,10 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
   case Drag::Annotation:
     m_dragOffset = at - m_dragFrom;
     m_dragMoved = m_dragMoved || distance(m_dragOffset, QPointF()) * m_zoom > 3.0;
+    // Where a dimension dragged alone snaps (mitcad#1173).
+    if (draggedAlone()) {
+      emit annotationDragged(m_dragView, m_dragOffset, event->modifiers().testFlag(Qt::AltModifier));
+    }
     update();
     return;
   case Drag::OutOfView:
@@ -1186,6 +1260,10 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
   // What a click would pick: the workspace asks the model (mitcad#725).
   if (m_pick == SheetPick::Picks && !m_placing) {
     emit hoverRequested(under, at);
+  }
+  // Where a dimension placed snaps (mitcad#1173).
+  if (m_pick == SheetPick::Picks && m_placing) {
+    emit placingMoved(at, event->modifiers().testFlag(Qt::AltModifier));
   }
   // Painted again only when what shows changed (mitcad#759): the outline
   // under the pointer, or what follows it; the model's hover marks paint
@@ -1255,6 +1333,10 @@ void DrawingSheetView::contextMenuEvent(QContextMenuEvent* event) {
 
 void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
   const QPointF at = toSheet(event->position());
+  // Alt with the click or at the drag's end: placed freely (mitcad#1173).
+  m_releaseModifiers = event->modifiers();
+  m_dragSnapped = false;
+  m_snapHint.clear();
   const Drag drag = m_drag;
   m_drag = Drag::None;
   if (drag == Drag::Pan) {
@@ -1471,7 +1553,20 @@ bool DrawingSheetView::cancelPicks() {
   return true;
 }
 
+void DrawingSheetView::keyReleaseEvent(QKeyEvent* event) {
+  // Alt let go: a dimension placed or dragged snaps again (mitcad#1173).
+  if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+    askSnap(false);
+  }
+  QWidget::keyReleaseEvent(event);
+}
+
 void DrawingSheetView::keyPressEvent(QKeyEvent* event) {
+  // Alt held: a dimension placed or dragged goes where the pointer is
+  // (mitcad#1173).
+  if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+    askSnap(true);
+  }
   if (!unmodified(event)) {
     QWidget::keyPressEvent(event);
     return;

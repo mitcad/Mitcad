@@ -217,7 +217,7 @@ function Test-Programs([string]$Install) {
   $bin = Join-Path $Install 'bin'
   # 1. Files (Qt's plugins are in plugins, which bin\qt.conf points to).
   $required = @('mitcad.exe', 'mitcad-cli.exe', 'mitcad-updater.exe', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll',
-                'Qt6OpenGL.dll', 'Qt6OpenGLWidgets.dll', 'Qt6Svg.dll', 'Qt6Network.dll',
+                'Qt6OpenGL.dll', 'Qt6OpenGLWidgets.dll', 'Qt6Svg.dll', 'Qt6Network.dll', 'Qt6PrintSupport.dll',
                 '..\plugins\platforms\qwindows.dll', '..\plugins\tls\qschannelbackend.dll',
                 'TKernel.dll', 'TKService.dll', 'TKOpenGl.dll', 'vcruntime140.dll', 'msvcp140.dll')
   foreach ($file in $required) {

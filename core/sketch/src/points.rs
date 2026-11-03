@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Points that become one: a curve end that Extend brings to an existing
-//! point joins it (mitcad#259), and a Coincident constraint between the ends
-//! of two curves merges them (mitcad#260), so that the curves share a point
-//! as curves drawn from the same point do. Offset and the chain selection
-//! join curves only through shared points.
+//! point joins it (mitcad#259), as does a Trim cut end on one (mitcad#1191),
+//! and a Coincident constraint between the ends of two curves merges them
+//! (mitcad#260), so that the curves share a point as curves drawn from the
+//! same point do. Offset and the chain selection join curves only through
+//! shared points.
 //!
 //! [`SketchEdit::merge_points`] moves everything that refers to one point
 //! (curve ends, constraints, dimensions, text frames) to the other, drops
@@ -91,7 +92,7 @@ impl SketchEdit<'_> {
     /// it is a point of, and a constraint the same as an earlier one. Of
     /// the same constraint twice the active one stays (mitcad#723): an
     /// inactive duplicate of an active one holds nothing.
-    fn drop_idle_on(&mut self, point: EntityUid) {
+    pub(super) fn drop_idle_on(&mut self, point: EntityUid) {
         let index = EntityIndex::new(&self.def.entities);
         let on_point = |refs: &[Ref]| refs.contains(&Ref::Point(point));
         let twice = |refs: &[Ref]| {
@@ -267,12 +268,12 @@ impl SketchEdit<'_> {
         Ok(())
     }
 
-    /// The existing point an extension that ends at `at` on the curve
-    /// `target` reaches (mitcad#259): one within `tol` of `at` (where
-    /// `points`, the solved positions, have it), the target's own points
-    /// first, then any other, the lower id where several are; never a point
-    /// of the extended curve `curve`. With whether the
-    /// extended curve can end at it ([`SketchEdit::mergeable_point`]); one
+    /// The existing point an extension (or a trim's cut, mitcad#1191) that
+    /// ends at `at` on the curve `target` reaches (mitcad#259): one within
+    /// `tol` of `at` (where `points`, the solved positions, have it), the
+    /// target's own points first, then any other, the lower id where
+    /// several are; never a point of the extended (or trimmed) curve
+    /// `curve`. With whether the curve can end at it ([`SketchEdit::mergeable_point`]); one
     /// it cannot is held there by a point-to-point coincident constraint.
     pub(super) fn point_reached(
         &self,

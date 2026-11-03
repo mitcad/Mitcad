@@ -449,7 +449,25 @@ WindowStyle::WindowStyle(QMainWindow* window) : QObject(window), m_window(window
   if (QMenuBar* bar = window->menuBar()) {
     bar->installEventFilter(this);
   }
+  watchHost();
   apply();
+}
+
+// A document's window may be shown inside a document frame (mitcad#1172),
+// which is then the top-level window with the native frame and the visible
+// menu bar: watched for its show and its native window too.
+void WindowStyle::watchHost() {
+  QWidget* host = m_window != nullptr ? m_window->window() : nullptr;
+  if (host == m_host.data()) {
+    return;
+  }
+  if (m_host != nullptr && m_host != m_window) {
+    m_host->removeEventFilter(this);
+  }
+  m_host = host;
+  if (host != nullptr && host != m_window) {
+    host->installEventFilter(this);
+  }
 }
 
 void WindowStyle::styleDock(QDockWidget* dock) {
@@ -496,9 +514,18 @@ bool WindowStyle::eventFilter(QObject* watched, QEvent* event) {
       apply();
     }
     break;
+  case QEvent::ParentChange:
+    // Into a document frame, or out of one into a window of its own.
+    if (watched == m_window.data()) {
+      watchHost();
+      styleHost();
+      applyFrame();
+    }
+    break;
   case QEvent::Show:
   case QEvent::WinIdChange:
-    if (watched == m_window.data() && (event->type() == QEvent::Show || m_shown)) {
+    if ((watched == m_window.data() || (watched == m_host.data() && m_host != nullptr)) &&
+        (event->type() == QEvent::Show || m_shown)) {
       m_shown = true;
       applyFrame();
     }
@@ -534,6 +561,7 @@ void WindowStyle::apply() {
   window.setColor(QPalette::Accent, colors.accent);
   window.setColor(QPalette::Link, colors.accent);
   m_window->setPalette(window);
+  styleHost();
   // The panels and the toolbar: what fills a background in them is the
   // surface.
   QPalette surface;
@@ -554,18 +582,31 @@ void WindowStyle::apply() {
   applyFrame();
 }
 
+void WindowStyle::styleHost() {
+  // A document frame's menu bar and tab bar in the window's colour, as the
+  // window's own menu bar: the title bar's colour (applyFrame) is the same.
+  QWidget* host = m_window != nullptr ? m_window->window() : nullptr;
+  if (host == nullptr || host == m_window) {
+    return;
+  }
+  QPalette palette;
+  palette.setColor(QPalette::Window, windowColors().window);
+  host->setPalette(palette);
+}
+
 void WindowStyle::applyFrame() {
-  // Only on the window's native window as it is: winId() would create one,
-  // also while the window goes (its native window is destroyed at the end,
-  // with a WinIdChange; DWM then answered E_HANDLE).
-  if (m_window == nullptr || !m_shown || m_window->internalWinId() == 0 ||
-      !m_window->testAttribute(Qt::WA_WState_Created)) {
+  // The top-level window: the document frame that shows this window, if it
+  // is in one (mitcad#1172). Only on its native window as it is: winId()
+  // would create one, also while the window goes (its native window is
+  // destroyed at the end, with a WinIdChange; DWM then answered E_HANDLE).
+  QWidget* host = m_window != nullptr ? m_window->window() : nullptr;
+  if (host == nullptr || !m_shown || host->internalWinId() == 0 || !host->testAttribute(Qt::WA_WState_Created)) {
     return;
   }
   const WindowColors colors = windowColors();
   // The title bar in the menu bar's colour (Windows 11; nothing elsewhere).
   // Logged at every application: at the show and at each change of theme.
-  const QString frame = win::applyWindowFrame(m_window.data(), colors.window, colors.text);
+  const QString frame = win::applyWindowFrame(host, colors.window, colors.text);
   if (frame.isEmpty()) {
     return;
   }

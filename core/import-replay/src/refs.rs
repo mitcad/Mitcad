@@ -1669,6 +1669,8 @@ pub(crate) fn compare_bodies<K: Kernel>(
             volume_difference: None,
             max_deviation: None,
             relative_difference: None,
+            file_faces: (sig.faces > 0).then_some(sig.faces),
+            mitcad_faces: None,
             source: body.source.clone(),
             uid: None,
         };
@@ -1677,6 +1679,7 @@ pub(crate) fn compare_bodies<K: Kernel>(
             report.mitcad = Some(format!("{uid} {name}"));
             report.uid = Some(*uid);
             report.mitcad_volume = Some(mine.volume);
+            report.mitcad_faces = (mine.faces > 0).then_some(mine.faces);
             report.volume_difference = Some((mine.volume - sig.volume) / sig.volume);
             let small = |s: &K::Shape| kernel.faces(s).is_ok_and(|f| f.len() <= 300);
             // A body with the same measures (to 1e-4) is not compared surface

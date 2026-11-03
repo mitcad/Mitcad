@@ -154,7 +154,8 @@ NSButton* plainButton(id target, SEL action) {
 - (void)showLog:(const mitcad::MessageLog*)log {
   _log = log;
   const mitcad::MessageEntry* full = log != nullptr ? log->full() : nullptr;
-  const mitcad::MessageEntry* latest = log != nullptr ? log->latest() : nullptr;
+  // Null when another design cleared the band (mitcad#1174).
+  const mitcad::MessageEntry* latest = log != nullptr ? log->stub() : nullptr;
   QString shown;
   if (full != nullptr) {
     NSImage* image = levelImage(full->level);
@@ -182,6 +183,12 @@ NSButton* plainButton(id target, SEL action) {
     shown = QStringLiteral("stub %1 %2").arg(mitcad::noticeLevelName(latest->level), latest->text);
   } else {
     for (NSView* view in @[ _icon, _text, _close, _stub ]) view.hidden = YES;
+    if (!_logged.isEmpty()) {
+      // Emptied by another design (mitcad#1174); the next message is logged
+      // again even when it is the same.
+      _logged.clear();
+      qDebug().noquote() << QStringLiteral("Native message band: none");
+    }
   }
   if (!shown.isEmpty() && shown != _logged) {
     _logged = shown;

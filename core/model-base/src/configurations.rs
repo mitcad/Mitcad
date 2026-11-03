@@ -610,7 +610,7 @@ impl Configurations {
         }
         if !self.closed && !self.parameters.is_empty() {
             out.push(format!(
-                "the rows of an open table set options only, not {}: make the table closed",
+                "the rows set only options while Only these rows is off (closed), not {}",
                 self.parameters.join(", ")
             ));
         }

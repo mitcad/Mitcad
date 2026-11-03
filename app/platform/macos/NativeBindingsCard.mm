@@ -45,7 +45,7 @@ public:
   }
 
   void show(const QRect& anchor, bool pinned) override {
-    NSWindow* window = (__bridge NSWindow*)nativeDialogWindow();
+    NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(m_source);
     if (!m_source || !window.visible || !NSApp.active) return;
     if (!m_view) {
       m_view = createNativeWidgetView(m_source);
@@ -115,7 +115,7 @@ public:
     const CGFloat wanted = std::max(CGFloat(40), root.fittingSize.height);
     m_height.constant = wanted;
     m_height.active = YES;
-    NSWindow* document = (__bridge NSWindow*)nativeDialogWindow();
+    NSWindow* document = (__bridge NSWindow*)nativeDialogWindow(m_source);
     NSScreen* screen = document.screen != nil ? document.screen : NSScreen.mainScreen;
     const CGFloat available = std::max(CGFloat(160), screen.visibleFrame.size.height - 80);
     m_popover.contentSize = NSMakeSize(460, std::min(wanted, available));

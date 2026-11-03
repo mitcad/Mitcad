@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/build app/commands/BuildCommands.cpp app/framework app/library app/OcctViewer.cpp tools/cli
+# check-all sources: app/build app/commands/BuildCommands.cpp app/commands/MoveCommands.cpp app/framework app/library app/OcctViewer.cpp tools/cli
 # Input-driven Windows UI test of the BUILD tab (mitcad#375) in the build
 # VM (tools/ui-windows-lib.ps1 says how the input is posted); the Linux
 # test is tools/ui-build-test.sh, with the same steps. A library of small
@@ -55,6 +55,13 @@
 #  10. Shift + click places at once (mitcad#451): on the XY plane and on a
 #      profile's side without Place; a plain click only previews; over the
 #      part's longest length it is refused and places nothing.
+#  11. The first profile anywhere on a plane (mitcad#1196): XY chosen by
+#      its icon (Esc takes it out again), a click far from the icon places
+#      the profile there; a face of a block still in one click; Move/Copy
+#      on a placed profile (clicked before, or clicked in it) moves its
+#      occurrence, no move refusing a body of another component; in a new
+#      design the grounded first profile on the root's XY moves 100 mm and
+#      stays grounded.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-build-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir] [-Shots dir]
 # -Shots (default: UI_BUILD_SHOTS, as in the Linux test) saves a screenshot
@@ -224,6 +231,16 @@ Run-Cli 'the empty design' @('run', $empty, '--save', $start)
 function Placed-Occurrence { return Ui-LastMatch '^Placed .* as .* \((O[0-9/]*)\), length' }
 function Placed-Name { return Ui-LastMatch '^Placed .* as (.*) \(O[0-9/]*\), length' }
 function Placed-Body { return Ui-LastMatch '^New body .* \((F[0-9]+\.b[0-9]+)\): volume' }
+# Body-Row OCCURRENCE BODY: the browser row of a placed part's body
+# ("Browser Root/.../<name>:1/Bodies/Body2"), from the log's names.
+function Body-Row([string]$Occurrence, [string]$Body) {
+  $name = Ui-LastMatch ('^Placed .* as (.*) \(' + [regex]::Escape($Occurrence) + '\), length')
+  $label = Ui-LastMatch ('^New body (\S+) \(' + [regex]::Escape($Body) + '\): volume')
+  if (-not $name -or -not $label) { Ui-Fail "no names of $Occurrence and $Body" }
+  $row = Ui-LastMatch ('^(Browser Root/(?:.*/)?' + [regex]::Escape($name) + ':\d+/Bodies/' + [regex]::Escape($label) + ') at -?\d+,-?\d+$')
+  if (-not $row) { Ui-Fail "no browser row of $label in $name" }
+  return $row
+}
 # The faces of a body a click can pick now (after the last "Pick places:"),
 # whose names contain the text: a derived part's sides are
 # "<F>:part(F2:side(c1[c4,c2]))", its ends "<F>:end_a", "<F>:end_b".
@@ -526,7 +543,7 @@ Expect-Row 'tilt' 'hidden' 'no Tilt before a side pick (mitcad#444)'
 Ui-ShowOrigin
 Ui-Mark
 Ui-Step "on the root's XY plane"         { Ui-ClickLogged 'Datum xy' }
-Ui-ExpectNew 'Inspect Profile: place grounded, length 1000.00 mm (typed), square ends; adds to Component1' 'on the root''s XY plane, picked from Component1: grounded at the click'
+Ui-ExpectNew 'Inspect Profile: place grounded, length 1000.00 mm (typed), square ends; adds to Component1' 'on the root''s XY plane, picked from Component1: grounded at its origin until a click says where (mitcad#1196)'
 Place 'Profile 20 test'
 No-PolicyMessage
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
@@ -1200,13 +1217,11 @@ Ui-Step 'Profile in the same design (F3)' { Ui-Key 'F3' }
 Ui-ExpectNew "BUILD profile starts with test-profiles/${second}: " 'the part placed last in this design'
 Ui-ExpectNew "Panel Profile tile part: $($p30Names[$second])" 'its tile'
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
-# The message boxes titled "MitCad" are new windows (Ui-FocusDialog).
-$before = Ui-Windows '^MitCad$'
+# New opens the new design in a document window of its own (mitcad#1172),
+# without a question about the changed one, which stays open beside it.
 Ui-Mark
 Ui-Step 'new design (Ctrl+N)'            { Ui-Key 'ctrl+n' }
-Ui-FocusDialog '^MitCad$' -Except $before
-Ui-Step "don't save (D)"                 { Ui-Key 'd' }
-Ui-FocusMain
+Ui-ExpectNew 'Document window created: ' 'the new design in a window of its own'
 Ui-ExpectNew 'New document' 'a new design'
 Ui-Mark
 Ui-Step 'Profile in the new design (F3)' { Ui-Key 'F3' }
@@ -1286,5 +1301,171 @@ No-Placement 'a failed Shift+click makes nothing'
 Ui-Mark
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
 Ui-ExpectNew 'Closed Profile after 2' 'Close keeps the two'
+
+# mitcad#1196, as part 11 of the Linux test: on a design with a block
+# (F1.b0) away from the origin, XY chosen by its icon (the preview at its
+# origin; Esc takes the plane out, the panel stays), then a click far from
+# the icon places the first profile there (its end A at the click); a face
+# of the block still in one click; Move/Copy (M) with the first profile
+# clicked before moves its occurrence, and a click on the second one in
+# Move/Copy takes its occurrence too. In session 0 the view gets a Leave
+# after each posted move (Off-Parts), which puts the preview back at the
+# plane's origin, where Enter would place it: the click still places it
+# where it is.
+Write-Host '--- 11. The first profile anywhere on a plane, and Move on a placed one (mitcad#1196)'
+$planeJson = Join-Path $work 'plane.json'
+Set-Content -Encoding ascii $planeJson ('[{"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"}, ' +
+  '"corner": [250, 250], "length": 100, "width": 100, "height": 40, "operation": "new_body"}}]')
+$plane = Join-Path $work 'plane.mitcad'
+Run-Cli 'the design with a block' @('run', $planeJson, '--save', $plane)
+Ui-StartApp 'build-plane' @('--open', $plane)
+Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+# The origin shown first, so that the fit takes in it and the block.
+Ui-ShowOrigin
+Ui-Step 'fit the view (F6)'              { Ui-Key 'F6' }
+Ui-Mark
+Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
+Ui-ExpectNew 'BUILD profile adds to Root (a ground placement)' 'the root, the active component'
+Ui-Step 'a typed length of 200'          { Ui-TypeIn 'Panel Profile input length' '200' }
+Ui-ShowOrigin
+Ui-Mark
+Ui-Step 'XY by its icon'                 { Ui-ClickLogged 'Datum xy' }
+Ui-ExpectNew 'BUILD plane chosen: plane xy; the next click places on it, Enter at its origin' "the click on XY's icon chooses the plane"
+Ui-ExpectNew "View hint Profile: Click where on the plane it goes, or press Enter for the plane's origin" "the view's hint asks where on the plane"
+Expect-Inspect @('; end A at 0.0, 0.0, 0.0;') "the preview at the plane's origin"
+Ui-Mark
+Ui-Step 'Esc'                            { Ui-Key 'Escape' }
+Ui-ExpectNew 'BUILD plane choice taken out (Esc): plane xy' 'Esc takes the plane out'
+Ui-Sync
+if (@(Ui-NewLines | Where-Object { $_.StartsWith('Closed Profile') }).Count -gt 0) { Ui-Fail 'Esc closed the panel' }
+Write-Host 'ok   the panel stays'
+Ui-Mark
+Ui-Step 'XY by its icon again'           { Ui-ClickLogged 'Datum xy' }
+Ui-ExpectNew 'BUILD plane chosen: plane xy' 'XY chosen again'
+# A point of the view far from the icon: the lower left, else the lower right.
+$icon = Ui-LoggedAt 'Datum xy'
+$far = Ui-ViewAt 20 80
+if ((($far[0] - $icon[0]) * ($far[0] - $icon[0]) + ($far[1] - $icon[1]) * ($far[1] - $icon[1])) -lt 22500) { $far = Ui-ViewAt 80 80 }
+Ui-Mark
+# MK_SHIFT keeps the posted move in session 0, as for the hovers above.
+Ui-Step 'the mouse far from the icon'    { [UiInput]::Move($script:UiWindow, $far[0], $far[1], 0x04) }
+Ui-ExpectNew 'BUILD on plane xy: the preview follows the mouse' 'the preview follows the mouse on XY'
+Ui-Mark
+Ui-Step 'a click there'                  { Ui-Click $far[0] $far[1] }
+Ui-ExpectNew 'BUILD plane click: plane xy at ' 'the click says where on XY'
+$at11 = Ui-LastMatch '^BUILD plane click: plane xy at (.*)$'
+Expect-Inspect @('Inspect Profile: place geometry', "; end A at $at11;") "the preview starts at the click ($at11)"
+$c = @($at11 -split ', ' | ForEach-Object { [double]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) })
+if ($c.Count -ne 3 -or [Math]::Sqrt($c[0] * $c[0] + $c[1] * $c[1]) -le 50 -or $c[2] -ne 0) {
+  Ui-Fail "the click's point $at11 is not on XY away from its origin"
+}
+Write-Host 'ok   on XY, away from its origin'
+Ui-Mark
+Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }
+Ui-ExpectNew 'Placed ' 'the first profile placed at the click' 30
+$p11 = Placed-Occurrence
+$b11 = Placed-Body
+if (-not $p11 -or -not $b11) { Ui-Fail 'no occurrence or body of the profile placed on XY' }
+# A face still takes one click: the block's, on a plane placement.
+Ui-Step 'Placement: on a plane'          { Ui-ClickLogged 'Panel Profile input place=plane' }
+Refresh-Picks 'Profile'
+$faces11 = @(Faces-Of 'F1.b0' ':')
+if ($faces11.Count -eq 0) { Ui-Fail 'no face of the block to pick' }
+Ui-Mark
+Ui-Step 'a face of the block'            { Pick-Face 'F1.b0' $faces11[0] }
+Expect-Inspect @('Inspect Profile: place geometry') 'a face places in one click'
+if (@(Ui-NewLines | Where-Object { $_.StartsWith('BUILD plane chosen') }).Count -gt 0) { Ui-Fail 'a face click chose a plane' }
+Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }
+Ui-ExpectNew 'Placed ' 'the second profile placed on the face' 30
+$p11b = Placed-Occurrence
+$b11b = Placed-Body
+if (-not $p11b -or -not $b11b) { Ui-Fail 'no occurrence or body of the profile placed on the face' }
+Ui-Mark
+Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
+Ui-ExpectNew 'Closed Profile after 2' 'Close keeps the two'
+# Move on a profile clicked before: its occurrence moves, not its body.
+# Its body's row in the browser is clicked: the middle of its box in the
+# view can be on an edge, which Move/Copy would take as its axis.
+$row11 = Body-Row $p11 $b11
+Ui-Mark
+Ui-Step 'click the first profile'        { Ui-ClickLogged $row11 }
+Ui-ExpectNew 'Selected: 1 body' 'the profile clicked'
+Ui-Mark
+Ui-Step 'Move/Copy (M)'                  { Ui-Key 'm' }
+Ui-ExpectNew 'Command Move/Copy started' 'Move/Copy started'
+Ui-ExpectNew "Move/Copy: the selection is of another component than the active one: moving $p11 (Move Object: Components)" "the profile's occurrence, not its body"
+Ui-ExpectNew 'Panel Move/Copy choices: move_type=components' 'Move Object: Components'
+Ui-ExpectNew 'Panel Move/Copy input tx at' 'the panel is laid out'
+Ui-Step '30 mm along X'                  { Ui-TypeIn 'Panel Move/Copy input tx' '30' }
+Ui-ExpectNew 'Preview Move/Copy: ok' 'previewed'
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Moved 1 components (' "the profile's occurrence moved"
+Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
+# Move with nothing selected, the second profile clicked in it.
+Ui-Mark
+Ui-Step 'Move/Copy (M), nothing selected' { Ui-Key 'm' }
+Ui-ExpectNew 'Command Move/Copy started' 'Move/Copy started'
+Ui-ExpectNew 'Panel Move/Copy input tx at' 'the panel is laid out'
+Ui-Mark
+Ui-Step 'click the second profile'       { Ui-ClickLogged "Body $b11b in $p11b" }
+Ui-ExpectNew "is of another component than the active one: moving $p11b (Move Object: Components)" 'a click on the profile takes its occurrence'
+Ui-Step '-30 mm along X'                 { Ui-TypeIn 'Panel Move/Copy input tx' '-30' }
+Ui-ExpectNew 'Preview Move/Copy: ok' 'previewed'
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Moved 1 components (' "the second profile's occurrence moved"
+if ((Ui-CountLog 'a feature works on the bodies of its own component') -gt 0) { Ui-Fail 'a move refused a body of another component' }
+Write-Host 'ok   no move refused a body of another component'
+# A new design, Component1 the host: the first profile on the root's XY
+# (Enter, at its origin) is grounded; Move moves it 100 mm, and it stays
+# grounded there (the panel says so instead of refusing).
+Ui-StartApp 'build-grounded-move'
+Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Mark
+Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
+Ui-ExpectNew 'BUILD profile adds to Component1 (a ground placement)' 'a new design: adds to Component1'
+Ui-Step 'a typed length of 200'          { Ui-TypeIn 'Panel Profile input length' '200' }
+Ui-ShowOrigin
+Ui-Mark
+Ui-Step "the root's XY by its icon"      { Ui-ClickLogged 'Datum xy' }
+Ui-ExpectNew 'BUILD plane chosen: plane xy' "the root's XY chosen"
+Ui-Step 'Place at its origin (Enter)'    { Ui-Key 'Return' }
+Ui-ExpectNew 'BUILD on plane xy: placed at its origin' "Enter places it at the plane's origin"
+Ui-ExpectNew 'Placed ' 'the first profile placed, grounded' 30
+$p12 = Placed-Occurrence
+$b12 = Placed-Body
+if (-not $p12 -or -not $b12) { Ui-Fail 'no occurrence or body of the grounded profile' }
+Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
+Ui-Step 'fit the view (F6)'              { Ui-Key 'F6' }
+$row12 = Body-Row $p12 $b12
+Ui-Mark
+Ui-Step 'click the grounded profile'     { Ui-ClickLogged $row12 }
+Ui-ExpectNew 'Selected: 1 body' 'the profile clicked'
+Ui-Mark
+Ui-Step 'Move/Copy (M)'                  { Ui-Key 'm' }
+# Its path in the design (O1/O2: in Component1), which Placed logs by its
+# last uid.
+Ui-ExpectNew 'Move/Copy: the selection is of another component than the active one: moving ' "the grounded profile's occurrence"
+$moved12 = Ui-LastMatch '^Move/Copy: the selection is of another component than the active one: moving (\S+) \(Move Object: Components\)$'
+if (-not $moved12 -or ($moved12 -split '/')[-1] -ne $p12) { Ui-Fail "Move/Copy moves '$moved12', not the grounded profile's $p12" }
+Write-Host "ok   it moves $moved12 (Move Object: Components)"
+Ui-ExpectNew 'Panel Move/Copy input tx at' 'the panel is laid out'
+Ui-Step '100 mm along X'                 { Ui-TypeIn 'Panel Move/Copy input tx' '100' }
+Ui-ExpectNew 'Preview Move/Copy: ok' 'previewed, not refused'
+Ui-ExpectNew 'Panel Move/Copy note: Grounded: it stays grounded at the new place.' 'the panel says it stays grounded'
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Moved 1 components (' 'the grounded profile moved'
+if (@(Ui-NewLines | Where-Object { $_.Contains(' is grounded') }).Count -gt 0) { Ui-Fail 'the move was refused as grounded' }
+$grounded = Join-Path $work 'grounded.mitcad'
+Ui-Mark
+Ui-Step 'save as (Ctrl+Shift+S)'         { Ui-Key 'ctrl+shift+s' }
+Ui-FocusDialog '^Save As$'
+Ui-Step 'the path'                       { Ui-Key 'ctrl+a'; Ui-Type $grounded; Ui-Key 'Return' }
+Ui-FocusMain
+Ui-ExpectNew "Saved $($grounded -replace '\\', '/')" 'saved'
+$uid12 = ($p12 -split '/')[-1]
+$saved = Get-Content -Raw $grounded | ConvertFrom-Json
+$entry = @($saved.occurrences | Where-Object { $_.uid -eq $uid12 })
+if ($entry.Count -ne 1 -or -not $entry[0].grounded) { Ui-Fail "the moved profile $uid12 is not grounded in the saved design" }
+Write-Host 'ok   the moved profile is still grounded'
 
 Ui-Finish 'UI Windows BUILD test'

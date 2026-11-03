@@ -93,7 +93,7 @@ void MainWindow::parameterTableClosed() {
   }
   // Back to what stayed open: the panel or the sketch takes the keys again.
   if (!m_nativeUi) {
-    raise();
+    window()->raise(); // the document frame's window too (mitcad#1172)
     activateWindow();
   }
   qDebug().noquote() << QStringLiteral("Parameters closed: back to %1")

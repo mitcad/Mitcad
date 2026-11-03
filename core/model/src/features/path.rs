@@ -370,7 +370,7 @@ fn edge_curves_of<K: Kernel>(
             .map_err(|e| format!("path: {e}"))?;
         let mut curves = curves.into_iter();
         match (curves.next(), curves.next()) {
-            (None, _) => return Err(format!("path: {}", ctx.missing_edge(body, edge))),
+            (None, _) => return Err(format!("path: {}", ctx.missing_edge_on(body, shape, edge))),
             (Some(curve), None) => pieces.push(PathCurve {
                 name: edge.to_string(),
                 curve,

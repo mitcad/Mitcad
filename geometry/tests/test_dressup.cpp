@@ -199,6 +199,31 @@ void test_chamfers() {
   CHECK(throws_with([&] { chamfer("F5", *body, {top_front()}, ChamferSpec()); }, "distance must be"));
 }
 
+// A chamfer the geometry kernel cannot build says what it was asked for
+// (mitcad#1185): its edge, and the faces its chain ends against, with the
+// kernel's own message kept and the message's start as before (the .f3d
+// import tells a failure of the kernel by it). The block is 20 high: a
+// bevel of 30 down its front face cannot be built.
+void test_chamfer_failure_names_its_edges_and_ends() {
+  ChamferSpec huge;
+  huge.distance = 30;
+  std::string message;
+  try {
+    chamfer("F5", *block(), {top_front()}, huge);
+  } catch (const std::invalid_argument& error) {
+    message = std::string("invalid: ") + error.what();
+  } catch (const std::runtime_error& error) {
+    message = error.what();
+  }
+  std::printf("test_chamfer_failure_names_its_edges_and_ends: %s\n", message.c_str());
+  CHECK(message.rfind("chamfer", 0) == 0);
+  CHECK(message.find("edge " + top_front()) != std::string::npos);
+  // The front top edge ends at the block's corners, against its two ends.
+  CHECK(message.find("its chain ending against faces") != std::string::npos);
+  CHECK(message.find(side("F2", 1, 1)) != std::string::npos);
+  CHECK(message.find(side("F2", 1, 3)) != std::string::npos);
+}
+
 // The block's corner edge i (between side i - 1 and side i).
 std::string corner_edge(int i) { return edge(side("F2", 1, (i + 3) % 4), side("F2", 1, i)); }
 
@@ -1548,6 +1573,7 @@ void dressup_tests() {
   test_several_fillets_on_one_body();
   test_fillet_after_booleans();
   test_chamfers();
+  guarded("test_chamfer_failure_names_its_edges_and_ends", test_chamfer_failure_names_its_edges_and_ends);
   guarded("test_fillet_edge_sets", test_fillet_edge_sets);
   guarded("test_fillet_faces_select_their_edges", test_fillet_faces_select_their_edges);
   guarded("test_fillet_tangent_chains", test_fillet_tangent_chains);

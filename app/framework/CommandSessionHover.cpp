@@ -2,8 +2,9 @@
 // CommandSession: the hover of a tangent chain (mitcad#290). With Tangent
 // Chain on, Fillet, Chamfer and the face tools take the whole chain of a
 // picked edge or face; the hover shows it before the click. And the point
-// under the mouse for a command that previews a click there (mitcad#417).
-// The rest of the session is in CommandSession.cpp.
+// under the mouse for a command that previews a click there (mitcad#417),
+// and the point of a chosen plane under the mouse anywhere in the view
+// (mitcad#1196). The rest of the session is in CommandSession.cpp.
 #include <exception>
 
 #include <QElapsedTimer>
@@ -50,6 +51,72 @@ void CommandSession::hoverMoved(const SelectionItem& item) {
   }
   if (m_def.hoverPreview(item, m_state, m_host)) {
     schedulePreview();
+  }
+}
+
+void CommandSession::pointerMoved(std::optional<QPointF> position) {
+  if (m_done || !m_def.cursorPlane || !m_def.cursorPlaneMoved) {
+    return;
+  }
+  m_pointer = position;
+  if (m_host.viewer().isNavigating()) {
+    return; // the next move comes soon enough
+  }
+  if (m_host.modelBusy()) {
+    // The last place of the mouse once the model is idle: the preview ends
+    // where the mouse stopped.
+    if (!m_pointerWaits) {
+      m_pointerWaits = true;
+      m_host.whenIdle(this, [this] {
+        m_pointerWaits = false;
+        if (!m_done) {
+          pointerMoved(m_pointer);
+        }
+      });
+    }
+    return;
+  }
+  const std::optional<gp_Ax3> plane = m_def.cursorPlane(m_state);
+  if (!plane) {
+    return;
+  }
+  const std::optional<gp_Pnt> point = position ? m_host.viewer().planePoint(*position, *plane) : std::nullopt;
+  if (m_def.cursorPlaneMoved(point, m_state, m_host)) {
+    schedulePreview();
+  }
+}
+
+void CommandSession::clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers) {
+  if (m_done || !m_def.cursorPlane || !m_def.cursorPlaneClicked) {
+    return;
+  }
+  if (m_host.modelBusy()) {
+    inputAction([this, position, modifiers] { clickedAt(position, modifiers); });
+    return;
+  }
+  const std::optional<gp_Ax3> plane = m_def.cursorPlane(m_state);
+  if (!plane) {
+    return; // the pick input takes the click as usual
+  }
+  const std::optional<gp_Pnt> point = m_host.viewer().planePoint(position, *plane);
+  if (!point) {
+    qDebug().noquote() << QStringLiteral("%1: the click is not on the plane").arg(m_def.name);
+    return;
+  }
+  ++m_generation;
+  if (!m_def.cursorPlaneClicked(*point, m_state, m_host)) {
+    return;
+  }
+  if (m_presenter) {
+    m_presenter->refresh(m_state);
+  }
+  updateHighlights();
+  inputsChanged();
+  // Shift + click: the point and OK in one, as on a pick input that places
+  // (InputDef::shiftClickApplies, mitcad#451).
+  if (modifiers.testFlag(Qt::ShiftModifier) && !modifiers.testFlag(Qt::ControlModifier) && !m_done) {
+    qDebug().noquote() << QStringLiteral("%1: Shift+click on the plane places at once").arg(m_def.name);
+    commit();
   }
 }
 

@@ -1,0 +1,221 @@
+# SPDX-License-Identifier: MIT
+# Run by ui-macos-native-comments-test.sh in both appearances. Pointer and
+# keyboard steps exercise native controls; model-command stands for the
+# agent addressing a note, never for the Add/Resolve actions under test.
+wait-idle
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+native-appearance '${MITCAD_TEST_APPEARANCE}'
+native-resize 1280 820
+key F6
+expect-model-bodies 1 6000
+expect-ever '^Comments: none$'
+
+# The search keeps Add Comment's name, native shortcut hint and CAD icon.
+# The shortcut below starts it through ordinary AppKit keyboard dispatch.
+native-action tools.search
+native-type native.commandSearch 'Add Comment'
+expect-native-text native.command.comment.add '^Add Comment[[:space:]]+⇧N$'
+expect-native-style native.command.comment.add 'result-icon,enabled'
+key Escape
+focus-main
+mark
+native-key-event Shift+n
+wait-log '^Command Add Comment started'
+expect-native-visible input_text true
+native-viewport-click-pick 'face F2.b0/F2:end\('
+wait-log 'Add Comment On: 1 face'
+native-pointer-click input_text
+type 'make this face 2 mm thicker'
+expect-input-text text '^make this face 2 mm thicker$'
+native-pointer-click commandOk
+wait-log '^Done Add Comment'
+wait-log '^Comment C1: open, user, '
+wait-log '^Comment C1 pin: open at '
+wait-log '^Comment pins drawn: C1 open'
+screenshot '${MITCAD_TEST_SHOTS}/pin.png'
+
+# A real click on the shared viewport pin must reach it through AppKit
+# chrome, open a native window and select the row.
+mark
+native-viewport-click-logged '^Comment pin C1 at '
+wait-log '^Comment pin clicked: C1$'
+focus-dialog '^Comments$'
+expect-native-visible commentsTable true
+expect-native-text comments.C1 '^1$'
+expect-native-text comments.C1.text '^make this face 2 mm thicker$'
+expect-native-text comments.C1.author '^user$'
+expect-native-text comments.C1.target '(?i)face'
+expect-native-text comments.C1.status '^Open$'
+expect-native-accessibility comments.C1.row '(?s)Comment 1.*Open.*user.*make this face 2 mm thicker.*On:'
+expect-native-enabled commentsResolve true
+expect-native-enabled commentsReopen false
+expect-native-enabled commentsReply true
+expect-native-enabled commentsRetarget false
+expect-native-enabled commentsDelete true
+expect-native-columns commentsTable fit
+expect-native-selection commentsTable 1
+
+# A pin already identifies the target from the view. Clear its row selection
+# through the real filter, then select the panel row to frame that target.
+native-pointer-click commentsFilterOpen
+expect-native-visible comments.C1.row false
+expect-native-selection commentsTable 0
+native-pointer-click commentsFilterOpen
+expect-native-visible comments.C1.row true
+mark
+native-pointer-click comments.C1
+wait-log '^Comment target shown: C1: 1 face.*\(view '
+expect-selection 1 0
+screenshot-screen '${MITCAD_TEST_SHOTS}/panel.png'
+
+# The design command represents an agent's response. Every displayed
+# field, including the resolution and accessible description, must follow.
+mark
+model-command '{"cmd":"address_comment","id":"C1","resolution":"Made the face 2 mm thicker","author":"native-ui-test-agent"}'
+wait-log '^Comment C1: addressed, '
+wait-log '^Comment C1 resolution: Made the face 2 mm thicker$'
+wait-log '^Comment pins drawn: C1 dimmed'
+expect-native-text comments.C1.status '^Addressed$'
+expect-native-text comments.C1.resolution '^Made the face 2 mm thicker$'
+expect-native-accessibility comments.C1.row '(?s)Addressed.*Resolution: Made the face 2 mm thicker'
+screenshot-screen '${MITCAD_TEST_SHOTS}/addressed.png'
+
+# Native filters remove and restore the actual rows, not just a model
+# count. A compact window keeps the whole action row reachable.
+native-pointer-click commentsFilterAddressed
+expect-native-visible comments.C1.row false
+native-pointer-click commentsFilterAddressed
+expect-native-visible comments.C1.row true
+native-resize 900 640
+focus-dialog '^Comments$'
+native-dialog-resize 600 340
+# Comments keeps its custom action row inside the body, without a dialog
+# footer. Check every table, filter and action for clipping and hit testing.
+expect-native-bounds commentsTable 300
+expect-native-bounds commentsFilterOpen 35
+expect-native-bounds commentsFilterAddressed 60
+expect-native-bounds commentsFilterResolved 55
+expect-native-bounds commentsResolve 40
+expect-native-bounds commentsReopen 40
+expect-native-bounds commentsReply 35
+expect-native-bounds commentsRetarget 40
+expect-native-bounds commentsDelete 35
+expect-native-bounds commentsClose 35
+screenshot-screen '${MITCAD_TEST_SHOTS}/compact.png'
+native-resize 1280 820
+focus-dialog '^Comments$'
+native-dialog-resize 820 380
+native-pointer-click comments.C1
+
+# Reply uses a genuine multiline native editor and its Return command.
+mark
+native-pointer-click commentsReply
+focus-dialog '^Reply to Comment 1$'
+native-pointer-click commentText
+type 'checked native reply'
+native-key-event Return
+expect-native-dialog-gone '^Reply to Comment 1$'
+focus-dialog '^Comments$'
+wait-log '^Comment C1 reply 1: user: checked native reply$'
+expect-native-accessibility comments.C1.reply.1.row 'user.*checked native reply'
+
+# Resolve through the actual native button: the pin disappears and the
+# default filter omits the row. Resolved reveals it; Reopen makes it live.
+native-pointer-click comments.C1
+mark
+native-pointer-click commentsResolve
+wait-log '^Comment C1: resolved'
+wait-log '^Comment pins drawn: none$'
+expect-native-visible comments.C1.row false
+native-pointer-click commentsFilterResolved
+expect-native-visible comments.C1.row true
+expect-native-text comments.C1.status '^Resolved$'
+native-pointer-click comments.C1
+expect-native-enabled commentsResolve false
+expect-native-enabled commentsReopen true
+mark
+native-pointer-click commentsReopen
+focus-dialog '^Reopen Comment 1$'
+native-pointer-click commentText
+type 'please check again'
+native-key-event Return
+expect-native-dialog-gone '^Reopen Comment 1$'
+focus-dialog '^Comments$'
+wait-log '^Comment C1: open, '
+expect-native-text comments.C1.status '^Open$'
+native-pointer-click commentsFilterOpen
+expect-native-visible comments.C1.row false
+native-pointer-click commentsFilterOpen
+expect-native-visible comments.C1.row true
+native-pointer-click commentsClose
+expect-native-dialog-gone '^Comments$'
+
+# The native navigation bar exposes the pin toggle, and the chat's
+# Comments toggle defaults on and sends ordinary native clicks to Qt.
+focus-main
+expect-native-accessibility navigationBar_view.comment_pins '^Comment Pins$'
+mark
+native-pointer-click navigationBar_view.comment_pins
+wait-log '^Comment pins hidden$'
+wait-log '^Comment pins drawn: hidden \(1\)$'
+mark
+native-pointer-click navigationBar_view.comment_pins
+wait-log '^Comment pins shown$'
+wait-log '^Comment pins drawn: C1 open'
+native-action view.chat
+wait-log '^Chat panel: ready' 60
+expect-native-visible chatAttachComments true
+expect-native-text chatAttachComments '^Comments$'
+expect-native-accessibility chatAttachComments '^Comments$'
+expect-widget-property chatAttachComments checked true
+mark
+native-pointer-click chatAttachComments
+wait-log '^Chat: Comments not attached$'
+expect-widget-property chatAttachComments checked false
+mark
+native-pointer-click chatAttachComments
+wait-log '^Chat: Comments attached$'
+expect-widget-property chatAttachComments checked true
+screenshot '${MITCAD_TEST_SHOTS}/chat.png'
+native-action view.chat
+
+# Browser and timeline use the shared command locations and native text
+# dialogs. Cancel each prompt, preserving the one real face comment.
+focus-main
+native-expand native.modelTree
+native-context-menu native.model.body:F2.b0@ 'Add Comment…'
+focus-dialog '^Add Comment$'
+expect-native-visible commentText true
+native-pointer-click commentText
+native-key-event Return
+focus-dialog '^Add Comment$'
+expect-native-visible commentValidation true
+expect-native-text commentValidation '^Write the comment first\.$'
+native-pointer-click commentText
+type 'first native line'
+native-key-event Shift+Return
+type 'second native line'
+expect-native-text commentText '^first native line\nsecond native line$'
+native-key-event Escape
+expect-native-dialog-gone '^Add Comment$'
+focus-main
+native-context-menu native.history.F2 'Add Comment…'
+focus-dialog '^Add Comment$'
+expect-native-visible commentText true
+native-key-event Escape
+expect-native-dialog-gone '^Add Comment$'
+
+# Deletion remains available through the native panel after it reopens.
+focus-main
+native-action view.comments
+focus-dialog '^Comments$'
+native-pointer-click comments.C1
+mark
+native-pointer-click commentsDelete
+wait-log '^Comments: none$'
+wait-log '^Comment pins drawn: none$'
+expect-native-visible comments.C1.row false
+expect-native-enabled commentsDelete false
+native-pointer-click commentsClose
+expect-native-dialog-gone '^Comments$'
+expect-model-bodies 1 6000

@@ -93,6 +93,8 @@ bool MainWindow::readOnlyCommand(const CommandDef& def) {
       QStringLiteral("drawing.close"), QStringLiteral("file.export_drawing"),
       // Another design of a project, as Open (mitcad#530).
       QStringLiteral("file.open_from_project"),
+      // Printing changes no design (mitcad#1089).
+      QStringLiteral("file.print"),
   };
   return allowed.contains(def.id) || def.id.startsWith(QLatin1String("view.")) ||
          def.id.startsWith(QLatin1String("inspect.")) || def.id.startsWith(QLatin1String("help."));
@@ -114,6 +116,8 @@ bool MainWindow::readOnlyModelCommand(const QString& name) {
       // A Flat Pattern's drawing (mitcad#210), a drawing's file
       // (mitcad#707; one kept is only read).
       QStringLiteral("export_flat_pattern_dxf"), QStringLiteral("export_drawing"),
+      // A cut sheet's file, as File › Print writes it (mitcad#1089).
+      QStringLiteral("export_cut_sheet"),
       // The Center of Mass marker (mitcad#1094): display state, as the
       // origin's.
       QStringLiteral("add_center_of_mass"), QStringLiteral("set_center_of_mass_visible"),

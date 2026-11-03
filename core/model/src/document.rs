@@ -189,12 +189,22 @@ mod material_variants;
 // optionally replaced by a link to it (mitcad#1057).
 mod save_component;
 pub use save_component::{CutKind, CutReference, SaveComponentOptions, SavedComponent};
+// Convert Mesh's Faceted solid hides the mesh body it was made from in the
+// step that adds it (mitcad#1082).
+mod mesh_convert;
 // The design's summary, the root's property set Summary (mitcad#1088).
 mod design_summary;
 pub use design_summary::{SUMMARY_KEYS, SUMMARY_SET};
 // Features may share a name; lookups by name refuse a shared one with the
 // uids (mitcad#1107).
 mod feature_names;
+// Comments: notes pinned to features, faces, edges and points for an AI
+// agent, addressed and resolved (mitcad#1119).
+mod comments;
+pub use comments::{
+    COMMENT_USER, Comment, CommentFound, CommentReply, CommentSketchItem, CommentStatus,
+    CommentTarget, CommentTargetKind, comment_number,
+};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -354,6 +364,11 @@ pub struct DocState {
     /// definition, and right whatever changed `features` (see
     /// `feature_index.rs`).
     pub(crate) feature_index: crate::feature_index::FeatureIndex,
+    /// Comments (mitcad#1119), in the order they were added.
+    pub(crate) comments: Vec<Comment>,
+    /// The number of the next comment's id: one past the largest ever
+    /// used, so that an id is never given again.
+    pub(crate) next_comment: u32,
 }
 
 impl Default for DocState {
@@ -396,6 +411,8 @@ impl Default for DocState {
             image_references: Vec::new(),
             bindings: Bindings::default(),
             feature_index: Default::default(),
+            comments: Vec::new(),
+            next_comment: 1,
         }
     }
 }
@@ -647,7 +664,9 @@ impl DocState {
     /// Refuses uses of reference parameters (mitcad#231) the timeline gives
     /// no value: a reference is known only after its sketch, so only the
     /// features after it may use it, directly or through other parameters'
-    /// expressions.
+    /// expressions, and the sketch's own driving dimensions (mitcad#1116:
+    /// solved after it, see [`DocState::check_driven_uses`]), not its
+    /// patterns, offsets, texts or placement.
     pub(crate) fn check_reference_order(&self) -> Result<(), ModelError> {
         // Each reference: its sketch's position and name, and its dimension.
         let mut refs: HashMap<ParamId, (usize, &str, crate::sketch::ConstraintUid)> =
@@ -690,35 +709,96 @@ impl DocState {
         for (position, entry) in self.features.iter().enumerate() {
             // What the feature uses: a sketch's own references are not uses.
             let mut used = entry.def.params();
+            // A sketch's driving dimensions may use its own references
+            // (mitcad#1116), its other values (patterns, offsets, texts,
+            // placement) not.
+            let mut dimension_values = BTreeSet::new();
+            let mut other_values = BTreeSet::new();
             if let FeatureDef::Sketch(def) = &entry.def {
                 for r in def.dimensions.iter().filter_map(|d| d.reference) {
                     if let Some(i) = used.iter().position(|p| *p == r) {
                         used.swap_remove(i);
                     }
                 }
+                dimension_values.extend(def.dimensions.iter().filter_map(|d| d.value));
+                let _ = def.map_params(&mut |slot, id: &ParamId| {
+                    if !slot.starts_with("dimensions[") {
+                        other_values.insert(*id);
+                    }
+                    Ok::<_, ()>(())
+                });
             }
             for id in used {
+                let in_dimension = dimension_values.contains(&id) && !other_values.contains(&id);
                 for r in uses(id) {
                     let (at, sketch, dimension) = refs[&r];
-                    if position <= at {
+                    if position < at || (position == at && !in_dimension) {
                         let through = if id == r {
                             String::new()
                         } else {
                             format!(" (through parameter {})", self.parameters.name(id))
                         };
-                        let user = if position == at {
-                            format!("{sketch} itself")
+                        let (user, who) = if position == at {
+                            (
+                                format!("{sketch} itself"),
+                                format!(
+                                    " outside its driving dimensions; only those and the \
+                                     features after {sketch} can"
+                                ),
+                            )
                         } else {
-                            format!("{}, before {sketch} in the timeline,", entry.name)
+                            (
+                                format!("{}, before {sketch} in the timeline,", entry.name),
+                                format!("; only features after {sketch} can"),
+                            )
                         };
                         return Err(invalid(format!(
                             "{} is what the driven dimension {dimension} of {sketch} measures: \
-                             {user} cannot use it{through}; only features after {sketch} can",
+                             {user} cannot use it{through}{who}",
                             self.parameters.name(r)
                         )));
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Refuses a circular dependency in a sketch whose driving dimensions
+    /// use its own driven ones (mitcad#1116): a driving dimension that can
+    /// move what a driven dimension it uses measures, directly or through
+    /// other driven dimensions (`mitcad_sketch::driven`). Sketches whose
+    /// definition and parameters are those of `before` are not checked
+    /// again.
+    pub(crate) fn check_driven_uses(&self, before: Option<&DocState>) -> Result<(), ModelError> {
+        let params = &self.parameters;
+        let same_params = before.is_some_and(|b| b.parameters == *params);
+        for entry in &self.features {
+            let FeatureDef::Sketch(def) = &entry.def else {
+                continue;
+            };
+            let uses = crate::features::sketch::driven_uses(def, params);
+            if uses.is_empty() {
+                continue;
+            }
+            if same_params
+                && before
+                    .and_then(|b| b.entry(entry.uid))
+                    .is_some_and(|old| old.def == entry.def)
+            {
+                continue;
+            }
+            mitcad_sketch::driven::check_uses(
+                def,
+                &uses,
+                &mut |id| {
+                    params
+                        .value(id)
+                        .ok_or_else(|| format!("parameter {} does not exist", params.name(id)))
+                },
+                &|id| params.name(id),
+            )
+            .map_err(|e| invalid(format!("{}: {e}", entry.name)))?;
         }
         Ok(())
     }
@@ -2294,6 +2374,9 @@ impl<K: Kernel> Document<K> {
         // Driven dimensions' references are used only after their sketches
         // (mitcad#231).
         next.check_reference_order()?;
+        // A sketch's driving dimensions may use its own driven ones, but
+        // not in a circle (mitcad#1116).
+        next.check_driven_uses(Some(&self.state))?;
         // Parameters can disappear with their owning features or
         // components, or change units or dependencies. Keep every saved
         // configuration applicable before committing any such edit.
@@ -2443,6 +2526,10 @@ impl<K: Kernel> Document<K> {
     ) -> Result<Added, ModelError> {
         let component = component.unwrap_or(self.state.assembly.active);
         self.state.editable(component)?;
+        // Faceted Convert Mesh hides its mesh body (mitcad#1082).
+        if let Some(mesh) = mesh_convert::hidden_mesh(def) {
+            return self.add_hiding_mesh(def, name, component, None, mesh);
+        }
         self.check_profiles(def)?;
         // A new component of a component that takes none goes beside it
         // (mitcad#292).
@@ -4271,3 +4358,7 @@ struct ProjectionTarget {
     /// From the source's component's coordinates into the sketch's.
     to_sketch: Option<crate::transform::Transform>,
 }
+
+// Read-only BOM grouping (mitcad#1176).
+mod bom;
+pub use bom::{BomRow, PartSignature};

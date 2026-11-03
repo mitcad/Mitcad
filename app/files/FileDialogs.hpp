@@ -79,8 +79,17 @@ std::optional<DxfChoice> askDxfInsert(QWidget* parent, const QString& file,
 std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
                                       const QVector<QPair<QString, QString>>& planes, const QJsonObject& info);
 
-// Insert Mesh: millimetres per unit of the file.
-std::optional<double> askMeshUnit(QWidget* parent, const QString& file);
+// Insert Mesh: millimetres per unit of the file, and whether the mesh
+// bodies are converted to solids by Convert Mesh's Faceted Solid
+// (mitcad#1082) with its weld tolerance (mm) and merge angle (degrees);
+// the choice to convert is remembered.
+struct MeshInsertChoice {
+  double unitMillimetres = 1.0;
+  bool convert = false;
+  double tolerance = 0.01;
+  double angleDegrees = 0.5;
+};
+std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& file);
 
 // Insert Component: linked (true) or a copy (false).
 std::optional<bool> askLinked(QWidget* parent, const QString& file);

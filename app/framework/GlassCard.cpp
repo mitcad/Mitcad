@@ -482,7 +482,7 @@ QPoint GlassCard::mapToHost(const QWidget* widget, const QPoint& point) {
 
 void GlassCard::hostVisibilityChanged(bool hostVisible) {
   if (m_windowed && m_wanted && !m_suppressed) {
-    QWidget::setVisible(hostVisible);
+    QWidget::setVisible(hostVisible && parentWidget() != nullptr && parentWidget()->isVisible());
   }
 }
 
@@ -510,11 +510,10 @@ void GlassCard::setVisible(bool visible) {
     return;
   }
   m_wanted = visible;
-  // Qt shows a window at once, whether its parent is shown or not; it
-  // would then float on its own until the host appears (and could not be
-  // attached to it).
-  const QWidget* host = parentWidget() != nullptr ? parentWidget()->window() : nullptr;
-  QWidget::setVisible(visible && host != nullptr && host->isVisible());
+  // Qt shows tool windows independently of their parent widget. Follow
+  // the owning document page, which can be hidden inside a visible frame;
+  // background message updates must not show its cards over another page.
+  QWidget::setVisible(visible && parentWidget() != nullptr && parentWidget()->isVisible());
 }
 
 void GlassCard::syncNativeWindow() {

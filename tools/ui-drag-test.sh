@@ -165,6 +165,10 @@ ui_expect_new "Saved $FILE" "saved"
 
 echo "--- Read-only: the pin does not drag"
 ui_mark
+# Opening the open design again only brings it forward (mitcad#1172): close
+# it first, so Open Read-Only reads it into the empty design left.
+ui_step "close (Ctrl+W)"                 ui_key ctrl+w
+ui_expect_new "Document closed" "closed: an empty design"
 ui_step "open read-only (search)"        ui_command "Open Read-Only"
 ui_step "the design"                     ui_type_path "Open Read-Only" "$FILE"
 ui_focus_main

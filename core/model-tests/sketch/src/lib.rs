@@ -40,3 +40,5 @@ mod sketch_projection_side_1047_tests;
 // A new sketch on the XZ origin plane is seen from the front; existing
 // sketches keep their frames (mitcad#1060).
 mod sketch_xz_front_1060_tests;
+// Sketch Fillet at corners of circular arcs (mitcad#1192).
+mod sketch_fillet_arcs_1192_tests;

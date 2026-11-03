@@ -34,6 +34,8 @@
 # Usage: tools/ui-projects-test.sh
 
 source "$(dirname "$0")/ui-test-lib.sh"
+# New and Open replace the design, as these steps expect (mitcad#1172).
+ui_open_in_current_window
 
 command -v git > /dev/null || { echo "git is required (apt-get install git)" >&2; exit 2; }
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}

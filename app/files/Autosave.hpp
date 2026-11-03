@@ -24,8 +24,8 @@ struct GeneralSettings;
 // never a project's folder, so nothing of it reaches a project's version
 // control), from where it can be recovered after a crash (P8c).
 //
-// Every run of the application is a session with an id of its own (a
-// UUID), and the folder holds per session:
+// Every document window has a recovery session with its own UUID, even
+// when several windows share a process. The folder holds per session:
 //
 // - `<id>.lock`: a QLockFile held while the session runs, from its first
 //   autosave to its end. A lock whose process is gone (QLockFile checks the

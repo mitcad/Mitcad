@@ -1682,3 +1682,138 @@ others exactly), from three:
   Repeating a nested pattern with a rounded angle is not done: it is a
   quirk of one file's history, so the body after the pattern stays 0.40
   mm off (its volume within 1e-5).
+
+## Corners where a rounding ends after an edge overflow (ninth round of mitcad#236)
+
+The designs whose roundings the census of 11.10.2026 left failing at a
+vertex, imported again one by one with the dressup dump (18 designs by
+content id), still fail at a rounding's end in five items; each failing
+fillet was replayed from the dump with OCCT's fillet alone on the
+replayed body before it (for item 23 of `f5e08b18` the history's stored
+body lies within 5e-12 of it).
+
+| Item | Kind at the end | Now |
+|---|---|---|
+| `f5e08b18` 23 (Fillet14, 0.5 along a step's foot) | the contact on the step leaves it into the bar's rounding, which ends the blend 0.5 past the vertex on its edge's line with the floor | parametric and verified (port patch 1140) |
+| `f9d6d78a` 24 (Fillet4, 1 along a top outline) | the outline's corner arc runs past a wall rising from the top: the arc's piece lies wholly past the wall and is dropped, and the corner caps the next piece's prolongation with the wall, which it does not meet | falls back (`the rounding's end does not meet the face at the end`) |
+| `99ef321f` 22 (Fillet32) | OnSame end on a bore's rounded rim: the contact does not reach the edge at the vertex | falls back, not traced further |
+| `49ccc315`, `e41d24ac` 35 (Fillet9) | corners of two roundings and four sharp edges: two faces met round the vertex share no edge | falls back, not traced further |
+| `b596234a`, `9c3751cd` 63 (Fillet10) | the corner joining two roundings: two faces met round the vertex share no edge | falls back, not traced further |
+
+**`f5e08b18` item 23.** A block beside a bar reaches 0.073 mm further
+out along the floor than the bar; the bar's floor edge is rounded with 3
+and the block's with 8, so the block's face beside the bar is a step
+between the two profiles that narrows to a point where the bar's rounding
+comes tangent to the floor. The item rounds the step's foot with 0.5.
+Near that point the step is lower than the ball: its contact leaves the
+step across its edge with the bar's rounding (the edge overflow), and the
+bar's rounding cuts the blend from there to the end; the cut's end, where
+the floor contact meets the bar's rounding, lies on the line of the
+floor's edge with the bar's rounding 0.5 past its end. OCCT's analytic
+cut to the end looked for that point on the edge only; the corner then
+looked for the floor's edge with the block's rounding to cross the bar's
+rounding, which passes 0.9 µm above it, and failed. With port patch 1140
+the end is taken on the edge's line continued (the two faces are tangent
+along it), the bar's rounding grows up to the cut and the edge is
+prolonged to the end, as the file has it: the result's faces lie on the
+file's (the boolean differences with the stored body are empty both
+ways), its change of volume is 0.04 % off the file's, and the bar's
+rounding grows by the file's 0.41 mm². The same chain's other three ends,
+built before by the corner, now come from the same cut (one of them, whose
+cap the corner had cut along the wrong arc of the intersection, is right
+only now).
+
+**`f9d6d78a` item 24 (left).** It runs on the stored bodies of item 22's
+fallback. The rounding of 1 along the top's outline ends at the vertex
+where the outline's corner cylinder (radius 2) meets a wall rising from
+the top at a sharp edge. The blend's contact on the top already lies on
+the wall's foot at the start of the outline's straight edge, so the
+analytic piece along the corner arc (a torus) has its top side wholly past
+the wall; it is given up, and the corner caps the straight piece's
+prolongation with the wall's plane, which that prolongation does not
+meet. The file's result keeps the torus along the arc (0.49 mm²) and a
+sliver of the cylinder (0.064 mm²), cut by the wall's plane grown by
+0.23 mm². What it needs: the arc's piece cut by the wall (a cut to the end
+whose face beyond is the wall, met by the top contact before the piece
+starts).
+
+The 18 designs, imported again with the patch, item by item against the
+import before it: only `f5e08b18` item 23 changes (fallback to parametric:
+26 of 28 items parametric, 2 skipped; the final bodies within 5e-6 of the
+file's by volume as before); every other item of the 18 keeps its
+outcome.
+
+## A rounding round a corner cut by a wall across it; the corners left (tenth round of mitcad#236)
+
+The items the ninth round left, each replayed from the dressup dump with
+OCCT's fillet alone on the replayed body before it.
+
+| Item | Kind at the end | Now |
+|---|---|---|
+| `f9d6d78a` 24 (Fillet4, 1 along a top outline) | the outline's corner arc runs past a wall standing on the top across the corner's rounding | parametric and verified (port patch 1170) |
+| `99ef321f` 22 (Fillet32, 0.5) | the chain turns at a convex kink between two cylinders just before its last edge, 0.84 long, which ends where an earlier rounding of a bore's rim crosses the cylinder: no piece on that edge, and the OnSame corner finds no point of the contact on an arc ("no point on arc"). The file's result pivots the ball about the kink (a torus of radii 0.5 and 0.5) and ends against the rim's rounding | falls back |
+| `49ccc315`, `e41d24ac` 35 (Fillet9, 2.5 round a rim of eight arcs) | at each of the eight vertices between the arcs a radial hole of radius 0.75 grazes the top face (its crest at the top's height): the walk round the vertex meets two faces with no common edge ("Failed to find edge") | falls back |
+| `b596234a`, `9c3751cd` 63 (Fillet10, 3, concave) | two struts' cylinders of radius 19.5 meet a facet of 5.4 mm² at the joint, narrower than the radius; the corners of the two roundings at the facet's ends: two faces round the vertex with no common edge | falls back |
+
+**`f9d6d78a` item 24.** It runs on the stored bodies of item 22's
+fallback. A rounding of 1 along the top's outline, round the outline's
+corner (rounded with 2) up to the vertex where a wall standing on the top
+crosses the corner's rounding at a sharp vertical edge. The contact on the
+top runs onto the wall's foot already on the straight edge before the
+corner: the analytic piece round the corner lies wholly past the wall and
+the straight piece's start is an extension with its top side given up.
+The cut to the end (`ChFi3d_KPartCutToEnd`) took that extension for its
+first piece and gave up; the corner capped the straight piece's
+prolongation with the wall, which it does not meet. With port patch 1170
+the given-up pieces make way for the cut ones, and the end past the vertex
+(1140) needs only the wall and the corner's cylinder to go on meeting
+along their edge's line: the wall grows down to the cut, 1 below the top,
+as in the file. OCCT alone on the replayed body: the boolean differences
+with the stored body are empty both ways, the change of volume 0.013 % off
+the file's (the torus 0.4888 against the file's 0.4886 mm², the wall
+grown by the file's 0.23 mm²).
+
+The 18 designs of the ninth round, imported again with 1170 item by item
+against the import before both rounds: `f5e08b18` item 23 (ninth round)
+and `f9d6d78a` item 24 change, from fallback to parametric (`f9d6d78a`
+69 of 78 items parametric, 5 fallbacks, 4 skipped; the bodies its items
+build after it within 7e-8 of the file's by volume); every other item of
+the 18 keeps its outcome.
+
+## The corners left after the tenth round (eleventh round of mitcad#236)
+
+The three items the tenth round left, replayed again from the dressup dump
+with OCCT's fillet alone on the replayed body before each, and compared
+with the stored body after it near the failing vertices. None is fixed:
+each needs a corner construction of its own, larger than a guarded change
+to an existing one.
+
+- **`99ef321f` item 22 (Fillet32, 0.5 along a wall's outline).** A bore
+  of radius 3 through the wall runs 0.02 mm into a round bar of radius 5
+  standing on the wall (the axes 7.98 apart against the radii's 8), and
+  the bore's rim on the wall is rounded with 0.3: the bar's top carries a
+  sliver of the bore's surface and of that rim rounding about 0.84 wide.
+  The chain's last edge, the wall's edge with the bar across that sliver,
+  is its own stripe; at its end both of its contacts lie inside their
+  faces (the bar's contact 0.5 off the wall passes beside the rim
+  rounding, the wall's contact 0.43 outside it), so the OnSame corner
+  finds no point on an arc ("Corner OnSame : no point on arc"). The
+  file's result pivots the ball about the sliver's edge line (a torus of
+  radii 0.5 and 0.5 about it) and trims the rim rounding slightly.
+- **`49ccc315`, `e41d24ac` item 35 (Fillet9, 2.5 round a rim of eight
+  arcs).** At each of the eight vertices between the arcs a vertical slot
+  1.5 wide runs down through the wall, its top end rounded with 0.75 so
+  that its crest touches the top face along a line at the rim: the top
+  face and the slot's end cylinder meet only along that tangent line. The
+  walk round each vertex meets two faces with no common edge ("Failed to
+  find edge"). The rounding must run over the slot's mouth, opened by the
+  rounding itself.
+- **`b596234a`, `9c3751cd` item 63 (Fillet10, 3, concave).** At each of
+  two nodes of a frame of tubes (outer radius 19.5) three struts meet a
+  triangular facet of 5.4 mm², narrower than the radius; the item rounds
+  the facet's three edges. The two roundings at each facet corner, with
+  the struts' sharp edge between them, fail ("Failed to find edge"). The
+  file's result replaces the facet by three blend faces between the
+  struts (B-splines of about 239, 239 and 164 mm²) that run on along the
+  struts' intersections: a node blend of three tubes, not a corner of
+  two roundings.

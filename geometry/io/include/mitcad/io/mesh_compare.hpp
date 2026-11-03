@@ -46,7 +46,7 @@ struct FaceMeshComparison {
   // The deviation the options ask of this face (mm): the linear deflection
   // raised to the face's floor (face_deviation_floor), `a`'s options.
   double tolerance = 0.0;
-  double area = 0.0; // the face's true area (BRepGProp, mm²)
+  double area = 0.0; // the face's true area (analysis::surface_properties, mm²)
   FaceMeshQuality a;
   FaceMeshQuality b;
   // The face's triangulation time (ms) in each meshing; -1 when the mesher

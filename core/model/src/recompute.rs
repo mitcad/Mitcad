@@ -2044,7 +2044,10 @@ fn measure_references(
 }
 
 /// Applies a feature's placement changes: each occurrence must be placed
-/// in the feature's component and not be grounded.
+/// in the feature's component and not be grounded, except one that a
+/// `move_occurrence` lists itself (mitcad#1196): it moves there and stays
+/// grounded at the new place (a grounded member a rigid group would take
+/// along still refuses).
 pub(crate) fn place(
     state: &DocState,
     entry: &FeatureEntry,
@@ -2078,7 +2081,12 @@ pub(crate) fn place(
                 assembly.name(entry.component)
             ));
         }
-        if occurrence.grounded {
+        let listed = match &entry.def {
+            FeatureDef::MoveOccurrence(m) => m.occurrences.contains(uid),
+            _ => false,
+        };
+        let moved_itself = listed && matches!(change, PlacementChange::Move(..));
+        if occurrence.grounded && !moved_itself {
             return Err(format!("{name} is grounded"));
         }
         let current = next.get(uid).copied().unwrap_or(occurrence.transform);

@@ -9,6 +9,7 @@ what the user sees (text style, messages and severity, colors), are in
 - [The design hierarchy](ui-conventions.md#the-design-hierarchy)
 - [Words that are not synonyms](ui-conventions.md#words-that-are-not-synonyms)
 - [Annotations](ui-conventions.md#annotations),
+  [Comments](ui-conventions.md#comments),
   [Drawings](ui-conventions.md#drawings),
   [Sketches](ui-conventions.md#sketches),
   [Configurations](ui-conventions.md#configurations)

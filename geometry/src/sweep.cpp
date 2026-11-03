@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <optional>
+#include <string>
 #include <stdexcept>
 #include <utility>
 
@@ -32,6 +34,9 @@
 #include <BRepLib.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
+#include <Standard_ErrorHandler.hxx>
+#include <Standard_Failure.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools.hxx>
@@ -50,6 +55,7 @@
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Cylinder.hxx>
@@ -1261,6 +1267,306 @@ ShapePtr holed_taper(const Shape& solid, const std::vector<bool>& leaned, const 
   return result;
 }
 
+// A length or an angle in words: up to three decimals, no trailing zeros.
+std::string number_text(const double value) {
+  char text[64];
+  std::snprintf(text, sizeof text, "%.3f", value);
+  std::string out = text;
+  while (!out.empty() && out.back() == '0') {
+    out.pop_back();
+  }
+  if (!out.empty() && out.back() == '.') {
+    out.pop_back();
+  }
+  return out == "-0" ? "0" : out;
+}
+
+// Where a taper closes or splits the profile it leans (mitcad#1186): the
+// profile's walls move into the profile (out of it for a taper that
+// widens) by t tan(angle) at height t above the near cap, as the profile
+// offset in its plane by that distance (OCCT's offset of the cap face,
+// joined as the draft's planes meet). Its first change of shape on the way
+// up is where the taper cannot go on: two walls not next to each other
+// meeting (the profile splits there, or a notch closes) or a wall shrinking
+// to nothing. `height` is how far the extrusion runs above the near cap.
+struct TaperClosure {
+  double at = 0.0;                 // the height where it happens
+  std::vector<std::string> walls;  // the walls that meet (in pairs) or vanish there
+  double gap = 0.0;                // how far apart the meeting walls are on the cap
+  bool meet = false;               // walls meet (else they vanish)
+};
+
+std::optional<TaperClosure> taper_closure(const Shape& solid, const std::vector<bool>& leaned,
+                                          const gp_Pln& neutral, const gp_Dir& pull, double angle) {
+  const int near = near_cap_of(solid, leaned, neutral, pull);
+  if (near < 0 || std::abs(angle) < 1.0e-9) {
+    return std::nullopt;
+  }
+  const TopoDS_Face cap = TopoDS::Face(solid.face(near).Oriented(TopAbs_FORWARD));
+  double height = 0.0;
+  for (TopExp_Explorer v(solid.occt(), TopAbs_VERTEX); v.More(); v.Next()) {
+    const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(v.Current()));
+    height = std::max(height, gp_Vec(neutral.Location(), p).Dot(gp_Vec(pull)));
+  }
+  if (!(height > Precision::Confusion())) {
+    return std::nullopt;
+  }
+  // The cap's edges and the wall each one leans.
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+  TopExp::MapShapesAndUniqueAncestors(solid.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+  std::vector<TopoDS_Edge> edges;
+  std::vector<std::string> walls;
+  int wires = 0;
+  for (TopExp_Explorer w(cap, TopAbs_WIRE); w.More(); w.Next()) {
+    ++wires;
+  }
+  for (TopExp_Explorer e(cap, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    std::string wall;
+    const int index = faces_of.FindIndex(edge);
+    if (index > 0) {
+      for (const TopoDS_Shape& face : faces_of.FindFromIndex(index)) {
+        const int f = solid.face_index(face);
+        if (f >= 0 && f != near && leaned[static_cast<std::size_t>(f)] && !solid.face_names(f).empty()) {
+          wall = solid.face_names(f).front();
+        }
+      }
+    }
+    edges.push_back(edge);
+    walls.push_back(wall.empty() ? "an unnamed wall" : wall);
+  }
+  // The profile offset by d (out of it where positive): whether it is the
+  // cap's shape still, and the edges that vanished.
+  const auto changed = [&](const double d, std::vector<std::size_t>* vanished) {
+    BRepOffsetAPI_MakeOffset offset(cap, GeomAbs_Intersection);
+    try {
+      OCC_CATCH_SIGNALS
+      offset.Perform(d);
+    } catch (const Standard_Failure&) {
+      return true;
+    }
+    if (!offset.IsDone() || offset.Shape().IsNull()) {
+      return true;
+    }
+    int count = 0;
+    for (TopExp_Explorer w(offset.Shape(), TopAbs_WIRE); w.More(); w.Next()) {
+      ++count;
+    }
+    bool gone = false;
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+      if (offset.Generated(edges[i]).IsEmpty()) {
+        gone = true;
+        if (vanished != nullptr) {
+          vanished->push_back(i);
+        }
+      }
+    }
+    return gone || count != wires;
+  };
+  // The walls move out of the profile by t tan(angle) at height t.
+  const double slope = std::tan(angle);
+  const double end = height * slope;
+  if (!changed(end, nullptr)) {
+    return std::nullopt;
+  }
+  // The first change on the way up, sampled (the offset itself is unsteady
+  // right at a change: it may fail there, or split the profile a moment).
+  constexpr int kSamples = 64;
+  double below = 0.0;
+  double above = end;
+  for (int k = 1; k <= kSamples; ++k) {
+    const double d = end * k / kSamples;
+    if (changed(d, nullptr)) {
+      above = d;
+      break;
+    }
+    below = d;
+  }
+  TaperClosure closure;
+  // Walls that meet there: two edges of the cap facing each other across
+  // the profile (out of it, for a taper that widens), their nearest points
+  // inside both edges, half their distance between the offsets sampled on
+  // either side of the change.
+  // (A sample's width either way: the offset may split the profile a
+  // moment before its walls' true meeting, or fail a moment after.)
+  const double window = std::abs(end) / kSamples;
+  double first_meet = std::numeric_limits<double>::infinity();
+  std::vector<std::size_t> named;
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    for (std::size_t j = i + 1; j < edges.size(); ++j) {
+      BRepExtrema_DistShapeShape distance(edges[i], edges[j]);
+      if (!distance.IsDone() || distance.NbSolution() == 0) {
+        continue;
+      }
+      const double gap = distance.Value();
+      const double half = 0.5 * gap;
+      if (half < std::abs(below) - window || half > std::abs(above) + window) {
+        continue;
+      }
+      bool facing = false;
+      for (int n = 1; n <= distance.NbSolution() && !facing; ++n) {
+        // (Square to both edges where their nearest points are: walls that
+        // face each other. Edges of a convex corner nearest at its vertices
+        // do not.)
+        const gp_Pnt p1 = distance.PointOnShape1(n), p2 = distance.PointOnShape2(n);
+        const gp_Vec across(p1, p2);
+        bool square = across.Magnitude() > Precision::Confusion();
+        for (int k = 0; k < 2 && square; ++k) {
+          const TopoDS_Edge& e = k == 0 ? edges[i] : edges[j];
+          const BRepExtrema_SupportType type = k == 0 ? distance.SupportTypeShape1(n) : distance.SupportTypeShape2(n);
+          double t = 0.0;
+          if (type == BRepExtrema_IsOnEdge) {
+            if (k == 0) {
+              distance.ParOnEdgeS1(n, t);
+            } else {
+              distance.ParOnEdgeS2(n, t);
+            }
+          } else if (type == BRepExtrema_IsVertex) {
+            t = BRep_Tool::Parameter(TopoDS::Vertex(k == 0 ? distance.SupportOnShape1(n) : distance.SupportOnShape2(n)), e);
+          } else {
+            square = false;
+            break;
+          }
+          gp_Pnt at;
+          gp_Vec tangent;
+          BRepAdaptor_Curve(e).D1(t, at, tangent);
+          square = tangent.Magnitude() > gp::Resolution() &&
+                   std::abs(tangent.Normalized().Dot(across.Normalized())) < 1.0e-6;
+        }
+        if (!square) {
+          continue;
+        }
+        const gp_Pnt middle((p1.XYZ() + p2.XYZ()) / 2.0);
+        BRepClass_FaceClassifier inside(cap, middle, Precision::Confusion());
+        facing = gap > Precision::Confusion() &&
+                 (end < 0.0 ? inside.State() == TopAbs_IN : inside.State() == TopAbs_OUT);
+      }
+      if (!facing) {
+        continue;
+      }
+      if (gap < first_meet - 1.0e-9 * height) {
+        first_meet = gap;
+        named.clear();
+      }
+      if (std::abs(gap - first_meet) <= 1.0e-9 * height) {
+        named.push_back(i);
+        named.push_back(j);
+      }
+    }
+  }
+  if (!named.empty()) {
+    closure.meet = true;
+    closure.gap = first_meet;
+    closure.at = 0.5 * first_meet / std::abs(slope);
+  } else {
+    // Walls that shrink to nothing: gone on the change's far side; where
+    // the first of them goes, halved down to a millionth of the height.
+    std::vector<std::size_t> gone;
+    for (double d = above; gone.empty() && std::abs(d) <= std::abs(end) * (1.0 + 1.0e-9); d += end / kSamples) {
+      changed(d, &gone);
+      above = d;
+    }
+    if (gone.empty()) {
+      return std::nullopt;
+    }
+    named = gone;
+    const auto vanished = [&](const double d) {
+      std::vector<std::size_t> now;
+      changed(d, &now);
+      return std::any_of(gone.begin(), gone.end(), [&now](const std::size_t i) {
+        return std::find(now.begin(), now.end(), i) != now.end();
+      });
+    };
+    double lo = below;
+    double hi = above;
+    while (std::abs(hi - lo) > 1.0e-6 * std::abs(end)) {
+      const double mid = 0.5 * (lo + hi);
+      (vanished(mid) ? hi : lo) = mid;
+    }
+    closure.at = std::abs(hi / slope);
+  }
+  if (closure.meet) {
+    // Pairs, each once.
+    for (std::size_t k = 0; k + 1 < named.size(); k += 2) {
+      const std::string& a = walls[named[k]];
+      const std::string& b = walls[named[k + 1]];
+      bool known = false;
+      for (std::size_t m = 0; m + 1 < closure.walls.size() && !known; m += 2) {
+        known = (closure.walls[m] == a && closure.walls[m + 1] == b) || (closure.walls[m] == b && closure.walls[m + 1] == a);
+      }
+      if (!known && a != b) {
+        closure.walls.push_back(a);
+        closure.walls.push_back(b);
+      }
+    }
+  } else {
+    for (const std::size_t i : named) {
+      if (std::find(closure.walls.begin(), closure.walls.end(), walls[i]) == closure.walls.end()) {
+        closure.walls.push_back(walls[i]);
+      }
+    }
+  }
+  return closure;
+}
+
+// The error of a taper the draft could not build: where and how it closes
+// the profile when it does within the extrusion, else the kernel's own
+// failure with what was asked.
+std::string taper_failure(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
+                          const gp_Dir& pull, double angle, const std::string& kernel) {
+  double height = 0.0;
+  for (TopExp_Explorer v(solid.occt(), TopAbs_VERTEX); v.More(); v.Next()) {
+    const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(v.Current()));
+    height = std::max(height, gp_Vec(neutral.Location(), p).Dot(gp_Vec(pull)));
+  }
+  const std::string degrees = number_text(std::abs(angle) * 180.0 / 3.14159265358979323846);
+  std::optional<TaperClosure> closure;
+  try {
+    OCC_CATCH_SIGNALS
+    closure = taper_closure(solid, leaned, neutral, pull, angle);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    closure.reset();
+  }
+  if (!closure || closure->walls.empty()) {
+    return "the taper failed: the geometry kernel could not lean the profile's walls by " + degrees +
+           " degrees over " + number_text(height) + " mm (" + kernel + ")";
+  }
+  std::string walls;
+  if (closure->meet) {
+    // "A and B", "A and B; C and D", up to three pairs.
+    const std::size_t pairs = closure->walls.size() / 2;
+    for (std::size_t k = 0; k < pairs && k < 3; ++k) {
+      walls += (k == 0 ? "" : "; ") + closure->walls[2 * k] + " and " + closure->walls[2 * k + 1];
+    }
+    if (pairs > 3) {
+      walls += "; and " + std::to_string(pairs - 3) + (pairs == 4 ? " more pair" : " more pairs");
+    }
+  } else {
+    for (std::size_t i = 0; i < closure->walls.size() && i < 4; ++i) {
+      walls += (i == 0 ? "" : i + 1 == closure->walls.size() ? " and " : ", ") + closure->walls[i];
+    }
+    if (closure->walls.size() > 4) {
+      walls += " and " + std::to_string(closure->walls.size() - 4) + " more";
+    }
+  }
+  const std::string where = number_text(closure->at) + " mm from the sketch plane, before the extrusion's end " +
+                            number_text(height) + " mm from it";
+  const std::string outcome =
+      angle < 0.0 ? "the taper closes the profile there" : "the widening taper makes the profile overlap itself there";
+  if (closure->meet) {
+    return "the taper failed: leaning by " + degrees + " degrees, the walls " + walls + ", " +
+           number_text(closure->gap) + " mm apart in the profile, meet " + where + ": " + outcome;
+  }
+  return "the taper failed: leaning by " + degrees + " degrees, " +
+         (closure->walls.size() == 1 ? "the wall " : "the walls ") + walls + " shrink" +
+         (closure->walls.size() == 1 ? "s" : "") + " to nothing " + where + ": " + outcome;
+}
+
 } // namespace
 
 ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, double angle,
@@ -1283,7 +1589,35 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
     }
   }
   if (loops < 2) {
-    return tapered_draft(solid, leaned, neutral, pull, angle);
+    // (A draft that fails, or whose walls cross into an invalid solid, is
+    // explained by where the taper closes the profile, when it does; a
+    // draft valid or not explained so is as before.)
+    ShapePtr drafted;
+    try {
+      drafted = tapered_draft(solid, leaned, neutral, pull, angle);
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const std::runtime_error& error) {
+      if (std::string(error.what()).find("out of memory") != std::string::npos) {
+        throw;
+      }
+      throw std::runtime_error(taper_failure(solid, leaned, neutral, pull, angle, error.what()));
+    }
+    if (!drafted->occt().IsNull() && !is_valid(drafted->occt())) {
+      std::optional<TaperClosure> closure;
+      try {
+        OCC_CATCH_SIGNALS
+        closure = taper_closure(solid, leaned, neutral, pull, angle);
+      } catch (const Cancelled&) {
+        throw;
+      } catch (...) {
+      }
+      if (closure && !closure->walls.empty()) {
+        throw std::runtime_error(
+            taper_failure(solid, leaned, neutral, pull, angle, "the taper produced an invalid shape"));
+      }
+    }
+    return drafted;
   }
   try {
     ShapePtr drafted = tapered_draft(solid, leaned, neutral, pull, angle);
@@ -1298,7 +1632,8 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
   if (ShapePtr holed = holed_taper(solid, leaned, neutral, pull, angle, caps)) {
     return holed;
   }
-  throw std::runtime_error("the taper failed; the angle may close the profile");
+  throw std::runtime_error(
+      taper_failure(solid, leaned, neutral, pull, angle, "the taper failed; the angle may close the profile"));
 }
 
 namespace {

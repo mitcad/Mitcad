@@ -80,8 +80,9 @@ struct PrintImport {
 namespace {
 
 // The Printer and Process boxes' entries after the profiles: a new one
-// (mitcad#655), then Printers and Processes on the current choice, the
-// rows' only way to edit since their pencil went (mitcad#1134).
+// (mitcad#655), then the Printers or Processes manager on the current
+// choice (mitcad#1135), the rows' only way to edit since their pencil went
+// (mitcad#1134).
 const char* kNewProfile = "__new";
 const char* kEditProfiles = "__edit";
 
@@ -376,6 +377,12 @@ void MainWindow::commandInputsChanged() {
   }
 }
 
+bool MainWindow::designOpen() const {
+  // The empty Untitled design a window starts with is no design of the
+  // user's: the print managers work on the libraries then (mitcad#1135).
+  return !m_filePath.isEmpty() || isModified();
+}
+
 bool MainWindow::canChangePrintSettings() const {
   // 3D Print has no preview: the print windows its Edit… opens change the
   // design while its panel is open (mitcad#655).
@@ -388,7 +395,7 @@ void MainWindow::importPrintSettings(const std::shared_ptr<PrintImport>& target)
     showError(changeBlockedReason());
     return;
   }
-  // The import Printers and Processes and My Library share (mitcad#829):
+  // The import the print managers share (mitcad#829):
   // into the design, whose root chooses the printer and process read in
   // the import's one undo step. A refusal shows as any model command's.
   const QString path = chooseSlicerFile(this);
@@ -404,20 +411,45 @@ void MainWindow::importPrintSettings(const std::shared_ptr<PrintImport>& target)
 
 CommandDef MainWindow::printersCommand() {
   CommandDef def;
+  // The Printers manager (mitcad#1135; the id of Edit Printers and
+  // Processes…, mitcad#655, kept).
   def.id = QStringLiteral("make.printers");
-  def.name = tr("Edit Printers and Processes…");
+  def.name = tr("Printers…");
   // The printer with a gear, apart from Send to Slicer's (mitcad#1096).
   def.icon = QStringLiteral("print-settings");
-  def.tooltip = tr("Edits printers and processes");
+  def.tooltip = tr("Creates, edits, imports and deletes printers");
   def.kind = CommandDef::Kind::Action;
+  // Also without a design (mitcad#1135): the manager then works on the
+  // libraries.
   def.mode = CommandDef::Mode::Model;
   // The Make tab's 3D Print group (mitcad#1049).
   def.tab = QStringLiteral("MAKE");
   def.group = QStringLiteral("3D PRINT");
   def.pinned = true;
-  def.keywords = {QStringLiteral("printer"), QStringLiteral("process"), QStringLiteral("print"),
-                  QStringLiteral("slicer"),  QStringLiteral("profile"), QStringLiteral("3mf")};
-  def.run = [this] { m_controller->openProfiles(QString(), QString()); };
+  def.keywords = {QStringLiteral("printer"), QStringLiteral("print"),   QStringLiteral("slicer"),
+                  QStringLiteral("profile"), QStringLiteral("3mf"),     QStringLiteral("library"),
+                  QStringLiteral("nozzle"),  QStringLiteral("my library")};
+  def.run = [this] { m_controller->openProfiles(QStringLiteral("printer"), QString()); };
+  return def;
+}
+
+CommandDef MainWindow::processesCommand() {
+  CommandDef def;
+  // The Processes manager (mitcad#1135), after Printers….
+  def.id = QStringLiteral("make.processes");
+  def.name = tr("Processes…");
+  // The print's layers with a gear, apart from the printer's.
+  def.icon = QStringLiteral("print-process");
+  def.tooltip = tr("Creates, edits, imports and deletes print processes");
+  def.kind = CommandDef::Kind::Action;
+  def.mode = CommandDef::Mode::Model;
+  def.tab = QStringLiteral("MAKE");
+  def.group = QStringLiteral("3D PRINT");
+  def.pinned = true;
+  def.keywords = {QStringLiteral("process"), QStringLiteral("print"),        QStringLiteral("slicer"),
+                  QStringLiteral("profile"), QStringLiteral("layer height"), QStringLiteral("infill"),
+                  QStringLiteral("library"), QStringLiteral("my library")};
+  def.run = [this] { m_controller->openProfiles(QStringLiteral("process"), QString()); };
   return def;
 }
 
@@ -453,7 +485,7 @@ CommandDef MainWindow::print3dCommand() {
   // choice takes the design's away), then the items in a steady order, so a
   // choice never moves them: by vendor (a process by its printer), then by
   // name (mitcad#1108, profilePickerRows). Then a new one, and last
-  // Edit printers and processes… (mitcad#1134).
+  // Edit printers… or Edit processes… (mitcad#1134, mitcad#1135).
   const auto choices = [this](const QString& kind) {
     const QVector<ProfilePickerRow> rows =
         profilePickerRows(queryLibraryItems(model(), kind, projectFolder()), kind);
@@ -466,9 +498,11 @@ CommandDef MainWindow::print3dCommand() {
     options.append({choiceSeparatorPrefix() + QStringLiteral("new"), QString()});
     options.append({QString::fromLatin1(kNewProfile),
                     kind == QStringLiteral("printer") ? tr("New printer…") : tr("New process…")});
-    // The last row: Printers and Processes on the current choice, in the
-    // place of the pencil beside the row (mitcad#1134).
-    options.append({QString::fromLatin1(kEditProfiles), tr("Edit printers and processes…")});
+    // The last row: the manager of the kind on the current choice, in the
+    // place of the pencil beside the row (mitcad#1134; one manager per
+    // kind, mitcad#1135).
+    options.append({QString::fromLatin1(kEditProfiles),
+                    kind == QStringLiteral("printer") ? tr("Edit printers…") : tr("Edit processes…")});
     return options;
   };
   // The box's picker (mitcad#1108): the rows under their vendor (a
@@ -537,9 +571,9 @@ CommandDef MainWindow::print3dCommand() {
       return;
     }
     if (value == QLatin1String(kEditProfiles)) {
-      // Printers and Processes on the chosen one; on Slicer default with
-      // none selected (mitcad#1134, as the pencil did, mitcad#655). The
-      // choice stays.
+      // The Printers or Processes manager on the chosen one (its design
+      // copy, mitcad#1135); on Slicer default with none selected
+      // (mitcad#1134, as the pencil did, mitcad#655). The choice stays.
       state.setChoice(kind, before);
       qDebug().noquote() << QStringLiteral("3D Print %1 edit: %2")
                                 .arg(kind, before.isEmpty() ? QStringLiteral("slicer default") : before);

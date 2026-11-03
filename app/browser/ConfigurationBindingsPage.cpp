@@ -43,10 +43,15 @@ ConfigurationBindingsPage::ConfigurationBindingsPage(DocumentHost& host, QWidget
   setObjectName(QStringLiteral("configurationsBindingsPage"));
   auto* layout = new QVBoxLayout(this);
   auto* top = new QHBoxLayout;
-  top->addWidget(new QLabel(tr("Driven by:")));
+  // The filter by option (mitcad#968: Option, not Driven by).
+  auto* filterLabel = new QLabel(tr("Option:"));
+  filterLabel->setObjectName(QStringLiteral("configurationsBindingsOptionLabel"));
+  top->addWidget(filterLabel);
   m_driven = new QComboBox;
   m_driven->setObjectName(QStringLiteral("configurationsBindingsDrivenBy"));
   m_driven->setToolTip(tr("Only the bindings that follow this option"));
+  m_driven->setAccessibleName(tr("Option"));
+  qDebug().noquote() << QStringLiteral("Configurations bindings filter label: %1").arg(filterLabel->text());
   m_driven->addItem(tr("All options"), QString());
   top->addWidget(m_driven);
   m_search = new QLineEdit;

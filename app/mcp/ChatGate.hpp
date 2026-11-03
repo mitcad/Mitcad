@@ -25,6 +25,9 @@ public:
 
   virtual ~ChatGate() = default;
 
+  // Identifies the document that owns a chat bridge, independently of focus.
+  virtual bool ownsMarker(const QString&) const { return false; }
+
   // Before a call of the connection marked `marker`. Ask: the gate calls
   // `answer` once, later, with the user's answer (true: run it) and the
   // reason of a refusal; it may never call it when the connection ends

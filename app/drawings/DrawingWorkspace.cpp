@@ -157,6 +157,50 @@ std::optional<RevisionFields> askRevision(QWidget* parent, const QString& title,
   return out;
 }
 
+// The annotations that snap to the spacing of the one before (mitcad#1173):
+// the dimensions.
+bool spacedType(const QString& type) {
+  return type == QStringLiteral("linear") || type == QStringLiteral("ordinate") || type == QStringLiteral("angle") ||
+         type == QStringLiteral("radius") || type == QStringLiteral("diameter");
+}
+
+QString millimetres(double value) { return QString::number(value, 'f', 2); }
+
+// A `drawing_snap` answer's hint beside the snapped place: "12 mm × 2".
+QString snapHint(const QJsonObject& answer) {
+  return QObject::tr("%1 mm × %2")
+      .arg(QString::number(answer.value(QStringLiteral("spacing")).toDouble(), 'g', 4))
+      .arg(answer.value(QStringLiteral("multiple")).toInt());
+}
+
+// What a `drawing_snap` answer says of the place, for the log: "line_offset
+// -24.00, beyond 12.00 mm, snapped to 12.00 mm x2 of annotation 1" (or
+// "free" with Alt, "not snapped").
+QString placedText(const QJsonObject& answer, bool freely) {
+  QStringList parts;
+  const QJsonValue offset = answer.value(QStringLiteral("line_offset"));
+  const QJsonArray text = answer.value(QStringLiteral("text_offset")).toArray();
+  if (offset.isDouble()) {
+    parts << QStringLiteral("line_offset %1").arg(millimetres(offset.toDouble()));
+  } else if (text.size() == 2) {
+    parts << QStringLiteral("text_offset %1,%2")
+                 .arg(millimetres(text.at(0).toDouble()), millimetres(text.at(1).toDouble()));
+  }
+  const QJsonValue beyond = answer.value(QStringLiteral("beyond"));
+  if (beyond.isDouble()) {
+    parts << QStringLiteral("beyond %1 mm").arg(millimetres(beyond.toDouble()));
+  }
+  if (answer.value(QStringLiteral("snapped")).toBool()) {
+    parts << QStringLiteral("snapped to %1 mm x%2 of annotation %3")
+                 .arg(millimetres(answer.value(QStringLiteral("spacing")).toDouble()))
+                 .arg(answer.value(QStringLiteral("multiple")).toInt())
+                 .arg(answer.value(QStringLiteral("from")).toInt());
+  } else {
+    parts << (freely ? QStringLiteral("free") : QStringLiteral("not snapped"));
+  }
+  return parts.join(QStringLiteral(", "));
+}
+
 } // namespace
 
 QList<TemplateChoice> availableTemplates(const DocumentHost& host) {
@@ -415,6 +459,20 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   m_hoverTimer->setSingleShot(true);
   m_hoverTimer->setInterval(60);
   connect(m_hoverTimer, &QTimer::timeout, this, &DrawingWorkspace::hoverPick);
+  // Dimension spacing (mitcad#1173).
+  m_snapTimer = new QTimer(this);
+  m_snapTimer->setSingleShot(true);
+  m_snapTimer->setInterval(30);
+  connect(m_snapTimer, &QTimer::timeout, this, [this] {
+    if (m_snapPending) {
+      m_snapPending = false;
+      snapNow();
+      m_snapTimer->start();
+    }
+  });
+  connect(m_sheetView, &DrawingSheetView::placingMoved, this,
+          [this](QPointF at, bool freely) { snapRequested(0, at, freely); });
+  connect(m_sheetView, &DrawingSheetView::annotationDragged, this, &DrawingWorkspace::snapRequested);
 
   hide();
   viewer->installEventFilter(this);
@@ -1229,7 +1287,20 @@ void DrawingWorkspace::picked(ToolPicks picks) {
     showHint();
     return;
   }
-  const QJsonObject command = m_tool->command(m_drawing, m_sheet, picks, options);
+  QJsonObject command = m_tool->command(m_drawing, m_sheet, picks, options);
+  // A dimension goes where it snaps to the spacing of the one before, or
+  // with Alt where it is clicked (mitcad#1173).
+  if (m_tool->pick == SheetPick::Picks && command.contains(QStringLiteral("at")) &&
+      m_tool->annotationType != nullptr && spacedType(m_tool->annotationType(options))) {
+    m_snapTimer->stop();
+    m_snapPending = false;
+    const bool freely = m_sheetView->releaseModifiers().testFlag(Qt::AltModifier);
+    QJsonObject placed;
+    if (askSnap(command, freely, &placed)) {
+      command.insert(QStringLiteral("at"), placed.value(QStringLiteral("at")));
+      qDebug().noquote() << QStringLiteral("Drawing dimension placed: %1").arg(placedText(placed, freely));
+    }
+  }
   if (command.isEmpty()) {
     if (annotating) {
       clearToolPicks();
@@ -1274,6 +1345,7 @@ bool DrawingWorkspace::clearToolPicks() {
   m_pickItems = QJsonArray();
   m_pickPoints.clear();
   m_pickView = 0;
+  m_loggedSnap.clear();
   if (had) {
     m_sheetView->setPickMarks(QJsonArray());
     m_sheetView->setPlacingPreview(QString(), {});
@@ -1291,6 +1363,86 @@ void DrawingWorkspace::showPlacingPreview() {
       m_tool->annotationType != nullptr ? m_tool->annotationType(m_options.value(m_tool->id)) : QString();
   const bool lines = type == QStringLiteral("linear") && m_pickPoints.size() >= 2;
   m_sheetView->setPlacingPreview(lines ? QStringLiteral("dimension") : QStringLiteral("leader"), m_pickPoints);
+}
+
+QJsonObject DrawingWorkspace::placingCommand(QPointF at) const {
+  if (m_tool == nullptr || m_tool->pick != SheetPick::Picks || m_tool->command == nullptr ||
+      m_tool->annotationType == nullptr || m_toolPicks.isEmpty()) {
+    return {};
+  }
+  const QHash<QString, QString> options = m_options.value(m_tool->id);
+  if (!spacedType(m_tool->annotationType(options))) {
+    return {};
+  }
+  ToolPicks picks;
+  picks.view = m_pickView;
+  picks.picks = m_toolPicks;
+  picks.points = {at};
+  return m_tool->command(m_drawing, m_sheet, picks, options);
+}
+
+bool DrawingWorkspace::askSnap(const QJsonObject& command, bool freely, QJsonObject* answer) {
+  // Not while a job computes the model (mitcad#753): placed as clicked.
+  if (command.isEmpty() || !isOpen() || m_host.modelBusy()) {
+    return false;
+  }
+  try {
+    *answer = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("drawing_snap")},
+                                          {QStringLiteral("command"), command},
+                                          {QStringLiteral("free"), freely}});
+  } catch (const std::exception&) {
+    // Placed as clicked: the command says why when it fails.
+    return false;
+  }
+  return true;
+}
+
+void DrawingWorkspace::snapRequested(int annotation, QPointF point, bool freely) {
+  m_snapAnnotation = annotation;
+  m_snapPoint = point;
+  m_snapFree = freely;
+  if (m_snapTimer->isActive()) {
+    m_snapPending = true;
+    return;
+  }
+  snapNow();
+  m_snapTimer->start();
+}
+
+void DrawingWorkspace::snapNow() {
+  QJsonObject answer;
+  bool snapped = false;
+  if (m_snapAnnotation != 0) {
+    const SheetAnnotation* dragged = m_sheetView->annotation(m_snapAnnotation);
+    if (dragged != nullptr && spacedType(dragged->type) &&
+        askSnap({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_annotation")},
+                 {QStringLiteral("drawing"), m_drawing},
+                 {QStringLiteral("annotation"), m_snapAnnotation},
+                 {QStringLiteral("move"), QJsonArray{m_snapPoint.x(), m_snapPoint.y()}}},
+                m_snapFree, &answer)) {
+      snapped = answer.value(QStringLiteral("snapped")).toBool();
+    }
+    const QJsonArray move = answer.value(QStringLiteral("move")).toArray();
+    m_sheetView->setDragSnap(snapped && move.size() == 2, QPointF(move.at(0).toDouble(), move.at(1).toDouble()),
+                             snapped ? snapHint(answer) : QString());
+  } else {
+    if (m_sheetView->isPlacing() && askSnap(placingCommand(m_snapPoint), m_snapFree, &answer)) {
+      snapped = answer.value(QStringLiteral("snapped")).toBool();
+    }
+    const QJsonArray at = answer.value(QStringLiteral("at")).toArray();
+    m_sheetView->setPlacingSnap(snapped && at.size() == 2, QPointF(at.at(0).toDouble(), at.at(1).toDouble()),
+                                snapped ? snapHint(answer) : QString());
+  }
+  const QString logged = snapped ? QStringLiteral("%1 mm x%2")
+                                       .arg(millimetres(answer.value(QStringLiteral("spacing")).toDouble()))
+                                       .arg(answer.value(QStringLiteral("multiple")).toInt())
+                                 : QString();
+  if (logged != m_loggedSnap) {
+    m_loggedSnap = logged;
+    if (!logged.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Drawing snap: %1").arg(logged);
+    }
+  }
 }
 
 void DrawingWorkspace::hoverRequested(int view, QPointF at) {
@@ -1364,7 +1516,8 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
   // Every pick of one annotation is on the view of the first.
   const int on = m_pickView != 0 ? m_pickView : view;
   if (on == 0) {
-    setStatus(tr("Click on a view."), true);
+    // A click that picks nothing is a hint, not an error (mitcad#1174).
+    m_host.showStatus(tr("Click on a view."), NoticeLevel::Hint);
     return;
   }
   QJsonObject query{{QStringLiteral("query"), QStringLiteral("drawing_pick")},
@@ -1392,7 +1545,9 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
       return;
     }
     qDebug().noquote() << QStringLiteral("Drawing pick: nothing at %1,%2").arg(at.x(), 0, 'f', 1).arg(at.y(), 0, 'f', 1);
-    setStatus(tr("Nothing to pick there: click an edge, a circle or a corner of the view."), true);
+    // A hint that fades, not an error (mitcad#1174).
+    m_host.showStatus(tr("Nothing to pick there: click an edge, a circle or a corner of the view."),
+                      NoticeLevel::Hint);
     return;
   }
   m_pickView = on;
@@ -1462,10 +1617,25 @@ QStringList DrawingWorkspace::datumLetters() const {
 }
 
 void DrawingWorkspace::annotationMoved(int annotation, QPointF delta) {
-  run({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_annotation")},
-       {QStringLiteral("drawing"), m_drawing},
-       {QStringLiteral("annotation"), annotation},
-       {QStringLiteral("move"), QJsonArray{delta.x(), delta.y()}}});
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_drawing_annotation")},
+                      {QStringLiteral("drawing"), m_drawing},
+                      {QStringLiteral("annotation"), annotation},
+                      {QStringLiteral("move"), QJsonArray{delta.x(), delta.y()}}};
+  // A dimension dragged snaps as one placed (mitcad#1173); with Alt it
+  // goes where it is dropped.
+  m_snapTimer->stop();
+  m_snapPending = false;
+  m_loggedSnap.clear();
+  const SheetAnnotation* dragged = m_sheetView->annotation(annotation);
+  if (dragged != nullptr && spacedType(dragged->type)) {
+    const bool freely = m_sheetView->releaseModifiers().testFlag(Qt::AltModifier);
+    QJsonObject placed;
+    if (askSnap(command, freely, &placed)) {
+      command.insert(QStringLiteral("move"), placed.value(QStringLiteral("move")));
+      qDebug().noquote() << QStringLiteral("Drawing dimension moved: %1").arg(placedText(placed, freely));
+    }
+  }
+  run(command);
 }
 
 void DrawingWorkspace::deleteAnnotation(int annotation) {
@@ -1785,6 +1955,13 @@ void DrawingWorkspace::fillTablePanel(int id, const QJsonObject& json) {
     connect(levels, &QComboBox::currentIndexChanged, this,
             [field, levels] { field(QStringLiteral("levels"), levels->currentData().toString()); });
     m_form->addRow(tr("Rows"), levels);
+    auto* group = new QCheckBox;
+    group->setObjectName(QStringLiteral("drawingTableGroupIdentical"));
+    group->setChecked(table.value(QStringLiteral("group_identical")).toBool());
+    connect(group, &QCheckBox::toggled, this, [field](bool checked) {
+      field(QStringLiteral("group_identical"), checked ? QStringLiteral("true") : QStringLiteral("false"));
+    });
+    m_form->addRow(tr("Group identical parts"), group);
   }
   const QString title = table.value(QStringLiteral("title")).toString();
   auto* heading = new QLineEdit(title);
@@ -2461,6 +2638,36 @@ bool DrawingWorkspace::exportTo(const QString& path) {
   qInfo().noquote() << QStringLiteral("Exported %1: drawing %2, %3 sheets").arg(path, m_name).arg(sheets);
   setStatus(tr("Exported %1 (%2 sheet(s)).").arg(QDir::toNativeSeparators(path)).arg(sheets), false);
   return true;
+}
+
+QStringList DrawingWorkspace::writeSheetsSvg(const QString& folder, QString& error) {
+  const QString path = QDir(folder).filePath(QStringLiteral("sheet.svg"));
+  QJsonObject command{{QStringLiteral("path"), path}, {QStringLiteral("drawing"), m_drawing}};
+  if (m_cutSheet) {
+    command.insert(QStringLiteral("cmd"), QStringLiteral("export_cut_sheet"));
+    command.insert(QStringLiteral("labels"), m_cutLabels);
+  } else {
+    command.insert(QStringLiteral("cmd"), QStringLiteral("export_drawing"));
+    const QString title = m_title ? m_title() : QString();
+    if (!title.isEmpty()) {
+      command.insert(QStringLiteral("title"), title);
+    }
+  }
+  QJsonObject result;
+  if (!m_host.runModelCommand(command, &result)) {
+    error = m_host.lastError();
+    return {};
+  }
+  // A drawing's SVG files, one per sheet (the second sheet.svg's sheet-2.svg,
+  // …); a cut sheet's one file.
+  QStringList files;
+  for (const QJsonValue& file : result.value(QStringLiteral("files")).toArray()) {
+    files << file.toString();
+  }
+  if (files.isEmpty()) {
+    files << path;
+  }
+  return files;
 }
 
 void DrawingWorkspace::setStatus(const QString& text, bool error) {

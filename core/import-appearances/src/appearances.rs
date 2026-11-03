@@ -558,6 +558,21 @@ impl<K: Kernel> Appearances<K> for Importer<'_, K> {
                 (Some(_), None) => "its selector names no body of its blob".to_owned(),
                 _ => "no body of the replay was matched with it".to_owned(),
             };
+            // A body the file hides (its light bulb off, mitcad#1175): a
+            // copy kept beside the body made from it would cover that
+            // body's features in the view.
+            if b.light_bulb == Some(false) {
+                report.hidden += 1;
+                match uid {
+                    Some(uid) => match self.doc.set_body_visible(uid, false) {
+                        Ok(()) => report.hidden_set += 1,
+                        Err(e) => report.gaps.push(format!("body {entity}: hidden: {e}")),
+                    },
+                    None => report
+                        .gaps
+                        .push(format!("body {entity}: hidden: {}", why_none())),
+                }
+            }
             if b.appearance.is_none() {
                 report.bodies += 1;
                 report

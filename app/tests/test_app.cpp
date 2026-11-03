@@ -1172,6 +1172,7 @@ public:
     bodies = static_cast<int>(update.bodies.size());
     return {};
   }
+  void setPaused(bool value) override { paused = value; }
   void setView(const mitcad::render::ViewData& view) override {
     camera = view;
     sequence = view.sequence;
@@ -1217,6 +1218,7 @@ public:
   mitcad::render::ViewData camera;
   mitcad::render::EnvironmentData world;
   std::vector<int> previews;
+  bool paused = false;
   bool finalDenoise = false;
   double timeLimit = 0.0;
   int meshes = 0;
@@ -1404,12 +1406,14 @@ void renderFallbackTests() {
   environment.lights[1].kind = mitcad::render::LightData::Kind::Sun;
   environment.lights[1].power = 3.5f;
   const auto settings = [&environment](mitcad::render::Renderer& renderer) {
+    renderer.setPaused(true);
     renderer.setEnvironment(environment);
     renderer.setSamples(16);
     renderer.setPreviews({4, 8});
     renderer.setFinal(true, 12.5);
   };
   const auto checkState = [&view, &environment, &first](const FakeRenderer& cpu) {
+    CHECK(cpu.paused);
     CHECK(cpu.samples == 16 && cpu.meshes == 2 && cpu.bodies == 3 && cpu.sequence == 7 && cpu.lights == 2);
     CHECK(cpu.previews == std::vector<int>({4, 8}) && cpu.finalDenoise && cpu.timeLimit == 12.5);
     CHECK(cpu.camera.perspective && cpu.camera.eye == view.eye && cpu.camera.target == view.target);
@@ -1443,6 +1447,9 @@ void renderFallbackTests() {
       renderer->setView(view);
       renderer->wait();
       checkState(*made.renderers.back());
+      renderer->setPaused(false);
+      CHECK(!made.renderers.back()->paused && made.renderers.back()->sequence == 7);
+      CHECK(made.renderers.back()->meshes == 2 && made.renderers.back()->bodies == 3);
       CHECK(made.reports.size() == 1 && made.reports[0] == "Rendering on the CPU: " + label + " failed (no kernel)");
       CHECK(made.reportedDevices.size() == 1 && made.reportedDevices[0].type == "CPU" && !made.reportedDevices[0].metalRT);
     }
@@ -2655,13 +2662,18 @@ int materialToolTests();
 int noticeLevelTests();
 int colorRoleTests();
 int messageLogTests();
+int paperPrintTests();
 int profilePickerRowsTests();
 int centerOfMassTests();
 int quickAccessTests();
+int commentsTests();
 int slicerMaterialRowsTests();
+int chatAccountCheckTests();
 int browserRolesTests();
 int saveComponentTargetTests();
 int lengthUnitsTests();
+int printValueChoicesTests();
+int screenshotBudgetTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2783,13 +2795,18 @@ int main(int argc, char* argv[]) {
     failures += noticeLevelTests();
     failures += colorRoleTests();
     failures += messageLogTests();
+    failures += paperPrintTests();
     failures += profilePickerRowsTests();
     failures += centerOfMassTests();
     failures += quickAccessTests();
+    failures += commentsTests();
     failures += slicerMaterialRowsTests();
+    failures += chatAccountCheckTests();
     failures += browserRolesTests();
     failures += saveComponentTargetTests();
     failures += lengthUnitsTests();
+    failures += printValueChoicesTests();
+    failures += screenshotBudgetTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

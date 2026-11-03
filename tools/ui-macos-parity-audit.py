@@ -45,7 +45,7 @@ GROUPS = (
     ("settings-textures", "Settings Textures", "production"),
     ("shortcuts", "Keyboard Shortcuts", "production"),
     ("print", "Send to Slicer", "production"),
-    ("profiles", "Printers and Processes", "production"),
+    ("profiles", "Processes (once Printers and Processes)", "production"),
     ("materials", "Materials", "production"),
     ("properties", "Properties", "production"),
     ("export", "Export", "production"),
@@ -239,7 +239,8 @@ def make_scenario(group, frontend, theme, directory):
         "publish": ("tools.publish_library", "^Publish to Library$"),
         "render": ("file.render_image", "^Render Image$"),
         "shortcuts": ("tools.shortcuts", "^Keyboard Shortcuts$"),
-        "profiles": ("make.printers", "^Printers and Processes$"),
+        # The Processes manager, the richer of the two since mitcad#1135.
+        "profiles": ("make.processes", "^Processes$"),
         "materials": ("solid.materials", "^Materials$"),
         "properties": ("inspect.properties", "^Properties$"),
         "export": ("file.export", "^Export$"),

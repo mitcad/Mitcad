@@ -345,6 +345,24 @@ void test_offsets_and_lofts_leave_inputs() {
   square.region = rectangle(21, 10, 10, 40, 20);
   loft_spec.sections = {top, square};
   check_kept("a loft from a face", {base}, [&] { loft(loft_spec); });
+  // A loft tangent to the walls of a ring from its top, a face with a hole
+  // (mitcad#1183): the ring and its face's hole stay as they were.
+  Region holed = circle(31, 0, 0, 10);
+  holed.loops.push_back(circle(32, 0, 0, 5).loops.front());
+  const ShapePtr ring = extrude("F7", {holed}, 0, 20);
+  LoftSpec from_ring;
+  from_ring.feature = "F9";
+  LoftSection ring_top;
+  ring_top.kind = LoftSection::Kind::Face;
+  ring_top.body = ring;
+  ring_top.face = "F7:end(r{c31})";
+  LoftSection disc;
+  disc.kind = LoftSection::Kind::Region;
+  disc.frame.origin = gp_Pnt(0, 0, 40);
+  disc.region = circle(33, 0, 0, 5);
+  from_ring.sections = {ring_top, disc};
+  from_ring.start.kind = LoftEnd::Kind::Tangent;
+  check_kept("a tangent loft from a face with a hole", {ring}, [&] { loft(from_ring); });
 }
 
 // Imported bodies can have edge tolerances larger than their vertices'.

@@ -291,6 +291,20 @@ bool SketchModel::load(const QJsonObject& sketch) {
     text.flipX = flag(t, "flip_x");
     text.flipY = flag(t, "flip_y");
     text.outlined = !t.value(QStringLiteral("outline")).toArray().isEmpty();
+    // The contours' curves carry no type: their fields tell it.
+    for (const QJsonValue& contour : t.value(QStringLiteral("outline")).toArray()) {
+      for (const QJsonValue& part : contour.toObject().value(QStringLiteral("curves")).toArray()) {
+        const QJsonObject g = part.toObject();
+        const QString kind = g.contains(QStringLiteral("control"))        ? QStringLiteral("spline")
+                             : g.contains(QStringLiteral("major_radius")) ? (g.contains(QStringLiteral("start_angle"))
+                                                                                 ? QStringLiteral("elliptical_arc")
+                                                                                 : QStringLiteral("ellipse"))
+                             : g.contains(QStringLiteral("start_angle")) ? QStringLiteral("arc")
+                             : g.contains(QStringLiteral("radius"))      ? QStringLiteral("circle")
+                                                                         : QStringLiteral("line");
+        text.outline.push_back(curveOf(kind, g));
+      }
+    }
     text.fontFile = t.value(QStringLiteral("font_file")).toObject().value(QStringLiteral("path")).toString();
     const QJsonObject code = t.value(QStringLiteral("code")).toObject();
     text.code = !code.isEmpty();

@@ -21,7 +21,13 @@ pub use reference::{ECHO_CHARS, Vocabulary, echoed, missing_name, unknown_comman
 // history (mitcad#947).
 pub mod chat;
 
+// Comments for agents (mitcad#1119): the comments resource, its
+// subscription, the author of comment commands and the resolve policy.
+mod comments;
+pub use comments::{COMMENTS_URI, RESOLVE_REFUSED};
+
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
 
 /// The initialization-based MCP revision implemented by this server.
@@ -118,6 +124,17 @@ struct Session<B> {
     backend: B,
     profile: Profile,
     vocabulary: Vocabulary,
+    /// The client's name (`clientInfo.name`) as comment commands' author
+    /// (mitcad#1119).
+    author: String,
+    /// The user's preference that agents may resolve comments (mitcad#1119);
+    /// the live application sets it, the headless server never does.
+    may_resolve_comments: bool,
+    /// The resources the client subscribed to (live profile).
+    subscriptions: BTreeSet<String>,
+    /// The `comments` query's answer as the application last gave it
+    /// (live profile): the `mitcad://comments` resource.
+    comments: Option<Value>,
 }
 
 impl<B: Backend> Session<B> {
@@ -128,6 +145,10 @@ impl<B: Backend> Session<B> {
             backend,
             profile: Profile::Headless,
             vocabulary,
+            author: comments::DEFAULT_AUTHOR.to_owned(),
+            may_resolve_comments: false,
+            subscriptions: BTreeSet::new(),
+            comments: None,
         }
     }
 
@@ -213,13 +234,21 @@ impl<B: Backend> Session<B> {
                 "Request ID leaves no room for a bounded response",
             ));
         }
+        // Subscriptions are the live profile's (mitcad#1119): its comments
+        // change while a client is connected.
+        let live = matches!(self.profile, Profile::Live);
         let result = match method {
             "initialize" => return Dispatch::response(self.initialize(id, params)),
             "ping" => json!({}),
+            "resources/subscribe" | "resources/unsubscribe" if !live => {
+                return Dispatch::response(error(Some(id), -32601, "Unknown method"));
+            }
             "tools/list"
             | "tools/call"
             | "resources/list"
             | "resources/read"
+            | "resources/subscribe"
+            | "resources/unsubscribe"
             | "resources/templates/list" => {
                 if self.phase != Phase::Ready {
                     return Dispatch::response(error(
@@ -240,12 +269,40 @@ impl<B: Backend> Session<B> {
                         if let Some(response) = reject_cursor(id, params) {
                             return Dispatch::response(response);
                         }
-                        json!({"resources": [{
+                        let mut resources = vec![json!({
                             "uri": COMMANDS_URI,
                             "name": "Mitcad document API",
                             "description": "JSON command and query reference, identities and metric units",
                             "mimeType": "text/markdown"
-                        }]})
+                        })];
+                        if live {
+                            resources.push(comments::resource());
+                        }
+                        json!({"resources": resources})
+                    }
+                    "resources/subscribe" | "resources/unsubscribe" => {
+                        let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+                            return Dispatch::response(error(
+                                Some(id),
+                                -32602,
+                                "uri must be a string",
+                            ));
+                        };
+                        if uri != COMMANDS_URI && uri != COMMENTS_URI {
+                            return Dispatch::response(error(
+                                Some(id),
+                                -32002,
+                                "Unknown resource URI",
+                            ));
+                        }
+                        // The reference never changes while connected; the
+                        // comments notify (mitcad#1119).
+                        if method == "resources/subscribe" {
+                            self.subscriptions.insert(uri.to_owned());
+                        } else {
+                            self.subscriptions.remove(uri);
+                        }
+                        json!({})
                     }
                     "resources/templates/list" => {
                         if let Some(response) = reject_cursor(id, params) {
@@ -261,6 +318,16 @@ impl<B: Backend> Session<B> {
                                 "uri must be a string",
                             ));
                         };
+                        if live && uri == COMMENTS_URI {
+                            return Dispatch::response(match &self.comments {
+                                Some(answer) => success(id, comments::contents(answer)),
+                                None => error(
+                                    Some(id),
+                                    -32002,
+                                    "The application has not given the comments yet; retry",
+                                ),
+                            });
+                        }
                         if uri != COMMANDS_URI {
                             return Dispatch::response(error(
                                 Some(id),
@@ -308,19 +375,26 @@ impl<B: Backend> Session<B> {
         // MCP legacy negotiation returns a supported version when the client's
         // proposed revision differs. The client decides whether it can proceed.
         self.phase = Phase::AwaitingInitialized;
+        // Its comment commands carry its name (mitcad#1119).
+        self.author = comments::author_name(params["clientInfo"]["name"].as_str().unwrap_or(""));
         let instructions = match self.profile {
             Profile::Headless => {
-                "Local headless CAD documents. Look up commands, queries, feature types and their fields with model_reference: without arguments it gives the reference's contents and every name this server permits, then one section, query, command, feature type or search at a time (the resource mitcad://reference/commands is the whole reference, about 1 MB). Use the explicit document handle on every call. Files are confined to the configured workspace. A model_command is one command object or an array of them run in order (stopping at the first refusal, which undoes the ones before it, or at the first failed feature); its result lists what it changed (timeline: full gives the whole timeline and bodies). Queries are single objects. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. Place a part or a sketch on a reference to an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written and does not follow the model. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. Documents last until closed or the server exits."
+                "Local headless CAD documents. A design can hold comments, notes pinned to features, faces, edges and points for an agent: read the open ones with model_query {\"query\": \"comments\", \"status\": \"open\"} first, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference: without arguments it gives the reference's contents and every name this server permits, then one section, query, command, feature type or search at a time (the resource mitcad://reference/commands is the whole reference, about 1 MB). Use the explicit document handle on every call. Files are confined to the configured workspace. A model_command is one command object or an array of them run in order (stopping at the first refusal, which undoes the ones before it, or at the first failed feature); its result lists what it changed (timeline: full gives the whole timeline and bodies). Queries are single objects. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. Place a part or a sketch on a reference to an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written and does not follow the model. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. Documents last until closed or the server exits."
             }
             Profile::Live => {
-                "Control the document already open in the Mitcad application, alongside its user. Call document_list to obtain its current handle; handles become invalid when the document is replaced. Look up commands, queries, feature types and their fields with model_reference: without arguments it gives the reference's contents and every name this server permits, then one section, query, command, feature type or search at a time (the resource mitcad://reference/commands is the whole reference, about 1 MB). A model_command is one command object or an array of them run in order as one undo step (stopping at the first refusal, which undoes the ones before it, or at the first failed feature); its result lists what it changed (timeline: full gives the whole timeline and bodies). Queries are single objects. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. Place a part or a sketch on a reference to an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written and does not follow the model. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0 (ui_state shows the Sketch Palette's warnings). Queries work at any time except while the model computes (the result then says busy and when to retry). While a sketch is open, its sketch.* commands go through the sketch session; other model commands wait until the sketch or command panel is finished, and editing is refused when the document is read-only. ui_state shows what the user sees (mode, selection, Sketch Palette warnings, messages), ui_log the application's log, ui_screenshot the view; ui_select points at entities, ui_command runs the application's commands by id, ui_camera reads or sets the view's camera (and frames a box, the shown bodies or the selection) for screenshots. document_save saves to the document's own path, or with path (Save As) into a folder the user allows agents to use; document_open opens a design from such a folder in place of the open document; document_list lists the allowed folders; model_export writes the bodies (3MF, STL, STEP, drawings, ...) to a new file in such a folder without changing the document, and ui_screenshot can write its image there too. Changes you make are labeled (agent) in the undo text and undo with Ctrl+Z. File imports and closing are not available through this connection. Disconnecting leaves the application's document open, including unsaved changes."
+                "Control the documents open in the Mitcad application, alongside its user. Call document_list to obtain every handle and the active flag. Pass document to target a specific design; omitting it uses the active design. A chat agent remains bound to its own design. Handles become invalid when their document is closed or replaced. Comments first: the user pins comments (notes such as \"make this hole an M6 thread\") to features, faces, edges and points for you; ui_state's comments.open counts the open ones. Read the open comments before other work (the resource mitcad://comments, which notifies subscribers when comments change, or model_query {\"query\": \"comments\", \"status\": \"open\"}; ui_select or ui_camera with comment shows one's target). After the change a comment asks for, address it in the same model_command array as that change, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done, briefly>\"}, so both undo together; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference: without arguments it gives the reference's contents and every name this server permits, then one section, query, command, feature type or search at a time (the resource mitcad://reference/commands is the whole reference, about 1 MB). A model_command is one command object or an array of them run in order as one undo step (stopping at the first refusal, which undoes the ones before it, or at the first failed feature); its result lists what it changed (timeline: full gives the whole timeline and bodies). Queries are single objects. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. Place a part or a sketch on a reference to an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written and does not follow the model. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0 (ui_state shows the Sketch Palette's warnings). Queries work at any time except while the model computes (the result then says busy and when to retry). While a sketch is open, its sketch.* commands go through the sketch session; other model commands wait until the sketch or command panel is finished, and editing is refused when the document is read-only. ui_state shows what the user sees (mode, selection, Sketch Palette warnings, messages), ui_log the application's log, ui_screenshot the view; ui_select points at entities, ui_command runs the application's commands by id, ui_camera reads or sets the view's camera (and frames a box, the shown bodies or the selection) for screenshots. document_save saves to the document's own path, or with path (Save As) into a folder the user allows agents to use; document_open opens a design from such a folder in place of the selected document; document_list lists the allowed folders; model_export writes the bodies (3MF, STL, STEP, drawings, ...) to a new file in such a folder without changing the document, and ui_screenshot can write its image there too. Changes you make are labeled (agent) in the undo text and undo with Ctrl+Z. File imports and closing are not available through this connection. Disconnecting leaves the application's document open, including unsaved changes."
             }
+        };
+        // The live comments resource notifies its subscribers (mitcad#1119).
+        let resources = match self.profile {
+            Profile::Headless => json!({}),
+            Profile::Live => json!({"subscribe": true}),
         };
         success(
             id,
             json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}, "resources": {}},
+                "capabilities": {"tools": {}, "resources": resources},
                 "serverInfo": {"name": "mitcad", "version": env!("CARGO_PKG_VERSION")},
                 "instructions": instructions
             }),
@@ -353,6 +427,11 @@ impl<B: Backend> Session<B> {
         if let Err(message) = catalog::validate(arguments, &tool["inputSchema"], "arguments") {
             return Dispatch::response(error(Some(id), -32602, &message));
         }
+        // What the schema cannot say: ui_select's items or comment
+        // (mitcad#1119).
+        if let Err(message) = catalog::check(name, arguments) {
+            return Dispatch::response(error(Some(id), -32602, &message));
+        }
         // The reference is the protocol's own, in both servers (mitcad#714).
         if name == "model_reference" {
             let content = match reference::answer(arguments, &self.vocabulary) {
@@ -361,10 +440,19 @@ impl<B: Backend> Session<B> {
             };
             return Dispatch::response(success(id, content));
         }
+        let mut arguments = mcp_defaults(name, arguments);
+        // Comment commands carry the client's name; resolving waits for the
+        // user's preference (mitcad#1119).
+        if name == "model_command"
+            && let Err(refusal) =
+                comments::apply_policy(&mut arguments, &self.author, self.may_resolve_comments)
+        {
+            return Dispatch::response(success(id, tool_content(refusal, true)));
+        }
         Dispatch::Tool {
             id: id.clone(),
             name: name.to_owned(),
-            arguments: mcp_defaults(name, arguments),
+            arguments,
         }
     }
 }
@@ -492,6 +580,27 @@ impl LiveSession {
                 PreparedMessage::Tool { name, arguments }
             }
         })
+    }
+
+    /// The application's comments (mitcad#1119): the `comments` query's
+    /// answer for all statuses, which `resources/read` of `mitcad://comments`
+    /// returns from now on. When it differs from the last one and the client
+    /// subscribed to the resource, the `notifications/resources/updated`
+    /// message to send it.
+    pub fn set_comments(&mut self, answer: Value) -> Option<Value> {
+        let session = &mut self.session;
+        if session.comments.as_ref() == Some(&answer) {
+            return None;
+        }
+        session.comments = Some(answer);
+        (session.phase == Phase::Ready && session.subscriptions.contains(COMMENTS_URI))
+            .then(|| comments::updated(COMMENTS_URI))
+    }
+
+    /// The user's preference Preferences › AI Assistants › Agents may resolve
+    /// comments (mitcad#1119): off, `resolve_comment` is refused.
+    pub fn set_may_resolve_comments(&mut self, allowed: bool) {
+        self.session.may_resolve_comments = allowed;
     }
 
     /// Wrap the application's result and release the pending request ID.

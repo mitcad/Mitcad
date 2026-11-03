@@ -14,7 +14,7 @@ namespace mitcad {
 // drop-down's label and the tooltip), the group it is listed under (a
 // printer's vendor, a process's printer), its name without the group with
 // a printer's nozzle as "X1 Carbon · 0.4 mm nozzle", and where it comes
-// from (This design, My library, Project, Built-in, or the 3MF it was
+// from (This design, This project, My library, Built-in, or the 3MF it was
 // imported from).
 struct ProfilePickerRow {
   QString key;
@@ -39,7 +39,7 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
 QString printerVendor(const QString& bareName, const QStringList& bareNames);
 
 // Where an item comes from, as its picker row's tag: Built-in, My
-// library, Project; the design's own the 3MF it was imported from, else
+// library, This project; the design's own the 3MF it was imported from, else
 // This design.
 QString profileSource(const LibraryItem& item);
 

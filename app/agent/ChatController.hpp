@@ -61,6 +61,9 @@ struct ChatHost {
   std::function<void(std::function<void()> call)> whenIdle;
   // Opens a page in the browser (UI tests log it).
   std::function<void(const QString& url)> openUrl;
+  // The design's open comments (mitcad#1119): id, text, label (the target)
+  // and author of each.
+  std::function<QJsonArray()> comments;
 };
 
 class ChatController : public QObject, public mcp::ChatGate {
@@ -97,11 +100,16 @@ public:
   // activated); a quick file check while it is missing.
   void refreshSetup(bool full);
   void signIn();
+  QJsonObject accountError() const { return m_accountErrors.value(m_agent->id()); }
+  bool checkingAccount() const { return m_checkingAccount; }
+  // Recheck sign-in and one bounded, context-free turn in a fresh process.
+  void checkAccount();
   void openInstallPage();
   bool needsPrivacyNotice() const;
   void acceptPrivacyNotice();
 
-  void send(const QString& text, bool attachSelection, bool attachView);
+  // attachComments: the open comments go with it (mitcad#1119).
+  void send(const QString& text, bool attachSelection, bool attachView, bool attachComments = false);
   void stop();
   void newConversation();
   // The open design's history, or every design's (Preferences).
@@ -118,6 +126,7 @@ public:
   const QList<QJsonObject>& entries() const { return m_entries; }
 
   // ChatGate (the live server, for the chat's own bridge connection).
+  bool ownsMarker(const QString& marker) const override { return !marker.isEmpty() && marker == m_marker; }
   Decision decide(const QString& marker, const QString& tool, const QJsonObject& arguments,
                   std::function<void(bool allowed, const QString& reason)> reply) override;
   void toolStarted(const QString& marker, const QString& tool) override;
@@ -176,6 +185,17 @@ private:
   static bool sameState(const QJsonObject& a, const QJsonObject& b);
 
   void noteDetected();
+  void accountFailed(const QJsonObject& account, const QString& text);
+  void beginAccountProbe();
+  // Check again's setup check has an outcome (mitcad#1155,
+  // accountCheckStep): Ready goes on to the probe, an unusable agent ends
+  // the check; nothing while the probe runs. `atOnce`: right after check().
+  void settleAccountCheck(bool atOnce);
+  // Why the agent's readiness keeps the account check from going on.
+  QString readinessProblem() const;
+  // `reason`: why the check failed, other than the account error itself;
+  // shown as a notice, the account error's own reason is kept.
+  void finishAccountProbe(bool success, const QString& reason = QString());
 
   ChatHost m_host;
   std::vector<ChatAgent*> m_agents;
@@ -184,6 +204,11 @@ private:
   ChatHistoryStore m_store;
   Activity m_activity = Activity::Idle;
   QString m_model;
+  QHash<QString, QJsonObject> m_accountErrors;
+  bool m_checkingAccount = false;
+  bool m_accountProbe = false;
+  bool m_checkSawAccountError = false; // the check itself reported an account error
+  int m_probeGeneration = 0;
 
   QString m_documentId;
   QString m_path;

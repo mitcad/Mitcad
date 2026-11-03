@@ -77,13 +77,17 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     // placeholder and the application's name (mitcad#1149).
     m_main->setWindowTitle(QStringLiteral("%1[*] - MitCad").arg(qEnvironmentVariable("MITCAD_MCP_WINDOW_LABEL")));
     m_main->setWindowModified(true);
-    m_main->raise();
-    m_main->activateWindow();
+    // The top-level window: the main window may be a page of a document
+    // frame (mitcad#1172), whose raise() would not raise the window, and an
+    // X11 window under another one is not activated.
+    QWidget* top = m_main->window();
+    top->raise();
+    top->activateWindow();
 #ifdef Q_OS_WIN
     // Session 0 has no foreground desktop: deliver the activation event
     // that the ordinary window system sends after activateWindow().
     QEvent activation(QEvent::WindowActivate);
-    QCoreApplication::sendEvent(m_main, &activation);
+    QCoreApplication::sendEvent(top, &activation);
 #endif
     qInfo().noquote() << "Assistant window activated";
     return;

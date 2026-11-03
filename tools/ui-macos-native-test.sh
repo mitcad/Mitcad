@@ -27,6 +27,7 @@ case "$scenario" in
     ;;
   secondary)
     script=native-macos-secondary.mitcad-ui
+    export MITCAD_TEST_PICKER_ANIMATIONS=1
     # A failed smoke may already have created its Local project. Remove
     # only this scenario's fixture so the Create action is rerunnable.
     rm -rf "$UI_OUT/files/NativeProject" "$UI_OUT/files/NativeCloudProject" \
@@ -173,6 +174,11 @@ elif [ "$scenario" = cancel ]; then
 elif [ "$scenario" = sketch ]; then
   ui_expect_log 'volume 20250\.000 mm3' 'native precision fields created the expected extrusion'
 elif [ "$scenario" = secondary ]; then
+  message_count=$(grep -c '^Panel Native form controls regression message box: warning: Repeated native form message$' "$UI_LOG_FILE" || true)
+  if [ "$message_count" != 1 ]; then
+    ui_fail "unchanged native form message was logged $message_count times instead of once"
+  fi
+  ui_expect_log '^Native picker animations: on$' 'the unavailable-content picker kept the normal animation setting'
   if [ -e "$MITCAD_TEST_WORK/CancelledProject" ]; then
     ui_fail 'cancelling New Project created files or settings'
   fi

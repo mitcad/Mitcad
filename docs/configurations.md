@@ -17,8 +17,18 @@ recommendations the owner accepted on the same day).
 A configurable design stands for a family of products. The user picks a
 value for each **option** (Color, Length, Size), **rules** remove the
 values and combinations that are not allowed, and named **rows** are
-presets of option values. The same choice is made in the design itself,
-when a library component or another design is inserted, and in BUILD.
+saved combinations of option values. The same choice is made in the
+design itself, when a library component or another design is inserted,
+and in BUILD.
+
+**Words.** This note uses the model's words (domain, driven, open and
+closed tables, the cascade and its moves). The UI and the user guide use
+the words the owner approved on 2 November 2026 (mitcad#968,
+[ui-conventions.md](ui-conventions.md#configurations)): **possible
+values** for a domain, **allowed values** for what the rules leave of it,
+**By formula** for a driven option, **Value** for an option's current
+value, **row** (configuration row) rather than preset, **Only these
+rows** for a closed table, and **adjust** for a move.
 
 ```text
 Options   Color  ∈ {'Black'; 'White'; 'Red'}
@@ -347,9 +357,9 @@ filled whole, not only cell by cell (mitcad#1044):
    option's current value when the table is filled, so that every row
    keeps a value of every option.
 
-The lookups (decision 9) remain the other way: the user guide's Closed
-tables leads with filling from a CSV or a table, and names the lookups
-after it.
+The lookups (decision 9) remain the other way: the user guide's Only the
+listed rows leads with filling from a CSV or a table, and names the
+lookups after it.
 
 ## UI
 
@@ -359,14 +369,16 @@ decision 7):
 
 - **Options**: the options in choice order (drag to reorder), and **Add
   Option** (an existing user parameter, or a new one). Each option has
-  its domain: a list editor, or a table column, or min/max/step. Each
-  option also has a default and a comment. A driven option is shown as
-  such.
-- **Rows**: a sheet with one row per preset and a column per option,
-  plus Designation, Part Number and Supplier URL. It has the Closed
-  check, Generate Rows from Table…, Import CSV… and Export CSV…, Copy and
-  Paste of blocks of cells (decision 12), and Apply. A cell or row that
-  breaks a rule is marked with the rule's name in the tooltip.
+  its domain (the Possible Values column, Edit Possible Values…): a list
+  editor, or a table column, or min/max/step. Each option also shows its
+  current Value (mitcad#968: not a stored default) and a comment. A
+  driven option is shown as By Formula, its Value the evaluated one.
+- **Rows**: a sheet with one row per saved combination and a column per
+  option, plus Designation, Part Number and Supplier URL. It has the Only
+  these rows check (`closed`), Generate Rows from Table…, Import CSV…
+  and Export CSV…, Copy and Paste of blocks of cells (decision 12), and
+  Apply. A cell or row that breaks a rule is marked with the rule's name
+  in the tooltip.
 - **Rules**: the list of rules (name, enabled check, a problem mark),
   the block editor for the selected rule, and Check Rules with its
   report.
@@ -430,7 +442,7 @@ decision 7):
 
 - A **Configuration** panel has a chooser per option: a combo for a
   list, and a field and a slider for a range, on one row with the
-  option's name. A combo chooses a row preset. Since mitcad#1020 it is a
+  option's name. A combo labelled Row chooses a row. Since mitcad#1020 it is a
   left panel of its own (it was the top of the browser): Projects,
   Configuration and Browser from the top, shown while the design has
   options or rows, collapsible (the state kept), and sharing the left

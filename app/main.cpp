@@ -17,6 +17,8 @@
 #include <optional>
 
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
+#include "DocumentFrame.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "OcctViewer.hpp"
 #include "files/F3dImport.hpp"
@@ -115,12 +117,14 @@ int runApplication(int argc, char* argv[]) {
   // renderer, opengl32sw.dll, whose contexts OCCT cannot use.
   QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
 #endif
-#ifdef Q_OS_MACOS
-  // Every OpenGL context Qt creates must be a core profile: macOS cannot
-  // share resources between contexts of different profiles, and Qt shares
-  // the viewport's context with the one that composes the window.
-  QSurfaceFormat::setDefaultFormat(mitcad::macSurfaceFormat());
-#endif
+  // A document viewport can move between top-level frames. Qt otherwise
+  // destroys its QOpenGLWidget context during that move, invalidating the
+  // OCCT shader/mesh resources retained by the same document viewer.
+  // Global sharing keeps that exact context alive across reparenting.
+  QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+  // The global share context and every viewport/compositor must use the
+  // same existing platform format, selected before QApplication creates it.
+  QSurfaceFormat::setDefaultFormat(mitcad::viewportSurfaceFormat());
 
   useStoredSettings();
   // The frontend (mitcad#1056): Qt by default, also in a build with the
@@ -405,9 +409,11 @@ int runApplication(int argc, char* argv[]) {
 
   // A screenshot run offers no crash reports either (mitcad#62).
   mitcad::ReportCenter::setOfferEarlierCrashes(!parser.isSet(screenshotOption));
-  std::unique_ptr<mitcad::MainWindow> ownedWindow;
+  mitcad::WindowManager manager(nativeUiRequested);
+  mitcad::DocumentFrame::install(manager);
+  mitcad::MainWindow* ownedWindow = nullptr;
   try {
-    ownedWindow = std::make_unique<mitcad::MainWindow>(parser.isSet(demoOption), nullptr, nativeUiRequested);
+    ownedWindow = manager.createWindow(parser.isSet(demoOption));
   } catch (const std::exception& error) {
     qCritical().noquote() << "Could not create the application window:" << error.what();
     return 2;
@@ -435,14 +441,14 @@ int runApplication(int argc, char* argv[]) {
       return 2;
     }
   }
-  window.present();
+  manager.present(&window);
   // The window's layout once it shows, which tools/check-all.sh compares
   // to decide whether the UI tests must run (tools/ui-layout.sh, mitcad#412).
   if (!window.usesNativeUi()) {
     mitcad::TestSync::singleShot(0, &window, [&window] { window.logLayout(); });
   }
 
-  mitcad::mcp::LiveServer mcpServer(&window);
+  mitcad::mcp::LiveServer mcpServer(&manager);
   if (!parser.isSet(noMcpOption)) {
     mitcad::mcp::setRunAgentFolders(parser.values(mcpFolderOption));
     QString error;
@@ -452,7 +458,10 @@ int runApplication(int argc, char* argv[]) {
       window.setMcpUnavailable(QCoreApplication::translate("main", "The listener for assistants did not start: %1").arg(error));
     }
   } else {
-    window.setMcpUnavailable(QCoreApplication::translate("main", "Assistants are switched off (MitCad was started with --no-mcp)"));
+    const QString reason = QCoreApplication::translate("main", "Assistants are switched off (MitCad was started with --no-mcp)");
+    window.setMcpUnavailable(reason);
+    QObject::connect(&manager, &mitcad::WindowManager::windowAdded, &manager,
+                     [reason](mitcad::MainWindow* document) { document->setMcpUnavailable(reason); });
   }
 
   // For tests (framework/Diagnostics.hpp): the theme switched while the
@@ -487,12 +496,16 @@ int runApplication(int argc, char* argv[]) {
   // screenshot run, so that no test touches the network; the CLI and the
   // MCP server have no such start.
   if (!testDriver.active() && !parser.isSet(screenshotOption)) {
-    QTimer::singleShot(1000, &window, [&window] { window.updateLibrariesAtStart(); });
+    QTimer::singleShot(1000, &manager, [&manager] {
+      if (auto* current = manager.activeWindow()) current->updateLibrariesAtStart();
+    });
   }
 
   // After the recovery question (queued above): a file the system opens
   // waits for it, like for any other dialog.
-  fileOpenFilter.setHandler([&window](const QString& path) { window.openExternalFile(path); });
+  fileOpenFilter.setHandler([&manager](const QString& path) {
+    if (auto* current = manager.activeWindow()) current->openExternalFile(path);
+  });
 
   if (parser.isSet(screenshotOption)) {
     const QString path = parser.value(screenshotOption);
@@ -502,10 +515,8 @@ int runApplication(int argc, char* argv[]) {
     });
   }
 
-  // The application quits with its window (Qt's default), also on macOS,
-  // where an application usually stays running without windows: Mitcad has
-  // one window and one document, and a menu bar with no document would
-  // only be something to close again.
+  // Each window owns one document. Closing the last document ends this
+  // process, also on macOS; Quit applies every window's save/lock guard.
   const int status = QApplication::exec();
   // Display meshes still to be stored after an open (mitcad#880): the body
   // being written is finished, the others are dropped (the next open

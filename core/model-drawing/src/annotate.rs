@@ -301,7 +301,7 @@ impl Seen {
     }
 }
 
-fn mid(a: P2, b: P2) -> P2 {
+pub(crate) fn mid(a: P2, b: P2) -> P2 {
     mul2(add2(a, b), 0.5)
 }
 
@@ -348,7 +348,7 @@ pub fn arc_points3(center: Vec3, normal: Vec3, radius: f64, start: Vec3, end: Ve
 }
 
 /// The unit vector along `a`, or the x axis when `a` has no length.
-fn unit2(a: P2) -> P2 {
+pub(crate) fn unit2(a: P2) -> P2 {
     vec2::unit(a).unwrap_or([1.0, 0.0])
 }
 
@@ -631,7 +631,7 @@ pub fn turned(d: P2, turn: Option<f64>) -> P2 {
 /// The direction (unit, view) an ordinate dimension measures along and
 /// the one its leader runs along: the view's x and y (vertical: y and x),
 /// as turned with its view.
-fn ordinate_axes(annotation: &ViewAnnotation) -> (P2, P2) {
+pub(crate) fn ordinate_axes(annotation: &ViewAnnotation) -> (P2, P2) {
     let (d, n) = match annotation.along {
         Some(Along::Vertical) => ([0.0, 1.0], [1.0, 0.0]),
         _ => ([1.0, 0.0], [0.0, 1.0]),
@@ -642,7 +642,7 @@ fn ordinate_axes(annotation: &ViewAnnotation) -> (P2, P2) {
 /// The direction (unit, view) a linear dimension measures along, and
 /// whether its picks are parallel lines; a horizontal or vertical one's
 /// as turned with its view (`turn`, degrees).
-fn linear_axes(
+pub(crate) fn linear_axes(
     along: Option<Along>,
     turn: Option<f64>,
     seen: &[Seen],
@@ -669,7 +669,7 @@ fn linear_axes(
 
 /// The corner of two straight edges and the unit rays from it to their
 /// far ends.
-fn corner(seen: &[Seen]) -> Result<(P2, P2, P2), String> {
+pub(crate) fn corner(seen: &[Seen]) -> Result<(P2, P2, P2), String> {
     let (Seen::Line(a1, b1), Seen::Line(a2, b2)) = (seen[0], seen[1]) else {
         return Err("an angle is between two straight edges".to_owned());
     };

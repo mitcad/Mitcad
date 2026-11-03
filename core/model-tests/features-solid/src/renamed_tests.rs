@@ -371,3 +371,60 @@ fn planes_on_a_renamed_face_keep_their_place() {
     );
     assert_eq!(doc.datum(FeatureUid(4)), datum);
 }
+
+/// An edge whose face a chamfer cut away (mitcad#1187): the fillet still
+/// fails, its error suggests the edges of the faces it names, the
+/// chamfer's first, and nothing takes one in its place. The query that
+/// looks an edge up says the same.
+#[test]
+fn a_missing_edge_suggests_edges_of_its_faces_and_takes_none() {
+    let mut doc = block();
+    let name = |text: &str| -> FaceName { text.parse().unwrap() };
+    let (top, front) = (name(&format!("F2:end({RECT})")), name(FRONT));
+    let edge = EdgeName::new(top.clone(), front.clone());
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0",
+               "edges": [edge], "size": {"type": "equal_distance", "distance": 1}}}),
+    );
+    assert_eq!(status(&doc, 3), FeatureStatus::Ok);
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+               "edges": [edge], "radius": 2}}),
+    );
+    let FeatureStatus::Failed(message) = status(&doc, 4) else {
+        panic!("the fillet did not fail");
+    };
+    // The chamfer's edges with each face first, then the rest by name.
+    let chamfer = FaceName::chamfer(FeatureUid(3), edge.clone());
+    let made = |kept: &FaceName, instead: &FaceName| {
+        let at = EdgeName::new(kept.clone(), chamfer.clone());
+        format!("{at} ({chamfer} instead of {instead})")
+    };
+    let head = format!(
+        "edge {edge} no longer exists after Chamfer1; existing edges of body F2.b0 \
+         that share a face with it (suggestions only, not applied): {}, {}, ",
+        made(&top, &front),
+        made(&front, &top)
+    );
+    assert!(message.starts_with(&head), "{message}");
+    assert!(message.ends_with(" and 3 more"), "{message}");
+    // Nothing was taken: the fillet keeps its edge and rounds nothing.
+    match &doc.feature(FeatureUid(4)).unwrap().def {
+        FeatureDef::Fillet(fillet) => assert_eq!(fillet.sets[0].edges, std::slice::from_ref(&edge)),
+        other => panic!("not a fillet: {other:?}"),
+    }
+    assert_eq!(doc.kernel().count("fillet"), 0);
+    assert!(warnings(&doc, 4).is_empty());
+    // The feature query and the edge lookup of a query give the same detail.
+    let feature = query(&doc, json!({"query": "feature", "uid": "F4"}));
+    assert_eq!(feature["error"], message.as_str());
+    let (_, suggestions) = message.split_once("; ").unwrap();
+    let lookup = json!({"query": "tangent_chains", "body": "F2.b0", "edge": edge});
+    let error = doc.query(&lookup.to_string()).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!("the body has no edge {edge}; {suggestions}")
+    );
+}

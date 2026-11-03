@@ -41,9 +41,11 @@ ConfigurationBar::ConfigurationBar(DocumentHost& host, QWidget* parent) : QWidge
   QFont font = m_title->font();
   font.setBold(true);
   m_title->setFont(font);
+  m_title->setObjectName(QStringLiteral("configurationRowLabel"));
   m_row = new QComboBox;
   m_row->setObjectName(QStringLiteral("configurationRow"));
-  m_row->setToolTip(tr("Rows: presets of the options' values"));
+  m_row->setToolTip(tr("Choose a row: a saved combination of the options' values"));
+  m_row->setAccessibleName(tr("Row"));
   m_row->setFocusPolicy(Qt::StrongFocus);
   m_grid->addWidget(m_title, 0, 0);
   m_grid->addWidget(m_row, 0, 1);
@@ -121,6 +123,7 @@ void ConfigurationBar::setHeaderTitled(bool titled) {
   QFont font = m_title->font();
   font.setBold(!titled);
   m_title->setFont(font);
+  qDebug().noquote() << QStringLiteral("Configuration bar row label: %1").arg(m_title->text());
 }
 
 void ConfigurationBar::rebuild() {
@@ -247,13 +250,14 @@ void ConfigurationBar::showValues() {
     if (option == nullptr) {
       continue;
     }
-    QString why = tr("Allowed: %1").arg(option->allowed.summary());
+    QString why = tr("Allowed values: %1").arg(option->allowed.summary());
     if (!option->restrictedBy.isEmpty()) {
-      why += QLatin1Char('\n') + tr("Narrowed by %1").arg(option->restrictedBy.join(QStringLiteral(", ")));
+      why += QLatin1Char('\n') + tr("Restricted by %1").arg(option->restrictedBy.join(QStringLiteral(", ")));
     }
     if (chooser.label != nullptr) {
+      // By Formula: the evaluated value, the expression in its tooltip.
       chooser.label->setText(option->valueText);
-      chooser.label->setToolTip(tr("Driven by its formula %1").arg(option->expression));
+      chooser.label->setToolTip(tr("By formula: %1").arg(option->expression));
     }
     if (chooser.combo != nullptr) {
       const QSignalBlocker blocker(chooser.combo);
@@ -264,8 +268,8 @@ void ConfigurationBar::showValues() {
       }
       int index = chooser.combo->findText(option->valueText);
       if (index < 0) {
-        // A value the rules do not allow now (a broken rule, a driven
-        // option before it): shown, not offered.
+        // A value that is not an allowed value now (a broken rule, a By
+        // Formula option before it): shown, not offered.
         chooser.combo->insertItem(0, option->valueText, QVariant());
         index = 0;
       }
@@ -385,7 +389,7 @@ void ConfigurationBar::showNotice(const QString& text, bool error) {
   if (error) {
     setErrorStyleSheet(m_notice);
   } else {
-    // A cascade's moves are information, not a warning (mitcad#1040):
+    // Automatic adjustments are information, not a warning (mitcad#1040):
     // the plain text colour.
     setErrorStyleSheet(m_notice, QString());
   }

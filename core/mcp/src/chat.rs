@@ -21,6 +21,7 @@
 //! | `tool` | `id`, `name`, `server`, `input` | a tool call with its input |
 //! | `tool_result` | `id`, `error`, `text` | a tool call's result (`text` cut to 2000 characters) |
 //! | `turn_end` | `error`, `subtype`, `text`, `session` | the turn ended |
+//! | `account_error` | `account` (`code`, `reason`), `text` | account access failed; kept until a fresh check passes |
 //! | `status` | `subtype`, `text` | another message of the agent (a retry, a compaction) |
 //! | `output` | `text` | a line that is no message of the protocol (logged, not shown) |
 //! | `bridge` | `bridge`, `bridge_error` | MitCad's tools connected or failed after `init` (Codex) |
@@ -31,6 +32,7 @@
 //! Codex's `init` adds `resume_failed`: the thread to resume was gone and a
 //! new one started.
 
+mod account;
 mod claude;
 mod codex;
 mod groups;
@@ -72,10 +74,11 @@ impl Stream {
     /// The panel events of one output line (without its newline): none, one
     /// or several.
     pub fn feed(&mut self, line: &str) -> Vec<Value> {
-        match self {
+        let events = match self {
             Stream::Claude(stream) => stream.feed(line),
             Stream::Codex(stream) => stream.feed(line),
-        }
+        };
+        account::events(line, events)
     }
 
     /// A control of a stream that holds a protocol's state (Codex: `start`,
@@ -138,6 +141,7 @@ pub(crate) fn pictures(request: &Value) -> Result<Vec<(&str, &str)>, String> {
 ///   `minimum`
 /// - `claude_auth`: `exit_code`, `output` (of `claude auth status`) →
 ///   `signed_in`, `method`
+/// - `account_error`: `text`, `details` (optional structured error) → `code`, `reason` or null
 /// - `claude_models` → `models` (`id`, `name`): Claude Code's model
 ///   aliases for its `--model`
 /// - `codex_arguments` → `arguments` (`app-server`; the rest goes through
@@ -173,6 +177,11 @@ pub fn request(request: &Value) -> Result<Value, String> {
             text_field(request, "output"),
         )),
         "claude_models" => Ok(claude::models()),
+        "account_error" => Ok(account::classify(
+            request.get("details").unwrap_or(&Value::Null),
+            text_field(request, "text"),
+        )
+        .unwrap_or(Value::Null)),
         "codex_arguments" => Ok(codex::arguments()),
         "codex_version" => Ok(codex::version(text_field(request, "output"))),
         "codex_auth" => Ok(codex::auth(

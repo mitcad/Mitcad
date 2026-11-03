@@ -31,8 +31,9 @@ struct BindingActions {
 };
 
 // Configurations › Bindings (mitcad#862): every binding of the design as a
-// table (Item, Property, Follows, Now), filtered by Driven by (All options
-// or one option: the parameters the bindings use) and by an item search.
+// table (Item, Property, Follows, Now), filtered by Option (mitcad#968; All
+// options or one option: the parameters the bindings use) and by an item
+// search.
 // A binding whose results name no appearance or material, or that the
 // model warns about, is a warning row (`no appearance “paint_purple”`).
 // Edit… (or a double-click), Select in Browser, and Remove Binding (the
@@ -47,7 +48,8 @@ struct BindingActions {
 // removed: <item> <property>` (or `… refused: <reason>`), and the places
 // `Configurations binding <item> <property> at x,y`, `Configurations
 // bindings driven by|search|edit|select|remove at x,y` in the main
-// window's coordinates.
+// window's coordinates (`driven by` is the Option filter's key, kept for
+// the tests), and `Configurations bindings filter label: Option:`.
 class ConfigurationBindingsPage : public ConfigurationPage {
   Q_OBJECT
 

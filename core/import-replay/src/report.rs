@@ -12,6 +12,10 @@ use serde::Serialize;
 
 pub use crate::components::ComponentReport;
 
+/// How far (relative) a final body's volume may be from the stored body's
+/// before the import warns that they differ (mitcad#1175).
+pub const BODY_VOLUME_TOLERANCE: f64 = 1e-6;
+
 /// The report of one file (an `.f3z` package has several designs).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ImportReport {
@@ -215,7 +219,7 @@ pub struct HistoryReport {
 }
 
 /// One body stored in the file against the replay.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct BodyReport {
     /// The body's name in the file, or its blob and record.
     pub file: String,
@@ -234,6 +238,12 @@ pub struct BodyReport {
     /// (|A − B| + |B − A|) / max(|A|, |B|) from the boolean differences.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relative_difference: Option<f64>,
+    /// The faces of the file's body and of the Mitcad body matched to it
+    /// (mitcad#1175).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_faces: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mitcad_faces: Option<usize>,
     /// The stored body's blob and record (`StoredBody::source`), and the
     /// Mitcad body matched to it: what the appearances join on
     /// (mitcad#228).
@@ -559,6 +569,58 @@ impl DesignReport {
         counts
     }
 
+    /// The warning when the final bodies are not those stored in the file
+    /// (mitcad#1175): a stored body the replay has none for, one whose
+    /// volume differs by more than [`BODY_VOLUME_TOLERANCE`] or whose
+    /// faces differ in number, a replayed body the file does not store.
+    /// The first few are named. None when they agree.
+    pub fn body_differences(&self) -> Option<String> {
+        let mut found: Vec<String> = Vec::new();
+        for body in &self.bodies {
+            let Some(mitcad) = &body.mitcad else {
+                found.push(format!("the file's {} is not in the replay", body.file));
+                continue;
+            };
+            let name = mitcad.split_once(' ').map_or(mitcad.as_str(), |(_, n)| n);
+            let volume = body
+                .volume_difference
+                .filter(|d| d.abs() > BODY_VOLUME_TOLERANCE);
+            let faces = match (body.mitcad_faces, body.file_faces) {
+                (Some(m), Some(f)) if m != f => Some((m, f)),
+                _ => None,
+            };
+            if volume.is_none() && faces.is_none() {
+                continue;
+            }
+            let mut text = format!("{name}:");
+            if let Some(d) = volume {
+                text.push_str(&format!(" volume {:+.4} %", d * 100.0));
+            }
+            if let Some((m, f)) = faces {
+                text.push_str(&format!(" {m} faces against the file's {f}"));
+            }
+            found.push(text);
+        }
+        for extra in &self.extra_bodies {
+            let name = extra.split_once(' ').map_or(extra.as_str(), |(_, n)| n);
+            found.push(format!("{name} is not in the file"));
+        }
+        if found.is_empty() {
+            return None;
+        }
+        const NAMED: usize = 5;
+        let more = found.len().saturating_sub(NAMED);
+        found.truncate(NAMED);
+        let mut warning = format!(
+            "the final bodies differ from those stored in the file: {}",
+            found.join("; ")
+        );
+        if more > 0 {
+            warning.push_str(&format!("; and {more} more"));
+        }
+        Some(warning)
+    }
+
     /// The largest relative volume difference of the final bodies, None
     /// when no body was compared.
     pub fn worst_volume_difference(&self) -> Option<f64> {
@@ -697,6 +759,13 @@ impl DesignReport {
                     .count(),
                 a.not_in_design
             );
+            if a.hidden > 0 {
+                let _ = writeln!(
+                    out,
+                    "  hidden bodies: {}/{} of the file's hidden bodies hidden",
+                    a.hidden_set, a.hidden
+                );
+            }
             for g in &a.gaps {
                 let _ = writeln!(out, "    {g}");
             }
@@ -874,5 +943,52 @@ mod notice_tests {
         assert_eq!(Outcome::Partial.level(), NoticeLevel::Warning);
         assert_eq!(Outcome::Fallback.level(), NoticeLevel::Warning);
         assert_eq!(Outcome::Skipped.level(), NoticeLevel::Warning);
+    }
+
+    /// (mitcad#1175) Final bodies that are not the stored ones are one
+    /// warning naming them: past 1e-6 in volume, other faces, a stored
+    /// body without a body in the replay, a replayed body the file does
+    /// not store; within it, none.
+    #[test]
+    fn final_bodies_that_differ_are_a_warning() {
+        let body = |file: &str, mitcad: Option<&str>, dv: f64, faces: (usize, usize)| BodyReport {
+            file: file.to_owned(),
+            file_volume: 1000.0,
+            mitcad: mitcad.map(str::to_owned),
+            mitcad_volume: mitcad.map(|_| 1000.0 * (1.0 + dv)),
+            volume_difference: mitcad.map(|_| dv),
+            file_faces: Some(faces.1),
+            mitcad_faces: mitcad.map(|_| faces.0),
+            ..BodyReport::default()
+        };
+        let mut report = DesignReport {
+            bodies: vec![
+                body("Body1", Some("F2.b0 Body1"), 5e-7, (5, 5)),
+                body("Body2", Some("F5.b0 Body2"), -1e-6, (12, 12)),
+            ],
+            ..DesignReport::default()
+        };
+        assert_eq!(report.body_differences(), None);
+        report.bodies[0].volume_difference = Some(1.5e-4);
+        report.bodies[1].mitcad_faces = Some(40);
+        report.bodies.push(body("Body3", None, 0.0, (6, 6)));
+        report.extra_bodies.push("F9.b0 Body4".to_owned());
+        assert_eq!(
+            report.body_differences().as_deref(),
+            Some(
+                "the final bodies differ from those stored in the file: Body1: volume +0.0150 %; \
+                 Body2: 40 faces against the file's 12; the file's Body3 is not in the replay; \
+                 Body4 is not in the file"
+            )
+        );
+        for k in 0..4 {
+            report.extra_bodies.push(format!("F1{k}.b0 Extra{k}"));
+        }
+        assert!(
+            report
+                .body_differences()
+                .unwrap()
+                .ends_with("Extra0 is not in the file; and 3 more")
+        );
     }
 }

@@ -5,7 +5,7 @@
 # Build and Make; the moved commands started from it (Qt: the Make tab's
 # buttons; AppKit: the native actions of its toolbar) and cancelled: Print
 # Analysis, Send to Slicer (once 3D Print) and the Annotate group's
-# Dimension; Edit Materials… and Edit Printers and Processes… open their
+# Dimension; Edit Materials…, Printers… and Processes… open their
 # windows. Qt: Body2 selected on the Make tab shows its card with Walls 5
 # set on the body, and the Browser marks Body2.
 # tools/ui-make-tab-test.sh (Linux) and tools/ui-windows-make-tab-test.ps1
@@ -92,7 +92,11 @@ for frontend in $frontends; do
     echo "expect-log 'Materials opened'"
     echo 'mark'
     make_command make.printers
-    echo "expect-log 'Printers and processes opened'"
+    echo "expect-log 'Printers opened'"
+    echo 'focus-main'
+    echo 'mark'
+    make_command make.processes
+    echo "expect-log 'Processes opened'"
     if [ "$frontend" = qt ]; then
       echo 'focus-main'
       echo 'mark'

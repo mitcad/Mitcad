@@ -12,9 +12,12 @@
 #include <QEvent>
 #include <QDateTime>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QHash>
 #include <QJsonObject>
 #include <QPointer>
+#include <QSettings>
 #include <QStringList>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -22,6 +25,7 @@
 #include <QUuid>
 
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
 #include "framework/TitleBar.hpp"
 #include "AgentIndicator.hpp"
 #include "ChatGate.hpp"
@@ -69,26 +73,134 @@ struct LiveServer::State {
     // its calls go through the panel's approvals (ChatGate), and one that
     // waits for the user's answer holds the connection's next requests.
     QString chat;
+    QPointer<MainWindow> chatWindow;
+    QString document;
     bool waiting = false;
     rust::Box<LiveMcpSession> session = new_live_mcp_session();
+    // The comments this session was last given (mitcad#1119).
+    QByteArray commentsGiven;
+    QString commentsDocument;
   };
 
   LiveServer* owner;
-  QPointer<MainWindow> window;
+  QPointer<WindowManager> manager;
   QTcpServer listener;
   Endpoint endpoint;
   bool published = false;
+  QString unavailable;
   bool handling = false;
   quint64 connections = 0;
   std::vector<std::shared_ptr<Client>> clients;
+  struct Comments {
+    QByteArray key;
+    QByteArray text;
+    QString error;
+  };
+  QHash<QString, Comments> comments;
+  bool commentsPosted = false;
 
-  State(LiveServer* object, MainWindow* documentWindow) : owner(object), window(documentWindow) {}
+  State(LiveServer* object, WindowManager* windows) : owner(object), manager(windows) {}
+
+  MainWindow* window() const { return manager ? manager->activeWindow() : nullptr; }
+
+  MainWindow* documentWindow(const Client& client, const QJsonObject& arguments = {}) const {
+    const QString id = arguments.value(QStringLiteral("document")).toString();
+    if (!id.isEmpty()) return manager ? manager->windowForDocument(id) : nullptr;
+    if (!client.chat.isEmpty())
+      return client.chatWindow && client.chatWindow->mcpDocumentId() == client.document ? client.chatWindow.data() : nullptr;
+    return window();
+  }
+
+  ChatGate* chatGate(const Client& client) const {
+    return client.chatWindow ? client.chatWindow->chatGate() : nullptr;
+  }
+
+  void refreshComments() {
+    bool pending = false;
+    // Replaced and closed designs must not retain an unbounded comments cache.
+    for (auto i = comments.begin(); i != comments.end();) {
+      if (!manager || !manager->windowForDocument(i.key())) i = comments.erase(i);
+      else ++i;
+    }
+    for (const auto& client : clients) {
+      if (!client->authenticated || !connected(*client)) continue;
+      MainWindow* target = !client->document.isEmpty() && manager
+                               ? manager->windowForDocument(client->document) : documentWindow(*client);
+      if (!target) {
+        giveComments(*client, client->document, QJsonDocument(QJsonObject{{QStringLiteral("comments"), QJsonArray{}},
+            {QStringLiteral("open"), 0}, {QStringLiteral("document"), client->document},
+            {QStringLiteral("error"), QStringLiteral("The document has closed or been replaced")}}).toJson(QJsonDocument::Compact));
+        continue;
+      }
+      if (target->modelBusy() || target->viewerWidget()->isPainting()) {
+        // Never answer a newly selected design with another design's resource.
+        if (client->commentsDocument != target->mcpDocumentId()) {
+          giveComments(*client, target->mcpDocumentId(), QJsonDocument(QJsonObject{
+              {QStringLiteral("document"), target->mcpDocumentId()}, {QStringLiteral("busy"), true},
+              {QStringLiteral("retry_after_ms"), 200}}).toJson(QJsonDocument::Compact));
+        }
+        pending = true;
+        continue;
+      }
+      auto& cached = comments[target->mcpDocumentId()];
+      const QByteArray key = QJsonDocument(target->documentSession().snapshot().document).toJson(QJsonDocument::Compact);
+      if (key != cached.key) {
+        try {
+          QJsonObject answer = target->query({{QStringLiteral("query"), QStringLiteral("comments")}}).toObject();
+          answer.insert(QStringLiteral("document"), target->mcpDocumentId());
+          const QByteArray text = QJsonDocument(answer).toJson(QJsonDocument::Compact);
+          if (!cached.text.isEmpty() && cached.text != text)
+            qInfo().noquote() << QStringLiteral("MCP: comments changed (%1 open)").arg(answer.value(QStringLiteral("open")).toInt());
+          cached.text = text;
+          cached.key = key;
+          cached.error.clear();
+        } catch (const std::exception& failure) {
+          const QString error = QString::fromUtf8(failure.what());
+          if (error != cached.error) qInfo().noquote() << QStringLiteral("MCP: the comments could not be read: %1").arg(error);
+          cached.error = error;
+        }
+      }
+      giveComments(*client, target->mcpDocumentId(), cached.text);
+    }
+    if (pending) scheduleComments(200);
+  }
+
+  void giveComments(Client& client, const QString& document, const QByteArray& text) {
+    if (text.isEmpty() || client.commentsGiven == text) return;
+    try {
+      const std::string notification(client.session->set_mcp_comments(rust::Str(text.constData(), size_t(text.size()))));
+      client.commentsGiven = text;
+      client.commentsDocument = document;
+      if (!notification.empty()) write(client, QByteArray::fromStdString(notification) + '\n');
+    } catch (const std::exception& failure) {
+      qWarning().noquote() << QStringLiteral("MCP: comments not given to a client: %1").arg(QString::fromUtf8(failure.what()));
+    }
+  }
+
+  void scheduleComments(int delay) {
+    if (commentsPosted || !manager || authenticatedClients() == 0) return;
+    commentsPosted = true;
+    QTimer::singleShot(delay, owner, [this] { commentsPosted = false; refreshComments(); });
+  }
+
+  void attachWindow(MainWindow* target) {
+    target->installEventFilter(owner);
+    QObject::connect(target, &QWidget::windowTitleChanged, owner, [this] { publishWindow(); });
+    QObject::connect(&target->documentSession(), &DocumentSession::changed, owner, [this] { scheduleComments(0); });
+    if (published) target->setMcpListener(endpoint.instance, endpoint.port);
+    else if (!unavailable.isEmpty()) target->setMcpUnavailable(unavailable);
+  }
+
+  void failed(const QString& reason) {
+    unavailable = QObject::tr("The listener for assistants did not start: %1").arg(reason);
+    if (manager) for (MainWindow* target : manager->windows()) target->setMcpUnavailable(unavailable);
+  }
 
   void publishWindow() {
-    if (!published || !window) return;
+    if (!published || !window()) return;
     // The design's name as the title bar shows it (mitcad#1149): not the
     // raw title, whose "[*]" is Qt's placeholder of the modified mark.
-    endpoint.title = TitleBar::documentTitleOf(window->windowTitle());
+    endpoint.title = TitleBar::documentTitleOf(window()->windowTitle());
     QString error;
     if (!publishWindowState(endpoint, &error)) qWarning().noquote() << error;
   }
@@ -112,8 +224,13 @@ struct LiveServer::State {
       if (!endpoint.agents.contains(agent.name)) endpoint.agents.append(agent.name.left(256));
     }
     publishWindow();
-    if (window) {
-      window->setMcpAgents(agents, [this](const QStringList& ids) { disconnectClients(ids); });
+    if (manager) for (MainWindow* target : manager->windows()) {
+      QList<ConnectedAgent> shown;
+      for (const auto& agent : agents) {
+        const auto found = std::find_if(clients.begin(), clients.end(), [&](const auto& client) { return client->id == agent.id; });
+        if (found != clients.end() && ((*found)->chat.isEmpty() || (*found)->chatWindow == target)) shown.append(agent);
+      }
+      target->setMcpAgents(shown, [this](const QStringList& ids) { disconnectClients(ids); });
     }
   }
 
@@ -148,8 +265,6 @@ struct LiveServer::State {
     }));
   }
 
-  ChatGate* chatGate() const { return window ? window->chatGate() : nullptr; }
-
   // A tool's result back to the client, through the session's pending
   // request.
   void finishTool(Client& client, const QJsonObject& value, bool error) {
@@ -168,17 +283,31 @@ struct LiveServer::State {
     // The chat's own calls (mitcad#947): it tells its changes of the
     // design from the user's.
     const QString chat = client.chat;
-    if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate()) {
+    if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate(client)) {
       gate->toolStarted(chat, tool);
     }
     try {
-      if (!window) {
+      const QPointer<MainWindow> target(documentWindow(client, arguments));
+      if (!target) {
+        // A handle of a replaced or closed design names no window: the
+        // client lists the open designs again, as with one window.
+        if (!arguments.value(QStringLiteral("document")).toString().isEmpty())
+          throw std::runtime_error("No open document with this handle; call document_list after New or Open");
         throw std::runtime_error("The application document window has closed");
       }
       // The live catalog (mitcad#265): MainWindowMcp.cpp, MainWindowMcpUi.cpp.
       // An applied model command is an error only when a feature it
       // added or edited fails; finish_mcp decides (mitcad#401).
-      value = window->mcpTool(tool, arguments);
+      if (!client.chat.isEmpty() && target != client.chatWindow)
+        throw std::runtime_error("A chat agent can only access its own document");
+      const QString document = target->mcpDocumentId();
+      value = target->mcpTool(tool, arguments);
+      if (!target) {
+        client.document = document;
+        throw std::runtime_error("The application document window closed during the request");
+      }
+      client.document = target->mcpDocumentId();
+      scheduleComments(0);
     } catch (const Refusal& refusal) {
       // Busy (when to retry), a panel's state.
       error = true;
@@ -188,7 +317,7 @@ struct LiveServer::State {
       error = true;
       value = {{QStringLiteral("error"), QString::fromUtf8(failure.what())}};
     }
-    if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate()) {
+    if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate(client)) {
       gate->toolFinished(chat, tool, error);
     }
     finishTool(client, value, error);
@@ -243,6 +372,9 @@ struct LiveServer::State {
       client.authenticated = accepted;
       if (accepted && chatMarked) {
         client.chat = marker;
+        if (manager) for (MainWindow* target : manager->windows()) {
+          if (target->chatGate() && target->chatGate()->ownsMarker(marker)) { client.chatWindow = target; client.document = target->mcpDocumentId(); break; }
+        }
       }
       if (!accepted && client.socket) {
         client.socket->disconnectFromHost();
@@ -253,6 +385,12 @@ struct LiveServer::State {
       write(client, protocolError(-32700, QStringLiteral("Invalid UTF-8 JSON message")));
       return;
     }
+    // Comments for agents (mitcad#1119): whether agents may resolve them
+    // (Preferences › AI Assistants), and the design's comments as they are
+    // now, before the request reads them.
+    client.session->set_mcp_comment_policy(
+        QSettings().value(QStringLiteral("ai/agentsMayResolveComments"), false).toBool());
+    refreshComments();
     try {
       const std::string planText(client.session->prepare_mcp(rust::Str(message.constData(), size_t(message.size()))));
       const auto plan = QJsonDocument::fromJson(QByteArray::fromStdString(planText)).object();
@@ -289,10 +427,14 @@ struct LiveServer::State {
         return;
       }
       const QString tool = plan.value(QStringLiteral("tool")).toString();
-      const auto arguments = plan.value(QStringLiteral("arguments")).toObject();
+      auto arguments = plan.value(QStringLiteral("arguments")).toObject();
+      // Bind an omitted handle before a user approval can change the active window.
+      if (!arguments.contains(QStringLiteral("document"))) {
+        if (MainWindow* target = documentWindow(client)) arguments.insert(QStringLiteral("document"), target->mcpDocumentId());
+      }
       if (!client.chat.isEmpty()) {
         // The chat's own connection (mitcad#947): its approvals first.
-        ChatGate* gate = chatGate();
+        ChatGate* gate = chatGate(client);
         if (gate == nullptr) {
           finishTool(client, {{QStringLiteral("error"), QObject::tr("The chat that started this agent has closed.")}},
                      true);
@@ -424,7 +566,7 @@ struct LiveServer::State {
         // The chat's agent ended (mitcad#947): its card goes.
         if (const std::shared_ptr<Client> gone = weak.lock(); gone && !gone->chat.isEmpty()) {
           gone->waiting = false;
-          if (ChatGate* gate = chatGate()) {
+          if (ChatGate* gate = chatGate(*gone)) {
             gate->connectionClosed(gone->chat);
           }
         }
@@ -440,41 +582,38 @@ struct LiveServer::State {
   }
 };
 
-LiveServer::LiveServer(MainWindow* window, QObject* parent)
-    : QObject(parent), m_state(std::make_unique<State>(this, window)) {
-  window->installEventFilter(this);
-  connect(window, &QWidget::windowTitleChanged, this, [this] { m_state->publishWindow(); });
-  // The native macOS shell has its own NSWindow. Its process activation
-  // still reaches Qt even when the retained main QWidget is hidden.
+LiveServer::LiveServer(WindowManager* manager, QObject* parent)
+    : QObject(parent), m_state(std::make_unique<State>(this, manager)) {
+  for (MainWindow* window : manager->windows()) m_state->attachWindow(window);
+  connect(manager, &WindowManager::windowAdded, this, [this](MainWindow* window) {
+    m_state->attachWindow(window);
+    m_state->updateAgents();
+  });
+  connect(manager, &WindowManager::windowsChanged, this, [this] { m_state->scheduleComments(0); m_state->updateAgents(); });
+  connect(manager, &WindowManager::activeWindowChanged, this, [this] {
+    // Unbound external clients follow focus; chat clients remain document-bound.
+    for (const auto& client : m_state->clients) if (client->chat.isEmpty()) client->document.clear();
+    m_state->activated();
+    m_state->scheduleComments(0);
+  });
   connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
     if (state == Qt::ApplicationActive) m_state->activated();
   });
 }
 
 bool LiveServer::eventFilter(QObject* watched, QEvent* event) {
-  if (watched == m_state->window && event->type() == QEvent::WindowActivate) m_state->activated();
+  if (watched == m_state->window() && event->type() == QEvent::WindowActivate) m_state->activated();
   return QObject::eventFilter(watched, event);
 }
 
 LiveServer::~LiveServer() {
   m_state->listener.close();
-  if (m_state->window) {
-    m_state->window->setMcpAgents({}, {});
-  }
-  ChatGate* gate = m_state->chatGate();
+  if (m_state->manager) for (MainWindow* window : m_state->manager->windows()) window->setMcpAgents({}, {});
   for (const auto& client : m_state->clients) {
-    if (client->socket) {
-      client->socket->disconnect(this);
-      client->socket->abort();
-    }
-    // Its waiting card's answer would come to no listener (mitcad#947).
-    if (gate != nullptr && !client->chat.isEmpty()) {
-      gate->connectionClosed(client->chat);
-    }
+    if (client->socket) { client->socket->disconnect(this); client->socket->abort(); }
+    if (ChatGate* gate = m_state->chatGate(*client); gate && !client->chat.isEmpty()) gate->connectionClosed(client->chat);
   }
-  if (m_state->published) {
-    removeEndpoint(m_state->endpoint);
-  }
+  if (m_state->published) removeEndpoint(m_state->endpoint);
 }
 
 bool LiveServer::start(QString* error) {
@@ -482,6 +621,7 @@ bool LiveServer::start(QString* error) {
   // (mcp/LogRing.hpp); this keeps it for a server started without it.
   installLogRing();
   if (!prepareDiscoveryDirectory(error)) {
+    m_state->failed(error ? *error : tr("Unknown listener error"));
     return false;
   }
   // Removes the records of killed instances (mitcad#437) before a client
@@ -489,6 +629,7 @@ bool LiveServer::start(QString* error) {
   discover();
   // On Windows with SO_EXCLUSIVEADDRUSE (mitcad#945).
   if (!listenOnLoopback(m_state->listener, error)) {
+    m_state->failed(error ? *error : tr("Unknown listener error"));
     return false;
   }
   auto& endpoint = m_state->endpoint;
@@ -498,17 +639,18 @@ bool LiveServer::start(QString* error) {
   endpoint.port = m_state->listener.serverPort();
   if (!publishEndpoint(endpoint, error)) {
     m_state->listener.close();
+    m_state->failed(error ? *error : tr("Unknown listener error"));
     return false;
   }
   m_state->published = true;
-  if (m_state->window && QGuiApplication::applicationState() == Qt::ApplicationActive) m_state->activated();
+  m_state->unavailable.clear();
+  if (m_state->window() && QGuiApplication::applicationState() == Qt::ApplicationActive) m_state->activated();
   else m_state->publishWindow();
   connect(&m_state->listener, &QTcpServer::newConnection, this, [this] { m_state->accept(); });
   qInfo().noquote() << "MCP live instance:" << endpoint.instance << "127.0.0.1:" << endpoint.port;
   // The agent indicator names them (mitcad#710).
-  if (m_state->window) {
-    m_state->window->setMcpListener(endpoint.instance, endpoint.port);
-  }
+  if (m_state->manager) for (MainWindow* window : m_state->manager->windows())
+    window->setMcpListener(endpoint.instance, endpoint.port);
   return true;
 }
 

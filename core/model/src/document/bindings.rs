@@ -286,7 +286,10 @@ impl DocState {
                 }
             }
         }
+        // Not while a faceted Convert Mesh replaces the body, which it
+        // hides (mitcad#1157, `mesh_convert.rs`).
         if let Some(text) = &a.visible_when
+            && self.mesh_replaced_by(uid).is_none()
             && let Ok(visible) = holds(self, text)
         {
             a.visible = visible;
@@ -318,7 +321,14 @@ impl DocState {
                 ));
             }
         }
-        if let Some(text) = &a.visible_when
+        if a.visible_when.is_some()
+            && let Some(convert) = self.mesh_replaced_by(uid)
+        {
+            warnings.push(format!(
+                "show when: not followed while {} replaces this mesh body",
+                convert.name
+            ));
+        } else if let Some(text) = &a.visible_when
             && let Err(e) = holds(self, text)
         {
             warnings.push(format!("show when: {e}"));

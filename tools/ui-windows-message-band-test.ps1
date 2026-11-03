@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/MessageBand.cpp app/framework/MessageLog.cpp app/framework/FloatingLayout.cpp app/MainWindow.cpp app/browser/BrowserController.cpp tools/cli
+# check-all sources: app/files/MainWindowFiles.cpp
 # Input-driven Windows UI test of the message band and the message history
 # (mitcad#1042) in the build VM (tools/ui-windows-lib.ps1 says how the input
 # is posted), as tools/ui-message-band-test.sh does on Linux, on a block
@@ -15,7 +16,16 @@
 #      not a popup: popups close at once in session 0): the newest message
 #      first, the error below it; a click on the error's row selects Fillet2
 #      without saying its error again. Esc closes the history.
-#   5. Docked: the status bar's history button opens the same history.
+#   5. Another design clears the band (mitcad#1174): the error shown, New
+#      (Ctrl+N) empties the band and shows only the new design's hint; the
+#      block opened (Ctrl+O) and its error shown, Open of a design without
+#      failures leaves the band empty, without a message or a stub.
+#   6. Docked: the status bar's history button opens the same history.
+#   7. Docked: the error again, then New: the status line and the band
+#      cleared.
+# New and Open put another design into the same window here (Preferences >
+# General, open in the current window): by default each design has a
+# document window of its own (mitcad#1172), whose band is its own.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-message-band-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -25,7 +35,8 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{} -StepPause 0
+# The setting documents/openInCurrentWindow (Open in the current window).
+Ui-Init $App $Out $QtBin @{ 'documents/openInCurrentWindow' = 'true' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -53,6 +64,35 @@ Set-Content -Encoding ascii $modelScript @'
 '@
 $made = & $cli run $modelScript --save $design
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $design)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
+# The same block without the fillets: a design that opens without a
+# message (mitcad#1174).
+$plainScript = Join-Path $work 'plain.json'
+$plain = Join-Path $work 'plain.mitcad'
+Set-Content -Encoding ascii $plainScript @'
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}}
+]
+'@
+$made = & $cli run $plainScript --save $plain
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $plain)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
+# The paths as the log has them (forward slashes).
+$designLogged = $design -replace '\\', '/'
+$plainLogged = $plain -replace '\\', '/'
+
+# Type-Into-Dialog "title" path: the path typed into Qt's file dialog and
+# accepted.
+function Type-Into-Dialog([string]$Title, [string]$Path) {
+  Ui-FocusDialog $Title
+  Ui-Key 'ctrl+a'
+  Ui-Type $Path
+  Ui-Sync
+  Ui-Key 'Return'
+  Ui-FocusMain
+}
 
 # Expect-Line "regex" "description" [seconds]: a line since the mark
 # matches; the last one is returned.
@@ -166,7 +206,33 @@ Ui-ExpectNew 'Message history: ' 'the history opened again'
 Ui-Step 'close it (Esc)'                 { Ui-Key 'Escape' }
 Ui-ExpectNew 'Message history: closed' 'Esc closed it'
 
-Write-Host '--- 5. Docked: the status bar''s history button'
+Write-Host '--- 5. Another design clears the band (mitcad#1174)'
+Ui-Mark
+Ui-Step 'click the failures summary'     { Ui-ClickLogged 'Failures button' }
+Expect-Line '^Message band full: error Fillet2: ' 'the error shown again' | Out-Null
+Ui-Mark
+Ui-Step 'new design (Ctrl+N)'            { Ui-Key 'ctrl+n' }
+Ui-ExpectNew 'New document' 'a new design'
+Expect-Line '^Message band cleared \(another design\)\r?$' 'New cleared the band' | Out-Null
+Expect-Line '^Message band full: hint Create a sketch to start modeling' 'the new design''s own hint only' | Out-Null
+Not-Since '^Message band (full|stub): error ' 'no error of the previous design'
+Ui-Mark
+Ui-Step 'open (Ctrl+O)'                  { Ui-Key 'ctrl+o' }
+Ui-Step 'type the block''s path'         { Type-Into-Dialog '^Open$' $design }
+Ui-ExpectNew "Opened $designLogged" 'the block opened through the dialog' 20
+Ui-ExpectNew 'Failures button at' 'the failures summary is placed'
+Ui-Mark
+Ui-Step 'click the failures summary'     { Ui-ClickLogged 'Failures button' }
+Expect-Line '^Message band full: error Fillet2: ' 'the block''s error in the band' | Out-Null
+Ui-Mark
+Ui-Step 'open (Ctrl+O)'                  { Ui-Key 'ctrl+o' }
+Ui-Step 'type the plain block''s path'   { Type-Into-Dialog '^Open$' $plain }
+Ui-ExpectNew "Opened $plainLogged" 'a design without failures opened' 20
+Expect-Line '^Message band cleared \(another design\)\r?$' 'Open cleared the band' | Out-Null
+Ui-Sync
+Not-Since '^Message band (full|stub): ' 'the band empty: no message, no stub'
+
+Write-Host '--- 6. Docked: the status bar''s history button'
 Ui-StartApp 'message-band-docked' @('--chrome=docked', '--open', $design)
 Ui-ExpectLog 'Failures button at' 'the failures summary is placed'
 Ui-ExpectLog 'Message history button at' 'the history button is in the status bar'
@@ -178,5 +244,15 @@ Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
 Ui-Mark
 Ui-Step 'click the history button'       { Ui-ClickLogged 'Message history button' }
 Select-FromHistory 'Docked'
+Write-Host '--- 7. Docked: another design clears the status line (mitcad#1174)'
+Ui-Mark
+Ui-Step 'click the failures summary'     { Ui-ClickLogged 'Failures button' }
+Ui-ExpectNew 'Status error: Fillet2: ' 'the error on the status line'
+Ui-Mark
+Ui-Step 'new design (Ctrl+N)'            { Ui-Key 'ctrl+n' }
+Ui-ExpectNew 'New document' 'a new design'
+Expect-Line '^Status line cleared \(another design\)\r?$' 'New cleared the status line' | Out-Null
+Expect-Line '^Message band cleared \(another design\)\r?$' 'and the message band''s message' | Out-Null
+Not-Since '^Status error: ' 'no error on the status line'
 
 Ui-Finish 'Windows UI message band test'

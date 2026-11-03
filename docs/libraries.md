@@ -339,13 +339,35 @@ It also checks the design:
 - Every mount of the design is a sound one.
 - A mount frame of the design that the block leaves out is a warning.
 
-**Placing a component.** Insert from Library drops a component in as it always
-did: at the origin. You join it later with Joint. A component's mount
-frames are then its joint origins, ready for Joint. A
-component with mount frames opens Place Component instead. There, a click on a
+**Placing a component.** Insert from Library drops a component without
+mount frames in at the origin, and the message band says so (`Inserted
+<name> at the origin: no mount frame; join it with Joint.`). You join it
+later with Joint. A component with mount frames opens Place Component
+instead. There, a click on a
 face, a hole or a grid snaps the selected frame to it and makes the
-joint that the frame asks for. Enter without a click still drops the
-component in ([app/COMMANDS.md](../app/COMMANDS.md#component-libraries)).
+joint that the frame asks for. What was selected before Insert from
+Library is the click when the frame takes it (mitcad#1197): a hole's rim
+or round face, or an axis, for a `shaft` or `hole` frame, a flat face or
+a plane for a `face` or `grid` frame. The component shows there at once,
+and Place (Enter) places it. Enter without a click still drops the
+component in at the origin
+([app/COMMANDS.md](../app/COMMANDS.md#component-libraries)). A
+component's mount frames are then its joint origins, ready for Joint.
+
+**The fasteners of mitcad-parts** have a mount frame (mitcad#1197), at
+the origin of each design (an ISO part's z is -Z, a wood fastener's +Z):
+
+| Part | Frame | Where |
+|---|---|---|
+| The screws ISO 4762, ISO 4017 | `seat`, `shaft`, `rigid` | On the axis under the head, z along the shank to the tip |
+| The countersunk screw ISO 10642 | `seat`, `shaft`, `rigid` | On the axis at the head's top, where its cone meets the face |
+| The nut ISO 4032, the washer ISO 7089 | `seat`, `hole`, `rigid` | On the axis on the bearing face, z out of it |
+| The wood fasteners (Build parts) | `axis`, `shaft`, `rigid` | Their Build frame `axis`: a countersunk head's top, else the head's underside, z to the tip |
+
+So a hole's rim or round face, selected or clicked, seats a screw with
+its head on the face, and a nut or a washer with its bearing face on it.
+The slot nuts and slot screws of the Build tab have none: Build places
+them in a profile's slot.
 On a grid, the foot goes on the cells under the click. Rotate turns
 its footprint in quarter turns. MitCad refuses a cell that another
 component stands on, and names that component.
@@ -1767,15 +1789,18 @@ wins.
 | user | `print-library` in the platform's data folder under `Mitcad/Mitcad`, beside `libraries` (`MITCAD_PRINT_LIBRARY_DIR` replaces it) | the user's own |
 | base | MitCad's component library, its newest version fetched | read only |
 
-The user's and the project's library are managed in the application
-without a design: Tools › My Library… ([user guide](user-guide.md#my-library),
-mitcad#704) makes, duplicates (also from the base library and the
-built-in materials), renames, edits and deletes their items, and
-imports a slicer's project or preset into them. It runs the library
-commands of [commands.md](../core/model-api/src/commands.md#print-profiles)
-(*Items where they live*, `import_print_profile` with `into`) on a model
-of its own, so an open design changes only through its own question
-about an item changed elsewhere. A library can also be written by hand
+The user's and the project's library are managed in the application by
+the Materials, Printers and Processes managers
+([user guide](user-guide.md#where-print-items-live), mitcad#704,
+mitcad#1135), which list each item where it lives (`library_items` with
+`by_place`) and make, duplicate (also from the base library and the
+built-in materials), copy, rename, edit and delete the items of each
+library, and import a slicer's project or preset into one. They run the
+library commands of
+[commands.md](../core/model-api/src/commands.md#print-profiles) (*Items
+where they live*, `import_print_profile` with `into`): on the open
+design's model, or with no design open on a model of their own, so that
+the empty window does not become a changed design. A library can also be written by hand
 in this format, or with `mitcad-cli run` and the same commands.
 
 A library repository lists its items in its manifest, each with its id

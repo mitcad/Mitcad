@@ -204,6 +204,12 @@ public:
     m_hasScene = true;
     return m_inner->updateScene(update);
   }
+  void setPaused(bool paused) override {
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    m_paused = paused;
+    m_inner->setPaused(paused);
+  }
+  bool isPaused() const override { return current()->isPaused(); }
   void setView(const ViewData& view) override {
     const std::lock_guard<std::mutex> lock(m_mutex);
     m_view = view;
@@ -346,6 +352,7 @@ private:
         lock.lock();
         continue;
       }
+      m_inner->setPaused(m_paused);
       // What the failed renderer had, in the order the worker sends it.
       if (m_samples) {
         m_inner->setSamples(*m_samples);
@@ -389,6 +396,7 @@ private:
   bool m_fallbackFailed = false;
   bool m_denoisingRetried = false; // the same GPU with CPU denoising took over once
   bool m_stop = false;
+  bool m_paused = false;
   std::thread m_watcher;
   // The scene as the renderer holds it: all its meshes and the bodies.
   SceneUpdate wholeScene() const {

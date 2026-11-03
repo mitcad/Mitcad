@@ -6,13 +6,13 @@
 #include <QObject>
 
 namespace mitcad {
-class MainWindow;
+class WindowManager;
 namespace mcp {
 
-// One loopback listener for this application's actual document window.
+// One loopback listener for every document window in this process.
 class LiveServer : public QObject {
 public:
-  explicit LiveServer(MainWindow* window, QObject* parent = nullptr);
+  explicit LiveServer(WindowManager* manager, QObject* parent = nullptr);
   ~LiveServer() override;
   bool start(QString* error);
 

@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY: two free points that frame the view's fit and a half disc of r 20 about the origin, for Sketch Fillet at its corner (20, 0) (mitcad#1192). As a Trim leaves a corner, the line c3 from (20, 0) (p4) to (-20, 0) (p5) and the arc c6 over (0, 20) end at (20, 0) in two points: the arc's own start (p7) is held on the line by a point-on-curve; at (-20, 0) they share p5."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[20,0],"end":[-20,0]},
+  {"cmd":"sketch.arc","sketch":"F1","mode":"three_point","start":[20,0],"through":[0,20],"end":"p5"},
+  {"cmd":"sketch.add_constraint","sketch":"F1","constraint":{"type":"coincident","point":"p7","entity":"c3"}},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"constraints":[{"type":"coincident","point":"p7"}]}}}
+]

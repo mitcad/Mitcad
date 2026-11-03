@@ -19,7 +19,7 @@
 #                                 lines in its Text and saved with Enter), as
 #                                 text and as blocks
 #   <dir>/shelf-6-moved.png       the Configuration bar after choosing Black:
-#                                 Length moved to 1000 mm, with the notice
+#                                 Length adjusted to 1000 mm, with the notice
 # The pictures go into docs/images/configurations/, where the guide
 # expects them: run it into a folder under build/ and copy the six PNG
 # files. The design, the commands and the app's log stay in <dir>/work.
@@ -223,7 +223,7 @@ ui_mark
 ui_step "Add Option: Length"             add_option
 ui_expect_new "Configurations added option Length" "Length is an option"
 ui_expect_new "Configurations options: Color (Black, White) = White; Length (300 mm" \
-  "two options in their order, with their domains"
+  "two options in their order, with their possible values"
 ui_focus_dialog '^Configurations$'
 window_height '^Configurations$' 420
 window_shot '^Configurations$' shelf-2-options

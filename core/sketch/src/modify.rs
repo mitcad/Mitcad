@@ -10,6 +10,7 @@ use std::f64::consts::TAU;
 
 use super::edit::DRIVEN_SUFFIX;
 use super::edit::{PointInput, SketchEdit};
+use super::fillet::{Leg, fillet_at, is_corner};
 use super::geometry::{Curve2, P2, add, cross, dist, dot, norm, perp, scale, sub, unit};
 use super::intersect::intersections;
 use super::solve::{Goal, Solved, measure_in};
@@ -877,10 +878,9 @@ impl SketchEdit<'_> {
 
     // Trim and extend.
 
-    /// Where other curves cross a curve: (parameter, the crossing curve),
-    /// sorted along it, ends of an open curve left out.
-    fn crossings(&self, id: EntityUid) -> Result<(Curve2, Vec<(f64, EntityUid)>), String> {
-        let solved = self.solved()?;
+    /// Where other curves cross a curve, sorted along it, ends of an open
+    /// curve left out.
+    fn crossings(&self, id: EntityUid, solved: &Solved) -> Result<(Curve2, Vec<Cut>), String> {
         let curve = solved
             .curves
             .get(&id)
@@ -888,6 +888,9 @@ impl SketchEdit<'_> {
             .ok_or_else(|| format!("curve c{} does not exist", id.0))?;
         let size = sketch_size(&solved.curves);
         let tol = 1e-9 * size;
+        // Extend's reach for an existing point (`extend`: ten times its
+        // tolerance on ten times the size).
+        let reach = 1e-7 * size;
         let (lo, hi) = curve.domain();
         let mut cuts = Vec::new();
         for (other, c) in &solved.curves {
@@ -898,13 +901,96 @@ impl SketchEdit<'_> {
                 let t = curve.wrap(hit.ta);
                 let at_end = !curve.is_closed()
                     && ((t - lo).abs() <= 1e-9 * (hi - lo) || (t - hi).abs() <= 1e-9 * (hi - lo));
-                if !at_end {
-                    cuts.push((t, *other));
+                if at_end {
+                    continue;
                 }
+                let touching =
+                    cross(unit(curve.eval(hit.ta)[1]), unit(c.eval(hit.tb)[1])).abs() <= 1e-3;
+                cuts.push(Cut {
+                    t,
+                    curve: *other,
+                    reach: if touching {
+                        reach.max(TANGENT_REACH * size)
+                    } else {
+                        reach
+                    },
+                });
             }
         }
-        cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        cuts.sort_by(|a, b| a.t.total_cmp(&b.t));
         Ok((curve, cuts))
+    }
+
+    /// The end a trim gives a curve at a cut (mitcad#1191), as Extend joins
+    /// a point (mitcad#259): an existing point there (one of the crossing
+    /// curve first, then any other, never one of the trimmed curve `id`)
+    /// becomes the end, held on the crossing curve when it is none of its
+    /// points and nothing holds it there yet (a lone point, another curve's
+    /// end); one the curve cannot end at (projected, computed by a derived
+    /// offset or a pattern's, see `points.rs`) holds a new end with a
+    /// point-to-point coincident constraint; elsewhere (a T) the end is a
+    /// new point on the crossing curve. Returns the end and the point it
+    /// joined.
+    fn cut_end(
+        &mut self,
+        id: EntityUid,
+        curve: &Curve2,
+        cut: &Cut,
+        solved: &Solved,
+    ) -> (EntityUid, Option<EntityUid>) {
+        let at = curve.point(cut.t);
+        match self.point_reached(at, &solved.points, cut.curve, id, cut.reach) {
+            Some((q, true)) => {
+                let of_crossing = self
+                    .def
+                    .entity(cut.curve)
+                    .is_some_and(|e| e.kind.points().contains(&q));
+                let held = self.def.constraints.iter().any(|c| {
+                    matches!(c.kind, ConstraintKind::Coincident { point, entity: Ref::Curve(on) }
+                        if point == q && on == cut.curve)
+                });
+                if !of_crossing && !held && self.computing_offset(cut.curve).is_none() {
+                    self.add_constraint(ConstraintKind::Coincident {
+                        point: q,
+                        entity: Ref::Curve(cut.curve),
+                    });
+                }
+                (q, Some(q))
+            }
+            Some((q, false)) => {
+                let p = self.add_point(solved.points.get(&q).copied().unwrap_or(at));
+                if self.computing_offset(q).is_none() {
+                    self.add_constraint(ConstraintKind::Coincident {
+                        point: p,
+                        entity: Ref::Point(q),
+                    });
+                }
+                (p, Some(q))
+            }
+            None => (self.point_on_crossing(at, cut.curve), None),
+        }
+    }
+
+    /// After a trim joined existing points: a point-on-curve of one of them
+    /// on the trimmed curves, which its end there now holds, and what else
+    /// then says nothing on a point that became an end (`points.rs`) go.
+    fn drop_idle_after_trim(&mut self, joined: &[EntityUid], curves: &[EntityUid]) {
+        let on: BTreeSet<ConstraintUid> = self
+            .def
+            .constraints
+            .iter()
+            .filter(|c| {
+                matches!(c.kind, ConstraintKind::Coincident { point, entity: Ref::Curve(curve) }
+                    if joined.contains(&point) && curves.contains(&curve))
+            })
+            .map(|c| c.id)
+            .collect();
+        self.drop_constraints(&on);
+        for q in joined {
+            if self.def.entity(*q).is_some() {
+                self.drop_idle_on(*q);
+            }
+        }
     }
 
     /// A new point at a position on the curve `on` (point-on-curve).
@@ -1014,10 +1100,14 @@ impl SketchEdit<'_> {
     }
 
     /// Trims the piece of a curve around `at` between the curves that cross
-    /// it (Trim). A curve nothing crosses is deleted.
+    /// it (Trim). A curve nothing crosses is deleted. A cut end that lies on
+    /// an existing point becomes that point, as an extended end does
+    /// (mitcad#1191, see `cut_end`), so that both curves of a crossing
+    /// trimmed there end in one point.
     pub fn trim(&mut self, id: EntityUid, at: P2) -> Result<(), String> {
         self.shape_editable(id)?;
-        let (curve, cuts) = self.crossings(id)?;
+        let solved = self.solved()?;
+        let (curve, cuts) = self.crossings(id, &solved)?;
         let kind = self.curve(id)?.kind.clone();
         let (t_at, _) = curve.closest(at);
         let (lo, hi) = curve.domain();
@@ -1026,12 +1116,18 @@ impl SketchEdit<'_> {
                 return self.remove(&[Item::Entity(Ref::Curve(id))]);
             }
             // The cuts around the pick; the rest becomes an arc.
-            let after = cuts.iter().position(|(t, _)| *t > t_at).unwrap_or(0);
+            let after = cuts.iter().position(|c| c.t > t_at).unwrap_or(0);
             let before = (after + cuts.len() - 1) % cuts.len();
-            let (t_end, c_end) = cuts[before];
-            let (t_start, c_start) = cuts[after];
-            let start = self.point_on_crossing(curve.point(t_start), c_start);
-            let end = self.point_on_crossing(curve.point(t_end), c_end);
+            let (t_end, t_start) = (cuts[before].t, cuts[after].t);
+            let (start, joined_start) = self.cut_end(id, &curve, &cuts[after], &solved);
+            let (mut end, mut joined_end) = self.cut_end(id, &curve, &cuts[before], &solved);
+            if end == start {
+                // A touching curve found as two cuts a little apart, both
+                // at one point: the arc does not close on it.
+                end = self.point_on_crossing(curve.point(t_end), cuts[before].curve);
+                joined_end = None;
+            }
+            let joined: Vec<EntityUid> = joined_start.into_iter().chain(joined_end).collect();
             self.drop_extent_constraints(id);
             if matches!(
                 kind,
@@ -1040,7 +1136,9 @@ impl SketchEdit<'_> {
                 // A closed spline (mitcad#783): the rest from the start
                 // round to the end, across its seam when it runs over it,
                 // as a spline by control points.
-                return self.reshape(id, &curve, t_start, t_end, Some(start), Some(end));
+                self.reshape(id, &curve, t_start, t_end, Some(start), Some(end))?;
+                self.drop_idle_after_trim(&joined, &[id]);
+                return Ok(());
             }
             let e = self.def.entity_mut(id).expect("a curve");
             e.kind = match kind {
@@ -1058,35 +1156,38 @@ impl SketchEdit<'_> {
                 },
                 _ => return Err("this closed curve cannot be trimmed".to_owned()),
             };
+            self.drop_idle_after_trim(&joined, &[id]);
             return Ok(());
         }
-        let below = cuts.iter().rev().find(|(t, _)| *t < t_at).copied();
-        let above = cuts.iter().find(|(t, _)| *t > t_at).copied();
+        let below = cuts.iter().rev().find(|c| c.t < t_at);
+        let above = cuts.iter().find(|c| c.t > t_at);
         let (old_start, old_end) = kind.ends().expect("an open curve");
         self.drop_extent_constraints(id);
         match (below, above) {
             (None, None) => return self.remove(&[Item::Entity(Ref::Curve(id))]),
-            (None, Some((t, c))) => {
+            (None, Some(cut)) => {
                 // Cut off the start.
-                let p = self.point_on_crossing(curve.point(t), c);
-                self.reshape(id, &curve, t, hi, Some(p), None)?;
+                let (p, joined) = self.cut_end(id, &curve, cut, &solved);
+                self.reshape(id, &curve, cut.t, hi, Some(p), None)?;
                 self.drop_if_unused(old_start);
+                self.drop_idle_after_trim(joined.as_slice(), &[id]);
             }
-            (Some((t, c)), None) => {
-                let p = self.point_on_crossing(curve.point(t), c);
-                self.reshape(id, &curve, lo, t, None, Some(p))?;
+            (Some(cut), None) => {
+                let (p, joined) = self.cut_end(id, &curve, cut, &solved);
+                self.reshape(id, &curve, lo, cut.t, None, Some(p))?;
                 self.drop_if_unused(old_end);
+                self.drop_idle_after_trim(joined.as_slice(), &[id]);
             }
-            (Some((t0, c0)), Some((t1, c1))) => {
+            (Some(cut0), Some(cut1)) => {
                 // Keep both ends: this curve up to t0, a new one from t1.
-                let p0 = self.point_on_crossing(curve.point(t0), c0);
-                let p1 = self.point_on_crossing(curve.point(t1), c1);
+                let (p0, joined0) = self.cut_end(id, &curve, cut0, &solved);
+                let (p1, joined1) = self.cut_end(id, &curve, cut1, &solved);
                 let copy = self.id();
                 let mut second = self.curve(id)?.clone();
                 second.id = copy;
                 self.push(second);
-                self.reshape(copy, &curve, t1, hi, Some(p1), None)?;
-                self.reshape(id, &curve, lo, t0, None, Some(p0))?;
+                self.reshape(copy, &curve, cut1.t, hi, Some(p1), None)?;
+                self.reshape(id, &curve, lo, cut0.t, None, Some(p0))?;
                 match kind {
                     EntityKind::Line { .. } => {
                         self.add_constraint(ConstraintKind::Collinear { a: id, b: copy });
@@ -1094,6 +1195,8 @@ impl SketchEdit<'_> {
                     EntityKind::Arc { .. } | EntityKind::EllipticalArc { .. } => {}
                     _ => {}
                 }
+                let joined: Vec<EntityUid> = joined0.into_iter().chain(joined1).collect();
+                self.drop_idle_after_trim(&joined, &[id, copy]);
             }
         }
         Ok(())
@@ -1473,6 +1576,8 @@ impl SketchEdit<'_> {
     /// Rounds the corner of two lines with an arc of `radius` tangent to
     /// both (sketch Fillet), dimensioned by its radius. The corner
     /// stays as a point on both lines, as in [`SketchEdit::chamfer`].
+    /// A circular arc and a line or another arc (mitcad#1192) are rounded
+    /// at the point where they end together.
     pub fn fillet(
         &mut self,
         a: EntityUid,
@@ -1482,7 +1587,19 @@ impl SketchEdit<'_> {
         self.shape_editable(a)?;
         self.shape_editable(b)?;
         let r = self.fillet_radius(radius)?;
-        let arc = self.fillet_arc(a, b, r)?;
+        let arc = if self.is_line(a) && self.is_line(b) {
+            self.fillet_arc(a, b, None, r)?
+        } else {
+            let at = self.corner_point_of(a, b)?;
+            if !self.is_fillet_corner(a, b, at)? {
+                return Err(format!(
+                    "c{} and c{} are tangent at p{}: there is no corner to round",
+                    a.0, b.0, at.0
+                ));
+            }
+            self.check_fillets_fit(&[(a, b, Some(at))], r)?;
+            self.fillet_arc(a, b, Some(at), r)?
+        };
         self.add_dimension(
             DimensionKind::Radius { curve: arc },
             Some(radius),
@@ -1505,11 +1622,12 @@ impl SketchEdit<'_> {
     /// of `curves` end at one point, and every one of `points` that ends
     /// exactly two lines (construction lines count only among
     /// construction lines, so a rectangle's diagonal does not spoil its
-    /// corners). Each corner gets an arc of `radius` as in
-    /// [`SketchEdit::fillet`]; the first arc has the radius dimension and
-    /// the others are Equal to it, so the one dimension drives them all.
-    /// Two lines without a shared end are one corner where they meet. The
-    /// arcs are returned in the order of the corners.
+    /// corners). Circular arcs count as lines do (mitcad#1192). Each
+    /// corner gets an arc of `radius` as in [`SketchEdit::fillet`]; the
+    /// first arc has the radius dimension and the others are Equal to it,
+    /// so the one dimension drives them all. Two lines without a shared
+    /// end are one corner where they meet. The arcs are returned in the
+    /// order of the corners.
     pub fn fillet_corners(
         &mut self,
         curves: &[EntityUid],
@@ -1518,20 +1636,18 @@ impl SketchEdit<'_> {
     ) -> Result<Vec<EntityUid>, String> {
         let r = self.fillet_radius(radius)?;
         let corners = self.corners_of(curves, points)?;
-        for &(a, b) in &corners {
+        for &(a, b, _) in &corners {
             self.shape_editable(a)?;
             self.shape_editable(b)?;
         }
-        if let [(a, b)] = corners[..]
-            && self.shared_end(a, b).is_none()
-        {
+        if let [(a, b, None)] = corners[..] {
             // Two lines that meet where they would cross.
             return Ok(vec![self.fillet(a, b, radius)?]);
         }
         self.check_fillets_fit(&corners, r)?;
         let mut arcs = Vec::with_capacity(corners.len());
-        for &(a, b) in &corners {
-            arcs.push(self.fillet_arc(a, b, r)?);
+        for &(a, b, at) in &corners {
+            arcs.push(self.fillet_arc(a, b, at, r)?);
         }
         self.add_dimension(
             DimensionKind::Radius { curve: arcs[0] },
@@ -1586,36 +1702,216 @@ impl SketchEdit<'_> {
         }
     }
 
-    /// The point where two lines end together.
-    fn shared_end(&self, a: EntityUid, b: EntityUid) -> Option<EntityUid> {
-        let (a0, a1) = self.line_ends(a).ok()?;
-        let (b0, b1) = self.line_ends(b).ok()?;
-        [a0, a1].into_iter().find(|p| *p == b0 || *p == b1)
+    /// Whether a curve is a line.
+    fn is_line(&self, id: EntityUid) -> bool {
+        matches!(
+            self.def.entity(id).map(|e| &e.kind),
+            Some(EntityKind::Line { .. })
+        )
     }
 
-    /// The corners (pairs of lines) that `curves` and `points` name for
+    /// The ends of a curve whose corners Sketch Fillet rounds: a line or a
+    /// circular arc (mitcad#1192), or why it is neither.
+    fn fillet_ends(&self, id: EntityUid) -> Result<(EntityUid, EntityUid), String> {
+        match self.curve(id)?.kind {
+            EntityKind::Line { start, end, .. } | EntityKind::Arc { start, end, .. } => {
+                Ok((start, end))
+            }
+            ref other => Err(not_filleted(id, other)),
+        }
+    }
+
+    /// The point where two curves end together, the corner of an arc's
+    /// fillet (mitcad#1192).
+    fn corner_point_of(&self, a: EntityUid, b: EntityUid) -> Result<EntityUid, String> {
+        let (a0, a1) = self.fillet_ends(a)?;
+        let (b0, b1) = self.fillet_ends(b)?;
+        let mut shared: Vec<EntityUid> = [a0, a1]
+            .into_iter()
+            .filter(|p| *p == b0 || *p == b1)
+            .collect();
+        shared.dedup();
+        if shared.is_empty() {
+            // Two ends held together at one place (mitcad#1192).
+            shared = [a0, a1]
+                .into_iter()
+                .filter(|&p| [b0, b1].into_iter().any(|q| self.held_ends(p, q, a, b)))
+                .collect();
+        }
+        match shared[..] {
+            [p] => Ok(p),
+            [] => Err(format!(
+                "c{} and c{} do not end at one point: an arc is rounded where it ends \
+                 together with the other curve",
+                a.0, b.0
+            )),
+            _ => Err(format!(
+                "c{} and c{} end together at p{} and p{}: pick the corner point to round",
+                a.0, b.0, shared[0].0, shared[1].0
+            )),
+        }
+    }
+
+    /// Whether the end `p` of the curve `x` and the end `q` of the curve
+    /// `y` are one corner although they are two points (mitcad#1192), as a
+    /// Trim or an import leaves them: at the same place (within [`GAP`])
+    /// and held together by a point-to-point coincident, or by a
+    /// point-on-curve of one end on the other curve.
+    fn held_ends(&self, p: EntityUid, q: EntityUid, x: EntityUid, y: EntityUid) -> bool {
+        let near = matches!((self.at(p), self.at(q)), (Ok(a), Ok(b)) if dist(a, b) <= GAP);
+        p != q
+            && x != y
+            && near
+            && self.def.constraints.iter().any(|c| {
+                c.active
+                    && match c.kind {
+                        ConstraintKind::Coincident {
+                            point,
+                            entity: Ref::Point(other),
+                        } => (point == p && other == q) || (point == q && other == p),
+                        ConstraintKind::Coincident {
+                            point,
+                            entity: Ref::Curve(on),
+                        } => (point == p && on == y) || (point == q && on == x),
+                        _ => false,
+                    }
+            })
+    }
+
+    /// The other side of a corner at the end `p` of the line or arc `x`
+    /// that no other curve shares (mitcad#1192): another line or arc whose
+    /// end is held to `p` ([`SketchEdit::held_ends`]), with that end; one
+    /// of the two curves an arc, of one kind (drawn or construction).
+    fn held_partner(&self, p: EntityUid, x: EntityUid) -> Option<(EntityUid, EntityUid)> {
+        let entity = self.def.entity(x)?;
+        let arc_x = matches!(entity.kind, EntityKind::Arc { .. });
+        self.def.entities.iter().find_map(|e| {
+            let arc = match e.kind {
+                EntityKind::Arc { .. } => true,
+                EntityKind::Line { .. } => false,
+                _ => return None,
+            };
+            if e.construction != entity.construction || !(arc || arc_x) {
+                return None;
+            }
+            let (s, t) = e.kind.ends()?;
+            [s, t]
+                .into_iter()
+                .find(|&q| self.held_ends(p, q, x, e.id))
+                .map(|q| (e.id, q))
+        })
+    }
+
+    /// The end of `curve` at the corner `at` of `curve` and `other`: `at`
+    /// itself, or the end of `curve` held to it ([`SketchEdit::held_ends`]).
+    fn corner_end(
+        &self,
+        curve: EntityUid,
+        other: EntityUid,
+        at: EntityUid,
+    ) -> Result<EntityUid, String> {
+        let (s, e) = self.fillet_ends(curve)?;
+        if s == at || e == at {
+            return Ok(at);
+        }
+        [s, e]
+            .into_iter()
+            .find(|&q| self.held_ends(at, q, other, curve))
+            .ok_or_else(|| format!("p{} is no end of c{}", at.0, curve.0))
+    }
+
+    /// The corner at `at` where the curves `a` and `b` (lines or circular
+    /// arcs) end together, or where an end of one is held to `at`, the end
+    /// of the other: its place and both curves as they leave it.
+    fn fillet_legs(
+        &self,
+        a: EntityUid,
+        b: EntityUid,
+        at: EntityUid,
+    ) -> Result<(P2, Leg, Leg), String> {
+        let corner = self.at(at)?;
+        let (end_a, end_b) = (self.corner_end(a, b, at)?, self.corner_end(b, a, at)?);
+        Ok((
+            corner,
+            self.fillet_leg(a, end_a, corner)?,
+            self.fillet_leg(b, end_b, corner)?,
+        ))
+    }
+
+    /// A line or a circular arc as it leaves its end `at` (at `corner`).
+    fn fillet_leg(&self, curve: EntityUid, at: EntityUid, corner: P2) -> Result<Leg, String> {
+        let not_an_end = || format!("p{} is no end of c{}", at.0, curve.0);
+        match self.curve(curve)?.kind {
+            EntityKind::Line { start, end, .. } => {
+                let far = match (start == at, end == at) {
+                    (true, _) => end,
+                    (_, true) => start,
+                    _ => return Err(not_an_end()),
+                };
+                let far = self.at(far)?;
+                Ok(Leg::Line {
+                    dir: unit(sub(far, corner)),
+                    len: dist(far, corner),
+                })
+            }
+            EntityKind::Arc { center, start, end } => {
+                // Counter-clockwise from its start, clockwise from its end.
+                let ccw = match (start == at, end == at) {
+                    (true, _) => true,
+                    (_, true) => false,
+                    _ => return Err(not_an_end()),
+                };
+                let c = self.at(center)?;
+                let (s, e) = (sub(self.at(start)?, c), sub(self.at(end)?, c));
+                let mut sweep = cross(s, e).atan2(dot(s, e));
+                if sweep <= 0.0 {
+                    sweep += TAU;
+                }
+                Ok(Leg::Arc {
+                    center: c,
+                    radius: dist(corner, c),
+                    ccw,
+                    sweep,
+                })
+            }
+            ref other => Err(not_filleted(curve, other)),
+        }
+    }
+
+    /// Whether the curves `a` and `b` that end together at `at` make a
+    /// corner to round: lines not in line, curves not tangent there.
+    fn is_fillet_corner(&self, a: EntityUid, b: EntityUid, at: EntityUid) -> Result<bool, String> {
+        if self.is_line(a) && self.is_line(b) {
+            return Ok(self.corner(a, b).is_ok());
+        }
+        let (corner, leg_a, leg_b) = self.fillet_legs(a, b, at)?;
+        Ok(is_corner(corner, &leg_a, &leg_b))
+    }
+
+    /// The corners (pairs of lines or circular arcs, with the point where
+    /// they end together) that `curves` and `points` name for
     /// [`SketchEdit::fillet_corners`], each once.
     fn corners_of(
         &self,
         curves: &[EntityUid],
         points: &[EntityUid],
-    ) -> Result<Vec<(EntityUid, EntityUid)>, String> {
+    ) -> Result<Vec<FilletCorner>, String> {
         let mut lines: Vec<EntityUid> = Vec::new();
         for &c in curves {
-            self.line_ends(c)?;
+            self.fillet_ends(c)?;
             if !lines.contains(&c) {
                 lines.push(c);
             }
         }
-        let mut corners: Vec<(EntityUid, EntityUid)> = Vec::new();
+        let mut corners: Vec<FilletCorner> = Vec::new();
         let mut at: Vec<EntityUid> = Vec::new();
-        // Where two of the lines of one kind end together (a construction
+        // Where two of the curves of one kind end together (a construction
         // diagonal at a rectangle's corner is no part of the corner); a
         // point where three or more of them end is no corner of two.
         let construction = |l: EntityUid| self.def.entity(l).is_some_and(|e| e.construction);
         let mut ending: BTreeMap<(EntityUid, bool), Vec<EntityUid>> = BTreeMap::new();
         for &l in &lines {
-            let (s, e) = self.line_ends(l)?;
+            let (s, e) = self.fillet_ends(l)?;
             for p in [s, e] {
                 let list = ending.entry((p, construction(l))).or_default();
                 if !list.contains(&l) {
@@ -1624,22 +1920,46 @@ impl SketchEdit<'_> {
             }
         }
         for &l in &lines {
-            let (s, e) = self.line_ends(l)?;
+            let (s, e) = self.fillet_ends(l)?;
             for p in [s, e] {
                 let list = &ending[&(p, construction(l))];
                 if list.len() > 2 {
                     return Err(format!(
-                        "{} of the lines end at p{}: pick the corners of two lines",
+                        "{} of the curves end at p{}: pick the corners of two curves",
                         list.len(),
                         p.0
                     ));
                 }
                 if list.len() == 2 && list[0] == l && !at.contains(&p) {
-                    // Lines in line (a line drawn in two) make no corner.
-                    if self.corner(list[0], list[1]).is_ok() {
+                    // Lines in line (a line drawn in two) and curves
+                    // tangent where they meet make no corner.
+                    if self.is_fillet_corner(list[0], list[1], p)? {
                         at.push(p);
-                        corners.push((list[0], list[1]));
+                        corners.push((list[0], list[1], Some(p)));
                     }
+                }
+            }
+        }
+        // Ends of two of the curves held together at one place, as a Trim
+        // leaves them (mitcad#1192).
+        for &x in &lines {
+            let (s, e) = self.fillet_ends(x)?;
+            for p in [s, e] {
+                let Some((y, q)) = self.held_partner(p, x) else {
+                    continue;
+                };
+                let alone = |p: EntityUid, c: EntityUid| ending[&(p, construction(c))].len() == 1;
+                if at.contains(&p)
+                    || at.contains(&q)
+                    || !lines.contains(&y)
+                    || !alone(p, x)
+                    || !alone(q, y)
+                {
+                    continue;
+                }
+                if self.is_fillet_corner(x, y, p)? {
+                    at.extend([p, q]);
+                    corners.push((x, y, Some(p)));
                 }
             }
         }
@@ -1669,17 +1989,41 @@ impl SketchEdit<'_> {
             } else {
                 drawn
             };
-            let is_line = |e: &Entity| matches!(e.kind, EntityKind::Line { .. });
+            let rounds =
+                |e: &Entity| matches!(e.kind, EntityKind::Line { .. } | EntityKind::Arc { .. });
             match ends_here[..] {
-                [a, b] if is_line(a) && is_line(b) => {
-                    self.corner(a.id, b.id)
-                        .map_err(|e| format!("p{} is no corner: {e}", p.0))?;
+                [a, b] if rounds(a) && rounds(b) => {
+                    if self.is_line(a.id) && self.is_line(b.id) {
+                        self.corner(a.id, b.id)
+                            .map_err(|e| format!("p{} is no corner: {e}", p.0))?;
+                    } else if !self.is_fillet_corner(a.id, b.id, p)? {
+                        return Err(format!(
+                            "p{} is no corner: c{} and c{} are tangent there",
+                            p.0, a.id.0, b.id.0
+                        ));
+                    }
                     at.push(p);
-                    corners.push((a.id, b.id));
+                    corners.push((a.id, b.id, Some(p)));
+                }
+                // One curve ends there, held to the end of another
+                // (mitcad#1192).
+                [x] if rounds(x) && self.held_partner(p, x.id).is_some() => {
+                    let (y, q) = self.held_partner(p, x.id).expect("a partner");
+                    if at.contains(&q) {
+                        continue;
+                    }
+                    if !self.is_fillet_corner(x.id, y, p)? {
+                        return Err(format!(
+                            "p{} is no corner: c{} and c{} are tangent there",
+                            p.0, x.id.0, y.0
+                        ));
+                    }
+                    at.extend([p, q]);
+                    corners.push((x.id, y, Some(p)));
                 }
                 _ => {
                     return Err(format!(
-                        "p{} is not the corner of two lines ({} curve(s) end there)",
+                        "p{} is not the corner of two lines or arcs ({} curve(s) end there)",
                         p.0,
                         ends_here.len()
                     ));
@@ -1688,49 +2032,173 @@ impl SketchEdit<'_> {
         }
         if corners.is_empty() {
             if let ([a, b], []) = (&lines[..], points) {
-                // Two lines that do not end together: where they meet.
-                return Ok(vec![(*a, *b)]);
+                if self.is_line(*a) && self.is_line(*b) {
+                    // Two lines that do not end together: where they meet.
+                    return Ok(vec![(*a, *b, None)]);
+                }
+                // An arc that does not end with the other curve, is
+                // tangent to it where it does, or is of the other kind.
+                let at = self.corner_point_of(*a, *b)?;
+                if self.is_fillet_corner(*a, *b, at)? {
+                    return Err(format!(
+                        "c{} and c{} are not both drawn or both construction curves",
+                        a.0, b.0
+                    ));
+                }
+                return Err(format!(
+                    "c{} and c{} are tangent at p{}: there is no corner to round",
+                    a.0, b.0, at.0
+                ));
             }
-            return Err("the selection has no corner where two lines end together".to_owned());
+            return Err(
+                "the selection has no corner where two lines or arcs end together".to_owned(),
+            );
         }
         Ok(corners)
     }
 
-    /// Refuses fillets of `r` at `corners` (of lines with shared ends)
-    /// that would take more of a line than it has, naming the line and the
-    /// largest radius that fits it.
-    fn check_fillets_fit(&self, corners: &[(EntityUid, EntityUid)], r: f64) -> Result<(), String> {
-        // What the corners take of each line, and its length.
+    /// Refuses fillets of `r` at `corners` (of lines or arcs with shared
+    /// ends) that would take more of a curve than it has, naming the curve
+    /// and the largest radius that fits it.
+    fn check_fillets_fit(&self, corners: &[FilletCorner], r: f64) -> Result<(), String> {
+        // What the corners take of each curve, and its length.
         let mut taken: BTreeMap<EntityUid, (f64, f64)> = BTreeMap::new();
-        for &(a, b) in corners {
-            let corner = self.corner(a, b)?;
-            let half = dot(corner.dir_a, corner.dir_b).clamp(-1.0, 1.0).acos() / 2.0;
-            let back = r / half.tan();
-            for (line, len) in [(a, corner.len_a), (b, corner.len_b)] {
-                let entry = taken.entry(line).or_insert((0.0, len));
+        for &corner in corners {
+            let Some(takes) = self.fillet_takes(corner, r)? else {
+                // No arc of r touches the curves ahead of the corner: an
+                // arc's circle too small to hold it.
+                let (a, b, _) = corner;
+                let (arc, other) = if self.is_line(a) { (b, a) } else { (a, b) };
+                return Err(format!(
+                    "the fillet radius {} mm does not fit on c{} at its corner with c{}, \
+                     the radius must be less than {} mm",
+                    short(r),
+                    arc.0,
+                    other.0,
+                    short(self.largest_fillet(corners, arc, r)?)
+                ));
+            };
+            for (curve, back, len) in takes {
+                let entry = taken.entry(curve).or_insert((0.0, len));
                 entry.0 += back;
                 entry.1 = entry.1.max(len);
             }
         }
-        for (line, (need, len)) in taken {
+        for (curve, (need, len)) in taken {
             if need >= len {
+                // A line's corners with lines take of it in proportion to
+                // the radius.
+                let linear = corners
+                    .iter()
+                    .filter(|(a, b, _)| *a == curve || *b == curve)
+                    .all(|(a, b, _)| self.is_line(*a) && self.is_line(*b));
+                let largest = if linear {
+                    r * len / need
+                } else {
+                    self.largest_fillet(corners, curve, r)?
+                };
                 return Err(format!(
                     "the fillet radius {} mm does not fit on c{}: its corners take {} mm of its {} mm, \
                      the radius must be less than {} mm",
                     short(r),
-                    line.0,
+                    curve.0,
                     short(need),
                     short(len),
-                    short(r * len / need)
+                    short(largest)
                 ));
             }
         }
         Ok(())
     }
 
-    /// Rounds the corner of two lines with an arc of `r` tangent to both,
-    /// without a dimension; the corner stays as a point on both lines.
-    fn fillet_arc(&mut self, a: EntityUid, b: EntityUid, r: f64) -> Result<EntityUid, String> {
+    /// What a fillet of `r` takes of each of its two curves at a corner,
+    /// from the corner along the curve (an arc's length), with the
+    /// curve's length: None where no arc of `r` touches both curves
+    /// ahead of the corner.
+    fn fillet_takes(
+        &self,
+        (a, b, at): FilletCorner,
+        r: f64,
+    ) -> Result<Option<[FilletTake; 2]>, String> {
+        if self.is_line(a) && self.is_line(b) {
+            let corner = self.corner(a, b)?;
+            let half = dot(corner.dir_a, corner.dir_b).clamp(-1.0, 1.0).acos() / 2.0;
+            let back = r / half.tan();
+            return Ok(Some([(a, back, corner.len_a), (b, back, corner.len_b)]));
+        }
+        let at = match at {
+            Some(p) => p,
+            None => self.corner_point_of(a, b)?,
+        };
+        let (corner, leg_a, leg_b) = self.fillet_legs(a, b, at)?;
+        Ok(fillet_at(corner, &leg_a, &leg_b, r).map(|f| {
+            [
+                (a, f.along[0], leg_a.length()),
+                (b, f.along[1], leg_b.length()),
+            ]
+        }))
+    }
+
+    /// The largest radius below `r` whose fillets at the corners of
+    /// `curve` among `corners` fit on it, by bisection (the bound, which a
+    /// message rounds to a micrometre): an arc's fillets do not take of
+    /// it in proportion to the radius.
+    fn largest_fillet(
+        &self,
+        corners: &[FilletCorner],
+        curve: EntityUid,
+        r: f64,
+    ) -> Result<f64, String> {
+        let mine: Vec<FilletCorner> = corners
+            .iter()
+            .copied()
+            .filter(|(a, b, _)| *a == curve || *b == curve)
+            .collect();
+        let fits = |s: f64| -> Result<bool, String> {
+            let (mut need, mut len) = (0.0, 0.0_f64);
+            for &corner in &mine {
+                let Some(takes) = self.fillet_takes(corner, s)? else {
+                    return Ok(false);
+                };
+                for (c, back, l) in takes {
+                    if c == curve {
+                        need += back;
+                        len = len.max(l);
+                    }
+                }
+            }
+            Ok(need < len)
+        };
+        let (mut lo, mut hi) = (0.0_f64, r);
+        for _ in 0..64 {
+            let mid = 0.5 * (lo + hi);
+            if fits(mid)? {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo)
+    }
+
+    /// Rounds a corner with an arc of `r` tangent to both curves, without
+    /// a dimension; the corner stays as a point on both. Two lines meet at
+    /// their shared end or where they would cross; a corner with a
+    /// circular arc is the point `at` where both end (mitcad#1192).
+    fn fillet_arc(
+        &mut self,
+        a: EntityUid,
+        b: EntityUid,
+        at: Option<EntityUid>,
+        r: f64,
+    ) -> Result<EntityUid, String> {
+        if !(self.is_line(a) && self.is_line(b)) {
+            let at = match at {
+                Some(p) => p,
+                None => self.corner_point_of(a, b)?,
+            };
+            return self.fillet_curves(a, b, at, r);
+        }
         let corner = self.corner(a, b)?;
         let half = dot(corner.dir_a, corner.dir_b).clamp(-1.0, 1.0).acos() / 2.0;
         let back = r / half.tan();
@@ -1764,6 +2232,102 @@ impl SketchEdit<'_> {
         self.add_constraint(ConstraintKind::tangent(b, arc));
         self.keep_corner(&corner, a, b);
         Ok(arc)
+    }
+
+    /// Rounds the corner at `at`, where a circular arc ends together with
+    /// a line or another arc (mitcad#1192), with an arc of `r` tangent to
+    /// both, without a dimension. Of the circles of `r` tangent to both,
+    /// the one on the side where the two curves bound the corner (between
+    /// the directions in which they leave it), nearest to it. Both curves
+    /// are trimmed back to where the arc touches them; an arc keeps its
+    /// centre and radius (and their constraints and dimensions), and its
+    /// arc length dimension and the midpoints on it, which measured the
+    /// piece cut off, go. The corner stays as a point on both curves.
+    fn fillet_curves(
+        &mut self,
+        a: EntityUid,
+        b: EntityUid,
+        at: EntityUid,
+        r: f64,
+    ) -> Result<EntityUid, String> {
+        let (corner, leg_a, leg_b) = self.fillet_legs(a, b, at)?;
+        let (end_a, end_b) = (self.corner_end(a, b, at)?, self.corner_end(b, a, at)?);
+        let fillet = fillet_at(corner, &leg_a, &leg_b, r)
+            .filter(|f| f.along[0] < leg_a.length() && f.along[1] < leg_b.length())
+            .ok_or_else(|| {
+                format!(
+                    "the fillet radius {} mm does not fit at p{}",
+                    short(r),
+                    at.0
+                )
+            })?;
+        let arc = self.id();
+        let pa = self.add_point(fillet.touch[0]);
+        let pb = self.add_point(fillet.touch[1]);
+        let c = self.add_point(fillet.center);
+        self.move_end(a, end_a, pa);
+        self.move_end(b, end_b, pb);
+        // Counter-clockwise from one touch to the other over the side that
+        // faces the corner.
+        let angle = |p: P2| {
+            let v = sub(p, fillet.center);
+            v[1].atan2(v[0])
+        };
+        let turn = |from: P2, to: P2| (angle(to) - angle(from)).rem_euclid(TAU);
+        let [ta, tb] = fillet.touch;
+        let (start, end) = if turn(ta, corner) < turn(ta, tb) {
+            (pa, pb)
+        } else {
+            (pb, pa)
+        };
+        self.push(Entity::new(
+            arc,
+            EntityKind::Arc {
+                center: c,
+                start,
+                end,
+            },
+        ));
+        self.add_constraint(ConstraintKind::tangent(a, arc));
+        self.add_constraint(ConstraintKind::tangent(b, arc));
+        for curve in [a, b] {
+            if !self.is_line(curve) {
+                self.drop_extent_constraints(curve);
+            }
+        }
+        self.keep_shared_corner([(a, end_a, pa), (b, end_b, pb)]);
+        Ok(arc)
+    }
+
+    /// Keeps the shared end of two curves whose corner a fillet rounds as a
+    /// point on both (mitcad#1192), as [`SketchEdit::keep_corner`] does for
+    /// two lines: constraints on it stay, and a length dimension of a line
+    /// becomes the distance from its other end to the corner. `curves` are
+    /// the two curves with their old ends at the corner and their new ends
+    /// at the fillet. Two old ends held together (two points,
+    /// [`SketchEdit::held_ends`]) stay so, each on its own curve.
+    fn keep_shared_corner(&mut self, curves: [(EntityUid, EntityUid, EntityUid); 2]) {
+        for (curve, p, new_end) in curves {
+            self.add_constraint(ConstraintKind::Coincident {
+                point: p,
+                entity: Ref::Curve(curve),
+            });
+            let far = match self.def.entity(curve).map(|e| &e.kind) {
+                Some(EntityKind::Line { start, end, .. }) => {
+                    if *start == new_end {
+                        *end
+                    } else {
+                        *start
+                    }
+                }
+                _ => continue,
+            };
+            for d in &mut self.def.dimensions {
+                if d.kind == (DimensionKind::Length { line: curve }) {
+                    d.kind = DimensionKind::Distance { a: far, b: p };
+                }
+            }
+        }
     }
 
     /// Bevels the corner of two lines with a line (sketch Chamfer):
@@ -2435,6 +2999,23 @@ fn apart(d: f64, size: f64) -> String {
     }
 }
 
+/// A corner Sketch Fillet rounds: two curves and the point where they end
+/// together (none for two lines that meet where they would cross).
+type FilletCorner = (EntityUid, EntityUid, Option<EntityUid>);
+
+/// What a fillet takes of one curve at its corner: the curve, the length
+/// taken from the corner along it, and the curve's length.
+type FilletTake = (EntityUid, f64, f64);
+
+/// Why Sketch Fillet does not round a corner of a curve.
+fn not_filleted(id: EntityUid, kind: &EntityKind) -> String {
+    format!(
+        "c{} is a {}: Sketch Fillet rounds corners of lines and circular arcs",
+        id.0,
+        kind.type_name()
+    )
+}
+
 struct Corner {
     point: P2,
     end_a: EntityUid,
@@ -2444,6 +3025,26 @@ struct Corner {
     len_a: f64,
     len_b: f64,
 }
+
+/// Where a curve crossing another cuts it (Trim).
+struct Cut {
+    /// The parameter on the cut curve.
+    t: f64,
+    /// The crossing curve.
+    curve: EntityUid,
+    /// How far an existing point may lie from the cut and still become the
+    /// end there (mitcad#1191).
+    reach: f64,
+}
+
+/// How far an existing point may lie from a trim's cut where the curves
+/// touch (are tangent) and still become the end there (mitcad#1191),
+/// relative to the sketch size. A point the solve holds on two touching
+/// curves within its tolerance (1e-9 of the size) can lie off the contact
+/// along them by about the square root of twice that, so the computed
+/// contact is only that accurate: two arcs trimmed one after the other at
+/// their contact were left with ends 2e-6 mm apart.
+const TANGENT_REACH: f64 = 5e-5;
 
 struct Chain {
     /// Curves in order, and whether each runs forward along the chain.

@@ -4,7 +4,8 @@
 // (as a replayed body against the one stored for it) and that has a hole
 // the original lacks. Only the hole is removed material, found without a
 // boolean of the near-coincident bumps; a near copy without the hole lacks
-// nothing; a change over most of the body is cut whole.
+// nothing; a change over most of the body is cut whole; a long, narrow
+// hole is cut within a box that misses the bump (mitcad#1177).
 
 #include <chrono>
 #include <cmath>
@@ -86,6 +87,33 @@ void test_hole_beside_near_faces() {
   }
 }
 
+// A hole of radius 2 along y through the block at x = 20, z = 5.
+TopoDS_Shape drill_across(const TopoDS_Shape& body) {
+  const TopoDS_Shape tool = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(20, -1, 5), gp_Dir(0, 1, 0)), 2, 42).Shape();
+  return BRepAlgoAPI_Cut(body, tool).Shape();
+}
+
+void test_long_hole_beside_near_faces() {
+  // mitcad#1177: a long, narrow hole's faces (4 by 40 by 4 mm) grown by
+  // half their diagonal reach the near-coincident bump 20 mm away, and
+  // over most of the body; grown by half their middle side, they do not.
+  const Shape before(bumped(0.0));
+  const Shape after(drill_across(bumped(0.02)));
+  const auto start = std::chrono::steady_clock::now();
+  const BooleanResult removed = removed_material(before, after, 0.1);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  std::printf("removed material of a long hole beside near-coincident faces: %.2f s\n", seconds);
+  CHECK(removed.touched.size() == 1 && removed.touched[0]);
+  CHECK(removed.pieces.size() == 1);
+  if (removed.pieces.size() == 1) {
+    const Shape& hole = *removed.pieces.front().shape;
+    CHECK_NEAR(volume(hole), kPi * 4.0 * 40.0);
+    const BoundingBox b = bounding_box(hole);
+    CHECK(near(b.min.X(), 18.0, 1e-4) && near(b.max.X(), 22.0, 1e-4));
+    CHECK(std::abs(b.min.Y()) < 1e-4 && near(b.max.Y(), 40.0, 1e-4));
+  }
+}
+
 void test_near_copy_lacks_nothing() {
   const Shape before(bumped(0.0));
   const Shape after(bumped(0.02));
@@ -110,6 +138,7 @@ void test_large_change_cuts_whole() {
 
 void removed_tests() {
   test_hole_beside_near_faces();
+  test_long_hole_beside_near_faces();
   test_near_copy_lacks_nothing();
   test_large_change_cuts_whole();
 }

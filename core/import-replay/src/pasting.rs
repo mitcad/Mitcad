@@ -12,6 +12,12 @@
 //! (mitcad#465, `features/body_transfer.rs` of the model). The
 //! item has no state of its own to be checked against, so the replay's
 //! bodies must be as they were and be the destination's after the move.
+//!
+//! A cut pasted into the component it came from moves nothing; where the
+//! file's history holds a state of its own for it that is not the bodies
+//! as they are (it keeps the body and adds a copy of it), its translation
+//! is that copy (mitcad#1175), which the usual route checks against the
+//! state.
 
 use mitcad_dump::TimelineItem;
 use mitcad_model::BodyUid;
@@ -59,6 +65,23 @@ fn run_command<K: crate::ImportKernel>(commands: Option<&Commands>) -> Option<Ru
 }
 
 impl<K: crate::ImportKernel> crate::Importer<'_, K> {
+    /// Whether the replay's solids are the state the file's history keeps
+    /// for item `index`; true where the history holds no state of its own
+    /// for it (or cannot build it): nothing to check against.
+    pub(crate) fn state_is_current(&mut self, index: i64) -> bool {
+        if !self.oracle.enabled {
+            return true;
+        }
+        let Some(state) = self.oracle.item_state(index) else {
+            return true;
+        };
+        let kernel = self.doc.kernel();
+        let Some(expected) = self.oracle.try_sigs(kernel, state) else {
+            return true;
+        };
+        bodies_distance(&expected, &self.current_sigs()).is_some()
+    }
+
     /// A cut and paste as the Move to Component command its translation
     /// gives ([`Importer::cut_paste_command`](crate::ops)). False (nothing
     /// done) when the move is refused or changes the bodies: the item then

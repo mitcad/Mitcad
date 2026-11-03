@@ -26,6 +26,8 @@ for scenario in face-bounded-profiles face-bounded-whole-face face-bounded-open-
   esac
   workflow=$MITCAD_TEST_WORK/$scenario.mitcad-ui
   if [ "$frontend" = native ]; then
+    # Hit-test the visible AppKit hierarchy for viewport input, including
+    # the ordinary Qt viewport and manipulator routing behind its host.
     sed -e 's/^button .* clear_profiles$/native-click native.action.clear|profiles/' \
         -e 's/^click-pick /native-viewport-click-pick /' \
         -e 's/^qt-choice input_operation /native-choice input_operation /' "$workflow" \
@@ -37,7 +39,7 @@ for scenario in face-bounded-profiles face-bounded-whole-face face-bounded-open-
   ui_expect_log '^TestDriver: done' "$frontend: $scenario completed"
   ui_expect_no_log '^TestDriver: FAIL' "$frontend: $scenario assertions passed"
   if [ "$frontend" = native ]; then
-    ui_expect_log '^Native viewport pointer:' "$scenario: pick used AppKit hit-testing and NSApp dispatch"
+    ui_expect_log '^Native viewport pointer:' "$scenario: viewport click used AppKit hit-testing and dispatch"
   fi
 done
 [ "$UI_FAILURES" = 0 ] || exit 1

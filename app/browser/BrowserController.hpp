@@ -14,7 +14,6 @@
 #include "DocumentSnapshot.hpp"
 #include "FindInDesign.hpp"
 #include "../print/MaterialsDialog.hpp"
-#include "../print/MyLibraryDialog.hpp"
 #include "../print/OwnSettingsDialog.hpp"
 #include "../print/ProfilesDialog.hpp"
 #include "../print/PurgeVolumesDialog.hpp"
@@ -129,21 +128,22 @@ public:
   // `bound`: a target's material follows an expression, the fx mark.
   QMenu* materialMenu(QWidget* owner, const QStringList& bodies, const QString& component = QString(),
                       bool bound = false);
-  // Printers and Processes (mitcad#655; Edit Printers and Processes, Edit…
-  // of 3D Print's and Property Sets' Printer and Process rows): the item
-  // `key` ("<place>/<id>") of `kind` (printer or process) selected, none
-  // for an empty key. The window follows the model.
+  // The Printers or the Processes manager (mitcad#655, mitcad#1135;
+  // Make › 3D Print › Printers… and Processes…, Edit… of 3D Print's and
+  // Property Sets' Printer and Process rows): the manager of `kind`
+  // (printer or process; the Printers manager for none) with the item
+  // `key` ("<place>/<id>") selected, the design's choice for an empty key.
+  // With no design open it works on the libraries (ManagerHosts). The
+  // window follows the model.
   void openProfiles(const QString& kind, const QString& key);
   // A body's, an occurrence's or a component's own process settings in
   // the settings form (mitcad#655): `owner` its uid, `name` as the design
   // shows it (3D Print's own-settings links, Property Sets' Edit… of
   // Process).
   void openOwnSettings(const QString& owner, const QString& name);
-  // My Library (mitcad#704; Tools › My Library…, My Library… of Materials
-  // and Printers and Processes): the user's and the project's materials,
-  // printers and processes without a design. When it closes after a
-  // change, the open print windows read the libraries again.
-  void openMyLibrary();
+  // A manager closed after it changed a library without a design
+  // (mitcad#1135): the other managers read the libraries again.
+  void librariesChanged();
   // Purge Volumes (mitcad#705; 3D Print's Purge volumes row): the table of
   // the filament slots of `bodies` (uids, in the order printed). The window
   // follows the model.
@@ -346,9 +346,9 @@ private:
   QPointer<AppearanceDialog> m_appearances;
   QPointer<PropertySetsDialog> m_propertySets;
   QPointer<MaterialsDialog> m_materials;     // mitcad#655
-  QPointer<ProfilesDialog> m_profiles;       // mitcad#655
+  QPointer<ProfilesDialog> m_printers;      // mitcad#655, mitcad#1135
+  QPointer<ProfilesDialog> m_processes;     // mitcad#1135
   QPointer<OwnSettingsDialog> m_ownSettings; // mitcad#655
-  QPointer<MyLibraryDialog> m_myLibrary;     // mitcad#704
   QPointer<PurgeVolumesDialog> m_purgeVolumes; // mitcad#705
   QPointer<FindDialog> m_find;
   QToolButton* m_findButton = nullptr;

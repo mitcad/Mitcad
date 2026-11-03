@@ -119,6 +119,8 @@ RenderMode::RenderMode(OcctViewer& viewer, std::function<void(QObject*, std::fun
       qInfo().noquote() << QStringLiteral("Render view %1: %2 samples in %3 s").arg(view).arg(samples).arg(seconds, 0, 'f', 2);
     }
   });
+  m_documentVisible = viewer.documentVisible();
+  connect(&viewer, &OcctViewer::documentVisibilityChanged, this, &RenderMode::setDocumentVisible);
   m_messageTimer->setSingleShot(true);
   m_messageTimer->setInterval(kMessageMilliseconds);
   connect(m_messageTimer, &QTimer::timeout, this, [this] {
@@ -167,6 +169,20 @@ void RenderMode::setEnabled(bool enabled) {
   }
 }
 
+void RenderMode::setDocumentVisible(bool visible) {
+  if (visible == m_documentVisible) return;
+  m_documentVisible = visible;
+  if (!m_enabled || !m_ready) return;
+  m_client->send({{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), !visible}});
+  if (visible) {
+    sendEnvironment();
+    scheduleScene();
+    sendView();
+    showFrame();
+    displayFrame();
+  }
+}
+
 void RenderMode::deviceChanged() {
   if (!m_enabled) {
     return;
@@ -183,6 +199,7 @@ void RenderMode::workerReady(const QString& renderer) {
   }
   qInfo().noquote() << QStringLiteral("Render worker ready: %1").arg(renderer);
   m_ready = true;
+  m_client->send({{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), !m_documentVisible}});
   m_workerMeshes.clear();
   // Full-resolution previews (docs/rendering.md, "Previews"): none unless
   // asked for, as each costs a denoise of the whole view.
@@ -210,7 +227,7 @@ void RenderMode::setSettings(const QJsonObject& settings, const QString& documen
   const QJsonObject film = settings.value(QStringLiteral("film")).toObject();
   m_look.exposure = static_cast<float>(film.value(QStringLiteral("exposure")).toDouble());
   m_look.transform = viewTransformOf(film.value(QStringLiteral("view_transform")).toString());
-  if (!m_enabled || !m_ready) {
+  if (!m_enabled || !m_ready || !m_documentVisible) {
     return;
   }
   const QString sent = m_sentEnvironment;
@@ -229,7 +246,7 @@ QJsonObject RenderMode::environmentCommand() const {
 }
 
 void RenderMode::sendEnvironment() {
-  if (!m_enabled || !m_ready) {
+  if (!m_enabled || !m_ready || !m_documentVisible) {
     return;
   }
   const QJsonObject command = environmentCommand();
@@ -278,7 +295,7 @@ void RenderMode::workerFailed(const QString& reason) {
 }
 
 void RenderMode::scheduleScene() {
-  if (!m_enabled || !m_ready || m_scenePending) {
+  if (!m_enabled || !m_ready || !m_documentVisible || m_scenePending) {
     return;
   }
   m_scenePending = true;
@@ -290,7 +307,7 @@ void RenderMode::scheduleScene() {
 }
 
 void RenderMode::sendScene() {
-  if (!m_enabled || !m_ready) {
+  if (!m_enabled || !m_ready || !m_documentVisible) {
     return;
   }
   // A fixed scene for trying the renderer without a design.
@@ -538,7 +555,7 @@ QString RenderMode::viewKey(const QJsonObject& view) {
 }
 
 void RenderMode::sendView() {
-  if (!m_enabled || !m_ready) {
+  if (!m_enabled || !m_ready || !m_documentVisible) {
     return;
   }
   QJsonObject view = viewCommand();
@@ -571,7 +588,7 @@ void RenderMode::sendView() {
 void RenderMode::showFrame() {
   ScopedTiming delivery("render delivery");
   render::Frame frame;
-  if (!m_enabled || !m_client->takeFrame(frame)) {
+  if (!m_enabled || !m_documentVisible || !m_client->takeFrame(frame)) {
     return;
   }
   // A frame of an older camera or size would not fit the view.

@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# The sketch of a component shown only at its second occurrence
+# (mitcad#1194; the fixture hidden-occurrence-sketch.json: Plate:1 in the
+# hidden Assembly:1 at (-200, 0, 450), Plate:2 shown at the origin). The
+# wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation on Plate's Sketch1.
+#   1. The sketch is edited where the view shows Plate, at Plate:2 (O3),
+#      its frame's origin at the origin; its curves are drawn there
+#      ("Sketches shown: F1"), not left out with the hidden Assembly:1
+#      while its dimensions were drawn at (-200, 0, 450).
+#   2. The hole's diameter set to 12 in its value editor changes the
+#      plate; the saved design is checked by hidden-occurrence-sketch-check.json.
+wait-idle
+mark
+ENTER_SKETCH
+wait-log '^Editing sketch F1 \(Sketch1\)'
+expect-log '^Sketch frame in the design \(at O3\): origin \(0\.000000, 0\.000000, 0\.000000\)'
+wait-log '^Sketches shown: F1$' 10
+key F6
+wait-log '^Dimension k7 text at '
+
+mark
+dblclick-logged '^Dimension k7 text at '
+wait-log '^Sketch value editor at '
+key ctrl+a
+type 12
+key Return
+wait-log '^Dimension k7 = 12 '
+command sketch.finish
+wait-log '^Sketch finished'
+wait-log 'Body [^ ]+ \(F2\.b0\): volume (23214\.602 -> )?22869\.027 mm3' 30
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

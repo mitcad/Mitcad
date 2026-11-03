@@ -410,7 +410,10 @@ void FloatingLayout::showEvent(QShowEvent* event) {
     return;
   }
   // The cards' windows follow the window that they are children of.
-  if (m_hostWindow.isNull()) {
+  if (m_hostWindow != window()) {
+    if (m_hostWindow) {
+      m_hostWindow->removeEventFilter(this);
+    }
     m_hostWindow = window();
     m_hostWindow->installEventFilter(this);
   }
@@ -427,9 +430,11 @@ void FloatingLayout::showEvent(QShowEvent* event) {
 
 void FloatingLayout::hideEvent(QHideEvent* event) {
   QWidget::hideEvent(event);
-  if (!m_windowed || window()->isVisible()) {
-    return; // hidden by a page change, not with the window
+  if (!m_windowed) {
+    return;
   }
+  // Native tool windows do not inherit this page's visibility. A document
+  // tab can hide while its containing frame remains visible.
   for (const Entry& entry : m_entries) {
     if (entry.card != nullptr) {
       entry.card->hostVisibilityChanged(false);
@@ -864,11 +869,18 @@ void FloatingLayout::logCards() {
     return;
   }
   // The bottom of the bar above the cards in the window: the menu bar (none
-  // on macOS) and the header, as they are placed.
+  // on macOS) and the header, as they are placed. The document's own main
+  // window may sit in a document frame (mitcad#1172), below the frame's menu
+  // bar and tabs: the bar ends at its top, or at its own menu bar's bottom.
   int barBottom = 0;
-  if (const auto* mainWindow = qobject_cast<const QMainWindow*>(host)) {
+  const QMainWindow* mainWindow = nullptr;
+  for (QWidget* parent = parentWidget(); parent != nullptr && mainWindow == nullptr; parent = parent->parentWidget()) {
+    mainWindow = qobject_cast<const QMainWindow*>(parent);
+  }
+  if (mainWindow != nullptr) {
+    barBottom = mainWindow == host ? 0 : mainWindow->mapTo(host, QPoint(0, 0)).y();
     if (mainWindow->menuWidget() != nullptr && mainWindow->menuWidget()->isVisible()) {
-      barBottom = mainWindow->menuWidget()->geometry().bottom() + 1;
+      barBottom = mainWindow->menuWidget()->mapTo(host, QPoint(0, mainWindow->menuWidget()->height())).y();
     }
   }
   if (m_header != nullptr && m_header->isVisible()) {

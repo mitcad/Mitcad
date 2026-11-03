@@ -729,4 +729,17 @@ Table clearCells(const Table& table, const QVector<SheetColumn>& columns, const 
   return out;
 }
 
+ValueCell valueCell(const OptionReport* report, bool text, const QString& expression) {
+  ValueCell cell;
+  if (report != nullptr && report->driven) {
+    // By Formula: the evaluated value; the formula only in the tooltip.
+    cell.text = report->valueText;
+    cell.expression = report->expression.isEmpty() ? expression : report->expression;
+    cell.editable = false;
+    return cell;
+  }
+  cell.text = report != nullptr && !report->valueText.isEmpty() ? report->valueText : rowText(text, expression);
+  return cell;
+}
+
 } // namespace mitcad::configurations

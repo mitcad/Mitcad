@@ -18,8 +18,17 @@ expect-log 'Configurations window opened'
 expect-ever 'Configurations options: Color \(Black, White\) = White; Length \(300 mm'
 expect-ever 'Configurations rows: open, .*Short: Color = White, Length = 800 mm'
 expect-ever 'Configurations tab Rows at'
+# The approved words (mitcad#968): the Options headers, Edit Possible
+# Values…, Only these rows with its tooltip, the Bindings tab's Option
+# filter, and the panel's row chooser labelled Row.
+expect-ever 'Configurations options header: Option \| Unit \| Possible Values \| Value \| Comment \| By Formula \| Used By$'
+expect-widget-property configurationsEditDomain text 'Edit Possible Values…'
+expect-widget-property configurationsClosed text 'Only these rows'
+expect-widget-property configurationsClosed toolTip 'Allow only the combinations listed in the Rows tab'
+expect-widget-property configurationsBindingsOptionLabel text 'Option:'
 key Escape
 focus-main
+expect-widget-property configurationRowLabel text 'Row'
 
 # A choice in the bar: Length typed into its field; the body follows.
 capture-undo-depth before

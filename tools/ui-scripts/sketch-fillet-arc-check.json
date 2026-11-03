@@ -1,0 +1,5 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved Sketch1 after Sketch Fillet of r 2 at the half disc's corner point (20, 0) (mitcad#1192): one region, the half disc of 628.3185 mm2 less the 1.0154 mm2 that the arc tangent to the line, inside the circle, rounds off the corner."},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"regions":[{"area":627.30315}]},"tolerance":0.0001}}
+]

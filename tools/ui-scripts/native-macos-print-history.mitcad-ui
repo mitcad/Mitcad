@@ -24,7 +24,7 @@ native-choice 'native.properties.C0.Print Process.profile.value' Alternate
 expect-log 'Property print Print Process/profile set: Alternate' 30
 expect-undo-depth ${baseline} 1
 native-pointer-click 'native.properties.C0.Print Process.profile.edit'
-focus-dialog '^Printers and Processes$'
+focus-dialog '^Processes$'
 expect-log 'Profile selected: process Alternate'
 expect-undo-depth ${baseline} 1
 native-pointer-button '^Close$'

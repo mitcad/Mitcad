@@ -751,7 +751,7 @@ impl Configurations {
                     to: to.text.clone(),
                     from_expression,
                     to_expression: to.expression.clone(),
-                    rule: format!("its allowed values {t}.{column}"),
+                    rule: format!("its possible values {t}.{column}"),
                 },
             });
         }

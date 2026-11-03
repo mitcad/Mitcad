@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The navigation bar at the bottom of the view (mitcad#1086,
-// view/NavigationBar): Look At, Fit, Visual Style, Layout Grid and Snap to
-// Grid, the View menu's own actions. In the Floating layout a capsule card
-// at the bottom centre of the view, above the timeline
+// view/NavigationBar): Look At, Fit, Visual Style, Layout Grid, Snap to
+// Grid and Comment Pins, the View menu's own actions. In the Floating
+// layout a capsule card at the bottom centre of the view, above the timeline
 // (FloatingLayout::Anchor::BottomCenter); in the Docked layout in the
 // status bar. It shows in every workspace and in sketches; Preferences ›
 // Display › Show the navigation bar hides it. The AppKit frontend shows
@@ -95,7 +95,8 @@ void MainWindow::createNativeNavigationBar() {
   bar.style.label = tr("Visual Style");
   bar.style.icon = themeIcon(QStringLiteral("visual-style"));
   bar.commands = {QStringLiteral("view.look_at"), QStringLiteral("view.fit"), bar.style.id,
-                  QStringLiteral("view.grid"), QStringLiteral("view.snap_grid")};
+                  QStringLiteral("view.grid"), QStringLiteral("view.snap_grid"),
+                  QStringLiteral("view.comment_pins")};
   for (const QString& id : std::as_const(bar.commands)) {
     follow(m_registry->action(id));
   }

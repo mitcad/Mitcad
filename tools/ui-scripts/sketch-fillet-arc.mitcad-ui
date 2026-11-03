@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Sketch Fillet at the corner of a line and an arc picked by its corner
+# point (mitcad#1192). The wrapper replaces ENTER_SKETCH with the
+# frontend's ordinary timeline activation on the fixture's Sketch1: two
+# framing points at (-40, -30) and (40, 30), and a half disc of r 20 about
+# the origin, its line from (20, 0) to (-20, 0) and its arc over (0, 20);
+# at (20, 0) they end in two points, the arc's end held on the line by a
+# point-on-curve, as a Trim leaves a corner.
+# The click stays near the middle of the fit, clear of the browser and the
+# palette also in session 0's 1024x768 window on Windows.
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+
+# The corner point at (20, 0) selected, where the line and the arc end
+# together: Sketch Fillet takes it, the preview rounds the corner and OK
+# keeps the arc of the default radius 2.
+mark
+sketch-click 20 0
+expect-selection 1 0
+mark
+command sketch.fillet
+wait-log '^Command Sketch Fillet started'
+wait-log '^Preview Sketch Fillet: ok'
+mark
+key Return
+wait-log 'Sketch fillet of p[0-9]+, radius 2'
+screenshot '${MITCAD_TEST_WORK}/sketch-fillet-arc.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL|Pick two lines'

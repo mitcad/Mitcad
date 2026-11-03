@@ -1,0 +1,186 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: patch 1140's end past the spine's end vertex wherever the edge's
+faces go on meeting along its curve, and over pieces given up at the end
+(mitcad#236).
+
+The case: a rounding of 1 along a top's outline, round the outline's
+corner (rounded with 2) up to the vertex V where a wall standing on the
+top crosses the corner's rounding at a sharp vertical edge Eq. The
+contact on the top runs onto the wall's foot already on the straight
+edge before the corner: the analytic piece round the corner lies wholly
+past the wall, and so does the straight piece's start, which is kept as
+an extension with its top side given up. ChFi3d_KPartCutToEnd took that
+extension for the first piece, found no side whose contact leaves its
+face and gave up; the corner then capped the straight piece's
+prolongation with the wall, which it does not meet ("bouchon non
+ecrit").
+
+Now the pieces at the end with a side given up come before the first
+piece on both faces, which is P; where the end is past V, the cut pieces
+take their place (elsewhere such an end is left as before). And the end
+past V (patch 1140) no longer needs Eq's faces tangent along it and the
+face the contact leaves narrowing to a point at V: it needs Eq's curve
+continued from V up to the end on both faces' surfaces (checked at four
+points), which holds for faces tangent along Eq and for the wall and the
+corner's cylinder running on along their vertical edge. The wall grows
+down to the cut and Eq is prolonged down to the end, 1 below the top, as
+in the file: on the stored design the boolean differences with the
+file's body are empty both ways and the change of volume is 0.013 % off
+the file's. Test: geometry/tests/test_fillet_corners.cpp, a block lowered
+on one side of a wall across its rounded corner, against the lower block
+alone rounded on the far side of the wall's plane (failing without the
+patch).
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index a0156063..8c40e525 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -9739,47 +9739,6 @@ static void ChFi3d_FillKPartRoundGapsAcrossEdges(
+ //            no corner). Returns true when the pieces are added.
+ //=======================================================================
+ 
+-//=======================================================================
+-// function : ChFi3d_NarrowsToVertex
+-// purpose  : Whether the edges E1 and E2 leave their common vertex V the
+-//            same way (within 0.25 rad): the face they bound narrows to a
+-//            point at V.
+-//=======================================================================
+-
+-static bool ChFi3d_NarrowsToVertex(const TopoDS_Edge& E1, const TopoDS_Edge& E2, const TopoDS_Vertex& V)
+-{
+-  gp_Vec aOut[2];
+-  int    k = 0;
+-  for (const TopoDS_Edge& E : {E1, E2})
+-  {
+-    bool atV = false;
+-    for (TopExp_Explorer ex(E, TopAbs_VERTEX); ex.More() && !atV; ex.Next())
+-    {
+-      atV = ex.Current().IsSame(V);
+-    }
+-    if (!atV || BRep_Tool::Degenerated(E))
+-    {
+-      return false;
+-    }
+-    const BRepAdaptor_Curve aC(E);
+-    const double            p = BRep_Tool::Parameter(V, E);
+-    gp_Pnt                  aP;
+-    aC.D1(p, aP, aOut[k]);
+-    // (Away from V: towards the edge's other end.)
+-    const double pm = 0.5 * (aC.FirstParameter() + aC.LastParameter());
+-    if (pm < p)
+-    {
+-      aOut[k].Reverse();
+-    }
+-    if (aOut[k].Magnitude() <= gp::Resolution())
+-    {
+-      return false;
+-    }
+-    k++;
+-  }
+-  return aOut[0].Angle(aOut[1]) < 0.25;
+-}
+-
+ //=======================================================================
+ // function : ChFi3d_OnOneSurface
+ // purpose  : Whether faces F1 and F2 lie on one surface (planes in one
+@@ -9944,7 +9903,25 @@ static bool ChFi3d_KPartCutToEnd(
+   {
+     return false;
+   }
+-  const occ::handle<ChFiDS_SurfData> P = isFirst ? aLSD(k).First() : aLSD(k).Last();
++  // (Pieces at the end whose contact on one side is given up, an extension
++  // over the stretch where that contact lies past its face's edge, come
++  // before P: the cut pieces take their place, where the end is past V.)
++  int nGivenUp = 0;
++  while (nGivenUp < aLSD(k).Length())
++  {
++    const occ::handle<ChFiDS_SurfData>& D = aLSD(k).Value(isFirst ? 1 + nGivenUp : aLSD(k).Length() - nGivenUp);
++    if (D->IndexOfS1() > 0 && D->IndexOfS2() > 0)
++    {
++      break;
++    }
++    nGivenUp++;
++  }
++  if (nGivenUp == aLSD(k).Length())
++  {
++    return false;
++  }
++  const occ::handle<ChFiDS_SurfData> P =
++    aLSD(k).Value(isFirst ? 1 + nGivenUp : aLSD(k).Length() - nGivenUp);
+   // The side whose contact leaves its face N across an edge E into B.
+   int ons = 0;
+   for (int s = 1; s <= 2 && ons == 0; s++)
+@@ -10154,19 +10131,17 @@ static bool ChFi3d_KPartCutToEnd(
+     }
+   }
+   // The other contact's line meeting Eq's curve only beyond V, where Eq
+-  // ends: where Eq's faces Fo and B are tangent along it (B rounds Fo off
+-  // there) and N narrows to a point at V (its edges there, the spine's end
+-  // edge and E, leave V the same way: a step between B and Fo that closes
+-  // up at V), their surfaces go on meeting along that curve. (Not where N
+-  // narrows to a point at E's other end too, a sliver of N between B and two
+-  // faces, which another blend's contact leaves across E as well, e.g. a
+-  // window's floor rounded on both edges up to a pillar's rounded end: the
+-  // corner cuts them.) B then grows
+-  // up to the cut along it: Eq is prolonged beyond V to the point Q there,
+-  // where the blend ends.
++  // ends: where Eq's faces Fo and B go on meeting along Eq's curve
++  // continued up to that point Q (Fo and B tangent along Eq, B rounding Fo
++  // off there; or both surfaces running on along Eq's line, a wall standing
++  // on N against a rounded outline), B grows up to the cut along it: Eq is
++  // prolonged beyond V to Q, where the blend ends. (Not where N narrows to a
++  // point at E's other end, a sliver of N between B and two faces, which
++  // another blend's contact leaves across E as well, e.g. a window's floor
++  // rounded on both edges up to a pillar's rounded end: the corner cuts
++  // them.)
+   bool isPastV = false;
+-  if (!found && ChFi3d::IsTangentFaces(Eq, Fo, B) && ChFi3d_NarrowsToVertex(Spine->Edges(eEnd), E, V)
+-      && !ChFi3d_NarrowsAtOtherEnd(N, B, E, V, EFMap))
++  if (!found && !ChFi3d_NarrowsAtOtherEnd(N, B, E, V, EFMap))
+   {
+     occ::handle<Geom_Curve> aBasisEq = CEq;
+     if (const occ::handle<Geom_TrimmedCurve> aTrim = occ::down_cast<Geom_TrimmedCurve>(CEq))
+@@ -10195,11 +10170,17 @@ static bool ChFi3d_KPartCutToEnd(
+         {
+           continue;
+         }
+-        // (On both faces' surfaces there.)
+-        const gp_Pnt               aQ = CO->Value(t);
+-        GeomAPI_ProjectPointOnSurf aPrB(aQ, aSB), aPrO(aQ, aSO);
+-        if (aPrB.NbPoints() == 0 || aPrB.LowerDistance() > 10. * tol3d || aPrO.NbPoints() == 0
+-            || aPrO.LowerDistance() > 10. * tol3d)
++        // (Eq's curve continued from V to there on both faces' surfaces.)
++        const gp_Pnt aQ = CO->Value(t);
++        bool         onBoth = true;
++        for (int j = 1; j <= 4 && onBoth; j++)
++        {
++          const gp_Pnt               aX = j == 4 ? aQ : aBasisEq->Value(pv + (w - pv) * j / 4.);
++          GeomAPI_ProjectPointOnSurf aPrB(aX, aSB), aPrO(aX, aSO);
++          onBoth = aPrB.NbPoints() > 0 && aPrB.LowerDistance() <= 10. * tol3d && aPrO.NbPoints() > 0
++                   && aPrO.LowerDistance() <= 10. * tol3d;
++        }
++        if (!onBoth)
+         {
+           continue;
+         }
+@@ -10210,7 +10191,7 @@ static bool ChFi3d_KPartCutToEnd(
+       }
+     }
+   }
+-  if (!found)
++  if (!found || (nGivenUp > 0 && !isPastV))
+   {
+     return false;
+   }
+@@ -10515,6 +10496,10 @@ static bool ChFi3d_KPartCutToEnd(
+       break;
+     }
+   }
++  for (int j = 0; j < nGivenUp; j++)
++  {
++    aLSD(k).Remove(isFirst ? 1 : aLSD(k).Length());
++  }
+   int i = 1;
+   for (int e = eEnd;; e += step, i++)
+   {

@@ -31,6 +31,12 @@ discovery and chat folders:
   codex-again  the next start: Codex and its model are still chosen
   desktop   only Claude Desktop installed: the panel points to Connect AI
             Assistant
+  account   each agent (mitcad#1126): an account failure (a message queued
+            meanwhile is not sent and says so), How to fix, Check again
+            failing for the account, for the network (the account's reason
+            stays) and with the agent's program gone (it ends at once and
+            shows the agent missing; found again, Check again is back), then
+            passing; New Conversation in a fresh session
 
 Usage: ui-chat-test.py APP STUB OUTPUT [QT_BIN]
 """
@@ -361,6 +367,114 @@ def main():
             "expect-widget-property chatSetup text 'Install Claude Code'",
         ]
         run(app, "desktop", work, out, "floating", desktop)
+    for agent_name, shown_name, error_code, reason in (
+            ("claude", "Claude Code", "org-disabled", "your organization has disabled access"),
+            ("codex", "Codex", "signed-out", "sign-in is missing or has expired")):
+        with tempfile.TemporaryDirectory(prefix="chat-account-" + agent_name + "-", dir=out) as temporary:
+            work = Path(temporary)
+            (work / "designs").mkdir()
+            install_stub(stub, work / "clients", agent_name)
+            (work / (agent_name + "-signed-in")).write_text("", encoding="utf-8")
+            blocked = work / "account-blocked"
+            blocked.write_text("", encoding="utf-8")
+            recovered = out / ("chat-account-recovered-" + agent_name + ".png")
+            recovered.unlink(missing_ok=True)
+            # Signals of the UI script to the harness (screenshots into the
+            # work folder) and the harness's answer (mitcad#1155).
+            agent_gone = work / "agent-gone.png"
+            agent_removed = work / "agent-removed"
+            agent_back = work / "agent-back.png"
+            state_line = "'" + shown_name + " cannot use this account: " + reason + "'"
+            account = [
+                "wait-idle", "command view.chat", "wait-log 'Chat panel: ready' 60",
+                # The failure waits for account-go.png: a message written
+                # meanwhile waits in the queue and is not sent (mitcad#1155).
+                *send("account failure, slowly"), "wait-log 'Chat panel: notice'",
+                "button '^Continue$' chatContinue",
+                "wait-log 'Chat: message [0-9]+ sent' 30",
+                *send("queued at the account failure"),
+                "wait-log 'Chat: message queued \\(1 waiting\\)' 30",
+                "screenshot '" + str(work / "account-go.png") + "'",
+                "wait-log 'Chat: " + shown_name + " account error: " + error_code + "' 60",
+                "wait-log 'Chat notice \\(warning\\): 1 waiting message\\(s\\) were not sent\\.' 30",
+                "wait-log 'Chat: turn ended' 60",
+                "expect-widget-property chatPanel chatState account-error",
+                "expect-widget-property chatState text " + state_line,
+                "expect-widget-property chatSetup text 'How to fix'",
+                "expect-widget-property chatInput visible false",
+                "button '^How to fix$' chatSetup",
+                "expect-widget-property chatAccountHelp visible true",
+                "screenshot '" + str(out / ("chat-account-" + agent_name + ".png")) + "'",
+                "mark", "button '^Check again$' chatCheckAccount",
+                "wait-log 'Chat: " + shown_name + " account check failed:' 60",
+                "expect-widget-property chatPanel chatState account-error",
+                # A probe that fails for the network: the account's reason
+                # stays in the state line, the network error is a notice.
+                "screenshot '" + str(work / "network-down.png") + "'",
+                "mark", "button '^Check again$' chatCheckAccount",
+                "wait-log 'Chat: " + shown_name + " account check failed: .*Connection error' 60",
+                "wait-log 'Chat notice \\(warning\\): The account check failed: .*Connection error' 30",
+                "expect-widget-property chatPanel chatState account-error",
+                "expect-widget-property chatState text " + state_line,
+                "expect-widget-property chatCheckAccount enabled true",
+                "screenshot '" + str(work / "network-up.png") + "'",
+                # The agent's program gone: Check again ends at once instead
+                # of staying in Checking; the panel shows the agent missing,
+                # Check again hidden but usable again once it is back.
+                "screenshot '" + str(agent_gone) + "'",
+                "expect-file '" + str(agent_removed) + "' 30",
+                "mark", "button '^Check again$' chatCheckAccount",
+                "wait-log 'Chat: " + shown_name + " account check failed:' 10",
+                "wait-log 'Chat panel: missing' 10",
+                "expect-widget-property chatPanel chatState missing",
+                "expect-widget-property chatCheckAccount visible false",
+                "expect-widget-property chatCheckAccount enabled true",
+                "expect-widget-property chatNew enabled true",
+                "mark", "screenshot '" + str(agent_back) + "'",
+                "wait-log 'Chat: " + shown_name + " appeared' 60",
+                "wait-log 'Chat panel: account-error' 60",
+                "expect-widget-property chatCheckAccount visible true",
+                "expect-widget-property chatState text " + state_line,
+                # Change the scripted service's state, then run the same
+                # production recheck path again in another fresh process.
+                "screenshot '" + str(recovered) + "'", "sleep 500",
+                "mark", "button '^Check again$' chatCheckAccount",
+                "wait-log 'Chat: " + shown_name + " account check passed' 60",
+                "wait-log 'Chat panel: ready' 60",
+                "expect-widget-property chatAccountHelp visible false",
+                "expect-model-bodies 0 0",
+                *send("hello after account check"), "wait-log 'Chat: turn ended' 60",
+                "mark", "button '^New Conversation$' chatNew",
+                *send("hello with fresh sign-in"), "wait-log 'Chat: turn ended' 60",
+            ]
+            program = work / "clients" / (agent_name + ".exe" if os.name == "nt" else agent_name)
+
+            def account_harness(_text):
+                if agent_gone.exists() and not agent_removed.exists():
+                    try:
+                        program.unlink(missing_ok=True)
+                    except OSError:
+                        return False  # still in use (Windows): the next poll
+                    agent_removed.write_text("", encoding="utf-8")
+                if agent_back.exists() and not program.exists():
+                    install_stub(stub, work / "clients", agent_name)
+                if recovered.exists():
+                    blocked.unlink(missing_ok=True)
+                    return True
+                return False
+            text = run(app, "account-" + agent_name, work, out, "floating", account, on_log=account_harness)
+            if text.count("Chat notice (error):") != 1:
+                raise RuntimeError(agent_name + ": the account error must appear once")
+            messages = lines(work / "chat-messages.jsonl")
+            if any(message["text"] == "queued at the account failure" for message in messages):
+                raise RuntimeError(agent_name + ": a message queued at the account failure was sent")
+            probes = [message for message in messages if message["text"].startswith("Reply with OK only.")]
+            if len(probes) != 3 or any(probe["context"] or probe["pictures"] for probe in probes):
+                raise RuntimeError(agent_name + ": account probe must have no design context or pictures")
+            sessions = {messages[0]["session"], messages[-1]["session"], *(probe["session"] for probe in probes)}
+            if len(sessions) != 5:
+                raise RuntimeError(agent_name + ": the probe and New Conversation need fresh sessions")
+
     print("PASS: chat panel: setup, approvals, one undo step per message, stop, history and resume, both layouts, "
           "Codex, the agent switcher and the model choice")
 

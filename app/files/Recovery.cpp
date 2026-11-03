@@ -209,7 +209,7 @@ void discardSession(RecoverableSession& session) {
   qInfo().noquote() << QStringLiteral("Discarded recovery of %1").arg(session.document);
 }
 
-std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions) {
+std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Recover Unsaved Work"));
   auto* layout = new QVBoxLayout(&dialog);
@@ -218,6 +218,7 @@ std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableS
   text->setWordWrap(true);
   layout->addWidget(text);
   auto* table = new QTreeWidget;
+  table->setObjectName(QStringLiteral("recoverySessions"));
   table->setRootIsDecorated(false);
   table->setAllColumnsShowFocus(true);
   table->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -225,19 +226,22 @@ std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableS
                           QObject::tr("File"), QObject::tr("Note")});
   table->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
   layout->addWidget(table, 1);
-  auto* info = new QLabel(QObject::tr("Restore opens the selected design with these changes, not saved yet and "
-                                      "without undo history. One design is restored at a time; the others stay "
+  auto* info = new QLabel(QObject::tr("Restore opens each selected design in its own document window, with these "
+                                      "changes, not saved yet and without undo history. Unselected designs stay "
                                       "until you restore or discard them (File › Recover Designs)."));
   info->setWordWrap(true);
   layout->addWidget(info);
   auto* buttons = new QDialogButtonBox;
   QPushButton* restore = buttons->addButton(QObject::tr("&Restore"), QDialogButtonBox::AcceptRole);
   QPushButton* discard = buttons->addButton(QObject::tr("&Discard…"), QDialogButtonBox::DestructiveRole);
-  buttons->addButton(QObject::tr("&Later"), QDialogButtonBox::RejectRole);
+  QPushButton* later = buttons->addButton(QObject::tr("&Later"), QDialogButtonBox::RejectRole);
+  restore->setObjectName(QStringLiteral("recoveryRestore"));
+  discard->setObjectName(QStringLiteral("recoveryDiscard"));
+  later->setObjectName(QStringLiteral("recoveryLater"));
   restore->setDefault(true);
   layout->addWidget(buttons);
 
-  // Row i is sessions[i]; the newest first, selected.
+  // Row i is sessions[i]; every healthy design is selected for restore.
   const auto fill = [&] {
     table->clear();
     for (const RecoverableSession& session : sessions) {
@@ -250,6 +254,10 @@ std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableS
     }
     if (table->topLevelItemCount() > 0) {
       table->setCurrentItem(table->topLevelItem(0));
+      table->clearSelection();
+      for (int i = 0; i < table->topLevelItemCount(); ++i) {
+        table->topLevelItem(i)->setSelected(!sessions[static_cast<std::size_t>(i)].damaged());
+      }
     }
   };
   const auto selected = [&] {
@@ -260,21 +268,21 @@ std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableS
     std::sort(rows.begin(), rows.end());
     return rows;
   };
-  const auto restorable = [&]() -> std::optional<std::size_t> {
-    const std::vector<std::size_t> rows = selected();
-    if (rows.size() == 1 && rows.front() < sessions.size() && !sessions[rows.front()].damaged()) {
-      return rows.front();
-    }
-    return std::nullopt;
+  const auto restorable = [&] {
+    std::vector<std::size_t> rows = selected();
+    rows.erase(std::remove_if(rows.begin(), rows.end(), [&](std::size_t row) {
+      return row >= sessions.size() || sessions[row].damaged();
+    }), rows.end());
+    return rows;
   };
   const auto update = [&] {
-    restore->setEnabled(restorable().has_value());
+    restore->setEnabled(!restorable().empty());
     discard->setEnabled(!selected().empty());
   };
-  std::optional<std::size_t> chosen;
+  std::vector<std::size_t> chosen;
   const auto accept = [&] {
     chosen = restorable();
-    if (chosen) {
+    if (!chosen.empty()) {
       dialog.accept();
     }
   };
@@ -316,7 +324,7 @@ std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableS
   dialog.resize(820, 340);
   prepareModal(&dialog);
   if (execDialog(&dialog) != QDialog::Accepted) {
-    return std::nullopt;
+    return {};
   }
   return chosen;
 }

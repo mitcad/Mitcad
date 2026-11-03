@@ -239,11 +239,19 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         // The projection rule's choice of edge per curve, made once: the
         // snap puts the curve on that edge's projection and the projection
         // follows the same edge (mitcad#227).
-        let choices = if target.is_some() {
+        let mut choices = if target.is_some() {
             linked::choices(&parts, &frame, &sources)
         } else {
             Vec::new()
         };
+        // Copies in place of the body under the sketch: its own edge.
+        if let Some(body) = plane
+            .get("body")
+            .and_then(Value::as_str)
+            .and_then(|b| b.parse::<BodyUid>().ok())
+        {
+            linked::prefer_own_body(&mut choices, &sources, body);
+        }
         let snapped = if parts.linked > 0 {
             let own = owned && target.is_some();
             let edges = if own {
@@ -2146,7 +2154,9 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         other: &serde_json::Map<String, Value>,
         sketch: i64,
     ) -> Option<RegionSet> {
-        let loops = other.get("_f3d_profile_loops")?;
+        let Some(loops) = other.get("_f3d_profile_loops") else {
+            return self.text_set(other.get("_f3d_text_profiles")?, sketch);
+        };
         let info = self.sketches.get(&sketch)?;
         let output = self.doc.sketch_output(info.uid)?;
         let regions = &output.region_info;
@@ -2201,6 +2211,72 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 chosen.len(),
                 regions.len(),
                 chosen.iter().map(|&i| regions[i].area).collect::<Vec<_>>()
+            );
+        }
+        Some(RegionSet {
+            keys: chosen
+                .iter()
+                .map(|&i| regions[i].profile.key.to_string())
+                .collect(),
+            guess: false,
+            area: chosen.iter().map(|&i| regions[i].area).sum(),
+            parts: chosen
+                .iter()
+                .map(|&i| (regions[i].centroid, regions[i].area))
+                .collect(),
+            probe: None,
+            measured: false,
+            exact,
+        })
+    }
+
+    /// The letters of the texts an extrusion's text profiles name
+    /// (`_f3d_text_profiles`: `texts`, the file's text ids; `profiles`, how
+    /// many profiles the item selects; `only`, all of them the texts'),
+    /// mitcad#1177: the file's text profiles have no loops of sketch
+    /// curves, one profile a letter (the drill index's 59 profiles are the
+    /// 59 letters of its text). The regions bounded by one glyph contour
+    /// that is a letter's outline (not a counter); exact when the item
+    /// selects only the texts' profiles and as many as there are letters.
+    fn text_set(&self, named: &Value, sketch: i64) -> Option<RegionSet> {
+        let info = self.sketches.get(&sketch)?;
+        let output = self.doc.sketch_output(info.uid)?;
+        let texts: Vec<u32> = named["texts"]
+            .as_array()?
+            .iter()
+            .filter_map(|t| info.ids.get(t.as_str()?))
+            .filter_map(|ours| ours.strip_prefix('t')?.parse().ok())
+            .collect();
+        if texts.is_empty() {
+            return None;
+        }
+        let letters: std::collections::BTreeSet<mitcad_model::topo::CurveId> = output
+            .texts
+            .iter()
+            .filter(|t| texts.contains(&t.id.0))
+            .flat_map(mitcad_model::sketch::text::letter_contours)
+            .collect();
+        let regions = &output.region_info;
+        let chosen: Vec<usize> = regions
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                let mut outer = r.profile.key.segments().map(|s| &s.curve);
+                matches!((outer.next(), outer.next()), (Some(c), None) if letters.contains(c))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if chosen.is_empty() {
+            return None;
+        }
+        let exact = named["only"] == true
+            && named["profiles"].as_u64() == Some(chosen.len() as u64)
+            && chosen.len() == letters.len();
+        if crate::tracing() {
+            eprintln!(
+                "import: text profiles select {} letters of {} regions, exact={exact}",
+                chosen.len(),
+                regions.len(),
             );
         }
         Some(RegionSet {

@@ -89,6 +89,9 @@ pub struct TableSettings {
     /// A parts list's.
     #[serde(default, skip_serializing_if = "is_default")]
     pub levels: Levels,
+    /// A read-only grouping of measured geometry and material (mitcad#1176).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub group_identical: bool,
     /// Over it; `HOLES (mm)` and `BILL OF MATERIALS` when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -105,6 +108,7 @@ impl TableSettings {
             tags: TagStyle::default(),
             origin: TableOrigin::default(),
             levels: Levels::default(),
+            group_identical: false,
             title: None,
         }
     }

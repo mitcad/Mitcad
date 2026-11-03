@@ -154,6 +154,10 @@ In Mitcad: Libraries, add this repository's URL, Fetch; then Insert
 Component from Library, or the BUILD tab's pickers. Designs record the
 version they use.
 
+The screws, nuts, washers and wood fasteners have mount frames: with a
+hole's rim or round face selected (or clicked), Insert from Library seats
+one there, its head or bearing face on the face, joined to the hole.
+
 This repository was the fastener library (mitcad-fasteners) up to 1.0.0;
 from 2.0.0 it is the parts library. Designs made with the fastener library
 keep reading their parts at the versions they recorded.

@@ -577,13 +577,15 @@ def listed_frames(entries, what):
     return out
 
 
-def add_frames(mcp, document, frames, length):
+def add_frames(mcp, document, frames, length, mounts=None):
     """Adds the frames as joint origins mount:<name>, in their order with
     end_a and end_b first. With a length parameter, end_a and end_b
     without an origin are XY turned over and a plane at the length. A
     frame whose origin's z is an expression (`[0, 0, "L"]`) lies on a plane
     offset by it along Z (from XY, or from a fixed plane through its x and
-    y), so that it follows the parameter; the others are fixed planes."""
+    y), so that it follows the parameter; the others are fixed planes. A
+    frame `mounts` names gets that `mount` (mitcad#1197: a mount frame of
+    Place Component too)."""
     def follow(name, label, origin, z, x):
         on_axis = abs(origin[0]) < 1e-9 and abs(origin[1]) < 1e-9 and dot(x, [1, 0, 0]) > 1 - 1e-9
         base = "xy" if on_axis else {"origin": [origin[0], origin[1], 0.0], "normal": [0, 0, 1], "x_axis": x}
@@ -626,6 +628,8 @@ def add_frames(mcp, document, frames, length):
             definition = follow(name, label, origin, z, x)
         else:
             definition = {"type": "joint_origin", "geometry": {"origin": origin, "normal": z, "x_axis": x}}
+        if mounts and name in mounts:
+            definition["mount"] = mounts[name]
         mcp.add(document, {"cmd": "add_feature", "name": f"mount:{name}", "def": definition})
 
 
@@ -1951,6 +1955,9 @@ def make_model(ctx, mcp, entry, build):
         # The frames a shape makes when the entry lists none, and the holes
         # it has cut (their frames are added to the others).
         default_frames, holes, caps = [], [], []
+        # The frames that are mount frames too (mitcad#1197): by name, the
+        # joint origin's `mount` (a fastener's axis, for Place Component).
+        mounted = {}
         if shape == "plate":
             w = size(dimensions["width"], "W")
             t = size(dimensions["thickness"], "T")
@@ -2112,6 +2119,11 @@ def make_model(ctx, mcp, entry, build):
                 # After the frames, whose uids stay those of a plain part.
                 dress = (shank, head_uid, head, dk, length, d, value_of(dimensions["diameter"], parameters))
             default_frames = [{"name": "axis", "kind": "shaft", "origin": [0, 0, 0], "z": [0, 0, 1], "x": [1, 0, 0]}]
+            # Insert from Library places it into a hole by its axis, its
+            # seat on the face (mitcad#1197; docs/libraries.md, "Mount
+            # frames"): the axis frame a `shaft` mount frame, fixed.
+            mounted = {"axis": {"name": "axis", "kind": "shaft"}}
+            entry["mounts"] = [{"name": "axis", "kind": "shaft", "joint": "rigid"}]
         elif shape == "sheet":
             w = size(dimensions["width"], "W")
             h = size(dimensions["height"], "H")
@@ -2146,7 +2158,7 @@ def make_model(ctx, mcp, entry, build):
              "x": [0, 0, 1] if abs(h["z"][2]) < 0.9 else [1, 0, 0], "diameter": mm(h["diameter"])} for h in holes]
         frames = listed_frames(listed, entry["id"])
         length = (build.get("length") or {}).get("parameter")
-        add_frames(mcp, document, frames, length)
+        add_frames(mcp, document, frames, length, mounted)
         set_frames(entry, build, frames, build.get("frames") or [])
         fill_fasteners(entry, build)
         if dress:
@@ -2896,6 +2908,9 @@ def make_part(ctx, mcp, entry):
     # the making found are not a BUILD part's.
     if build and entry.get("build"):
         component["build"] = build
+    # The mount frames the making gave (mitcad#1197: a fastener's axis).
+    if entry.get("mounts"):
+        component["mounts"] = entry["mounts"]
     rows = entry.get("rows") or []
     if rows and "description" not in component:
         component["description"] = f"{len(rows)} sizes, {rows[0]['name']} to {rows[-1]['name']}."

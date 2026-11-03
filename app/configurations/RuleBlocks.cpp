@@ -1236,6 +1236,58 @@ std::vector<BlockPath> emptyPlaces(const Rule& rule) {
   return out;
 }
 
+QString emptyPlaceHint(const Rule& rule, const BlockPath& path) {
+  const QString condition = QStringLiteral("Add a condition");
+  const QString option = QStringLiteral("Choose an option");
+  const QString value = QStringLiteral("Enter a value");
+  const QString action = QStringLiteral("Add an action");
+  // A block that waits for a part of its own.
+  if (const Block* block = blockAt(rule, path); block != nullptr && block->kind != BlockKind::Empty) {
+    switch (block->kind) {
+    case BlockKind::Name:
+      return option;
+    case BlockKind::And:
+    case BlockKind::Or:
+    case BlockKind::Not:
+    case BlockKind::Require:
+      return condition;
+    case BlockKind::AllowOnly:
+    case BlockKind::Exclude:
+    case BlockKind::Min:
+    case BlockKind::Max:
+    case BlockKind::Step:
+      return block->text.isEmpty() ? option : value;
+    case BlockKind::InTable:
+      return QStringLiteral("Choose a table");
+    default:
+      return value;
+    }
+  }
+  // An empty socket, or a new place at a list's end: by what it is in.
+  if (path.indices.empty()) {
+    return path.section == 0 ? condition : action;
+  }
+  if (path.section != 0 && path.indices.size() == 1) {
+    return action; // a then's or an else's slot
+  }
+  const Block* parent = blockAt(rule, parentOf(path));
+  if (parent == nullptr) {
+    return path.section == 0 ? condition : action;
+  }
+  switch (parent->kind) {
+  case BlockKind::And:
+  case BlockKind::Or:
+  case BlockKind::Not:
+  case BlockKind::Require:
+    return condition;
+  case BlockKind::Compare:
+  case BlockKind::OneOf:
+    return path.indices.back() == 0 ? option : value;
+  default:
+    return value;
+  }
+}
+
 std::vector<Block>* listOf(Rule& rule, const BlockPath& path) {
   if (path.indices.empty()) {
     return nullptr;

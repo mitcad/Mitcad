@@ -157,6 +157,11 @@ public:
   // The folder of the project the document is in (its library of
   // materials and print profiles, mitcad#640); empty outside a project.
   virtual QString projectFolder() const { return {}; }
+  // Whether the window holds a design of the user's (mitcad#1135): one
+  // opened or saved, or one changed since the window opened. False for
+  // the empty Untitled design a window starts with: the print managers
+  // then work on My library (and This project) without a design.
+  virtual bool designOpen() const { return true; }
 
   // Sheet metal (mitcad#210): the Flat Pattern of a sheet-metal body to a
   // DXF file the user chooses.
@@ -202,6 +207,13 @@ public:
   // and one calibrated by two points clicked on it and a typed distance.
   virtual void editImageReference(const QString& /*name*/) {}
   virtual void calibrateImageReference(const QString& /*name*/) {}
+
+  // Comments for AI agents (mitcad#1119): asks for the text of a comment
+  // on `target` (the `add_comment` command's: {"feature"}, {"body",
+  // "occurrence"}, {"parameter"}) and adds it; `label` names the target in
+  // the dialog. The browser's, the timeline's and Edit Parameters' Add
+  // Comment….
+  virtual void addCommentOn(const QJsonObject& /*target*/, const QString& /*label*/) {}
 };
 
 } // namespace mitcad

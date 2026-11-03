@@ -215,6 +215,16 @@ MassProperties fixed_point_properties(const Shape& shape) {
   });
 }
 
+double faces_area(const std::vector<TopoDS_Face>& faces) {
+  BRep_Builder builder;
+  TopoDS_Compound compound;
+  builder.MakeCompound(compound);
+  for (const TopoDS_Face& face : faces) {
+    builder.Add(compound, face);
+  }
+  return analysis::surface_properties(compound, true).Mass();
+}
+
 BoundingBox bounding_box(const Shape& shape) {
   return detail::run("bounding box", [&] {
     BoundingBox result;

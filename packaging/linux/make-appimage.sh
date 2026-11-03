@@ -8,7 +8,8 @@
 #   2. linuxdeploy copies the libraries the executables need into usr/lib
 #      (Qt, OCCT and the rest from vcpkg, ICU, ...) and points their
 #      RUNPATH there; its Qt plugin adds Qt's plugins (the X11 platform,
-#      image formats, the SVG icon engine, TLS) and a qt.conf. What every
+#      image formats, the SVG icon engine, TLS, the CUPS print support of
+#      File › Print) and a qt.conf. What every
 #      Linux desktop has (glibc, X11 and xcb, OpenGL, fontconfig,
 #      FreeType, ...) stays the system's: linuxdeploy's exclude list. Then
 #      the ELF files are stripped.
@@ -100,6 +101,11 @@ for module in "$(dirname "$oidn")"/libOpenImageDenoise_device_{cpu,cuda,hip,sycl
   [ -e "$module" ] && [ ! -L "$module" ] && executables+=(--library "$module")
 done
 executables+=(--exclude-library 'libcuda.so*' --exclude-library 'libamdhip64.so*')
+# File › Print (mitcad#1089): Qt's CUPS print support plugin talks to the
+# system's print service through the system's libcups, which stays the
+# system's like the GPU drivers (a desktop without it prints to PDF files
+# only: Qt then leaves the plugin unloaded).
+executables+=(--exclude-library 'libcups.so*')
 # OpenSSL (see the header): the libssl.so.3 next to the libcrypto.so.3 that
 # the executables link, so that the AppImage has both or neither.
 crypto=""

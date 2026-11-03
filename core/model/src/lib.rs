@@ -324,3 +324,11 @@ pub use document::{CutKind, CutReference, SaveComponentOptions, SavedComponent};
 // The design's summary and statistics (mitcad#1088).
 pub use document::{SUMMARY_KEYS, SUMMARY_SET};
 pub use file::{DesignStatistics, SaveStamp};
+// Comments pinned to the model for an AI agent (mitcad#1119).
+pub use document::{
+    COMMENT_USER, Comment, CommentFound, CommentReply, CommentSketchItem, CommentStatus,
+    CommentTarget, CommentTargetKind, comment_number,
+};
+
+// Read-only BOM grouping (mitcad#1176).
+pub use document::{BomRow, PartSignature};

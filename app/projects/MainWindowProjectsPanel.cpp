@@ -7,6 +7,7 @@
 // History, Project Settings and Sync Now of a project, Add Existing Project
 // Folder and Remove from List. The panel itself is projects/ProjectsPanel.
 #include "../MainWindow.hpp"
+#include "../WindowManager.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -506,7 +507,8 @@ void MainWindow::sendPanelProjectVersions(const QString& root) {
 }
 
 void MainWindow::createDesignInProject(const QString& root, const QString& path) {
-  if (!maybeSave()) {
+  const bool replacing = m_windowManager == nullptr || GeneralSettings::load().openInCurrentWindow;
+  if (replacing && !maybeSave()) {
     qInfo().noquote() << QStringLiteral("New Design cancelled");
     return;
   }
@@ -515,7 +517,7 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
   // the new design is made (mitcad#175): a release that needs a choice
   // (Resolve Sync, Keep Lock) keeps the design and makes nothing.
   const bool wasReadOnly = windowReadOnly();
-  if (!m_locks->designClosing(file, false)) {
+  if (replacing && !m_locks->designClosing(file, false)) {
     qInfo().noquote() << QStringLiteral("New Design cancelled");
     return;
   }
@@ -531,7 +533,7 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
   refreshProjectsPanel();
   if (!answer) {
     // Refused: the open design stays, and takes its lock again.
-    m_locks->designOpened(m_filePath, wasReadOnly);
+    if (replacing) m_locks->designOpened(m_filePath, wasReadOnly);
     return;
   }
   qInfo().noquote() << QStringLiteral("New Design: made %1 in %2").arg(file, units);
@@ -539,16 +541,17 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
   // With its Component1 active, as the file stores it (mitcad#844): its
   // first sketch and feature go into it, as in the untitled new design.
   m_openingNewDesign = true;
-  const bool opened = openFile(file, error);
+  MainWindow* target = m_windowManager != nullptr ? m_windowManager->openFile(this, file, error) : nullptr;
+  const bool opened = m_windowManager != nullptr ? target != nullptr : openFile(file, error);
   m_openingNewDesign = false;
   if (!opened) {
-    m_locks->designOpened(m_filePath, wasReadOnly); // the open design stays
+    if (replacing) m_locks->designOpened(m_filePath, wasReadOnly); // the open design stays
     if (!error.isEmpty()) {
       sheetWarning(this, tr("New Design"), tr("Could not open %1:\n%2").arg(QDir::toNativeSeparators(file), error));
     }
     return;
   }
-  showHint(tr("%1 is a new design of %2: every save records a version.")
+  (target != nullptr ? target : this)->showHint(tr("%1 is a new design of %2: every save records a version.")
                .arg(QFileInfo(file).fileName(), QFileInfo(root).fileName()));
 }
 
@@ -571,9 +574,13 @@ void MainWindow::moveInProject(const QString& root, const QString& from, const Q
   if (canonicalRoot.isEmpty()) {
     canonicalRoot = QFileInfo(root).absoluteFilePath();
   }
-  for (QWidget* widget : QApplication::topLevelWidgets()) {
-    auto* window = qobject_cast<MainWindow*>(widget);
-    if (window == nullptr || window->m_filePath.isEmpty()) {
+  QList<MainWindow*> documents;
+  if (m_windowManager != nullptr) documents = m_windowManager->windows();
+  else for (QWidget* widget : QApplication::topLevelWidgets()) {
+    if (auto* window = qobject_cast<MainWindow*>(widget)) documents.append(window);
+  }
+  for (MainWindow* window : documents) {
+    if (window->m_filePath.isEmpty()) {
       continue;
     }
     openDesigns.append(window->m_filePath);
@@ -719,10 +726,15 @@ void MainWindow::panelVersionHistory(const QString& root, const QString& path) {
   const QString file = QDir::cleanPath(QDir(root).filePath(path));
   if (m_filePath.isEmpty() || !sameFolderPath(file, m_filePath)) {
     // The history is the open design's: it opens first.
-    if (!maybeSave()) {
+    if (m_windowManager == nullptr && !maybeSave()) {
       return;
     }
     QString error;
+    if (m_windowManager != nullptr) {
+      if (MainWindow* target = m_windowManager->openFile(this, file, error)) target->showVersionHistory();
+      else if (!error.isEmpty()) sheetWarning(this, tr("Version History"), error);
+      return;
+    }
     if (!openFile(file, error)) {
       if (!error.isEmpty()) {
         sheetWarning(this, tr("Version History"),

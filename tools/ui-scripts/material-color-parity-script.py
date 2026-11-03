@@ -35,7 +35,7 @@ def select(identifier, name):
             f"dialog-click-logged 'Materials item {name} at '")
 
 
-def open_add_popover():
+def open_add_popover(capture_name):
     add("mark", "native-pointer-click materialAppearanceAdd" if native else "button '^Add$' materialAppearanceAdd",
         "expect-log '^Materials add appearance picker opened: [0-9]+ appearances$'")
     if native:
@@ -44,6 +44,20 @@ def open_add_popover():
             "focus-dialog '^appearancePicker$'",
             "expect-native-visible appearancePickerSearch true",
             "expect-native-visible 'appearancePickerList.item.Swatch source' true")
+        # AppKit consumes the outside press that dismisses a transient
+        # popover. Separate driver steps give AppKit an event-loop turn
+        # before Add… receives the next press during the close animation.
+        # The wrapper's 50 ms timer and zero settling delay keep this
+        # genuine overlap; its retired-close assertion must prove it.
+        add("mark", "native-pointer-click materialAppearanceAdd",
+            "native-pointer-click materialAppearanceAdd",
+            "wait-log '^Native picker appearancePicker at materialAppearanceAdd: [0-9]+ rows$'",
+            "wait-log '^Native picker retired close: appearancePicker, successor shown$'",
+            "sleep 600", "focus-dialog '^appearancePicker$'",
+            "expect-native-visible appearancePickerSearch true",
+            "expect-native-visible 'appearancePickerList.item.Swatch source' true",
+            "screenshot-screen '${MITCAD_TEST_WORK}/" + capture_name +
+            "-picker-reopened-${MITCAD_TEST_COLOR_SCHEME}.png'")
 
 
 # The colour a command gave a material of its own became its appearance
@@ -66,7 +80,7 @@ for identifier, name, offered, first in [
             add("expect-native-text materialAppearances/0/0 '^None$'")
     add(f"screenshot-dialog '${{MITCAD_TEST_WORK}}/{identifier}-${{MITCAD_TEST_COLOR_SCHEME}}.png'")
     # Add…'s popover of the appearance library, closed with Escape.
-    open_add_popover()
+    open_add_popover(identifier)
     add(f"screenshot-screen '${{MITCAD_TEST_WORK}}/{identifier}-picker-${{MITCAD_TEST_COLOR_SCHEME}}.png'")
     if not native:
         # The Qt popover is a window of its own (mitcad#1071): its search
@@ -81,7 +95,7 @@ if native:
     # selected), Make Default, then Remove of the default: each one
     # edit_material, one undo step.
     select("inherited-color", "Audit Inherited")
-    open_add_popover()
+    open_add_popover('paint-choice')
     add("native-type appearancePickerSearch 'Paint - Red'",
         "expect-log '^Materials add appearance picker search: Paint - Red, [0-9]+ shown$'", "key Return",
         "expect-log '^Materials add appearance picker chosen: Paint - Red \\(paint_red\\)$'",

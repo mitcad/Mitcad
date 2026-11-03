@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <utility>
 
@@ -142,6 +143,67 @@ void test_start() {
   CHECK(faces_named(*slanted, side("F2", 1, 1)) == 1 && edge_names_unique(*slanted));
   spec.side1.taper = 0.1;
   CHECK(throws_with([&] { extrude_feature(spec); }, "parallel to the sketch"));
+}
+
+// A taper that closes the profile partway (mitcad#1186): a C of lines, a
+// 23 x 44 block less a 20 x 40 bite from its left side, which leaves
+// strips 2 wide at the bottom and the top and 3 wide at the right. Leaning
+// in by 45 degrees, the strips' walls move 1 mm in a millimetre: the bottom
+// and top strips close 1 mm up, before the end of an extrusion 3 mm long.
+// The error says so, naming the walls that meet; the same profile tapered
+// less, or extruded less far, builds.
+Region c_profile() {
+  const double pts[8][2] = {{0, 0}, {23, 0}, {23, 44}, {0, 44}, {0, 42}, {20, 42}, {20, 2}, {0, 2}};
+  Region region;
+  Loop loop;
+  std::string key = "r{";
+  for (int i = 0; i < 8; ++i) {
+    const auto curve = [](int k) { return "c" + std::to_string((k + 8) % 8 + 1); };
+    Segment segment;
+    segment.kind = SegmentKind::Line;
+    segment.start = gp_Pnt2d(pts[i][0], pts[i][1]);
+    segment.end = gp_Pnt2d(pts[(i + 1) % 8][0], pts[(i + 1) % 8][1]);
+    segment.name = curve(i) + "[" + curve(i - 1) + "," + curve(i + 1) + "]";
+    key += (i == 0 ? "" : ",") + segment.name;
+    loop.segments.push_back(segment);
+  }
+  region.loops.push_back(loop);
+  region.name = key + "}";
+  return region;
+}
+
+void test_taper_closing_the_profile_partway() {
+  const double angle = 45.0 * kPi / 180.0;
+  ExtrudeFeatureSpec spec = spec_of({c_profile()}, 3);
+  spec.side1.taper = -angle;
+  std::string message;
+  try {
+    extrude_feature(spec);
+  } catch (const std::exception& error) {
+    message = error.what();
+  }
+  std::printf("test_taper_closing_the_profile_partway: %s\n", message.c_str());
+  // As before, the start the .f3d import knows a kernel failure by.
+  CHECK(message.rfind("the taper failed", 0) == 0);
+  CHECK(message.find("leaning by 45 degrees") != std::string::npos);
+  // The bottom strip's walls (c1 at y = 0, c7 at y = 2) and the top
+  // strip's (c3 at y = 44, c5 at y = 42), 2 apart, meet 1 mm up.
+  CHECK(message.find("F2:side(c1[c8,c2]) and F2:side(c7[c6,c8])") != std::string::npos);
+  CHECK(message.find("F2:side(c5[c4,c6])") != std::string::npos);
+  CHECK(message.find("2 mm apart in the profile, meet 1 mm from the sketch plane") != std::string::npos);
+  CHECK(message.find("before the extrusion's end 3 mm from it: the taper closes the profile there") !=
+        std::string::npos);
+  // Nearby profiles that do not close build: 15 degrees over 3 mm (the
+  // walls move 0.8 mm), and 45 degrees over 0.9 mm.
+  spec.side1.taper = -15.0 * kPi / 180.0;
+  const ShapePtr gentle = extrude_feature(spec);
+  CHECK(BRepCheck_Analyzer(gentle->occt()).IsValid());
+  CHECK(volume(*gentle) > 0.0);
+  spec.side1.taper = -angle;
+  spec.side1.distance = 0.9;
+  const ShapePtr short_one = extrude_feature(spec);
+  CHECK(BRepCheck_Analyzer(short_one->occt()).IsValid());
+  CHECK(volume(*short_one) > 0.0);
 }
 
 void test_taper() {
@@ -742,6 +804,7 @@ void extrude_feature_tests() {
   guarded("test_oblique", test_oblique);
   guarded("test_start", test_start);
   guarded("test_taper", test_taper);
+  guarded("test_taper_closing_the_profile_partway", test_taper_closing_the_profile_partway);
   guarded("test_taper_closing_profile", test_taper_closing_profile);
   guarded("test_taper_closing_ring", test_taper_closing_ring);
   guarded("test_thin", test_thin);

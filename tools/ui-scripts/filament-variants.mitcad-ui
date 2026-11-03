@@ -12,7 +12,8 @@
 #   1. 3D Print's Material row names the variant the printer picks, and
 #      another printer's when the printer changes (chosen in the Printer
 #      picker, mitcad#1108).
-#   2. Import Presets of Printers and Processes: Shop PLA is one row with
+#   2. Import Presets of the Printers manager (mitcad#1135: into This
+#      design, its box's default): Shop PLA is one row with
 #      its three presets under it, the printers and nozzles in use on top;
 #      Bench X 0.6 unticked unticks its variant; the merge of Old PLA's
 #      separate materials ticked; Import 2 Presets brings Shop PLA in as
@@ -59,7 +60,7 @@ wait-idle
 # 2. Import Presets: one filament's presets as one material.
 mark
 command make.printers
-focus-dialog '^Printers and Processes$'
+focus-dialog '^Printers$'
 button '^Import from Slicer'
 popup 'Presets of Bambu Studio…'
 focus-dialog '^Import Presets$'
@@ -84,8 +85,8 @@ expect-log 'Slicer presets merge: ticked'
 mark
 button '^Import 2 Presets$'
 expect-log 'Imported print settings from 2 presets: printers: ; processes: ; materials: Shop PLA;'
-expect-log 'Profiles merged: Old PLA \(old_x, old_y\)'
-focus-dialog '^Printers and Processes$'
+expect-log 'Printers merged: Old PLA \(old_x, old_y\)'
+focus-dialog '^Printers$'
 button '^Close$'
 focus-main
 wait-idle

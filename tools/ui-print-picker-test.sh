@@ -13,9 +13,9 @@
 #      printer is set ("Use Printer …", one undo step), and the closed
 #      field shows the model and the nozzle without the vendor.
 #   3. No button beside Printer or Process (mitcad#1134): the box lists
-#      Edit printers and processes… last, below New printer…; chosen in
-#      the picker, it opens Printers and Processes on the chosen printer
-#      and keeps the choice (no undo step).
+#      Edit printers… last, below New printer…; chosen in the picker, it
+#      opens the Printers manager (mitcad#1135) on the chosen printer and
+#      keeps the choice (no undo step).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-print-picker-test.sh
@@ -151,12 +151,12 @@ ui_expect_new "3D Print printer: design/acme-lab-x1-carbon-0-4-nozzle" \
   "the design's printer is the one from plate.3mf"
 ui_expect_new "Panel Send to Slicer input printer shows: $X1" "the field shows the model and the nozzle"
 
-echo "--- 3. Edit printers and processes…, the last row: Printers and Processes on the chosen printer (mitcad#1134)"
+echo "--- 3. Edit printers…, the last row: the Printers manager on the chosen printer (mitcad#1134, mitcad#1135)"
 # The box's options as logged: the printers, a line, New printer… and last
-# Edit printers and processes….
+# Edit printers….
 listed=$(grep -F "Panel Send to Slicer options printer: " "$UI_LOG" | tail -1)
 case "$listed" in
-  *"| --- | New printer… | Edit printers and processes…") echo "ok   Edit printers and processes… last, below New printer…" ;;
+  *"| --- | New printer… | Edit printers…") echo "ok   Edit printers… last, below New printer…" ;;
   *) ui_fail "the Printer box lists '${listed#*: }'" ;;
 esac
 ui_mark
@@ -165,22 +165,22 @@ ui_expect_new "Printer picker opened: " "the picker opened"
 ui_focus_dialog '^Printer Picker$'
 ui_mark
 xdotool type --delay 40 -- "Edit printers"
-ui_expect_new "Printer picker search: Edit printers, first Edit printers and processes…" "the search finds the row"
+ui_expect_new "Printer picker search: Edit printers, first Edit printers…" "the search finds the row"
 ui_mark
 ui_step "choose (Enter)"                   ui_key Return
-ui_expect_new "Printer picker chose: Edit printers and processes…" "Edit printers and processes… chosen"
+ui_expect_new "Printer picker chose: Edit printers…" "Edit printers… chosen"
 ui_expect_new "3D Print printer edit: design/acme-lab-x1-carbon-0-4-nozzle" "on the design's printer"
-ui_expect_new "Printers and processes opened" "Printers and Processes opened"
+ui_expect_new "Printers opened" "the Printers manager opened"
 ui_expect_new "Profile selected: printer Acme Lab X1 Carbon 0.4 nozzle (design)" "on the chosen printer"
-ui_focus_dialog '^Printers and Processes$'
-ui_step "close"                            ui_click_logged "Profiles close"
+ui_focus_dialog '^Printers$'
+ui_step "close"                            ui_click_logged "Printers close"
 ui_focus_main
 ui_sync
 if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "3D Print printer: "; then
-  ui_fail "Edit printers and processes… changed the printer"
+  ui_fail "Edit printers… changed the printer"
 fi
 shown=$(grep -F "Panel Send to Slicer input printer shows: " "$UI_LOG" | tail -1)
-[ "${shown#*shows: }" = "$X1" ] || ui_fail "the field shows '${shown#*shows: }' after Edit printers and processes…"
+[ "${shown#*shows: }" = "$X1" ] || ui_fail "the field shows '${shown#*shows: }' after Edit printers…"
 echo "ok   the choice stays: the field shows $X1"
 ui_mark
 ui_step "close the panel (Esc)"            ui_key Escape

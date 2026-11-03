@@ -1323,7 +1323,62 @@ fallback on a machine without the font (nothing is substituted by shape).
 A text keeps outlines a file stores for it while its font is missing
 (mitcad#416, the `.ipt` import's texts), but an `.f3d` text record holds
 none: its profile loops have no curve records either (below).
-A text on a path is placed from its start; the file's per-glyph matrices
-(where on a closed path the text starts and which way it runs) are not
-decoded yet.
+A text on a path: below.
+
+### Texts on a path (mitcad#1177)
+
+A text's path constraint is a class of its own (`9D30FCDC`, a subclass of
+the constraint class) that keeps, between its root part and its sketch
+reference, the text again (after a `u8 1` from class version 1), a `u32`
+character count and per character `u32 16` and a row-major 4×4 matrix: the
+character's placement in the sketch (cm), its x axis the baseline's
+direction, its y axis the character's up, its translation the pen moved up
+to the font's ascender line. A reported drill index (content id 528e5029,
+the only file of the test files with the class) has 90 characters, 11 880
+bytes before the sketch reference, so the constraint reader, which looked
+for the sketch within 1 000 bytes, left it undecoded and the text had no
+path. What the file says, checked against its stored body (the embossed
+glyphs' vertices) and its preview:
+
+- the characters stand on the circle's outside, their capitals' top on the
+  circle (4.25 cm) and their baseline a text height further out (4.75 cm),
+  read counter-clockwise; the pens follow the circle's arc length, each
+  character's middle on the circle;
+- the matrices run clockwise from the last character: a text below its
+  path stores its characters against the reading order, so the order gives
+  `isAbovePath` (false here);
+- the text is left-aligned in the record, and its last character ends
+  exactly (to 1e-6°) opposite the circle's reference direction: a whole
+  circle as a path starts there (its parameter runs from -π to π about the
+  reference direction), and a text below its path is the text above it
+  turned round, so its ends swap. The replay gives Mitcad's text the path
+  with `above: false` (hanging from its capitals with `cap_height`), the
+  alignment swapped (right here), and the construction circle that start
+  (`start_angle`, from `_f3d.pathStart`), from which Mitcad lays a path
+  text out;
+- the characters keep their own widths: no kerning (the text's pair of
+  ones stands 0.52 mm, Arial's kerning of "11", farther apart than the
+  font's kerning puts it), so the replay sets the text's `no_kerning`;
+  with it the glyphs' vertices lie within 1.5 µm of the stored body's, the
+  curves between them within 0.034 mm (the file's are cubic B-splines
+  through them, the font's quadratic);
+- the extrusion's 59 text profiles have no loops of sketch curves, one
+  profile a letter: the dump names the texts (`_f3d_text_profiles`) and the
+  replay selects their letters' regions (each glyph contour that is a
+  letter's outline, not a counter), exact when the item selects as many
+  profiles as there are letters and only the texts'.
+
+The drill index's emboss then replays parametrically: 1090 faces as the
+file's, the body within 5e-7 of the stored volume (0.3 mm³ of the 148 mm³
+the letters add, from the curves' shapes). The two holes after it, placed
+where the history removes material, compared the replayed body with the
+stored one in a box grown by half its diagonal round the changed faces:
+for the deep centre hole (8 by 8 by 125 mm) 63 mm on every side, over the
+whole top with the text, whose faces lie micrometres off the stored ones,
+so the whole bodies were cut (800 s in a debug build) and the hole fell
+back. The removed material is first cut within boxes grown by half their
+middle side (4 mm here; `geometry/src/removed.cpp`), then as before: about
+10 s, and both holes parametric. An open path below its text and a path turning clockwise
+about the sketch normal are not in the test files; the side and the swap
+follow the same rule, the start of an arc is its own.
 

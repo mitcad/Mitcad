@@ -2,43 +2,42 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/print app/browser/BrowserController.cpp app/MainWindow.cpp app/files/MainWindowPrint.cpp
 # check-all sources: core/model/src/print_library.rs core/model/src/document/library_items.rs tools/cli
+# check-all sources: core/model-api/src/print_profiles.rs
 # check-all sources: core/model/src/print_profile.rs core/model/src/print_files/installed.rs core/model/src/document/slicer_presets.rs
-# My Library (mitcad#704) through the real UI: the user's materials,
-# printers and processes managed without a design, on a design of one box
-# that must not change. My library is the test's own folder
-# (MITCAD_PRINT_LIBRARY_DIR), which mitcad-cli gives a printer, Bench X.
-#   1. Tools › My Library… (the command search): the Materials tab lists
-#      the built-in materials under Built-in; Duplicate of PLA Plastic
-#      makes PLA Plastic (copy) in My library (its file), its name typed
-#      (Bench PLA) and its density changed (1.3), each written to the
-#      file; Delete asks ("Delete Bench PLA from My library?") and removes
-#      the file.
-#   2. The Printers tab: Bench X; Duplicate makes Bench X (copy) in My library,
-#      renamed Bench Y; Delete removes it.
-#   3. The design did not change: no modified mark in the title, its file
-#      as it was; Edit Printers and Processes' Edit Library… (after
-#      Delete, left of Close, mitcad#1019) opens the
-#      window again.
-#   4. A fake Bambu Studio data folder (mitcad#830): Import from Slicer ▾
-#      offers its presets; the new process is ticked, the printer named as
-#      Bench X is marked and unticked; Import brings the process into My
-#      library and leaves Bench X as it was; the line names it and My
-#      Library shows it on the Processes tab, selected. Then again, with
-#      both names in My library: the keyboard moves to Fine, Space ticks
-#      and unticks it, Tab reaches its choice; Override ticks the row and
-#      All same names shows no value while the rows differ; Copy again;
+# My library without a design (mitcad#704, mitcad#1135) through the real
+# UI: the Materials, Printers and Processes managers opened with no design
+# open (the empty Untitled window) show My library and Built-in and work on
+# them alone; the window's design stays unchanged. My library is the
+# test's own folder (MITCAD_PRINT_LIBRARY_DIR), which mitcad-cli gives a
+# printer, Bench X. Tools › My Library… is gone (tools/ui-print-managers-test.sh).
+#   1. Edit Materials (the command search): the Materials manager lists My
+#      library and Built-in, no This design; the search finds the built-in
+#      PLA Plastic; Duplicate makes PLA Plastic (copy) in My library at
+#      once (the only place to ask for), its file, its name typed (Bench
+#      PLA) and its density changed (1.3), each written to the file;
+#      Delete asks ("Delete Bench PLA from My library?") and removes the
+#      file.
+#   2. Printers…: Bench X under My library; Duplicate makes Bench X (copy)
+#      in My library, renamed Bench Y; Delete removes it.
+#   3. The window's design did not change: no modified mark in the title.
+#   4. A fake Bambu Studio data folder (mitcad#830), in the Processes
+#      manager: Import from Slicer ▾ offers its presets; the new process is
+#      ticked, the printer named as Bench X is marked and unticked; Import
+#      brings the process into My library and leaves Bench X as it was;
+#      the line names it and the manager shows it, selected. Then again,
+#      with both names in My library: the keyboard moves to Fine, Space
+#      ticks and unticks it, Tab reaches its choice; Override ticks the row
+#      and All same names shows no value while the rows differ; Copy again;
 #      Import names the count ("Import 1 Preset"); the filter "bench"
 #      hides Fine, and Import still brings the ticked Fine in as Fine 2,
 #      named in the line and selected.
 #   5. The first opening on a library of slicer imports (mitcad#1018): a
 #      slicer's data folder made here like an installed one's (a vendor's
 #      1800 system presets, the user's 41 on them), its presets imported
-#      into a fresh My library; the app again, Edit Materials…, Edit
-#      Library… of the Materials window (after Delete, left of Close; its
-#      mnemonic Alt+L, mitcad#1019): My Library opens, logs its
-#      opening's parts ("My Library timing: ...") and fills its panels
-#      when the items were read off the UI thread ("My Library loaded:
-#      ..."), the slicer's presets looked for as well ("My Library
+#      into a fresh My library; the app again, Edit Materials: the manager
+#      opens, logs its opening's time ("Materials timing: ...") and fills
+#      its list when the items were read off the UI thread ("Materials
+#      loaded: ..."), the slicer's presets looked for as well ("Materials
 #      slicers: ..."). The times are printed, none asserted.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -49,7 +48,6 @@ source "$(dirname "$0")/ui-test-lib.sh"
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 WORK=$(mktemp -d /tmp/mitcad-ui-my-library.XXXXXX)
 trap 'ui_cleanup; rm -rf -- "${WORK:?}"' EXIT
-FILE=$WORK/box.mitcad
 # The user's library of materials and profiles in the test's own folder.
 export MITCAD_PRINT_LIBRARY_DIR=$WORK/print-library
 LIB=$MITCAD_PRINT_LIBRARY_DIR
@@ -166,32 +164,7 @@ make_slicer_folder() {
     "$data" "${presets%, }" > "$WORK/slicer-import.json"
 }
 
-# logged_place text: "x y" of the last "<text> at x,y" logged.
-logged_place() {
-  grep -F -- "$1 at " "$UI_LOG" | tail -1 | sed 's/^.* at \([-0-9]*\),\([-0-9]*\)$/\1 \2/'
-}
-
-# expect_list_button log: Edit Library… of the window logged as `log`
-# (mitcad#1019) is in the row under the list after Delete, left of Close:
-# no result button.
-expect_list_button() {
-  local lx ly dx dy cx cy
-  read -r lx ly <<< "$(logged_place "$1 edit_library")"
-  read -r dx dy <<< "$(logged_place "$1 delete")"
-  read -r cx cy <<< "$(logged_place "$1 close")"
-  [ "$ly" = "$dy" ] && [ "$ly" = "$cy" ] && [ "$lx" -gt "$dx" ] && [ "$lx" -lt "$cx" ] ||
-    ui_fail "$1: Edit Library at $lx,$ly is not after Delete ($dx,$dy) and before Close ($cx,$cy)"
-  echo "ok   $1: Edit Library… after Delete, left of Close"
-}
-
-# The design: one box. My library: a printer.
-cat > "$WORK/model.json" << 'EOF'
-[
-  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-10, -10],
-    "length": 20, "width": 20, "height": 20, "operation": "new_body"}}
-]
-EOF
-"$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+# My library: a printer.
 cat > "$WORK/printer.json" << 'EOF'
 [
   {"cmd": "create_print_profile", "library": "user", "kind": "printer", "name": "Bench X",
@@ -202,70 +175,84 @@ EOF
 "$CLI" run "$WORK/printer.json" --save "$WORK/other.mitcad" > "$WORK/cli-printer.log" 2>&1 ||
   { cat "$WORK/cli-printer.log"; ui_fail "mitcad-cli (Bench X into My library)"; }
 [ -f "$LIB/print/printers/bench-x.json" ] || ui_fail "Bench X is not in My library"
-DESIGN_SUM=$(sha256sum "$FILE" | cut -c1-64)
 
 ui_start_display
-ui_start_app --open "$FILE" --no-native-dialogs
-ui_step "fit (F6)"                         ui_key F6
-ui_expect_log "Body F1.b0 at" "the box is in the view"
+# No design open: the empty Untitled window.
+ui_start_app --no-native-dialogs
 
-echo "--- 1. My Library: a built-in material duplicated, renamed, its density changed, deleted"
+echo "--- 1. Materials without a design: My library and Built-in; a built-in material duplicated, renamed, its density changed, deleted"
 ui_mark
-ui_command "My Library"
-ui_expect_new "My Library opened" "the window opened"
-ui_expect_new "My Library materials row: fdm_plastics/pla PLA Plastic (mitcad)" "PLA is listed, built in"
-ui_expect_new "My Library tab printers at" "the tabs have their places"
-ui_expect_new "My Library import at" "Import from Slicer… has its place"
-ui_expect_new "My Library materials item PLA Plastic at" "its row has its place"
-ui_focus_dialog '^My Library$'
+ui_command "Edit Materials"
+ui_expect_new "Materials opened without a design" "the Materials manager opened on the libraries"
+ui_expect_new "Materials loaded: " "its list filled when the items were read"
+ui_expect_new "Materials groups: My library 0 | Built-in " "My library and Built-in, no This design"
+ui_expect_new "Materials row: fdm_plastics/pla PLA Plastic (mitcad)" "PLA is listed, built in"
+ui_expect_new "Materials import at" "Import from Slicer… has its place"
+ui_expect_new "Materials search at" "the search above the list"
+ui_focus_dialog '^Materials$'
 ui_mark
-ui_step "PLA Plastic"                      ui_click_logged "My Library materials item PLA Plastic"
+ui_step "search 'PLA Plastic'"             ui_click_logged "Materials search"
+xdotool type --delay 40 "PLA Plastic"
+ui_expect_new "Materials mitcad item PLA Plastic at" "its row has its place"
+ui_mark
+ui_step "PLA Plastic"                      ui_click_logged "Materials mitcad item PLA Plastic"
 ui_expect_new "Material selected: PLA Plastic (mitcad)" "PLA is selected"
-ui_expect_new "My Library materials duplicate at" "Duplicate under the list"
-ui_step "Duplicate"                        ui_click_logged "My Library materials duplicate"
-ui_expect_new "Material duplicated: PLA Plastic as " "a copy made"
+ui_expect_new "Materials duplicate at" "Duplicate under the list"
+ui_step "Duplicate"                        ui_click_logged "Materials duplicate"
+ui_expect_new "Material duplicated: PLA Plastic as " "a copy made, My library the only place to ask for"
 id=$(logged_after "Material duplicated: PLA Plastic as " 's/.* as \(.*\) in \(.*\)$/\1/')
 place=$(logged_after "Material duplicated: PLA Plastic as " 's/.* as .* in \(.*\)$/\1/')
 [ "$place" = user ] || ui_fail "the copy went to '$place', not My library"
 echo "ok   in My library, not in the design"
 MATERIAL=$LIB/materials/$id.json
 expect_item "$MATERIAL" '.material.name' '"PLA Plastic (copy)"' "its file, named after PLA"
-ui_expect_new "My Library materials row: fdm_plastics/$id PLA Plastic (copy) (user)" "the list shows it"
+ui_expect_new "Materials row: fdm_plastics/$id PLA Plastic (copy) (user)" "the list shows it"
 ui_sync
 ui_mark
 xdotool type --delay 40 "Bench PLA"
 ui_key Return
 ui_expect_new "Material PLA Plastic (copy) (user) name = Bench PLA" "Enter renamed it"
 expect_item "$MATERIAL" '.material.name' '"Bench PLA"' "the file has the new name"
-ui_expect_new "My Library materials density at" "Density has its place"
-ui_step "Density"                          ui_click_logged "My Library materials density"
+ui_expect_new "Materials density at" "Density has its place"
+ui_step "Density"                          ui_click_logged "Materials density"
 ui_key ctrl+a
 xdotool type --delay 40 "1.3"
 ui_key Return
 ui_expect_new "Material Bench PLA (user) density = 1.3" "Enter saved the density"
 expect_item "$MATERIAL" '.material.density' '1.3' "the file has the new density"
 ui_mark
-ui_step "Delete"                           ui_click_logged "My Library materials delete"
-ui_expect_new "My Library materials delete: Delete Bench PLA from My library?" \
+ui_step "Delete"                           ui_click_logged "Materials delete"
+ui_expect_new "Materials delete: Delete Bench PLA from My library?" \
   "Delete asks first, naming the library"
 ui_focus_dialog '^Delete$'
 ui_step "Delete (Alt+D)"                   ui_key alt+d
 ui_expect_new "Material deleted: Bench PLA (user)" "deleted"
 [ ! -e "$MATERIAL" ] || ui_fail "the file is still there"
 echo "ok   its file is gone"
+ui_focus_dialog '^Materials$'
+ui_mark
+ui_step "close"                            ui_click_logged "Materials close"
+ui_expect_new "Materials closed after changes" "closed"
 
-echo "--- 2. Printers: Bench X duplicated, renamed, deleted"
-ui_focus_dialog '^My Library$'
+echo "--- 2. Printers… without a design: Bench X duplicated, renamed, deleted"
+ui_focus_main
 ui_mark
-ui_step "the Printers tab"                 ui_click_logged "My Library tab printers"
-ui_expect_new "My Library tab: printers" "the Printers tab"
-ui_expect_new "My Library printers row: printer/bench-x Bench X (user)" "Bench X is listed"
-ui_expect_new "My Library printers item Bench X at" "its row has its place"
-ui_step "Bench X"                          ui_click_logged "My Library printers item Bench X"
+ui_command "Printers"
+ui_expect_new "Printers opened without a design" "the Printers manager opened on the libraries"
+ui_expect_new "Printers groups: My library 1 | Built-in " "My library and Built-in, no This design"
+ui_expect_new "Printers row: printer/bench-x Bench X (user)" "Bench X is listed"
+ui_expect_new "Printers user item Bench X at" "its row has its place"
+ui_focus_dialog '^Printers$'
+ui_mark
+ui_step "Bench X"                          ui_click_logged "Printers user item Bench X"
 ui_expect_new "Profile selected: printer Bench X (user)" "Bench X is selected"
-ui_expect_new "My Library printers duplicate at" "Duplicate under the list"
+ui_expect_new "Printers editing: Editing: My library — every design of yours can use it" "edited in My library"
+ui_expect_new "Printers duplicate at" "Duplicate under the list"
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Printers use at"; then
+  ui_fail "Use in this design without a design"
+fi
 ui_mark
-ui_step "Duplicate"                        ui_click_logged "My Library printers duplicate"
+ui_step "Duplicate"                        ui_click_logged "Printers duplicate"
 ui_expect_new "Profile duplicated: Bench X as " "a copy made"
 pid=$(logged_after "Profile duplicated: Bench X as " 's/.* as \(.*\) in \(.*\)$/\1/')
 place=$(logged_after "Profile duplicated: Bench X as " 's/.* as .* in \(.*\)$/\1/')
@@ -280,40 +267,28 @@ ui_key Return
 ui_expect_new "Profile Bench X (copy) (user) name = Bench Y" "Enter renamed it"
 expect_item "$PRINTER" '.profile.name' '"Bench Y"' "the file has the new name"
 ui_mark
-ui_step "Delete"                           ui_click_logged "My Library printers delete"
-ui_expect_new "My Library printers delete: Delete Bench Y from My library?" "Delete asks first"
+ui_step "Delete"                           ui_click_logged "Printers delete"
+ui_expect_new "Printers delete: Delete Bench Y from My library?" "Delete asks first"
 ui_focus_dialog '^Delete$'
 ui_step "Delete (Alt+D)"                   ui_key alt+d
 ui_expect_new "Profile deleted: Bench Y (user)" "deleted"
 [ ! -e "$PRINTER" ] || ui_fail "the printer's file is still there"
 [ -f "$LIB/print/printers/bench-x.json" ] || ui_fail "Bench X went too"
 echo "ok   its file is gone, Bench X stays"
-ui_focus_dialog '^My Library$'
+ui_focus_dialog '^Printers$'
 ui_mark
-ui_step "close"                            ui_click_logged "My Library printers close"
-ui_expect_new "My Library closed after changes" "closed"
+ui_step "close"                            ui_click_logged "Printers close"
+ui_expect_new "Printers closed after changes" "closed"
 
-echo "--- 3. The design did not change; Printers and Processes links to My Library"
+echo "--- 3. The window's design did not change"
 ui_focus_main
 title=$(xdotool getwindowname "$UI_WINDOW")
 case $title in
   *"*"*) ui_fail "the design is marked changed: $title" ;;
 esac
-[ "$(sha256sum "$FILE" | cut -c1-64)" = "$DESIGN_SUM" ] || ui_fail "the design's file changed"
 echo "ok   the design is unchanged ($title)"
-ui_mark
-ui_command "Edit Printers and Processes"
-ui_expect_new "Printers and processes opened" "Printers and Processes opened"
-ui_expect_new "Profiles edit_library at" "Edit Library… has its place"
-ui_expect_new "Profiles close at" "Close has its place"
-expect_list_button Profiles
-ui_focus_dialog '^Printers and Processes$'
-ui_mark
-ui_step "Edit Library…"                    ui_click_logged "Profiles edit_library"
-ui_expect_new "Profiles: Edit Library…" "the link"
-ui_expect_new "My Library opened" "My Library opened again"
 
-echo "--- 4. Presets of an installed slicer (mitcad#830): a fake Bambu Studio folder"
+echo "--- 4. Presets of an installed slicer (mitcad#830): a fake Bambu Studio folder, in the Processes manager"
 # The slicer's data folder in the test's own config folder: a process of
 # the user's, and a printer named as My library's Bench X.
 PRESETS=$XDG_CONFIG_HOME/BambuStudio/user/default
@@ -321,10 +296,14 @@ mkdir -p "$PRESETS/process" "$PRESETS/machine"
 printf '{"name": "Fine", "from": "User", "layer_height": "0.12"}\n' > "$PRESETS/process/Fine.json"
 printf '{"name": "Bench X", "from": "User", "printable_height": "180"}\n' > "$PRESETS/machine/Bench X.json"
 BENCH_SUM=$(sha256sum "$LIB/print/printers/bench-x.json" | cut -c1-64)
-ui_focus_dialog '^My Library$'
 ui_mark
-ui_step "Import from Slicer"               ui_click_logged "My Library import"
-ui_expect_new "My Library import menu: From a file… | Presets of Bambu Studio…" "a file or the slicer's presets"
+ui_command "Processes"
+ui_expect_new "Processes opened without a design" "the Processes manager opened on the libraries"
+ui_expect_new "Processes import at" "Import from Slicer… has its place"
+ui_focus_dialog '^Processes$'
+ui_mark
+ui_step "Import from Slicer"               ui_click_logged "Processes import"
+ui_expect_new "Processes import menu: From a file… | Presets of Bambu Studio…" "a file or the slicer's presets"
 ui_key Down Down Return
 ui_expect_new "Slicer presets opened: Bambu Studio, 2 presets" "the slicer's presets listed"
 ui_expect_new "Slicer presets row: process Fine, ticked" "a new one ticked"
@@ -334,9 +313,8 @@ ui_expect_new "Slicer presets ticked: 1, Import 1 Preset" "Import says how many"
 ui_expect_new "Slicer presets all same names: copy" "All same names shows the rows' Copy"
 ui_focus_dialog '^Import Presets$'
 ui_step "Import (Alt+I)"                   ui_key alt+i
-ui_expect_new "My Library import: Fine imported into My library" "the ticked one imported, by its name"
-ui_expect_new "My Library tab: processes" "My Library shows the Processes tab"
-ui_expect_new "Profile selected: process Fine (user)" "with Fine selected"
+ui_expect_new "Processes import: Fine imported into My library" "the ticked one imported, by its name"
+ui_expect_new "Profile selected: process Fine (user)" "the manager shows Fine selected"
 expect_item "$LIB/print/processes/fine.json" '.profile.values.layer_height' '0.12' "Fine is in My library"
 # Its number as a number: the file keeps it as the model wrote it (250.0).
 expect_item "$LIB/print/printers/bench-x.json" '.profile.values.max_print_height == 250' 'true' \
@@ -347,10 +325,10 @@ echo "ok   Bench X's file as it was"
 
 echo "--- 4b. Both names in My library now: the keyboard, a choice that ticks its row, Fine as Fine 2"
 FINE_SUM=$(sha256sum "$LIB/print/processes/fine.json" | cut -c1-64)
-ui_focus_dialog '^My Library$'
+ui_focus_dialog '^Processes$'
 ui_mark
-ui_step "Import from Slicer"               ui_click_logged "My Library import"
-ui_expect_new "My Library import menu: From a file… | Presets of Bambu Studio…" "the menu again"
+ui_step "Import from Slicer"               ui_click_logged "Processes import"
+ui_expect_new "Processes import menu: From a file… | Presets of Bambu Studio…" "the menu again"
 ui_key Down Down Return
 ui_expect_new "Slicer presets row: process Fine, unticked, same name: My library has a process of this name, copy" \
   "Fine is now a name My library has: unticked, Copy"
@@ -389,19 +367,19 @@ ui_step "type bench"                       xdotool type --delay 40 "bench"
 ui_expect_new "Slicer presets filter: bench, 1 shown" "the filter shows Bench X alone"
 ui_mark
 ui_step "Import (Alt+I)"                   ui_key alt+i
-ui_expect_new "My Library import: Fine imported into My library as Fine 2" "the line names the copy's name"
-ui_expect_new "Profile selected: process Fine 2 (user)" "My Library shows Fine 2 selected"
+ui_expect_new "Processes import: Fine imported into My library as Fine 2" "the line names the copy's name"
+ui_expect_new "Profile selected: process Fine 2 (user)" "the manager shows Fine 2 selected"
 expect_item "$LIB/print/processes/fine-2.json" '.profile.name' '"Fine 2"' "Fine 2 is in My library"
 [ "$(sha256sum "$LIB/print/processes/fine.json" | cut -c1-64)" = "$FINE_SUM" ] ||
   ui_fail "Fine's file changed by a Copy"
 [ "$(sha256sum "$LIB/print/printers/bench-x.json" | cut -c1-64)" = "$BENCH_SUM" ] ||
   ui_fail "the unticked Bench X's file changed"
 echo "ok   Fine and Bench X as they were"
-ui_focus_dialog '^My Library$'
+ui_focus_dialog '^Processes$'
 ui_step "close (Esc)"                      ui_key Escape
-ui_expect_new "My Library closed" "closed"
+ui_expect_new "Processes closed" "closed"
 
-echo "--- 5. The first opening on a library of slicer imports (mitcad#1018), from the Materials window"
+echo "--- 5. The first opening on a library of slicer imports (mitcad#1018), the Materials manager without a design"
 # A slicer's data folder like an installed one's: a vendor of system
 # presets (30 printer models, 120 printers, 480 processes, 1200
 # filaments on 41 bases), one model enabled in its app config, and the
@@ -416,29 +394,20 @@ count=$(find "$MITCAD_PRINT_LIBRARY_DIR" -name '*.json' | wc -l)
 [ "$count" -ge 41 ] || ui_fail "My library has $count items, not the 41 imported"
 echo "ok   $count items imported into My library"
 ui_stop_app
-ui_start_app --open "$FILE" --no-native-dialogs
+ui_start_app --no-native-dialogs
 ui_mark
 ui_command "Edit Materials"
-ui_expect_new "Materials opened" "the Materials window opened"
-ui_expect_new "Materials timing: " "the Materials window logs its opening's time"
-ui_expect_new "Materials edit_library at" "Edit Library… has its place"
+ui_expect_new "Materials opened without a design" "the Materials manager opened on the libraries"
+ui_expect_new "Materials timing: " "it logs its opening's time"
+ui_expect_new "Materials loaded: " "the list filled when the items were read off the UI thread" 60
+ui_expect_new "Materials slicers: " "the slicer's presets looked for"
 ui_expect_new "Materials close at" "Close has its place"
-expect_list_button Materials
-ui_focus_dialog '^Materials$'
-ui_mark
-ui_step "Edit Library… (Alt+L)"            ui_key alt+l
-ui_expect_new "Materials: Edit Library…" "the button, by its mnemonic"
-ui_expect_new "My Library opened" "My Library opened"
-ui_expect_new "My Library timing: " "its first opening logs each part's time"
-ui_expect_new "My Library materials: " "the materials listed"
-ui_expect_new "My Library loaded: " "the panels filled when the items were read"
-ui_expect_new "My Library slicers: " "the slicer's presets looked for"
 # The times as logged, for the record; none is asserted.
-for line in "Materials timing: " "My Library timing: " "My Library loaded: " "My Library slicers: "; do
+for line in "Materials timing: " "Materials loaded: " "Materials slicers: "; do
   echo "     $(grep -F -- "$line" "$UI_LOG" | tail -1 | sed "s/^.*\($line\)/\1/")"
 done
-ui_focus_dialog '^My Library$'
+ui_focus_dialog '^Materials$'
 ui_step "close (Esc)"                      ui_key Escape
-ui_expect_new "My Library closed" "closed"
+ui_expect_new "Materials closed" "closed"
 
-ui_finish "UI My Library"
+ui_finish "UI My library without a design"

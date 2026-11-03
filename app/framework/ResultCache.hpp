@@ -22,7 +22,8 @@ struct CacheSettings {
   bool disk = true;
   qint64 diskMegabytes = 5 * 1024;
   // The model's memory cache of computed results, at most this much
-  // (estimated): a quarter of the machine's memory unless set.
+  // (estimated), shared among open documents: a quarter of the machine's
+  // memory unless set.
   qint64 memoryMegabytes = defaultMemoryMegabytes();
 
   static qint64 defaultMemoryMegabytes();

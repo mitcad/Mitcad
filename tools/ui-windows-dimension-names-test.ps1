@@ -22,7 +22,10 @@
 #      tooltip says what d4 is (mitcad#250); "depth = 12" renames it.
 #   6. Edit Extrude2 (mitcad#250): its field's tooltip; no labels while the
 #      field has the keyboard only because the panel opened (mitcad#587); a
-#      click into it labels the sketch's dimensions, and only those; a
+#      click into it labels the sketch's dimensions, and only those; Right
+#      View, Front View and both again by keys (F7, F8), the field keeping
+#      the keyboard: the labels stay and the width's place follows each
+#      view, the same place for the same view (mitcad#1179); a
 #      click on the width dimension inserts width, depth and d5 are typed
 #      by name; the tooltip follows.
 #
@@ -34,7 +37,28 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{} -StepPause 0
+# Right View and Front View by keys of the test's own (mitcad#1179).
+Ui-Init $App $Out $QtBin @{ 'view.right' = 'F7'; 'view.front' = 'F8' } -StepPause 0
+
+# The width's label's place for the camera now, once it has one since the
+# mark: the last "Parameter label Sketch1 k5 width at x,y" after the mark.
+# Session 0 paints no widgets, so this is the place the labels' layout
+# gives, not one a paint drew (the Linux test checks those).
+function Width-LabelFollows([string]$Description) {
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $at = $null
+  do {
+    foreach ($line in @(Ui-NewLines)) {
+      if ($line.Contains('Parameter labels for Extrude hidden')) { Ui-Fail "${Description}: the labels were hidden" }
+      if ($line -match '^Parameter label Sketch1 k5 width at (\d+,\d+)$') { $at = $Matches[1] }
+    }
+    if ($at) { break }
+    Start-Sleep -Milliseconds 50
+  } while ($clock.ElapsedMilliseconds -lt 5000)
+  if (-not $at) { Ui-Fail "${Description}: the label's place did not change as the camera turned" }
+  Write-Host "ok   $Description (at $at)"
+  return $at
+}
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -150,6 +174,33 @@ if (Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_ -match 
   Ui-Fail 'an earlier feature''s value was labelled (only sketch dimensions, mitcad#587)'
 }
 Write-Host 'ok   only the sketch''s dimensions are labelled'
+# The labels follow the camera as it turns (mitcad#1179): Right View and
+# Front View by their keys, the field keeping the keyboard and the labels;
+# each time the width's label has a new place, the same for the same view.
+$start = Ui-LastMatch '^Parameter label Sketch1 k5 width at (\d+,\d+)$'
+Ui-Mark
+Ui-Step 'Right View (F7)'                { Ui-Key 'F7' }
+Ui-ExpectNew 'Camera direction -1 0 0 up 0 0 1' 'the view turned to the right' 10
+$right = Width-LabelFollows 'the width''s label follows to the right view'
+if ($right -eq $start) { Ui-Fail "the width's label stayed at $start" }
+Ui-Mark
+Ui-Step 'Front View (F8)'                { Ui-Key 'F8' }
+Ui-ExpectNew 'Camera direction 0 1 0 up 0 0 1' 'the view turned to the front' 10
+$front = Width-LabelFollows 'the width''s label follows to the front view'
+if ($front -eq $right) { Ui-Fail "the width's label stayed at $right" }
+Ui-Mark
+Ui-Step 'Right View again (F7)'          { Ui-Key 'F7' }
+Ui-ExpectNew 'Camera direction -1 0 0 up 0 0 1' 'the view turned to the right again' 10
+$again = Width-LabelFollows 'the width''s label follows back to the right view'
+if ($again -ne $right) { Ui-Fail "the width's label is at $again in the right view, before at $right" }
+# Front View again, where the width's label is well inside the view for
+# the click on it below.
+Ui-Mark
+Ui-Step 'Front View again (F8)'          { Ui-Key 'F8' }
+Ui-ExpectNew 'Camera direction 0 1 0 up 0 0 1' 'the view turned to the front again' 10
+$again = Width-LabelFollows 'the width''s label follows back to the front view'
+if ($again -ne $front) { Ui-Fail "the width's label is at $again in the front view, before at $front" }
+Write-Host 'ok   the labels follow the camera'
 Ui-Step 'type 2* into the distance'      { Ui-TypeIn 'Panel Extrude input distance' '2*' }
 Ui-ExpectNew 'Extrude Distance: 2*' 'the typed text evaluated'
 Ui-Mark

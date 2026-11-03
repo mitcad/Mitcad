@@ -264,6 +264,18 @@ if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-
 Ui-Mark
 Drawing-Tool 'Dimension' 'Dimensions'
 Ui-ExpectNew 'Drawing tool: Dimension' 'the dimension tool is on'
+# A click that picks nothing is a hint, not an error (mitcad#1174): off the
+# views, and on the front view away from its edges.
+Ui-Mark
+Ui-Step 'the empty sheet'                 { Sheet-Click 120 220 }
+Ui-ExpectNew 'Message band: hint Click on a view.' 'off the views: a hint'
+Ui-Step 'the front view, off its edges'   { Sheet-Click 100 128 }
+Ui-ExpectNew 'Drawing pick: nothing at' 'nothing picked on the view'
+Ui-ExpectNew 'Message band: hint Nothing to pick there: ' 'a missed pick: a hint'
+if (Ui-NewLines | Where-Object { $_ -match '^(Status error|Message band: error) (Click on a view|Nothing to pick)' }) {
+  Ui-Fail 'a missed pick said as an error'
+}
+Write-Host 'ok   no missed pick said as an error'
 Ui-Step 'the bottom edge'                 { Sheet-Click 95 100.5 }
 Ui-ExpectNew 'Drawing picked line (1)' 'the bottom edge picked'
 Ui-Step 'the top edge'                    { Sheet-Click 95 139.5 }

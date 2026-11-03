@@ -36,6 +36,7 @@ bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feat
     }
     return false;
   }
+  m_cleared = false; // the stub is this message's again
   if (!m_entries.empty() && m_entries.front().text == text && m_entries.front().level == level &&
       m_entries.front().feature == feature) {
     MessageEntry& same = m_entries.front();
@@ -78,11 +79,18 @@ bool MessageLog::commandStarted() {
   return true;
 }
 
+bool MessageLog::clear() {
+  const bool changed = shown() != Shown::None;
+  m_full.reset();
+  m_cleared = true;
+  return changed;
+}
+
 MessageLog::Shown MessageLog::shown() const {
   if (m_full) {
     return Shown::Full;
   }
-  return m_entries.empty() ? Shown::None : Shown::Stub;
+  return m_entries.empty() || m_cleared ? Shown::None : Shown::Stub;
 }
 
 } // namespace mitcad

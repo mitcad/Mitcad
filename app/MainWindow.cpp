@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -812,7 +813,7 @@ MainWindow::~MainWindow() {
   m_nativeForm.reset();
   m_nativeIdleForm.reset();
   m_nativeWindow.reset();
-  setNativeDialogWindow(nullptr);
+  bindNativeDialogWindow(this, nullptr);
 #endif
   // The Selection Filter's menu ends while the window's members still live:
   // left to the window's children, it ended after the sketch controller,
@@ -834,7 +835,9 @@ void MainWindow::present() {
     return;
   }
 #endif
+  mac::prepareDocumentWindowPresentation(this, property("mitcadSeparateWindow").toBool());
   show();
+  mac::enableDocumentWindowTabs(this, [this](bool visible) { setDocumentVisible(visible); });
 }
 
 void MainWindow::logLayout() const {
@@ -935,6 +938,8 @@ void MainWindow::registerCommands() {
   registerInspectCommands(*m_registry, *this, this, [this] { return m_selection; });
   // Center of Mass, after Physical Properties (mitcad#1094).
   registerCenterOfMassCommand();
+  // Add Comment after it, and the comments' View menu commands (mitcad#1119).
+  registerCommentCommands();
   registerSketchCommands(*m_registry, *m_sketch);
   // Redefine Sketch Plane (mitcad#787).
   registerSketchPlaneCommands(*m_registry, *m_sketch);
@@ -1183,24 +1188,16 @@ void MainWindow::registerCommands() {
   materials.pinned = true;
   materials.keywords = {QStringLiteral("material"), QStringLiteral("density"), QStringLiteral("filament"),
                         QStringLiteral("print"),    QStringLiteral("plastic"), QStringLiteral("metal"),
-                        QStringLiteral("library"),  QStringLiteral("physical material"), QStringLiteral("mass")};
+                        QStringLiteral("library"),  QStringLiteral("physical material"), QStringLiteral("mass"),
+                        QStringLiteral("my library")};
   m_registry->add(materials);
   // The rest of the Make tab (mitcad#1049, MainWindowMake.cpp): the
   // Material tool's entry in the Materials group, the Annotate group,
   // Export Face as DXF.
   registerMakeCommands();
-  // My Library (mitcad#704, print/MyLibraryDialog.cpp): the user's own
-  // materials, printers and processes without a design; it changes only
-  // the libraries, so also while a panel is open.
-  CommandDef myLibrary = action("tools.my_library", tr("My Library…"), "material", CommandDef::Mode::Any,
-                                [this] { m_controller->openMyLibrary(); });
-  myLibrary.tooltip = tr("Your own materials, printers and processes");
-  myLibrary.keywords = {QStringLiteral("material"), QStringLiteral("printer"),  QStringLiteral("process"),
-                        QStringLiteral("filament"), QStringLiteral("library"),  QStringLiteral("print"),
-                        QStringLiteral("slicer"),   QStringLiteral("profile"), QStringLiteral("import")};
-  myLibrary.duringCommands = true;
-  myLibrary.enabled = [this] { return m_controller != nullptr; };
-  m_registry->add(myLibrary);
+  // Tools › My Library… went with mitcad#1135: the Materials, Printers and
+  // Processes managers (the Make tab) show My library beside the design,
+  // and work on it alone when no design is open.
 
   // The caches of computed results (P7d).
   CommandDef diagnostics = action("help.diagnostics", tr("Diagnostics…"), "measure", CommandDef::Mode::Any,
@@ -1301,10 +1298,17 @@ void MainWindow::createMenus() {
   tools->setObjectName(QStringLiteral("toolsMenu"));
   tools->addAction(m_registry->action(QStringLiteral("tools.search")));
   tools->addAction(m_registry->action(QStringLiteral("tools.shortcuts")));
-  // The user's materials, printers and processes (mitcad#704).
-  tools->addAction(m_registry->action(QStringLiteral("tools.my_library")));
   // Component libraries (mitcad#64, mitcad#63).
   createLibraryMenu(tools);
+  // For the UI tests: the entries as the menu opens (mitcad#1135: no My
+  // Library… since the print managers show My library).
+  connect(tools, &QMenu::aboutToShow, this, [tools] {
+    QStringList entries;
+    for (const QAction* entry : tools->actions()) {
+      entries << (entry->isSeparator() ? QStringLiteral("-") : entry->text().remove(QLatin1Char('&')));
+    }
+    qDebug().noquote() << QStringLiteral("Tools menu: %1").arg(entries.join(QStringLiteral(" | ")));
+  });
 #ifdef Q_OS_MACOS
   createWindowMenu();
 #endif
@@ -1353,6 +1357,7 @@ void MainWindow::createMenus() {
 // The standard Window menu of macOS applications.
 void MainWindow::createWindowMenu() {
   QMenu* window = menuBar()->addMenu(tr("&Window"));
+  window->setObjectName(QStringLiteral("windowMenu"));
   QAction* minimize = window->addAction(tr("Minimize"));
   minimize->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   connect(minimize, &QAction::triggered, this, [this] { showMinimized(); });
@@ -1445,6 +1450,7 @@ void MainWindow::createRibbon() {
   // with the tab.
   connect(m_ribbon, &Ribbon::tabChanged, this, [this](const QString& tab) {
     qDebug().noquote() << QStringLiteral("Ribbon tab shown: %1").arg(tab);
+    updateSelectionCreate(); // none on the Make tab (mitcad#1178)
     updateMakeCard();
     updateMakeMarkers();
   });
@@ -1535,6 +1541,8 @@ void MainWindow::createRibbon() {
   quickAccess->setFocusPolicy(Qt::NoFocus);
   quickAccess->setCompact(m_ribbon->tabBar()->sizeHint().height());
   m_ribbon->addTabRowWidget(quickAccess);
+  // Unless the user hid it (mitcad#1189): then the tabs' row closes up.
+  quickAccess->applyVisible();
 }
 
 void MainWindow::createPanels() {
@@ -1770,6 +1778,12 @@ void MainWindow::createIdlePage() {
   // (mitcad#560), as the palette's rows did (mitcad#412). Transparent: the
   // card's glass or the dock's surface shows through, as before.
   if (!m_nativeUi) {
+    // As wide as the scroll area shows, never wider (mitcad#1178): a
+    // section wider than its place (a drop-down of long names) had its
+    // right edge, the group box's frame with it, cut by the card. The
+    // sections are squeezed to the card's width instead, every frame whole
+    // with the card's margin on both sides.
+    m_idlePage->setSizePolicy(QSizePolicy::Ignored, m_idlePage->sizePolicy().verticalPolicy());
     auto* scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -1912,6 +1926,8 @@ void MainWindow::updateActions() {
                                  : m_mode == Mode::Sketch ? unsigned(SketchShortcutContext)
                                                           : unsigned(ModelShortcutContext));
   m_registry->updateEnabled([this](const CommandDef& def) { return isAvailable(def); });
+  // What File › Print prints now, for the UI tests (mitcad#1089).
+  logPrintTarget();
   // The card's Create row offers enabled commands only (mitcad#619).
   updateSelectionCreate();
   m_confirmAction->setEnabled(m_mode == Mode::Command || m_mode == Mode::Sketch);
@@ -3154,6 +3170,8 @@ void MainWindow::refreshScene() {
   followImageReferences();
   // The Center of Mass marker where the design's center is (mitcad#1094).
   followCenterOfMass();
+  // The comments' pins and the Comments panel (mitcad#1119).
+  followComments();
   // The Origin folder and Isolate are the document's (P9).
   m_originShown = m_snapshot.originShown;
   m_isolation = m_snapshot.isolation;
@@ -3579,7 +3597,7 @@ void MainWindow::logBodyPlaces() {
   }
   QStringList places;
   for (const auto& [label, center] : std::as_const(m_bodyCenters)) {
-    const QPoint at = m_viewer->mapTo(this, m_viewer->toWidget(center));
+    const QPoint at = m_viewer->mapTo(window(), m_viewer->toWidget(center));
     places << QStringLiteral("Body %1 at %2,%3").arg(label).arg(at.x()).arg(at.y());
   }
   const QString logged = places.join(QLatin1Char('\n'));
@@ -3626,8 +3644,8 @@ void MainWindow::showProfiles() {
     const std::string region = utf8(profile.value(QStringLiteral("region")).toString());
     const QString occurrence = placingOccurrence(sketch);
     if (!occurrence.isEmpty()) {
-      if (!m_snapshot.isOccurrenceShown(occurrence)) {
-        continue; // the component's occurrence is hidden
+      if (sketch != active && !m_snapshot.isOccurrenceShown(occurrence)) {
+        continue; // the component's occurrence is hidden (not the edited sketch's, mitcad#1194)
       }
       occurrences[utf8(sketch)] = occurrence;
     }
@@ -3774,8 +3792,12 @@ void MainWindow::showSketches() {
       const QString occurrence = placingOccurrence(sketch);
       QString placed;
       if (!occurrence.isEmpty()) {
-        if (!m_snapshot.isOccurrenceShown(occurrence)) {
-          continue; // the component's occurrence is hidden
+        // The component's occurrence hidden: its sketches are not drawn,
+        // but the edited one is, where its dimensions and constraints are
+        // (mitcad#1194).
+        const bool edited = m_sketch->isActive() && sketch == m_sketch->uid();
+        if (!edited && !m_snapshot.isOccurrenceShown(occurrence)) {
+          continue;
         }
         const TopLoc_Location placement = placementOf(occurrence);
         for (SketchEntityDisplay& entity : some) {
@@ -3978,7 +4000,7 @@ void MainWindow::logDatumPlaces() {
       }
       tryPlaces(sides);
     }
-    const QPoint point = m_viewer->mapTo(this, m_viewer->toWidget(at));
+    const QPoint point = m_viewer->mapTo(window(), m_viewer->toWidget(at));
     const QString in = occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + occurrence;
     lines << QStringLiteral("Datum %1%2 at %3,%4").arg(uid, in).arg(point.x()).arg(point.y());
   }
@@ -4022,7 +4044,7 @@ void MainWindow::logPickPlaces(SelectFilter filter, bool again) {
   }
   qDebug().noquote() << "Pick places:";
   for (const auto& [item, at] : places) {
-    const QPoint point = m_viewer->mapTo(this, at);
+    const QPoint point = m_viewer->mapTo(window(), at);
     qDebug().noquote() << QStringLiteral("Pick %1 %2/%3 at %4,%5")
                               .arg(SelectionItem::kindName(item.kind), item.owner, item.name)
                               .arg(point.x())
@@ -4074,7 +4096,7 @@ void MainWindow::inputActivated(SelectFilter filter) {
         const BRepAdaptor_Curve curve(TopoDS::Edge(edges.Current()));
         at = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0);
       }
-      const QPoint point = m_viewer->mapTo(this, m_viewer->toWidget(at));
+      const QPoint point = m_viewer->mapTo(window(), m_viewer->toWidget(at));
       qDebug().noquote() << QStringLiteral("Sketch entity %1/%2 at %3,%4")
                                 .arg(entity.sketch, entity.id)
                                 .arg(point.x())
@@ -4208,6 +4230,28 @@ void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, co
   // A crash in the geometry kernel is an internal error (mitcad#62).
   if (level == NoticeLevel::Error && m_reports != nullptr) {
     m_reports->errorShown(message);
+  }
+}
+
+void MainWindow::clearDesignMessages() {
+  // Another design in the window (New, Open, Open Recent, a file from the
+  // system, recovery, an import into a new design; mitcad#1174): the
+  // previous design's message goes, an error too, from the Docked status
+  // line and from the message band (its stub as well); the history keeps
+  // it.
+  m_statusIsHint = true;
+  m_statusLevel = NoticeLevel::Hint;
+  if (m_statusLabel != nullptr) {
+    setErrorStyleSheet(m_statusLabel, QString());
+    m_statusLabel->clear();
+  }
+  if (m_statusIcon != nullptr) {
+    m_statusIcon->clear();
+    m_statusIcon->hide();
+  }
+  qDebug().noquote() << QStringLiteral("Status line cleared (another design)");
+  if (m_messages != nullptr) {
+    m_messages->clear("another design");
   }
 }
 
@@ -5649,7 +5693,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // Live updates leave the brokers cleanly (mitcad#89).
     m_live->shutDown();
     event->accept();
+    if (m_windowManager != nullptr) m_windowManager->windowClosed(this);
   } else {
+    if (m_windowManager != nullptr) m_windowManager->cancelQuit(this);
     event->ignore();
   }
 }
@@ -5682,6 +5728,7 @@ void MainWindow::clearNativeCommandContinuation() {
 }
 
 void MainWindow::newDocument() {
+  if (m_windowManager != nullptr) { m_windowManager->newDocument(this); return; }
   if (deferForNativeCommand([this] { newDocument(); })) {
     return;
   }
@@ -5699,7 +5746,11 @@ void MainWindow::openDocument() {
   if (deferForNativeCommand([this] { openDocument(); })) {
     return;
   }
-  if (!maybeSave()) {
+  // Replacing this design (no window manager, or Open in the current
+  // window, mitcad#1172) asks about its changes before the file is chosen,
+  // as Open always did; otherwise the design stays open and nothing is asked.
+  const bool replacing = m_windowManager == nullptr || GeneralSettings::load().openInCurrentWindow;
+  if (replacing && !maybeSave()) {
     return;
   }
   const QString path = dialogOpenFileName(this, tr("Open"), dialogFolder(DialogGroup::Open), openFilter());
@@ -5710,7 +5761,8 @@ void MainWindow::openDocument() {
   QString error;
   // The import of the file chosen asks its choices (mitcad#507).
   m_askImportChoices = true;
-  const bool opened = openFile(path, error);
+  const bool opened = m_windowManager != nullptr ? m_windowManager->openFile(this, path, error, replacing) != nullptr
+                                                 : openFile(path, error);
   m_askImportChoices = false;
   if (!opened && !error.isEmpty()) {
     const QString message = tr("Could not open %1:\n%2").arg(QDir::toNativeSeparators(path), error);
@@ -6184,7 +6236,7 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   const QByteArray storeLabel = label.toUtf8();
   const QByteArray handOff = handedOver.toUtf8();
   const double minMs = resultStoreMinMs();
-  const auto memoryMb = static_cast<std::uint64_t>(CacheSettings::load().memoryMegabytes);
+  const auto memoryMb = static_cast<std::uint64_t>(m_documentSession->memoryCacheMegabytes());
   // Display meshes stored after the open (mitcad#880) count toward the
   // store's size too: the writer's thread starts the clean-up.
   DisplayMeshWrites* const writes = displayMeshWrites();
@@ -6274,6 +6326,7 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   // any command or sketch on it, and its recovery data (P8).
   resetCommandState();
   m_document = std::move(*made);
+  clearDesignMessages(); // the old design's (mitcad#1174)
   m_measureHistory.clear(); // the old design's measurements (mitcad#648)
   m_measurementKept = false; // and a Keep of its (mitcad#649)
   m_mcpDocumentId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -6374,7 +6427,7 @@ void MainWindow::applyCacheSettings() {
   }
   m_document->set_result_store(rustStr(resultStoreDirectory().toUtf8()), rustStr(resultStoreBuildId().toUtf8()),
                                rustStr(documentName().toUtf8()));
-  m_document->set_memory_cache_budget(static_cast<std::uint64_t>(CacheSettings::load().memoryMegabytes));
+  DocumentSession::refreshMemoryCacheBudgets();
   collectResultStoreGarbage();
 }
 

@@ -31,6 +31,11 @@ double volume(const Shape& shape);
 // programs' measures of the same shape.
 MassProperties fixed_point_properties(const Shape& shape);
 
+// The area of faces that are not a body of their own (a section's caps),
+// each face once, integrated as mass_properties integrates a body's faces
+// (mitcad#140), so that every area MitCad reports agrees (mitcad#1200).
+double faces_area(const std::vector<TopoDS_Face>& faces);
+
 // Axis-aligned box around the geometry (not enlarged by tolerances).
 struct BoundingBox {
   bool empty = true;

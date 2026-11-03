@@ -123,6 +123,10 @@ public:
   std::shared_ptr<geometry::Shape> previewToolShape() const;
   int undoDepth() const;
   bool modified() const;
+  // One process-wide model-cache budget, divided among its live sessions.
+  // Busy models receive their new share once their worker releases them.
+  qint64 memoryCacheMegabytes() const;
+  static void refreshMemoryCacheBudgets();
 
   void setWaitHandler(WaitHandler handler) { m_waitHandler = std::move(handler); }
   // Called on the session's thread before every job starts, while the
@@ -214,6 +218,7 @@ private:
   std::function<void()> m_beforeJob;
   std::deque<IdleCall> m_idleCalls;
   bool m_idleCallsPosted = false;
+  bool m_cacheBudgetPending = false;
   QTimer m_progressTimer;
   QJsonObject m_documentInfo;
 };

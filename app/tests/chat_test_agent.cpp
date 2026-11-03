@@ -17,6 +17,10 @@
 //   "save"     document_save to MITCAD_TEST_CHAT_SAVE_PATH
 //   "undo"     model_command undo (a step from before the message)
 //   "wait"     streams a line, then waits for its turn to be stopped
+//   "account failure" (or the work folder's account-blocked file) an
+//              account error; with "slowly" it waits for account-go.png;
+//              the account check's probe fails for the network instead
+//              while network-down.png is there and network-up.png not
 //   otherwise  a plain answer naming what came with the message
 //
 // It records each start's arguments (chat-starts.jsonl) and each message's
@@ -69,6 +73,35 @@ void onInterrupt(int) { interrupted = true; }
 #endif
 
 QString work() { return qEnvironmentVariable("MITCAD_ASSISTANT_TEST_WORK"); }
+
+QString accountFailure() {
+  return QStringLiteral("Your organization has disabled Claude subscription access for Claude Code · "
+                        "Use an Anthropic API key instead, or ask your admin to enable access");
+}
+
+// The account check's probe turn fails for the network (mitcad#1155): while
+// the UI script's screenshot network-down.png is in the work folder and
+// network-up.png is not.
+bool networkDown(const QString& text) {
+  const QDir folder(work());
+  return text.startsWith(QStringLiteral("Reply with OK only.")) &&
+         QFileInfo::exists(folder.filePath(QStringLiteral("network-down.png"))) &&
+         !QFileInfo::exists(folder.filePath(QStringLiteral("network-up.png")));
+}
+
+QString networkFailure() { return QStringLiteral("API Error: Connection error (the test network is down)"); }
+
+// "account failure, slowly": the failure waits for the UI script's
+// screenshot account-go.png, so that a message can be queued meanwhile.
+void waitForAccountGo(const QString& text) {
+  if (!text.contains(QStringLiteral("slowly"))) {
+    return;
+  }
+  const QString signal = QDir(work()).filePath(QStringLiteral("account-go.png"));
+  for (int waited = 0; waited < 600 && !QFileInfo::exists(signal); ++waited) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+}
 
 void appendLine(const QString& name, const QJsonObject& value) {
   QFile file(QDir(work()).filePath(name));
@@ -328,7 +361,21 @@ int printMode(const QStringList& args) {
       continue;
     }
     bool error = false;
-    if (text.contains(QStringLiteral("several"))) {
+    if (networkDown(text)) {
+      conversation.end(true, QStringLiteral("error_during_execution"), networkFailure());
+    } else if (text.contains(QStringLiteral("account failure")) ||
+        QFileInfo::exists(QDir(work()).filePath(QStringLiteral("account-blocked")))) {
+      waitForAccountGo(text);
+      // Stream it first, then repeat it in an assistant error and the
+      // result: all three deliveries must become one error row.
+      conversation.answer(accountFailure());
+      const QJsonArray content{QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                                           {QStringLiteral("text"), accountFailure()}}};
+      emitLine({{QStringLiteral("type"), QStringLiteral("assistant")},
+                {QStringLiteral("error"), QStringLiteral("authentication_failed")},
+                {QStringLiteral("message"), QJsonObject{{QStringLiteral("content"), content}}}});
+      conversation.end(true, QStringLiteral("error_during_execution"), accountFailure());
+    } else if (text.contains(QStringLiteral("several"))) {
       // Three calls in a row (the second fails: no such document), a text,
       // two calls, a text: two group rows (mitcad#983).
       conversation.answer(QStringLiteral("Looking at the design."));
@@ -715,7 +762,21 @@ int appServer(const QStringList& args) {
         continue;
       }
       bool error = false;
-      if (text.contains(QStringLiteral("box"))) {
+      if (networkDown(text)) {
+        turn.end(QStringLiteral("failed"), networkFailure());
+      } else if (text.contains(QStringLiteral("account failure")) ||
+        QFileInfo::exists(QDir(work()).filePath(QStringLiteral("account-blocked")))) {
+        waitForAccountGo(text);
+        const QJsonObject connection{{QStringLiteral("httpStatusCode"), 401}};
+        const QJsonObject info{{QStringLiteral("httpConnectionFailed"), connection}};
+        const QJsonObject failure{{QStringLiteral("message"), QStringLiteral("Not signed in")},
+                                  {QStringLiteral("codexErrorInfo"), info}};
+        notify(QStringLiteral("error"), {{QStringLiteral("threadId"), thread},
+                                         {QStringLiteral("turnId"), turnId},
+                                         {QStringLiteral("willRetry"), false},
+                                         {QStringLiteral("error"), failure}});
+        turn.end(QStringLiteral("failed"), QStringLiteral("Not signed in"));
+      } else if (text.contains(QStringLiteral("box"))) {
         turn.answer(QStringLiteral("Adding the boxes."));
         const QString document = turn.document();
         turn.call(QStringLiteral("model_command"), box(document, 0, 20, 30, 10), &error);

@@ -8,10 +8,12 @@
 #include <QDateTime>
 #include <QDir>
 #include <QJsonDocument>
+#include <QTimer>
 #include <QUuid>
 #include <QtLogging>
 
 #include "../mcp/AssistantSetup.hpp"
+#include "AccountCheck.hpp"
 #include "ChatLogic.hpp"
 #include "ChatSettings.hpp"
 #include "ClaudeCodeAgent.hpp"
@@ -22,6 +24,9 @@ namespace {
 
 // What an untitled design's history keeps in memory at most.
 constexpr qsizetype kUnsavedLimit = 4 * 1024 * 1024;
+// Check again's setup check at most (mitcad#1155): the agents' version and
+// sign-in probes take up to 20 s each.
+constexpr int kAccountSetupCheckMs = 45000;
 
 QString newSession() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
@@ -122,6 +127,7 @@ ChatController::ChatController(ChatHost host, QObject* parent)
       if (candidate == m_agent) {
         qInfo().noquote() << QStringLiteral("Chat state: %1").arg(readinessName(m_agent->readiness()));
         emit setupChanged();
+        settleAccountCheck(false);
       }
     });
     connect(candidate, &ChatAgent::panelEvent, this, [this, candidate](const QJsonObject& event) {
@@ -196,7 +202,7 @@ ChatController::~ChatController() {
 }
 
 void ChatController::chooseAgent(const QString& id) {
-  if (m_agent->id() == id || m_activity != Activity::Idle) {
+  if (m_agent->id() == id || m_activity != Activity::Idle || m_checkingAccount) {
     return;
   }
   for (ChatAgent* candidate : m_agents) {
@@ -233,7 +239,7 @@ void ChatController::refreshSetup(bool full) {
   if (m_detected != before) {
     emit setupChanged(); // the switcher's agents
   }
-  if (m_activity != Activity::Idle) {
+  if (m_activity != Activity::Idle || m_checkingAccount) {
     return;
   }
   if (full) {
@@ -247,6 +253,160 @@ void ChatController::refreshSetup(bool full) {
 
 void ChatController::signIn() {
   m_agent->signIn();
+}
+
+void ChatController::accountFailed(const QJsonObject& account, const QString& text) {
+  const bool repeated = m_accountErrors.value(m_agent->id()) == account;
+  m_accountErrors.insert(m_agent->id(), account);
+  if (m_checkingAccount) {
+    m_checkSawAccountError = true;
+  }
+  qInfo().noquote() << QStringLiteral("Chat: %1 account error: %2")
+                           .arg(m_agent->name(), account.value(QStringLiteral("code")).toString());
+  if (!m_checkingAccount && !repeated) {
+    const QString shown = text.isEmpty() ? account.value(QStringLiteral("reason")).toString() : text;
+    if (m_answer >= 0 && m_entries[m_answer].value(QStringLiteral("text")).toString().trimmed() == shown.trimmed()) {
+      QJsonObject& entry = m_entries[m_answer];
+      entry.insert(QStringLiteral("role"), QStringLiteral("notice"));
+      entry.insert(QStringLiteral("level"), QStringLiteral("error"));
+      emit entryChanged(m_answer);
+      m_answer = -1;
+      record(entry);
+      qInfo().noquote() << QStringLiteral("Chat notice (error): %1").arg(shown);
+    } else {
+      notice(shown, NoticeLevel::Error);
+    }
+  }
+  // The waiting messages are not sent with this account; said as Stop says
+  // it (mitcad#1155), before the turn ends.
+  if (!m_queue.isEmpty()) {
+    notice(tr("%n waiting message(s) were not sent.", nullptr, int(m_queue.size())), NoticeLevel::Warning);
+    m_queue.clear();
+  }
+  if (!m_checkingAccount && m_turn.active) {
+    // Some agents emit an error notification and then keep retrying. Let
+    // a buffered turn_end arrive first; otherwise end that turn so the
+    // explicit account check is available. No more model calls may run.
+    const QString marker = m_marker;
+    QTimer::singleShot(1000, this, [this, marker] {
+      if (marker == m_marker && m_turn.active &&
+          (m_activity == Activity::Working || m_activity == Activity::Starting)) {
+        stop();
+      }
+    });
+  }
+  emit setupChanged();
+}
+
+void ChatController::checkAccount() {
+  if (m_activity != Activity::Idle || m_checkingAccount) {
+    return;
+  }
+  m_checkingAccount = true;
+  m_accountProbe = false;
+  m_checkSawAccountError = false;
+  ++m_probeGeneration;
+  const int generation = m_probeGeneration;
+  m_agent->shutdown();
+  m_marker.clear();
+  qInfo().noquote() << QStringLiteral("Chat: checking %1 account").arg(m_agent->name());
+  emit setupChanged();
+  m_agent->check();
+  // A check that emits no readiness change (mitcad#1155): one that ends at
+  // once with the readiness it had (the program is gone, as at the last
+  // look) is settled here; one that keeps an unfinished sign-in may never
+  // change it, so the setup check is bounded too.
+  settleAccountCheck(true);
+  QTimer::singleShot(kAccountSetupCheckMs, this, [this, generation] {
+    if (m_checkingAccount && !m_accountProbe && generation == m_probeGeneration) {
+      finishAccountProbe(false, m_agent->readiness() == ChatAgent::Readiness::SigningIn
+                                    ? readinessProblem()
+                                    : tr("The account check timed out. Try again."));
+    }
+  });
+}
+
+void ChatController::settleAccountCheck(bool atOnce) {
+  if (!m_checkingAccount || m_accountProbe) {
+    return;
+  }
+  switch (accountCheckStep(m_agent->readiness(), atOnce)) {
+  case AccountCheckStep::Wait: break;
+  case AccountCheckStep::Probe: beginAccountProbe(); break;
+  case AccountCheckStep::Fail: finishAccountProbe(false, readinessProblem()); break;
+  }
+}
+
+QString ChatController::readinessProblem() const {
+  const QString detail = m_agent->readinessDetail();
+  switch (m_agent->readiness()) {
+  case ChatAgent::Readiness::Missing:
+    return detail.isEmpty() ? tr("%1 was not found.").arg(m_agent->name()) : detail;
+  case ChatAgent::Readiness::Outdated:
+    return detail.isEmpty() ? tr("%1 needs an update.").arg(m_agent->name()) : detail;
+  case ChatAgent::Readiness::Checking:
+  case ChatAgent::Readiness::SignedOut:
+  case ChatAgent::Readiness::SigningIn:
+  case ChatAgent::Readiness::Ready:
+    break;
+  }
+  return tr("Sign in to %1 and check again.").arg(m_agent->accountName());
+}
+
+void ChatController::beginAccountProbe() {
+  QString reason;
+  const QString instance = m_host.listener(&reason);
+  const QString bridge = mcp::installedBridge(QCoreApplication::applicationDirPath());
+  if (instance.isEmpty() || bridge.isEmpty()) {
+    finishAccountProbe(false, reason.isEmpty() ? tr("MitCad's bridge is unavailable.") : reason);
+    return;
+  }
+  m_accountProbe = true;
+  m_marker = QUuid::createUuid().toString(QUuid::Id128);
+  const ChatAgent::Start start{newSession(), false, bridge, instance, m_marker, chosenModel()};
+  setActivity(Activity::Starting);
+  if (!m_agent->start(start, &reason) ||
+      !m_agent->send({QStringLiteral("Reply with OK only. Do not use tools."), QString(), {}}, &reason)) {
+    finishAccountProbe(false, reason);
+    return;
+  }
+  const int generation = m_probeGeneration;
+  QTimer::singleShot(30000, this, [this, generation] {
+    if (m_checkingAccount && generation == m_probeGeneration) {
+      finishAccountProbe(false, tr("The account check timed out. Try again."));
+    }
+  });
+}
+
+void ChatController::finishAccountProbe(bool success, const QString& reason) {
+  if (!m_checkingAccount) {
+    return;
+  }
+  m_checkingAccount = false;
+  m_accountProbe = false;
+  ++m_probeGeneration;
+  m_marker.clear();
+  if (success) {
+    m_accountErrors.remove(m_agent->id());
+    qInfo().noquote() << QStringLiteral("Chat: %1 account check passed").arg(m_agent->name());
+  } else {
+    // The account's own reason stays in the state line (mitcad#1155); why
+    // this check failed otherwise (the network, the agent gone, a timeout)
+    // is a notice beside it, not kept in the history.
+    const QString kept = m_accountErrors.value(m_agent->id()).value(QStringLiteral("reason")).toString();
+    qInfo().noquote() << QStringLiteral("Chat: %1 account check failed: %2")
+                             .arg(m_agent->name(), reason.isEmpty() ? kept : reason);
+    if (!reason.isEmpty() && !m_checkSawAccountError) {
+      notice(tr("The account check failed: %1").arg(reason), NoticeLevel::Warning, false);
+    }
+  }
+  // feed_line has returned before panelEvent is emitted. Both process
+  // adapters stop their event loop when shutdown detaches the process.
+  // Detach before reporting Ready, so a new message cannot reuse the
+  // probe's process or temporary session.
+  m_agent->shutdown();
+  setActivity(Activity::Idle);
+  emit setupChanged();
 }
 
 void ChatController::openInstallPage() {
@@ -403,6 +563,9 @@ void ChatController::documentChanged(const QString& documentId, const QString& p
     m_turn.startDepth = -1;
     return;
   }
+  if (m_checkingAccount) {
+    finishAccountProbe(false);
+  }
   // Another design: its own conversation. The agent of the one before ends
   // (its undo steps went with its document).
   m_documentId = documentId;
@@ -421,6 +584,9 @@ void ChatController::documentChanged(const QString& documentId, const QString& p
 }
 
 void ChatController::startOver(bool mark) {
+  if (m_checkingAccount) {
+    finishAccountProbe(false);
+  }
   closeAnswer();
   m_agent->shutdown();
   m_marker.clear();
@@ -457,7 +623,10 @@ void ChatController::clearHistory(bool all) {
   startOver(false);
 }
 
-void ChatController::send(const QString& text, bool attachSelection, bool attachView) {
+void ChatController::send(const QString& text, bool attachSelection, bool attachView, bool attachComments) {
+  if (!accountError().isEmpty() || m_checkingAccount) {
+    return;
+  }
   const QString shown = text.trimmed();
   if (shown.isEmpty()) {
     return;
@@ -471,6 +640,18 @@ void ChatController::send(const QString& text, bool attachSelection, bool attach
       // For the agent: the entities as ui_state and ui_select give them.
       message.context = QStringLiteral("Selected in MitCad (as ui_state's selection): ") + compact(selection, 32000);
       attached << QStringLiteral("%1 selected").arg(selection.size());
+    }
+  }
+  // The open comments (mitcad#1119), as the comments resource lists them,
+  // so the agent addresses them.
+  if (attachComments && m_host.comments) {
+    const QJsonArray comments = m_host.comments();
+    if (!comments.isEmpty()) {
+      const QString listed = QStringLiteral("Open comments in MitCad (address each with address_comment in the same "
+                                            "model_command array as its change): ") +
+                             compact(comments, 32000);
+      message.context = message.context.isEmpty() ? listed : message.context + QStringLiteral("\n\n") + listed;
+      attached << QStringLiteral("%1 open comments").arg(comments.size());
     }
   }
   if (attachView) {
@@ -569,6 +750,20 @@ void ChatController::closeAnswer() {
 
 void ChatController::onEvent(const QJsonObject& event) {
   const QString kind = event.value(QStringLiteral("kind")).toString();
+  if (kind == QStringLiteral("account_error")) {
+    accountFailed(event.value(QStringLiteral("account")).toObject(), event.value(QStringLiteral("text")).toString());
+    return;
+  }
+  if (m_accountProbe) {
+    if (kind == QStringLiteral("init")) {
+      setActivity(Activity::Working);
+    } else if (kind == QStringLiteral("turn_end")) {
+      const bool success = !event.value(QStringLiteral("error")).toBool();
+      finishAccountProbe(success, success || event.value(QStringLiteral("account_error")).toBool()
+                                     ? QString() : event.value(QStringLiteral("text")).toString());
+    }
+    return;
+  }
   if (kind == QStringLiteral("init")) {
     m_sawInit = true;
     m_resumable = true;
@@ -647,7 +842,7 @@ void ChatController::onEvent(const QJsonObject& event) {
     qInfo().noquote() << QStringLiteral("Chat: turn ended (%1)").arg(subtype);
     if (stopped) {
       notice(tr("Stopped."));
-    } else if (event.value(QStringLiteral("error")).toBool()) {
+    } else if (event.value(QStringLiteral("error")).toBool() && !event.value(QStringLiteral("account_error")).toBool()) {
       const QString text = event.value(QStringLiteral("text")).toString();
       notice(text.isEmpty() ? tr("%1 ended the message with an error (%2).").arg(m_agent->name(), subtype) : text,
              NoticeLevel::Error);
@@ -679,6 +874,15 @@ void ChatController::onEvent(const QJsonObject& event) {
 }
 
 void ChatController::onExited(int code, const QString& errors, bool stopped) {
+  if (m_checkingAccount) {
+    finishAccountProbe(false, errors.isEmpty() ? tr("The agent ended before the account check finished.") : errors);
+    return;
+  }
+  const QJsonObject account = chatRequest({{QStringLiteral("op"), QStringLiteral("account_error")},
+                                          {QStringLiteral("text"), errors}});
+  if (!stopped && !account.isEmpty()) {
+    accountFailed(account, errors);
+  }
   m_marker.clear();
   for (int index = 0; index < m_entries.size(); ++index) {
     if (m_entries[index].value(QStringLiteral("role")).toString() == QStringLiteral("card") &&
@@ -704,11 +908,11 @@ void ChatController::onExited(int code, const QString& errors, bool stopped) {
     }
     if (stopped) {
       notice(tr("Stopped."));
-    } else {
+    } else if (accountError().isEmpty()) {
       notice(tr("%1 ended: %2").arg(m_agent->name(), errors.isEmpty() ? tr("exit status %1").arg(code) : errors), NoticeLevel::Error);
     }
     endTurn(true);
-  } else if (!stopped && !m_sawInit) {
+  } else if (!stopped && !m_sawInit && accountError().isEmpty()) {
     notice(tr("%1 ended: %2").arg(m_agent->name(), errors.isEmpty() ? tr("exit status %1").arg(code) : errors), NoticeLevel::Error);
   }
   if (!m_queue.isEmpty()) {
@@ -848,6 +1052,9 @@ mcp::ChatGate::Decision ChatController::decide(const QString& marker, const QStr
   }
   if (!m_turn.active) {
     return {Verdict::Deny, tr("No message of the chat is running.")};
+  }
+  if (!accountError().isEmpty()) {
+    return {Verdict::Deny, tr("The agent's account cannot be used. Check it again in the chat panel.")};
   }
   const ChatSettings settings = ChatSettings::load();
   const QJsonObject state = m_host.documentState();

@@ -19,8 +19,8 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSet>
-#include <QSettings>
 #include <QTreeWidget>
+#include <QVector>
 #include <QWidget>
 #include <QtLogging>
 
@@ -56,8 +56,6 @@ QSet<QString>& asked() {
 
 QString askedKey(const LibraryItem& item) { return item.kind + QLatin1Char('/') + item.designId(); }
 
-const char* kPlaceSetting = "print/creationPlace";
-
 } // namespace
 
 QString LibraryItem::designId() const {
@@ -71,22 +69,54 @@ bool LibraryItem::saved() const { return library == QStringLiteral("user") || li
 
 bool LibraryItem::unsaved() const { return !readOnly && library.isEmpty(); }
 
-QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QString& kind, const QString& project,
-                                       QString* error) {
+namespace {
+
+// The rows of a `library_items` answer as items.
+QVector<LibraryItem> itemsOfRows(const QJsonArray& rows, const QString& kind);
+
+// Asks `library_items` of a kind; the rows, and the places of a by-place
+// answer.
+QJsonArray itemRows(const CommandContext& model, const QString& kind, const QString& project, bool byPlace,
+                    QStringList* places, QString* error) {
   QJsonObject query{{QStringLiteral("query"), QStringLiteral("library_items")}, {QStringLiteral("kind"), kind}};
   if (!project.isEmpty()) {
     query.insert(QStringLiteral("project"), project);
   }
-  QJsonArray rows;
+  if (byPlace) {
+    query.insert(QStringLiteral("by_place"), true);
+  }
   try {
     const QJsonValue answer = model.query(query);
-    rows = answer.isArray() ? answer.toArray() : answer.toObject().value(QStringLiteral("items")).toArray();
+    if (places != nullptr) {
+      places->clear();
+      for (const QJsonValue& place : answer.toObject().value(QStringLiteral("places")).toArray()) {
+        places->append(place.toString());
+      }
+    }
+    return answer.isArray() ? answer.toArray() : answer.toObject().value(QStringLiteral("items")).toArray();
   } catch (const std::exception& e) {
     if (error != nullptr) {
       *error = QString::fromUtf8(e.what());
     }
     return {};
   }
+}
+
+} // namespace
+
+QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QString& kind, const QString& project,
+                                       QString* error) {
+  return itemsOfRows(itemRows(model, kind, project, false, nullptr, error), kind);
+}
+
+QVector<LibraryItem> queryPlaceItems(const CommandContext& model, const QString& kind, const QString& project,
+                                     QStringList* places, QString* error) {
+  return itemsOfRows(itemRows(model, kind, project, true, places, error), kind);
+}
+
+namespace {
+
+QVector<LibraryItem> itemsOfRows(const QJsonArray& rows, const QString& kind) {
   QVector<LibraryItem> items;
   for (const QJsonValue& value : std::as_const(rows)) {
     const QJsonObject row = value.toObject();
@@ -131,12 +161,21 @@ QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QStrin
     if (item.library == QStringLiteral("design")) {
       item.library.clear();
     }
+    // By place (mitcad#1135).
+    item.shadowed = row.value(QStringLiteral("shadowed")).toBool();
+    item.copy = text(row, "copy");
+    item.copyUsed = row.value(QStringLiteral("copy_used")).toBool();
+    const QJsonObject source = row.value(QStringLiteral("source")).toObject();
+    item.sourcePlace = text(source, "place");
+    item.sourceName = text(source, "name");
     if (!item.id.isEmpty()) {
       items.append(item);
     }
   }
   return items;
 }
+
+} // namespace
 
 const LibraryItem* findItem(const QVector<LibraryItem>& items, const QString& key) {
   for (const LibraryItem& item : items) {
@@ -167,9 +206,123 @@ QString placeName(const QString& place) {
     return QObject::tr("My library");
   }
   if (place == QStringLiteral("project")) {
-    return QObject::tr("This project's library");
+    return QObject::tr("This project");
   }
   return QObject::tr("This design");
+}
+
+QString placeHeading(const QString& place, int count) {
+  return QStringLiteral("%1 (%2)").arg(placeName(place)).arg(count);
+}
+
+QStringList writablePlaces(bool hasDesign, bool inProject) {
+  QStringList places;
+  if (hasDesign) {
+    places << QStringLiteral("design");
+  }
+  if (inProject) {
+    places << QStringLiteral("project");
+  }
+  places << QStringLiteral("user");
+  return places;
+}
+
+QString defaultPlace(bool hasDesign) { return hasDesign ? QStringLiteral("design") : QStringLiteral("user"); }
+
+QString choosePlaceAmong(QWidget* anchor, const QString& logName, const QStringList& places, const QString& current,
+                         const QPoint* at) {
+  if (places.isEmpty()) {
+    return QString();
+  }
+  if (places.size() == 1) {
+    return places.first();
+  }
+  // The default first, the others in the lists' order.
+  QStringList order = places;
+  if (order.removeAll(current) > 0) {
+    order.prepend(current);
+  }
+  QMenu menu(anchor);
+  QStringList names;
+  QVector<QAction*> actions;
+  for (const QString& place : std::as_const(order)) {
+    actions.append(menu.addAction(placeName(place)));
+    names << placeName(place);
+  }
+  qDebug().noquote() << QStringLiteral("%1 menu: %2").arg(logName, names.join(QStringLiteral(" | ")));
+  QAction* chosen = execMenu(&menu, at != nullptr ? *at : anchor->mapToGlobal(QPoint(0, anchor->height())));
+  const int index = static_cast<int>(actions.indexOf(chosen));
+  if (chosen == nullptr || index < 0) {
+    qDebug().noquote() << QStringLiteral("%1 menu closed").arg(logName);
+    return QString();
+  }
+  qDebug().noquote() << QStringLiteral("%1 chosen: %2").arg(logName, names.at(index));
+  return order.at(index);
+}
+
+QString editingLine(const LibraryItem& item) {
+  if (item.readOnly) {
+    return QObject::tr("Built-in: read only. Duplicate makes a copy you can edit.");
+  }
+  if (item.place == QStringLiteral("project")) {
+    return QObject::tr("Editing: this project's library — every design of the project uses it");
+  }
+  if (item.place == QStringLiteral("user")) {
+    return QObject::tr("Editing: My library — every design of yours can use it");
+  }
+  if (!item.sourceName.isEmpty()) {
+    // A copy: its library item stays as it is (no sync, mitcad#1135).
+    return QObject::tr("Editing: this design only — %1's %2 stays as it is")
+        .arg(placeName(item.sourcePlace), item.sourceName);
+  }
+  return QObject::tr("Editing: this design only");
+}
+
+bool matchesSearch(const LibraryItem& item, const QString& text) {
+  const QString wanted = text.trimmed();
+  return wanted.isEmpty() || item.name.contains(wanted, Qt::CaseInsensitive);
+}
+
+QStringList copyTargets(const LibraryItem& item, bool hasDesign, bool inProject) {
+  if (item.readOnly) {
+    return {};
+  }
+  QStringList targets = writablePlaces(hasDesign, inProject);
+  targets.removeAll(item.place);
+  return targets;
+}
+
+QJsonObject copyCommand(const LibraryItem& item, const QString& place, const QString& project) {
+  QJsonObject command;
+  const bool material = item.kind == QStringLiteral("material");
+  if (place == QStringLiteral("design")) {
+    // The design's copy of a library item, linked to it as before.
+    command = QJsonObject{{QStringLiteral("cmd"), QStringLiteral("copy_from_print_library")},
+                          {QStringLiteral("library"), item.library},
+                          {QStringLiteral("kind"), item.kind},
+                          {QStringLiteral("id"), item.id}};
+  } else if (item.library.isEmpty()) {
+    // The design's item into a library: its copy then names it.
+    command = QJsonObject{{QStringLiteral("cmd"), QStringLiteral("save_to_print_library")},
+                          {QStringLiteral("library"), place},
+                          {QStringLiteral("kind"), item.kind},
+                          {QStringLiteral("id"), item.designId()}};
+  } else {
+    // A library's item into another library, under its own name.
+    command = QJsonObject{
+        {QStringLiteral("cmd"), material ? QStringLiteral("create_material") : QStringLiteral("create_print_profile")},
+        {QStringLiteral("library"), place},
+        {QStringLiteral("name"), item.name},
+        {QStringLiteral("based_on"),
+         QJsonObject{{QStringLiteral("library"), item.library}, {QStringLiteral("id"), item.id}}}};
+    if (!material) {
+      command.insert(QStringLiteral("kind"), item.kind);
+    }
+  }
+  if (!project.isEmpty()) {
+    command.insert(QStringLiteral("project"), project);
+  }
+  return command;
 }
 
 QString materialGroupTitle(const QString& group) {
@@ -262,8 +415,8 @@ QJsonObject designFields(const LibraryItem& item, const QJsonArray& designItems,
   return itemFields(item, designItems, library);
 }
 
-QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QLabel** saved, QWidget** builtIn, QPushButton** duplicate,
-                        QPushButton** saveTo) {
+QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QWidget** builtIn, QPushButton** duplicate,
+                        QPushButton** copyTo, QLabel** editing) {
   auto* row = new QHBoxLayout;
   *name = new QLineEdit;
   (*name)->setPlaceholderText(QObject::tr("Name"));
@@ -280,9 +433,15 @@ QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QLabel** saved, QWidget
     return label;
   };
   *used = quiet(QObject::tr("● Used in this design"));
-  *saved = quiet(QString()); // showSavedState
+  (*used)->setObjectName(QStringLiteral("printManagerUsed"));
+  // Where the item lives and whom an edit reaches (editingLine,
+  // mitcad#1135): the panel puts it under the header.
+  *editing = quiet(QString());
+  (*editing)->setObjectName(QStringLiteral("printManagerEditing"));
+  (*editing)->setWordWrap(true);
   // Built-in with its lock, small and grey, and Duplicate (mitcad#655).
   *builtIn = new QWidget;
+  (*builtIn)->setObjectName(QStringLiteral("printManagerBuiltIn"));
   auto* builtInRow = new QHBoxLayout(*builtIn);
   builtInRow->setContentsMargins(0, 0, 0, 0);
   builtInRow->setSpacing(4);
@@ -292,31 +451,21 @@ QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QLabel** saved, QWidget
   setRoleStyleSheet(words, ColorRole::TextSecondary);
   // The way on beside it (mitcad#655): the user's own copy.
   *duplicate = new QPushButton(QObject::tr("Duplicate"));
+  (*duplicate)->setObjectName(QStringLiteral("printManagerBuiltInDuplicate"));
   builtInRow->addWidget(lock);
   builtInRow->addWidget(words);
   builtInRow->addSpacing(6);
   builtInRow->addWidget(*duplicate);
   (*builtIn)->hide();
-  *saveTo = new QPushButton;
+  // A copy in another place (mitcad#1135): a menu of the places.
+  *copyTo = new QPushButton(QObject::tr("Copy to ▾"));
+  (*copyTo)->setObjectName(QStringLiteral("printManagerCopyTo"));
+  (*copyTo)->setToolTip(QObject::tr("Copies the item to another place: This design, This project or My library"));
   row->addWidget(*name, 1);
   row->addWidget(*used);
-  row->addWidget(*saved);
   row->addWidget(*builtIn);
-  row->addWidget(*saveTo);
+  row->addWidget(*copyTo);
   return row;
-}
-
-void showSavedState(QLabel* saved, const LibraryItem* item) {
-  const bool shown = item != nullptr && item->saved();
-  saved->setVisible(shown);
-  if (shown) {
-    saved->setText(item->library == QStringLiteral("project") ? QObject::tr("In this project's library")
-                                                              : QObject::tr("In My library"));
-  }
-}
-
-QString saveToText(bool inProject) {
-  return inProject ? QObject::tr("Save to ▾") : QObject::tr("Save to My library");
 }
 
 void markInDesign(QTreeWidgetItem* row, bool used, const QString& tooltip) {
@@ -353,7 +502,7 @@ bool confirmDelete(QWidget* parent, const LibraryItem& item, const QString& logN
     const QString from =
         item.library == QStringLiteral("project") ? QObject::tr("this project's library") : QObject::tr("My library");
     question = QObject::tr("Delete %1 from %2?").arg(item.name, from);
-    if (any("bodies") || any("components") || any("chosen_by") || item.chosen) {
+    if (any("bodies") || any("components") || any("chosen_by") || item.chosen || item.copyUsed) {
       question += QLatin1Char(' ') + QObject::tr("This design keeps using it.");
     }
   } else if (item.kind != QStringLiteral("material")) {
@@ -424,26 +573,6 @@ bool usedByDesign(const LibraryItem& item) {
     }
   }
   return item.chosen;
-}
-
-QString choosePlace(QWidget* anchor, const QString& logName, bool inProject, const QPoint* at) {
-  if (!inProject) {
-    return QStringLiteral("user");
-  }
-  QSettings settings;
-  const QString last = settings.value(QLatin1String(kPlaceSetting), QStringLiteral("user")).toString();
-  QMenu menu(anchor);
-  QAction* user = menu.addAction(placeName(QStringLiteral("user")));
-  QAction* project = menu.addAction(placeName(QStringLiteral("project")));
-  menu.setActiveAction(last == QStringLiteral("project") ? project : user);
-  qDebug().noquote() << QStringLiteral("%1 menu: %2 | %3").arg(logName, user->text(), project->text());
-  QAction* chosen = execMenu(&menu, at != nullptr ? *at : anchor->mapToGlobal(QPoint(0, anchor->height())));
-  if (chosen == nullptr) {
-    return QString();
-  }
-  const QString library = chosen == project ? QStringLiteral("project") : QStringLiteral("user");
-  settings.setValue(QLatin1String(kPlaceSetting), library);
-  return library;
 }
 
 QString designDialectOf(const CommandContext& model) {

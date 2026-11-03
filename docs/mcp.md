@@ -4,7 +4,7 @@
 ## Connect from MitCad
 
 To work with an agent inside MitCad instead, open the chat panel (**View ›
-Chat**): it starts your own Claude Code or Codex with this window's live server as
+Chat**): it starts your own Claude Code or Codex with this process's live server as
 its only tool source and asks you before file operations; see [the chat
 panel](ai-chat.md).
 
@@ -155,14 +155,16 @@ are listed, and can be removed, in **Preferences › AI Assistants**.
   that need it are quoted (PowerShell on Windows, a POSIX shell
   elsewhere). The copies are a fallback, not a prerequisite.
 - **Codex settings file** with **Change…** (ChatGPT / Codex only).
-- With several MitCad windows open, the bridge connects to the window
-  active last and names its design on stderr. The connection stays with
-  that window for the whole assistant session, even when another window
-  becomes active. **Copy Command for This Window** adds `--instance` to
-  choose this window explicitly; `--list-instances` lists the live windows.
-  A saved setup never records a temporary instance id. The dialog names a
-  connected assistant **in this window** or **in** the other design; the
-  assistant indicator belongs only to the connected window.
+- Each MitCad process has one live listener for all its document windows.
+  With several processes open, the bridge connects to the process active last
+  and names its active design on stderr. The connection keeps that process
+  for the assistant session. **Copy Command for This Window** adds
+  `--instance` to choose its process explicitly; `--list-instances` lists the
+  live processes. A saved setup never records a temporary instance id.
+  Within a process, `document_list` lists all designs; pass `document` to
+  target one independently of window activation. The assistant indicator is
+  shared by the process's windows. Chat connections belong to their own
+  document and appear only in that document's indicator.
 
 **The Linux AppImage** (mitcad#1170). The bridge, `mitcad-cli`, is inside
 the AppImage, in a folder that the AppImage mounts anew on each start and
@@ -275,12 +277,12 @@ On macOS, the installed bundle includes the CLI:
 `--list-instances` prints `{"instances":[...]}`. The list gives the
 `instance`, `pid`, `host` and `port` of each live instance. It never
 prints authentication tokens. With several instances open, `--connect`
-selects the window active last. Each instance records its latest activation
+selects the process active last. Each instance records its latest activation
 as UTC milliseconds beside its private discovery record, along with its
 design title (the name its title bar shows, without the modified mark) and
 connected client names, without a token. The bridge names
 its choice and the other designs on stderr; MCP stdout stays JSON-RPC only.
-A connected bridge keeps its chosen window until the session ends.
+A connected bridge keeps its chosen process until the session ends.
 If none of the live instances has an activation time (for example, older
 applications), the bridge asks for `--instance` as before. For scripts,
 `--connect --instance ID` always selects exactly that ID from the list.
@@ -400,20 +402,49 @@ The rule of thumb: what the user can see and do in the window, an AI assistant
 can read and do through these tools. The assistant gets the same undo and
 the same refusals.
 
-`document_list` returns the opaque handle of the GUI document, with its
-`path`, `name`, `state`, `busy` and `editable`. `editable` means that
-model commands run now. The result also lists the folders for designs that AI assistants
-can use. Commands change that actual document through its normal
-computation and undo workflow. They update its viewport, browser and
-history.
+`document_list` returns every open document's opaque handle, with its
+`path`, `name`, `state`, `busy`, `editable` and `active` flag. `editable`
+means that model commands run now. After connecting or creating a window,
+wait for that document to become editable before sending model commands;
+the process listener can be ready before native presentation finishes.
+A blocked document includes `blocked_reason`. In native macOS builds,
+`native_blockers`, when present, distinguishes `command_form`,
+`closing_command`, `modal_dialog` and `window_modal`. These fields describe
+the existing command and modal guards; they do not bypass them.
+`native_modal_state` identifies the actual AppKit modal window, tracked
+modal stack depth and top window, document/key windows and their sheets.
+Each identity includes its class, title, identifier, visibility and whether
+it or its sheet owner is the requested or another registered document window.
+The result also lists the folders for
+designs that AI assistants can use. Commands change their target's actual
+document through its normal computation and undo workflow, updating that
+document's viewport, browser and history.
 
-New or Open in the GUI invalidates the previous document handle.
-`document_open` also invalidates it. List the documents again before
-you edit the replacement. These tools act on the document and take the
-handle: `model_query`, `model_command`, `model_export`, `document_save`,
-`ui_select` and `ui_command`. These tools read or set the window and take no handle:
-`ui_state`, `ui_log`, `ui_screenshot` and `ui_camera`. `document_open`
-takes no handle, because it replaces the document.
+Every live document or UI tool accepts an optional `document` handle.
+Omitting it targets the active document at the start of the call. An
+explicit handle keeps the target independent of focus. A request waiting
+for approval retains its original target. Chat agents are bound to their
+own document, including when another window becomes active; they cannot
+use a different document's handle. `model_reference` is process-wide and
+`document_list` always lists all documents. `ui_log` reads the process log.
+
+Closing or replacing a document invalidates only that document's handle.
+Opening or creating another window leaves the other handles valid.
+`document_open` deliberately replaces the selected document, refusing
+unsaved changes unless `discard` is true; UI File › Open follows the user's
+window preference instead. List documents again before editing a
+replacement. `ui_command` with `id: "window.new"` creates an empty document
+window without a file dialog; use `document_list` to obtain its new handle.
+The request's result still describes its original target. Existing file
+and interactive-dialog commands remain refused through `ui_command`.
+The headless server's explicit-handle contract is unchanged.
+
+The `mitcad://comments` resource follows the last tool's selected document
+for each connection, or the active document before a selection. Activating
+another window resets that default for external connections. Chat
+connections keep their own document's comments. The resource includes its
+`document` handle, so clients can identify the design even when two designs
+have identical comments.
 
 **Folders for designs** are the live-mode counterpart of `--workspace` in
 headless mode. `document_save` with a `path` (Save As) and
@@ -606,12 +637,12 @@ A new bridge can connect again to the same document. `--workspace` and
 | `model_reference` | As in headless mode: none, or one of `section`, `query`, `command`, `feature`, `search`; optional `offset`. | As in headless mode ([Look up the reference](#look-up-the-reference)). The protocol answers it, without the document. |
 | `document_save` | `document`. Optional `path`. Optional `overwrite` (default false). | `document`, `path`, `saved`, `status`, `state`. `status` is the text of the status bar, with the recorded version. Refer to the text below the table. |
 | `document_open` | `path`. Optional `discard` (default false). | `document` (the new handle), `path`, `name`, `state`, `busy`, `editable`, `opened`, `replaced` (the old handle). Refer to the text below the table. |
-| `ui_state` | `{}` | `document`, `name`, `path`, `modified`, `read_only`, `read_only_reason`, `mode`, `busy`, `editable`, `active_component`, `undo`, `redo`, `undo_depth`, `selection`, `hint`, `hint_is_error`, `status_line`, `status_line_is_error`, `agents`, `sketch`, `command`, `app`. Refer to the text below the table. |
+| `ui_state` | `{}` | `document`, `name`, `path`, `modified`, `read_only`, `read_only_reason`, `mode`, `busy`, `editable`, `active_component`, `undo`, `redo`, `undo_depth`, `selection`, `hint`, `hint_is_error`, `status_line`, `status_line_is_error`, `agents`, `sketch`, `command`, `comments` (`open`: the number of open comments), `app`. Refer to the text below the table. |
 | `ui_log` | `since` (a sequence number). `limit` (default 200, at most 2000). | `lines`, `next`, `dropped`. Refer to the text below the table. |
-| `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`. With `path`, also `path` and no image. Refer to the text below the table. |
-| `ui_select` | `document`. `items` (entities). `reveal` (`none`, `pan` default, `fit`). | `document`, `selected`, `selection`, `view` (`none`, `pan`, `zoom`), `camera`. With a command panel open, also `picked`, `into_command` and `command`. Refer to the text below the table. |
+| `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `max_bytes` (the encoded image's bytes, 4096 to 5 MiB; default 5 MiB inline, none for a file). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`, `downscaled_for_bytes`, `max_bytes`. With `path`, also `path` and no image. Refer to the text below the table. |
+| `ui_select` | `document`. `items` (entities) or `comment` (a comment's id). `reveal` (`none`, `pan` default, `fit`). | `document`, `selected`, `selection`, `view` (`none`, `pan`, `zoom`), `camera`. With a command panel open, also `picked`, `into_command` and `command`. With `comment`, also `comment`. Refer to the text below the table. |
 | `ui_command` | `document`. `id` or `edit`. `inputs`. `finish` (`ok` default, `cancel`, `keep_open`). | `document`, `command`, `panel`, `committed`, `open`, `mode`, `sketch`, `undo`, `previews`, `log`, `hint`. For a `view.*` command, also `camera`. Refer to the text below the table. |
-| `ui_camera` | `eye`, `target`, `up`, `height`, `fov`, `projection`. `box` or `frame` (`none` default, `shown`, `selection`), optional `aspect` with them. | `camera`, `framed` (`none`, `box`, `shown`, `selection`), `changed`, `aspect` when given. Refer to the text below the table. |
+| `ui_camera` | `eye`, `target`, `up`, `height`, `fov`, `projection`. `box`, `frame` (`none` default, `shown`, `selection`) or `comment` (a comment's id), optional `aspect` with them. | `camera`, `framed` (`none`, `box`, `shown`, `selection`, `comment`), `changed`, `aspect` when given, `comment` with it. Refer to the text below the table. |
 
 **`document_save`** without `path` saves to the document's own path, as
 File > Save does. In a project with versions, it uses the version and
@@ -651,6 +682,10 @@ an entity unchanged as its selection `a` or `b` (faces, edges, vertices,
 bodies, planes, axes and points; `commands.md`, *Selections by names and
 as entities*, mitcad#985).
 
+`comments` holds `open`, the number of open comments in the design
+([Comments for agents](#comments-for-agents)); it is left out while the
+model computes.
+
 `hint` and `hint_is_error` give the status line. While Create Sketch
 waits for a plane, `hint` gives the text of its banner. Then
 `status_line` and `status_line_is_error` give the status line when it
@@ -683,15 +718,36 @@ gets the same cut line.
 sketch overlay. By default, it shows the 3D view. With `window`, it
 shows the whole window. In the native macOS window, this is the window
 as the window server composes it. MitCad scales the image to fit
-`max_size`. Then it scales the image further until the file is under
-5 MiB, well in the 8 MiB frame.
+`max_size`. Then it scales the image further until the encoded image
+(the PNG or JPEG file, the result's `bytes`) takes at most `max_bytes`
+(mitcad#1188).
+
+`max_bytes` counts the encoded image, not its base64 or the response
+around it. The image block's base64 is 4 characters for every 3 bytes,
+and the rest of the response (the text block, `structuredContent` and
+the JSON-RPC envelope) adds less than 2 KiB. The default, 5 MiB, keeps
+the response well within MitCad's own 8 MiB transport limit. That limit
+is MitCad's; MitCad cannot know a client's own limit for a tool result
+or an image. A client with a lower limit passes a smaller `max_bytes`
+(4096 at least), for example 500000, and gets a known smaller reply.
+The format asked for is kept: the budget makes the picture smaller,
+never another format. `downscaled_for_bytes` tells when the budget made
+it smaller than `max_size`, and `max_bytes` gives the budget used.
+MitCad encodes at most 8 times and never goes below 64 pixels on the
+longer side. When even that is over the budget, the call is refused
+with `error_code` `screenshot_too_large`, `max_bytes`, and the smallest
+attempt's `smallest_bytes`, `smallest_width` and `smallest_height`; the
+connection stays usable. Then allow more bytes, ask for `format` `jpeg`
+with a lower `quality`, or write the image to a file with `path`.
 
 The image comes as an MCP `image` content block after the text block,
 not as text (mitcad#689); `format` `jpeg` with `quality` makes it
 smaller. With `path`, the image is written to that `.png` or `.jpg`
 file in a folder for designs instead (an existing file only with
-`overwrite: true`), at its full size, and only the path, the size and
-the bytes come back.
+`overwrite: true`), and only the path, the size and the bytes come
+back. A file has no byte budget: it takes the picture at its full size
+for full quality, unless `max_bytes` is given, which then applies to
+the file as it would to an image returned inline.
 
 `width` and `height` (16 to 4096), or `aspect` (width / height, with
 `max_size` on the longer side or with one of them), render the 3D view
@@ -714,6 +770,15 @@ sight. It keeps the zoom, unless the entities do not fit. With `reveal`
 `ui_camera`, unless `reveal` is `none`. When the reply comes, the view
 is at its place and its animation has ended. Thus the next
 `ui_screenshot` shows it.
+
+With `comment` instead of `items` (mitcad#1119), `ui_select` selects
+that comment's target and reveals it the same way: a feature, a body, a
+face, an edge, a vertex or a sketch entity. A comment on a free point or
+a parameter, an orphaned comment and a target that is no longer in the
+design select nothing; the view then moves to the comment's `place`
+(none for a parameter). The result's `comment` holds its `id`, `label`,
+`status`, `orphaned`, `place` and `selected` (whether its target was
+selected). Give `items` or `comment`, not both.
 
 With a command panel open, the entities go to the active input of the
 panel instead. Each entity goes as one click. An entity that is already
@@ -784,6 +849,15 @@ fits the box into a picture of that width over height instead, as
 `ui_screenshot` with the same `aspect` (or `width` and `height`)
 renders it.
 
+`comment` (mitcad#1119) frames a comment's target instead of `box` or
+`frame`, and selects it as `ui_select` does when no sketch, command
+panel or plane pick is open: `framed` is `comment` and the result's
+`comment` is as `ui_select`'s. A target without a shape of its own (a
+free point, a feature without bodies, an orphaned comment) is centred at
+its `place` at the current zoom. A comment on a parameter has no place
+and is refused. `ui_camera` with `comment` waits for the model as
+queries do (`busy`, `retry_after_ms`).
+
 `ui_command` covers these UI-only flows:
 
 - Clean Up Stale Projections: `{"id": "sketch.clean_up_stale_projections"}`
@@ -805,6 +879,54 @@ commands and sketches. It frames the isolated bodies when the design
 isolates some. Otherwise it frames everything shown. Home (`view.home`)
 takes the eye, target, up and height of a named view with the name
 `Home`.
+
+### Comments for agents
+
+The user pins **comments** to features, faces, edges, bodies, sketch
+entities, parameters and points of the design, such as "make this hole
+an M6 thread" (mitcad#1119; the commands and the `comments` query are in
+[commands.md](../core/model-api/src/commands.md), section *Comments*).
+They stay in the design between messages and sessions. The server's
+instructions tell an AI assistant to read the open comments first and,
+after the change a comment asks for, to put `address_comment` with its
+`id` and a short `resolution` in the same `model_command` array as that
+change. Both are then one undo step.
+
+- `ui_state`'s `comments.open` counts the open comments.
+- The resource `mitcad://comments` (`application/json`, listed by
+  `resources/list` on a live connection) is the `comments` query's
+  answer for every status: `comments` (each with `id`, `text`, `target`,
+  `status`, `orphaned`, `author`, `resolution`, `replies`, `created`,
+  `label`, `place`), `open` and `revision`. MitCad reads it again after
+  every change of the document (commands, undo, redo, Open, the user's
+  own edits) once the model is idle, and before it answers each request.
+- `resources/subscribe` with `{"uri": "mitcad://comments"}` asks for
+  `notifications/resources/updated` (`{"uri": "mitcad://comments"}`)
+  whenever the comments change: one is added, edited, answered,
+  addressed, resolved, reopened, deleted or orphaned. Read the resource
+  again then. `resources/unsubscribe` stops them. The live server's
+  `initialize` result says `"resources": {"subscribe": true}`; the
+  headless server has neither the resource nor subscriptions (its
+  documents' comments are read with `model_query`).
+- `ui_select` and `ui_camera` take `comment` (above): the user sees the
+  target, and the next `ui_screenshot` shows it.
+- **The author.** MCP sets `author` on `add_comment`, `reply_comment`,
+  `address_comment` and `reopen_comment` with a reply to the client's
+  name from `initialize` (`clientInfo.name`, for example `claude-code`),
+  whatever the call says: a client cannot write as the user. An empty
+  name, or `user`, becomes `agent`. The headless server does the same.
+- **Resolving is the user's.** `resolve_comment` through MCP is refused
+  with "Resolving comments is left to the user (Preferences › AI
+  Assistants › Agents may resolve comments)" unless the user turned on
+  **Preferences › AI Assistants › Agents may resolve comments** (the
+  setting `ai/agentsMayResolveComments`, off by default; MitCad reads it
+  for each request). The refusal is the tool's error result with
+  `applied: false`; in an array it names the `entry`, and nothing of the
+  array runs. The headless server has no such preference and always
+  refuses. Reopening and the other comment commands are allowed.
+
+The chat panel sends the open comments with a message when its
+**Comments** toggle is on ([AI chat](ai-chat.md)).
 
 ## Tools and results
 
@@ -1126,6 +1248,10 @@ If the operation already changed the document, the compact result keeps
 `original_is_error` reports if the omitted result itself contained an
 error. Large embedded images can exceed this response limit, although
 the design file accepts them.
+
+This 8 MiB limit is MitCad's transport, not a promise about a client:
+a client can reject smaller results of its own accord. For
+`ui_screenshot`, `max_bytes` gives such a client a reply of a known size.
 
 A failed feature does not reject a command. The command is applied and
 the feature is skipped. Every applied `model_command` result has

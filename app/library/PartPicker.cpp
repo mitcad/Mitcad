@@ -25,6 +25,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMainWindow>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -1942,7 +1943,16 @@ bool PartGrid::eventFilter(QObject* watched, QEvent* event) {
 // PartPicker
 
 PartPicker* PartPicker::of(QWidget* window) {
+  // The main window itself, also inside a document frame (mitcad#1172),
+  // whose top-level window holds several documents, each with its own
+  // design (In this design) and so its own picker.
   QWidget* top = window != nullptr ? window->window() : nullptr;
+  for (QWidget* parent = window; parent != nullptr; parent = parent->parentWidget()) {
+    if (qobject_cast<QMainWindow*>(parent) != nullptr) {
+      top = parent;
+      break;
+    }
+  }
   if (top != nullptr) {
     if (auto* found = top->findChild<PartPicker*>(QString(), Qt::FindDirectChildrenOnly)) {
       return found;

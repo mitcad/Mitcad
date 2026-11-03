@@ -499,6 +499,108 @@ QString listed(const std::vector<std::string>& ids) {
   return items.isEmpty() ? QStringLiteral("-") : items.join(QLatin1Char(','));
 }
 
+// Both transports and the regression decode the same protocol-9 command.
+void applyPauseCommand(render::Renderer& renderer, const QJsonObject& command) {
+  renderer.setPaused(command.value(QStringLiteral("paused")).toBool());
+}
+
+// The real interactive CPU renderer pauses between batches. Request the
+// pause at the first completed full-resolution frame, before the next batch
+// can finish the view, instead of racing a machine-dependent sleep against it.
+// Preview sample counts configure denoising, not mandatory display boundaries;
+// Cycles can coalesce those updates for a small, quickly rendered scene.
+class PauseFrame final : public KeptFrame {
+public:
+  static constexpr int kSamples = 16;
+  render::Renderer* renderer = nullptr;
+  std::atomic<bool> requested{false};
+  std::atomic<bool> resumed{false};
+  std::atomic<int> publications{0};
+  std::atomic<int> firstResumedSample{0};
+
+  void endFrame(std::uint64_t view, int count, bool denoised) override {
+    std::printf("render-update pause frame: view %llu, %d x %d, samples %d, denoised %d\n",
+                static_cast<unsigned long long>(view), width_, height_, count, int(denoised));
+    const bool fullPartialFrame = view == 1 && width_ == 160 && height_ == 120 && count > 0 && count < kSamples;
+    KeptFrame::endFrame(view, count, denoised);
+    publications.fetch_add(1);
+    if (resumed.load()) {
+      int empty = 0;
+      firstResumedSample.compare_exchange_strong(empty, count);
+    }
+    if (fullPartialFrame && !requested.exchange(true)) {
+      applyPauseCommand(*renderer, {{QStringLiteral("cmd"), QStringLiteral("pause")},
+                                    {QStringLiteral("paused"), true}});
+    }
+  }
+};
+
+bool runPauseUpdateTest(const render::RendererOptions& options) {
+  PauseFrame frame;
+  std::string error;
+  const auto renderer = render::makeCyclesRenderer(frame, options, error);
+  if (!renderer) {
+    std::fprintf(stderr, "render-update pause: cannot start CPU renderer: %s\n", error.c_str());
+    return false;
+  }
+  if (renderer->device().type != "CPU") {
+    std::fprintf(stderr, "render-update pause: the synthetic check requires the CPU renderer\n");
+    return false;
+  }
+  frame.renderer = renderer.get();
+  renderer->setSamples(PauseFrame::kSamples);
+  renderer->setPreviews({4});
+  const render::SceneUpdate scene = render::testScene();
+  renderer->updateScene(scene);
+  render::ViewData view;
+  view.sequence = 1;
+  view.width = 160;
+  view.height = 120;
+  view.perspective = true;
+  view.eye = {120, -160, 110};
+  view.target = {40, 0, 10};
+  view.up = {0, 0, 1};
+  view.halfHeight = 70;
+  renderer->setView(view);
+  const auto deadline = KeptFrame::Clock::now() + std::chrono::minutes(1);
+  while (!renderer->isPaused() && KeptFrame::Clock::now() < deadline && renderer->deviceError().empty()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const int samples = renderer->currentSample();
+  if (!frame.requested.load() || !renderer->isPaused() || samples <= 0 || samples >= PauseFrame::kSamples) {
+    std::fprintf(stderr, "render-update pause: no acknowledged partial render (requested %d, paused %d, samples %d)\n",
+                 int(frame.requested.load()), int(renderer->isPaused()), samples);
+    return false;
+  }
+  const int publications = frame.publications.load();
+  // This is a quiet-period invariant after acknowledgement, not a render
+  // speed requirement. Neither samples nor published frames may advance.
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  const bool frozen = renderer->isPaused() && renderer->currentSample() == samples &&
+                      frame.publications.load() == publications;
+  render::SceneUpdate same;
+  same.bodies = scene.bodies;
+  const auto changes = renderer->updateScene(same);
+  const bool retained = changes.added.empty() && changes.changed.empty() && changes.moved.empty() &&
+                        changes.removed.empty() && changes.meshes == 1 &&
+                        renderer->isPaused() && renderer->currentSample() == samples;
+  frame.resumed.store(true);
+  applyPauseCommand(*renderer, {{QStringLiteral("cmd"), QStringLiteral("pause")},
+                                {QStringLiteral("paused"), false}});
+  const bool accumulationKept = renderer->currentSample() >= samples;
+  const bool finished = frame.waitDone(view.sequence);
+  const bool continued = finished && accumulationKept && frame.firstResumedSample.load() > samples &&
+                         frame.samples == PauseFrame::kSamples && renderer->currentSample() == PauseFrame::kSamples &&
+                         !renderer->isPaused() && !frame.pixels.empty() &&
+                         !render::coverage(frame.pixels.data(), frame.width_, frame.height_).isEmpty();
+  const bool ok = frozen && retained && continued;
+  const int finalSamples = finished ? frame.samples : renderer->currentSample();
+  std::printf("render-update pause: samples %d, publications %d frozen %d, scene retained %d, "
+              "first resumed sample %d, final %d/%d%s\n", samples, publications, int(frozen), int(retained),
+              frame.firstResumedSample.load(), finalSamples, PauseFrame::kSamples, ok ? "" : " (FAILED)");
+  return ok;
+}
+
 // --update-test: scene updates as the application sends them, each checked
 // against what it must change (docs/rendering.md, "Scene updates"), then a
 // render of the last scene. Prints a line per update; 0 when all hold.
@@ -750,6 +852,7 @@ int runUpdateTest() {
               "%.3f over %d%s\n",
               live, liveCovered, fromStart, openedCovered,
               sameGlass ? "" : " (wanted alike and above 0.05: the live swap renders it wrong)");
+  failures += runPauseUpdateTest(options) ? 0 : 1;
   std::printf("render-update %s\n", failures == 0 ? "ok" : "FAILED");
   return failures == 0 ? 0 : 1;
 }
@@ -2031,7 +2134,8 @@ bool RenderSession::command(const QJsonObject& command) {
     const auto warning = state.renderer->setEnvironment(environmentOf(command));
     if (!warning.empty()) state.event({{QStringLiteral("event"), QStringLiteral("warning")},
                                        {QStringLiteral("message"), QString::fromStdString(warning)}});
-  } else if (name == QLatin1String("view")) state.renderer->setView(viewOf(command));
+  } else if (name == QLatin1String("pause")) applyPauseCommand(*state.renderer, command);
+  else if (name == QLatin1String("view")) state.renderer->setView(viewOf(command));
   else if (name == QLatin1String("samples")) {
     std::vector<int> previews;
     for (const auto& at : command.value(QStringLiteral("previews")).toArray()) previews.push_back(at.toInt());
@@ -2308,6 +2412,8 @@ int main(int argc, char* argv[]) {
                                .value(QStringLiteral("preset"))
                                .toString())
                       .arg(command.value(QStringLiteral("lights")).toArray().size())}});
+    } else if (name == QLatin1String("pause")) {
+      applyPauseCommand(*renderer, command);
     } else if (name == QLatin1String("view")) {
       renderer->setView(viewOf(command));
     } else if (name == QLatin1String("samples")) {

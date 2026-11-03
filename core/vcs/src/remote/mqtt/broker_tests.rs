@@ -892,7 +892,14 @@ fn slashes(path: &Path) -> String {
 
 /// Starts mosquitto with `config`; None when it ended before it listened
 /// on every one of `ports` (a port taken) or did not start in time.
+///
+/// A port answering is not enough: another test may have taken it after
+/// it was chosen, and mosquitto, failing to bind it, may still be ending
+/// on a busy machine. It is ready when its own log says "running", which
+/// it writes only after every listener is open.
 fn launch(program: &Path, config: &Path, ports: &[u16]) -> Option<Child> {
+    let log = config.with_file_name("mosquitto.log");
+    let _ = fs::write(&log, "");
     let mut child = Command::new(program)
         .arg("-c")
         .arg(config)
@@ -906,12 +913,12 @@ fn launch(program: &Path, config: &Path, ports: &[u16]) -> Option<Child> {
         if ended(&mut child) {
             return None;
         }
-        if ports
-            .iter()
-            .all(|port| TcpStream::connect(("127.0.0.1", *port)).is_ok())
+        let running = fs::read_to_string(&log).is_ok_and(|text| text.contains(" running"));
+        if running
+            && ports
+                .iter()
+                .all(|port| TcpStream::connect(("127.0.0.1", *port)).is_ok())
         {
-            // Still running a moment later: the listener is its own.
-            std::thread::sleep(Duration::from_millis(30));
             return (!ended(&mut child)).then_some(child);
         }
         if Instant::now() >= deadline {
@@ -932,7 +939,7 @@ impl Mosquitto {
         let dir = test_dir("mosquitto");
         let mut settings = format!(
             "per_listener_settings false\nallow_anonymous true\npersistence false\n\
-             log_dest file {}\nlog_type error\nlog_type warning\nlog_type notice\n",
+             log_dest file {}\nlog_type error\nlog_type warning\nlog_type notice\nlog_type information\n",
             slashes(&dir.join("mosquitto.log"))
         );
         if let Some((user, pass)) = password {

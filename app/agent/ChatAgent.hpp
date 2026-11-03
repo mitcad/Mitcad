@@ -54,7 +54,7 @@ public:
 
   struct Message {
     QString text;
-    QString context; // the attached selection, as text
+    QString context; // the attached selection and open comments, as text
     QList<Picture> pictures;
   };
 

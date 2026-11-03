@@ -404,8 +404,13 @@ pub(super) fn small_block(doc: &mut Document<MockKernel>) -> BodyUid {
 /// Two bodies: one of the root (PLA), one of an arm (ABS) with five walls
 /// of its own; a bench printer and a standard process at the root.
 pub(super) fn design() -> Document<MockKernel> {
+    design_and_body().0
+}
+
+/// [`design`] and its root body (PLA, no print values of its own).
+fn design_and_body() -> (Document<MockKernel>, BodyUid) {
     let mut doc = Document::new(MockKernel::default());
-    small_block(&mut doc);
+    let body = small_block(&mut doc);
     let (arm, _) = doc
         .create_component(Some("Arm"), Transform::translation([40.0, 0.0, 0.0]), true)
         .unwrap();
@@ -431,7 +436,7 @@ pub(super) fn design() -> Document<MockKernel> {
             {"cmd": "set_component_material", "component": "Arm", "material": "abs"},
         ]),
     );
-    doc
+    (doc, body)
 }
 
 pub(super) fn export_to(
@@ -593,6 +598,117 @@ fn prusaslicer_and_cura_exports_give_each_body_its_settings() {
     assert_eq!(
         setting(parts[0], "cura:layer_height").as_deref(),
         Some("0.2")
+    );
+}
+
+fn read(doc: &Document<MockKernel>, query: Value) -> Value {
+    serde_json::from_str(&doc.query(&query.to_string()).unwrap()).unwrap()
+}
+
+/// A print value added to a body as its own (the Make tab's Add Print
+/// Value…, mitcad#1178): `set_property` on the body at the value it prints
+/// with, then typed over, each one undo step; the 3MF exports give that
+/// body its own Walls and the Make tab's markers name it; `remove_property`
+/// clears it again in one undo step, and the export goes back to the
+/// process's Walls.
+#[test]
+fn a_print_value_added_to_a_body_reaches_the_3mf_export() {
+    let (mut doc, body) = design_and_body();
+    let owner = body.to_string();
+    // What it prints with: the process's two walls; none of its own.
+    let settings = read(
+        &doc,
+        json!({"query": "print_settings", "body": owner.clone()}),
+    );
+    let walls = settings["process"]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"] == "perimeters")
+        .unwrap()
+        .clone();
+    assert_eq!(walls["from"], "profile", "{walls}");
+    assert_eq!(read(&doc, json!({"query": "make_differences"})), json!([]));
+
+    // Added at that value, then typed over: one undo step each.
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": owner.clone(), "set": "Print Process",
+               "key": "perimeters", "value": walls["value"].clone()}),
+    );
+    assert_eq!(
+        read(&doc, json!({"query": "document"}))["undo"],
+        "Set perimeters"
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": owner.clone(), "set": "Print Process",
+               "key": "perimeters", "value": 4}),
+    );
+    command(&mut doc, json!({"cmd": "undo"}));
+    let settings = read(
+        &doc,
+        json!({"query": "print_settings", "body": owner.clone()}),
+    );
+    let own = settings["process"]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"] == "perimeters")
+        .unwrap()
+        .clone();
+    assert_eq!(own["from"], "property", "{own}");
+    assert_eq!(own["level"], "body", "{own}");
+    assert_eq!(
+        own["value"].as_f64(),
+        Some(2.0),
+        "one undo step back to the value added"
+    );
+    command(&mut doc, json!({"cmd": "redo"}));
+    let differences = read(&doc, json!({"query": "make_differences"}));
+    assert_eq!(differences[0]["body"], owner.as_str(), "{differences}");
+    assert_eq!(differences[0]["print"], json!(["Walls"]), "{differences}");
+
+    // The exports carry it: the body's four walls beside the arm's five.
+    let (_, data) = export_to(&mut doc, "own-walls.3mf", "prusaslicer");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let model = std::str::from_utf8(package.file("Metadata/Slic3r_PE_model.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(model.contains("key=\"perimeters\" value=\"4\""), "{model}");
+    assert!(model.contains("key=\"perimeters\" value=\"5\""), "{model}");
+    let (_, data) = export_to(&mut doc, "own-walls-bambu.3mf", "bambu_studio");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let model = std::str::from_utf8(package.file("Metadata/model_settings.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(
+        model.contains("<metadata key=\"wall_loops\" value=\"4\"/>"),
+        "{model}"
+    );
+
+    // Removed: one undo step; the process's two walls again.
+    command(
+        &mut doc,
+        json!({"cmd": "remove_property", "owner": owner.clone(), "set": "Print Process",
+               "key": "perimeters"}),
+    );
+    assert_eq!(
+        read(&doc, json!({"query": "document"}))["undo"],
+        "Remove perimeters"
+    );
+    assert_eq!(read(&doc, json!({"query": "make_differences"})), json!([]));
+    let (_, data) = export_to(&mut doc, "no-own-walls.3mf", "prusaslicer");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let model = std::str::from_utf8(package.file("Metadata/Slic3r_PE_model.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(!model.contains("key=\"perimeters\" value=\"4\""), "{model}");
+    assert!(model.contains("key=\"perimeters\" value=\"2\""), "{model}");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(
+        read(&doc, json!({"query": "make_differences"}))[0]["print"],
+        json!(["Walls"])
     );
 }
 

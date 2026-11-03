@@ -587,10 +587,27 @@ void pageTests() {
   CHECK(page.statusLevel() == mitcad::NoticeLevel::Warning);
   // The place it waits for is marked (mitcad#1064).
   CHECK(canvas->validationText() == QStringLiteral("warning at when socket"));
+  // What goes there, in its mark and its accessible caption (mitcad#968):
+  // a condition, never "when socket".
+  const auto captionOf = [canvas](const QString& name) {
+    for (std::size_t i = 0; i < canvas->pieces().size(); ++i) {
+      if (canvas->pieces()[i].name() == name) {
+        return canvas->pieceCaption(i);
+      }
+    }
+    return QString();
+  };
+  CHECK(page.blockMarks(0).size() == 1 &&
+        page.blockMarks(0)[0].message == QStringLiteral("Not saved yet: add a condition."));
+  CHECK(captionOf(QStringLiteral("when socket")) == QStringLiteral("Empty place: Add a condition"));
   CHECK(canvas->focusPiece(QStringLiteral("when socket")));
   CHECK(canvas->insertAtFocus(QStringLiteral("compare")));
   CHECK(canvas->focusName() == QStringLiteral("when.0 socket")); // its first empty socket
   CHECK(canvas->validationText() == QStringLiteral("warning at when.0 socket, when.1 socket"));
+  CHECK(page.blockMarks(0).size() == 2 &&
+        page.blockMarks(0)[0].message == QStringLiteral("Not saved yet: choose an option.") &&
+        page.blockMarks(0)[1].message == QStringLiteral("Not saved yet: enter a value."));
+  CHECK(captionOf(QStringLiteral("when.1 socket")) == QStringLiteral("Empty place: Enter a value"));
   CHECK(canvas->insertAtFocus(QStringLiteral("option")));
   type(canvas, QStringLiteral("Color")); // its editor opened at once
   CHECK(canvas->focusPiece(QStringLiteral("when.1 socket")));
@@ -738,7 +755,8 @@ void pageTemplateTests() {
   CHECK(colors.addRule(QStringLiteral("allow")) && closed.saves.size() == 1);
   CHECK(!colors.closedNote()->isHidden());
   CHECK(colors.closedNote()->text() ==
-        QStringLiteral("This table is closed: only its rows are allowed, so rules are not needed."));
+        QStringLiteral("Only these rows is on: only the combinations listed in the Rows tab are allowed, so rules "
+                       "are not needed."));
 }
 
 // A "combination in table" block (mitcad#849): its columns follow the
@@ -823,6 +841,23 @@ void placeTests() {
   }
   CHECK(ids == QStringList({QStringLiteral("when.0"), QStringLiteral("when.1"), QStringLiteral("then.0"),
                             QStringLiteral("then.0.0"), QStringLiteral("else.0")}));
+  // Each empty place says what goes there (mitcad#968): the compare's first
+  // side an option, its second a value, the max its option and its value,
+  // the else an action; an empty when a condition.
+  QStringList hints;
+  for (const BlockPath& path : emptyPlaces(waiting)) {
+    hints << emptyPlaceHint(waiting, path);
+  }
+  CHECK(hints == QStringList({QStringLiteral("Choose an option"), QStringLiteral("Enter a value"),
+                              QStringLiteral("Choose an option"), QStringLiteral("Enter a value"),
+                              QStringLiteral("Add an action")}));
+  Rule bare;
+  bare.name = QStringLiteral("B");
+  CHECK(applyRuleEntry(bare, QStringLiteral("when")));
+  CHECK(emptyPlaceHint(bare, BlockPath{0, {}}) == QStringLiteral("Add a condition"));
+  CHECK(emptyPlaceHint(bare, BlockPath{1, {0}}) == QStringLiteral("Add an action"));
+  CHECK(place(bare, Target{BlockPath{0, {}}, false}, newBlock(QStringLiteral("and"))));
+  CHECK(emptyPlaceHint(bare, BlockPath{0, {0}}) == QStringLiteral("Add a condition"));
 
   // A saved rule with a value outside its option's domain: a warning on the
   // value, in the list and on the canvas.

@@ -74,6 +74,9 @@ mark
 button '^New'
 expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Other$'
 popup 'FDM Plastic'
+# Then where (mitcad#1135): This design first.
+expect-log '^Materials new menu: This design \| My library$'
+popup 'This design'
 expect-log '^Material created: .+ in design$'
 expect-undo-depth ${start} 4
 wait-idle

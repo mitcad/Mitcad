@@ -117,6 +117,11 @@ fi
 if [ ! -f "$contents/PlugIns/styles/libqmacstyle.dylib" ]; then
   fail "$contents/PlugIns/styles/libqmacstyle.dylib" "the macOS widget style plug-in is missing"
 fi
+# File › Print (mitcad#1089): Qt's print support, which macdeployqt copies
+# as the app links it.
+if [ ! -d "$contents/Frameworks/QtPrintSupport.framework" ]; then
+  fail "$contents/Frameworks/QtPrintSupport.framework" "Qt's print support is missing"
+fi
 if ! ls "$contents/Resources/licenses/"* >/dev/null 2>&1; then
   fail "$contents/Resources/licenses" "the licence texts are missing"
 fi

@@ -6,22 +6,31 @@
 // the native macOS inspector (which mirrors the idle page's widgets). The
 // rule is framework/SelectionCreate.cpp's; here the window gives it the
 // commands' definitions and whether they are enabled, and logs the row.
+// The Make tab has no row: the Make section takes its place (mitcad#1178).
 #include "MainWindow.hpp"
+
+#include <utility>
 
 #include <QAction>
 #include <QDebug>
 #include <QPoint>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QStackedWidget>
 #include <QString>
 #include <QStringList>
 #include <QToolButton>
 #include <QVector>
 #include <QtLogging>
 
+#include "framework/AutoselectPanel.hpp"
 #include "framework/Command.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/GlassCard.hpp"
+#include "framework/Ribbon.hpp"
 #include "framework/SelectionCreate.hpp"
 #include "framework/TestSync.hpp"
+#include "print/MakeBodyCard.hpp"
 
 namespace mitcad {
 
@@ -31,7 +40,9 @@ void MainWindow::updateSelectionCreate() {
   }
   QVector<SelectionCreatePanel::Entry> entries;
   QStringList names;
-  if (m_mode == Mode::Idle && !m_selection.isEmpty()) {
+  // None on the Make tab: the Make section is the card's there (mitcad#1178).
+  const bool makeTab = m_ribbon != nullptr && m_ribbon->currentTab() == QLatin1String("MAKE");
+  if (m_mode == Mode::Idle && !m_selection.isEmpty() && !makeTab) {
     const Selection selection = m_selection;
     // Enabled as the ribbon shows it (updateActions, isAvailable): no query
     // here, which the model would refuse while a job computes.
@@ -69,11 +80,45 @@ void MainWindow::updateSelectionCreate() {
                                 .arg(at.x())
                                 .arg(at.y());
     }
+    logSelectionCardSections();
   });
   updateCommandCard();
 #ifdef MITCAD_MACOS_NATIVE_UI
   refreshNativeInspector();
 #endif
+}
+
+void MainWindow::logSelectionCardSections() {
+  if (m_commandPages == nullptr || m_idlePage == nullptr || m_commandPages->currentWidget() != m_idlePage) {
+    return;
+  }
+  // The card: the Floating layout's glass card, else (Docked) the panel's
+  // pages; what of it shows the page: the scroll area's viewport.
+  const QWidget* card = m_commandCard != nullptr && m_commandCard->isAncestorOf(m_commandPages)
+                            ? static_cast<const QWidget*>(m_commandCard)
+                            : static_cast<const QWidget*>(m_commandPages);
+  const auto* scroll = qobject_cast<const QScrollArea*>(m_idlePage);
+  const QWidget* visible = scroll != nullptr ? scroll->viewport() : m_idlePage;
+  const bool scrolled = scroll != nullptr && scroll->verticalScrollBar()->isVisible();
+  const auto left = [](const QWidget* widget) { return GlassCard::mapToHost(widget, QPoint(0, 0)).x(); };
+  const auto right = [](const QWidget* widget) {
+    return GlassCard::mapToHost(widget, QPoint(widget->width() - 1, 0)).x();
+  };
+  const std::pair<const char*, const QWidget*> sections[] = {
+      {"Make", m_makeCard}, {"Create", m_selectionCreate}, {"Autoselect", m_autoselect}};
+  for (const auto& [name, section] : sections) {
+    if (section == nullptr || !section->isVisible()) {
+      continue;
+    }
+    qDebug().noquote() << QStringLiteral("Selection card section %1: %2..%3 of card %4..%5, visible to %6%7")
+                              .arg(QLatin1String(name))
+                              .arg(left(section))
+                              .arg(right(section))
+                              .arg(left(card))
+                              .arg(right(card))
+                              .arg(right(visible))
+                              .arg(scrolled ? QStringLiteral(", scrolled") : QString());
+  }
 }
 
 } // namespace mitcad

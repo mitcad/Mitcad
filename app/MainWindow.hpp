@@ -53,6 +53,7 @@ class QStackedWidget;
 class QToolButton;
 
 namespace mitcad {
+class WindowManager;
 
 class AutosaveManager;
 class AutoselectPanel;
@@ -65,6 +66,7 @@ class ImageCalibration;
 struct PrintImport;
 struct PrintBedChoices;
 struct MeshPlan;
+struct MeshInsertChoice;
 class FloatingLayout;
 class GlassCard;
 class LockController;
@@ -132,6 +134,14 @@ public:
   // With demo set, starts with a dimensioned block instead of an empty part.
   explicit MainWindow(bool demo = false, QWidget* parent = nullptr, bool nativeUi = false);
   ~MainWindow() override;
+
+  WindowManager* windowManager() const { return m_windowManager; }
+  QString documentFilePath() const { return m_filePath; }
+  // The frontend pauses hidden document viewers without replacing them.
+  void setDocumentVisible(bool visible);
+  bool closeDocumentWindow();
+  void minimizeDocumentWindow();
+  bool restoreRecovered(RecoverableSession& session);
 
   // Presents the selected frontend; the Qt host is the embedded viewport
   // root when AppKit owns the visible window.
@@ -327,6 +337,8 @@ public:
   bool originShown() const override { return m_originShown; }
   QString documentFolder() const override;
   QString projectFolder() const override { return m_project.isProject() ? m_project.root : QString(); }
+  // A design opened, saved or changed (mitcad#1135; files/MainWindowPrint.cpp).
+  bool designOpen() const override;
   void exportFlatPattern(const QString& body) override;
   // Save As Mesh (mitcad#734; files/MainWindowSaveAsMesh.cpp).
   void saveAsMesh(const Selection& items) override;
@@ -372,6 +384,8 @@ protected:
   void resizeEvent(QResizeEvent* event) override;
 
 private:
+  friend class WindowManager;
+  WindowManager* m_windowManager = nullptr;
   bool m_nativeUi = false;
   mutable QSize m_loggedWindowSize; // the size the last "Window layout:" line gave (logLayout)
 #ifdef MITCAD_MACOS_NATIVE_UI
@@ -506,6 +520,11 @@ private:
   // computation takes them from instead of evaluating them again.
   bool installDocument(const QString& label, const QString& path, const DocumentMaker& make,
                        QString& error, const QString& handedOver = QString());
+  // Another design in the window (installDocument, mitcad#1174): the
+  // previous design's message goes from the status line and the message
+  // band, its stub too; the history keeps it. Logged `Status line cleared
+  // (another design)` and `Message band cleared (another design)`.
+  void clearDesignMessages();
   // The result store (P7d, framework/ResultCache.hpp): the document's
   // results that were costly to compute go to the store as a job, for the
   // document named `label` (after Save); and what a recompute took from
@@ -607,8 +626,14 @@ private:
   void updateIdleHighlights();
   void updateIdleCard();
   // The selection card's Create row (mitcad#619, MainWindowSelectionCreate.cpp):
-  // the CREATE commands that fit the selection, Extrude first.
+  // the CREATE commands that fit the selection, Extrude first; none on the
+  // Make tab, where the Make section takes its place (mitcad#1178).
   void updateSelectionCreate();
+  // The selection card's sections against the card, for the UI tests
+  // (mitcad#1178): "Selection card section Make: <left>..<right> of card
+  // <left>..<right>, visible to <right>" (", scrolled" with the page's
+  // scroll bar shown), in the main window's coordinates.
+  void logSelectionCardSections();
   SelectFilter idleFilter() const;
   void showContextMenu(const QPoint& globalPosition, const SelectionItem& item);
   // The menu outside sketches and commands (mitcad#494,
@@ -1094,7 +1119,6 @@ private:
   // left to recover (at start-up, or File > Recover Designs), and the
   // document restored from it: modified, as the file it came from.
   void recoverDocuments(bool atStart);
-  bool restoreRecovered(RecoverableSession& session);
   // Before Save writes over a recovered document's file: true to write it
   // (unchanged since the document was opened, or Overwrite chosen), false
   // for Save As instead, nothing to cancel.
@@ -1132,7 +1156,14 @@ private:
   // Import: into the open document (an .f3d design: a new document).
   void importFile();
   bool importPath(const QString& path, bool interactive, QString* error = nullptr);
-  bool importCad(const QString& path, double unitMillimetres, QString* error);
+  bool importCad(const QString& path, double unitMillimetres, QString* error,
+                 QJsonObject* imported = nullptr);
+  // Insert Mesh's Convert to solid (mitcad#1082): each mesh body of the
+  // import result made a faceted solid; one undo step with the import
+  // (`depth`: the undo depth before it) when any converts, and a refused
+  // one kept as a mesh body with the reason in the status line.
+  void convertInsertedMeshes(const QString& path, const QJsonObject& imported,
+                             const MeshInsertChoice& choice, int depth);
   bool importDrawing(const QString& path, bool interactive, QString* error);
   // Insert SVG (mitcad#473): an SVG drawing into a new sketch, or the
   // edited one.
@@ -1140,6 +1171,7 @@ private:
   void insertMesh();
   void insertDxf();
   void insertComponent(const QString& path = QString());
+  void insertOpenDesign();
   // `rerun`: the options of an .f3d import run again with the items whose
   // deviating results the user keeps (mitcad#379); empty for a new import.
   // `ask`: the import asks its choices (File > Open and Import: an .iam
@@ -1211,9 +1243,22 @@ private:
   // slicer; OK writes the files and starts the slicer (sendToSlicer: false
   // when the files could not be written).
   CommandDef print3dCommand();
-  // Edit Printers and Processes… (mitcad#655): the Make tab's 3D PRINT
-  // group's command after Send to Slicer that opens Printers and Processes.
+  // Printers… and Processes… (mitcad#655, mitcad#1135): the Make tab's 3D
+  // Print group's commands after Send to Slicer that open the Printers and
+  // the Processes managers.
   CommandDef printersCommand();
+  CommandDef processesCommand();
+  // File › Print… (mitcad#1089; printing/MainWindowPaperPrint.cpp): what it
+  // prints now (the Cut List or Bill of Materials window, the open drawing
+  // or cut sheet, the open sketch), its command `file.print`, the printing,
+  // and the log line of what it prints when that changes ("Print
+  // available: sketch Sketch1", "Print available: nothing").
+  enum class PrintTarget { None, Lists, Drawing, CutSheet, Sketch };
+  PrintTarget printTarget() const;
+  CommandDef paperPrintCommand();
+  void printCurrent();
+  void logPrintTarget();
+  QString m_loggedPrintTarget;
   // `whole`: the occurrences selected as components when the panel
   // started (paths of uids), each sent whole as one 3MF object (mitcad#856).
   // `bedFaces`: the print bed faces chosen for 3MF pieces with several
@@ -1587,6 +1632,13 @@ private:
   void setMakeCardProperty(const QString& set, const QString& key, const QJsonValue& value, const QString& plain,
                            const QString& shown);
   void setMakeCardValue(const QString& set, const QString& key, const QString& typed);
+  // Add Print Value… (mitcad#1178): the picker of the settings the body can
+  // take as its own; the one chosen is set on the body at the value it
+  // prints with now (one undo step), or added to the card without a value
+  // when it has none, its field focused. A body value's remove button
+  // clears it on the body (remove_property, one undo step).
+  void addMakeCardValue();
+  void removeMakeCardValue(const QString& set, const QString& key, const QString& name);
   // The Browser's markers on the Make tab: the bodies whose material or
   // print settings differ from their component's; none on another tab.
   void updateMakeMarkers();
@@ -1834,6 +1886,31 @@ private:
   void registerCenterOfMassCommand();
   void followCenterOfMass();
   QString m_loggedCenterOfMass;
+
+  // Comments for AI agents (mitcad#1119; MainWindowComments.cpp): Add
+  // Comment and Retarget Comment (a panel that picks the target), View ›
+  // Comments… and View › Comment Pins; after a refresh the `comments`
+  // query's pins in the view and rows in the Comments panel. The browser's,
+  // the timeline's and Edit Parameters' menus add one through
+  // addCommentOn (DocumentHost).
+  void registerCommentCommands();
+  CommandDef commentTargetCommand(bool retarget);
+  void followComments();
+  void openComments();
+  void addCommentOn(const QJsonObject& target, const QString& label) override;
+  // A comment command, one undo step, as an annotation's
+  // (runAnnotationCommand); false with the reason logged when refused.
+  bool runCommentCommand(const QJsonObject& command, const QString& what);
+  // A row of the panel clicked: its target selected and framed.
+  void showCommentTarget(const QString& id);
+  void retargetComment(const QString& id);
+  void setCommentPinsShown(bool shown);
+  QJsonObject m_commentsAnswer; // the `comments` query's, as last read
+  QPointer<QDialog> m_commentsWindow;
+  QPointer<QWidget> m_commentPins; // view/CommentPinOverlay
+  QString m_commentRetarget;       // the comment Retarget Comment pins again
+  QString m_loggedComments;
+  QString m_loggedCommentsError;
 };
 
 } // namespace mitcad

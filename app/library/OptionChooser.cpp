@@ -778,9 +778,10 @@ void OptionChooser::showAnswer(const OptionsAnswer& answer) {
   for (int i = 0; i < shown.options.size() && i < m_fields.size(); ++i) {
     const PartOption& option = shown.options[i];
     QWidget* field = m_fields[i];
-    QString tip = tr("Allowed: %1").arg(option.allowedText());
+    // The configuration's words (mitcad#968, docs/ui-conventions.md).
+    QString tip = tr("Allowed values: %1").arg(option.allowedText());
     if (!option.restrictedBy.isEmpty()) {
-      tip += QLatin1Char('\n') + tr("Narrowed by: %1").arg(option.restrictedBy.join(QStringLiteral(", ")));
+      tip += QLatin1Char('\n') + tr("Restricted by %1").arg(option.restrictedBy.join(QStringLiteral(", ")));
     }
     if (option.driven) {
       tip = tr("Follows %1").arg(option.bound ? option.parameter : option.expression);

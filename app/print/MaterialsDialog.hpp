@@ -35,21 +35,24 @@ class AppearancePopover;
 class DocumentHost;
 class MaterialVariantsPage;
 class SettingsForm;
+class SlicerImportBar;
 
-// The materials' list and editor (mitcad#655), shared by the Materials
-// window and My Library's Materials tab (mitcad#704). On the left the
-// materials the user can choose (the `library_items` query, one row with
-// the design's copy), grouped by their class in Metals, Plastics (the
-// filaments too) and Other, each with its appearance's swatch; no places:
-// an item is built-in or the user's own. It manages the materials and
+// The list and editor of the Materials manager (mitcad#655, mitcad#1135).
+// On the left a search and the materials grouped by where they live (the
+// `library_items` query by place, queryPlaceItems): This design, This
+// project (in a project only), My library and Built-in, each a heading
+// with its count, and in each place by class (Metals, General Plastics,
+// FDM Plastics, Resins, Other), each with its appearance's swatch; the
+// search across the places. A design's copy of a library material and that
+// material are two rows, each in its place. It manages the materials and
 // assigns none: the Material tool assigns (mitcad#1059).
 //
-// On the right the selected material with the values the design prints
-// with: its name as a title, "Built-in" with a lock for a built-in one,
-// and Save to for the user's own that is in no library yet (My library,
-// in a project a menu with Project), then the tabs: General (Name, Class,
+// On the right the selected material with its own values where it lives:
+// its name as a title, "Built-in" with a lock for a built-in one, else
+// Copy to ▾ (the other places), then one line that says where it is edited
+// and whom that reaches (editingLine), then the tabs: General (Name, Class,
 // Density in g/cm³, Appearances) and, for a plastic only, the print
-// settings' (Filament, Cooling, ...; the window's one search is theirs).
+// settings' (Filament, Cooling, ...).
 // The Filament tab's Slicer presets name, per slicer, the slicer's preset
 // the material builds on (mitcad#1062: `filament_settings_id`, which the
 // 3MF export writes with the preset it inherits from), each an editable
@@ -62,59 +65,54 @@ class SettingsForm;
 // also in a row's context menu (Delete removes too). A filament's colour
 // is its appearance: the print settings have no colour field, the export
 // writes the colour of a body's appearance.
-// The list of materials is shallow: the groups' headings flush left,
-// their materials one small step in; it is as wide as its names need
-// (at most under half the window) until the user moves the divider, and
-// a name is elided only when it is narrowed, its full name the tooltip.
-// Each field is saved at Enter or when it is left: one model
-// command and undo step, `edit_material` with the item's library when it
-// is saved in one (the library's file and the design's copy together;
-// Undo restores both). A saved item another design changed is asked
-// about once (askChangedElsewhere: Use the changes, Keep these). Built-in
-// ones are read only: Duplicate makes the user's own copy. New asks the
-// class (Metal, Plastic, Other); New and Duplicate make the material in
-// this design and select it. Delete removes the item (a saved one from
-// its library, the design keeping its copy), always asked
-// (confirmDelete). A refusal of a setting shows under its field, others
-// on the message line. Read only is disabled, never hidden.
+// The list of materials is shallow: the places' headings flush left,
+// their classes and materials small steps in; it is as wide as its names
+// need (at most under half the window) until the user moves the divider,
+// and a name is elided only when it is narrowed, its full name the tooltip.
+// Each field is saved at Enter or when it is left, in the item's own
+// place: one `edit_material` and undo step (a library item's file with the
+// design's copies of it, as before; a design's copy alone). A copy whose
+// library item another design changed is asked about once
+// (askChangedElsewhere: Use the changes, Keep these). Built-in ones are
+// read only: Duplicate makes the user's own copy. New asks the class
+// (Metal, Plastic, Other), then where (This design when a design is open,
+// else My library, first); Duplicate asks where; both select it. Delete
+// removes the item, always asked (confirmDelete). A refusal of a setting
+// shows under its field, others on the message line. Read only is
+// disabled, never hidden.
 //
-// In a library (setLibrary, My Library): the library's items by class,
-// then the built-in ones under Built-in to duplicate; New and Duplicate
-// make the item in the library, edits and Delete change its file. No Save
-// to, no saved state (every item is the library's).
+// Without a design (ManagerHosts) the panel works through a model of its
+// own: This design is no group and no place to ask for.
 class MaterialsPanel : public QWidget {
   Q_OBJECT
 
 public:
-  // `logName` heads the panel's log lines: "Materials", "My Library
-  // materials".
+  // `logName` heads the panel's log lines: "Materials".
   MaterialsPanel(PrintItemsHost& host, const QString& logName, QWidget* parent = nullptr);
   ~MaterialsPanel() override;
 
-  // The library the panel works in: `user` or `project` (My Library);
-  // empty: the design (the default). Its items are read at once, or with
-  // `read` false shown empty until refresh (My Library reads them off the
-  // UI thread, mitcad#1018).
-  void setLibrary(const QString& library, bool read = true);
+  // Another model to work through (a manager opened with or without a
+  // design); nothing selected, read at once or with `read` false shown
+  // empty until refresh (read off the UI thread, mitcad#1018).
+  void setHost(PrintItemsHost& host, bool read = true);
   // Shows the materials and the selected one as the model has them now.
   void refresh();
   // Shows the materials with the item `key` ("<place>/<id>") selected and
-  // in sight (My Library after an import), logged as "Material selected:
-  // <name> (<place>)".
+  // in sight (after an import), logged as "Material selected: <name>
+  // (<place>)". A library item the design has a copy of stands for that
+  // copy, what the design uses.
   void showItem(const QString& key);
   // A button of the window at the end of the row under the list (Close),
   // its place logged as "<logName> <name> at x,y".
   void addButton(QPushButton* button, const QString& name);
-  // A button of the window that is no result of it, after the list's
-  // actions (New, Duplicate, Delete) with a gap (Edit Library…,
-  // mitcad#1019), logged as addButton's.
-  void addListButton(QPushButton* button, const QString& name);
+  // The places a material can be made in now.
+  QStringList places() const;
   // Edit Appearances… of the Appearance box (the controller's window);
   // none: the box has no such entry.
   std::function<void()> editAppearances;
 
 signals:
-  // A command of the panel changed the model (My Library: a library).
+  // A command of the panel changed the model or a library.
   void changed();
 
 protected:
@@ -124,20 +122,22 @@ protected:
 
 private:
   const LibraryItem* current() const;
-  bool inLibrary() const { return !m_libraryPlace.isEmpty(); }
-  // The project commands and queries name: none in My library.
-  QString itemsProject() const;
+  bool hasDesign() const { return m_host->hasDesign(); }
+  // The project commands and queries name.
+  QString project() const;
   void rebuildList();
   void showCurrent();
   void selectKey(const QString& key);
   // Runs `change` (fields of edit_material) on the selected item, later.
   void edit(const QJsonObject& change, const QString& what, const QString& field = QString());
-  // A new item's `library` and project in My Library.
-  void inPlace(QJsonObject& command) const;
+  // Asks where a new item goes (New, Duplicate); empty when not chosen.
+  QString askWhere(QPushButton* anchor, const QString& what);
+  // A new item's `library` and project when `place` is a library.
+  void inPlace(QJsonObject& command, const QString& place) const;
   void newMaterial();
-  void duplicate();
+  void duplicate(QPushButton* anchor);
   void remove();
-  void saveTo();
+  void copyTo();
   // Asks once about the selected item when another design changed it.
   void askChanges();
   // One of the material's appearances made its default (mitcad#1055).
@@ -176,21 +176,20 @@ private:
   void scheduleLogPlaces();
   void logPlaces();
 
-  PrintItemsHost& m_host;
-  QString m_log;          // "Materials"
-  QString m_libraryPlace; // user or project in My Library; empty: the design
+  PrintItemsHost* m_host = nullptr;
+  QString m_log; // "Materials"
   PrintKeyTable m_keys;
   QString m_dialect; // the design's slicer (designDialectOf)
-  QVector<LibraryItem> m_items;
+  QVector<LibraryItem> m_items; // by place
+  QStringList m_places;         // the groups, in their order
   QJsonArray m_designMaterials;
-  QJsonObject m_library;
   QVector<Appearance> m_appearances;
   QJsonArray m_bodies;
   QString m_currentKey;      // the selected row's key; empty for none
-  QString m_currentDesignId; // its design copy, which a row keeps when its place changes
   QString m_pendingFocus;    // a row made just now, whose Name takes the keyboard
   bool m_pendingDensity = false; // ... its Density instead (a new material of no typical one)
   bool m_building = false;
+  QLineEdit* m_search = nullptr; // across the places (mitcad#1135)
   QTreeWidget* m_list = nullptr;
   QSplitter* m_splitter = nullptr;  // the list and the editor
   bool m_listWidthByUser = false;   // the user moved the divider: no fitListWidth
@@ -200,11 +199,11 @@ private:
   QComboBox* m_class = nullptr;
   QWidget* m_builtIn = nullptr; // "Built-in" with its lock and Duplicate
   QPushButton* m_headerDuplicate = nullptr;
-  QLabel* m_saved = nullptr; // "In My library", a saved item's state
+  QLabel* m_editing = nullptr; // editingLine (mitcad#1135)
   QLabel* m_emptyState = nullptr;  // "No material selected"
   QLabel* m_usedState = nullptr; // "● Used in this design"
   QStringList m_usedIds;         // the design's materials its bodies use
-  QPushButton* m_saveTo = nullptr;
+  QPushButton* m_copyTo = nullptr;
   QLineEdit* m_density = nullptr;
   QLabel* m_densityError = nullptr;
   QTreeWidget* m_appearanceList = nullptr; // every one it offers, the default marked
@@ -225,6 +224,7 @@ private:
   QPushButton* m_delete = nullptr;
   QVector<std::pair<QString, QPushButton*>> m_windowButtons; // addButton's
   QString m_loggedRows;
+  QString m_loggedEditing;
   QString m_loggedPlaces;
 };
 
@@ -247,10 +247,15 @@ BodyMaterialCommands bodyMaterialCommands(QWidget* parent, const LibraryItem* it
                                           const QJsonArray& bodyRows, const QStringList& bodies,
                                           const QString& project);
 
-// Materials (mitcad#655): a library window like Appearances, opened by
-// Edit Materials: the panel above on the open design, with Edit Library…
-// (My Library, mitcad#704) after the list's actions and Close (mitcad#1019).
-// It assigns nothing: the Material tool does (mitcad#1059).
+// The Materials manager (mitcad#655, mitcad#1135): a library window like
+// Appearances, opened by Make › Materials › Edit Materials…, and with no
+// design open on the libraries' own model (ManagerHosts). Import from
+// Slicer… at the top (SlicerImportBar, mitcad#829), the box before it
+// saying where the materials go (the default as New's), its line and Details… before it; the panel above;
+// Close at the end of the row under the list. It assigns nothing: the
+// Material tool does (mitcad#1059). Logs "Materials groups: ..." and, on
+// an opening without a design, "Materials loaded: read <n> ms, list <n>
+// ms" once the items were read off the UI thread.
 class MaterialsDialog : public QDialog {
   Q_OBJECT
 
@@ -258,17 +263,32 @@ public:
   MaterialsDialog(DocumentHost& host, QWidget* parent = nullptr);
   ~MaterialsDialog() override;
 
+  // An opening: the model chosen (with or without a design), the item
+  // `key` selected, none for an empty key.
+  void open() override { open(QString()); }
+  void open(const QString& key);
   void refresh();
   // The item `key` selected and in sight (MaterialsPanel::showItem).
   void showItem(const QString& key);
+  // Whether it works on the open design.
+  bool onDesign() const { return m_hosts.onDesign(); }
   // Edit Appearances… of the Appearance box (the controller's window).
   std::function<void()> editAppearances;
-  // Edit Library…: My Library (mitcad#704).
-  std::function<void()> openMyLibrary;
+
+signals:
+  // Closed after it changed a library without a design: the other
+  // managers read the libraries again.
+  void libraryChanged();
+
+protected:
+  void hideEvent(QHideEvent* event) override;
 
 private:
-  DesignItemsHost m_designHost;
+  ManagerHosts m_hosts;
+  SlicerImportBar* m_import = nullptr;
   MaterialsPanel* m_panel = nullptr;
+  int m_reads = 0;        // openings read ahead: only the latest one's answers are shown
+  bool m_changed = false; // a library changed without a design
 };
 
 } // namespace mitcad

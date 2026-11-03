@@ -2,8 +2,12 @@
 // Publish real snapshots and read them through the normal recovery path.
 #include "files/Autosave.hpp"
 #include "files/Recovery.hpp"
+#include "framework/AppSettings.hpp"
 
 #include <QDir>
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QThread>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -134,5 +138,48 @@ int autosaveTests() {
     }
   }
   check(dir.entryList(QDir::Files | QDir::Hidden).isEmpty(), "final cleanup");
+
+  // Two documents in one process own different records and live locks.
+  // Closing or replacing one must not discard the other's work.
+  const bool hadDirectory = qEnvironmentVariableIsSet("MITCAD_AUTOSAVE_DIR");
+  const QByteArray oldDirectory = qgetenv("MITCAD_AUTOSAVE_DIR");
+  qputenv("MITCAD_AUTOSAVE_DIR", folder.path().toUtf8());
+  {
+    AutosaveManager left;
+    AutosaveManager right;
+    check(left.session() != right.session(), "document sessions have distinct UUIDs");
+    left.state = right.state = [] { return AutosaveManager::State{true, 1}; };
+    left.snapshot = [&] { return AutosaveManager::Snapshot{first, QStringLiteral("Left"), QString()}; };
+    right.snapshot = [&] { return AutosaveManager::Snapshot{second, QStringLiteral("Right"), QString()}; };
+    GeneralSettings settings;
+    settings.autosave = true;
+    left.apply(settings);
+    right.apply(settings);
+    left.saveSoon();
+    right.saveSoon();
+    const auto waitFor = [&](const auto& ready) {
+      QElapsedTimer elapsed;
+      elapsed.start();
+      while (!ready() && elapsed.elapsed() < 10000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+      }
+      return ready();
+    };
+    const QString leftRecord = dir.filePath(left.session() + QStringLiteral(".json"));
+    const QString rightRecord = dir.filePath(right.session() + QStringLiteral(".json"));
+    check(waitFor([&] { return QFile::exists(leftRecord) && QFile::exists(rightRecord); }),
+          "both real managers publish independently");
+    check(findRecoverable(folder.path(), QString()).empty(), "both live document locks exclude recovery");
+    left.replaced();
+    check(!QFile::exists(leftRecord) && QFile::exists(rightRecord), "replacing left preserves right record");
+    check(findRecoverable(folder.path(), QString()).empty(), "right lock survives replacing left");
+    const auto record = QJsonDocument::fromJson(read(rightRecord)).object();
+    check(read(dir.filePath(record.value(QStringLiteral("project")).toString())) == second,
+          "right snapshot retains its own document bytes");
+  }
+  check(dir.entryList(QDir::Files | QDir::Hidden).isEmpty(), "normal document close removes both owned sessions");
+  if (hadDirectory) qputenv("MITCAD_AUTOSAVE_DIR", oldDirectory);
+  else qunsetenv("MITCAD_AUTOSAVE_DIR");
   return failures;
 }

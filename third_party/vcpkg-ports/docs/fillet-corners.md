@@ -1,4 +1,4 @@
-# Fillet corners where a rounding ends: 0130–0540
+# Fillet corners where a rounding ends: 0130–0540, 1140, 1170
 
 The corners OCCT's rolling ball fillet builds where a rounding ends at a
 vertex (`PerformIntersectionAtEnd`, `PerformOneCorner`), in the rounds of
@@ -37,6 +37,11 @@ mitcad#342. Most cases are rebuilt with OCCT alone in
   contact crosses only past the trimmed bounds (mitcad#236).
 - **0540** ends a rounding that runs on into an earlier rounding of its
   radius with the section they share (mitcad#236).
+- **1140** ends a blend cut by the face at the end past the spine's end
+  vertex, along the line of that face's edge tangent to the other
+  contact's face (mitcad#236).
+- **1170** takes 1140's end wherever the edge's faces go on meeting along
+  its curve continued, and over pieces given up at the end (mitcad#236).
 
 ## 0130: a rounding vanishing at a tangent end
 
@@ -441,6 +446,81 @@ where the edge's curve ends at the vertex (a stored B-spline;
 with a curve that goes on past it). The earlier rounding grows up to the
 section, as in the files' bodies.
 
+## 1140: a cut to the end past the vertex along a tangent edge
+
+The patch 1140 goes on with the corners where a rounding ends after an edge
+overflow (mitcad#236, ninth round): the face at the end cuts an analytic
+blend whose contact ran off its face, and the cut's end lies on the line of
+an edge of that face past the spine's end vertex.
+
+### 1140-chfi3d-cut-to-end-past-the-vertex-along-a-tangent-edge
+
+A bar whose edge along the floor is rounded with 3, and beside it a block
+that reaches further out, its own edge along the floor rounded with 8, its
+floor going 0.073 mm further than the bar's: the block's face beside the
+bar is a step between the two profiles that narrows to a point at the
+vertex V where the bar's rounding comes tangent to the floor. The step's
+foot rounded with 0.5 (its edge with the floor, on tangentially up the
+block's rounding): near V the step is lower than the ball, its contact
+leaves the step across its edge with the bar's rounding B, and B cuts the
+blend all along from there (`ChFi3d_KPartCutToEnd`). That cut ends where
+the blend's other contact meets the edge Eq of its face Fo (the floor) with
+B at V; Eq ends at V, and the contact meets Eq's line only 0.5 past V. No
+end was found; the corner cut the walked blend with B and looked for the
+floor's edge with the block's rounding to cross B, which passes 0.9
+micrometres above it, and failed ("the edge beside the end does not cross
+the face at the end").
+
+Where Fo and B are tangent along Eq and N narrows to a point at V (the
+spine's end edge and N's edge with B leave V the same way), their surfaces
+go on meeting along Eq's line beyond V. (Not where N narrows to a point at
+that edge's other end too, a sliver of N between B and two faces whose
+other blend leaves N across the same edge, as a window's floor rounded on
+both edges up to a pillar's rounded end: the corners cut those as before.)
+The end is now taken there, a new vertex on Eq's curve
+continued and on both surfaces, where the blend ends in a point. B grows up
+to the cut, Eq is prolonged beyond V to the new vertex
+(`ChFi3d_ProlongEdgeBeyondVertex`), and the spine's end edge, under the
+blend, is cut at V with no side kept. The piece whose contact leaves its
+face may lie on the spine's end edge itself (a step's foot on a rounding
+that a smaller rounding of the bar meets tangentially); it then still has
+the parameters of that edge's whole blend, extended past the edge, at its
+end (an OnSame end's corner sets them): its end section is taken through
+its other contact's point there, by bisection on the edge as the end's,
+and its parameters at that end are those of its points (on a closed
+contact line, in the period that keeps the piece's direction; restored
+when no pieces are added). In the stored design the rounding is the file's: the
+boolean differences with the file's body are empty both ways, the change
+of volume 0.04 % off the file's, and the bar's rounding grown past the
+step by the file's 0.41 mm².
+
+## 1170: the end past the vertex along faces that go on meeting
+
+The patch 1170 goes on with 1140 (mitcad#236, tenth round): a rounding round
+an outline's corner up to a wall standing on the top across the corner's
+rounding.
+
+### 1170-chfi3d-cut-to-end-past-the-vertex-along-faces-meeting-on
+
+A rounding of 1 along a top's outline, round the outline's corner (rounded
+with 2) up to the vertex where a wall standing on the top crosses the
+corner's rounding at a sharp vertical edge. The contact on the top runs
+onto the wall's foot already on the straight edge before the corner: the
+analytic piece round the corner lies wholly past the wall, and so does the
+straight piece's start, kept as an extension with its top side given up.
+`ChFi3d_KPartCutToEnd` took that extension for the first piece and gave
+up; the corner capped the straight piece's prolongation with the wall,
+which it does not meet ("bouchon non ecrit"). Now pieces at the end with a
+side given up come before the first piece on both faces, and the cut
+pieces take their place where the end is past the vertex (elsewhere such
+an end is left as before). 1140's end past the vertex no longer needs the
+edge's faces tangent along it and the face the contact leaves narrowing to
+a point there: it needs the edge's curve continued up to the end on both
+faces' surfaces (checked at four points), which holds for faces tangent
+along it and for a wall and a cylinder running on along their vertical
+edge. The wall grows down to the cut, its edge with the corner's rounding
+prolonged down to the end, as in the files' bodies.
+
 ## Reports and tests
 
 - 0130 to 0139, 0210 to 0219, 0280 to 0289, 0290 to 0299, 0340 to 0349 and
@@ -457,4 +537,16 @@ section, as in the files' bodies.
   `geometry/tests/test_fillet_corners.cpp`.
 - 0540: mitcad#236 and the wall's foot rounded on into its end's earlier
   rounding (its floor edges as circles and as B-splines) in
+  `geometry/tests/test_fillet_corners.cpp`.
+- 1140: mitcad#236 and the step's foot beside a bar's rounding tangent to
+  the floor (failing without the patch) and beside a notch rounded tangent
+  to the block's rounding, in both orientations, each against the block
+  alone rounded less what lies in the bar's profile, and a tab's top
+  rounded concave up to its side roundings tangent to a curved wall
+  (closed contact lines), against the material under the rounding's torus
+  within the tab's outline, in `geometry/tests/test_fillet_corners.cpp`.
+- 1170: mitcad#236 and a block lowered on one side of a wall across its
+  rounded corner, its lower top's edge rounded round the corner up to the
+  wall, against the lower block alone rounded on the far side of the
+  wall's plane (failing without the patch), in
   `geometry/tests/test_fillet_corners.cpp`.

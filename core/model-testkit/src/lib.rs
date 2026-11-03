@@ -5025,6 +5025,51 @@ impl Kernel for MockKernel {
         })
     }
 
+    // Emboss by projection (mitcad#1091).
+
+    /// The profiles' prism one unit along the sketch normal, faces named
+    /// as the projected tool's, with the history `project(<feature>:<face>
+    /// by <depth>)`; the call in `specs` (`project F4 onto F2:side0 along
+    /// 0 0 1 by 1`). The face must be the body's; "projected_emboss" in
+    /// `fail` fails it.
+    fn projected_emboss(
+        &self,
+        spec: &mitcad_model_base::kernel::EmbossProjectSpec<'_, MockShape>,
+    ) -> Result<MockShape, KernelError> {
+        self.call("projected_emboss")?;
+        if !spec.body.has_face(spec.face) {
+            return Err(KernelError::failed(format!(
+                "the body has no face {}",
+                spec.face
+            )));
+        }
+        self.specs.borrow_mut().push(format!(
+            "project {} onto {} along {} by {}",
+            spec.feature,
+            spec.face,
+            spec.direction.map(|v| number(round(v))).join(" "),
+            number(spec.depth)
+        ));
+        let mut shape = self.extrude(&ExtrudeSpec {
+            feature: spec.feature,
+            frame: spec.frame,
+            regions: spec.regions,
+            direction: spec.frame.normal(),
+            start: 0.0,
+            end: 1.0,
+        })?;
+        shape.history = format!(
+            "project({}:{} by {})",
+            spec.feature,
+            spec.face,
+            number(spec.depth)
+        );
+        for part in &mut shape.parts {
+            part.history = shape.history.clone();
+        }
+        Ok(shape)
+    }
+
     // Topology counts for Physical Properties (mitcad#1095).
 
     /// The faces and face-pair edges of the shape (of each solid of a

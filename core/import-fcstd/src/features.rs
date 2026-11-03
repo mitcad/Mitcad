@@ -82,7 +82,7 @@ use super::history::{Candidate, SketchMade, Target};
 use super::params::{Kind, Q};
 use super::profiles::Swept;
 use super::sketches::Placed;
-use mitcad_import_base::geom::{cross, dot, norm, scale, sub, unit};
+use mitcad_import_base::geom::{add, cross, dot, norm, scale, sub, unit};
 
 /// What a fillet or chamfer works on: its body, the edges and faces named,
 /// or (`all`, FreeCAD's `UseAllEdges`) every edge of the body.
@@ -1270,12 +1270,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// sketch whose circles or arcs those edges are (the same centre,
     /// radius and plane, to [`SAME_GEOMETRY`]), the object's own profile
     /// sketch first, and those curves as the hole's points, so that the
-    /// hole follows the sketch. All the edges must be in one sketch.
+    /// hole follows the sketch. All the edges must be in one sketch. They
+    /// may lie at one distance from its plane along its normal (the far end
+    /// of a pad of the sketch, mitcad#1195): that distance comes with them,
+    /// the holes start there.
     fn hole_edge_points(
         &mut self,
         link: &LinkRef,
         component: ComponentUid,
-    ) -> Result<(SketchMade, Vec<String>), String> {
+    ) -> Result<(SketchMade, Vec<String>, f64), String> {
         if link.subs.is_empty() {
             return Err(format!(
                 "a hole's profile of the whole {} (not a sketch) is not translated",
@@ -1352,11 +1355,16 @@ impl<K: Kernel> Importer<'_, '_, K> {
             external.sort();
             ids.extend(external.into_iter().map(|(_, id)| *id));
             let mut found = Vec::new();
+            // The circles' distance from the sketch's plane (the first one's).
+            let offset = circles
+                .first()
+                .map_or(0.0, |(c, _, _)| dot(sub(*c, sketch.frame.origin), normal));
             for (center, axis, radius) in &circles {
                 if norm(cross(*axis, normal)) > SAME_GEOMETRY {
                     break;
                 }
                 let tolerance = SAME_GEOMETRY * (1.0 + norm(*center) + radius);
+                let center = &sub(*center, scale(normal, offset));
                 let hit = ids.iter().find(|id| {
                     match output.solved.curves.get(&mitcad_model::EntityUid(**id)) {
                         Some(
@@ -1383,13 +1391,96 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 }
             }
             if found.len() == circles.len() {
-                return Ok((sketch, found));
+                return Ok((sketch, found, offset));
             }
         }
         Err(format!(
             "{}'s edges of the hole's profile are not circles of one imported sketch",
             link.object
         ))
+    }
+
+    /// A hole's profile of chosen edges of its sketch (`(Sketch003, [Edge2,
+    /// Edge3])` with `AllowMultiFace`, mitcad#1195): FreeCAD drills at those
+    /// circles and arcs only, not at the sketch's others (another feature
+    /// may take those, as a pocket of the same sketch's other circles).
+    fn hole_chosen_points(
+        &mut self,
+        link: &LinkRef,
+        sketch: &SketchMade,
+        profile_object: &Object,
+        component: ComponentUid,
+    ) -> Result<Vec<String>, String> {
+        let parsed = fc::Sketch::of(profile_object);
+        let mut points = Vec::new();
+        for part in &link.subs {
+            let name = sub_name(part);
+            // An element FreeCAD marks missing (`?Vertex8`) drills nothing.
+            if name.starts_with('?') {
+                continue;
+            }
+            // A vertex of the sketch's shape: the sketch's point there.
+            if let Some(index) = element_index(name, "Vertex") {
+                let at = match self
+                    .stored_element(&link.object, ElementKind::Vertex, index, component)
+                    .as_deref()
+                {
+                    Some([Curve3::Point(p)]) => *p,
+                    _ => return Err(format!("{}.{name}: not in its stored shape", link.object)),
+                };
+                let output = self
+                    .doc
+                    .sketch_output(sketch.uid)
+                    .ok_or("the sketch did not solve")?;
+                let tolerance = SAME_GEOMETRY * (1.0 + norm(at));
+                let found = sketch.points.values().find(|id| {
+                    output
+                        .solved
+                        .points
+                        .get(&mitcad_model::EntityUid(**id))
+                        .is_some_and(|p| norm(sub(sketch.frame.point(*p), at)) <= tolerance)
+                });
+                let point = format!(
+                    "p{}",
+                    found.ok_or_else(|| format!(
+                        "{}.{name} is not a point of the imported sketch",
+                        link.object
+                    ))?
+                );
+                if !points.contains(&point) {
+                    points.push(point);
+                }
+                continue;
+            }
+            if !name.starts_with("Edge") {
+                return Err(format!(
+                    "a hole's profile of {}.{name} (not an edge) is not translated",
+                    link.object
+                ));
+            }
+            let geometry = self
+                .sketch_geometry(profile_object, name, component)
+                .ok_or_else(|| format!("{}.{name} was not found", link.object))?;
+            let circular = usize::try_from(geometry)
+                .ok()
+                .and_then(|i| parsed.geometry.get(i))
+                .is_some_and(|g| matches!(g.curve, Curve::Circle { .. } | Curve::Arc { .. }));
+            if !circular {
+                return Err(format!(
+                    "a hole's profile of {}.{name} (not a circle or arc) is not translated",
+                    link.object
+                ));
+            }
+            let id = sketch
+                .curves
+                .get(&geometry)
+                .ok_or_else(|| format!("{}.{name} was not imported", link.object))?;
+            let curve = format!("c{id}");
+            if !points.contains(&curve) {
+                points.push(curve);
+            }
+        }
+        Ok(points)
     }
 
     fn hole_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
@@ -1403,18 +1494,22 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // and points, projected. Circular edges of a body (FreeCAD 1.x's
         // hole at a feature's circles, mitcad#1087): the circles of the
         // sketch they came from.
-        let (sketch, points) = if super::sketches::is_binder(&profile_object.type_name) {
+        let (sketch, points, offset) = if super::sketches::is_binder(&profile_object.type_name) {
             let sketch = self.binder_sketch(&link.object, component)?;
             let bound = self
                 .sketches_of(&profile_object)
                 .and_then(|s| s.into_iter().next())
                 .ok_or("the binder binds no sketch")?;
             let points = hole_points(&sketch, &fc::Sketch::of(&bound));
-            (sketch, points)
+            (sketch, points, 0.0)
         } else if super::is_sketch(&profile_object.type_name) {
             let sketch = self.sketch_of(&link, component)?;
-            let points = hole_points(&sketch, &fc::Sketch::of(&profile_object));
-            (sketch, points)
+            let points = if !link.subs.is_empty() && o.bool("AllowMultiFace") == Some(true) {
+                self.hole_chosen_points(&link, &sketch, &profile_object, component)?
+            } else {
+                hole_points(&sketch, &fc::Sketch::of(&profile_object))
+            };
+            (sketch, points, 0.0)
         } else {
             self.hole_edge_points(&link, component)?
         };
@@ -1445,7 +1540,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
                             o.solved.points.get(&id).copied()
                         }
                     });
-                    at.map(|p| frame.point(p))
+                    // At the edges' distance from the plane (mitcad#1195).
+                    at.map(|p| add(frame.point(p), scale(normal, offset)))
                 })
                 .collect()
         };
@@ -1498,7 +1594,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
             // its stored shape.
             return Err("FreeCAD did not model its thread (the hole is invalid)".to_owned());
         }
-        if o.bool("Threaded") == Some(true) {
+        if o.bool("Threaded") == Some(true) && !modeled && taper.is_some() {
+            // A cosmetic thread changes nothing of FreeCAD's tapered hole,
+            // and MitCad's thread goes on a cylindrical wall, not a cone
+            // (mitcad#1195: a tapered pipe tap hole fell back).
+            notes.push("its cosmetic thread is left out: the hole is tapered".to_owned());
+        } else if o.bool("Threaded") == Some(true) {
             match self.hole_thread(o, modeled) {
                 Ok(t) => thread = Some(t),
                 Err(why) if modeled => return Err(format!("its modeled thread: {why}")),
@@ -1598,10 +1699,31 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let boxes: Vec<Option<mitcad_model::BoundingBox>> =
             participants.iter().map(|b| self.box_of(*b)).collect();
         let reversed = o.bool("Reversed").unwrap_or(false);
+        // Holes at a feature's circles off the sketch's plane (the far end
+        // of its pad, mitcad#1195) start on the plane through them, at the
+        // centres where the sketch puts them now.
+        let lifted = offset.abs() > SAME_GEOMETRY * (1.0 + norm(sketch.frame.origin));
+        let placement = if lifted {
+            let at: Vec<[f64; 3]> = positions.iter().flatten().copied().collect();
+            if at.len() != points.len() {
+                return Err("a hole's centre did not solve".to_owned());
+            }
+            json!({"type": "plane",
+                   "plane": {"origin": add(sketch.frame.origin, scale(normal, offset)), "normal": normal},
+                   "points": at})
+        } else {
+            json!({"type": "sketch_points", "sketch": sketch.uid.to_string(), "points": points})
+        };
+        if lifted {
+            notes.push(format!(
+                "drilled from {}'s face {offset:.3} mm off its sketch's plane, at fixed places",
+                link.object
+            ));
+        }
         let mut out = Vec::new();
         for flip in [reversed, !reversed] {
             let mut def = json!({"type": "hole",
-                "placement": {"type": "sketch_points", "sketch": sketch.uid.to_string(), "points": points},
+                "placement": placement.clone(),
                 "diameter": diameter, "kind": kind, "extent": extent, "flip": flip,
                 "participants": uids(&participants)});
             if angled {

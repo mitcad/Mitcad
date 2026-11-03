@@ -9,8 +9,10 @@
 // taken from a profile, each with the icon of the level that gives it
 // (body, occurrence, component). The material, the process and the values
 // are edited here; the window asks the model and sets them on the body
-// (MainWindowMake.cpp), each one undo step. The Properties window stays
-// for full editing.
+// (MainWindowMake.cpp), each one undo step. Add Print Value… under the
+// values asks for a setting to add to the body (PrintValuePicker,
+// mitcad#1178); a value set on the body has a remove button, which clears
+// it there. The Properties window stays for full editing.
 
 #include <QGroupBox>
 #include <QHash>
@@ -92,9 +94,20 @@ public:
   // so that a field being edited keeps its place. True when it changed.
   bool setData(const MakeCardData& data);
   const MakeCardData& data() const { return m_data; }
+  // A setting added without a value to start from (the slicer's default:
+  // mitcad#1178): a body row with an empty field, shown until a value
+  // typed there is set (the data then has it), another body is shown or
+  // its remove button drops it. `value.level` is "body".
+  void addPending(const MakeCardValue& value);
+  const MakeCardValue& pending() const { return m_pending; }
+  // Gives a value's field the keyboard, its text selected; false when the
+  // card has no such field.
+  bool focusValue(const QString& key);
   // The places of its fields in the main window's coordinates, for the UI
   // tests: "Make card material at x,y", "Make card process at x,y", "Make
-  // card value perimeters at x,y".
+  // card value perimeters at x,y", "Make card remove perimeters at x,y"
+  // (a value set on the body), "Make card add value at x,y"; and each
+  // value's level icon, "Make card value perimeters icon body".
   QStringList places() const;
 
 signals:
@@ -103,17 +116,26 @@ signals:
   void processChosen(const QString& id);
   // A value typed and confirmed (Enter, or the field left changed).
   void valueEdited(const QString& set, const QString& key, const QString& text);
+  // Add Print Value… clicked.
+  void addValueRequested();
+  // A body value's remove button clicked (not a pending one's: the card
+  // drops that itself).
+  void valueRemoved(const QString& set, const QString& key, const QString& name);
 
 private:
   void rebuild();
   QLabel* levelIcon(const QString& level, const QString& owner);
 
   MakeCardData m_data;
+  MakeCardValue m_pending; // key empty: none
   bool m_hasData = false;
   QGridLayout* m_grid = nullptr;
   QComboBox* m_material = nullptr;
   QComboBox* m_process = nullptr;
-  QHash<QString, QLineEdit*> m_fields; // the values' fields, by key
+  QHash<QString, QLineEdit*> m_fields;    // the values' fields, by key
+  QHash<QString, QWidget*> m_removes;     // the body values' remove buttons, by key
+  QHash<QString, QString> m_icons;        // the values' level icons, by key
+  QWidget* m_add = nullptr;               // Add Print Value…
 };
 
 } // namespace mitcad

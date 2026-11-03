@@ -23,10 +23,17 @@
 #   4. A drop-in: a lamp dropped in with Enter, then joined with Joint by its
 #      mount frame (the browser's row of its joint origin) onto a plate's
 #      top, in a design of its own.
+#   5. A selection made before (mitcad#1197): a hole's rim selected, then
+#      Insert from Library > ISO 4762 of the parts library's generator
+#      (its mount frame `seat` under the head): Place Component starts
+#      with the rim as Place On, the screw shown in the hole; Enter places
+#      it, head on the face, a rigid joint to the hole; no other screw at
+#      the origin.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-mount-test.sh
 # check-all sources: core/model/src/document/mounts.rs core/model-api/src/mounts.rs core/vcs/src/library tools/cli
+# check-all sources: tools/libraries/make-fastener-library.py tools/libraries/library_previews.py
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -105,6 +112,24 @@ g "$LIB" add -A
 g "$LIB" commit -q -m "Mount parts"
 g "$LIB" tag v1.0.0
 echo "ok   the library of the synthetic parts, its mounts from the designs"
+
+# The parts library's socket head cap screws, M5, as its generator makes
+# them (5.): their mount frame `seat` under the head, in the manifest.
+PARTS=$WORK/parts
+python3 "$ROOT/tools/libraries/make-fastener-library.py" --cli "$CLI" --out "$PARTS" --sizes M5 \
+  --standards iso4762 --version 1.0.0 --no-render --commit > "$WORK/parts.log" 2>&1 ||
+  { cat "$WORK/parts.log"; ui_fail "the fastener generator failed"; }
+"$CLI" library check "$PARTS" > /dev/null || ui_fail "the generated fasteners have errors"
+grep -q '"name": "seat"' "$PARTS/mitcad-library.json" || ui_fail "the generated screw lists no mount frame"
+echo "ok   the generated ISO 4762 lists its mount frame"
+# The plate with a hole of 5.5 mm (5.): Plate:1, 100 x 60 x 10 at (20,
+# 20), the hole at (70, 50) through it (F1.b0: its top F1:top, the
+# hole's wall F2:side0, the rim their edge).
+HOLED=$WORK/holed.mitcad
+design holed '{"cmd": "create_component", "name": "Plate"}, '"$(box 20 20 100 60 10)"',
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [70, 50], "diameter": 5.5, "height": 10,
+    "operation": "cut", "participants": ["F1.b0"]}},
+  {"cmd": "activate_component", "component": "Root"}'
 
 # check "description" expectations...: the saved design opened by mitcad-cli.
 check() {
@@ -435,6 +460,62 @@ save
 # middle (70, 50, 10): the lamp stands on it.
 check "the dropped-in lamp stands on the plate's top, by its mount frame" \
   "{\"expect\": {\"occurrence\": \"Lamp:1\", \"body\": \"$DROPPED\", \"center\": [70, 50, 12.5], \"tolerance\": 1e-6}}"
+
+echo "--- 5. A hole's rim selected before Insert from Library: ISO 4762 placed in the hole (mitcad#1197)"
+ui_stop_app
+OPEN=$HOLED
+ui_start_app --open "$HOLED"
+ui_step "fit (F6)"                         ui_key F6
+ui_mark
+ui_step "Libraries (command search)"       ui_command "Libraries..."
+ui_focus_dialog '^Libraries$'
+ui_step "Add URL (Alt+A)"                  ui_key alt+a
+ui_focus_dialog '^Add Library$'
+ui_step "the generated fasteners"          eval 'ui_type_text "$PARTS"; ui_key Return'
+ui_focus_dialog '^Libraries$'
+ui_expect_new "Library source added: $PARTS" "the source added"
+ui_step "Fetch All (Alt+F)"                ui_key alt+f
+ui_expect_new "Library fetched: library Mitcad parts (mitcad-parts) from $PARTS" "the fasteners fetched" 30
+ui_step "close (Alt+C)"                    ui_key alt+c
+ui_focus_main
+# Where a click picks the hole's rim on the plate's top: Fillet logs its
+# edges' places (an idle view logs none), cancelled before the click.
+ui_mark
+ui_step "Fillet (command search)"          ui_command "Fillet"
+ui_expect_new "Pick places:" "where the edges are picked"
+RIM=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed -n 's/^Pick \(.*\) at [0-9]*,[0-9]*$/\1/p' |
+  grep -E '^(edge F1\.b0/E\{.*F1:top.*F2:|edge F1\.b0/E\{.*F2:.*F1:top)' | head -1)
+[ -n "$RIM" ] || ui_fail "the hole's rim on the plate's top is not among the pick places"
+ui_step "cancel it (Esc)"                  ui_key Escape
+ui_mark
+ui_step "select the rim ($RIM)"            ui_click_pick "$RIM at"
+ui_expect_new "Selected: 1 edge" "the hole's rim selected"
+ui_mark
+ui_step "Insert from Library"              ui_command "Insert from Library"
+ui_focus_dialog '^Insert from Library$'
+ui_step "search 4762"                      xdotool type --delay 40 "4762"
+ui_expect_new "Library search '4762': 1 components" "the search finds the screw"
+ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.0.0 (" "the generated screw"
+ui_step "Insert (Alt+I)"                   ui_key alt+i
+ui_focus_main
+ui_expect_new "Insert from Library: mitcad-parts/iso4762 has mount frames seat (into a hole, fixed): Place Part" \
+  "the screw has its mount frame: Place Component"
+ui_expect_new "Command Place Component started" "Place Component started"
+ui_expect_new "Place Component: Place On edge" "the rim selected before is Place On"
+ui_expect_new ": frame seat (shaft), rigid joint, on Plate:1" "the screw shown in the hole at once, no click" 20
+no_free=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -c "^Inserted component " || true)
+[ "$no_free" = 0 ] || ui_fail "a component was dropped in at the origin"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed part " "the screw placed" 30
+ui_expect_new "by its frame seat on Plate:1: rigid joint Joint" "a rigid joint to the hole (logged)"
+ui_expect_new "at (70, 50, 10)" "its head on the plate's top, on the hole's axis"
+ui_step "close (Escape)"                   ui_key Escape
+save
+check "one screw, fixed in the hole by its joint: none free at the origin" \
+  '{"expect": {"bodies": 2}}' \
+  '{"expect": {"query": {"query": "joints"}, "result": {"joints": [{"kind": "rigid", "solved": true}]}}}' \
+  '{"expect": {"query": {"query": "joint_dof", "occurrence": "ISO 4762 M5x16:1"}, "result": {"dof": 0}}}'
 
 ui_stop_app
 ui_finish "mount frames of any part and Place Part"

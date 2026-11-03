@@ -15,6 +15,7 @@ commands make (`SketchEdit`). It sits below the model's core, on
 | `geometry`, `intersect`, `regions` | 2D curves, their intersections, the profile regions |
 | `solve` | The solve and its status |
 | `edit`, `modify`, `tools`, `points`, `cleanup`, `stale`, `convert`, `axes` | Sketch edits (`SketchEdit`) |
+| `fillet` | The tangent circle of a sketch fillet at a corner of a circular arc with a line or an arc (mitcad#1192) |
 | `project` | Model geometry and other sketches' curves and points (`ProjectionSource`, `SketchEntityRef`, mitcad#904) projected into the sketch; linked projections that follow their sources |
 | `offset`, `pattern`, `spacing` | Offsets, patterns, equal spacing |
 | `text`, `fonts`, `code`, `svg`, `dxf` | Texts, font files, QR codes, SVG and DXF drawings |

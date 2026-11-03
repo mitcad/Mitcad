@@ -212,8 +212,9 @@ texture paths as `{"kind", "paths"}` — and `connections`), `bodies`
 the blob; `appearance` and `material` as `{"token", "library", "preset",
 "display", "asset"}`; `faces`: the faces with their own, each `guid`,
 `appearance`, `color`, `faces` (fingerprints in the stored design, cm) or
-`why`), `faces` (face references whose face the stored design does not
-have), `occurrences` (overrides: `object_id`, `component`, `appearance`)
+`why`; `light_bulb`: false for a body the file hides, where its record
+gives it, mitcad#1175), `faces` (face references whose face the stored
+design does not have), `occurrences` (overrides: `object_id`, `component`, `appearance`)
 and `warnings`. External dumps have none; the import then sets no
 appearances.
 
@@ -545,7 +546,8 @@ which.
   (mitcad#186): `ControlPolygonConstraint` (bit 31: the lines of a control
   point spline's polygon and the spline) and `TextBoxConstraint` (bit 40:
   the four lines of a sketch text's box, and its corner point in some
-  files) and `TextPathConstraint` (bit 41: a text and one curve; unverified).
+  files) and `TextPathConstraint` (bit 41: a text and its path curve,
+  mitcad#1177).
 - `Dimension`: `id`, `type` (`SketchLinearDimension`,
   `SketchDiameterDimension`, `SketchAngularDimension`, ...), `parameter`
   (parameter reference; null for some driven dimensions, K6), `isDriving`,
@@ -594,7 +596,10 @@ which.
   `{kind: "sketch_entity", id}` in order, the first running along the
   baseline from the text's corner; `horizontalAlignment`,
   `verticalAlignment` as the API's names) or `AlongPathTextDefinition`
-  (`path`: the curve). `textStyle` bit 1 (bold) comes from the font weight
+  (`path`: the curve; `isAbovePath` from the order the file stores its
+  characters' placements in, mitcad#1177; for a whole circle as the path,
+  `_f3d.pathStart`, where the circle starts as a path: radians about the
+  sketch normal from the sketch x axis, opposite its reference direction). `textStyle` bit 1 (bold) comes from the font weight
   (600 and up); italic and underline are not decoded. `_f3d` holds the raw
   flags, weight, width factor and kind. The `.ipt` decoder (mitcad#414)
   adds `lineSpacing` (cm, baseline to baseline, measured from the glyph
@@ -650,7 +655,7 @@ parentheses.
 
 | objectType | detail keys |
 |---|---|
-| ExtrudeFeature | operation, profile, extentType, extentOne, extentTwo (`ToEntityExtentDefinition`: entity, isChained, offset, isMinimumSolution, directionHint; `ThroughAllExtentDefinition`: isPositiveDirection; `SymmetricExtentDefinition`: distance, isFullLength, taperAngle), hasTwoExtents, symmetricExtent, startExtent, taperAngleOne, taperAngleTwo, participantBodies, isSolid, isThinExtrude, thinExtrudeWallLocationOne/Two, thinExtrudeWallThicknessOne/Two. The stream decoder gives the extents from the extrude record: `extentType` and `hasTwoExtents`; a side through all with `isPositiveDirection` (the flag byte: 0 along the sketch normal, 1 against it); `SymmetricExtentDefinition` (also as `symmetricExtent`) with its length byte as `isFullLength`; `ToEntityExtentDefinition` with `isChained` (the slot role 17 or 18), `isMinimumSolution` (the byte after the object reference) and `directionHint` (the stored direction vector, turned round by the flag byte); `isSymmetric` false on distances; `startExtent` `ProfilePlaneStartDefinition` (its `profilePlane` the sketch plane in sketch coordinates); `_f3d_missing_texts`, the object ids of the sketch texts its text profiles (`92F9A5F4`) name that the design no longer has (mitcad#332) |
+| ExtrudeFeature | operation, profile, extentType, extentOne, extentTwo (`ToEntityExtentDefinition`: entity, isChained, offset, isMinimumSolution, directionHint; `ThroughAllExtentDefinition`: isPositiveDirection; `SymmetricExtentDefinition`: distance, isFullLength, taperAngle), hasTwoExtents, symmetricExtent, startExtent, taperAngleOne, taperAngleTwo, participantBodies, isSolid, isThinExtrude, thinExtrudeWallLocationOne/Two, thinExtrudeWallThicknessOne/Two. The stream decoder gives the extents from the extrude record: `extentType` and `hasTwoExtents`; a side through all with `isPositiveDirection` (the flag byte: 0 along the sketch normal, 1 against it); `SymmetricExtentDefinition` (also as `symmetricExtent`) with its length byte as `isFullLength`; `ToEntityExtentDefinition` with `isChained` (the slot role 17 or 18), `isMinimumSolution` (the byte after the object reference) and `directionHint` (the stored direction vector, turned round by the flag byte); `isSymmetric` false on distances; `startExtent` `ProfilePlaneStartDefinition` (its `profilePlane` the sketch plane in sketch coordinates); `_f3d_missing_texts`, the object ids of the sketch texts its text profiles (`92F9A5F4`) name that the design no longer has (mitcad#332); `_f3d_text_profiles`, those the sketch has (`texts`: their sketch-local ids), with the number of profiles the item selects (`profiles`) and whether all are the texts' (`only`; mitcad#1177) |
 | RevolveFeature | operation, profile, axis, isProjectAxis, extentDefinition (angle, isSymmetric / angleOne, angleTwo / to-entity), isSolid, participantBodies. The stream decoder gives `operation`, `isSolid`, `isProjectAxis` (class version 2), `extentDefinition` (`isSymmetric`; `TwoSidesAngleExtentDefinition` with `angleOne`, `angleTwo`), `axis` (an origin or construction axis, a sketch line, a cylindrical or conical face, an edge) and `participantBodies` of a join or cut |
 | HoleFeature | holeType, holeTapType, holeDiameter, tipAngle, counterboreDiameter, counterboreDepth, countersinkDiameter, countersinkAngle, isDefaultDirection, extentDefinition, position, direction, holePositionDefinition, participantBodies, tappedHoleInfo (a ThreadInfo), clearanceHoleInfo, thread (the hole's ThreadFeature: isModeled, isFullLength, threadLength, threadOffset, threadLocation, isRightHanded). The stream decoder gives a tapped hole's `holeTapType` (`TappedHoleTapType`), `tappedHoleInfo` and `thread` (`isModeled`, `isFullLength`, `threadLocation`, `threadLength` the thread depth, `threadOffset`) from its thread sub-item. It also gives (mitcad#67) `position`, the first of the hole's points (`_f3d_positions`, every point, in the component, cm), `holeType` (from the counterbore or countersink sizes among its parameters, else `SimpleHoleType`), `counterboreDiameter`, `counterboreDepth` and an `extentDefinition` from the hole's slot of role 5 (`AllExtentDefinition` with the bodies as its input, `OneSideToExtentDefinition`, its type only, with a plane or face; a hole without such a slot goes to its depth), and `holePositionDefinition` (`PlaneAndOffsetsHolePositionDefinition`: `planarEntity`, `edgeOne`, `edgeTwo`, `offsetOne`, `offsetTwo`; its `planarEntity` is also a construction or origin plane the hole starts on), and since mitcad#25 `isDefaultDirection` (class version 7 records); not `direction` |
 | ThreadFeature | threadInfo (isInternal, isRightHanded, isTapered, threadType, threadSize, threadDesignation, threadClass, majorDiameter, minorDiameter, pitchDiameter, threadPitch, threadAngle, ...), isModeled, isFullLength, threadLength, threadOffset, threadLocation, isRightHanded, inputCylindricalFaces, inputCylindricalFace, hole. The stream decoder gives `threadInfo` (type, size, designation, class, `isInternal`, `isRightHanded` (versions 4 and 5 of the thread object), the angle in degrees, the diameters and pitch in cm), `isModeled`, `isFullLength`, `threadLocation`, `threadLength`, `threadOffset` and `inputCylindricalFaces` (named faces, §2). The `.ipt` import gives a face as `{kind: face, geometry: {type: Cylinder, axis}, start_point, end_point}`: the thread's two ends (cm), on its cylinder's surface or axis, the import taking the cylinder through both |

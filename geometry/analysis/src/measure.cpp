@@ -299,8 +299,7 @@ std::optional<Circle> circle(const TopoDS_Shape& shape) {
   }
   if (surface.GetType() == GeomAbs_Cylinder) {
     const gp_Cylinder cylinder = surface.Cylinder();
-    GProp_GProps props;
-    BRepGProp::SurfaceProperties(face, props);
+    const GProp_GProps props = surface_properties(face);
     const gp_Ax1 axis = cylinder.Axis();
     const gp_Vec offset(axis.Location(), props.CentreOfMass());
     const gp_Pnt center =

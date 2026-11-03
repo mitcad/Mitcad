@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Common types of Mitcad's geometry analysis library
+// Common types of MitCad's geometry analysis library
 // (mitcad_geometry_analysis): physical properties, measurement,
 // interference, sections and shape comparison on OCCT shapes.
 //
@@ -48,7 +48,7 @@ Bounds bounds(const TopoDS_Shape& shape);
 TopoDS_Shape oriented_solids(const TopoDS_Shape& shape);
 
 // Volume and surface integrals of a shape (mass, centre, inertia), for
-// every volume and area Mitcad reports, so that they agree. Each face is
+// every volume and area MitCad reports, so that they agree. Each face is
 // integrated span by span (mitcad#140): along its boundary curves in the
 // parameter space and across the surface, split at the surface's and the
 // curves' knots, where the curves cross the surface's knot lines and every
@@ -63,7 +63,34 @@ TopoDS_Shape oriented_solids(const TopoDS_Shape& shape);
 // spans, 0.3 % off its area). Faces reaching to infinity keep OCCT's fixed
 // rule; faces without a surface (meshes) are integrated over their
 // triangles. The tests' faces of every kind come within 1e-9 (relative) of
-// their exact values.
+// their exact values, and lofts with their shells and offsets within 1e-8
+// of a reference: OCCT's adaptive Gauss-Kronrod rule for the curved faces,
+// a dense polygon through the boundary curves for the plane ones
+// (mitcad#1200, geometry.accurate_volumes). OCCT's own rules, even the
+// adaptive ones, integrate along the boundary curves alone: where the
+// curves' ends lie apart in the parameter plane (an offset's cap bounded
+// by intersection curves of tolerance 8e-5 mm, ends 8.5e-5 mm apart) each
+// gap leaves out the strip between it and the face's first parameter, 3e-6
+// of a 1 mm shell of a loft; close_gaps here joins them (mitcad#325).
+//
+// Every volume, area, centre and mass MitCad reports comes from here: the
+// bodies query, Physical Properties and the mass, the BOM, the print
+// estimates, the imports' reports, measured areas and the section caps'
+// area (geometry::mass_properties, geometry::faces_area). OCCT's default
+// call is left only where a sign or an order is wanted (whether a solid is
+// inside out, which piece lies further along) and in
+// geometry::fixed_point_properties, which measures as other programs on
+// OCCT do, for comparing with them.
+//
+// Cost: the number of points is fixed by the geometry, not by a tolerance,
+// so a body always measures the same. A face takes (pieces across) x
+// (pieces along its boundary curves) x points^2 evaluations: a piece per
+// span of the surface and the curves (a rational span in 4), an angle
+// parameter in at most 1024 steps per stretch, at most 30 points per
+// piece. Large bodies are integrated face by face on all cores, and
+// geometry::Shape keeps the measures, so a body is measured once. There is
+// no time limit with a coarser fallback: a value that depended on the
+// machine's load would not be the same twice.
 //
 // `only_closed`: closed shells only; `skip_shared`: a face shared by two
 // shells once.

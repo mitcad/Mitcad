@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
-# The 3D Print group's icons (mitcad#1096): Send to Slicer keeps the
-# printer, Edit Printers and Processes… shows the printer with a gear, and
-# the two differ in the ribbon, the menus and the command search (they all
-# take the command's action's icon); run by ui-print-icons-test.sh.
+# The 3D Print group's icons (mitcad#1096, mitcad#1135): Send to Slicer
+# keeps the printer, Printers… shows the printer with a gear, Processes…
+# the printed layers with a gear, and they differ in the ribbon, the menus
+# and the command search (they all take the command's action's icon); run
+# by ui-print-icons-test.sh.
 wait-idle
 expect-command-icon make.print3d print-3d make.printers
 expect-command-icon make.printers print-settings make.print3d
+expect-command-icon make.processes print-process make.printers
 expect-command-icon inspect.print_analysis print-analysis make.printers

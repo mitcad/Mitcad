@@ -3,10 +3,12 @@
 // Open Log Folder, the facts of its files' header, "Debug log on" in the
 // project indicator while it runs.
 #include "MainWindow.hpp"
+#include "WindowManager.hpp"
 
 #include <QAction>
 #include <QDir>
 #include <QList>
+#include <QStringList>
 #include <QUrl>
 #include <QtLogging>
 
@@ -44,13 +46,19 @@ void MainWindow::openLogFolder() {
 
 void MainWindow::createDebugLog() {
   DebugLog& log = DebugLog::instance();
-  // The open design's path for the header of the next file (main() gave
-  // the one --open names).
-  connect(m_documentSession, &DocumentSession::changed, this, [this] {
-    DebugLog::instance().setFact(QStringLiteral("Design"), m_filePath.isEmpty()
-                                                               ? QStringLiteral("none (not saved yet)")
-                                                               : QDir::toNativeSeparators(m_filePath));
-  });
+  // The process log describes all documents, not whichever worker changed last.
+  const auto updateDesigns = [this] {
+    QStringList designs;
+    const auto windows = windowManager() ? windowManager()->windows() : QList<MainWindow*>{this};
+    for (MainWindow* window : windows) {
+      designs.append(window->documentFilePath().isEmpty() ? QStringLiteral("none (not saved yet)")
+                                                        : QDir::toNativeSeparators(window->documentFilePath()));
+    }
+    DebugLog::instance().setFact(QStringLiteral("Design"), designs.join(QStringLiteral("; ")));
+  };
+  connect(m_documentSession, &DocumentSession::changed, this, updateDesigns);
+  if (WindowManager* manager = WindowManager::instance())
+    connect(manager, &WindowManager::windowsChanged, this, updateDesigns);
   m_debugLogOff = new QAction(tr("Turn Off Debug Log"), this);
   m_debugLogOff->setObjectName(QStringLiteral("debugLogOff"));
   m_debugLogOff->setMenuRole(QAction::NoRole);

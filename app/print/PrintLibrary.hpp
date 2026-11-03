@@ -24,10 +24,9 @@ class PrintKeyTable;
 
 // An item the user can choose (mitcad#655: a row of the `library_items`
 // query): a material, printer or process, one row with the design's copy
-// of it. The user sees two states only: built-in (Mitcad's, read-only)
-// or their own, saved in a library (`user`: My library, `project`: the
-// project's) or not yet (`design`). The model's place stays for commands
-// and logs; the windows show no places.
+// of it (the pickers), or each where it lives (queryPlaceItems, the
+// managers' groups, mitcad#1135): built-in (`mitcad`, read-only), My
+// library (`user`), This project (`project`) or This design (`design`).
 struct LibraryItem {
   QString id;   // in its place
   QString name;
@@ -42,6 +41,14 @@ struct LibraryItem {
   QString materialClass; // materials: metal, plastic, fdm_plastic, resin, other (mitcad#655, mitcad#1102)
   bool classFixed = false; // materials: print settings make it an FDM plastic (mitcad#1102)
   QColor displayColor; // materials; invalid without one
+  // By place (queryPlaceItems, mitcad#1135): a library item a nearer
+  // library has too; the design's copy of a library item and whether the
+  // design uses it; a design's copy's library item, by place and name.
+  bool shadowed = false;
+  QString copy;
+  bool copyUsed = false;
+  QString sourcePlace;
+  QString sourceName;
   QJsonObject row;     // as the query gave it
 
   // Its key in the windows and the panel: "<place>/<id>".
@@ -59,14 +66,45 @@ struct LibraryItem {
 // any): the rows in the query's order. Sets `error` when it was refused.
 QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QString& kind, const QString& project,
                                        QString* error = nullptr);
+// The same by place (`by_place`, mitcad#1135: the managers' list model):
+// every item of the design, then each library's own items, the project's,
+// the user's and the built-in ones; `places` (when given) gets the places
+// in that order (design, project in a project, user, mitcad).
+QVector<LibraryItem> queryPlaceItems(const CommandContext& model, const QString& kind, const QString& project,
+                                     QStringList* places = nullptr, QString* error = nullptr);
 // By key; null when it is not there.
 const LibraryItem* findItem(const QVector<LibraryItem>& items, const QString& key);
 // The row of the design's copy `designId`; null when none.
 const LibraryItem* findDesignCopy(const QVector<LibraryItem>& items, const QString& designId);
 
-// A library as the UI names it where one is chosen or named (Save to's
-// menu, Delete's question): My library, Project; Built-in, This design.
+// A place as the UI names it, the same in the managers' groups, the
+// pickers' tags and the menus that ask where (mitcad#1135): This design,
+// This project, My library, Built-in.
 QString placeName(const QString& place);
+// A place's group heading in the managers with its count: "This design (2)".
+QString placeHeading(const QString& place, int count);
+// The places New, Duplicate, Copy to and Import from Slicer can put an
+// item in, in the lists' order: This design (with a design), This project
+// (in a project), My library.
+QStringList writablePlaces(bool hasDesign, bool inProject);
+// Where New, Duplicate and Import from Slicer put an item unless the user
+// chooses another (mitcad#1135): This design with a design, else My
+// library.
+QString defaultPlace(bool hasDesign);
+// Asks where among `places` (writablePlaces), a menu at `anchor` (or at
+// `at`, global) with `current`, the default, first and the others in the
+// lists' order, logged "<logName> menu: This design | This project | My
+// library" and "<logName> chosen: My library"; one place is taken at
+// once. Empty when the menu was closed without a choice.
+QString choosePlaceAmong(QWidget* anchor, const QString& logName, const QStringList& places, const QString& current,
+                         const QPoint* at = nullptr);
+// The editor's one line above the settings (mitcad#1135): where the
+// selected item lives and whom an edit reaches, "Editing: this project's
+// library — every design of the project uses it".
+QString editingLine(const LibraryItem& item);
+// The managers' search: an item whose name holds `text` (any case);
+// every item for an empty text.
+bool matchesSearch(const LibraryItem& item, const QString& text);
 // A material group's title (Metals, General Plastics, FDM Plastics, Resins,
 // Other), a class's (Metal, General Plastic, FDM Plastic, Resin, Other) and
 // the classes and the groups in their order (mitcad#655, mitcad#1102).
@@ -87,19 +125,24 @@ QJsonObject itemFields(const LibraryItem& item, const QJsonArray& designItems, c
 // it has one, else as itemFields.
 QJsonObject designFields(const LibraryItem& item, const QJsonArray& designItems, const QJsonObject& library);
 
-// The header of Materials' and Printers and Processes' editor (mitcad#655):
-// the item's name to edit (bold, "Name" as its placeholder), then its
-// states as quiet grey text, one form in both windows: "● Used in this
-// design" (`used`, the lists' mark in words), "In My library" or "In this
-// project's library" (`saved`, showSavedState), "Built-in" with a lock and
-// a Duplicate button (`builtIn`); else Save to.
-QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QLabel** saved, QWidget** builtIn, QPushButton** duplicate,
-                        QPushButton** saveTo);
-// Shows the saved state of `item` (none: hidden).
-void showSavedState(QLabel* saved, const LibraryItem* item);
-// Save to's text: "Save to My library", in a project "Save to ▾" (a menu
-// of My library and Project).
-QString saveToText(bool inProject);
+// The header of the managers' editor (mitcad#655, mitcad#1135): the
+// item's name to edit (bold, "Name" as its placeholder), then its states
+// as quiet grey text, one form in the three managers: "● Used in this
+// design" (`used`, the lists' mark in words), "Built-in" with a lock and a
+// Duplicate button (`builtIn`); else Copy to ▾ (`copyTo`, a menu of the
+// other places). Under it `editing`, the line editingLine gives.
+QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QWidget** builtIn, QPushButton** duplicate,
+                        QPushButton** copyTo, QLabel** editing);
+// The places Copy to offers for `item`: writablePlaces less its own; none
+// for a built-in one.
+QStringList copyTargets(const LibraryItem& item, bool hasDesign, bool inProject);
+// The command that copies `item` to `place` (mitcad#1135), keeping a link
+// to its source only as before: a library item into the design is
+// `copy_from_print_library` (the design's copy of it), a design's item into
+// a library `save_to_print_library` (the design's copy then names it), a
+// library item into another library `create_material` or
+// `create_print_profile` based on it, by its name.
+QJsonObject copyCommand(const LibraryItem& item, const QString& place, const QString& project);
 // Marks a list row as the design's (mitcad#655: the chosen printer or
 // process, a material the bodies use): bold, a small check after the
 // name, `tooltip` on both; unmarks it when not.
@@ -137,12 +180,6 @@ bool changeAsked(const LibraryItem& item);
 // the design or an owner (a printer or process).
 bool usedByDesign(const LibraryItem& item);
 
-// Where Save to puts an item: My library (`user`) or the project's
-// (`project`). Without a project My library at once; in a project a menu
-// at `anchor` that starts on the place chosen last (My library the first
-// time), logged as "<logName> menu: My library | Project" (at `at`,
-// global, when given). Empty when the menu was closed without a choice.
-QString choosePlace(QWidget* anchor, const QString& logName, bool inProject, const QPoint* at = nullptr);
 // The slicer whose print settings the design's printer came from
 // (mitcad#655): the slicer its `printer_settings_id` names, else the first of
 // its `raw_slicers`, else Bambu Studio (`bambu_studio`): what a 3MF without

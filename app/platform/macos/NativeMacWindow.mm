@@ -243,10 +243,12 @@ struct NativeMacWindowState;
 - (void)applyRowCommand:(NSArray*)command;
 // The quick-access group's ⋮ and its menu's checks and Reset to Default
 // (mitcad#1113); applied once the menu has closed: the command and whether
-// it is checked, or nothing for the reset.
+// it is checked, nothing for the reset, or @"hide" for Hide Quick-Access
+// Toolbar (mitcad#1189).
 - (void)openQuickAccessMenu:(id)sender;
 - (void)chooseQuickAccess:(id)sender;
 - (void)resetQuickAccess:(id)sender;
+- (void)hideQuickAccess:(id)sender;
 - (void)applyQuickAccess:(NSArray*)choice;
 // The navigation bar's Visual Style button (mitcad#1099): its pop-up.
 - (void)openNavigationStyles:(id)sender;
@@ -481,6 +483,14 @@ NSString* const constraintsID = @"mitcad.constraints";
 
 } // namespace
 
+namespace {
+std::vector<NativeMacWindowState*> documentStates;
+id<NSApplicationDelegate> __strong originalAppDelegate = nil;
+NSMenu* __strong originalMainMenu = nil;
+NSMenu* __strong originalServicesMenu = nil;
+NSMenu* __strong originalWindowsMenu = nil;
+}
+
 struct NativeMacWindowState {
   QPointer<QWidget> viewport;
   std::unique_ptr<QWindow> foreignWindow;
@@ -614,6 +624,8 @@ struct NativeMacWindowState {
   NSArray<NSLayoutConstraint*>* __strong commandSearchLayout = nil;
   NSArray<NSLayoutConstraint*>* __strong timelineSearchLayout = nil;
   NSMenu* __strong mainMenu = nil;
+  NSMenu* __strong servicesMenu = nil;
+  NSMenu* __strong windowsMenu = nil;
   NSMenu* __strong previousMenu = nil;
   NSMenu* __strong previousServicesMenu = nil;
   NSMenu* __strong previousWindowsMenu = nil;
@@ -674,7 +686,14 @@ struct NativeMacWindowState {
     actionImages.countLimit = 1024;
     delegate = [[MITCADNativeWindowDelegate alloc] init];
     delegate->state = this;
-    previousAppDelegate = NSApp.delegate;
+    if (documentStates.empty()) {
+      originalAppDelegate = NSApp.delegate;
+      originalMainMenu = NSApp.mainMenu;
+      originalServicesMenu = NSApp.servicesMenu;
+      originalWindowsMenu = NSApp.windowsMenu;
+    }
+    previousAppDelegate = originalAppDelegate;
+    documentStates.push_back(this);
     NSApp.delegate = delegate;
     buildWindow();
     embedViewport();
@@ -734,11 +753,18 @@ struct NativeMacWindowState {
       viewport->windowHandle()->setParent(nullptr);
     }
     foreignWindow.reset();
-    if (NSApp.delegate == delegate) NSApp.delegate = previousAppDelegate;
-    if (NSApp.mainMenu == mainMenu) {
-      NSApp.mainMenu = previousMenu;
-      NSApp.servicesMenu = previousServicesMenu;
-      NSApp.windowsMenu = previousWindowsMenu;
+    documentStates.erase(std::remove(documentStates.begin(), documentStates.end(), this), documentStates.end());
+    if (documentStates.empty()) {
+      NSApp.delegate = originalAppDelegate;
+      NSApp.mainMenu = originalMainMenu;
+      NSApp.servicesMenu = originalServicesMenu;
+      NSApp.windowsMenu = originalWindowsMenu;
+      originalAppDelegate = nil;
+      originalMainMenu = nil;
+      originalServicesMenu = nil;
+      originalWindowsMenu = nil;
+    } else if (NSApp.delegate == delegate || NSApp.mainMenu == mainMenu) {
+      documentStates.back()->installMenus();
     }
     [window orderOut:nil];
     [window close];
@@ -1191,7 +1217,8 @@ struct NativeMacWindowState {
       const auto& a = items[index]; const auto& b = historyItems[index];
       if (a.id != b.id || a.title != b.title || a.status != b.status || a.noted != b.noted ||
           a.suppressed != b.suppressed || a.enabled != b.enabled || a.filtered != b.filtered ||
-          a.bindings != b.bindings || a.group != b.group || a.groupCollapsed != b.groupCollapsed) {
+          a.bindings != b.bindings || a.group != b.group || a.groupFirst != b.groupFirst ||
+          a.groupCollapsed != b.groupCollapsed) {
         historyAppearanceValid = false;
         break;
       }
@@ -1355,7 +1382,8 @@ struct NativeMacWindowState {
       artwork.icon = themeIcon(QStringLiteral("folder"));
       NSImage* image = actionImage(artwork, timeline::icon);
       if (view.folder.image != image) view.folder.image = image;
-      view.firstKey = ns(historyItems[group.first].id);
+      const auto& first = historyItems[group.first];
+      view.firstKey = ns(first.groupFirst.isEmpty() ? first.id : first.groupFirst);
       view.collapsed = group.collapsed;
     }
     for (NSString* name in historyGroupViews.allKeys) {
@@ -1438,7 +1466,9 @@ struct NativeMacWindowState {
     // snapshot must not overwrite the current frame autosave at launch.
     window.restorable = NO;
     window.minSize = NSMakeSize(820, 560);
-    window.tabbingMode = NSWindowTabbingModeDisallowed;
+    NSWindow.allowsAutomaticWindowTabbing = YES;
+    window.tabbingMode = NSWindowTabbingModeAutomatic;
+    window.tabbingIdentifier = @"org.mitcad.document";
     window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
     window.toolbarStyle = NSWindowToolbarStyleUnified;
     window.titleVisibility = NSWindowTitleHidden;
@@ -1880,7 +1910,7 @@ struct NativeMacWindowState {
     // its one-row options need (Projects' least), within the free canvas.
     CGFloat configurationWidth = std::max(cards.browser, NativeCardWidths::minimum(NativeCard::Projects));
     if (!inspectorCard.hidden) {
-      configurationWidth = std::max(cards.browser, std::min(configurationWidth, width - 2 * margin -
+      configurationWidth = std::max(cards.browser, std::min(configurationWidth, width - chatRoom - 2 * margin -
                                                             NativeCardWidths::freeCanvas - cards.inspector));
     }
     layoutLeftColumn(ribbonHeight + margin, floor, margin, gap, cards, configurationWidth);
@@ -2009,6 +2039,7 @@ struct NativeMacWindowState {
     }
     for (const NativeMacCubeArrow& arrow : cubeArrowPresentation) cubeArrows[ns(arrow.id)].hidden = open;
     layoutOverlays();
+    applyChatButtons();
     qInfo().noquote() << (open ? QStringLiteral("Native cards: Browser only (a drawing is open)")
                                : QStringLiteral("Native cards: all (the drawing closed)"));
   }
@@ -2649,9 +2680,18 @@ struct NativeMacWindowState {
     return menuItem;
   }
 
-  void addResponderItem(NSMenu* menu, NSString* title, SEL selector, NSString* key) {
+  void addResponderItem(NSMenu* menu, NSString* title, SEL selector, NSString* key, id target = nil) {
     NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title action:selector keyEquivalent:key];
+    item.target = target;
     [menu addItem:item];
+  }
+
+  void installMenus() {
+    if (closing) return;
+    NSApp.delegate = delegate;
+    NSApp.mainMenu = mainMenu;
+    NSApp.servicesMenu = servicesMenu;
+    NSApp.windowsMenu = windowsMenu;
   }
 
   void rebuildMenus() {
@@ -2671,7 +2711,7 @@ struct NativeMacWindowState {
     NSMenuItem* servicesItem = [[NSMenuItem alloc] initWithTitle:@"Services" action:nil keyEquivalent:@""];
     servicesItem.submenu = services;
     [appMenu addItem:servicesItem];
-    NSApp.servicesMenu = services;
+    servicesMenu = services;
     [appMenu addItem:NSMenuItem.separatorItem];
     addResponderItem(appMenu, @"Hide MitCad", @selector(hide:), @"h");
     NSMenuItem* hideOthers = [[NSMenuItem alloc] initWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
@@ -2691,18 +2731,27 @@ struct NativeMacWindowState {
       if (!titles.contains(title)) titles.append(title);
     }
     const int help = titles.indexOf(QStringLiteral("Help"));
-    titles.insert(help < 0 ? titles.size() : help, QStringLiteral("Window"));
+    if (!titles.contains(QStringLiteral("Window"))) titles.insert(help < 0 ? titles.size() : help, QStringLiteral("Window"));
     for (const QString& title : titles) {
       NSMenu* menu = [[NSMenu alloc] initWithTitle:ns(title)];
       NSMenuItem* top = [[NSMenuItem alloc] initWithTitle:ns(title) action:nil keyEquivalent:@""];
       top.submenu = menu;
       [mainMenu addItem:top];
       if (title == QStringLiteral("Window")) {
-        addResponderItem(menu, @"Minimize", @selector(performMiniaturize:), @"m");
-        addResponderItem(menu, @"Zoom", @selector(performZoom:), @"");
+        for (const NativeMacAction& item : actions) {
+          if (actionMenuPath(item).section(QLatin1Char('/'), 0, 0) == title) [menu addItem:menuAction(item)];
+        }
         [menu addItem:NSMenuItem.separatorItem];
-        addResponderItem(menu, @"Bring All to Front", @selector(arrangeInFront:), @"");
-        NSApp.windowsMenu = menu;
+        // Validation and dispatch belong to this document's real window,
+        // even while another window owns the application responder chain.
+        addResponderItem(menu, @"Show Tab Bar", @selector(toggleTabBar:), @"", window);
+        addResponderItem(menu, @"Show All Tabs", @selector(toggleTabOverview:), @"", window);
+        addResponderItem(menu, @"Merge All Windows", @selector(mergeAllWindows:), @"", window);
+        [menu addItem:NSMenuItem.separatorItem];
+        addResponderItem(menu, @"Zoom", @selector(performZoom:), @"", window);
+        [menu addItem:NSMenuItem.separatorItem];
+        addResponderItem(menu, @"Bring All to Front", @selector(arrangeInFront:), @"", NSApp);
+        windowsMenu = menu;
         continue;
       }
       QHash<QString, NSMenu*> submenus;
@@ -2748,7 +2797,7 @@ struct NativeMacWindowState {
         addResponderItem(menu, @"Select All", @selector(selectAll:), @"a");
       }
     }
-    NSApp.mainMenu = mainMenu;
+    if (window.keyWindow || documentStates.size() == 1) installMenus();
   }
 
   // The agent indicator's button (mitcad#710): its text, dot and tooltip.
@@ -3483,6 +3532,9 @@ struct NativeMacWindowState {
     [dots.heightAnchor constraintEqualToConstant:26].active = YES;
     [quickGroup addArrangedSubview:dots];
     applyQuickFolded();
+    // Hidden whole by the preference (mitcad#1189); the tabs' stack view
+    // detaches a hidden view, so the item closes up.
+    quickGroup.hidden = !quickAccess.visible;
   }
 
   // Each button's artwork and state from the latest actions, its tooltip;
@@ -3544,6 +3596,8 @@ struct NativeMacWindowState {
   // points off each, would have less room than it needs.
   void updateQuickFold() {
     if (closing || !quickGroup || !workspaceTabs || !documentTitle || quickGroup.window == nil) return;
+    // A hidden group (mitcad#1189) takes no room: nothing to fold.
+    if (!quickAccess.visible) return;
     [window.contentView.superview layoutSubtreeIfNeeded];
     const CGFloat tabsRight = NSMaxX([workspaceTabs convertRect:workspaceTabs.bounds toView:nil]);
     CGFloat right = window.frame.size.width;
@@ -3608,13 +3662,27 @@ struct NativeMacWindowState {
     reset.target = delegate;
     [menu addItem:reset];
     top.append(qt(reset.title));
+    // The group hidden (mitcad#1189); Settings › Display › Show
+    // quick-access toolbar brings it back.
+    NSMenuItem* hide = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Hide Quick-Access Toolbar"))
+                                                  action:@selector(hideQuickAccess:) keyEquivalent:@""];
+    hide.target = delegate;
+    [menu addItem:hide];
+    top.append(qt(hide.title));
     qDebug().noquote() << QStringLiteral("Native quick access menu: %1").arg(top.join(QStringLiteral(" | ")));
     return menu;
   }
 
   void setQuickAccess(const NativeMacQuickAccess& group) {
     const bool rebuild = group.shown != quickAccess.shown || (quickGroup && quickGroup.arrangedSubviews.count == 0);
+    const bool visibility = group.visible != quickAccess.visible;
     quickAccess = group;
+    if (visibility) {
+      // Preferences or the group's menu (mitcad#1189).
+      if (quickGroup) quickGroup.hidden = !group.visible;
+      qDebug().noquote() << (group.visible ? QStringLiteral("Native quick access shown")
+                                           : QStringLiteral("Native quick access hidden"));
+    }
     if (rebuild) {
       qDebug().noquote() << QStringLiteral("Native quick access: %1")
                                 .arg(group.shown.isEmpty() ? QStringLiteral("none") : group.shown.join(QStringLiteral(", ")));
@@ -3636,7 +3704,16 @@ bool NativeMacWindow::modalBlocked() const { return m_state->nativeModalBlocked(
 QString NativeMacWindow::embeddingError() const { return m_state->error; }
 void NativeMacWindow::show() {
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+  const bool separate = m_state->viewport && m_state->viewport->property("mitcadSeparateWindow").toBool();
+  m_state->window.tabbingMode = separate ? NSWindowTabbingModeDisallowed : NSWindowTabbingModeAutomatic;
+  // Ordering a window does not necessarily select its tab while the app
+  // is inactive. Present the requested document in the actual tab group.
+  NSWindowTabGroup* group = m_state->window.tabGroup;
+  if (group.windows.count > 1 && [group.windows containsObject:m_state->window]) {
+    group.selectedWindow = m_state->window;
+  }
   [m_state->window makeKeyAndOrderFront:nil];
+  m_state->window.tabbingMode = NSWindowTabbingModeAutomatic;
   [NSApp activate];
   [m_state->window.contentView layoutSubtreeIfNeeded];
   if (!m_state->frameInitialized) {
@@ -3654,7 +3731,7 @@ void NativeMacWindow::show() {
   m_state->syncViewport();
   focusViewport();
 }
-void NativeMacWindow::close() { [m_state->window performClose:nil]; }
+bool NativeMacWindow::close() { [m_state->window performClose:nil]; return m_state->closing; }
 void NativeMacWindow::focusViewport() {
   if (m_state->viewport) {
     m_state->viewport->setFocus(Qt::OtherFocusReason);
@@ -3908,9 +3985,13 @@ void NativeMacWindow::setChatView(void* view) {
 
 void NativeMacWindow::showChat(bool shown) {
   auto& state = *m_state;
-  if (state.chatCard.hidden != !shown) {
-    state.setCardVisible(state.chatCard, shown);
-    if (shown) {
+  const bool wasShown = !state.chatCard.hidden;
+  state.setCardVisible(state.chatCard, shown);
+  const bool actualShown = !state.chatCard.hidden;
+  if (shown && !actualShown) {
+    qInfo().noquote() << QStringLiteral("Native chat card deferred (a drawing is open)");
+  } else if (wasShown != actualShown) {
+    if (actualShown) {
       [state.chatCard layoutSubtreeIfNeeded];
       setChatCardContent(state.chatHost, state.chatContent);
       const NSSize size = state.chatCard.frame.size;
@@ -3920,7 +4001,7 @@ void NativeMacWindow::showChat(bool shown) {
       qInfo().noquote() << QStringLiteral("Native chat card hidden");
     }
   }
-  if (shown && !focusChatCard(state.chatHost)) {
+  if (shown && actualShown && !focusChatCard(state.chatHost)) {
     qInfo().noquote() << QStringLiteral("Native chat card: no message field to focus");
   }
   state.applyChatButtons();
@@ -3929,6 +4010,14 @@ void NativeMacWindow::showChat(bool shown) {
 bool NativeMacWindow::chatShown() const { return !m_state->chatCard.hidden; }
 void NativeMacWindow::setDrawingOpen(bool open) { m_state->setDrawingOpen(open); }
 void NativeMacWindow::setNavigationBar(const NativeMacNavigationBar& bar) { m_state->setNavigationBar(bar); }
+
+void* nativeDocumentWindowMenu(void* nativeWindow) {
+  NSWindow* window = (__bridge NSWindow*)nativeWindow;
+  for (NativeMacWindowState* state : documentStates) {
+    if (state->window == window && !state->closing) return (__bridge void*)state->windowsMenu;
+  }
+  return nullptr;
+}
 
 bool nativeWindowRefreshContract(void* nativeWindow, QString& error) {
   MITCADDocumentWindow* window = (__bridge MITCADDocumentWindow*)nativeWindow;
@@ -4637,14 +4726,27 @@ using namespace mitcad::mac;
   return [super forwardingTargetForSelector:selector];
 }
 - (void)application:(NSApplication*)application openFiles:(NSArray<NSString*>*)files {
+  // Cocoa can replay command-line values as launch-time file requests.
+  // Qt filters those before delivering genuine Finder/Dock file opens to
+  // FileOpenFilter, which queues them for the process window manager.
+  if (state && [state->previousAppDelegate respondsToSelector:_cmd]) {
+    [state->previousAppDelegate application:application openFiles:files];
+    return;
+  }
   bool handled = state && bool(state->callbacks.openFile);
   if (handled) for (NSString* file in files) state->callbacks.openFile(qt(file));
   [application replyToOpenOrPrint:handled ? NSApplicationDelegateReplySuccess : NSApplicationDelegateReplyFailure];
 }
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
-  (void)application;
-  if (!state || !state->callbacks.openFile) return;
-  for (NSURL* url in urls) if (url.fileURL) state->callbacks.openFile(qt(url.path));
+  if (state && [state->previousAppDelegate respondsToSelector:_cmd]) {
+    [state->previousAppDelegate application:application openURLs:urls];
+    return;
+  }
+  // LaunchServices also sends local files as URLs. Qt's openFiles handler
+  // owns launch filtering and the queued FileOpenFilter path for both forms.
+  NSMutableArray<NSString*>* files = [NSMutableArray array];
+  for (NSURL* url in urls) if (url.fileURL && url.path) [files addObject:url.path];
+  if (files.count > 0) [self application:application openFiles:files];
 }
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)application hasVisibleWindows:(BOOL)visible {
   // Qt updates its application state here even without an activation event.
@@ -4658,19 +4760,12 @@ using namespace mitcad::mac;
 }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)application {
   (void)application;
-  if (!state) return NSTerminateNow;
-  state->finishHistoryMarkerDrag();
-  if (!state->closing && state->callbacks.requestClose && !state->callbacks.requestClose()) return NSTerminateCancel;
-  // End QApplication's sole event loop so C++ document/session destructors
-  // run normally. AppKit must not call exit() before that cleanup finishes.
-  if (!state->closing) [state->window close];
-  QCoreApplication::quit();
+  if (state && state->callbacks.requestQuit) state->callbacks.requestQuit();
   return NSTerminateCancel;
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)application {
   (void)application;
-  // windowWillClose invokes the application's closed callback, preserving
-  // the existing single-document quit behavior through QApplication.
+  // The process window manager decides when the final document has closed.
   return NO;
 }
 - (BOOL)windowShouldClose:(NSWindow*)window {
@@ -4697,6 +4792,18 @@ using namespace mitcad::mac;
 - (void)windowDidEndSheet:(NSNotification*)notification {
   (void)notification;
   if (state) state->updateHistoryAppearance();
+}
+- (void)windowDidBecomeKey:(NSNotification*)notification {
+  (void)notification;
+  if (!state || state->closing) return;
+  state->installMenus();
+  if (state->callbacks.activated) state->callbacks.activated();
+}
+- (void)windowDidChangeOcclusionState:(NSNotification*)notification {
+  (void)notification;
+  if (state && state->callbacks.presentationVisible) {
+    state->callbacks.presentationVisible((state->window.occlusionState & NSWindowOcclusionStateVisible) != 0);
+  }
 }
 - (void)windowDidResignKey:(NSNotification*)notification {
   (void)notification;
@@ -4895,8 +5002,7 @@ using namespace mitcad::mac;
 - (void)quitApplication:(id)sender {
   (void)sender;
   if (!state) return;
-  [state->window performClose:nil];
-  if (state && state->closing) QCoreApplication::quit();
+  if (state->callbacks.requestQuit) state->callbacks.requestQuit();
 }
 - (BOOL)validateMenuItem:(NSMenuItem*)item {
   if (!state) return NO;
@@ -5415,10 +5521,17 @@ using namespace mitcad::mac;
   if (!state || !state->callbacks.quickAccessReset) return;
   [self performSelector:@selector(applyQuickAccess:) withObject:@[] afterDelay:0];
 }
+- (void)hideQuickAccess:(id)sender {
+  (void)sender;
+  if (!state || !state->callbacks.quickAccessHidden) return;
+  [self performSelector:@selector(applyQuickAccess:) withObject:@[@"hide"] afterDelay:0];
+}
 - (void)applyQuickAccess:(NSArray*)choice {
   if (!state || state->closing) return;
   if (choice.count == 2 && state->callbacks.quickAccessChosen) {
     state->callbacks.quickAccessChosen(qt(choice[0]), [choice[1] boolValue]);
+  } else if (choice.count == 1 && state->callbacks.quickAccessHidden) {
+    state->callbacks.quickAccessHidden();
   } else if (choice.count == 0 && state->callbacks.quickAccessReset) {
     state->callbacks.quickAccessReset();
   }

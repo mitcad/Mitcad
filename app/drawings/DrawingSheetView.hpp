@@ -149,6 +149,17 @@ public:
   // through the pointer), "leader" (a line from the point to the pointer
   // and a box there), empty for none.
   void setPlacingPreview(const QString& kind, const QVector<QPointF>& points);
+  // Where a dimension placed goes when it snaps to the spacing of the one
+  // before (mitcad#1173): its preview there (sheet mm) instead of at the
+  // pointer, with a short hint beside it ("12 mm × 2"); `snapped` false:
+  // at the pointer.
+  void setPlacingSnap(bool snapped, const QPointF& at, const QString& hint);
+  // A dimension dragged alone snaps likewise: its outline moves by
+  // `delta` (sheet mm) instead of the pointer's drag.
+  void setDragSnap(bool snapped, const QPointF& delta, const QString& hint);
+  // The keyboard modifiers of the last mouse button released: with Alt a
+  // dimension is placed or dragged freely, without its snap.
+  Qt::KeyboardModifiers releaseModifiers() const { return m_releaseModifiers; }
 
   // Drops a tool's picks so far (and a placing click awaited); false when
   // there were none.
@@ -208,6 +219,13 @@ signals:
   void contextMenuRequested(QPointF at, QPoint global);
   // A double-click on an annotation (with no tool).
   void annotationDoubleClicked(int id);
+  // The pointer moved (or Alt was pressed or released) while what an
+  // annotation tool picked is placed: where it is, and whether Alt is
+  // held; the workspace asks where a dimension snaps (mitcad#1173).
+  void placingMoved(QPointF at, bool freely);
+  // An annotation dragged alone, by this so far (or Alt pressed or
+  // released meanwhile).
+  void annotationDragged(int id, QPointF delta, bool freely);
 
 protected:
   bool event(QEvent* event) override;
@@ -222,8 +240,14 @@ protected:
   void leaveEvent(QEvent* event) override;
   void wheelEvent(QWheelEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
+  void keyReleaseEvent(QKeyEvent* event) override;
 
 private:
+  // Alt pressed or released: where a dimension placed or dragged goes is
+  // asked again (placingMoved, annotationDragged).
+  void askSnap(bool freely);
+  // Whether an annotation is dragged alone (its drag snaps).
+  bool draggedAlone() const;
   // Paints the paper and the groups' items into the sheet's picture, of
   // `pixels` at `ratio` device pixels per pixel.
   void paintSheet(const QSize& pixels, qreal ratio);
@@ -316,6 +340,14 @@ private:
   bool m_dragMoved = false;
   QString m_loggedPlaces;
   QString m_loggedAnnotations;
+  // A dimension's snapped place while it is placed, or its snapped drag
+  // (mitcad#1173), and the hint shown beside it.
+  bool m_snapped = false;
+  QPointF m_snapAt;
+  bool m_dragSnapped = false;
+  QPointF m_dragSnap;
+  QString m_snapHint;
+  Qt::KeyboardModifiers m_releaseModifiers;
 };
 
 } // namespace mitcad::drawings

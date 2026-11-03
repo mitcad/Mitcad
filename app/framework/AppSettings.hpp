@@ -47,6 +47,14 @@ struct GeneralSettings {
   // changes no open design. Millimetres by default (metric defaults, P11);
   // one of newDesignUnitChoices().
   QString newDesignUnits = QStringLiteral("mm");
+  // Open normally adds a document; this restores replacement in the
+  // current window. macOS uses system window tabs instead of a Qt frame.
+  bool openInCurrentWindow = false;
+#ifdef Q_OS_MACOS
+  QString openDesignsIn = QStringLiteral("windows");
+#else
+  QString openDesignsIn = QStringLiteral("tabs");
+#endif
   // The units to choose from, millimetres first: mm, cm, m, in, ft (the
   // choices of Change Active Units).
   static QStringList newDesignUnitChoices();

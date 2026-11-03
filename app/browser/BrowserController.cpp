@@ -344,17 +344,14 @@ void BrowserController::refresh(const DocumentSnapshot& snapshot) {
   if (m_materials && m_materials->isVisible()) {
     m_materials->refresh();
   }
-  if (m_profiles && m_profiles->isVisible()) {
-    m_profiles->refresh();
+  ProfilesDialog* const managers[] = {m_printers.data(), m_processes.data()};
+  for (ProfilesDialog* manager : managers) {
+    if (manager != nullptr && manager->isVisible()) {
+      manager->refresh();
+    }
   }
   if (m_ownSettings && m_ownSettings->isVisible()) {
     m_ownSettings->refresh();
-  }
-  // A Save to or a library edit of the design shows in My Library
-  // (mitcad#704).
-  if (m_myLibrary && m_myLibrary->isVisible()) {
-    m_myLibrary->setProjectFolder(m_host.projectFolder());
-    m_myLibrary->refresh();
   }
   if (m_purgeVolumes && m_purgeVolumes->isVisible()) {
     m_purgeVolumes->refresh(); // mitcad#705
@@ -1399,6 +1396,16 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("edit"), tr("Edit %1").arg(made != nullptr ? made->name : feature),
              [this, feature] { m_host.editFeature(feature); });
     moveEntry();
+    // A mesh body made a solid (mitcad#1082).
+    if (node.mesh) {
+      Selection meshItems;
+      meshItems.append(item);
+      if (m_host.offersCommand(QStringLiteral("solid.convert_mesh"), meshItems)) {
+        menu.add(QStringLiteral("convert-mesh"), tr("Convert Mesh"), [this, meshItems] {
+          m_host.startCommand(QStringLiteral("solid.convert_mesh"), meshItems, nullptr);
+        });
+      }
+    }
     menu.separator();
     visibility();
     // Shown while a condition holds (mitcad#809).
@@ -1456,6 +1463,15 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     timelineEntry(feature);
+    // A comment for an AI agent on the body (mitcad#1119), before Save as
+    // Mesh…, which stays the last entry before Collapse All.
+    menu.add(QStringLiteral("comment"), tr("Add Comment…"), [this, node] {
+      QJsonObject target{{QStringLiteral("body"), node.uid}};
+      if (!node.occurrence.isEmpty()) {
+        target.insert(QStringLiteral("occurrence"), node.occurrence);
+      }
+      m_host.addCommentOn(target, node.name);
+    });
     saveAsMeshEntry();
     break;
   }
@@ -1480,6 +1496,10 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     timelineEntry(node.uid);
+    // A comment for an AI agent on the sketch (mitcad#1119).
+    menu.add(QStringLiteral("comment"), tr("Add Comment…"), [this, node] {
+      m_host.addCommentOn({{QStringLiteral("feature"), node.uid}}, node.name);
+    });
     break;
   case BrowserNode::Type::Datum:
     menu.add(QStringLiteral("edit"), tr("Edit %1").arg(node.name), [this, node] { m_host.editFeature(node.uid); });
@@ -2135,9 +2155,18 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
     });
   }
   menu.add(QStringLiteral("marker"), tr("Roll Timeline Marker Here"), [this, index] { setMarker(index + 1); });
+  // A comment for an AI agent on the feature (mitcad#1119), after Find in
+  // Timeline or Find in Browser; Collapse All still ends a row's menu.
+  const QString featureName = feature->name;
+  const auto commentEntry = [this, &menu, &uid, &featureName] {
+    menu.add(QStringLiteral("comment"), tr("Add Comment…"), [this, uid, featureName] {
+      m_host.addCommentOn({{QStringLiteral("feature"), uid}}, featureName);
+    });
+  };
   // Found in the other place.
   if (row.isValid()) {
     menu.add(QStringLiteral("timeline"), tr("Find in Timeline"), [this, uid] { findInTimeline(uid); });
+    commentEntry();
     menu.add(QStringLiteral("folder"), tr("Collapse All"), [this] { m_browser->collapseAll(); });
   } else {
     menu.add(QStringLiteral("browser"), tr("Find in Browser"), [this, uid] {
@@ -2148,6 +2177,7 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
         m_host.showStatus(tr("%1 has nothing in the browser.").arg(f != nullptr ? f->name : uid), NoticeLevel::Information);
       }
     });
+    commentEntry();
   }
   menu.exec(at);
 }
@@ -2819,62 +2849,42 @@ void BrowserController::openPropertySets(const PropertyTarget& target) {
 void BrowserController::openProfiles(const QString& kind, const QString& key) {
   QElapsedTimer timer;
   timer.start();
-  const bool first = !m_profiles;
-  if (!m_profiles) {
-    m_profiles = new ProfilesDialog(m_host, m_window);
-    m_profiles->openMyLibrary = [this] { openMyLibrary(); };
+  // One manager per kind (mitcad#1135): the Printers manager for none.
+  const bool processes = kind == QStringLiteral("process");
+  QPointer<ProfilesDialog>& manager = processes ? m_processes : m_printers;
+  const bool first = !manager;
+  if (!manager) {
+    manager = new ProfilesDialog(m_host, processes ? QStringLiteral("process") : QStringLiteral("printer"), m_window);
+    connect(manager, &ProfilesDialog::libraryChanged, this, &BrowserController::librariesChanged);
   }
-  showDialog(m_profiles);
-  if (!m_profiles->testAttribute(Qt::WA_DontShowOnScreen)) {
-    m_profiles->raise();
-    m_profiles->activateWindow();
+  showDialog(manager);
+  if (!manager->testAttribute(Qt::WA_DontShowOnScreen)) {
+    manager->raise();
+    manager->activateWindow();
   }
-  qDebug().noquote() << QStringLiteral("Printers and processes opened");
-  m_profiles->showItem(kind, key);
-  qDebug().noquote() << QStringLiteral("Printers and processes timing: total %1 ms%2")
+  manager->open(key);
+  const QString title = processes ? QStringLiteral("Processes") : QStringLiteral("Printers");
+  qDebug().noquote() << QStringLiteral("%1 opened%2").arg(title, manager->onDesign() ? QString()
+                                                                                      : QStringLiteral(" without a design"));
+  qDebug().noquote() << QStringLiteral("%1 timing: total %2 ms%3")
+                            .arg(title)
                             .arg(timer.elapsed())
                             .arg(first ? QStringLiteral(", first opening") : QString());
 }
 
-void BrowserController::openMyLibrary() {
-  // Its opening's parts on the UI thread (mitcad#1018); the panels' filling
-  // follows ("My Library loaded: ...").
-  QElapsedTimer timer;
-  timer.start();
-  const bool first = !m_myLibrary;
-  if (!m_myLibrary) {
-    m_myLibrary = new MyLibraryDialog(m_window);
-    // The design's windows read the libraries again (mitcad#704); a
-    // changed item the design uses is asked about there, as another
-    // design's change.
-    connect(m_myLibrary, &MyLibraryDialog::libraryChanged, this, [this] {
-      if (m_materials && m_materials->isVisible()) {
-        m_materials->refresh();
-      }
-      if (m_profiles && m_profiles->isVisible()) {
-        m_profiles->refresh();
-      }
-      m_host.commandInputsChanged();
-    });
+void BrowserController::librariesChanged() {
+  // The managers read the libraries again; a changed item the design
+  // uses is asked about there, as another design's change.
+  if (m_materials && m_materials->isVisible()) {
+    m_materials->refresh();
   }
-  const qint64 created = timer.restart();
-  m_myLibrary->setProjectFolder(m_host.projectFolder());
-  m_myLibrary->read();
-  const qint64 read = timer.restart();
-  showDialog(m_myLibrary);
-  if (!m_myLibrary->testAttribute(Qt::WA_DontShowOnScreen)) {
-    m_myLibrary->raise();
-    m_myLibrary->activateWindow();
+  ProfilesDialog* const managers[] = {m_printers.data(), m_processes.data()};
+  for (ProfilesDialog* manager : managers) {
+    if (manager != nullptr && manager->isVisible()) {
+      manager->refresh();
+    }
   }
-  const qint64 shown = timer.elapsed();
-  qDebug().noquote() << QStringLiteral("My Library opened%1")
-                            .arg(m_host.projectFolder().isEmpty() ? QString() : QStringLiteral(" in a project"));
-  qDebug().noquote() << QStringLiteral("My Library timing: create %1 ms, read started %2 ms, show %3 ms, total %4 ms%5")
-                            .arg(created)
-                            .arg(read)
-                            .arg(shown)
-                            .arg(created + read + shown)
-                            .arg(first ? QStringLiteral(", first opening") : QString());
+  m_host.commandInputsChanged();
 }
 
 void BrowserController::openOwnSettings(const QString& owner, const QString& name) {
@@ -3057,15 +3067,16 @@ void BrowserController::openMaterial(const QStringList& bodies, const QString& c
   if (!m_materials) {
     m_materials = new MaterialsDialog(m_host, m_window);
     m_materials->editAppearances = [this] { openAppearances({}); };
-    m_materials->openMyLibrary = [this] { openMyLibrary(); };
+    connect(m_materials, &MaterialsDialog::libraryChanged, this, &BrowserController::librariesChanged);
   }
   showDialog(m_materials);
   if (!m_materials->testAttribute(Qt::WA_DontShowOnScreen)) {
     m_materials->raise();
     m_materials->activateWindow();
   }
-  qDebug().noquote() << QStringLiteral("Materials opened");
-  m_materials->refresh();
+  m_materials->open();
+  qDebug().noquote() << QStringLiteral("Materials opened%1").arg(m_materials->onDesign() ? QString()
+                                                                                         : QStringLiteral(" without a design"));
   qDebug().noquote() << QStringLiteral("Materials timing: total %1 ms%2")
                             .arg(timer.elapsed())
                             .arg(first ? QStringLiteral(", first opening") : QString());
@@ -3077,7 +3088,7 @@ void BrowserController::openMaterialsOf(const QStringList& bodies, const QString
     qDebug().noquote() << QStringLiteral("Materials opened for component %1").arg(component);
     // The component's own default material, when it has one.
     const QVector<LibraryItem> items =
-        queryLibraryItems(m_host.model(), QStringLiteral("material"), m_host.projectFolder());
+        queryPlaceItems(m_host.model(), QStringLiteral("material"), m_host.projectFolder());
     for (const LibraryItem& item : items) {
       if (m_materials && item.row.value(QStringLiteral("components")).toArray().contains(component)) {
         m_materials->showItem(item.key());
@@ -3106,8 +3117,9 @@ void BrowserController::openMaterialsOf(const QStringList& bodies, const QString
   if (ids.size() != 1 || ids.first().isEmpty() || !m_materials) {
     return;
   }
+  // Its row where it lives (mitcad#1135): the design's, else built in.
   const QVector<LibraryItem> items =
-      queryLibraryItems(m_host.model(), QStringLiteral("material"), m_host.projectFolder());
+      queryPlaceItems(m_host.model(), QStringLiteral("material"), m_host.projectFolder());
   if (const LibraryItem* item = findDesignCopy(items, ids.first())) {
     m_materials->showItem(item->key());
   }

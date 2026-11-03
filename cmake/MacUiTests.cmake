@@ -701,6 +701,18 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
   set_tests_properties(app.ui-macos-native-quick-access PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()
 
+# Comments in the AppKit frontend (mitcad#1120): real face picking, pins,
+# the native outline and actions, chat attachments and accessibility.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_agent AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-comments
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-comments-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "$<TARGET_FILE:test_chat_agent>"
+            "${CMAKE_BINARY_DIR}/ui-macos-native-comments")
+  set_tests_properties(app.ui-macos-native-comments PROPERTIES
+    TIMEOUT 900 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
 # Face-bounded profiles and an unsplit whole face (mitcad#1138), using the
 # same synthetic fixture and viewport input on both frontends.
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET test_face_profiles
@@ -741,6 +753,17 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
   endif()
 endif()
 
+# The native print managers by place (mitcad#1158), in a synthetic project
+# and in a fresh application without a design. Uses the shared Aqua lock.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-print-managers
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-print-managers-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-print-managers")
+  set_tests_properties(app.ui-macos-native-print-managers PROPERTIES
+    TIMEOUT 900 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
 # Selection Delete uses one dependency question and one undo transaction
 # from either collection or the canvas (mitcad#1139).
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
@@ -770,6 +793,51 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
             "${CMAKE_BINARY_DIR}/ui-macos-measure-planar")
   set_tests_properties(app.ui-macos-measure-planar PROPERTIES
     TIMEOUT 180 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Independent document owners, recovery after a real crash, and one real
+# MCP bridge serving two handles (mitcad#1172). Portable frame tests use
+# the guarded Qt-only fixture; product macOS keeps the system tab bar.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
+   AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-multi-document
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-multi-document-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-multi-document" qt all)
+  add_test(NAME app.ui-macos-document-frames
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-multi-document-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-document-frames" qt frames)
+  set_tests_properties(app.ui-macos-multi-document app.ui-macos-document-frames PROPERTIES
+    TIMEOUT 900 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-multi-document
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-multi-document-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-native-multi-document" native all)
+    set_tests_properties(app.ui-macos-native-multi-document PROPERTIES
+      TIMEOUT 900 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
+endif()
+
+# Saved-state insertion from another open document, including source Save/Cancel
+# and self-insertion exclusion, through the shared UI scenario (mitcad#1172).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
+   AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-insert-open-design
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-insert-open-design-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-macos-insert-open-design" qt)
+  set_tests_properties(app.ui-macos-insert-open-design PROPERTIES
+    TIMEOUT 420 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-insert-open-design
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-insert-open-design-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-native-insert-open-design" native)
+    set_tests_properties(app.ui-macos-native-insert-open-design PROPERTIES
+      TIMEOUT 420 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
 endif()
 
 # The release's native smoke subset (mitcad#1056). macOS releases are built

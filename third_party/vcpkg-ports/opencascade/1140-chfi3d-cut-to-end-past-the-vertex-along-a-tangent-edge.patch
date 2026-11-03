@@ -1,0 +1,491 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: an analytic blend cut to the end by a face at the end tangent to
+the other contact's face, the cut ending past the spine's end vertex on
+their edge's line (mitcad#236).
+
+The case: a bar whose edge along the floor is rounded with 3, and beside it
+a block that reaches further out, its own edge along the floor rounded with
+8, its floor going 0.073 mm further than the bar's. The block's face beside
+the bar is a step between the two profiles, which narrows to a point at the
+vertex V where the bar's rounding comes tangent to the floor. The step's
+foot is rounded with 0.5 (its edge with the floor, 0.073 long, on
+tangentially up the block's rounding). Near V the step is lower than the
+ball: the contact on it leaves the step across its edge with the bar's
+rounding B, and B cuts the blend all along from there to V
+(ChFi3d_KPartCutToEnd). That cut ends where the blend's other contact meets
+the edge Eq between its face Fo (the floor) and B at V; but Eq ends at V,
+and the contact, 0.5 off the step, meets Eq's line only 0.5 past V. No end
+was found, the corner (PerformOneCorner, OnSame) cut the walked blend with
+B instead and looked for the floor's edge with the block's rounding to
+cross B, which passes 0.9 micrometres above it: "the edge beside the end
+does not cross the face at the end".
+
+Where Fo and B are tangent along Eq (B rounds Fo off there) and the face N
+the contact leaves narrows to a point at V (the spine's end edge and N's
+edge E with B leave V the same way, within 0.25 rad), their surfaces go on
+meeting along Eq's line beyond V. Not where N narrows to a point at E's
+other end too: a sliver of N between B and two faces, which another
+blend's contact leaves across E as well (a window's floor rounded on both
+edges up to a pillar's rounded end), whose corners cut them as before.
+The end Q is now taken there, on Eq's curve continued beyond V and on both
+surfaces within the tolerance: a new vertex at Q ends the blend (a
+singular end, as at Q on Eq), B grows up to the cut, Eq is prolonged
+beyond V to Q (ChFi3d_ProlongEdgeBeyondVertex), and the spine's end edge,
+under the blend, is cut at V with no side kept.
+The piece P whose contact leaves its face may lie on the end edge itself
+(the step's foot on a rounding that a smaller rounding of the bar meets
+tangentially): it then still has the parameters of that edge's whole blend,
+extended past the edge, at its end, which the corner sets at an OnSame end.
+There its end section is taken through its other contact's point (by
+bisection on the edge, as Q's), and its parameters at that end are those of
+its points (on a closed contact line, in the period that keeps the piece's
+direction from its other end); restored when no pieces are added. The same
+end where a plate's top meets a cylindrical wall, rounded concave up to the
+plate's corner rounding tangent to the wall, builds as the file's (the
+rounding there was built before too, by the corner).
+
+On the stored design the step's foot builds as in the file: every face of
+the result lies on the file's (the boolean differences with the file's
+body are empty both ways), the change of volume 0.04 % off the file's, and
+the bar's rounding grown past the step by the file's 0.41 mm2. Tests:
+geometry/tests/test_fillet_corners.cpp, the step beside the rounded bar
+(failing without the patch) and beside a notch rounded tangent to the
+block's rounding, both against the block alone rounded less what lies in
+the bar's profile, and a tab's top rounded concave up to its side
+roundings tangent to a curved wall, against the material under the
+rounding's torus within the tab's outline.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 4c4a518f..a0156063 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -9739,6 +9739,169 @@ static void ChFi3d_FillKPartRoundGapsAcrossEdges(
+ //            no corner). Returns true when the pieces are added.
+ //=======================================================================
+ 
++//=======================================================================
++// function : ChFi3d_NarrowsToVertex
++// purpose  : Whether the edges E1 and E2 leave their common vertex V the
++//            same way (within 0.25 rad): the face they bound narrows to a
++//            point at V.
++//=======================================================================
++
++static bool ChFi3d_NarrowsToVertex(const TopoDS_Edge& E1, const TopoDS_Edge& E2, const TopoDS_Vertex& V)
++{
++  gp_Vec aOut[2];
++  int    k = 0;
++  for (const TopoDS_Edge& E : {E1, E2})
++  {
++    bool atV = false;
++    for (TopExp_Explorer ex(E, TopAbs_VERTEX); ex.More() && !atV; ex.Next())
++    {
++      atV = ex.Current().IsSame(V);
++    }
++    if (!atV || BRep_Tool::Degenerated(E))
++    {
++      return false;
++    }
++    const BRepAdaptor_Curve aC(E);
++    const double            p = BRep_Tool::Parameter(V, E);
++    gp_Pnt                  aP;
++    aC.D1(p, aP, aOut[k]);
++    // (Away from V: towards the edge's other end.)
++    const double pm = 0.5 * (aC.FirstParameter() + aC.LastParameter());
++    if (pm < p)
++    {
++      aOut[k].Reverse();
++    }
++    if (aOut[k].Magnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    k++;
++  }
++  return aOut[0].Angle(aOut[1]) < 0.25;
++}
++
++//=======================================================================
++// function : ChFi3d_OnOneSurface
++// purpose  : Whether faces F1 and F2 lie on one surface (planes in one
++//            plane, cylinders about one axis with one radius, or one
++//            surface).
++//=======================================================================
++
++static bool ChFi3d_OnOneSurface(const TopoDS_Face& F1, const TopoDS_Face& F2)
++{
++  const occ::handle<Geom_Surface> S1 = BRep_Tool::Surface(F1), S2 = BRep_Tool::Surface(F2);
++  if (S1.IsNull() || S2.IsNull())
++  {
++    return false;
++  }
++  if (S1 == S2)
++  {
++    return true;
++  }
++  const GeomAdaptor_Surface A1(S1), A2(S2);
++  if (A1.GetType() != A2.GetType())
++  {
++    return false;
++  }
++  const double tol = Precision::Confusion();
++  if (A1.GetType() == GeomAbs_Plane)
++  {
++    const gp_Pln P1 = A1.Plane(), P2 = A2.Plane();
++    return P1.Axis().IsParallel(P2.Axis(), Precision::Angular()) && P1.Distance(P2.Location()) <= tol;
++  }
++  if (A1.GetType() == GeomAbs_Cylinder)
++  {
++    const gp_Cylinder C1 = A1.Cylinder(), C2 = A2.Cylinder();
++    return C1.Axis().IsParallel(C2.Axis(), Precision::Angular())
++           && gp_Lin(C1.Axis()).Distance(C2.Location()) <= tol && std::abs(C1.Radius() - C2.Radius()) <= tol;
++  }
++  return false;
++}
++
++//=======================================================================
++// function : ChFi3d_NarrowsAtOtherEnd
++// purpose  : Whether face F narrows to a point at the other end of its edge
++//            E with face B from V: at the end of the chain of F's edges
++//            that go on from E tangentially with faces on B's surface (a
++//            half circle in two arcs, with the two halves of a cylinder),
++//            another edge of F leaves that end the way the chain arrives.
++//=======================================================================
++
++static bool ChFi3d_NarrowsAtOtherEnd(const TopoDS_Face&  F,
++                                     const TopoDS_Face&  B,
++                                     const TopoDS_Edge&  E,
++                                     const TopoDS_Vertex& V,
++                                     const ChFiDS_Map&   EFMap)
++{
++  // The direction along edge Ec away from its vertex Vc.
++  const auto outOf = [](const TopoDS_Edge& Ec, const TopoDS_Vertex& Vc, gp_Vec& D) {
++    const BRepAdaptor_Curve aC(Ec);
++    const double            p = BRep_Tool::Parameter(Vc, Ec);
++    gp_Pnt                  aP;
++    aC.D1(p, aP, D);
++    if (0.5 * (aC.FirstParameter() + aC.LastParameter()) < p)
++    {
++      D.Reverse();
++    }
++    return D.Magnitude() > gp::Resolution();
++  };
++  TopoDS_Edge   Ecur = E;
++  TopoDS_Vertex Vfrom = V;
++  for (int step = 0; step < 16; step++)
++  {
++    TopoDS_Vertex V1, V2;
++    TopExp::Vertices(Ecur, V1, V2);
++    const TopoDS_Vertex W = V1.IsSame(Vfrom) ? V2 : V1;
++    gp_Vec              aIn;
++    if (W.IsNull() || W.IsSame(Vfrom) || !outOf(Ecur, W, aIn))
++    {
++      return false;
++    }
++    TopoDS_Edge aNext;
++    for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++    {
++      const TopoDS_Edge& Ec = TopoDS::Edge(ex.Current());
++      if (Ec.IsSame(Ecur) || BRep_Tool::Degenerated(Ec))
++      {
++        continue;
++      }
++      bool atW = false;
++      for (TopExp_Explorer exv(Ec, TopAbs_VERTEX); exv.More() && !atW; exv.Next())
++      {
++        atW = exv.Current().IsSame(W);
++      }
++      gp_Vec aOut;
++      if (!atW || !outOf(Ec, W, aOut))
++      {
++        continue;
++      }
++      const double a = aIn.Angle(aOut);
++      if (a < 0.25)
++      {
++        return true; // (F narrows to a point at W)
++      }
++      if (M_PI - a < 0.01 && EFMap.Contains(Ec))
++      {
++        // (The chain goes on tangentially, with a face on B's surface.)
++        for (NCollection_List<TopoDS_Shape>::Iterator it(EFMap(Ec)); it.More(); it.Next())
++        {
++          if (!it.Value().IsSame(F) && ChFi3d_OnOneSurface(TopoDS::Face(it.Value()), B))
++          {
++            aNext = Ec;
++          }
++        }
++      }
++    }
++    if (aNext.IsNull())
++    {
++      return false;
++    }
++    Vfrom = W;
++    Ecur  = aNext;
++  }
++  return false;
++}
++
+ static bool ChFi3d_KPartCutToEnd(
+   TopOpeBRepDS_DataStructure&                                             DStr,
+   const occ::handle<ChFiDS_Spine>&                                        Spine,
+@@ -9990,6 +10153,63 @@ static bool ChFi3d_KPartCutToEnd(
+       found = wQ > fq + Precision::PConfusion() && wQ < lq - Precision::PConfusion();
+     }
+   }
++  // The other contact's line meeting Eq's curve only beyond V, where Eq
++  // ends: where Eq's faces Fo and B are tangent along it (B rounds Fo off
++  // there) and N narrows to a point at V (its edges there, the spine's end
++  // edge and E, leave V the same way: a step between B and Fo that closes
++  // up at V), their surfaces go on meeting along that curve. (Not where N
++  // narrows to a point at E's other end too, a sliver of N between B and two
++  // faces, which another blend's contact leaves across E as well, e.g. a
++  // window's floor rounded on both edges up to a pillar's rounded end: the
++  // corner cuts them.) B then grows
++  // up to the cut along it: Eq is prolonged beyond V to the point Q there,
++  // where the blend ends.
++  bool isPastV = false;
++  if (!found && ChFi3d::IsTangentFaces(Eq, Fo, B) && ChFi3d_NarrowsToVertex(Spine->Edges(eEnd), E, V)
++      && !ChFi3d_NarrowsAtOtherEnd(N, B, E, V, EFMap))
++  {
++    occ::handle<Geom_Curve> aBasisEq = CEq;
++    if (const occ::handle<Geom_TrimmedCurve> aTrim = occ::down_cast<Geom_TrimmedCurve>(CEq))
++    {
++      aBasisEq = aTrim->BasisCurve();
++    }
++    const double pv      = BRep_Tool::Parameter(V, Eq);
++    const bool   vAtLast = std::abs(pv - lq) <= std::abs(pv - fq);
++    const double aLen    = lq - fq;
++    const double e1      = std::max(vAtLast ? lq : fq - aLen, aBasisEq->FirstParameter());
++    const double e2      = std::min(vAtLast ? lq + aLen : fq, aBasisEq->LastParameter());
++    if (!aBasisEq->IsPeriodic() && e2 - e1 > Precision::PConfusion())
++    {
++      GeomAPI_ExtremaCurveCurve anExtP(CO, aBasisEq, CO->FirstParameter(), CO->LastParameter(), e1, e2);
++      const occ::handle<Geom_Surface> aSB = BRep_Tool::Surface(B);
++      const occ::handle<Geom_Surface> aSO = BRep_Tool::Surface(Fo);
++      for (int i = 1; i <= anExtP.NbExtrema() && !found; i++)
++      {
++        if (anExtP.Distance(i) > 10. * tol3d)
++        {
++          continue;
++        }
++        double t = 0., w = 0.;
++        anExtP.Parameters(i, t, w);
++        if (vAtLast ? w <= lq + Precision::PConfusion() : w >= fq - Precision::PConfusion())
++        {
++          continue;
++        }
++        // (On both faces' surfaces there.)
++        const gp_Pnt               aQ = CO->Value(t);
++        GeomAPI_ProjectPointOnSurf aPrB(aQ, aSB), aPrO(aQ, aSO);
++        if (aPrB.NbPoints() == 0 || aPrB.LowerDistance() > 10. * tol3d || aPrO.NbPoints() == 0
++            || aPrO.LowerDistance() > 10. * tol3d)
++        {
++          continue;
++        }
++        tQ      = t;
++        wQ      = w;
++        found   = true;
++        isPastV = true;
++      }
++    }
++  }
+   if (!found)
+   {
+     return false;
+@@ -10046,6 +10266,25 @@ static bool ChFi3d_KPartCutToEnd(
+   anEnd.uvB = pcB->Value(wQ);
+   anEnd.tO  = tQ;
+   anEnd.V   = V;
++  // (Beyond V: the end is a new vertex VQ at Q, on no edge; Eq's curve on B
++  // continued holds it.)
++  TopoDS_Vertex VQ;
++  if (isPastV)
++  {
++    if (BRep_Tool::Surface(B)->Value(anEnd.uvB.X(), anEnd.uvB.Y()).Distance(Q) > 10. * tol3d)
++    {
++      return false;
++    }
++    BRep_Builder aB;
++    aB.MakeVertex(VQ, Q, tol3d);
++    anEnd.CPN.Reset();
++    anEnd.CPN.SetPoint(Q);
++    anEnd.CPN.SetVertex(VQ);
++    anEnd.CPO.Reset();
++    anEnd.CPO.SetPoint(Q);
++    anEnd.CPO.SetVertex(VQ);
++  }
++  else
+   {
+     const TopAbs_Orientation OinB  = edgeInFace(Eq, BF).Orientation();
+     const TopAbs_Orientation OinFo = edgeInFace(Eq, FoF).Orientation();
+@@ -10066,7 +10305,139 @@ static bool ChFi3d_KPartCutToEnd(
+   }
+   // The pieces, from the end to k (to the edge before k where P starts at
+   // the start of edge k).
+-  const double WP = isFirst ? P->FirstSpineParam() : P->LastSpineParam();
++  double WP = isFirst ? P->FirstSpineParam() : P->LastSpineParam();
++  // (P's end as it was, restored unless the pieces are added.)
++  struct RestorePieceEnd
++  {
++    occ::handle<ChFiDS_SurfData> P;
++    bool                         isFirst = false;
++    double                       W       = 0.;
++    double                       T[2]    = {0., 0.};
++    bool                         Keep    = false;
++
++    ~RestorePieceEnd()
++    {
++      if (!P.IsNull() && !Keep)
++      {
++        for (int s = 1; s <= 2; s++)
++        {
++          P->ChangeInterference(s).SetParameter(T[s - 1], isFirst);
++        }
++        if (isFirst)
++        {
++          P->FirstSpineParam(W);
++        }
++        else
++        {
++          P->LastSpineParam(W);
++        }
++      }
++    }
++  } aRestoreP;
++  if (isPastV
++      && (WP < Spine->FirstParameter(k) - Precision::PConfusion()
++          || WP > Spine->LastParameter(k) + Precision::PConfusion()))
++  {
++    // P on the end edge still has the parameters of that edge's whole blend
++    // at its end, extended past the edge (the corner sets them at an OnSame
++    // end): the section through its other contact's point there instead,
++    // by bisection on edge k as Q's, and its parameters at that end those
++    // of its points.
++    const occ::handle<ChFiDS_SurfData>& FullK = aFull(k);
++    if (FullK.IsNull() || FullK->Interference(opp).LineIndex() <= 0)
++    {
++      return false;
++    }
++    const occ::handle<Geom_Curve>& COK = DStr.Curve(FullK->Interference(opp).LineIndex()).Curve();
++    if (COK.IsNull())
++    {
++      return false;
++    }
++    GeomAPI_ProjectPointOnCurve aPrP(P->Vertex(isFirst, opp).Point(), COK);
++    if (aPrP.NbPoints() == 0 || aPrP.LowerDistance() > 10. * tol3d)
++    {
++      return false;
++    }
++    double       tP = aPrP.LowerDistanceParameter();
++    const double wa = Spine->FirstParameter(k), wb = Spine->LastParameter(k);
++    double       ta = 0., tb = 0.;
++    if (!ChFi3d_KPartLineParam(DStr, FullK, opp, Spine->Value(wa), ta)
++        || !ChFi3d_KPartLineParam(DStr, FullK, opp, Spine->Value(wb), tb))
++    {
++      return false;
++    }
++    if (COK->IsPeriodic())
++    {
++      tP = ElCLib::InPeriod(tP, 0.5 * (ta + tb) - 0.5 * COK->Period(), 0.5 * (ta + tb) + 0.5 * COK->Period());
++    }
++    if ((tP - ta) * (tP - tb) > Precision::PConfusion() * std::abs(tb - ta))
++    {
++      return false;
++    }
++    double a = wa, b = wb;
++    for (int it = 0; it < 60; it++)
++    {
++      const double m  = 0.5 * (a + b);
++      double       tm = 0.;
++      if (!ChFi3d_KPartLineParam(DStr, FullK, opp, Spine->Value(m), tm))
++      {
++        return false;
++      }
++      if ((tm - tP) * (tb - ta) < 0.)
++      {
++        a = m;
++      }
++      else
++      {
++        b = m;
++      }
++    }
++    WP                = 0.5 * (a + b);
++    aRestoreP.P       = P;
++    aRestoreP.isFirst = isFirst;
++    aRestoreP.W       = isFirst ? P->FirstSpineParam() : P->LastSpineParam();
++    for (int s = 1; s <= 2; s++)
++    {
++      aRestoreP.T[s - 1] = P->Interference(s).Parameter(isFirst);
++    }
++    for (int s = 1; s <= 2; s++)
++    {
++      ChFiDS_FaceInterference& FI = P->ChangeInterference(s);
++      if (FI.LineIndex() <= 0)
++      {
++        return false;
++      }
++      const occ::handle<Geom_Curve>& CI = DStr.Curve(FI.LineIndex()).Curve();
++      if (CI.IsNull())
++      {
++        return false;
++      }
++      GeomAPI_ProjectPointOnCurve aPrI(P->Vertex(isFirst, s).Point(), CI);
++      if (aPrI.NbPoints() == 0 || aPrI.LowerDistance() > 10. * tol3d)
++      {
++        return false;
++      }
++      double ti = aPrI.LowerDistanceParameter();
++      if (CI->IsPeriodic())
++      {
++        // (In the period that keeps the piece's direction from its other
++        // end, within one period of it.)
++        const double T     = CI->Period();
++        const double other = FI.Parameter(!isFirst);
++        const bool   up    = FI.LastParameter() >= FI.FirstParameter();
++        ti = isFirst == up ? ElCLib::InPeriod(ti, other - T, other) : ElCLib::InPeriod(ti, other, other + T);
++      }
++      FI.SetParameter(ti, isFirst);
++    }
++    if (isFirst)
++    {
++      P->FirstSpineParam(WP);
++    }
++    else
++    {
++      P->LastSpineParam(WP);
++    }
++  }
+   int          kLast = k;
+   if (std::abs(WP - (isFirst ? Spine->FirstParameter(k) : Spine->LastParameter(k))) <= Precision::PConfusion())
+   {
+@@ -10161,6 +10532,17 @@ static bool ChFi3d_KPartCutToEnd(
+       break;
+     }
+   }
++  if (isPastV)
++  {
++    // B grows up to the cut: Eq prolonged beyond V to VQ. The spine's edge
++    // at V lies under the blend up to V: cut at V with no side kept there.
++    ChFi3d_ProlongEdgeBeyondVertex(DStr, Eq, V, VQ, wQ, Fo, B, tol3d);
++    TopoDS_Edge Es = Spine->Edges(eEnd);
++    Es.Orientation(TopAbs_FORWARD);
++    const int IE = DStr.AddShape(Es);
++    DStr.ChangeShapeInterferences(IE).Append(
++      ChFi3d_FilVertexInDS(TopAbs_EXTERNAL, IE, DStr.AddShape(V), BRep_Tool::Parameter(V, Es)));
++  }
+   if (isFirst)
+   {
+     aIntf(eEnd) = true;
+@@ -10171,7 +10553,8 @@ static bool ChFi3d_KPartCutToEnd(
+     aIntl(eEnd) = true;
+     Spine->SetLastStatus(ChFiDS_FreeBoundary);
+   }
+-  aRestore.Keep = true;
++  aRestore.Keep  = true;
++  aRestoreP.Keep = true;
+   return true;
+ }
+ 

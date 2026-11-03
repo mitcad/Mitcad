@@ -86,13 +86,10 @@ class MeasurementOverlay;
 struct PrintOverlay;
 struct ProxyMesh;
 
-#ifdef Q_OS_MACOS
-// The OpenGL format of every context Qt creates on macOS, the viewport's and
-// the window's shared one (main() sets it as the default format): a core
-// profile, which macOS only offers as a forward-compatible 4.1 context.
-// Contexts of different profiles cannot share resources there.
-QSurfaceFormat macSurfaceFormat();
-#endif
+// The existing platform format for both viewport and global share context:
+// macOS 4.1 core; Windows/Linux 4.5 compatibility. main() selects it before
+// QApplication so document moves retain a compatible context and resources.
+QSurfaceFormat viewportSurfaceFormat();
 
 // Identifies a sketch profile: (sketch feature uid, region key).
 using ProfileKey = std::pair<std::string, std::string>;
@@ -648,6 +645,8 @@ public:
   bool provisionalShown() const { return !m_provisional.IsNull(); }
   // Frames drawn so far (paintGL), for the drag timings' logs (mitcad#636):
   // what was submitted, not what the screen showed.
+  void setDocumentVisible(bool visible);
+  bool documentVisible() const { return m_documentVisible; }
   quint64 framesDrawn() const { return m_framesDrawn; }
   // Logs "<what>: first frame <ms> ms after it began" once the next frame
   // is drawn, the time taken from `started` (an open, mitcad#878): what an
@@ -702,6 +701,11 @@ public:
   // The point under a widget position on the plane through `through` that
   // faces the viewer; none when the view looks along it.
   std::optional<gp_Pnt> viewPlanePoint(const QPointF& position, const gp_Pnt& through) const;
+  // The point of a plane (in the design) under a widget position, where the
+  // pointer's ray meets it (mitcad#1196: BUILD's first part on a chosen
+  // plane); none when the view looks along the plane or it lies behind
+  // the eye there.
+  std::optional<gp_Pnt> planePoint(const QPointF& position, const gp_Ax3& plane) const;
   SelectFilter pickFilter() const { return m_filter; }
   // Colour of the highlight under the mouse: see-through and unlit, with
   // the face's boundary, edges and vertices opaque, hidden by nearer
@@ -846,6 +850,7 @@ public:
   void cancelPointerInteraction();
 
 signals:
+  void documentVisibilityChanged(bool visible);
   void badgeWidthChanged();
   void glInitialized(const QString& renderer);
   void glFailed(const QString& message);
@@ -869,6 +874,18 @@ signals:
   // an end click's part before the click). Emitted while the view paints:
   // connect queued.
   void hoverMoved(const mitcad::SelectionItem& item);
+  // The mouse moved over the view without a button held, at a widget
+  // position, wherever it is (mitcad#1196: a command's preview on a chosen
+  // plane follows it); pointerLeft when it left the view or went over a
+  // panel floating over it. Emitted from the mouse's events.
+  void pointerMoved(const QPointF& position);
+  void pointerLeft();
+  // A click (no window selection, not on the orientation cube or a panel
+  // over the view) at a widget position, with the keys held, emitted just
+  // before `picked` reports what it picked (mitcad#1196: a command that
+  // takes the click on a plane). Emitted while the view paints: connect
+  // queued.
+  void clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers);
   // A right click; `item` is what lies under the mouse (invalid if nothing).
   void contextMenuRequested(const QPoint& globalPosition, const mitcad::SelectionItem& item);
   // A right click on the orientation cube.
@@ -1259,6 +1276,7 @@ private:
   Bnd_Box m_originBox;
   bool m_resizeToLog = false;
   FirstBodiesFit m_firstFit; // the design's first bodies fitted once (expectFirstBodies)
+  bool m_documentVisible = true;
   bool m_directFrameQueued = false; // requestFrame() in an unexposed window
   bool m_painting = false;          // in paintGL()
   QString m_glVersion;              // GL_VERSION (glVersion())

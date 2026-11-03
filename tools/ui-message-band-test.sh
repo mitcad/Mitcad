@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/MessageBand.cpp app/framework/MessageLog.cpp app/framework/FloatingLayout.cpp app/MainWindow.cpp app/browser/BrowserController.cpp tools/cli
+# check-all sources: app/files/MainWindowFiles.cpp
 # The message band and the message history (mitcad#1042) through the real
 # UI, on a block whose second fillet fails (r 50):
 #   Floating:
@@ -14,14 +15,25 @@
 #   - A click on the stub opens the history: the newest message first, the
 #     error below it; a click on the error's row selects Fillet2 (without
 #     saying its error again) and closes the history. Esc closes it too.
+#   - Another design clears the band (mitcad#1174): the error shown, New
+#     (Ctrl+N) empties the band and shows only the new design's hint; the
+#     block opened (Ctrl+O) and its error shown, Open of a design without
+#     failures leaves the band empty, without a message or a stub.
 #   Docked:
 #   - The error on the status line; the status bar's history button opens
 #     the same history, whose error row selects Fillet2.
+#   - The error again, then New: the status line and the band cleared.
+# New and Open put another design into the same window here (Preferences >
+# General, open in the current window): by default each design has a
+# document window of its own (mitcad#1172), whose band is its own.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-message-band-test.sh
 
 source "$(dirname "$0")/ui-test-lib.sh"
+
+# New and Open replace the design, as these steps expect (mitcad#1172).
+ui_open_in_current_window
 
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -46,6 +58,19 @@ cat > "$WORK/model.json" << 'EOF'
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+# The same block without the fillets: a design that opens without a
+# message (mitcad#1174).
+GOOD=$WORK/plain.mitcad
+cat > "$WORK/plain.json" << 'EOF'
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}}
+]
+EOF
+"$CLI" run "$WORK/plain.json" --save "$GOOD" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 
 # since_mark: the log's lines since the mark.
 since_mark() { tail -n +$((UI_MARK + 1)) "$UI_LOG"; }
@@ -99,7 +124,7 @@ select_from_history() {
 }
 
 ui_start_display
-ui_start_app --open "$FILE" --chrome=floating
+ui_start_app --open "$FILE" --chrome=floating --no-native-dialogs
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Failed features: Fillet2: " "Fillet2 failed"
 ui_expect_log "Failures button at" "the failures summary is placed"
@@ -180,6 +205,34 @@ ui_step "click the stub"                   ui_click_logged "Message stub"
 ui_expect_new "Message history: " "the history opened again"
 ui_step "close it (Esc)"                   ui_key Escape
 ui_expect_new "Message history: closed" "Esc closed it"
+
+echo "--- Another design clears the band (mitcad#1174)"
+ui_mark
+ui_step "click the failures summary"       ui_click_logged "Failures button"
+expect_line "^Message band full: error Fillet2: " "the error shown again"
+ui_mark
+ui_step "new design (Ctrl+N)"              ui_key ctrl+n
+ui_expect_new "New document" "a new design"
+expect_line "^Message band cleared \(another design\)$" "New cleared the band"
+expect_line "^Message band full: hint Create a sketch to start modeling" "the new design's own hint only"
+not_since "^Message band (full|stub): error " "no error of the previous design"
+ui_mark
+ui_step "open (Ctrl+O)"                    ui_key ctrl+o
+ui_type_path "Open" "$FILE"
+ui_focus_main
+ui_expect_new "Opened $FILE" "the block opened through the dialog" 20
+ui_expect_new "Failures button at" "the failures summary is placed"
+ui_mark
+ui_step "click the failures summary"       ui_click_logged "Failures button"
+expect_line "^Message band full: error Fillet2: " "the block's error in the band"
+ui_mark
+ui_step "open (Ctrl+O)"                    ui_key ctrl+o
+ui_type_path "Open" "$GOOD"
+ui_focus_main
+ui_expect_new "Opened $GOOD" "a design without failures opened" 20
+expect_line "^Message band cleared \(another design\)$" "Open cleared the band"
+ui_sync
+not_since "^Message band (full|stub): " "the band empty: no message, no stub"
 ui_stop_app
 
 echo "--- Docked: the status bar's history button"
@@ -194,5 +247,15 @@ ui_step "clear the selection (Esc)"        ui_key Escape
 ui_mark
 ui_step "click the history button"         ui_click_logged "Message history button"
 select_from_history "Docked"
+echo "--- Docked: another design clears the status line (mitcad#1174)"
+ui_mark
+ui_step "click the failures summary"       ui_click_logged "Failures button"
+ui_expect_new "Status error: Fillet2: " "the error on the status line"
+ui_mark
+ui_step "new design (Ctrl+N)"              ui_key ctrl+n
+ui_expect_new "New document" "a new design"
+expect_line "^Status line cleared \(another design\)$" "New cleared the status line"
+expect_line "^Message band cleared \(another design\)$" "and the message band's message"
+not_since "^Status error: " "no error on the status line"
 
 ui_finish "UI message band test"

@@ -261,6 +261,16 @@ ui_chooses_chrome() {
 # were written for, unless the arguments choose a layout (--chrome…) or
 # UI_DEFAULT_CHROME=1 leaves it to the preference and the default
 # (Floating since mitcad#429).
+# ui_open_in_current_window: New and Open replace the window's design, as
+# they did before several designs could be open at once (Preferences >
+# General > Open in the current window, mitcad#1172). For tests of that
+# replacement and its questions (save, discard, locks); call it before
+# ui_start_app.
+ui_open_in_current_window() {
+  mkdir -p "$UI_CONFIG/Mitcad"
+  printf '[documents]\nopenInCurrentWindow=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+}
+
 ui_start_app() {
   local options=(--no-recovery) before window
   # Never on the caller's desktop: a test that forgot ui_start_display

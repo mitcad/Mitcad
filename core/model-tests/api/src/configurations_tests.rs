@@ -342,7 +342,7 @@ fn configure_writes_constants_in_one_undo_step() {
         &mut doc,
         json!({"cmd": "configure", "values": {"Depth": "100 mm"}}),
     );
-    assert!(e.contains("option Depth is driven"), "{e}");
+    assert!(e.contains("option Depth is by formula"), "{e}");
     add(&mut doc, "Wall", "4 mm");
     let e = refused(
         &mut doc,
@@ -400,10 +400,7 @@ fn a_closed_table_refuses_a_combination_that_is_no_row() {
         &mut doc,
         json!({"cmd": "configure", "values": {"Size": "M4", "Length": "99"}}),
     );
-    assert_eq!(
-        answer["refused"]["rule"],
-        "the configuration table is closed"
-    );
+    assert_eq!(answer["refused"]["rule"], "Only these rows");
     assert!(
         answer["refused"]["text"]
             .as_str()
@@ -425,10 +422,7 @@ fn a_closed_table_refuses_a_combination_that_is_no_row() {
     assert_eq!(answer["refused"], Value::Null, "{answer}");
     assert_eq!(text(&doc, "Length"), "16");
     assert_eq!(answer["moves"][0]["option"], "Length");
-    assert_eq!(
-        answer["moves"][0]["rule"],
-        "the configuration table is closed"
-    );
+    assert_eq!(answer["moves"][0]["rule"], "Only these rows");
     assert_eq!(answer["row"], "M6x16");
     // The query's choosers: Length of M6 is 16 only.
     let report = query(&doc, json!({"query": "configure"}));
@@ -461,7 +455,7 @@ fn an_open_table_allows_combinations_that_are_no_row() {
             "rows": [{"name": "A", "values": {"Size": "'M4'"}}], "closed": false}}),
     );
     assert!(
-        e.contains("the rows of an open table set options only"),
+        e.contains("the rows set only options while Only these rows is off"),
         "{e}"
     );
 }

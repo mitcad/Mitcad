@@ -642,7 +642,7 @@ std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
   return choice;
 }
 
-std::optional<double> askMeshUnit(QWidget* parent, const QString& file) {
+std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& file) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Insert Mesh"));
   auto* layout = new QVBoxLayout(&dialog);
@@ -650,14 +650,75 @@ std::optional<double> askMeshUnit(QWidget* parent, const QString& file) {
   layout->addLayout(form);
   auto* unit = unitBox();
   form->addRow(QObject::tr("Unit of %1:").arg(QFileInfo(file).fileName()), unit);
-  layout->addWidget(okCancel(dialog));
+  // Convert Mesh's Faceted Solid on the inserted bodies (mitcad#1082), with
+  // its panel's tolerances; the choice is remembered.
+  QSettings settings;
+  auto* convert = new QCheckBox(QObject::tr("&Convert to solid"));
+  convert->setObjectName(QStringLiteral("insertMeshConvert"));
+  convert->setToolTip(QObject::tr("A new solid of flat faces by Convert Mesh; the mesh body is kept, hidden"));
+  convert->setChecked(settings.value(QStringLiteral("insertMesh/convertToSolid"), false).toBool());
+  form->addRow(QString(), convert);
+  auto* tolerance = new QDoubleSpinBox;
+  tolerance->setDecimals(6);
+  tolerance->setRange(0.000001, 1.0);
+  tolerance->setSingleStep(0.01);
+  tolerance->setValue(0.01);
+  tolerance->setSuffix(QStringLiteral(" mm"));
+  form->addRow(QObject::tr("Weld tolerance:"), tolerance);
+  auto* angle = new QDoubleSpinBox;
+  angle->setDecimals(3);
+  angle->setRange(0.001, 30.0);
+  angle->setSingleStep(0.1);
+  angle->setValue(0.5);
+  angle->setSuffix(QStringLiteral(" deg"));
+  form->addRow(QObject::tr("Merge angle:"), angle);
+  const auto follow = [tolerance, angle](bool on) {
+    tolerance->setEnabled(on);
+    angle->setEnabled(on);
+  };
+  follow(convert->isChecked());
+  QObject::connect(convert, &QCheckBox::toggled, &dialog, [follow](bool on) {
+    follow(on);
+    qDebug().noquote() << QStringLiteral("Insert Mesh convert to solid %1")
+                              .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  });
+  QDialogButtonBox* buttons = okCancel(dialog);
+  layout->addWidget(buttons);
   unit->setFocus();
   qDebug().noquote() << QStringLiteral("Insert Mesh dialog opened: unit %1").arg(unitOffer(unit));
+  qDebug().noquote() << QStringLiteral("Insert Mesh convert to solid %1")
+                            .arg(convert->isChecked() ? QStringLiteral("on") : QStringLiteral("off"));
+  // Where the check box and OK are, in the main window's coordinates (UI
+  // tests).
+  TestSync::singleShot(200, &dialog, [convert, buttons, parent] {
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    const QPoint origin = parent != nullptr ? parent->window()->mapToGlobal(QPoint(0, 0)) : QPoint();
+    const auto at = [&origin](const QWidget* widget) {
+      const QPoint global = widget->mapToGlobal(widget->rect().center()) - origin;
+      return QStringLiteral("%1,%2").arg(global.x()).arg(global.y());
+    };
+    qDebug().noquote() << QStringLiteral("Insert Mesh convert at %1").arg(at(convert));
+    if (QPushButton* ok = buttons->button(QDialogButtonBox::Ok)) {
+      qDebug().noquote() << QStringLiteral("Insert Mesh OK at %1").arg(at(ok));
+    }
+  });
   prepareModal(&dialog);
   if (execDialog(&dialog) != QDialog::Accepted) {
     return std::nullopt;
   }
-  return kUnits[unit->currentIndex()].second;
+  MeshInsertChoice choice;
+  choice.unitMillimetres = kUnits[unit->currentIndex()].second;
+  choice.convert = convert->isChecked();
+  choice.tolerance = tolerance->value();
+  choice.angleDegrees = angle->value();
+  settings.setValue(QStringLiteral("insertMesh/convertToSolid"), choice.convert);
+  qDebug().noquote() << QStringLiteral("Insert Mesh: unit %1, convert to solid %2")
+                            .arg(unit->currentText(), choice.convert
+                                                          ? QStringLiteral("on, weld tolerance %1 mm, merge angle %2 deg")
+                                                                .arg(choice.tolerance)
+                                                                .arg(choice.angleDegrees)
+                                                          : QStringLiteral("off"));
+  return choice;
 }
 
 std::optional<bool> askLinked(QWidget* parent, const QString& file) {

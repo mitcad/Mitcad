@@ -5780,6 +5780,11 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             .filter(|b| SheetSig::of(kernel, b.shape).is_none())
             .map(|b| format!("{} {}", b.uid, b.name))
             .collect();
+        // Never silently (mitcad#1175): final bodies that are not those
+        // stored in the file, also within the replay's matching tolerance.
+        if let Some(warning) = self.report.body_differences() {
+            self.report.warnings.push(warning);
+        }
     }
 
     /// Whether the replay's sheets are not the state's `sheets` (each the

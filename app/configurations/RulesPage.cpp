@@ -69,7 +69,9 @@ QWidget* labelled(QLabel* label, QWidget* buddy) {
 // The page's own words (mitcad#966, #967; app/COMMANDS.md and the user
 // guide quote them).
 const char* const kLead = "Rules take away values and combinations that are not allowed. Most designs need none.";
-const char* const kClosed = "This table is closed: only its rows are allowed, so rules are not needed.";
+// The table closed: the Rows tab's Only these rows (mitcad#968).
+const char* const kClosed =
+    "Only these rows is on: only the combinations listed in the Rows tab are allowed, so rules are not needed.";
 const char* const kNoRules = "No rules yet. A rule is, for example: when Color is Black, Length is at most 1000 mm.";
 const char* const kChoose = "Add a rule, or choose one in the list.";
 const char* const kTextHint = "Enter saves the rule, Shift+Enter starts a new line, Esc restores it.";
@@ -461,8 +463,14 @@ std::vector<BlockMark> RulesPage::blockMarks(int index) const {
   }
   const Rule& rule = m_rules[static_cast<std::size_t>(index)];
   if (!isComplete(rule)) {
+    // Each empty place says what goes there (mitcad#968): "Not saved yet:
+    // choose an option."
     for (const BlockPath& path : emptyPlaces(rule)) {
-      marks.push_back({path, NoticeLevel::Warning, QStringLiteral("Not saved yet: fill this place.")});
+      QString hint = emptyPlaceHint(rule, path);
+      if (!hint.isEmpty()) {
+        hint[0] = hint[0].toLower();
+      }
+      marks.push_back({path, NoticeLevel::Warning, QStringLiteral("Not saved yet: %1.").arg(hint)});
     }
     return marks;
   }

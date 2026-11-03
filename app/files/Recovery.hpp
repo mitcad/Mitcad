@@ -53,7 +53,7 @@ struct RecoverableSession {
 };
 
 // The sessions in `directory` whose process is gone (their lock could be
-// taken), newest first; `own` is this run's session, never one of them.
+// taken), newest first; `own` is this document window's session, never one of them.
 // Locks of such sessions that left no files are removed.
 std::vector<RecoverableSession> findRecoverable(const QString& directory, const QString& own);
 
@@ -61,9 +61,9 @@ std::vector<RecoverableSession> findRecoverable(const QString& directory, const 
 void discardSession(RecoverableSession& session);
 
 // The dialog "Recover Unsaved Work": a table of the sessions, with Restore
-// (the one selected), Discard (the ones selected, after a question; they
-// are removed and leave `sessions`) and Later. Returns the index of the
-// session to restore, or nothing.
-std::optional<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions);
+// (all healthy designs selected initially), Discard (the ones selected,
+// after a question; they are removed and leave `sessions`) and Later.
+// Returns the selected healthy sessions to restore, or an empty list.
+std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions);
 
 } // namespace mitcad

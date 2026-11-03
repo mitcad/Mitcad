@@ -4616,6 +4616,142 @@ fn sketch_text_records() {
     assert_eq!(t.kind, 1);
 }
 
+/// A text's path constraint (class `9D30FCDC`, mitcad#1177): its roles,
+/// the text again (after the `u8 1` of class version 1), one placement per
+/// character (`u32 16` and a 4×4 matrix), then the sketch, the mask and
+/// the path curve. The 132 bytes a character are no bar to finding the
+/// sketch; the characters stored against the reading order make a text
+/// below its path, in it above; a whole circle as the path starts opposite
+/// its reference direction.
+#[test]
+fn text_path_constraint_records() {
+    // The circle's reference direction points a little past the sketch's
+    // y axis.
+    let (rx, ry) = (-0.104_528_463_267_653_47, 0.994_521_895_368_273_3);
+    let build = |reversed: bool| {
+        let mut doc = Doc::default();
+        for (g, p, v) in [
+            (ROOT, "", 0),
+            (SKETCH, ROOT, 18),
+            (SKETCH_TEXT, ROOT, 0),
+            (USAGE, ROOT, 1),
+            (SKETCH_CURVE, ROOT, 1),
+            (SKETCH_ARC, SKETCH_CURVE, 2),
+            (SKETCH_CONSTRAINT, ROOT, 3),
+            (TEXT_PATH_CONSTRAINT, SKETCH_CONSTRAINT, 1),
+        ] {
+            doc.class(g, p, v);
+        }
+        doc.obj(40, SKETCH, vec![0, 0]);
+        doc.obj(82, SKETCH_TEXT, text_record(None, 1, None));
+        // The path: a circle of 4.25 cm.
+        doc.obj(
+            83,
+            SKETCH_ARC,
+            cat(&[
+                &[0, 0],
+                &f64s(&[
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    rx,
+                    ry,
+                    0.0,
+                    4.25,
+                    0.0,
+                    std::f64::consts::TAU,
+                ]),
+                &r(40),
+            ]),
+        );
+        // "1 mm": four characters round the bottom of the circle, each
+        // turned along it (its x axis counter-clockwise), the next stored
+        // one 5 degrees further clockwise (`reversed`) or anticlockwise.
+        let step = if reversed { -5.0f64 } else { 5.0 };
+        let placed: Vec<u8> = (0..4)
+            .flat_map(|k| {
+                let a = (-90.0 + step * k as f64).to_radians();
+                let (s, c) = a.sin_cos();
+                let (xs, xc) = (a + std::f64::consts::FRAC_PI_2).sin_cos();
+                let m = [
+                    xc,
+                    -xs,
+                    0.0,
+                    4.1 * c,
+                    xs,
+                    xc,
+                    0.0,
+                    4.1 * s,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ];
+                cat(&[&u32b(16), &f64s(&m)])
+            })
+            .collect();
+        doc.obj(
+            90,
+            TEXT_PATH_CONSTRAINT,
+            cat(&[
+                &[1],
+                &u32b(2),
+                &r(83),
+                &u32b(1),
+                &r(82),
+                &u32b(0),
+                &[0],
+                &[1],
+                &r(82),
+                &u32b(4),
+                &placed,
+                &r(40),
+                &0x200_0000_0000u64.to_le_bytes(),
+                &u32b(1),
+                &r(83),
+                &[0],
+            ]),
+        );
+        doc.segment()
+    };
+    let seg = build(true);
+    let o = seg.object(90).unwrap();
+    let c = sketch::parse_constraint(&seg, o).unwrap();
+    assert_eq!(
+        (c.sketch, c.mask, c.entities.clone()),
+        (40, 0x200_0000_0000, vec![83])
+    );
+    assert_eq!(c.roles, vec![(83, 1), (82, 0)]);
+    assert_eq!(sketch::constraint_type(c.mask), Some("TextPathConstraint"));
+    let placed = sketch::text_path(&seg, o).unwrap();
+    assert_eq!(placed.text, 82);
+    assert_eq!(placed.characters.len(), 4);
+    assert!((placed.characters[0][3] - 0.0).abs() < 1e-12);
+    assert!((placed.characters[0][7] + 4.1).abs() < 1e-12);
+    // Not a text's path constraint: no placements.
+    assert!(sketch::text_path(&seg, seg.object(82).unwrap()).is_none());
+
+    let t = sketch::parse_text(&seg, seg.object(82).unwrap()).unwrap();
+    let v = sketch::text_value(&seg, 82, "t0", &t, &[90], &sketch::IdTable::default());
+    assert_eq!(v["definition"]["_type"], "AlongPathTextDefinition");
+    assert_eq!(v["definition"]["isAbovePath"], false);
+    let start = v["_f3d"]["pathStart"].as_f64().unwrap();
+    assert!((start - (-ry).atan2(-rx)).abs() < 1e-12, "{start}");
+    assert!((start.to_degrees() + 84.0).abs() < 1e-9, "{start}");
+
+    let seg = build(false);
+    let t = sketch::parse_text(&seg, seg.object(82).unwrap()).unwrap();
+    let v = sketch::text_value(&seg, 82, "t0", &t, &[90], &sketch::IdTable::default());
+    assert_eq!(v["definition"]["isAbovePath"], true);
+}
+
 /// A reference to an object of another document through an assembly
 /// context: `01 id 01 key 00 str8(guid) 00`.
 fn context_ref(id: u64, key: u64, guid: &str) -> Vec<u8> {

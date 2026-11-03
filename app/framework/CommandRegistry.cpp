@@ -338,7 +338,13 @@ void CommandRegistry::applyShortcut(const CommandDef& def, const QSettings& sett
   if (action == nullptr) return;
   const QList<QKeySequence> keys = effectiveKeys(def, settings);
   action->setShortcuts(keys);
-  QString tip = def.tooltip.isEmpty() ? def.name : QStringLiteral("%1: %2").arg(def.name, def.tooltip);
+  // The name before the description without its ellipsis ("Processes: …",
+  // not "Processes…: …"), as the quick-access tooltips write it.
+  QString name = def.name;
+  while (!def.tooltip.isEmpty() && (name.endsWith(QChar(0x2026)) || name.endsWith(QLatin1Char('.')))) {
+    name.chop(1);
+  }
+  QString tip = def.tooltip.isEmpty() ? def.name : QStringLiteral("%1: %2").arg(name, def.tooltip);
   if (!keys.isEmpty()) {
     tip += QStringLiteral(" (%1)").arg(keys.front().toString(QKeySequence::NativeText));
   } else if (m_disabledShortcuts.contains(def.id)) {

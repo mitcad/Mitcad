@@ -368,7 +368,8 @@ impl<K: Kernel> Document<K> {
                 .is_some_and(|p| !p.expr().is_constant());
             if driven {
                 return Err(invalid(format!(
-                    "option {name} is driven by its expression: change it with set_parameter"
+                    "option {name} is by formula: its value is calculated from its expression; \
+                     change the expression with set_parameter"
                 )));
             }
         }

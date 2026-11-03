@@ -6,7 +6,9 @@
 // to face, and the preview shows the part there (`mount_preview`, its shape
 // `analysis_shape` `mount_preview`); Place (Enter) or Shift + click makes
 // it (`insert_component` with `mount`: the part and the joint its frame
-// asks for, in one undo step), and the panel stays for the next one. Enter
+// asks for, in one undo step), and the panel stays for the next one. A
+// selection made before Insert from Library that Place On takes is the
+// pick (mitcad#1197: a hole's rim selected, the screw shown in it). Enter
 // without a pick drops the part in at the origin as Insert from Library
 // always did, to be joined later with Joint (its frames are joint origins
 // of its component).
@@ -418,6 +420,25 @@ CommandDef mountPartCommand(const std::shared_ptr<MountPart>& part, DocumentHost
           .withTooltip(QObject::tr("Along the frame's Z: a gap from what it is on")),
       checkInput(QStringLiteral("flip"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("The plane's other side, or the hole's other end")),
+  };
+  // A selection made before Insert from Library that Place On takes (a
+  // hole's rim or round face, an axis, a flat face or a plane) is the pick
+  // (mitcad#1197): the part shows there at once, Place (Enter) places it.
+  // Its click's place and the way towards the viewer then, as a click's.
+  def.preselected = [](const Selection&, CommandState& state, const CommandContext& context) {
+    const Selection& items = state.items(kAt);
+    if (items.isEmpty()) {
+      return;
+    }
+    const SelectionItem item = items.first();
+    build::recordPick(kAt, item, state, context);
+    if (const std::optional<gp_Pnt> point = build::pickPoint(kAt, state, context)) {
+      if (const std::optional<gp_Dir> toward = context.towardViewer(*point)) {
+        state.setObject(kToward, {{QStringLiteral("item"), item.describe()},
+                                  {QStringLiteral("toward"), xyzJson(toward->X(), toward->Y(), toward->Z())}});
+      }
+    }
+    qInfo().noquote() << QStringLiteral("Place Component: Place On %1 from the selection").arg(item.describe());
   };
   def.init = [part](CommandState& state, const CommandContext&) {
     const QVector<MountFrameInfo> frames = framesOf(*part);

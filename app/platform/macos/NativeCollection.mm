@@ -47,6 +47,7 @@
 #include <QTreeView>
 #include <QVariant>
 #include <QWidget>
+#include <QtLogging>
 
 namespace mitcad::mac {
 class NativeCatalogue;
@@ -97,6 +98,7 @@ class NativeCatalogue;
 
 @interface MitcadNativeSplitView : NSView {
 @public
+  QPointer<QSplitter> presenter;
   BOOL horizontal;
   NSMutableArray<NSView*>* panes;
   NSMutableArray* held; // per divider: its dragged size's constraint, else NSNull
@@ -124,14 +126,38 @@ constexpr CGFloat kDivider = 7;
 // width (NativeLayout.mm, NativeWindowFit.hpp): a pane's minimum yields to
 // the window's width before a scrolled body would widen; the split's
 // proportions hold against a row's expanding control, which takes the
-// row's spare width over the row's own hugging. No preference here may
-// grow the dialog's scrolled body: its height is the shared layout's.
+// row's spare width over the row's own hugging. Explicit user sizes instead
+// outrank content preferences, still below the window body's size; no
+// preference may grow that body. Its height is the shared layout's.
 const NSLayoutPriority kPaneMinimum = NSLayoutPriorityDefaultHigh - 50;
 const NSLayoutPriority kSplitRatio = NSLayoutPriorityDefaultLow - 10;
 const NSLayoutPriority kSplitKeep = NSLayoutPriorityDefaultLow - 5;
-const NSLayoutPriority kSplitDragged = NSLayoutPriorityDefaultLow - 2;
+// Explicit user sizes outrank content preferences (490), but not the
+// window body's size (499) or pane minima. Initial proportions stay soft.
+const NSLayoutPriority kSplitDragged = 498;
 const NSLayoutPriority kRowExpanding = NSLayoutPriorityDefaultLow - 40;
 const NSLayoutPriority kRowHugging = NSLayoutPriorityDefaultLow - 50;
+
+// Opt-in evidence for a divider constrained by its shared/native content.
+// Reading the constraint graph does not change layout or pointer handling.
+void traceSplitContent(NSView* view, int depth = 0) {
+  const NSSize intrinsic = view.intrinsicContentSize;
+  const auto compression = [view contentCompressionResistancePriorityForOrientation:NSLayoutConstraintOrientationHorizontal];
+  const auto hugging = [view contentHuggingPriorityForOrientation:NSLayoutConstraintOrientationHorizontal];
+  if (depth == 0 || (intrinsic.width > 0 && (compression >= kSplitDragged || hugging >= kSplitDragged))) {
+    qInfo().noquote() << QStringLiteral("Native split content: depth=%1 class=%2 id=%3 width=%4 intrinsic=%5 compression=%6 hugging=%7 hidden=%8")
+        .arg(depth).arg(QString::fromNSString(NSStringFromClass(view.class)))
+        .arg(QString::fromNSString(view.accessibilityIdentifier)).arg(NSWidth(view.frame))
+        .arg(intrinsic.width).arg(compression).arg(hugging).arg(view.isHiddenOrHasHiddenAncestor);
+    for (NSLayoutConstraint* constraint in [view constraintsAffectingLayoutForOrientation:NSLayoutConstraintOrientationHorizontal]) {
+      if (constraint.priority >= kSplitDragged) {
+        qInfo().noquote() << QStringLiteral("Native split constraint: depth=%1 %2")
+            .arg(depth).arg(QString::fromNSString(constraint.description));
+      }
+    }
+  }
+  for (NSView* child in view.subviews) traceSplitContent(child, depth + 1);
+}
 
 NSString* ns(const QString& text) { return text.toNSString(); }
 QString qt(NSString* text) { return text == nil ? QString() : QString::fromNSString(text); }
@@ -1669,9 +1695,16 @@ NSView* nativeSplitView(QSplitter* splitter, const NativeWidgetRenderer& render)
   MitcadNativeSplitView* split = [[MitcadNativeSplitView alloc] initWithFrame:NSMakeRect(0, 0, 600, 400)];
   split.translatesAutoresizingMaskIntoConstraints = NO;
   split->horizontal = horizontal;
+  split->presenter = splitter;
   split->panes = [NSMutableArray array];
   split->held = [NSMutableArray array];
-  const QList<int> given = splitter->sizes();
+  QList<int> given = splitter->sizes();
+  const QVariantList userSizes = splitter->property("nativeSplitUserSizes").toList();
+  const bool hasUserSizes = userSizes.size() == splitter->count();
+  if (hasUserSizes) {
+    given.clear();
+    for (const QVariant& value : userSizes) given.append(value.toInt());
+  }
   std::vector<int> stretches;
   std::vector<int> sizes;
   for (int i = 0; i < splitter->count(); ++i) {
@@ -1688,6 +1721,9 @@ NSView* nativeSplitView(QSplitter* splitter, const NativeWidgetRenderer& render)
       divider->index = static_cast<NSInteger>(split->panes.count) - 1;
       divider.translatesAutoresizingMaskIntoConstraints = NO;
       divider.accessibilityRole = NSAccessibilitySplitterRole;
+      divider.accessibilityIdentifier = ns(splitter->objectName() + QStringLiteral(".divider.%1").arg(i - 1));
+      divider.accessibilityLabel = ns(splitter->accessibleName().isEmpty() ? QObject::tr("Resize panes")
+                                                                         : splitter->accessibleName());
       [split addSubview:divider];
       along(divider, false, previous, true, horizontal, 0).active = YES;
       [lengthOf(divider, horizontal) constraintEqualToConstant:kDivider].active = YES;
@@ -1736,8 +1772,13 @@ NSView* nativeSplitView(QSplitter* splitter, const NativeWidgetRenderer& render)
     if (stretchSum > 0 && stretches[i] == 0) {
       if (sizes[i] > 0) {
         NSLayoutConstraint* keep = [lengthOf(pane, horizontal) constraintEqualToConstant:sizes[i]];
-        keep.priority = kSplitKeep;
+        keep.priority = hasUserSizes ? kSplitDragged : kSplitKeep;
         keep.active = YES;
+        if (hasUserSizes && i < split->held.count) {
+          // The next drag updates this preference rather than competing
+          // with an equally strong restored size.
+          split->held[i] = keep;
+        }
       }
       continue;
     }
@@ -2189,6 +2230,34 @@ void saveNativeUtilityFrame(NSWindow* window, QWidget* presenter) {
     }
   }
   const NSPoint origin = [self convertPoint:event.locationInWindow fromView:nil];
+  const bool trace = qEnvironmentVariableIntValue("MITCAD_LOG_NATIVE_EDITS") == 1;
+  int events = 0;
+  if (trace) {
+    qInfo().noquote() << QStringLiteral("Native split tracking begin: %1 divider=%2 size=%3 priority=%4 origin=%5,%6")
+        .arg(QString::fromNSString(self.accessibilityIdentifier)).arg(qlonglong(index)).arg(start)
+        .arg(constraint.priority).arg(origin.x).arg(origin.y);
+    qInfo().noquote() << QStringLiteral("Native split tracked constraint: %1 active=%2 pane-child=%3 same-window=%4 first-item=%5 held=%6")
+        .arg(QString::fromNSString(constraint.description)).arg(constraint.active)
+        .arg(pane.superview == self).arg(pane.window == self.window).arg(constraint.firstItem == pane)
+        .arg(static_cast<NSUInteger>(index) < held.count && held[static_cast<NSUInteger>(index)] == constraint);
+    for (NSLayoutConstraint* own in pane.constraints) {
+      if (own.firstAttribute == NSLayoutAttributeWidth || own.secondAttribute == NSLayoutAttributeWidth) {
+        qInfo().noquote() << QStringLiteral("Native split pane width constraint: %1 tracked=%2")
+            .arg(QString::fromNSString(own.description)).arg(own == constraint);
+      }
+    }
+    for (NSUInteger i = 0; i < panes.count; ++i) {
+      QWidget* widget = presenter && i < static_cast<NSUInteger>(presenter->count()) ? presenter->widget(static_cast<int>(i)) : nullptr;
+      if (widget != nullptr) {
+        const QSize minimum = widget->minimumSize();
+        const QSize hint = widget->minimumSizeHint();
+        qInfo().noquote() << QStringLiteral("Native split Qt pane: index=%1 class=%2 name=%3 minimum=%4,%5 hint=%6,%7")
+            .arg(qulonglong(i)).arg(QString::fromLatin1(widget->metaObject()->className())).arg(widget->objectName())
+            .arg(minimum.width()).arg(minimum.height()).arg(hint.width()).arg(hint.height());
+      }
+      mitcad::mac::traceSplitContent(panes[i]);
+    }
+  }
   for (;;) {
     NSEvent* next = [self.window nextEventMatchingMask:NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp];
     if (next == nil) {
@@ -2197,10 +2266,56 @@ void saveNativeUtilityFrame(NSWindow* window, QWidget* presenter) {
     const NSPoint point = [self convertPoint:next.locationInWindow fromView:nil];
     const CGFloat delta = horizontal ? point.x - origin.x : point.y - origin.y;
     constraint.constant = std::max<CGFloat>(0, start + delta);
-    [self layoutSubtreeIfNeeded];
+    // The constraint participates in the window's layout engine. A pass
+    // limited to this split can leave the owning frame's pending layout
+    // untouched while tracking, so its panes still report their old sizes.
+    // Complete that pass before displaying or remembering the actual size.
+    [self.window layoutIfNeeded];
+    ++events;
+    if (trace) {
+      const CGFloat actual = horizontal ? NSWidth(pane.frame) : NSHeight(pane.frame);
+      qInfo().noquote() << QStringLiteral("Native split tracking event: %1 type=%2 delta=%3 requested=%4 actual=%5 priority=%6")
+          .arg(QString::fromNSString(self.accessibilityIdentifier)).arg(int(next.type)).arg(delta)
+          .arg(constraint.constant).arg(actual).arg(constraint.priority);
+      qInfo().noquote() << QStringLiteral("Native split tracked constraint after layout: %1 active=%2 pane-child=%3 same-window=%4 owning-pane=%5")
+          .arg(QString::fromNSString(constraint.description)).arg(constraint.active)
+          .arg(pane.superview == self).arg(pane.window == self.window).arg([pane.constraints containsObject:constraint]);
+      for (NSView* ancestor = self; ancestor != nil; ancestor = ancestor.superview) {
+        qInfo().noquote() << QStringLiteral("Native split layout ancestor: class=%1 id=%2 width=%3 needsLayout=%4")
+            .arg(QString::fromNSString(NSStringFromClass(ancestor.class)))
+            .arg(QString::fromNSString(ancestor.accessibilityIdentifier)).arg(NSWidth(ancestor.frame)).arg(ancestor.needsLayout);
+      }
+    }
     if (next.type == NSEventTypeLeftMouseUp) {
       break;
     }
+  }
+  if (trace) {
+    qInfo().noquote() << QStringLiteral("Native split tracking end: %1 events=%2 size=%3")
+        .arg(QString::fromNSString(self.accessibilityIdentifier)).arg(events)
+        .arg(horizontal ? NSWidth(pane.frame) : NSHeight(pane.frame));
+  }
+  // A settings/category change can rebuild the presenter. Preserve the
+  // actual logical pane sizes, and notify the shared layout that the user
+  // chose them (Materials stops fitting its list automatically then).
+  QPointer<QSplitter> source = presenter;
+  if (source && source->count() == static_cast<int>(panes.count)) {
+    QVariantList remembered;
+    QList<int> sizes;
+    int position = 0;
+    for (NSUInteger i = 0; i < panes.count; ++i) {
+      NSView* current = panes[i];
+      const int size = static_cast<int>(std::lround(horizontal ? NSWidth(current.frame) : NSHeight(current.frame)));
+      sizes.append(size);
+      remembered.append(size);
+      if (i <= static_cast<NSUInteger>(index)) position += size;
+    }
+    source->setProperty("nativeSplitUserSizes", remembered);
+    if (!source) return;
+    source->setSizes(sizes);
+    if (!source) return;
+    QMetaObject::invokeMethod(source, "splitterMoved", Qt::DirectConnection,
+                              Q_ARG(int, position), Q_ARG(int, static_cast<int>(index) + 1));
   }
 }
 @end

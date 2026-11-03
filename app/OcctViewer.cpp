@@ -12,6 +12,7 @@
 #include <OpenGl_GraphicDriver.hxx>
 #include <OpenGl_GlCore11.hxx>
 #include <OpenGl_Group.hxx>
+#include <OpenGl_ShaderManager.hxx>
 #include <OpenGl_Workspace.hxx>
 #include <OpenGl_View.hxx>
 #include <OpenGl_Window.hxx>
@@ -493,6 +494,18 @@ public:
 occ::handle<OpenGl_Context> glContextOf(const occ::handle<V3d_View>& view) {
   const occ::handle<OpenGl_View> glView = occ::handle<OpenGl_View>::DownCast(view->View());
   return glView->GlWindow()->GetGlContext();
+}
+
+void logGlBinding(const char* phase, const OcctViewer* viewer, const occ::handle<OpenGl_Context>& gl) {
+  if (qEnvironmentVariableIsEmpty("MITCAD_LOG_GL_BINDINGS")) return;
+  const occ::handle<OpenGl_ShaderManager> shaders = gl.IsNull() ? occ::handle<OpenGl_ShaderManager>() : gl->ShaderManager();
+  qInfo().nospace() << "Viewport GL binding " << phase
+      << ": viewer=" << static_cast<const void*>(viewer)
+      << " qt=" << static_cast<const void*>(viewer->context())
+      << " current=" << static_cast<const void*>(QOpenGLContext::currentContext())
+      << " occt=" << static_cast<const void*>(gl.get())
+      << " shaders=" << static_cast<const void*>(shaders.get())
+      << " owns=" << (!shaders.IsNull() && shaders->IsSameContext(gl.get()));
 }
 
 Aspect_VKeyMouse toVKeyMouse(Qt::MouseButtons buttons) {
@@ -1269,7 +1282,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   driver->ChangeOptions().buffersOpaqueAlpha = true; // keep Qt's framebuffer opaque
   driver->ChangeOptions().useSystemBuffer = false;   // always render into FBOs
 #ifdef Q_OS_MACOS
-  // Qt's context is a core profile (macSurfaceFormat()); OCCT must not ask
+  // Qt's context is a core profile (viewportSurfaceFormat()); OCCT must not ask
   // for a compatibility one.
   driver->ChangeOptions().contextCompatible = false;
 #endif
@@ -1641,26 +1654,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
     QCoreApplication::instance()->installEventFilter(this);
   }
 
-#ifdef Q_OS_MACOS
-  // macOS offers only a legacy 2.1 or a forward-compatible core 3.2-4.1
-  // context, and OCCT needs shaders: core 4.1, as OCCT's own Qt sample asks
-  // (a 4.5 request is mapped to 4.1 there). No DeprecatedFunctions: that
-  // would drop the forward-compatible flag, which macOS requires.
-  setFormat(macSurfaceFormat());
-#else
-  // Compatibility profile on purpose: with a core profile OCCT 8.0 reads the
-  // window buffer bits through XGetWindowAttributes() on the current GLX
-  // drawable, which under Qt 6 is an offscreen pbuffer, and crashes.
-  // DeprecatedFunctions stops Qt from requesting a forward-compatible context,
-  // which Mesa turns into a core profile.
-  QSurfaceFormat format;
-  format.setDepthBufferSize(24);
-  format.setStencilBufferSize(8);
-  format.setVersion(4, 5);
-  format.setProfile(QSurfaceFormat::CompatibilityProfile);
-  format.setOption(QSurfaceFormat::DeprecatedFunctions);
-  setFormat(format);
-#endif
+  setFormat(viewportSurfaceFormat());
 }
 
 OcctViewer::~OcctViewer() {
@@ -4070,6 +4064,10 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
                               .arg(static_cast<double>(m_windowClock.nsecsElapsed()) / 1.0e6, 0, 'f', 2)
                               .arg(items.size());
   }
+  // Where the click was, before what it picked (mitcad#1196).
+  if (!m_windowPick && !isCovered(m_clickPosition)) {
+    emit clickedAt(m_clickPosition, m_pressModifiers);
+  }
   emit picked(items, m_pressModifiers, m_windowPick);
 }
 
@@ -5669,7 +5667,26 @@ void OcctViewer::sceneChanged() {
   requestFrame();
 }
 
+void OcctViewer::setDocumentVisible(bool visible) {
+  if (m_documentVisible == visible) return;
+  m_documentVisible = visible;
+  if (!visible) {
+    cancelPointerInteraction();
+    m_navigationTimer->stop();
+    m_scrollTimer->stop();
+    m_restTimer->stop();
+  } else {
+    updateNavigation();
+    requestFrame();
+  }
+  qInfo().noquote() << QStringLiteral("Document viewer %1: %2, frames %3")
+                           .arg(objectName(), visible ? QStringLiteral("visible") : QStringLiteral("hidden"))
+                           .arg(m_framesDrawn);
+  emit documentVisibilityChanged(visible);
+}
+
 void OcctViewer::requestFrame() {
+  if (!m_documentVisible) return;
   update();
   const QWindow* handle = window()->windowHandle();
   if (m_directFrameQueued || handle == nullptr || handle->isExposed() || !isVisible() ||
@@ -5714,7 +5731,18 @@ void OcctViewer::initializeGL() {
   const double shownHeight = (firstTime && !m_fitMade) ? 0.0 : visibleHeight();
   window->SetNativeHandle(occtDrawable());
   window->SetSize(viewWidth, viewHeight);
+  // SetWindow wraps the same Qt native context in a new OCCT context and
+  // shares the previous wrapper's shader manager. Keep that old wrapper
+  // alive until its shared manager has an explicit new owner: its destructor
+  // clears the manager's context pointer while it still owns that pointer.
+  occ::handle<OpenGl_Context> previous = firstTime ? occ::handle<OpenGl_Context>() : glContextOf(m_view);
+  logGlBinding("before SetWindow", this, previous);
   m_view->SetWindow(window, glContext->RenderingContext());
+  const occ::handle<OpenGl_Context> attached = glContextOf(m_view);
+  logGlBinding("after SetWindow", this, attached);
+  attached->ShaderManager()->SetContext(attached.get());
+  previous.Nullify();
+  logGlBinding("after context handover", this, attached);
   if (shownHeight > 0.0 && std::isfinite(shownHeight)) {
     setVisibleHeight(*m_view->Camera(), shownHeight);
   }
@@ -5773,16 +5801,26 @@ void OcctViewer::resizeGL(int width, int height) {
   navigationStep();
 }
 
-#ifdef Q_OS_MACOS
-QSurfaceFormat macSurfaceFormat() {
+QSurfaceFormat viewportSurfaceFormat() {
   QSurfaceFormat format;
   format.setDepthBufferSize(24);
   format.setStencilBufferSize(8);
+#ifdef Q_OS_MACOS
+  // macOS offers legacy 2.1 or forward-compatible core 3.2-4.1 contexts;
+  // OCCT needs shaders. DeprecatedFunctions would remove the required
+  // forward-compatible flag, and unlike profiles cannot share resources.
   format.setVersion(4, 1);
   format.setProfile(QSurfaceFormat::CoreProfile);
+#else
+  // OCCT's GLX backend needs compatibility: core reads Qt's pbuffer with
+  // XGetWindowAttributes(). DeprecatedFunctions prevents Mesa promoting a
+  // forward-compatible request to core. Keep the existing WGL/GLX format.
+  format.setVersion(4, 5);
+  format.setProfile(QSurfaceFormat::CompatibilityProfile);
+  format.setOption(QSurfaceFormat::DeprecatedFunctions);
+#endif
   return format;
 }
-#endif
 
 Aspect_Drawable OcctViewer::occtDrawable() {
 #ifdef _WIN32
@@ -5808,6 +5846,7 @@ Aspect_Drawable OcctViewer::occtDrawable() {
 }
 
 void OcctViewer::paintGL() {
+  if (!m_documentVisible) return;
   if (m_view->Window().IsNull()) {
     return;
   }
@@ -5854,6 +5893,11 @@ void OcctViewer::paintGL() {
   firstFrame.drawn = true;
 
   const occ::handle<OpenGl_Context> glContext = glContextOf(m_view);
+  logGlBinding("before paint", this, glContext);
+  // Qt has made the native context current. Synchronize OCCT's shared
+  // shader manager with the wrapper that owns this view, as OCCT's context
+  // activation does; native-context identity alone does not set that owner.
+  glContext->ShaderManager()->SetContext(glContext.get());
   occ::handle<OpenGl_FrameBuffer> framebuffer = glContext->DefaultFrameBuffer();
   if (framebuffer.IsNull()) {
     framebuffer = new QtFrameBuffer();
@@ -5962,6 +6006,7 @@ void OcctViewer::paintGL() {
 }
 
 void OcctViewer::updateNavigation() {
+  if (!m_documentVisible) return;
   const qint64 now = m_navigationClock.elapsed();
   const ViewNavigation::Change change = m_navigationState.update(now, !ViewAnimation()->IsStopped());
   const int left = m_navigationState.quietLeft(now);
@@ -6144,6 +6189,9 @@ bool OcctViewer::event(QEvent* event) {
     // progress ends here, without a pick.
     cancelPointerInteraction();
   }
+  if (event->type() == QEvent::Leave) {
+    emit pointerLeft(); // mitcad#1196
+  }
   if (event->type() == QEvent::Leave && m_hoveredPoint) {
     // Out of the view (to a panel): the point is under the mouse no more.
     // A move still to be drawn is not dropped: posted input (a UI test in
@@ -6261,6 +6309,24 @@ std::optional<gp_Pnt> OcctViewer::viewPlanePoint(const QPointF& position, const 
     return std::nullopt;
   }
   return gp_Pnt(from + direction * ((through.XYZ() - from).Dot(normal) / along));
+}
+
+std::optional<gp_Pnt> OcctViewer::planePoint(const QPointF& position, const gp_Ax3& plane) const {
+  const NCollection_Vec2<int> pixel = toDevicePixels(position);
+  double x = 0, y = 0, z = 0, dx = 0, dy = 0, dz = 0;
+  m_view->ConvertWithProj(pixel.x(), pixel.y(), x, y, z, dx, dy, dz);
+  const gp_XYZ from(x, y, z);
+  const gp_XYZ direction(dx, dy, dz);
+  const gp_XYZ normal = plane.Direction().XYZ();
+  const double along = direction.Dot(normal);
+  if (std::abs(along) < 1e-9) {
+    return std::nullopt; // looking along the plane
+  }
+  const double reach = (plane.Location().XYZ() - from).Dot(normal) / along;
+  if (reach < 0.0) {
+    return std::nullopt; // the plane is behind the eye there
+  }
+  return gp_Pnt(from + direction * reach);
 }
 
 void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {
@@ -6408,6 +6474,14 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
       }
     }
     return;
+  }
+  // Where the mouse is, for a preview on a chosen plane (mitcad#1196).
+  if (event->buttons() == Qt::NoButton) {
+    if (isCovered(event->position())) {
+      emit pointerLeft();
+    } else {
+      emit pointerMoved(event->position());
+    }
   }
   if (UpdateMousePosition(toDevicePixels(event->position()), viewButtons(event->buttons()),
                           viewFlags(event->modifiers()), false)) {

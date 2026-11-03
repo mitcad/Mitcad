@@ -380,7 +380,8 @@ QJsonObject holeTable(const QString& drawing, int /*sheet*/, const ToolPicks& pi
 QJsonObject partsList(const QString& drawing, int /*sheet*/, const ToolPicks& picks,
                       const QHash<QString, QString>& options) {
   QJsonObject command = tableOn(drawing, picks, QStringLiteral("parts_list"),
-                                {{QStringLiteral("levels"), toolOption("drawing.parts_list", options, "levels")}});
+                                {{QStringLiteral("levels"), toolOption("drawing.parts_list", options, "levels")},
+                                 {QStringLiteral("group_identical"), yes(toolOption("drawing.parts_list", options, "group_identical"))}});
   // Its balloons with it, on by default (mitcad#725).
   if (!command.isEmpty() && yes(toolOption("drawing.parts_list", options, "balloons"))) {
     command.insert(QStringLiteral("balloons"), true);
@@ -415,6 +416,8 @@ void addTableTools(QVector<DrawingToolDef>& tools) {
                 {choice(QStringLiteral("levels"), tr("Rows"),
                         {{QStringLiteral("top"), tr("First Level")}, {QStringLiteral("parts"), tr("Components Only")}},
                         QStringLiteral("top")),
+                 ToolOption{QStringLiteral("group_identical"), tr("Group identical parts"), ToolOption::Kind::Check, {},
+                            QStringLiteral("false")},
                  ToolOption{QStringLiteral("balloons"), tr("Balloons"), ToolOption::Kind::Check, {},
                             QStringLiteral("true")}},
                 &partsList, true, tr("Click where the list goes"), nullptr, nullptr, true});
@@ -444,12 +447,12 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                          {QStringLiteral("radius"), tr("Radius")},
                          {QStringLiteral("diameter"), tr("Diameter")}},
                         QStringLiteral("linear"))},
-                &dimension, true, tr("Click where the dimension goes"), &dimensionPicks, &dimensionType, true});
+                &dimension, true, tr("Click where the dimension goes (Alt: no snap)"), &dimensionPicks, &dimensionType, true});
   tools.append({QStringLiteral("drawing.ordinate"), tr("Ordinate"), QStringLiteral("drawing-ordinate"),
                 tr("Dimensions a point from an origin along the view"), SheetPick::Picks,
                 tr("Click the origin, then the point to dimension"),
                 {choice(QStringLiteral("along"), tr("Direction"), axes, QStringLiteral("horizontal"))}, &ordinate,
-                true, tr("Click where the value goes"), &twoPicks, &ordinateType, true});
+                true, tr("Click where the value goes (Alt: no snap)"), &twoPicks, &ordinateType, true});
   tools.append({QStringLiteral("drawing.baseline"), tr("Baseline"), QStringLiteral("drawing-baseline"),
                 tr("Dimensions several points from the first, or each from the last"), SheetPick::Picks,
                 tr("Click the points to dimension, then a free place for the dimension lines"),
@@ -982,7 +985,7 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
     const QString text = value.trimmed();
     command.insert(QStringLiteral("table"),
                    QJsonObject{{field, text.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(text)}});
-  } else if (field == QStringLiteral("descending")) {
+  } else if (field == QStringLiteral("descending") || field == QStringLiteral("group_identical")) {
     command.insert(QStringLiteral("table"), QJsonObject{{field, yes(value)}});
   } else if (field == QStringLiteral("origin") || field == QStringLiteral("tags") || field == QStringLiteral("levels")) {
     command.insert(QStringLiteral("table"), QJsonObject{{field, value}});

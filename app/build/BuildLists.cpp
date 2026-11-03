@@ -9,6 +9,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QCheckBox>
 #include <QDate>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -27,8 +28,12 @@
 #include <QPageSize>
 #include <QPainter>
 #include <QPdfWriter>
+#include <QPrinter>
 #include <QPushButton>
+#include <QShortcut>
 #include <QStandardPaths>
+#include <QSettings>
+#include <QSaveFile>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
@@ -41,6 +46,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
 #include "BuildModel.hpp"
+#include "../printing/PaperPrint.hpp"
 
 #include "../platform/MacDialogs.hpp"
 
@@ -205,7 +211,9 @@ void fill(QTableWidget* table, const ListTable& list) {
   for (int r = 0; r < list.rows.size(); ++r) {
     const QStringList& cells = list.rows[r];
     for (int c = 0; c < cells.size() && c < list.columns.size(); ++c) {
-      table->setItem(r, c, new QTableWidgetItem(cells[c]));
+      auto* item = new QTableWidgetItem(cells[c]);
+      item->setToolTip(list.tooltips.value(r));
+      table->setItem(r, c, item);
     }
   }
   table->resizeColumnsToContents();
@@ -432,6 +440,11 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
       cells << properties.value(key).toString();
     }
     parts.rows.append(cells);
+    QStringList names;
+    for (const QJsonValue& name : row.value(QStringLiteral("group_names")).toArray()) {
+      names << name.toString();
+    }
+    parts.tooltips.append(names.join(QLatin1Char('\n')));
   }
   return {parts};
 }
@@ -445,13 +458,27 @@ bool writeListPdf(const QString& path, const QString& title, const QString& subt
   writer.setResolution(300);
   writer.setTitle(title);
   writer.setCreator(QStringLiteral("MitCad"));
-  QPainter painter;
-  if (!painter.begin(&writer)) {
+  const int pages = paintListPages(writer, title, subtitle, tables);
+  if (pages == -1) {
     error = QObject::tr("%1 cannot be written").arg(QDir::toNativeSeparators(path));
     return false;
   }
-  const int width = writer.width();
-  const int height = writer.height();
+  if (pages < 0) {
+    error = QObject::tr("%1 was not written").arg(QDir::toNativeSeparators(path));
+    return false;
+  }
+  return true;
+}
+
+int paintListPages(QPagedPaintDevice& device, const QString& title, const QString& subtitle,
+                   const QVector<ListTable>& tables) {
+  QPainter painter;
+  if (!painter.begin(&device)) {
+    return -1;
+  }
+  const int width = device.width();
+  const int height = device.height();
+  int pages = 1;
   QFont heading(QStringLiteral("Helvetica"));
   heading.setPointSizeF(14);
   heading.setBold(true);
@@ -466,7 +493,8 @@ bool writeListPdf(const QString& path, const QString& title, const QString& subt
   };
   const auto room = [&](int needed) {
     if (y + needed > height) {
-      writer.newPage();
+      device.newPage();
+      ++pages;
       y = 0;
     }
   };
@@ -523,10 +551,9 @@ bool writeListPdf(const QString& path, const QString& title, const QString& subt
     y += line;
   }
   if (!painter.end()) {
-    error = QObject::tr("%1 was not written").arg(QDir::toNativeSeparators(path));
-    return false;
+    return -2;
   }
-  return true;
+  return pages;
 }
 
 BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& design, Page page, QWidget* parent)
@@ -570,6 +597,11 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   m_columns->setToolTip(tr("A column per key with each component's value: its own, its library's or computed"));
   columns->addRow(tr("Property co&lumns:"), m_columns);
   parts->addLayout(columns);
+  m_groupIdentical = new QCheckBox(tr("Group identical parts"));
+  m_groupIdentical->setObjectName(QStringLiteral("buildPartsGroupIdentical"));
+  m_groupIdentical->setToolTip(tr("Combine equal measured geometry and material in this report; the design is unchanged"));
+  m_groupIdentical->setChecked(QSettings().value(QStringLiteral("build/groupIdenticalParts"), false).toBool());
+  parts->addWidget(m_groupIdentical);
   m_partsTable = newTable(QStringLiteral("buildPartsList"));
   parts->addWidget(m_partsTable, 1);
   m_tabs->addTab(partsPage, tr("Bill of Materials"));
@@ -578,11 +610,26 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
   auto* copy = buttons->addButton(tr("Copy as &CSV"), QDialogButtonBox::ActionRole);
   copy->setObjectName(QStringLiteral("listCopyCsv"));
+  auto* saveCsv = buttons->addButton(tr("Save as CSV…"), QDialogButtonBox::ActionRole);
+  saveCsv->setObjectName(QStringLiteral("listSaveCsv"));
   auto* pdf = buttons->addButton(tr("Save as &PDF…"), QDialogButtonBox::ActionRole);
   pdf->setObjectName(QStringLiteral("listSavePdf"));
+  // File › Print for the list (mitcad#1089): the window is modal, so it has
+  // the button and the key itself.
+  auto* printButton = buttons->addButton(tr("Pr&int…"), QDialogButtonBox::ActionRole);
+  printButton->setObjectName(QStringLiteral("listPrint"));
+  printButton->setToolTip(tr("Prints the tab shown as its PDF lays it out"));
+  auto* printKey = new QShortcut(QKeySequence::Print, this);
+  connect(printKey, &QShortcut::activated, this, &BuildListsDialog::print);
+  connect(printButton, &QPushButton::clicked, this, &BuildListsDialog::print);
   mac::styleDialogButtons(buttons);
   layout->addWidget(buttons);
   connect(copy, &QPushButton::clicked, this, &BuildListsDialog::copyCsv);
+  connect(saveCsv, &QPushButton::clicked, this, &BuildListsDialog::saveCsv);
+  connect(m_groupIdentical, &QCheckBox::toggled, this, [this](bool checked) {
+    QSettings().setValue(QStringLiteral("build/groupIdenticalParts"), checked);
+    load();
+  });
   connect(pdf, &QPushButton::clicked, this, &BuildListsDialog::savePdf);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   connect(m_kerf, &QDoubleSpinBox::valueChanged, this, [this] { load(); });
@@ -611,7 +658,8 @@ void BuildListsDialog::load() {
     qWarning().noquote() << QStringLiteral("Cut list not read: %1").arg(errorText(error));
   }
   try {
-    QJsonObject query{{QStringLiteral("query"), QStringLiteral("parts_list")}};
+    QJsonObject query{{QStringLiteral("query"), QStringLiteral("parts_list")},
+                      {QStringLiteral("group_identical"), m_groupIdentical->isChecked()}};
     if (!keys.isEmpty()) {
       query.insert(QStringLiteral("properties"), QJsonArray::fromStringList(keys));
     }
@@ -680,6 +728,9 @@ void BuildListsDialog::load() {
                            .arg(m_cut[2].rows.size())
                            .arg(m_kerf->value());
   qInfo().noquote() << QStringLiteral("Build parts list: %1 row(s)").arg(m_parts.first().rows.size());
+  for (const QStringList& row : std::as_const(m_parts.first().rows)) {
+    qInfo().noquote() << QStringLiteral("Build BOM row: %1 x %2").arg(row.value(0), row.value(1));
+  }
   // The property columns (mitcad#496): the keys and each row's values.
   if (!keys.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Build parts list columns: %1").arg(keys.join(QStringLiteral(", ")));
@@ -721,6 +772,54 @@ void BuildListsDialog::copyCsv() {
     qInfo().noquote() << QStringLiteral("Build list CSV: %1").arg(line);
   }
   qInfo().noquote() << QStringLiteral("Build list copied as CSV: %1 line(s)").arg(lines.size());
+}
+
+void BuildListsDialog::print() {
+  const bool cutList = m_tabs->currentIndex() == 0;
+  const QString name = m_design.isEmpty() ? tr("Untitled") : m_design;
+  const QString title = cutList ? tr("Cut List") : tr("Bill of Materials");
+  const QString subtitle = tr("%1, %2").arg(name, QDate::currentDate().toString(Qt::ISODate));
+  // The PDF's paper and margins to start with; the dialog may change them.
+  QPrinter printer(QPrinter::HighResolution);
+  printer.setDocName(QStringLiteral("%1 %2").arg(name, title));
+  printer.setCreator(QStringLiteral("MitCad"));
+  printer.setPageLayout(QPageLayout(QPageSize(QPageSize::A4), QPageLayout::Landscape, QMarginsF(12, 12, 12, 12),
+                                    QPageLayout::Millimeter));
+  if (!printing::askPrinter(printer, this, 0)) {
+    return;
+  }
+  const int pages = paintListPages(printer, title, subtitle, shownTables());
+  if (pages < 0) {
+    const QString error = tr("Could not print to %1.").arg(printing::printerTarget(printer));
+    qWarning().noquote() << QStringLiteral("Build list not printed: %1").arg(error);
+    sheetWarning(this, tr("Print"), error);
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Printed %1: %2 page(s) to %3").arg(title).arg(pages).arg(printing::printerTarget(printer));
+}
+
+void BuildListsDialog::saveCsv() {
+  const QString name = m_design.isEmpty() ? tr("Untitled") : QFileInfo(m_design).completeBaseName();
+  const auto* host = dynamic_cast<const DocumentHost*>(parentWidget());
+  QString fallback = host != nullptr ? host->documentFolder() : QString();
+  if (fallback.isEmpty()) {
+    fallback = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+  }
+  const QString folder = dialogStartFolder(DialogGroup::Export, fallback);
+  const QString path = dialogSaveFileName(this, tr("Save List as CSV"),
+      QDir(folder).filePath(name + QStringLiteral(".csv")), tr("CSV files (*.csv)"));
+  if (path.isEmpty()) {
+    return;
+  }
+  QSaveFile file(path);
+  const QByteArray bytes = csvOf(shownTables()).toUtf8();
+  if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+    qWarning().noquote() << QStringLiteral("Build list CSV not written: %1").arg(file.errorString());
+    sheetCritical(this, tr("Save as CSV"), file.errorString());
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Export, path);
+  qInfo().noquote() << QStringLiteral("Build list saved as CSV: %1").arg(QDir::toNativeSeparators(path));
 }
 
 void BuildListsDialog::savePdf() {

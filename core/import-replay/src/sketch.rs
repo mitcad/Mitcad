@@ -295,6 +295,7 @@ pub fn translate(detail: &SketchDetail, params: &ParamMap) -> SketchParts {
     for (i, t) in detail.texts.as_deref().unwrap_or(&[]).iter().enumerate() {
         let n = ids.next + i as u32;
         if let Some(text) = text(t, n, &ids, &parts.entities, &positions) {
+            start_path_circle(&text, t, &mut parts.entities);
             let string = text["text"].as_str().unwrap_or_default().to_owned();
             parts.text_ids.push((i, format!("t{n}"), string));
             parts.texts.push(text);
@@ -305,6 +306,14 @@ pub fn translate(detail: &SketchDetail, params: &ParamMap) -> SketchParts {
         .keys()
         .filter_map(|k| Some((k.clone(), ids.name(k)?)))
         .collect();
+    // The texts too (mitcad#1177: an extrusion names the texts whose
+    // letters it selects).
+    let texts = detail.texts.as_deref().unwrap_or(&[]);
+    for (i, ours, _) in &parts.text_ids {
+        if let Some(file) = texts.get(*i).and_then(|t| t["id"].as_str()) {
+            parts.ids.insert(file.to_owned(), ours.clone());
+        }
+    }
     parts
 }
 
@@ -1246,12 +1255,52 @@ fn text(
                     path["fit"] = json!(true);
                 }
                 v["path"] = path;
+                // The file's characters along a path keep their own widths
+                // (mitcad#1177: the drill index's pair of ones stands as
+                // far apart as two ones alone).
+                v["no_kerning"] = json!(true);
                 align(&mut v);
+                // A text below its path is the file's text above the path
+                // turned round, so its ends swap (mitcad#1177: the drill
+                // index's left-aligned text ends where its circle starts).
+                if !above {
+                    match v["align"].as_str() {
+                        None => v["align"] = json!("right"),
+                        Some("right") => {
+                            v.as_object_mut().map(|o| o.remove("align"));
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         _ => {}
     }
     Some(v)
+}
+
+/// A whole construction circle that a text runs along starts where the
+/// file's circle starts as a path (`_f3d.pathStart`, mitcad#1177): the
+/// model lays the text out from the circle's start. A circle that makes
+/// faces keeps its start where the stored bodies have their seam.
+fn start_path_circle(text: &Value, t: &Value, entities: &mut [Value]) {
+    let (Some(curve), Some(start)) = (
+        text["path"]["curve"].as_str(),
+        t["_f3d"]["pathStart"].as_f64(),
+    ) else {
+        return;
+    };
+    let Some(circle) = entities
+        .iter_mut()
+        .find(|e| e["id"] == curve && e["type"] == "circle" && e["construction"] == true)
+    else {
+        return;
+    };
+    if start.abs() > 1e-9 {
+        circle["start_angle"] = json!(start);
+    } else {
+        circle.as_object_mut().map(|o| o.remove("start_angle"));
+    }
 }
 
 /// The glyph outlines a file stores with a text (SCHEMA.md `Text.glyphs`,

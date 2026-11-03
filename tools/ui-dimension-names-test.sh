@@ -6,6 +6,7 @@
 # check-all sources: app/framework/Command.hpp app/MainWindowParameterPicks.cpp
 # check-all sources: app/sketch/SketchOverlay.cpp app/sketch/SketchModel.cpp
 # check-all sources: app/commands/ExtrudeCommands.cpp app/commands/FilletCommands.cpp app/commands/CommandSupport.cpp tools/cli
+# check-all sources: app/view/ViewController.cpp
 # Dimension names in feature panels (mitcad#250), through the real UI:
 #   - A design (mitcad-cli): a 40 x 25 rectangle, its width k5 (d1) and
 #     height k6 (d2) dimensioned, its left side measured by the driven k7
@@ -17,7 +18,10 @@
 #   - Edit Extrude2: its tooltip; no labels while the distance field has
 #     the keyboard only because the panel opened (mitcad#587); a click into
 #     the field labels the shown sketch's dimensions in the view, and only
-#     those (not Extrude1's or Fillet1's values); a click on the width's
+#     those (not Extrude1's or Fillet1's values); Right View, Front View
+#     and both again by keys, the field keeping the keyboard: the
+#     labels stay, and the width's is drawn where each view puts it once
+#     the camera rests (mitcad#1179); a click on the width's
 #     label inserts d1 at the field's cursor, d4 and d5 are typed by name;
 #     the tooltip follows, and OK keeps 2*d1+d4+d5.
 #
@@ -50,6 +54,38 @@ cat > "$WORK/model.json" << EOF
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+
+# Right View and Front View by keys of our own, as Tools > Keyboard
+# Shortcuts saves them: they turn the view while the field keeps the
+# keyboard (mitcad#1179).
+mkdir -p "$XDG_CONFIG_HOME/Mitcad"
+printf '[shortcuts]\nview.right=F7\nview.front=F8\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
+
+# label_at "<label>" [drawn]: the last place logged since the mark for the
+# label ("Parameter label <label> at x,y"), or where a paint drew it
+# ("... drawn at x,y").
+label_at() {
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Parameter label $1 ${2:+$2 }at " | tail -1 | sed 's/.* at //'
+}
+
+# expect_label_follows "<label>" "<description>": once the camera rests, the
+# label has a new place since the mark, and the last paint drew it there;
+# the place in LABEL_AT.
+expect_label_follows() {
+  local drawn i
+  for i in $(seq 1 100); do
+    LABEL_AT=$(label_at "$1")
+    drawn=$(label_at "$1" drawn)
+    [ -n "$LABEL_AT" ] && [ "$LABEL_AT" = "$drawn" ] && break
+    sleep 0.05
+  done
+  [ -n "$LABEL_AT" ] || ui_fail "$2: the label's place did not change as the camera turned"
+  [ "$LABEL_AT" = "$drawn" ] ||
+    ui_fail "$2: the label was drawn at ${drawn:-its old place}, the camera puts it at $LABEL_AT"
+  grep -q "Parameter labels for Extrude hidden" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+    ui_fail "$2: the labels were hidden"
+  echo "ok   $2 (at $LABEL_AT)"
+}
 
 ui_start_display
 ui_start_app --open "$FILE"
@@ -84,6 +120,36 @@ ui_expect_new "Parameter label Sketch1 k7 d3 at" "and its driven dimension, by i
 grep -qE "Parameter label (Extrude1|Fillet1) " <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
   ui_fail "an earlier feature's value was labelled (only sketch dimensions, mitcad#587)"
 echo "ok   only the sketch's dimensions are labelled"
+# The labels follow the camera as it turns (mitcad#1179): Right View and
+# Front View by their keys, the field keeping the keyboard and the labels;
+# each time the width's label has a new place, drawn where the camera puts
+# it once the camera rests, and the same place for the same view.
+start=$(label_at "Sketch1 k5 d1")
+ui_mark
+ui_step "Right View (F7)"                ui_key F7
+ui_expect_new "Camera direction -1 0 0 up 0 0 1" "the view turned to the right" 10
+expect_label_follows "Sketch1 k5 d1" "the width's label follows to the right view"
+right=$LABEL_AT
+[ "$right" != "$start" ] || ui_fail "the width's label stayed at $start"
+ui_mark
+ui_step "Front View (F8)"                ui_key F8
+ui_expect_new "Camera direction 0 1 0 up 0 0 1" "the view turned to the front" 10
+expect_label_follows "Sketch1 k5 d1" "the width's label follows to the front view"
+front=$LABEL_AT
+[ "$front" != "$right" ] || ui_fail "the width's label stayed at $right"
+ui_mark
+ui_step "Right View again (F7)"          ui_key F7
+ui_expect_new "Camera direction -1 0 0 up 0 0 1" "the view turned to the right again" 10
+expect_label_follows "Sketch1 k5 d1" "the width's label follows back to the right view"
+[ "$LABEL_AT" = "$right" ] || ui_fail "the width's label is at $LABEL_AT in the right view, before at $right"
+# Front View again, where the width's label is well inside the view for
+# the click on it below.
+ui_mark
+ui_step "Front View again (F8)"          ui_key F8
+ui_expect_new "Camera direction 0 1 0 up 0 0 1" "the view turned to the front again" 10
+expect_label_follows "Sketch1 k5 d1" "the width's label follows back to the front view"
+[ "$LABEL_AT" = "$front" ] || ui_fail "the width's label is at $LABEL_AT in the front view, before at $front"
+echo "ok   the labels follow the camera"
 ui_step "type 2* into the distance"      ui_type_in "Panel Extrude input distance" "2*"
 ui_mark
 ui_step "click the width's label"        ui_click_logged "Parameter label Sketch1 k5 d1"

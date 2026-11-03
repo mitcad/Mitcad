@@ -4,6 +4,7 @@
 # check-all sources: core/model-api/src/drawings.rs core/model-api/src/drawing.rs core/model/src/document/drawings.rs tools/cli
 # check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/annotations.rs app/view/AnnotationDialogs.cpp
 # check-all sources: core/model-api/src/drawing_tables.rs core/model-api/src/drawing_templates.rs app/print
+# check-all sources: app/printing
 # check-all sources: core/dwg/src/write.rs
 # check-all sources: core/model-api/src/cut_sheets.rs app/browser/DocumentHost.hpp
 # check-all sources: app/framework/Ribbon.cpp app/framework/FloatingLayout.cpp app/framework/GlassCard.cpp
@@ -61,6 +62,8 @@
 #   - Saved and opened again: the drawing with its five views and its
 #     annotations.
 #   - Export… PDF: a PDF of the sheet with the note and the dimension;
+#     File › Print (Ctrl+P, to a PDF file in place of the system's dialog,
+#     mitcad#1089): one page of the sheet's size;
 #     Export… DWG: an R2000 DWG file of it (mitcad#728).
 #   - Templates and revisions (phase 4): Body1 made PLA (the Material tool), the
 #     title block's material follows; Add Revision: the revision table and
@@ -93,6 +96,10 @@ WORK=$(mktemp -d /tmp/mitcad-ui-drawings.XXXXXX)
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 R='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
 FILE="$WORK/block.mitcad"
+# File › Print (mitcad#1089) prints to this PDF in place of the system's
+# dialog.
+PRINTED=$WORK/printed.pdf
+export MITCAD_TEST_PRINT_PDF=$PRINTED
 
 cat > "$WORK/block.json" << EOF
 [
@@ -479,6 +486,17 @@ ui_mark
 ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_expect_new "Drawing hint: Click the edges, circles or corners to dimension on a view" "its hint"
+# A click that picks nothing is a hint, not an error (mitcad#1174): off the
+# views, and on the front view away from its edges.
+ui_mark
+ui_step "the empty sheet"                  sheet_click 120 220
+ui_expect_new "Message band: hint Click on a view." "off the views: a hint"
+ui_step "the front view, off its edges"    sheet_click 100 128
+ui_expect_new "Drawing pick: nothing at" "nothing picked on the view"
+ui_expect_new "Message band: hint Nothing to pick there: " "a missed pick: a hint"
+grep -qE "^(Status error|Message band: error) (Click on a view|Nothing to pick)" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "a missed pick said as an error"
+echo "ok   no missed pick said as an error"
 # What a click would pick is highlighted under the pointer (mitcad#725).
 ui_step "point at the bottom edge"         sheet_hover 95 100.5
 ui_expect_new "Drawing hover: line" "the edge under the pointer highlighted"
@@ -842,6 +860,23 @@ echo "ok   the PDF has its page"
 grep -aq "(DEBURR)" "$WORK/drawing.pdf" || ui_fail "the PDF has no note"
 grep -aq "(35 " "$WORK/drawing.pdf" || ui_fail "the PDF has no dimension of the block"
 echo "ok   the PDF has the note and the dimension"
+
+echo "--- Print (mitcad#1089)"
+ui_mark
+ui_expect_log "Print available: drawing Drawing1" "File › Print prints the open drawing"
+ui_step "Print (Ctrl+P)"                   ui_key ctrl+p
+ui_expect_new "Print dialog skipped (test): printing to $PRINTED" "the test's PDF in place of the dialog"
+ui_expect_new "Printed drawing Drawing1: 1 page(s), sheets " "the sheet printed on a page of its size" 30
+size=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed -n 's/^Printed drawing Drawing1: 1 page(s), sheets \([0-9.]*\) x \([0-9.]*\) mm to .*/\1 \2/p' | tail -1)
+[ -n "$size" ] || ui_fail "the print did not log its sheet's size"
+[ "$(grep -aoE '/Type */Page([^s]|$)' "$PRINTED" | wc -l | tr -d ' ')" = 1 ] || ui_fail "the printed PDF has not one page"
+read -r sheet_w sheet_h <<< "$size"
+grep -aoE '/MediaBox *\[ *0 +0 +[0-9.]+ +[0-9.]+ *\]' "$PRINTED" | head -1 |
+  sed -E 's/.*\[ *0 +0 +([0-9.]+) +([0-9.]+) *\]/\1 \2/' |
+  awk -v w="$sheet_w" -v h="$sheet_h" '{ dw = $1 - w * 72 / 25.4; dh = $2 - h * 72 / 25.4
+    exit !(dw > -1 && dw < 1 && dh > -1 && dh < 1) }' ||
+  ui_fail "the printed page is not the sheet's size ($size mm)"
+echo "ok   the printed PDF has one page of the sheet's size ($size mm)"
 
 echo "--- Export a DWG (mitcad#728)"
 ui_mark

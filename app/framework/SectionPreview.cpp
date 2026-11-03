@@ -8,9 +8,7 @@
 
 #include <BOPTools_AlgoTools3D.hxx>
 #include <BRepAdaptor_Surface.hxx>
-#include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
-#include <GProp_GProps.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <Geom_Surface.hxx>
 #include <IntTools_Context.hxx>
@@ -21,6 +19,7 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
 
 namespace mitcad {
@@ -143,14 +142,7 @@ std::vector<TopoDS_Face> sectionCapFaces(const TopoDS_Shape& cut, const TopoDS_S
   return caps;
 }
 
-double facesArea(const std::vector<TopoDS_Face>& faces) {
-  double area = 0.0;
-  for (const TopoDS_Face& face : faces) {
-    GProp_GProps properties;
-    BRepGProp::SurfaceProperties(face, properties);
-    area += properties.Mass();
-  }
-  return area;
-}
+// Integrated as the model's areas are (mitcad#1200).
+double facesArea(const std::vector<TopoDS_Face>& faces) { return geometry::faces_area(faces); }
 
 } // namespace mitcad

@@ -41,7 +41,11 @@ constexpr std::size_t kPoints = 9;
 
 // A region's box grows by this share of its diagonal, at least by
 // kMinMargin mm, on every side; on later attempts by twice and four times
-// that.
+// that. A first attempt grows it by this share of its middle side
+// instead (mitcad#1177: a deep hole's faces, 8 by 8 by 125 mm, grew by
+// 63 mm on every side, over a whole drill index's top with its embossed
+// text, whose faces lie a few micrometres off the stored ones, and the
+// whole bodies were cut: 800 s).
 constexpr double kMargin = 0.5;
 constexpr double kMinMargin = 0.5;
 constexpr int kAttempts = 3;
@@ -202,12 +206,22 @@ double box_volume(const Bnd_Box& box) {
   return size.X() * size.Y() * size.Z();
 }
 
-// The boxes grown, those that come within `apart` of each other united,
-// until none do.
-std::vector<Bnd_Box> grown(const std::vector<Bnd_Box>& regions, double factor, double apart) {
+// The middle one of a box's three sides.
+double middle_side(const Bnd_Box& box) {
+  const gp_XYZ size = box.CornerMax().XYZ() - box.CornerMin().XYZ();
+  double sides[3] = {size.X(), size.Y(), size.Z()};
+  std::sort(sides, sides + 3);
+  return sides[1];
+}
+
+// The boxes grown (by their diagonals' share times `factor`, or with
+// `middle` by their middle sides' share), those that come within `apart`
+// of each other united, until none do.
+std::vector<Bnd_Box> grown(const std::vector<Bnd_Box>& regions, double factor, double apart, bool middle = false) {
   std::vector<Bnd_Box> boxes;
   for (const Bnd_Box& box : regions) {
-    boxes.push_back(inflated(box, factor * std::max(kMinMargin, kMargin * std::sqrt(box.SquareExtent()))));
+    const double extent = middle ? middle_side(box) : std::sqrt(box.SquareExtent());
+    boxes.push_back(inflated(box, factor * std::max(kMinMargin, kMargin * extent)));
   }
   for (bool joined = true; joined;) {
     joined = false;
@@ -401,8 +415,12 @@ BooleanResult removed_material(const Shape& before, const Shape& after, double s
     Bnd_Box body;
     BRepBndLib::Add(before.occt(), body);
     if (!body.IsVoid()) {
-      for (int attempt = 0; attempt < kAttempts; ++attempt) {
-        const std::vector<Bnd_Box> boxes = grown(regions, static_cast<double>(1 << attempt), 2.0 * kApart);
+      // The first attempt by the regions' middle sides, then by their
+      // diagonals.
+      for (int attempt = -1; attempt < kAttempts; ++attempt) {
+        const std::vector<Bnd_Box> boxes =
+            attempt < 0 ? grown(regions, 1.0, 2.0 * kApart, true)
+                        : grown(regions, static_cast<double>(1 << attempt), 2.0 * kApart);
         double share = 0.0;
         for (const Bnd_Box& box : boxes) {
           share += box_volume(box);

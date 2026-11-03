@@ -19,8 +19,9 @@
 
 namespace mitcad::geometry {
 
-// A sketch region (its outer loop), a face of a body (its outer loop) or a
-// point (only first or last).
+// A sketch region (its outer loop; one with holes is refused), a face of a
+// body (its outer loop, also of a face with holes, mitcad#1183) or a point
+// (only first or last).
 struct LoftSection {
   enum class Kind { Region, Face, Point };
   Kind kind = Kind::Region;

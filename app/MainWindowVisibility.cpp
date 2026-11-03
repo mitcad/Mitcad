@@ -53,7 +53,7 @@ void MainWindow::logSketchPicks() {
   // planar, or left out by the policy), as "Pick refused face ...".
   qDebug().noquote() << "Pick places:";
   const auto logPlace = [this](const SelectionItem& item, const QPoint& at, const QString& prefix) {
-    const QPoint point = m_viewer->mapTo(this, at);
+    const QPoint point = m_viewer->mapTo(window(), at);
     qDebug().noquote() << QStringLiteral("Pick %1%2 %3/%4%5 at %6,%7")
                               .arg(prefix, SelectionItem::kindName(item.kind), item.owner, item.name,
                                    item.occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + item.occurrence)

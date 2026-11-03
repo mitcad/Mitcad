@@ -276,41 +276,38 @@ fn curve_flags_of(
 
 /// Arcs and circles by object id.
 pub fn arcs(seg: &Segment) -> HashMap<u64, ArcGeom> {
-    let mut out = HashMap::new();
-    for o in seg.objects_of(SKETCH_ARC) {
-        let d = seg.data(o);
-        let Some(root) = seg.root_part(d) else {
-            continue;
-        };
-        let p = root.end;
-        let Some(v) = f64s_at(d, p, 12) else { continue };
-        let mut q = p + 96;
-        let mut refs = Vec::new();
-        for _ in 0..3 {
-            match seg.ref_at(d, q) {
-                Some(r) if classes::is_point_class(seg.guid_of(r.id)) => {
-                    refs.push(r.id);
-                    q = r.end;
-                }
-                _ => break,
+    seg.objects_of(SKETCH_ARC)
+        .filter_map(|o| Some((o.id, arc(seg, o)?)))
+        .collect()
+}
+
+/// One arc or circle record.
+pub fn arc(seg: &Segment, o: &Object) -> Option<ArcGeom> {
+    let d = seg.data(o);
+    let p = seg.root_part(d)?.end;
+    let v = f64s_at(d, p, 12)?;
+    let mut q = p + 96;
+    let mut refs = Vec::new();
+    for _ in 0..3 {
+        match seg.ref_at(d, q) {
+            Some(r) if classes::is_point_class(seg.guid_of(r.id)) => {
+                refs.push(r.id);
+                q = r.end;
             }
+            _ => break,
         }
-        out.insert(
-            o.id,
-            ArcGeom {
-                center: vec3(&v[0..3]),
-                normal: vec3(&v[3..6]),
-                ref_dir: vec3(&v[6..9]),
-                radius: v[9],
-                start_angle: v[10],
-                end_angle: v[11],
-                center_point: refs.first().copied(),
-                end_point: refs.get(1).copied(),
-                start_point: refs.get(2).copied(),
-            },
-        );
     }
-    out
+    Some(ArcGeom {
+        center: vec3(&v[0..3]),
+        normal: vec3(&v[3..6]),
+        ref_dir: vec3(&v[6..9]),
+        radius: v[9],
+        start_angle: v[10],
+        end_angle: v[11],
+        center_point: refs.first().copied(),
+        end_point: refs.get(1).copied(),
+        start_point: refs.get(2).copied(),
+    })
 }
 
 /// A sketch spline [`SKETCH_SPLINE`] (mitcad#154): a B-spline in sketch
@@ -897,9 +894,15 @@ pub fn parse_constraint(seg: &Segment, o: &Object) -> Option<ConstraintRaw> {
         p += 1;
     }
     let tail_start = attributes_end(d, p);
+    // A text's path constraint keeps 132 bytes per character before the
+    // sketch (mitcad#1177): the sketch reference follows them.
+    let from = tail_start
+        .filter(|_| seg.guid_of(o.id) == Some(TEXT_PATH_CONSTRAINT))
+        .and_then(|s| text_path_part(seg, d, s))
+        .map_or(p, |part| part.end);
     // (A pattern constraint of newer writers keeps its values before the
     // sketch: over 200 bytes.)
-    for q in p..d.len().min(p + 1000) {
+    for q in from..d.len().min(from + 1000) {
         let Some(r) = seg.ref_at(d, q) else { continue };
         if seg.guid_of(r.id) != Some(SKETCH) {
             continue;
@@ -922,6 +925,67 @@ pub fn parse_constraint(seg: &Segment, o: &Object) -> Option<ConstraintRaw> {
         });
     }
     None
+}
+
+/// The part of a text's path constraint ([`TEXT_PATH_CONSTRAINT`],
+/// mitcad#1177) between its root part and its sketch reference: `[u8 1]
+/// ref text | u32 n | n × (u32 16 | f64 m[16])` (the `u8 1` from class
+/// version 1). Each `m` is a row-major 4×4 matrix, a planar rigid
+/// placement of one character in the sketch (cm): its first column the
+/// character's baseline direction, its second the character's up, its
+/// translation the character's pen moved up to the font's ascender line
+/// (a reported drill index with a text round a circle: the stored
+/// body's glyphs lie where these put them).
+///
+/// The matrices are stored in the order the characters lie along the
+/// path. A text that hangs below its path lists them against its reading
+/// order, last character first (the same file: its text on the outside of
+/// the circle reads counter-clockwise from its first character while the
+/// matrices run clockwise from the last).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextPathRaw {
+    pub text: u64,
+    pub characters: Vec<[f64; 16]>,
+    /// Where the part ends (the sketch reference).
+    pub end: usize,
+}
+
+fn text_path_part(seg: &Segment, d: &[u8], at: usize) -> Option<TextPathRaw> {
+    let is_text = |q: usize| {
+        seg.ref_at(d, q)
+            .filter(|r| seg.guid_of(r.id) == Some(SKETCH_TEXT))
+    };
+    let text =
+        is_text(at).or_else(|| (d.get(at) == Some(&1)).then(|| is_text(at + 1)).flatten())?;
+    let n = u32_at(d, text.end)? as usize;
+    let mut q = text.end + 4;
+    let mut characters = Vec::with_capacity(n.min(10_000));
+    for _ in 0..n {
+        if u32_at(d, q)? != 16 {
+            return None;
+        }
+        let m = <[f64; 16]>::try_from(f64s_at(d, q + 4, 16)?).ok()?;
+        if !m.iter().all(|x| x.is_finite()) || m[12..16] != [0.0, 0.0, 0.0, 1.0] {
+            return None;
+        }
+        characters.push(m);
+        q += 4 + 128;
+    }
+    Some(TextPathRaw {
+        text: text.id,
+        characters,
+        end: q,
+    })
+}
+
+/// A text's path constraint: the text and each character's placement.
+pub fn text_path(seg: &Segment, o: &Object) -> Option<TextPathRaw> {
+    if seg.guid_of(o.id) != Some(TEXT_PATH_CONSTRAINT) {
+        return None;
+    }
+    let d = seg.data(o);
+    let (start, _) = parse_constraint(seg, o)?.tail?;
+    text_path_part(seg, d, start)
 }
 
 /// Where the root part's attributes (`u8 has_attrs [u32 n, n ×
@@ -1341,7 +1405,10 @@ pub fn parse_text(seg: &Segment, o: &Object) -> Option<TextRaw> {
 /// A text as SCHEMA.md `Text` (cm). The API gives no position and angle
 /// for a text in a box or on a path; they are written when the file stores
 /// the text's placement. The box's lines and the path's curve come from the
-/// text's own constraint (`TextBoxConstraint`, `TextPathConstraint`).
+/// text's own constraint (`TextBoxConstraint`, `TextPathConstraint`); so do
+/// the side of the path a text lies on (`isAbovePath`, from the order of
+/// its characters' placements) and where a whole circle as its path starts
+/// (`_f3d.pathStart`).
 pub fn text_value(
     seg: &Segment,
     text: u64,
@@ -1373,7 +1440,7 @@ pub fn text_value(
     let tie = constraints.iter().find_map(|&c| {
         let pc = parse_constraint(seg, seg.object(c)?)?;
         let ours = pc.roles.iter().any(|(e, _)| *e == text);
-        (ours && matches!(pc.mask, 0x100_0000_0000 | 0x200_0000_0000)).then_some(pc)
+        (ours && matches!(pc.mask, 0x100_0000_0000 | 0x200_0000_0000)).then_some((c, pc))
     });
     let entity = |e: u64| {
         curves
@@ -1381,16 +1448,26 @@ pub fn text_value(
             .map(|c| json!({"kind": "sketch_entity", "id": c}))
     };
     let mut definition = serde_json::Map::new();
+    let mut path_start = None;
     match (&tie, raw.kind) {
-        (Some(pc), 1) if pc.mask == 0x200_0000_0000 => {
+        (Some((c, pc)), 1) if pc.mask == 0x200_0000_0000 => {
             definition.insert("_type".into(), json!("AlongPathTextDefinition"));
-            if let Some(path) = pc.entities.first().copied().and_then(entity) {
+            let curve = pc.entities.first().copied();
+            if let Some(path) = curve.and_then(entity) {
                 definition.insert("path".into(), path);
             }
+            let placed = seg.object(*c).and_then(|o| text_path(seg, o));
+            if let Some(above) = placed.as_ref().and_then(|p| above_path(p, &raw.text)) {
+                definition.insert("isAbovePath".into(), json!(above));
+            }
+            path_start = curve
+                .and_then(|e| seg.object(e))
+                .and_then(|o| arc(seg, o))
+                .and_then(|a| circle_path_start(&a));
         }
         _ => {
             definition.insert("_type".into(), json!("MultiLineTextDefinition"));
-            if let Some(pc) = tie.as_ref().filter(|pc| pc.mask == 0x100_0000_0000) {
+            if let Some((_, pc)) = tie.as_ref().filter(|(_, pc)| pc.mask == 0x100_0000_0000) {
                 let lines: Vec<serde_json::Value> =
                     pc.entities.iter().filter_map(|&e| entity(e)).collect();
                 if lines.len() == 4 {
@@ -1428,7 +1505,36 @@ pub fn text_value(
         value["position"] = json!([m[3], m[7], 0.0]);
         value["angle"] = json!(m[4].atan2(m[0]));
     }
+    if let Some(a) = path_start {
+        value["_f3d"]["pathStart"] = json!(a);
+    }
     value
+}
+
+/// Whether a text lies above its path (on its left, reading along it) or
+/// hangs below it, from the order its characters' placements are stored
+/// in ([`TextPathRaw`]): along the reading direction above, against it
+/// below. `None` when the placements are not one per character or do not
+/// tell (fewer than two, or the first two at one place).
+fn above_path(placed: &TextPathRaw, text: &str) -> Option<bool> {
+    let [m0, m1, ..] = placed.characters[..] else {
+        return None;
+    };
+    if placed.characters.len() != text.chars().count() {
+        return None;
+    }
+    let along = (m1[3] - m0[3]) * m0[0] + (m1[7] - m0[7]) * m0[4];
+    (along.abs() > 1e-9).then_some(along > 0.0)
+}
+
+/// Where a whole circle starts as a text's path: opposite its reference
+/// direction (its parameter runs from -π to π about that direction), as an
+/// angle about the sketch normal from the sketch x axis (radians). The
+/// drill index's text ends there to 1e-6° (mitcad#1177). `None` for an arc
+/// and for a circle turning the other way about the sketch normal.
+fn circle_path_start(a: &ArcGeom) -> Option<f64> {
+    let [x, y, _] = a.ref_dir;
+    (a.is_circle() && a.normal[2] > 0.0 && x.hypot(y) > 1e-9).then(|| (-y).atan2(-x))
 }
 
 /// Type of a constraint mask (section 10.3).
@@ -1463,9 +1569,10 @@ pub fn constraint_type(mask: u64) -> Option<&'static str> {
         // box's corner point in some files). Not a constraint of the
         // geometry.
         0x100_0000_0000 => "TextBoxConstraint",
-        // A text and one curve, with four matrices (a text along a path,
-        // unverified: its record names the text and the curve; the API
-        // lists no constraint for it).
+        // A text along a path: its record (class `9D30FCDC`, mitcad#1177)
+        // names the text and the curve and keeps each character's
+        // placement ([`TextPathRaw`]); the API lists no constraint for it.
+        // Not a constraint of the geometry.
         0x200_0000_0000 => "TextPathConstraint",
         _ => return None,
     })

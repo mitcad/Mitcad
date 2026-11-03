@@ -25,9 +25,12 @@ class QWidget;
 
 namespace mitcad {
 
-// The preference (settings "general/askActivateComponent", Preferences >
+// The preference (settings "components/askActivate", Preferences >
 // General "Ask to activate the component of a picked face"), on by default;
-// the question's Don't ask again turns it off. With no saved value it is
+// the question's Don't ask again turns it off. A value saved under the old
+// key "general/askActivateComponent" is moved to it once (mitcad#1190;
+// an INI file reads that key back as "General/askActivateComponent",
+// which is moved too). With no saved value it is
 // off when MITCAD_ASK_ACTIVATE_COMPONENT is 0: the UI test libraries set
 // that, so that their sketches on other components' faces stay as they were
 // (a test of the question sets it to 1).

@@ -146,6 +146,7 @@ struct NativeMacHistoryItem {
   // group's name on each of its first to last features the filter shows
   // (empty: none), and whether the group is folded into one cell.
   QString group;
+  QString groupFirst; // Canonical shared group head for hover and tooltip callbacks.
   bool groupCollapsed = false;
 };
 
@@ -169,8 +170,12 @@ struct NativeMacQuickAccess {
   QStringList tooltips; // one per shown command
   QList<NativeMacMenuItem> menus;
   QStringList chosen;
+  // Preferences › Display › Show quick-access toolbar (mitcad#1189):
+  // false hides the whole group, its ⋮ too.
+  bool visible = true;
   bool operator==(const NativeMacQuickAccess& other) const {
-    return shown == other.shown && tooltips == other.tooltips && menus == other.menus && chosen == other.chosen;
+    return shown == other.shown && tooltips == other.tooltips && menus == other.menus && chosen == other.chosen &&
+           visible == other.visible;
   }
 };
 
@@ -200,6 +205,9 @@ struct NativeMacWindowCallbacks {
   std::function<void(const QString&)> historyRename;
   std::function<bool()> requestClose;
   std::function<void()> closed;
+  std::function<void()> requestQuit;
+  std::function<void()> activated;
+  std::function<void(bool)> presentationVisible;
   std::function<void(const QString&, bool)> visibilityChanged;
   std::function<void(int)> historyMarkerChanged;
   // Start only when historyCanChange permits it. Once started, finish must
@@ -281,6 +289,8 @@ struct NativeMacWindowCallbacks {
   // unchecked, and Reset to Default; after the menu has closed.
   std::function<void(const QString&, bool)> quickAccessChosen;
   std::function<void()> quickAccessReset;
+  // Its Hide Quick-Access Toolbar (mitcad#1189), after the menu has closed.
+  std::function<void()> quickAccessHidden;
   // The message band (mitcad#1098): its × closed the message shown in full;
   // a history row about a feature was clicked (the feature's uid).
   std::function<void()> messageClosed;
@@ -293,6 +303,8 @@ struct NativeMacWindowState;
 
 // In-process native input acceptance check; called by NativeTestInput.
 bool nativeWindowRefreshContract(void* window, QString& error);
+// Borrowed per-document NSMenu*, or nullptr for a foreign/closing window.
+void* nativeDocumentWindowMenu(void* window);
 
 // Owns an AppKit window and its controls, but not the supplied Qt viewport.
 // The viewport must be a standalone QWidget containing only the CAD canvas
@@ -309,7 +321,7 @@ public:
   bool modalBlocked() const;
   QString embeddingError() const;
   void show();
-  void close();
+  bool close();
   void focusViewport();
 
   void setActions(const QList<NativeMacAction>& actions);
@@ -393,7 +405,9 @@ public:
   // the document's name would be cut, as the Qt title row's. Logs "Native
   // quick access: <ids>", each button's state with its tooltip ("Native
   // quick access file.save disabled: Save (⌘S): no unsaved changes") and
-  // "Native quick access folded" or "unfolded".
+  // "Native quick access folded" or "unfolded". A group that is not
+  // `visible` is hidden whole and the tabs' item closes up ("Native quick
+  // access hidden", "Native quick access shown").
   void setQuickAccess(const NativeMacQuickAccess& group);
   // The navigation bar (mitcad#1099): a capsule card at the bottom centre
   // of the view, above the timeline, the status pill above it; hidden while

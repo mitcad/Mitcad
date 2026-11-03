@@ -10,8 +10,9 @@
 # 10, M4 7 16, M5 8.5 20), a text option Size ('M4', no domain yet) and a
 # number option Length (16 mm) that a 10 x 10 mm extrusion takes as its
 # distance; no rows, no rules.
-#   1. Configurations…, Options: Size selected, Edit Domain…, Table Column
-#      (Alt+T; Screws.Size is offered), OK: Size's values are the column.
+#   1. Configurations…, Options: Size selected, Edit Possible Values…,
+#      Table Column (Alt+T; Screws.Size is offered), OK: Size's possible
+#      values are the column.
 #   2. Rows: Generate Rows from Table… offers Screws.Size for Size and the
 #      other columns dk and Length checked (mitcad#1044); both unchecked,
 #      OK makes the rows M3, M4 and M5 of the key only (one undo step).
@@ -71,7 +72,7 @@ ui_start_display
 ui_start_app --open "$FILE" --no-native-dialogs
 ui_expect_log "Browser Root at" "the design is open"
 
-echo "--- 1. A table column as Size's domain"
+echo "--- 1. A table column as Size's possible values"
 ui_mark
 ui_step "Configurations (search)"        ui_command "Configurations"
 ui_expect_new "Configurations window opened" "the window opened"
@@ -79,9 +80,9 @@ ui_expect_new "Configurations option Size option at" "the options' places are lo
 ui_focus_dialog '^Configurations$'
 ui_mark
 ui_step "select Size"                    ui_click_logged "Configurations option Size option"
-ui_step "Edit Domain…"                   ui_click_logged "Configurations edit domain"
-ui_expect_new "Option Domain dialog opened for Size" "the domain of Size"
-ui_focus_dialog '^Option Domain$'
+ui_step "Edit Possible Values…"          ui_click_logged "Configurations edit domain"
+ui_expect_new "Possible Values dialog opened for Size" "the possible values of Size"
+ui_focus_dialog '^Possible Values$'
 ui_step "Table Column (Alt+T)"           ui_key alt+t
 ui_step "OK (Enter)"                     ui_key Return
 ui_expect_new "Option Size domain: column Screws.Size" "the column is Size's domain"

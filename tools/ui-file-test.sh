@@ -16,6 +16,8 @@
 # check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/diff.rs
 
 source "$(dirname "$0")/ui-test-lib.sh"
+# New and Open replace the design, as these steps expect (mitcad#1172).
+ui_open_in_current_window
 
 WORK=$(mktemp -d /tmp/mitcad-ui-file.XXXXXX)
 FILE=$WORK/block.mitcad
@@ -98,7 +100,7 @@ project_menu="New Project | Open Project | Open from Cloud | - | Sync | Check fo
 project_menu="$project_menu | - | Project Settings | - | Web Viewer | Update Web Viewer"
 file_menu="New Design | Open | Open from Project | Open Recent > | Open Read-Only | Close | - | Save | Save As"
 file_menu="$file_menu | Save to Project | Save with Description"
-file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Create Drawing | Export Drawing | - | Recover Designs"
+file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Create Drawing | Export Drawing | - | Print | - | Recover Designs"
 file_menu="$file_menu | - | Exit"
 ui_mark
 ui_step "file menu (Alt+F)"              ui_key alt+f

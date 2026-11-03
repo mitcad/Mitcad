@@ -7,7 +7,8 @@
 # the default buttons after the workspace tabs; Save disabled for the
 # unchanged design with its reason in the tooltip, enabled after a change;
 # View › Look At checked in the group's ⋮ menu adds a button; Reset to
-# Default; a narrow window folds the group into its ⋮.
+# Default; a narrow window folds the group into its ⋮; Hide Quick-Access
+# Toolbar in its menu hides the whole group (mitcad#1189).
 # Usage: tools/ui-macos-native-quick-access-test.sh <app> <mitcad-cli> <output directory>
 # Requires MITCAD_MACOS_NATIVE_UI=ON and a logged-in macOS window server.
 set -uo pipefail

@@ -636,3 +636,289 @@ fn a_parts_list_of_a_subassemblys_view_lists_what_is_in_it() {
     assert_eq!(shown["broken"], false, "{shown}");
     assert_eq!(shown["label"], "1");
 }
+
+#[test]
+fn grouped_parts_list_keeps_every_components_balloon_number_and_material() {
+    let (mut doc, [_, second, _]) = assembly();
+    doc.kernel().measures.set(true);
+    let copy = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "PlateCopy"}),
+    );
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F5", "corner": [60, 0], "width": 40, "height": 30},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F5", "region": R}],
+                "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"}
+        ]),
+    );
+    let list = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+            "type": "parts_list", "at": [300, 280], "table": {"group_identical": true}
+        }),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(annotation(&doc, list)["label"], "1 Pin x1; 2 Plate x3");
+    let mut balloons = Vec::new();
+    for (body, occurrence) in [
+        ("F2.b0", json!(second)),
+        ("F6.b0", copy["occurrence"].clone()),
+    ] {
+        let edge = edge_of(&doc, body);
+        let id = command(
+            &mut doc,
+            json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+                "type": "balloon", "picks": [{"body": body, "occurrence": occurrence, "edge": edge}]
+            }),
+        )["annotation"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(annotation(&doc, id)["label"], "2");
+        balloons.push(id);
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": copy["component"], "material": "aluminum"}),
+    );
+    assert_eq!(
+        annotation(&doc, list)["label"],
+        "1 Pin x1; 2 Plate x2; 3 PlateCopy x1"
+    );
+    assert_eq!(annotation(&doc, balloons[0])["label"], "2");
+    assert_eq!(annotation(&doc, balloons[1])["label"], "3");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(annotation(&doc, list)["label"], "1 Pin x1; 2 Plate x3");
+    let saved = doc.to_json();
+    let kernel = MockKernel::default();
+    kernel.measures.set(true);
+    let mut loaded = Document::from_json(&saved, kernel).unwrap();
+    assert_eq!(annotation(&loaded, list)["table"]["group_identical"], true);
+    // Reading definitions does not evaluate geometry; reopen through the
+    // normal recompute command before checking the generated table/balloons.
+    command(&mut loaded, json!({"cmd": "recompute"}));
+    assert_eq!(loaded.bodies().len(), 3);
+    assert_eq!(loaded.instances().len(), 4);
+    assert_eq!(annotation(&loaded, list)["label"], "1 Pin x1; 2 Plate x3");
+    for balloon in &balloons {
+        assert_eq!(annotation(&loaded, *balloon)["label"], "2");
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": list,
+        "table": {"group_identical": false}}),
+    );
+    assert_eq!(
+        annotation(&doc, list)["label"],
+        "1 Pin x1; 2 Plate x2; 3 PlateCopy x1"
+    );
+}
+
+#[test]
+fn grouped_drawing_parts_use_materials_in_the_actual_assembly_paths() {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures.set(true);
+    for (parent, child, material, sketch) in [
+        ("SteelParent", "SteelChild", "steel", "F1"),
+        ("AluminumParent", "AluminumChild", "aluminum", "F3"),
+    ] {
+        command(&mut doc, json!({"cmd": "create_component", "name": parent}));
+        command(
+            &mut doc,
+            json!({"cmd": "set_component_material", "component": parent, "material": material}),
+        );
+        command(&mut doc, json!({"cmd": "create_component", "name": child}));
+        command(
+            &mut doc,
+            json!([
+                {"cmd": "sketch.create"},
+                {"cmd": "sketch.add_rectangle", "sketch": sketch, "corner": [0, 0], "width": 10, "height": 10},
+                {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": sketch, "region": R}],
+                    "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+                {"cmd": "activate_component", "component": "C0"}
+            ]),
+        );
+    }
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base",
+        "direction": "top", "at": [150, 150], "scale": "1:1"}),
+    );
+    let list = command(&mut doc, json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+        "type": "parts_list", "at": [300, 280], "table": {"levels": "parts", "group_identical": true}
+    }))["annotation"].as_u64().unwrap();
+    assert_eq!(
+        annotation(&doc, list)["label"],
+        "1 AluminumChild x1; 2 SteelChild x1"
+    );
+    // The bodies have no own material; querying them without their paths
+    // gives steel for both and would have merged them incorrectly.
+    for body in doc.bodies() {
+        assert_eq!(doc.body_material(body.uid, None).0.id, "steel");
+    }
+    let bom = query(
+        &doc,
+        json!({"query": "parts_list", "group_identical": true}),
+    );
+    let physical: Vec<_> = bom["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["name"] == "SteelChild" || r["name"] == "AluminumChild")
+        .collect();
+    assert_eq!(physical.len(), 2, "{bom}");
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "AluminumParent", "material": "steel"}),
+    );
+    assert_eq!(annotation(&doc, list)["label"], "1 SteelChild x2");
+}
+
+#[test]
+fn grouping_subject_own_bodies_keeps_ancestor_material_and_placement_balloon_identity() {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures.set(true);
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Parent"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "Parent", "material": "aluminum"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "OwnBodies"}),
+    );
+    for x in [0, 20] {
+        command(
+            &mut doc,
+            json!({"cmd": "add_feature", "def": {"type": "box",
+            "plane": {"type": "origin", "plane": "xy"}, "corner": [x, 0],
+            "length": 10, "width": 10, "height": 5, "operation": "new_body"}}),
+        );
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": "F1.b0", "material": "steel"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base",
+        "direction": "top", "at": [150, 150], "scale": "1:1",
+        "subject": {"type": "occurrence", "occurrence": "O1/O2"}}),
+    );
+    let list = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+            "type": "parts_list", "at": [300, 280], "table": {"group_identical": true}
+        }),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(annotation(&doc, list)["label"], "1 Body1 x1; 2 Body2 x1");
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": "F1.b0", "material": null}),
+    );
+    assert_eq!(annotation(&doc, list)["label"], "1 Body1 x2");
+}
+
+#[test]
+fn one_component_in_two_material_paths_has_distinct_grouped_balloon_numbers() {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures.set(true);
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "SteelParent"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Shared"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "box",
+        "plane": {"type": "origin", "plane": "xy"}, "corner": [0, 0],
+        "length": 10, "width": 10, "height": 5, "operation": "new_body"}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "AluminumParent"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "AluminumParent", "material": "aluminum"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "copy_occurrence", "occurrence": "O1/O2"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": "Shared", "set": "Identity", "key": "Material", "value": "Catalogue label"}),
+    );
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base",
+        "direction": "top", "at": [150, 150], "scale": "1:1"}),
+    );
+    let list = command(&mut doc, json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+        "type": "parts_list", "at": [300, 280], "table": {"levels": "parts", "group_identical": true,
+            "columns": ["item", "name", "quantity", "material", "Computed/Material", "Identity/Material"]}
+    }))["annotation"].as_u64().unwrap();
+    assert_eq!(annotation(&doc, list)["label"], "1 Shared x1; 2 Shared x1");
+    let steel = doc.material("steel").unwrap().name.clone();
+    let aluminum = doc.material("aluminum").unwrap().name.clone();
+    let cells = texts(&doc);
+    assert!(cells.contains(&steel), "{cells:?}");
+    assert!(cells.contains(&aluminum), "{cells:?}");
+    assert!(cells.contains(&"Catalogue label".to_owned()), "{cells:?}");
+    let edge = edge_of(&doc, "F1.b0");
+    for (occurrence, number) in [("O1/O2", "1"), ("O3/O4", "2")] {
+        let balloon = command(&mut doc, json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+            "type": "balloon", "picks": [{"body": "F1.b0", "occurrence": occurrence, "edge": edge}]
+        }))["annotation"].as_u64().unwrap();
+        assert_eq!(annotation(&doc, balloon)["label"], number);
+    }
+    let bom = query(
+        &doc,
+        json!({"query": "parts_list", "group_identical": true}),
+    );
+    let shared: Vec<_> = bom["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["name"] == "Shared")
+        .collect();
+    assert_eq!(shared.len(), 2, "{bom}");
+    assert!(shared.iter().all(|row| row["quantity"] == 1));
+    // The ungrouped component row counts both placements, so its Material
+    // cell lists both effective materials instead of just the base context.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": list,
+        "table": {"group_identical": false}}),
+    );
+    assert_eq!(annotation(&doc, list)["label"], "1 Shared x2");
+    assert!(texts(&doc).contains(&format!("{aluminum}, {steel}")));
+}

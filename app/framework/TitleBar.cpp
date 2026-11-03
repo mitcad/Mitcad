@@ -153,7 +153,8 @@ void TitleBar::setQuickAccess(QuickAccessGroup* group) {
   group->setObjectName(QStringLiteral("titleQuickAccess"));
   row->insertWidget(row->indexOf(m_tabs) + 1, group);
   group->setCardMaterial(m_floatingRow);
-  group->show();
+  // Unless the user hid it (mitcad#1189): then the row closes up.
+  group->applyVisible();
   connect(group, &QuickAccessGroup::contentsChanged, this, [this] {
     scheduleQuickFold();
     updateRowMask();
@@ -340,7 +341,8 @@ int TitleBar::titleWidth() const {
 }
 
 void TitleBar::updateQuickFold() {
-  if (m_quickAccess == nullptr) {
+  // A hidden group (mitcad#1189) takes no room: nothing to fold.
+  if (m_quickAccess == nullptr || m_quickAccess->isHidden()) {
     return;
   }
   // The room the name has with the group unfolded: from the group's right

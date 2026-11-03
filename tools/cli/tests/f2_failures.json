@@ -72,5 +72,16 @@
     "faces": ["F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
     "target": {"body": "F13.b0", "face": "F13:side0"}}},
   {"expect": {"feature": "ReplaceFace2", "status": "error", "error_contains": "the target does not meet the body"}},
+  {"expect": {"bodies": 2, "body": "Body1", "volume": 48000}},
+
+  {"comment": "Chamfer1 F15: a bevel of 30 down the 20 high front face cannot be built; the error names the edge and the faces its chain ends against, the kernel's own words kept (mitcad#1185)."},
+  {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0",
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"],
+    "size": {"type": "equal_distance", "distance": 30}}},
+  {"expect": {"feature": "Chamfer1", "status": "error", "error_contains": "chamfer failed"}},
+  {"expect": {"feature": "Chamfer1", "status": "error",
+    "error_contains": "(edge E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}, its chain ending against faces"}},
+  {"expect": {"feature": "Chamfer1", "status": "error", "error_contains": "F2:side(c4[c3,c1])"}},
+  {"expect": {"feature": "Chamfer1", "status": "error", "error_contains": "F2:side(c2[c1,c3])"}},
   {"expect": {"bodies": 2, "body": "Body1", "volume": 48000}}
 ]

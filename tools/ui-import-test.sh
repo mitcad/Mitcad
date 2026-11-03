@@ -71,6 +71,8 @@
 # check-all sources: core/import-solidcraft core/import-replay core/import-joints core/import-sheet core/import-primitives core/import-appearances
 
 source "$(dirname "$0")/ui-test-lib.sh"
+# New and Open replace the design, as these steps expect (mitcad#1172).
+ui_open_in_current_window
 
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 TEST_EXCHANGE=${UI_TEST_EXCHANGE:-$(cd "$(dirname "$UI_APP")/.." && pwd)/core/test_exchange}

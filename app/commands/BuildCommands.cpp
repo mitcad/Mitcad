@@ -51,6 +51,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -502,8 +503,9 @@ PartPicker* partPicker(Shared& shared, bool create) {
   PartPicker* picker = nullptr;
   if (create) {
     picker = PartPicker::of(shared.window);
-  } else if (QWidget* top = shared.window->window()) {
-    picker = top->findChild<PartPicker*>(QString(), Qt::FindDirectChildrenOnly);
+  } else {
+    // The main window's own (PartPicker::of), also in a document frame.
+    picker = shared.window->findChild<PartPicker*>(QString(), Qt::FindDirectChildrenOnly);
   }
   if (picker != nullptr && shared.picker.data() != picker) {
     shared.picker = picker;
@@ -828,8 +830,9 @@ QString noPartsText(const Shared& shared, const QString& role) {
 // Only what the placement can use highlights: in a ground placement
 // (the design has no part to go on, or Placement "On a plane") planes,
 // points and faces that are no BUILD part's, with the origin's planes
-// shown and Enter placing the part at the origin; else only the faces of
-// the parts it goes on, construction geometry hidden. The parts go into
+// shown and Enter placing the part at the origin (a plane clicked then
+// waits for the click that says where on it, mitcad#1196: kOnPlane); else
+// only the faces of the parts it goes on, construction geometry hidden. The parts go into
 // the BUILD host (the `build_host` query), shown as "Adds to".
 
 // Placement's icon buttons (mitcad#427), their labels the tooltips.
@@ -935,6 +938,111 @@ Against against(const Shared& shared, const QString& role, const CommandState& s
   return isEndFace(items.first()) ? Against::End : Against::Side;
 }
 
+// The first part on a chosen plane (mitcad#1196; Profile and Linear
+// Component): in a ground placement a click on an origin or construction
+// plane (its icon in the view or its browser row) chooses the plane, and
+// the pick waits for the point: the preview follows the mouse on that
+// plane wherever it is in the view (the pointer's ray against the plane,
+// CommandDef::cursorPlane), the next click places the part there, Enter
+// at the plane's origin, Esc takes the plane out again. Nothing else
+// takes a click meanwhile, no other plane and no face. Kept while the
+// point is awaited: {item (the plane's describe()), origin, normal, x}, the
+// plane in the design. A face keeps its one click.
+const QString kOnPlane = QStringLiteral("on_plane");
+const QString kAtPick = QStringLiteral("at_pick");
+
+bool awaitsPoint(const CommandState& state) {
+  const Selection& items = state.items(kAt);
+  return !items.isEmpty() && items.first().kind == SelectKind::Plane &&
+         str(state.object(kOnPlane), "item") == items.first().describe();
+}
+
+// The chosen plane while its point is awaited.
+std::optional<gp_Ax3> awaitedPlane(const CommandState& state) {
+  if (!awaitsPoint(state)) {
+    return std::nullopt;
+  }
+  const QJsonObject plane = state.object(kOnPlane);
+  const std::optional<gp_Pnt> origin = pointFrom(plane.value(QStringLiteral("origin")));
+  const QJsonArray normal = plane.value(QStringLiteral("normal")).toArray();
+  const QJsonArray x = plane.value(QStringLiteral("x")).toArray();
+  if (!origin || normal.size() < 3 || x.size() < 3) {
+    return std::nullopt;
+  }
+  const gp_Vec n(normal[0].toDouble(), normal[1].toDouble(), normal[2].toDouble());
+  const gp_Vec along(x[0].toDouble(), x[1].toDouble(), x[2].toDouble());
+  if (n.Magnitude() < 1e-12 || along.Magnitude() < 1e-12 || n.Crossed(along).Magnitude() < 1e-12) {
+    return std::nullopt;
+  }
+  return gp_Ax3(*origin, gp_Dir(n), gp_Dir(along));
+}
+
+// A point in tenths of a millimetre, no negative zero, as the inspection
+// logs end A.
+QString tenthsText(const gp_Pnt& point) {
+  const auto tenths = [](double v) { return QString::number(std::round(v * 10.0) / 10.0 + 0.0, 'f', 1); };
+  return QStringLiteral("%1, %2, %3").arg(tenths(point.X()), tenths(point.Y()), tenths(point.Z()));
+}
+
+// A plane clicked in a ground placement: chosen, its frame kept, its pick
+// without a point (the plane's origin until the mouse or a click says
+// where). A plane the model cannot tell the frame of stays a pick at the
+// click, as before.
+void choosePlane(const SelectionItem& item, CommandState& state, const CommandContext& context) {
+  const std::optional<gp_Ax3> plane = build::planeOf(item, context);
+  if (!plane) {
+    state.setObject(kOnPlane, {});
+    return;
+  }
+  const gp_Dir& normal = plane->Direction();
+  const gp_Dir& x = plane->XDirection();
+  state.setObject(kOnPlane, QJsonObject{{QStringLiteral("item"), item.describe()},
+                                        {QStringLiteral("origin"), build::pointJson(plane->Location())},
+                                        {QStringLiteral("normal"), QJsonArray{normal.X(), normal.Y(), normal.Z()}},
+                                        {QStringLiteral("x"), QJsonArray{x.X(), x.Y(), x.Z()}}});
+  state.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), item.describe()}});
+  qInfo().noquote() << QStringLiteral("BUILD plane chosen: %1; the next click places on it, Enter at its origin")
+                           .arg(item.describe());
+}
+
+// The mouse on the chosen plane (none: off the view): the preview there,
+// else at the plane's origin, where Enter places it. True when it moved.
+bool followOnPlane(const std::optional<gp_Pnt>& point, CommandState& state) {
+  if (!awaitsPoint(state)) {
+    return false;
+  }
+  const QString item = state.items(kAt).first().describe();
+  const QJsonObject pick = state.object(kAtPick);
+  const std::optional<gp_Pnt> was = pointFrom(pick.value(QStringLiteral("point")));
+  if (point ? (was && was->Distance(*point) < 1e-6) : !was) {
+    return false;
+  }
+  QJsonObject now{{QStringLiteral("item"), item}};
+  if (point) {
+    now.insert(QStringLiteral("point"), build::pointJson(*point));
+  }
+  // Logged when the preview starts to follow and when it goes back to the
+  // origin, not on every move.
+  if (!was || !point) {
+    qInfo().noquote() << (point ? QStringLiteral("BUILD on %1: the preview follows the mouse").arg(item)
+                                : QStringLiteral("BUILD on %1: the mouse off the view, the preview at its origin").arg(item));
+  }
+  state.setObject(kAtPick, now);
+  return true;
+}
+
+// The click that says where on the chosen plane: the part goes there.
+bool placeOnPlane(const gp_Pnt& point, CommandState& state) {
+  if (!awaitsPoint(state)) {
+    return false;
+  }
+  const QString item = state.items(kAt).first().describe();
+  state.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), item}, {QStringLiteral("point"), build::pointJson(point)}});
+  state.setObject(kOnPlane, {});
+  qInfo().noquote() << QStringLiteral("BUILD plane click: %1 at %2").arg(item, tenthsText(point));
+  return true;
+}
+
 // What the pick input takes now (InputDef::withPickRule).
 SelectFilter pickKinds(const Shared& shared, const QString& role, const CommandState& state) {
   if (against(shared, role, state) == Against::Ground) {
@@ -944,6 +1052,9 @@ SelectFilter pickKinds(const Shared& shared, const QString& role, const CommandS
 }
 
 bool pickTakes(const Shared& shared, const QString& role, const SelectionItem& item, const CommandState& state) {
+  if (awaitsPoint(state)) {
+    return false; // the click goes to the chosen plane (mitcad#1196)
+  }
   const std::optional<BuildPart> part = shared.partAt(item.occurrence);
   if (against(shared, role, state) == Against::Ground) {
     return !part; // planes, points and faces of other components
@@ -1508,6 +1619,10 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
                           : QObject::tr("Click a plane or a face, or press Enter; Shift+click places at once");
   } else if (placed.how == Against::Pick) {
     result.viewHint = QObject::tr("Click a %1's side or end; Shift+click places at once").arg(partWord(role));
+  } else if (awaitsPoint(state)) {
+    // A chosen plane (mitcad#1196): the preview follows the mouse on it.
+    result.viewHint =
+        QObject::tr("Click where on the plane it goes, or press Enter for the plane's origin; Esc picks another plane");
   }
   if (!placed.problem.isEmpty()) {
     result.text = QStringLiteral("<b>%1</b><br>%2").arg(part.name.toHtmlEscaped(), addsTo.toHtmlEscaped());
@@ -1828,8 +1943,11 @@ void keepPlace(const Shared& shared, CommandState& state, const CommandContext& 
                            .arg(cmd::label(kFroms, to), state.text(QStringLiteral("offset")));
 }
 
-// The inputs where and how a part goes, after the picker.
-QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, bool profile) {
+// The inputs where and how a part goes, after the picker; with
+// `planeThenPoint` a plane picked for a ground placement waits for the
+// click that says where on it (mitcad#1196, kOnPlane).
+QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, bool profile,
+                                  bool planeThenPoint = false) {
   const auto cut = [shared](const CommandState& state) { return shownForCut(*shared, state); };
   const auto how = [shared, role](const CommandState& state) { return against(*shared, role, state); };
   const auto ground = [how](const CommandState& state) { return how(state) == Against::Ground; };
@@ -1842,14 +1960,20 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
   QVector<InputDef> inputs = {
       selectionInput(kAt, QObject::tr("Place On"),
                      SelectKind::Face | SelectKind::Plane | SelectKind::Point | SelectKind::Vertex, 0, 1)
-          .withOnPick([shared, role, profile](const SelectionItem& item, CommandState& state,
-                                              const CommandContext& context) {
+          .withOnPick([shared, role, profile, planeThenPoint](const SelectionItem& item, CommandState& state,
+                                                              const CommandContext& context) {
             // A new click: where it was, its snap distance, and what it
             // places fills the panel (mitcad#417). A click on the face
             // picked already places it again there (near the other end, on
             // another zone of the end face) rather than taking it out.
             build::recordPick(kAt, item, state, context);
             state.setChecked(kOffsetTyped, false);
+            // A plane for the first part waits for where on it (mitcad#1196).
+            if (planeThenPoint && item.kind == SelectKind::Plane && against(*shared, role, state) == Against::Ground) {
+              choosePlane(item, state, context);
+            } else {
+              state.setObject(kOnPlane, {});
+            }
             fillFromClick(*shared, role, profile, state, context);
           },
                       true)
@@ -1998,6 +2122,7 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                       if (!items.isEmpty() && !pickTakes(*shared, role, items.first(), state)) {
                         state.setItems(kAt, {});
                         state.setObject(QStringLiteral("at_pick"), {});
+                        state.setObject(kOnPlane, {});
                       }
                     }));
   return inputs;
@@ -2032,6 +2157,7 @@ bool placeNow(Shared& shared, DocumentHost& host, const QString& role, const Par
   state.setChecked(kPlacedOne, true);
   state.setItems(kAt, {});
   state.setObject(QStringLiteral("at_pick"), {});
+  state.setObject(kOnPlane, {});
   state.setObject(kHoverPick, {});
   state.setObject(kEndPick, {});
   state.setChecked(kOffsetTyped, false);
@@ -2070,7 +2196,7 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
     });
   };
   def.inputs = pickerInputs(shared, role);
-  def.inputs += placementInputs(shared, role, profile);
+  def.inputs += placementInputs(shared, role, profile, true);
   def.init = [shared, role](CommandState& state, const CommandContext& context) {
     startPicker(*shared, role, state, context);
     qInfo().noquote() << QStringLiteral("BUILD %1 adds to %2%3")
@@ -2091,13 +2217,39 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
     hoverPickOnly(*shared, role, item, state);
     return false;
   };
+  // A chosen plane (mitcad#1196): the preview follows the mouse on it, the
+  // next click places the part there; Esc takes the plane out again.
+  def.cursorPlane = [](const CommandState& state) { return awaitedPlane(state); };
+  def.cursorPlaneMoved = [](const std::optional<gp_Pnt>& point, CommandState& state, const CommandContext&) {
+    return followOnPlane(point, state);
+  };
+  def.cursorPlaneClicked = [](const gp_Pnt& point, CommandState& state, const CommandContext&) {
+    return placeOnPlane(point, state);
+  };
+  def.escape = [](CommandState& state, const CommandContext&) {
+    if (!awaitsPoint(state)) {
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("BUILD plane choice taken out (Esc): %1").arg(state.items(kAt).first().describe());
+    state.setItems(kAt, {});
+    state.setObject(kAtPick, {});
+    state.setObject(kOnPlane, {});
+    return true;
+  };
   def.apply = [shared, &host, role, profile](CommandState& state, const CommandContext& context) {
     Part part;
     if (!chosenPart(*shared, state, part)) {
       host.showStatus(noPartsText(*shared, role), NoticeLevel::Error);
       return false;
     }
-    const Placement placed = placement(*shared, role, state, context, part, profile);
+    // Enter (or Place) before the click on a chosen plane: at the plane's
+    // origin, wherever the preview follows the mouse (mitcad#1196).
+    CommandState placing = state;
+    if (awaitsPoint(state)) {
+      placing.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), state.items(kAt).first().describe()}});
+      qInfo().noquote() << QStringLiteral("BUILD on %1: placed at its origin").arg(state.items(kAt).first().describe());
+    }
+    const Placement placed = placement(*shared, role, placing, context, part, profile);
     if (!placed.problem.isEmpty()) {
       host.showStatus(placed.problem, NoticeLevel::Error);
       return false;

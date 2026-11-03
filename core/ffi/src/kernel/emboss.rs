@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! Emboss: profiles wrapped onto cylinders and cones
-//! (`geometry/include/mitcad/geometry/emboss.hpp`, mitcad#458, mitcad#473).
+//! Emboss: profiles wrapped onto cylinders and cones, or projected onto any
+//! face (`geometry/include/mitcad/geometry/emboss.hpp`, mitcad#458,
+//! mitcad#473, mitcad#1091).
 
 #[cxx::bridge(namespace = "mitcad::bridge")]
 pub mod ffi {
@@ -13,6 +14,14 @@ pub mod ffi {
         radius: f64,
         to_radius: f64,
         half_angle: f64,
+    }
+
+    /// The direction (a unit vector) profiles are projected along onto a
+    /// face and how far they grow along its normals: out of the material
+    /// when positive, into it when negative (mitcad#1091).
+    struct EmbossProjection {
+        direction: [f64; 3],
+        depth: f64,
     }
 
     /// A conical face: its apex, its axis where the radius grows, its half
@@ -44,5 +53,16 @@ pub mod ffi {
 
         /// A conical face of a body (all pieces of a split one).
         fn face_cone(shape: &Shape, face: &str) -> Result<ConeOutput>;
+
+        /// The regions projected onto the face `face` of `body` and grown
+        /// along its normals, faces named after `feature` (mitcad#1091).
+        fn projected_emboss(
+            feature: &str,
+            frame: &Frame,
+            regions: &[Region],
+            body: &Shape,
+            face: &str,
+            projection: &EmbossProjection,
+        ) -> Result<SharedPtr<Shape>>;
     }
 }

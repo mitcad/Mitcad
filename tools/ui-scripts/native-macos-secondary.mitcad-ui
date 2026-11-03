@@ -4,6 +4,8 @@
 # with an empty document and never confirms Send or opens an external issue tracker.
 expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
 sleep 800
+expect-native-picker-fallback
+expect-log '^Native picker fallback verified: unavailable AppKit content, visible Qt picker, normal deletion$'
 
 # Native icon choices use the shared BUILD direction artwork. More was
 # removed from BUILD; its generic disclosure contract is tested separately.

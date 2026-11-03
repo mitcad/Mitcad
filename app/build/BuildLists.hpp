@@ -4,7 +4,8 @@
 // BUILD's OUTPUT group (mitcad#375): the cut list (the `build_cut_list`
 // query: the cut parts grouped by identical result, their stock and the
 // other parts) and the parts list (`parts_list`), each a table that copies
-// as CSV and saves as a PDF with the design's name and the date.
+// as CSV and saves CSV files. PDFs carry the design's name and the date,
+// with the same layout used for printing (mitcad#1089).
 
 #include <QDialog>
 #include <QJsonObject>
@@ -12,7 +13,9 @@
 #include <QStringList>
 #include <QVector>
 
+class QCheckBox;
 class QDoubleSpinBox;
+class QPagedPaintDevice;
 class QLineEdit;
 class QShowEvent;
 class QTabWidget;
@@ -29,6 +32,7 @@ struct ListTable {
   QString heading;
   QStringList columns;
   QVector<QStringList> rows;
+  QVector<QString> tooltips{};
 };
 
 // The tables as CSV: each table's columns and rows, a blank line between
@@ -38,6 +42,11 @@ QString csvOf(const QVector<ListTable>& tables);
 // design's name and the date; false with the reason when it cannot.
 bool writeListPdf(const QString& path, const QString& title, const QString& subtitle,
                   const QVector<ListTable>& tables, QString& error);
+// The PDF's pages on any paged device (the PDF writer, a printer: File ›
+// Print, mitcad#1089), in its paint rectangle: the number of pages; -1
+// when the device cannot be painted on, -2 when it could not be finished.
+int paintListPages(QPagedPaintDevice& device, const QString& title, const QString& subtitle,
+                   const QVector<ListTable>& tables);
 
 // The cut list's tables from `build_cut_list`'s answer: the rows, the
 // stock, the other parts. A design with timber (the answer's `timber`,
@@ -66,6 +75,10 @@ public:
   // `design` is the design's name for the PDF.
   BuildListsDialog(const CommandContext& model, const QString& design, Page page, QWidget* parent = nullptr);
 
+  // Prints the tab shown as its PDF lays it out (mitcad#1089): its Print…
+  // button, Ctrl+P, and File › Print while the window is open.
+  void print();
+
 protected:
   void showEvent(QShowEvent* event) override;
 
@@ -73,6 +86,7 @@ private:
   void load();
   void copyCsv();
   void savePdf();
+  void saveCsv();
   QVector<ListTable> shownTables() const;
   // Logs where the property columns field is, for UI tests.
   void logLayout();
@@ -85,6 +99,7 @@ private:
   QTableWidget* m_partsTable = nullptr;
   // The keys of the parts list's property columns (mitcad#496).
   QLineEdit* m_columns = nullptr;
+  QCheckBox* m_groupIdentical = nullptr;
   QString m_logged;
   QVector<ListTable> m_cut;
   QVector<ListTable> m_parts;

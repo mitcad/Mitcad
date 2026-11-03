@@ -104,7 +104,8 @@ void readAhead(QObject* context, const QVector<QJsonObject>& requests,
   });
 }
 
-// My Library's own model: an empty design and what the panels query of it.
+// The libraries' own model (a manager without a design): an empty design
+// and what the panels query of it.
 struct LibraryItemsHost::Model final : public CommandContext {
   Model() : document(new_design_document()) {}
 
@@ -150,6 +151,48 @@ bool LibraryItemsHost::runModelCommand(const QJsonObject& command, QJsonObject* 
     m_lastError = errorText(error);
     return false;
   }
+}
+
+bool ManagerHosts::choose() {
+  const bool onDesign = m_document.designOpen();
+  // The library's model in the open window's project, read again.
+  m_library.setProjectFolder(m_document.projectFolder());
+  m_library.readAgain();
+  const bool changed = onDesign != m_onDesign;
+  m_onDesign = onDesign;
+  return changed;
+}
+
+PrintItemsHost& ManagerHosts::current() {
+  if (m_onDesign) {
+    return m_design;
+  }
+  return m_library;
+}
+
+QVector<QJsonObject> managerRequests(const QString& kind, const QString& project) {
+  QVector<QJsonObject> requests;
+  QJsonObject items{{QStringLiteral("query"), QStringLiteral("library_items")},
+                    {QStringLiteral("kind"), kind},
+                    {QStringLiteral("by_place"), true}};
+  if (!project.isEmpty()) {
+    items.insert(QStringLiteral("project"), project);
+  }
+  requests.append(items);
+  // A material's Variants tab lists the printers (mitcad#1054).
+  if (kind == QStringLiteral("material")) {
+    QJsonObject printers{{QStringLiteral("query"), QStringLiteral("library_items")},
+                         {QStringLiteral("kind"), QStringLiteral("printer")}};
+    if (!project.isEmpty()) {
+      printers.insert(QStringLiteral("project"), project);
+    }
+    requests.append(printers);
+  }
+  const char* const asked[] = {"print_keys", "materials", "appearances", "bodies", "print_settings", "print_profiles"};
+  for (const char* name : asked) {
+    requests.append(QJsonObject{{QStringLiteral("query"), QLatin1String(name)}});
+  }
+  return requests;
 }
 
 bool LibraryItemsHost::runModelCommands(const QJsonArray& commands, const QString& /*label*/) {

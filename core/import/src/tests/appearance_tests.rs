@@ -138,3 +138,42 @@ fn appearances_and_materials_come_in_on_bodies_and_faces() {
     assert_eq!(satin.base_color, [0.6262; 3]);
     assert_eq!(doc.custom_appearances().len(), 2);
 }
+
+/// A body the file hides (its record's light bulb off, mitcad#1175) comes
+/// in hidden, counted in the report; one whose light bulb is on, or not
+/// given, stays shown.
+#[test]
+fn a_body_the_file_hides_comes_in_hidden() {
+    let kernel = || TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    };
+    let replay = |light_bulb: Option<bool>| {
+        let (items, geometry) = block_history(Vec::new());
+        let mut data = appearance_data([0.0; 3]);
+        if let Some(on) = light_bulb {
+            data["bodies"][0]["light_bulb"] = json!(on);
+        }
+        let mut source = serde_json::to_value(timeline_dump(items)).unwrap();
+        source["_f3d"] = json!({"appearance": data});
+        let mut doc = Document::new(kernel());
+        let mut geometry = BlobGeometry(geometry);
+        let report = import_design(&mut doc, &dump(source), &mut geometry, &Options::default());
+        let visible = doc.body_attributes(doc.bodies()[0].uid).visible;
+        (report, visible)
+    };
+    let (report, visible) = replay(Some(false));
+    let a = &report.appearances;
+    assert_eq!((a.hidden_set, a.hidden), (1, 1), "{}", report.text());
+    assert!(!visible, "{}", report.text());
+    assert!(
+        report.text().contains("hidden bodies: 1/1"),
+        "{}",
+        report.text()
+    );
+    for on in [Some(true), None] {
+        let (report, visible) = replay(on);
+        assert_eq!(report.appearances.hidden, 0, "{}", report.text());
+        assert!(visible, "{}", report.text());
+    }
+}

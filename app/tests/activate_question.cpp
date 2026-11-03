@@ -11,8 +11,13 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QTimer>
 
 namespace {
@@ -290,6 +295,102 @@ void dialogTests() {
   CHECK(!kept.activate && kept.dontAskAgain);
 }
 
+// The settings file the app reads in a settings folder (QSettings's INI
+// files of the user scope: <folder>/<organization>/<application>.ini).
+QString settingsFile(const QString& folder) {
+  return QDir(folder).filePath(QCoreApplication::organizationName() + QLatin1Char('/') +
+                               QCoreApplication::applicationName() + QStringLiteral(".ini"));
+}
+
+// A restart of the app with the same settings file: the file as saved,
+// copied into a fresh folder that the settings are then read from. A new
+// folder, because QSettings keeps a file it has read in memory for the
+// rest of the process; a new start reads it from the disk.
+void restart(const QString& from, const QString& to) {
+  QSettings().sync();
+  const QString saved = settingsFile(from);
+  const QString copied = settingsFile(to);
+  CHECK(QFileInfo::exists(saved));
+  CHECK(QDir().mkpath(QFileInfo(copied).path()));
+  CHECK(QFile::copy(saved, copied));
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, to);
+  CHECK(QSettings().fileName() == copied);
+}
+
+// The preference is read back after a restart (mitcad#1190: saved as
+// "general/askActivateComponent", an INI file read it back as unset), and
+// a value saved under the old key is moved to its own group once.
+void settingsTests() {
+  const QSettings::Format format = QSettings::defaultFormat();
+  const QString organization = QCoreApplication::organizationName();
+  const QString application = QCoreApplication::applicationName();
+  QCoreApplication::setOrganizationName(QStringLiteral("MitcadTest"));
+  QCoreApplication::setApplicationName(QStringLiteral("activate_question"));
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QTemporaryDir first;
+  QTemporaryDir second;
+  QTemporaryDir third;
+  CHECK(first.isValid() && second.isValid() && third.isValid());
+
+  // Don't ask again, then a restart: still off; turned back on, then a
+  // restart: on.
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, first.path());
+  saveAskToActivateComponent(false);
+  CHECK(!askToActivateComponent());
+  restart(first.path(), second.path());
+  CHECK(!askToActivateComponent());
+  {
+    const QSettings saved(settingsFile(second.path()), QSettings::IniFormat);
+    CHECK(saved.contains(QStringLiteral("components/askActivate")));
+    CHECK(!saved.childGroups().contains(QStringLiteral("General")));
+    CHECK(!saved.childGroups().contains(QStringLiteral("general")));
+  }
+  saveAskToActivateComponent(true);
+  restart(second.path(), third.path());
+  CHECK(askToActivateComponent());
+
+  // The file an earlier version saved on Linux: the group "general" as the
+  // section [%General], read back as "General/askActivateComponent".
+  QTemporaryDir old;
+  QTemporaryDir oldRestarted;
+  CHECK(old.isValid() && oldRestarted.isValid());
+  const QString oldFile = settingsFile(old.path());
+  CHECK(QDir().mkpath(QFileInfo(oldFile).path()));
+  {
+    QFile file(oldFile);
+    CHECK(file.open(QIODevice::WriteOnly));
+    file.write("[%General]\naskActivateComponent=false\n");
+  }
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, old.path());
+  CHECK(!askToActivateComponent());
+  restart(old.path(), oldRestarted.path());
+  CHECK(!askToActivateComponent());
+  {
+    const QSettings moved(settingsFile(oldRestarted.path()), QSettings::IniFormat);
+    CHECK(moved.contains(QStringLiteral("components/askActivate")));
+    CHECK(!moved.contains(QStringLiteral("General/askActivateComponent")));
+    CHECK(!moved.childGroups().contains(QStringLiteral("General")));
+  }
+
+  // The old key read back as written (the Windows registry, the macOS
+  // preferences): moved; a value already under the new key stays.
+  QTemporaryDir registry;
+  CHECK(registry.isValid());
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, registry.path());
+  QSettings().setValue(QStringLiteral("general/askActivateComponent"), false);
+  CHECK(!askToActivateComponent());
+  CHECK(QSettings().contains(QStringLiteral("components/askActivate")));
+  CHECK(!QSettings().contains(QStringLiteral("general/askActivateComponent")));
+  saveAskToActivateComponent(true);
+  QSettings().setValue(QStringLiteral("general/askActivateComponent"), false);
+  CHECK(askToActivateComponent());
+  CHECK(!QSettings().contains(QStringLiteral("general/askActivateComponent")));
+
+  QSettings::setDefaultFormat(format);
+  QCoreApplication::setOrganizationName(organization);
+  QCoreApplication::setApplicationName(application);
+}
+
 } // namespace
 
 int activateQuestionTests() {
@@ -297,5 +398,6 @@ int activateQuestionTests() {
   decisionTests();
   placeTests();
   dialogTests();
+  settingsTests();
   return failures;
 }

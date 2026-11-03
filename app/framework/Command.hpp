@@ -27,6 +27,7 @@
 #include <QVector>
 
 #include <TopoDS_Shape.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -1206,6 +1207,21 @@ struct CommandDef {
   // straight or turned before the click, mitcad#417). Not while the model
   // computes or the view is navigated.
   std::function<bool(const SelectionItem&, CommandState&, const CommandContext&)> hoverPreview;
+  // A point on a plane wherever the mouse is in the view (mitcad#1196:
+  // BUILD's first part on a chosen origin or construction plane). While
+  // `cursorPlane` gives a plane (in the design's coordinates), each move of
+  // the mouse over the view gives `cursorPlaneMoved` the point where the
+  // pointer's ray meets the plane (none when the mouse left the view or the
+  // ray misses the plane), and each click in the view (not a window, not on
+  // the orientation cube or a panel over the view) gives `cursorPlaneClicked`
+  // that point; a Shift + click is then also OK. Both return true when they
+  // changed the state, so that the preview is computed again. The command's
+  // pick input should take nothing from the view meanwhile: the click
+  // still reaches it. Not while the model computes or the view is navigated
+  // (a move then is taken once the model is idle).
+  std::function<std::optional<gp_Ax3>(const CommandState&)> cursorPlane;
+  std::function<bool(const std::optional<gp_Pnt>&, CommandState&, const CommandContext&)> cursorPlaneMoved;
+  std::function<bool(const gp_Pnt&, CommandState&, const CommandContext&)> cursorPlaneClicked;
   // Fills the inputs from a definition to edit: the `feature` query's def,
   // with the feature's "uid" added (see CommandContext::valueText).
   std::function<void(const QJsonObject&, CommandState&, const CommandContext&)> load;

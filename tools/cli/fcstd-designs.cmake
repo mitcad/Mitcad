@@ -24,6 +24,12 @@ set(designs
     # bodies, the pad keeps the cog apart (mitcad#997). FreeCAD's volume
     # 9378129.820 mm3.
     "f74d1d69|9378120.441|9378139.198"
+    # A segment of four Bodies (FreeCAD 26.3): holes at chosen circles and
+    # points of their sketches, pockets of chosen faces of a sketch
+    # (InternalFace), a tapered pipe tap hole and a counterbored hole at a
+    # pad's far circles (mitcad#1195). The last feature, the manifold's
+    # pocket: FreeCAD's volume 237034.404 mm3.
+    "bb41188f|237034.167|237034.641"
 )
 
 foreach(var CLI WORK)

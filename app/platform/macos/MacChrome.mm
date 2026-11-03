@@ -2,6 +2,12 @@
 #include "platform/MacChrome.hpp"
 
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
+#include "platform/NativeDialogs.hpp"
+#ifdef MITCAD_MACOS_NATIVE_UI
+#include "platform/NativeMacWindow.hpp"
+#endif
+#include <QPointer>
 
 #import <CoreGraphics/CoreGraphics.h>
 #include <dlfcn.h>
@@ -11,6 +17,7 @@
 #include <vector>
 
 #include <QCoreApplication>
+#include <QAction>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGuiApplication>
@@ -27,6 +34,21 @@
 #include <QStringList>
 #include <QVariant>
 #include <QWidget>
+
+@interface MITCADDocumentVisibilityObserver : NSObject {
+@public
+  QPointer<QWidget> presenter;
+  std::function<void(bool)> visible;
+}
+- (void)occlusionChanged:(NSNotification*)notification;
+@end
+@implementation MITCADDocumentVisibilityObserver
+- (void)occlusionChanged:(NSNotification*)notification {
+  NSWindow* window = notification.object;
+  if (presenter && visible) visible((window.occlusionState & NSWindowOcclusionStateVisible) != 0);
+}
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+@end
 
 namespace mitcad::mac {
 namespace {
@@ -204,6 +226,170 @@ void showMenuImages(QMenu* menu) {
   }
 }
 
+void prepareDocumentWindowPresentation(QWidget* widget, bool separate) {
+  if (!widget) return;
+  NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(widget);
+  if (!window) window = viewOf(widget).window;
+  NSWindow.allowsAutomaticWindowTabbing = YES;
+  window.tabbingIdentifier = @"org.mitcad.document";
+  window.tabbingMode = separate ? NSWindowTabbingModeDisallowed : NSWindowTabbingModeAutomatic;
+}
+
+void minimizeDocumentWindow(QWidget* widget) {
+  if (!widget) return;
+  NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(widget);
+  if (!window) window = viewOf(widget).window;
+  [window performMiniaturize:nil];
+}
+
+void enableDocumentWindowTabs(QWidget* widget, std::function<void(bool)> visibility) {
+  if (!widget) return;
+  NSWindow* window = viewOf(widget).window;
+  if (!window) return;
+  NSWindow.allowsAutomaticWindowTabbing = YES;
+  window.tabbingMode = NSWindowTabbingModeAutomatic;
+  window.tabbingIdentifier = @"org.mitcad.document";
+  static char observerKey;
+  auto* observer = (MITCADDocumentVisibilityObserver*)objc_getAssociatedObject(window, &observerKey);
+  if (!observer) {
+    observer = [MITCADDocumentVisibilityObserver new];
+    observer->presenter = widget;
+    [NSNotificationCenter.defaultCenter addObserver:observer selector:@selector(occlusionChanged:)
+                                               name:NSWindowDidChangeOcclusionStateNotification object:window];
+    objc_setAssociatedObject(window, &observerKey, observer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
+  observer->visible = std::move(visibility);
+}
+
+int documentWindowTabCount(QWidget* widget) {
+  if (!widget) return 0;
+  NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(widget);
+  if (!window) window = viewOf(widget).window;
+  if (!window) return 0;
+  return window.tabbedWindows ? int(window.tabbedWindows.count) : 1;
+}
+
+bool documentWindowTabSelected(QWidget* widget) {
+  if (!widget) return false;
+  NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(widget);
+  if (!window) {
+    // Observation must not create a Qt native handle or present a window.
+    const WId handle = widget->internalWinId();
+    NSView* view = handle ? (__bridge NSView*)reinterpret_cast<void*>(handle) : nil;
+    window = view.window;
+  }
+  if (!window || ![NSApp.windows containsObject:window]) return false;
+  NSWindowTabGroup* group = window.tabGroup;
+  return group.windows.count <= 1 || group.selectedWindow == window;
+}
+
+bool triggerDocumentWindowMenu(QWidget* presenter, const QString& entry, QString& error) {
+  error.clear();
+  if (qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") || !presenter) {
+    error = QStringLiteral("a UI script and an owned document presenter are required");
+    return false;
+  }
+  QPointer<QWidget> guarded = presenter;
+  NSWindow* bound = (__bridge NSWindow*)nativeDialogWindow(presenter);
+  NSWindow* window = bound ? bound : viewOf(presenter).window;
+  if (!window || ![NSApp.windows containsObject:window]) {
+    error = QStringLiteral("the document presenter has no owned application window");
+    return false;
+  }
+  // Resolve the presenter's own menu, independently of the foreground menu
+  // installed by another document. This is programmatic target-action input,
+  // not an assertion about WindowServer focus or physical menu tracking.
+  NSMenu* menu = nil;
+  if (bound) {
+#ifdef MITCAD_MACOS_NATIVE_UI
+    menu = (__bridge NSMenu*)nativeDocumentWindowMenu((__bridge void*)window);
+#endif
+  } else {
+    QMenu* qtMenu = presenter->findChild<QMenu*>(QStringLiteral("windowMenu"));
+    if (qtMenu) {
+      menu = qtMenu->toNSMenu();
+    }
+  }
+  [menu update]; // normal AppKit validation against the menu items' actual targets
+  if (!guarded || ![NSApp.windows containsObject:window] || !menu) {
+    error = QStringLiteral("the document presenter has no owned Window menu");
+    return false;
+  }
+  const auto normalized = [](QString text) { return text.remove(QLatin1Char('&')).trimmed(); };
+  NSMenuItem* selected = nil;
+  QStringList available;
+  for (NSMenuItem* item in menu.itemArray) {
+    if (!item.separatorItem) available << QString::fromNSString(item.title);
+    if (normalized(QString::fromNSString(item.title)) != normalized(entry)) continue;
+    if (selected) {
+      error = QStringLiteral("the owned Window menu entry '%1' is ambiguous").arg(entry);
+      return false;
+    }
+    selected = item;
+  }
+  if (!selected) {
+    error = QStringLiteral("the owned Window menu has no entry '%1' (entries: %2)")
+                .arg(entry, available.join(QStringLiteral(" | ")));
+    return false;
+  }
+  if (selected.hidden || selected.separatorItem || selected.submenu || !selected.enabled || !selected.action) {
+    error = QStringLiteral("the owned Window menu entry '%1' is not actionable "
+                           "(hidden %2, separator %3, submenu %4, enabled %5, action '%6', explicit target %7; "
+                           "native document %8, owned window tabs %9, visible %10, key %11, application active %12, "
+                           "menu auto-enables %13)")
+                .arg(entry).arg(bool(selected.hidden)).arg(bool(selected.separatorItem)).arg(selected.submenu != nil)
+                .arg(bool(selected.enabled))
+                .arg(selected.action ? QString::fromNSString(NSStringFromSelector(selected.action)) : QStringLiteral("<none>"))
+                .arg(selected.target != nil).arg(bound != nil)
+                .arg(window.tabbedWindows ? int(window.tabbedWindows.count) : 1)
+                .arg(bool(window.visible)).arg(NSApp.keyWindow == window).arg(bool(NSApp.active))
+                .arg(bool(menu.autoenablesItems));
+    return false;
+  }
+  id target = selected.target;
+  if (bound) {
+    // Observe the production item's owner instead of repairing it in the
+    // test helper: validation and dispatch must use that same real target.
+    id expected = nil;
+    const SEL action = selected.action;
+    if (action == @selector(toggleTabBar:) || action == @selector(toggleTabOverview:) ||
+        action == @selector(mergeAllWindows:) || action == @selector(performZoom:)) expected = window;
+    else if (action == @selector(arrangeInFront:)) expected = NSApp;
+    if (!expected || target != expected) {
+      error = QStringLiteral("the native Window menu entry '%1' has no matching owned system target").arg(entry);
+      return false;
+    }
+  } else target = [NSApp targetForAction:selected.action to:target from:selected];
+  // Qt's actual NSMenuItem routes to its normal menu-action receiver, whose
+  // QAction callback already retains the owning presenter by QPointer.
+  if (!target || ![target respondsToSelector:selected.action] ||
+      ![NSApp sendAction:selected.action to:target from:selected]) {
+    error = QStringLiteral("the owned Window menu entry '%1' could not dispatch").arg(entry);
+    return false;
+  }
+  return true;
+}
+
+void addDocumentWindowTabActions(QMenu* menu, QWidget* presenter) {
+  if (!menu || !presenter) return;
+  QPointer<QWidget> guarded = presenter;
+  const auto add = [menu, guarded](const QString& label, SEL selector) {
+    QAction* action = menu->addAction(label);
+    QObject::connect(action, &QAction::triggered, menu, [guarded, selector] {
+      if (!guarded) return;
+      NSWindow* window = viewOf(guarded).window;
+      if (selector == @selector(arrangeInFront:)) [NSApp arrangeInFront:nil];
+      else if (window) [NSApp sendAction:selector to:window from:nil];
+    });
+  };
+  menu->addSeparator();
+  add(QObject::tr("Show Tab Bar"), @selector(toggleTabBar:));
+  add(QObject::tr("Show All Tabs"), @selector(toggleTabOverview:));
+  add(QObject::tr("Merge All Windows"), @selector(mergeAllWindows:));
+  add(QObject::tr("Zoom"), @selector(performZoom:));
+  add(QObject::tr("Bring All to Front"), @selector(arrangeInFront:));
+}
+
 void hideNativeTitle(QWidget* window) {
   if (window == nullptr) {
     return;
@@ -213,6 +399,8 @@ void hideNativeTitle(QWidget* window) {
   if (native == nil) {
     return;
   }
+  native.tabbingMode = NSWindowTabbingModeAutomatic;
+  native.tabbingIdentifier = @"org.mitcad.document";
   native.titleVisibility = NSWindowTitleHidden;
   native.titlebarAppearsTransparent = YES;
 }

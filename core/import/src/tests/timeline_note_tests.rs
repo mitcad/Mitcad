@@ -92,6 +92,65 @@ fn a_fallback_stands_in_for_its_items_with_their_reasons() {
     );
 }
 
+/// An item that cannot be replayed (mitcad#1175: an extrusion whose
+/// details the file does not give) is never silent: it falls back with a
+/// warning among the import's notices. Without fallbacks the final bodies
+/// then differ from those stored in the file, which is a warning too.
+#[test]
+fn an_unreplayable_item_gives_a_warning() {
+    let (mut items, geometry) = block_history(Vec::new());
+    items[2] = json!({"index": 2, "name": "Extrude2", "objectType": "ExtrudeFeature"});
+    let replay = |fallback: bool| {
+        let mut geometry = TestGeometry {
+            states: geometry.states.clone(),
+            items: geometry.items.clone(),
+            ..TestGeometry::default()
+        };
+        let mut doc = Document::new(TestKernel::default());
+        let options = Options {
+            fallback,
+            ..Options::default()
+        };
+        import_design(
+            &mut doc,
+            &timeline_dump(items.clone()),
+            &mut geometry,
+            &options,
+        )
+    };
+    let warnings = |report: &DesignReport| -> Vec<String> {
+        report
+            .notices()
+            .into_iter()
+            .filter(|n| n.level == mitcad_model::NoticeLevel::Warning)
+            .map(|n| n.message.to_string())
+            .collect()
+    };
+    let report = replay(true);
+    let text = report.text();
+    assert_eq!(report.items[2].outcome, Outcome::Fallback, "{text}");
+    let notices = warnings(&report);
+    assert!(
+        notices.contains(&"1 item replaced by the file's bodies".to_owned()),
+        "{notices:?}\n{text}"
+    );
+    // The fallback brought the file's bodies: they agree.
+    assert!(
+        !notices.iter().any(|n| n.contains("final bodies differ")),
+        "{notices:?}\n{text}"
+    );
+    let report = replay(false);
+    let text = report.text();
+    assert_ne!(report.items[2].outcome, Outcome::Parametric, "{text}");
+    let notices = warnings(&report);
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.starts_with("the final bodies differ from those stored in the file: ")),
+        "{notices:?}\n{text}"
+    );
+}
+
 #[test]
 fn a_parametric_item_has_no_note_and_an_edit_clears_one() {
     let mut doc = Document::new(MockKernel::default());
