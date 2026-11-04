@@ -1,0 +1,21 @@
+{
+  "format": "mitcad-print-item",
+  "version": 1,
+  "material": {
+    "id": "generic-tpu-x",
+    "name": "Generic TPU X",
+    "density": 1.22,
+    "appearance": "generic_tpu_x_colour",
+    "filament": {
+      "filament_type": "TPU",
+      "temperature": 220
+    },
+    "slicer": {
+      "bambu_studio": {
+        "default_filament_colour": "[\"#FF8000\"]"
+      }
+    },
+    "class": "plastic",
+    "version": 1
+  }
+}

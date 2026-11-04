@@ -80,6 +80,11 @@ public:
   // The names of the general page's fields, which Search finds too
   // (mitcad#655): a match shows the page with the settings found.
   void setGeneralNames(const QStringList& names);
+  // Called with Search's text when it finds the general page's fields,
+  // empty otherwise (mitcad#1228): the window shows only the fields found
+  // there, so the general page stays short and the settings found below
+  // it in sight. While searching the page takes only its height.
+  std::function<void(const QString& search)> filterGeneral;
   // Shows the general page's tab (its fields take the keyboard).
   void showGeneral();
   // A page of the window's own after the print settings' tabs, its tab

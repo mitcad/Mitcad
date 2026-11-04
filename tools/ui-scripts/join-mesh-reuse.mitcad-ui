@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+# A Join made in the Extrude panel draws every face of the joined body
+# (GitHub #126, mitcad#1243), on join-mesh-reuse.json:
+#   1. Extrude the 177.2 x 25 profile 5 mm as a new body (F2.b0): its 6
+#      faces meshed where the view draws them.
+#   2. Extrude the 6 x 25 profile on the plate's end 10 mm, a Join: the
+#      preview is refined to the final meshes before OK, taking the faces
+#      the Join leaves as they were (the plate's top and far end) from the
+#      plate as shown. After OK all 8 faces of F2.b0 are meshed where the
+#      view draws them (the top's mesh lay at the plate's base, so the top
+#      was missing), and Create Sketch can pick the top (F2:end).
+# Run by tools/ui-join-mesh-reuse-test.sh (Linux) and
+# tools/ui-windows-join-mesh-reuse-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+# Extrude may preselect a profile: cleared, so that the click adds the
+# plate's.
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F1/r\{c1\[' 20
+click-pick 'profile F1/r\{c1\['
+wait-log '^Extrude Profiles: 1 profile \[profile r\{c1\['
+mark
+type-in '^Panel Extrude input distance at ' '5 mm'
+wait-log '^Preview Extrude: ok' 30
+mark
+button '^OK$'
+wait-log '^Added extrude' 30
+wait-idle
+expect-shown-body-meshes F2.b0 - 6
+
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F1/r\{c2\[' 20
+click-pick 'profile F1/r\{c2\['
+wait-log '^Extrude Profiles: 1 profile \[profile r\{c2\['
+type-in '^Panel Extrude input distance at ' '10 mm'
+wait-log '^Preview Extrude: ok' 30
+# The refined preview is what OK commits (the reported case).
+wait-log '^Preview Extrude: display meshes refined' 30
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\)' 30
+wait-idle
+expect-shown-body-meshes F2.b0 - 8
+screenshot '${MITCAD_TEST_WORK}/join-mesh-reuse.png'
+
+mark
+command sketch.create
+wait-log '^Pick places' 20
+wait-log '^Pick face F2\.b0/F2:end\(' 20
+mark
+key Escape
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

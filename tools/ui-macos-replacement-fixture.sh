@@ -20,6 +20,11 @@ ui_replacement_prepare() {
   fi
   export MITCAD_TEST_REPLACEMENT=$MITCAD_TEST_WORK/replacement
   export MITCAD_TEST_AUTOSAVE_SECONDS=2
+  # Exercise replacement explicitly. The multi-document default keeps the
+  # original design open in another window and has no save/lock questions.
+  # This is the test's private INI store, not the user's preferences.
+  mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi" || return 1
+  printf '\n[documents]\nopenInCurrentWindow=true\n' >> "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
   # Remove only this test's fixtures so retries cannot use old barriers.
   rm -rf "$MITCAD_TEST_REPLACEMENT"
   mkdir -p "$MITCAD_TEST_REPLACEMENT" || return 1

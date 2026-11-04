@@ -6,8 +6,8 @@ wait-idle
 expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
 native-resize 1440 900
 
-# The default commands this build has, after the workspace tabs.
-expect-ever '^Native quick access: file\.new_design, file\.open, file\.save, (file\.print, )?(file\.design_properties, )?tools\.preferences$'
+# The default commands in menu order, after the workspace tabs.
+expect-ever '^Native quick access: file\.new_design, file\.open, file\.save, file\.design_properties, file\.print, tools\.preferences$'
 expect-native-visible native.quickAccess.file.new_design true
 expect-native-visible native.quickAccessHairline true
 expect-native-visible native.quickAccessMenu true
@@ -39,7 +39,7 @@ screenshot '${MITCAD_TEST_SHOTS}/quick-access.png'
 mark
 native-popup native.quickAccessMenu 'Reset to Default'
 wait-log '^Quick access reset to the default$'
-wait-log '^Native quick access: file\.new_design, file\.open, file\.save, (file\.print, )?(file\.design_properties, )?tools\.preferences$'
+wait-log '^Native quick access: file\.new_design, file\.open, file\.save, file\.design_properties, file\.print, tools\.preferences$'
 expect-native-present native.quickAccess.view.look_at false
 
 # A narrow window folds the group into its ⋮ before the name is cut.

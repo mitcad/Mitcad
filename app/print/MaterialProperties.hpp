@@ -2,6 +2,7 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include <QDialog>
 #include <QHash>
@@ -98,6 +99,10 @@ public:
   void setMaterial(const QJsonObject& fields, bool editable, bool printing);
   // A refusal of the model, under the fields.
   void setError(const QString& text);
+  // While the window's Search filters the General tab (mitcad#1228): only
+  // the fields whose names contain `search`, their groups' headings, and
+  // the source and caution lines when a field is shown. Empty: every one.
+  void setSearch(const QString& search);
   // What the fields show, in one line: "Young's modulus 29007500 psi |
   // Poisson's ratio not given | ..." (the log, UI tests).
   QString shownText() const;
@@ -123,10 +128,15 @@ private:
 
   void rebuild();
   void finish(int index);
+  // The rows shown: Printing for an FDM plastic, those Search finds.
+  void applyVisibility();
 
   MaterialUnits m_units;
   QVector<Field> m_fields;
-  QVector<QWidget*> m_printingRows; // the Printing heading and rows, shown for an FDM plastic
+  // The groups' headings and their fields' indices (Mechanical, Thermal,
+  // Printing), a heading shown with any of its fields.
+  QVector<std::pair<QLabel*, QVector<int>>> m_groups;
+  QString m_search; // setSearch's
   QWidget* m_rows = nullptr;
   QLabel* m_reference = nullptr;
   QLabel* m_caution = nullptr;

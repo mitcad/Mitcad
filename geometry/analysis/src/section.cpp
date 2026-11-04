@@ -3,9 +3,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <utility>
 
 #include <BRep_Builder.hxx>
+#include <BRep_Tool.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Section.hxx>
@@ -15,10 +17,15 @@
 #include <GProp_GProps.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
+#include <OSD_Exception.hxx>
+#include <OSD_Signal.hxx>
 #include <Precision.hxx>
+#include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Pln.hxx>
@@ -159,9 +166,153 @@ Section section(const TopoDS_Shape& shape, const Plane& plane) {
   return result;
 }
 
-TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<ClippedFace>* faces) {
+namespace {
+
+// The fuzzy value of ClipAttempt::Fuzzy: this many times the shape's
+// largest tolerance, at most kMostFuzzy (mm).
+constexpr double kFuzzyFactor = 10.0;
+constexpr double kMostFuzzy = 0.01;
+
+// The largest tolerance of the shape's vertices, edges and faces, at least
+// Precision::Confusion().
+double largest_tolerance(const TopoDS_Shape& shape) {
+  double most = Precision::Confusion();
+  for (TopExp_Explorer it(shape, TopAbs_VERTEX); it.More(); it.Next()) {
+    most = std::max(most, BRep_Tool::Tolerance(TopoDS::Vertex(it.Current())));
+  }
+  for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
+    most = std::max(most, BRep_Tool::Tolerance(TopoDS::Edge(it.Current())));
+  }
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    most = std::max(most, BRep_Tool::Tolerance(TopoDS::Face(it.Current())));
+  }
+  return most;
+}
+
+double clip_fuzzy(const TopoDS_Shape& shape) {
+  return std::min(kMostFuzzy, kFuzzyFactor * largest_tolerance(shape));
+}
+
+// The plane moved by `by` along its normal.
+Plane moved(const Plane& plane, double by) {
+  const gp_Dir normal = direction(plane);
+  Plane result = plane;
+  result.origin = {plane.origin.x + by * normal.X(), plane.origin.y + by * normal.Y(),
+                   plane.origin.z + by * normal.Z()};
+  return result;
+}
+
+// The shape cut by the slab from the plane over the whole shape (its box
+// `box`) on the normal side, with the fuzzy value (0: none), and with
+// `faces` what became of each face; Error when the boolean fails.
+TopoDS_Shape cut_at(const TopoDS_Shape& shape, const Bounds& box, const Plane& plane, double fuzzy,
+                    std::vector<ClippedFace>* faces) {
+  double size = 0.0;
+  double distance = 0.0;
+  const TopoDS_Face disk = cover(box, plane, size, distance);
+  // A slab from the plane over the whole shape on the normal side.
+  const double depth = std::abs(distance) + size;
+  const TopoDS_Shape removed =
+      BRepPrimAPI_MakePrism(disk, gp_Vec(direction(plane)) * depth).Shape();
+  BRepAlgoAPI_Cut cut;
+  if (fuzzy > 0.0) {
+    cut.SetFuzzyValue(fuzzy);
+  }
+  build_keeping_inputs(cut, shape, removed);
+  if (!cut.IsDone() || cut.HasErrors()) {
+    throw Error("the boolean failed");
+  }
+  const TopoDS_Shape& result = cut.Shape();
+  if (faces) {
+    // Each face's images; a face the cut leaves as it is is its own.
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> kept;
+    TopExp::MapShapes(result, TopAbs_FACE, kept);
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> own;
+    TopExp::MapShapes(shape, TopAbs_FACE, own);
+    faces->clear();
+    for (int i = 1; i <= own.Extent(); ++i) {
+      ClippedFace face{own(i), {}};
+      if (!cut.IsDeleted(face.face)) {
+        for (const TopoDS_Shape& image : cut.Modified(face.face)) {
+          if (image.ShapeType() == TopAbs_FACE && kept.Contains(image)) {
+            face.pieces.push_back(image);
+          }
+        }
+        if (face.pieces.empty() && kept.Contains(face.face)) {
+          face.pieces.push_back(face.face);
+        }
+      }
+      faces->push_back(std::move(face));
+    }
+  }
+  return result;
+}
+
+// One attempt on a shape with surfaces whose box is `box`.
+TopoDS_Shape attempt_clip(const TopoDS_Shape& shape, const Bounds& box, const Plane& plane, ClipAttempt attempt,
+                          std::vector<ClippedFace>* faces, ClipReport* report) {
+  double fuzzy = 0.0;
+  double shift = 0.0;
+  if (attempt == ClipAttempt::Fuzzy) {
+    fuzzy = clip_fuzzy(shape);
+  } else if (attempt == ClipAttempt::Moved) {
+    shift = kClipShift;
+  }
+  try {
+    TopoDS_Shape result = cut_at(shape, box, shift != 0.0 ? moved(plane, shift) : plane, fuzzy, faces);
+    if (report) {
+      report->attempt = attempt;
+      report->fuzzy = fuzzy;
+      report->shift = shift;
+    }
+    return result;
+  } catch (const OSD_Exception&) {
+    // A crash inside OCCT (its signal handlers' exceptions) is not tried
+    // again, nor memory that ran out: the caller reports them (mitcad#392).
+    throw;
+  } catch (const OSD_Signal&) {
+    throw;
+  } catch (const Standard_OutOfMemory&) {
+    throw;
+  } catch (const Standard_Failure& failure) {
+    const char* message = failure.what();
+    throw Error(message != nullptr && *message != '\0' ? message : "the boolean failed");
+  }
+}
+
+const char* attempt_name(ClipAttempt attempt) {
+  switch (attempt) {
+  case ClipAttempt::Plain:
+    return "plain cut";
+  case ClipAttempt::Fuzzy:
+    return "fuzzy cut";
+  case ClipAttempt::Moved:
+    return "plane moved";
+  }
+  return "cut";
+}
+
+} // namespace
+
+TopoDS_Shape clip_by(const TopoDS_Shape& shape, const Plane& plane, ClipAttempt attempt,
+                     std::vector<ClippedFace>* faces) {
   if (shape.IsNull()) {
     throw Error("cannot clip a null shape");
+  }
+  try {
+    return attempt_clip(shape, box_of(shape), plane, attempt, faces, nullptr);
+  } catch (const Error& error) {
+    throw Error(std::string("the shape could not be clipped (") + attempt_name(attempt) + ": " + error.what() + ")");
+  }
+}
+
+TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<ClippedFace>* faces,
+                  ClipReport* report) {
+  if (shape.IsNull()) {
+    throw Error("cannot clip a null shape");
+  }
+  if (report) {
+    *report = ClipReport{};
   }
   if (detail::mesh_only(shape)) {
     return detail::mesh_clip(shape, plane, faces);
@@ -191,42 +342,22 @@ TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<Cli
     BRep_Builder().MakeCompound(nothing);
     return nothing;
   }
-  double size = 0.0;
-  double distance = 0.0;
-  const TopoDS_Face disk = cover(box, plane, size, distance);
-  // A slab from the plane over the whole shape on the normal side.
-  const double depth = std::abs(distance) + size;
-  const TopoDS_Shape removed =
-      BRepPrimAPI_MakePrism(disk, gp_Vec(direction(plane)) * depth).Shape();
-  BRepAlgoAPI_Cut cut;
-  build_keeping_inputs(cut, shape, removed);
-  if (!cut.IsDone() || cut.HasErrors()) {
-    throw Error("the shape could not be clipped");
-  }
-  const TopoDS_Shape& result = cut.Shape();
-  if (faces) {
-    // Each face's images; a face the cut leaves as it is is its own.
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> kept;
-    TopExp::MapShapes(result, TopAbs_FACE, kept);
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> own;
-    TopExp::MapShapes(shape, TopAbs_FACE, own);
-    faces->clear();
-    for (int i = 1; i <= own.Extent(); ++i) {
-      ClippedFace face{own(i), {}};
-      if (!cut.IsDeleted(face.face)) {
-        for (const TopoDS_Shape& image : cut.Modified(face.face)) {
-          if (image.ShapeType() == TopAbs_FACE && kept.Contains(image)) {
-            face.pieces.push_back(image);
-          }
-        }
-        if (face.pieces.empty() && kept.Contains(face.face)) {
-          face.pieces.push_back(face.face);
-        }
+  // The attempts in turn (mitcad#1230): a plane along the seams and edges
+  // of a revolved body's profile made the plain boolean fail, and the body
+  // was shown whole.
+  std::string failed;
+  for (const ClipAttempt attempt : {ClipAttempt::Plain, ClipAttempt::Fuzzy, ClipAttempt::Moved}) {
+    try {
+      TopoDS_Shape result = attempt_clip(shape, box, plane, attempt, faces, report);
+      if (report) {
+        report->failed = failed;
       }
-      faces->push_back(std::move(face));
+      return result;
+    } catch (const Error& error) {
+      failed += std::string(failed.empty() ? "" : "; ") + attempt_name(attempt) + ": " + error.what();
     }
   }
-  return result;
+  throw Error("the shape could not be clipped (" + failed + ")");
 }
 
 } // namespace mitcad::analysis

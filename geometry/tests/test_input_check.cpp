@@ -320,6 +320,16 @@ void test_analyses_leave_inputs() {
   check_kept("a clip", {base}, [&] {
     mitcad::analysis::clip(base->occt(), mitcad::analysis::Plane{{0, 0, 10}, {0, 0, 1}});
   });
+  // The clip's other attempts too (mitcad#1230): the cut with a fuzzy value
+  // and the cut at the plane moved along its normal.
+  check_kept("a fuzzy clip", {base}, [&] {
+    mitcad::analysis::clip_by(base->occt(), mitcad::analysis::Plane{{0, 0, 10}, {0, 0, 1}},
+                              mitcad::analysis::ClipAttempt::Fuzzy);
+  });
+  check_kept("a clip at the moved plane", {base}, [&] {
+    mitcad::analysis::clip_by(base->occt(), mitcad::analysis::Plane{{0, 0, 10}, {0, 0, 1}},
+                              mitcad::analysis::ClipAttempt::Moved);
+  });
 }
 
 // OCCT's offsets and lofts widened the tolerances of their input's edges.

@@ -3,6 +3,7 @@
 # check-all sources: core/model-api/src/body_notes.rs core/model-api/src/cut_sheets.rs tools/cli
 # check-all sources: core/model-api/src/annotations.rs app/MainWindowMeasurements.cpp app/view/MeasurementOverlay.cpp
 # check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
+# check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/print/ProfilePickerRows.cpp
 # Input-driven Windows UI test of the Make tab (mitcad#1049) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-make-tab-test.sh on Linux, on its design: a sheet-metal plate
@@ -30,6 +31,15 @@
 #      to Body1 with the body's icon, its field focused; 4 typed there is
 #      set; its remove button clears it; one Undo puts 4 back. None on the
 #      Solid tab, nor markers.
+#   4c. The card's Printer and Process pickers (mitcad#1239), on a second
+#      design with the printer Bench but none chosen, and My library with
+#      the processes Coarse @Alpha and Fine @Bench: the rows Printer,
+#      Process, Material; the Printer picker lists Bench, "Bench" typed
+#      and Enter make it the design's printer (the root's) and Undo gives
+#      Slicer default again; chosen again, the Process picker lists Bench's
+#      library process first, and choosing it sets it on the body (one undo
+#      step); the Printer picker's last row, Printers..., opens the Printers
+#      manager on Bench.
 #   5. The Floating layout: the Make tab and Dimension from it.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-make-tab-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -78,6 +88,28 @@ Set-Content -Encoding ascii $modelJson @'
 '@
 $output = & $cli run $modelJson --save $design 2>&1
 if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli: $($output -join ' / ')" }
+# The card's pickers (mitcad#1239): a box with the printer Bench in the
+# design, none chosen, no process.
+$pickersJson = Join-Path $work 'pickers.json'
+$pickers = Join-Path $work 'pickers.mitcad'
+Set-Content -Encoding ascii $pickersJson @'
+[
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-10,-10],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"create_print_profile","kind":"printer","name":"Bench","values":{"nozzle_diameter":0.4}}
+]
+'@
+$output = & $cli run $pickersJson --save $pickers 2>&1
+if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli (pickers): $($output -join ' / ')" }
+# My library in the test's own folder: a process for Bench and one for
+# another printer, by their names' @.
+$library = Join-Path $work 'print-library'
+$env:MITCAD_PRINT_LIBRARY_DIR = $library
+New-Item -ItemType Directory -Force (Join-Path $library 'print\processes') | Out-Null
+foreach ($process in @(@('fine-bench', 'Fine @Bench', '0.12'), @('coarse-alpha', 'Coarse @Alpha', '0.28'))) {
+  Set-Content -Encoding ascii (Join-Path $library "print\processes\$($process[0]).json") `
+    ('{"format": "mitcad-print-item", "version": 1, "profile": {"id": "' + $process[0] + '", "name": "' + $process[1] +
+     '", "kind": "process", "values": {"layer_height": ' + $process[2] + '}, "version": 1}}')
+}
 
 $ellipsis = [string][char]0x2026
 # Group-Menu "TAB/GROUP" "entries": the group's menu opened, its entries
@@ -300,6 +332,71 @@ Ui-Mark
 Ui-Step 'the Solid tab'                    { Ui-ClickLogged 'Ribbon tab SOLID' }
 Ui-ExpectNew 'Make card: none' 'no card on the Solid tab'
 Ui-ExpectNew 'Browser Make markers: none' 'no markers on the Solid tab'
+
+Write-Host '--- 4c. The card''s Printer and Process pickers (mitcad#1239)'
+# Picker-Choose "Printer" "typed": the card's picker opened, the text typed
+# in its search, Enter.
+function Picker-Choose([string]$Kind, [string]$Typed, [string]$First) {
+  Ui-Mark
+  Ui-Step "open the $Kind picker"          { Ui-ClickLogged "Make card $($Kind.ToLower())" }
+  Ui-ExpectNew "$Kind picker opened: " "the card's $Kind picker opened"
+  Ui-FocusDialog "^$Kind Picker$"
+  Ui-Mark
+  Ui-Step "type $Typed"                    { Ui-Type $Typed }
+  Ui-ExpectNew "$Kind picker search: $Typed, first $First" "$First found"
+  Ui-Mark
+  Ui-Step 'choose (Enter)'                 { Ui-Key 'Return' }
+  Ui-ExpectNew "$Kind picker chose: " 'chosen'
+  Ui-FocusMain
+}
+function Printer-Choose {
+  Picker-Choose 'Printer' 'Bench' 'Bench'
+  Ui-ExpectNew 'Make card Printer set: Bench' 'set as the design''s printer'
+  Ui-ExpectNew 'printer Bench (component Root); process Slicer default (default)' 'the card shows it at once, chosen on the root'
+}
+Ui-StartApp 'make-tab-pickers' @('--open', $pickers, '--no-native-dialogs')
+Ui-ExpectLog "Opened $workLogged/pickers.mitcad" 'the design without a printer opened'
+Ui-Mark
+Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
+Ui-Mark
+Ui-Step 'select Body1 in the Browser'      { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
+Ui-ExpectNew 'Make card: Body1: material ' 'Body1''s card'
+Ui-ExpectNew 'printer Slicer default (default); process Slicer default (default)' 'no printer and no process chosen'
+Ui-ExpectNew 'Make card rows: Printer, Process, Material' 'the rows from the widest choice: Printer, Process, Material'
+$printers = "$(Ui-LastLineWith 'Make card printers: ')"
+if (-not $printers.Contains('Bench')) { Ui-Fail "the Printer picker lists '$printers'" }
+Write-Host "ok   the Printer picker lists the printers: $printers"
+Ui-ExpectNew 'Make card processes: Alpha: Coarse @Alpha | Bench: Fine @Bench' 'the library''s processes under their printers'
+Printer-Choose
+Ui-ExpectNew 'Make card processes: Bench: Fine @Bench | Alpha: Coarse @Alpha' 'the design''s printer''s processes first now (mitcad#1216)'
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                    { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'printer Slicer default (default); process Slicer default (default)' 'one undo step: Slicer default again'
+Printer-Choose
+Ui-Mark
+Ui-Step 'open the Process picker'          { Ui-ClickLogged 'Make card process' }
+Ui-ExpectNew 'Process picker sections: Bench 1 | Alpha 1' 'Bench''s library process first'
+Ui-FocusDialog '^Process Picker$'
+Ui-Mark
+Ui-Step 'type @Bench'                      { Ui-Type '@Bench' }
+Ui-ExpectNew 'Process picker search: @Bench, first ' 'the process for Bench found'
+Ui-Mark
+Ui-Step 'choose (Enter)'                   { Ui-Key 'Return' }
+Ui-ExpectNew 'Process picker chose: ' 'chosen'
+Ui-FocusMain
+Ui-ExpectNew 'Make card Process set: Fine @Bench' 'the library''s process chosen'
+Ui-ExpectNew 'printer Bench (component Root); process Fine @Bench (body Body1)' 'copied into the design and set on the body'
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                    { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'printer Bench (component Root); process Slicer default (default)' 'one undo step: the body without a process again'
+Picker-Choose 'Printer' 'Printers' "Printers$ellipsis"
+Ui-ExpectNew 'Make card printer manager: design/bench' 'Printers... on the design''s printer'
+Ui-ExpectNew 'Printers opened' 'the Printers manager opened'
+Ui-ExpectNew 'Profile selected: printer Bench (design)' 'on Bench'
+Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Printers$'; Ui-Key 'Escape'; Ui-FocusMain }
+if (@(Ui-NewLines | Where-Object { $_.Contains('Make card Printer set: ') }).Count -gt 0) { Ui-Fail 'Printers... changed the printer' }
+Write-Host 'ok   Printers... keeps the printer'
 
 Write-Host '--- 5. Floating'
 Ui-StartApp 'make-tab-floating' @('--open', $design, '--chrome=floating')

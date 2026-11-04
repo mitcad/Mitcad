@@ -50,6 +50,7 @@
 
 #include "../browser/BrowserController.hpp"
 #include "../framework/Appearances.hpp"
+#include "../framework/CommandSession.hpp"
 #include "../framework/DocumentSession.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
@@ -1796,12 +1797,13 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   const bool reuse = state.checked(QStringLiteral("reuse"));
   settings.reuseWindow = reuse;
   settings.save();
-  // The status line, after the "Done." of the panel closing.
+  // The status line follows the actual command finish: releasing the
+  // panel's checkpoint is asynchronous, so a timer may precede "Done.".
   // The export's warnings go with the last line, in the warning colour,
   // one per line (mitcad#655).
   auto warned = std::make_shared<QString>();
   const auto report = [this, warned](const QString& message, bool error) {
-    TestSync::singleShot(0, this, [this, message, error, warned] {
+    const auto show = [this, message, error, warned] {
       if (error) {
         showError(message);
       } else if (!warned->isEmpty()) {
@@ -1809,7 +1811,13 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
       } else {
         showHint(message);
       }
-    });
+    };
+    if (m_session != nullptr) {
+      connect(m_session, &CommandSession::finished, this,
+              [show](bool committed) { if (committed) { show(); } }, Qt::SingleShotConnection);
+    } else {
+      show();
+    }
     // The last line, for UI tests (mitcad#857 review: it names a face
     // chosen).
     qInfo().noquote() << QStringLiteral("3D Print last line: %1").arg(message);

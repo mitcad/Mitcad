@@ -297,8 +297,9 @@ GitState gitState() {
 }
 
 QLabel* gitMissingNote() {
-  auto* label = new QLabel(tr("Cloud projects need the git program, which was not found: "
-                              "<a href=\"https://git-scm.com/downloads\">install git</a> and start MitCad again."));
+  auto* label = new QLabel(tr("Cloud projects need the installed git program, which was not found: "
+                              "<a href=\"https://git-scm.com/downloads\">install git</a> and start MitCad again. "
+                              "Component libraries over https:// work without it."));
   label->setWordWrap(true);
   label->setOpenExternalLinks(true);
   return label;

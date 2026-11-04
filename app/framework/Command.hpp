@@ -1228,6 +1228,14 @@ struct CommandDef {
   std::function<bool(const QJsonObject&)> canEdit;
   // A log line after OK, such as "Added fillet on 4 edge(s)".
   std::function<QString(const CommandState&, const CommandContext&)> describe;
+  // The feature's key value (mitcad#1235), which the timeline's and the
+  // Browser's hover text and the selection card show on a line of their
+  // own before its sizes (`featurePresentation`): the choices named by
+  // `keyInputs`, each shown as "Label: Option" while it is visible (a
+  // pattern's Pattern Type), or the text of `keyText` when that is set
+  // and gives one (a thread's size, `M76x2 6H, internal, modelled`).
+  QStringList keyInputs;
+  std::function<QString(const CommandState&, const CommandContext&)> keyText;
   // What the panel shows under the inputs after a successful preview, not
   // as an error, before the feature's warnings (Gear, mitcad#472: the
   // derived diameters and the centre distance of a mesh); none when empty.

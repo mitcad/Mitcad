@@ -6252,7 +6252,22 @@ bool pointerButton(const QRegularExpression& expression, QString& error) {
   NSView* content = targetWindow().contentView;
   NSView* button = buttonTitled(content.superview != nil ? content.superview : content, expression, true);
   if (button == nil) {
-    error = QStringLiteral("no enabled native button matching '%1'").arg(expression.pattern());
+    QStringList candidates;
+    const std::function<void(NSView*)> collect = [&](NSView* view) {
+      if ([view isKindOfClass:NSButton.class] && candidates.size() < 8) {
+        NSButton* candidate = (NSButton*)view;
+        if (expression.match(qt(candidate.title)).hasMatch()) {
+          candidates << QStringLiteral("'%1' enabled=%2 hidden=%3 visible=%4 frame=%5 visibleRect=%6")
+              .arg(qt(candidate.title)).arg(bool(candidate.enabled)).arg(bool(candidate.hiddenOrHasHiddenAncestor))
+              .arg(viewVisible(candidate)).arg(qt(NSStringFromRect(candidate.frame)))
+              .arg(qt(NSStringFromRect(candidate.visibleRect)));
+        }
+      }
+      for (NSView* child in view.subviews) { collect(child); }
+    };
+    collect(content.superview != nil ? content.superview : content);
+    error = QStringLiteral("no enabled native button matching '%1' in '%2'; candidates: %3")
+        .arg(expression.pattern(), qt(targetWindow().title), candidates.join(QStringLiteral("; ")));
     return false;
   }
   NSPoint point = NSZeroPoint;

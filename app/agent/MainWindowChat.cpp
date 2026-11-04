@@ -180,6 +180,10 @@ void MainWindow::createChat() {
     });
     if (auto* bar = findChild<QToolBar*>(QStringLiteral("ribbonToolbar"))) {
       bar->addAction(action);
+      // Named for the tests of the bar's colours (mitcad#1245).
+      if (QWidget* button = action != nullptr ? bar->widgetForAction(action) : nullptr) {
+        button->setObjectName(QStringLiteral("ribbonToolbarChat"));
+      }
     }
   }
   // The AppKit frontend's View menu and toolbar button come with its window

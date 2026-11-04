@@ -580,8 +580,9 @@ void CloudSection::finishCheck(const QString& address, const QJsonObject& answer
     if (cls == QLatin1String("not_found")) {
       text = tr("No repository at %1. Make one (Create Repository in Browser), then come back.").arg(address);
     } else if (cls == QLatin1String("git_missing")) {
-      text = tr("Cloud projects need the git program, which was not found: install git "
-                "(https://git-scm.com/downloads) and start MitCad again.");
+      text = tr("Cloud projects need the installed git program, which was not found: install git "
+                "(https://git-scm.com/downloads) and start MitCad again. Component libraries over https:// "
+                "work without it.");
     }
   } else if (m_describe) {
     text = m_describe(answer, ok);

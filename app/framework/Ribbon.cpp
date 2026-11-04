@@ -361,6 +361,7 @@ public:
     m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     page->layout()->setSizeConstraint(QLayout::SetMinimumSize);
     m_scroll->setWidget(page);
+    m_scroll->clearBackgrounds();
     m_back = arrow(Qt::LeftArrow, tr("Scroll toolbar left"), QStringLiteral("ribbonScrollLeft"));
     m_next = arrow(Qt::RightArrow, tr("Scroll toolbar right"), QStringLiteral("ribbonScrollRight"));
     row->addWidget(m_back);
@@ -397,6 +398,40 @@ private:
     QSize sizeHint() const override { return widget() ? widget()->sizeHint() : QSize(); }
     QSize minimumSizeHint() const override {
       return QSize(0, widget() ? widget()->minimumSizeHint().height() : 0);
+    }
+
+    // The toolbar's surface (WindowStyle) shows through the scroll area, its
+    // viewport and the page (mitcad#1245): none of them paints a background.
+    // The viewport fills itself by default, QScrollArea::setWidget turns the
+    // page's fill on, and the Windows 11 style gives the viewport a
+    // background of its own when it polishes the scroll area (its neutral
+    // grey under the groups in the dark theme). No palette of their own: the
+    // groups inherit the toolbar's, which follows the theme.
+    void clearBackgrounds() {
+      for (QWidget* layer : {static_cast<QWidget*>(this), viewport(), widget()}) {
+        if (layer != nullptr) {
+          layer->setAutoFillBackground(false);
+          layer->setAttribute(Qt::WA_NoSystemBackground);
+        }
+      }
+    }
+
+  protected:
+    // Again after the style polished the scroll area or changed, and after
+    // a change of the palette (the theme), which may fill them again.
+    bool event(QEvent* event) override {
+      const bool handled = QScrollArea::event(event);
+      switch (event->type()) {
+      case QEvent::Polish:
+      case QEvent::StyleChange:
+      case QEvent::PaletteChange:
+      case QEvent::ApplicationPaletteChange:
+        clearBackgrounds();
+        break;
+      default:
+        break;
+      }
+      return handled;
     }
   };
 

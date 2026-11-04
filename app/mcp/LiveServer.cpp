@@ -292,7 +292,8 @@ struct LiveServer::State {
         // A handle of a replaced or closed design names no window: the
         // client lists the open designs again, as with one window.
         if (!arguments.value(QStringLiteral("document")).toString().isEmpty())
-          throw std::runtime_error("No open document with this handle; call document_list after New or Open");
+          throw std::runtime_error(
+              "No open document with this handle (unknown, closed or replaced); call document_list after New or Open");
         throw std::runtime_error("The application document window has closed");
       }
       // The live catalog (mitcad#265): MainWindowMcp.cpp, MainWindowMcpUi.cpp.

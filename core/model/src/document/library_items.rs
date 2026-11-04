@@ -202,29 +202,83 @@ pub(super) fn free_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
         .expect("a free name")
 }
 
+/// A library material written (mitcad#1242): its id, its file, its
+/// version and the warnings of the write (a default appearance kept
+/// although nothing has it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterialWrite {
+    pub id: String,
+    pub path: PathBuf,
+    pub version: u32,
+    pub warnings: Vec<String>,
+}
+
+/// A command's answer with its warnings (`warnings`, one line each), when
+/// there are any.
+pub fn with_warnings(mut answer: Value, warnings: Vec<String>) -> Value {
+    if !warnings.is_empty() {
+        answer["warnings"] = json!(warnings);
+    }
+    answer
+}
+
+/// What a library material's file carries for its list of appearances.
+struct ItemLooks {
+    /// The appearances, in the list's order.
+    list: Vec<Appearance>,
+    /// Its own colour made again for its default, when it was missing.
+    made: Option<Appearance>,
+    /// A missing default kept, named.
+    warnings: Vec<String>,
+}
+
 /// The appearances a library material carries for its list (mitcad#1067),
 /// in the list's order: a library appearance needs none, one the item
-/// carries stays, a design's appearance goes with it. None when its
-/// default is no such appearance; another of its list that is none is
-/// carried by none.
+/// carries stays, a design's appearance goes with it; another of its list
+/// that is none is carried by none. A default that is none (mitcad#1242: a
+/// slicer import or an older version wrote the item without it) refuses
+/// only a change that names it (`named`): the material's own colour
+/// (`<id>_colour`, or its source's) is made again from its filament
+/// colour and carried from then on, another id is kept with a warning.
 fn item_appearances(
     material: &Material,
     carried: &[Appearance],
     design: &[Appearance],
-) -> Option<Vec<Appearance>> {
-    let mut list = Vec::new();
+    named: Option<&str>,
+) -> Result<ItemLooks, ModelError> {
+    let mut looks = ItemLooks {
+        list: Vec::new(),
+        made: None,
+        warnings: Vec::new(),
+    };
     for id in material.appearance_list() {
         if library_appearance(&id).is_some() {
             continue;
         }
-        let found = carried.iter().chain(design).find(|a| a.id == id).cloned();
-        match found {
-            Some(look) => list.push(look),
-            None if material.appearance.as_deref() == Some(id.as_str()) => return None,
-            None => {}
+        if let Some(look) = carried.iter().chain(design).find(|a| a.id == id) {
+            looks.list.push(look.clone());
+            continue;
+        }
+        if material.appearance.as_deref() != Some(id.as_str()) {
+            continue;
+        }
+        if crate::print_files::is_own_colour(material, &id) {
+            let look = crate::print_files::own_colour_again(material, &id);
+            looks.list.push(look.clone());
+            looks.made = Some(look);
+        } else if named == Some(id.as_str()) {
+            return Err(invalid(format!(
+                "material {}: there is no appearance {id}",
+                material.id
+            )));
+        } else {
+            looks.warnings.push(format!(
+                "material {}: there is no appearance {id}; kept as its default",
+                material.id
+            ));
         }
     }
-    Some(list)
+    Ok(looks)
 }
 
 impl DocState {
@@ -857,14 +911,15 @@ impl<K: Kernel> Document<K> {
     /// 1): from `based_on` (a material of the design or built in, or a
     /// library's item) or empty (1 g/cm³), named `<name> (copy)` after the
     /// one it is based on (mitcad#828), else `Material 1` (`… 2`), its id the name's when not
-    /// given. Returns the id, the file written and the version. The design
-    /// does not change: the file is an undo step of its own.
+    /// given. Returns the id, the file written, the version and the
+    /// warnings (a default appearance kept although missing, mitcad#1242).
+    /// The design does not change: the file is an undo step of its own.
     pub fn create_library_material(
         &mut self,
         libraries: &Libraries,
         library: LibraryKind,
         change: &MaterialChange,
-    ) -> Result<(String, PathBuf, u32), ModelError> {
+    ) -> Result<MaterialWrite, ModelError> {
         if change.version.is_some() || change.origin.is_some() {
             return Err(invalid("a library's item keeps its own version and origin"));
         }
@@ -971,39 +1026,46 @@ impl<K: Kernel> Document<K> {
             )));
         }
         new.version = Some(1);
-        let appearances =
-            item_appearances(&new, &carried, &self.state.appearances).ok_or_else(|| {
-                invalid(format!(
-                    "material {}: there is no appearance {}",
-                    new.id,
-                    new.appearance.as_deref().unwrap_or_default()
-                ))
-            })?;
+        // A copy of an item that lost its own colour carries it made again
+        // (mitcad#1242).
+        let looks = item_appearances(
+            &new,
+            &carried,
+            &self.state.appearances,
+            change.appearance.as_ref().and_then(Option::as_deref),
+        )?;
         new.check().map_err(invalid)?;
         let id = new.id.clone();
         let label = format!("Create Material {}", new.name);
         let data = ItemData::Material {
             material: new,
-            appearances,
+            appearances: looks.list,
         };
         let file = FileWrite::item(&folder, &data);
         let path = file.path().to_path_buf();
         self.with_files(label, vec![file], |_| Ok(()))?;
-        Ok((id, path, 1))
+        Ok(MaterialWrite {
+            id,
+            path,
+            version: 1,
+            warnings: looks.warnings,
+        })
     }
 
     /// Edits a material of the user's or the project's library: the
     /// change is applied key by key on top of the library's newest version,
     /// which counts up; the design's copies take the same change in one
     /// undo step (a copy that had the library's version is then at the new
-    /// one). Returns the file written and the version.
+    /// one). An item whose default appearance is missing is edited all the
+    /// same (mitcad#1242): its own colour made again, another kept with a
+    /// warning. Returns the file written, the version and the warnings.
     pub fn edit_library_material(
         &mut self,
         libraries: &Libraries,
         library: LibraryKind,
         id: &str,
         change: &MaterialChange,
-    ) -> Result<(PathBuf, u32), ModelError> {
+    ) -> Result<MaterialWrite, ModelError> {
         self.edit_library_material_carrying(libraries, library, id, change, None, &[])
     }
 
@@ -1022,7 +1084,7 @@ impl<K: Kernel> Document<K> {
         change: &MaterialChange,
         given: Option<&Appearance>,
         also: &[Appearance],
-    ) -> Result<(PathBuf, u32), ModelError> {
+    ) -> Result<MaterialWrite, ModelError> {
         if change.based_on.is_some() {
             return Err(invalid("based_on is only for create_material"));
         }
@@ -1068,14 +1130,22 @@ impl<K: Kernel> Document<K> {
         let version = if unchanged { old } else { old + 1 };
         edited.version = Some(version);
         edited.origin = None;
-        let appearances = item_appearances(&edited, &carrying, &self.state.appearances)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "material {id}: there is no appearance {}",
-                    edited.appearance.as_deref().unwrap_or_default()
-                ))
-            })?;
+        // A missing default refuses only a change that names it
+        // (mitcad#1242): the item's own colour is made again and carried.
+        let looks = item_appearances(
+            &edited,
+            &carrying,
+            &self.state.appearances,
+            change.appearance.as_ref().and_then(Option::as_deref),
+        )?;
+        let ItemLooks {
+            list: appearances,
+            made,
+            warnings,
+        } = looks;
         edited.check().map_err(invalid)?;
+        // The made colour joins the design too when a copy shows it.
+        let mut made_for_design = None;
         // The design's copies: checked before the file is written.
         let mut copies = Vec::new();
         for (i, m) in self.state.materials.iter().enumerate() {
@@ -1099,12 +1169,31 @@ impl<K: Kernel> Document<K> {
                 }
             }
             if copy != *m {
-                self.check_material(&copy, Some(i))?;
+                // A copy showing the own colour made again: the design
+                // takes it too (mitcad#1242), so it is checked without it.
+                let needs_made = made.as_ref().filter(|look| {
+                    copy.appearance.as_deref() == Some(look.id.as_str())
+                        && self.appearance(&look.id).is_none()
+                });
+                match needs_made {
+                    Some(look) => {
+                        let mut checked = copy.clone();
+                        checked.appearance = None;
+                        self.check_material(&checked, Some(i))?;
+                        made_for_design = Some(look.clone());
+                    }
+                    None => self.check_material(&copy, Some(i))?,
+                }
                 copies.push((i, copy));
             }
         }
         if unchanged && copies.is_empty() {
-            return Ok((path, old));
+            return Ok(MaterialWrite {
+                id: id.to_owned(),
+                path,
+                version: old,
+                warnings,
+            });
         }
         // The file and the copies are one undo step (mitcad#655).
         let label = format!("Edit Material {}", edited.name);
@@ -1119,6 +1208,9 @@ impl<K: Kernel> Document<K> {
         };
         let make_default = change.appearance.is_none();
         self.with_files(label, files, move |state| {
+            if let Some(look) = &made_for_design {
+                state.add_item_appearance(look);
+            }
             for (i, mut copy) in copies {
                 // A filament colour set: an appearance of the copy's list
                 // (mitcad#1055).
@@ -1127,7 +1219,12 @@ impl<K: Kernel> Document<K> {
             }
             Ok(())
         })?;
-        Ok((path, version))
+        Ok(MaterialWrite {
+            id: id.to_owned(),
+            path,
+            version,
+            warnings,
+        })
     }
 
     /// Deletes a material from the user's or the project's library (its

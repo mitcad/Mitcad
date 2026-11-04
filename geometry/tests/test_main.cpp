@@ -240,6 +240,11 @@ const Part kParts[] = {
     {"face_revolve", test::face_revolve_tests},
     // Fillets and chamfers that take a face away exactly (mitcad#1106).
     {"dressup_takes_face", test::dressup_takes_face_tests},
+    // Section Analysis' clip of a threaded revolved body in its profile's
+    // plane (mitcad#1230).
+    {"section_clip", test::section_clip_tests},
+    // Shells of bodies with parts no thicker than the wall (mitcad#1233).
+    {"shell_thin_parts", test::shell_thin_parts_tests},
 };
 
 bool is_part(const std::string& name) {

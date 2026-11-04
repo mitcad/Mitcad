@@ -13,13 +13,15 @@
 
 namespace mitcad::cli {
 
-const char* const kLibraryUsage = R"(  mitcad-cli library fetch <url> [--libraries DIR] [--json]
+const char* const kLibraryUsage = R"(  mitcad-cli library fetch <url> [--git] [--libraries DIR] [--json]
       Fetches a component library or a community index (a git repository
       with mitcad-library.json or mitcad-index.json at its root) into the
       cache of libraries (--libraries, else MITCAD_LIBRARIES_DIR, else
       the user's data folder): a bare clone, updated by later fetches
       without removing versions. Lists its versions (tags, then the
-      unreleased tip).
+      unreleased tip). https:// and http:// addresses need no git program;
+      folders do, and --git fetches every address (SSH too) with the
+      installed git program.
   mitcad-cli library list [--libraries DIR] [--json]
   mitcad-cli library show <url|id> [--rev R] [--libraries DIR] [--json]
       A fetched library at a version (default the newest): its components
@@ -232,7 +234,7 @@ int library(const std::vector<std::string>& args) {
              {"--libraries", "--rev", "--url", "--part", "--license", "--id", "--name", "--author", "--description",
               "--category", "--standard", "--keyword", "--designation", "--preview", "--role", "--system", "--supplier",
               "--part-number", "--junction", "--kind", "--size", "--mount"},
-             {"--json", "--unlicensed"}, a, error)) {
+             {"--json", "--unlicensed", "--git"}, a, error)) {
     return problem(error);
   }
   if (a.positional.empty()) {
@@ -251,7 +253,8 @@ int library(const std::vector<std::string>& args) {
     return value == nullptr ? std::string() : std::string(", \"") + field + "\": " + json_text(*value);
   };
   if (what == "fetch" && count == 2) {
-    return run(R"({"cmd": "library_fetch", "url": )" + json_text(a.positional[1]) + "}", json);
+    const std::string useGit = a.flag("--git") ? R"(, "use_git": true)" : "";
+    return run(R"({"cmd": "library_fetch", "url": )" + json_text(a.positional[1]) + useGit + "}", json);
   }
   if (what == "list" && count == 1) {
     return run(R"({"cmd": "library_list"})", json);

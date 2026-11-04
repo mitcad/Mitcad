@@ -42,3 +42,14 @@ mod sketch_projection_side_1047_tests;
 mod sketch_xz_front_1060_tests;
 // Sketch Fillet at corners of circular arcs (mitcad#1192).
 mod sketch_fillet_arcs_1192_tests;
+// Offsets leave out the curves that vanish at their distance and trim the
+// overlaps on the source's side (mitcad#1234).
+mod sketch_offset_vanishing_1234_tests;
+// Offsets that fall into several outlines, lines that run on along each
+// other across a closed notch, and offsets of offsets made again with
+// them (mitcad#1244).
+mod sketch_offset_outlines_1244_tests;
+// Offsets of open chains that fall into parts, arcs on one circle across a
+// closed notch, tapered waists whose walls' offsets cross, and lobes too
+// small for the distance (mitcad#1246).
+mod sketch_offset_open_parts_1246_tests;

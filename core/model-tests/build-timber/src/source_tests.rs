@@ -279,3 +279,62 @@ fn the_library_usage_counts_build_parts_by_their_source() {
     .unwrap();
     assert_eq!(usage(&doc), [entry("p30", 1), entry("cap30", 1)]);
 }
+
+#[test]
+fn removing_an_excluded_part_drops_the_cut_s_exclusion_with_a_notice() {
+    use mitcad_model::features::SketchPlane;
+    use mitcad_model::test_support::num;
+    // mitcad#1236: a cut in Holder whose automatic scope excludes a BUILD
+    // part's occurrence.
+    let mut doc = design();
+    let t = first(&mut doc, "p30", [0.0; 3], 1000.0);
+    let holder = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Holder"}),
+    )
+    .unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+               "length": 10, "width": 10, "height": 10, "operation": "new_body"}}),
+    )
+    .unwrap();
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [2.0, 2.0], &num(4.0), &num(4.0))
+        .unwrap()
+        .region;
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "extrude",
+               "profiles": [{"sketch": sketch, "region": region}],
+               "extent": {"type": "distance", "distance": 60}, "operation": "cut",
+               "cut_scope": {"context": {"component": holder["component"],
+                                         "occurrence": holder["occurrence"]},
+                   "targets": {"type": "automatic", "excluded": [
+                       {"component": t["component"], "occurrence": t["occurrence"]}]}}}}),
+    )
+    .unwrap();
+    let cut = added["uid"].clone();
+    all_ok(&doc);
+    let reply = command(
+        &mut doc,
+        json!({"cmd": "build_remove", "component": t["component"]}),
+    )
+    .unwrap();
+    let notice = reply["notices"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{reply}"))
+        .iter()
+        .find(|n| n["target"] == cut)
+        .unwrap_or_else(|| panic!("{reply}"));
+    assert_eq!(notice["level"], "info");
+    assert!(
+        notice["message"].as_str().unwrap().contains("dropped"),
+        "{notice}"
+    );
+    // The cut stays and keeps working.
+    let deleted = reply["removed"]["features"].as_array().unwrap();
+    assert!(!deleted.contains(&cut), "{reply}");
+    all_ok(&doc);
+}

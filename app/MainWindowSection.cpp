@@ -17,8 +17,11 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QJsonArray>
+#include <QLabel>
 #include <QPointer>
+#include <QStringList>
 #include <QThread>
 #include <QtLogging>
 
@@ -27,8 +30,14 @@
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include "browser/BrowserController.hpp"
+#include "browser/BrowserPanel.hpp"
+#include "framework/Command.hpp"
+#include "framework/CommandSession.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/Json.hpp"
+#include "framework/MessageBand.hpp"
+#include "framework/NoticeLevel.hpp"
 #include "framework/SectionPreview.hpp"
 #include "framework/SectionWorker.hpp"
 #include "mitcad/geometry/cancel.hpp"
@@ -112,9 +121,18 @@ void clipForView(Round& round, const QJsonValue& plane, const geometry::CancelSo
   round.prepared.reset();
   std::vector<TopoDS_Shape> fresh;
   for (std::size_t i = 0; i < round.sources.size(); ++i) {
-    const std::shared_ptr<geometry::Shape> shape = i < results->count() ? results->shape(i) : nullptr;
+    const QString uid = round.uids.value(static_cast<qsizetype>(i));
+    std::shared_ptr<geometry::Shape> shape = i < results->count() ? results->shape(i) : nullptr;
+    QString error = shape ? QString() : textOf(results->error(i));
+    // A body the test hook names fails as a clip OCCT cannot make would
+    // (mitcad#1230).
+    if (const QString forced = testClipFailure(uid, shape, round.sources[i]); !forced.isEmpty()) {
+      shape = nullptr;
+      error = forced;
+    }
+    logClipAttempts(uid, shape);
     round.clipped.push_back(shape);
-    round.errors << (shape ? QString() : textOf(results->error(i)));
+    round.errors << error;
     if (shape && round.sources[i] && !shape->occt().IsSame(round.sources[i]->occt())) {
       fresh.push_back(shape->occt());
     }
@@ -287,7 +305,7 @@ void MainWindow::showSectionRound(const SectionRound& round, const QJsonValue& p
   }
   for (std::size_t i = 0; i < round.sources.size(); ++i) {
     const qsizetype at = static_cast<qsizetype>(i);
-    kept.clips.insert(round.keys.value(at), SectionClip{round.sources[i], round.clipped[i]});
+    kept.clips.insert(round.keys.value(at), SectionClip{round.sources[i], round.clipped[i], round.errors.value(at)});
     if (!round.clipped[i]) {
       // Shown whole; a crash inside OCCT is its error (mitcad#392).
       qWarning().noquote() << QStringLiteral("Section: %1 shown whole: %2")
@@ -298,6 +316,102 @@ void MainWindow::showSectionRound(const SectionRound& round, const QJsonValue& p
                             .arg(QString::fromUtf8(compactJson(QJsonObject{{QStringLiteral("plane"), plane}})))
                             .arg(round.sources.size());
   showBodies(); // from the kept clips, then the measurement
+}
+
+QString MainWindow::shownSectionName() const {
+  if (cutPlane() != m_section) {
+    return tr("Hide Above Sketch"); // the sketch's plane
+  }
+  if (m_session && m_session->def().inspect) {
+    // The Section Analysis panel's own section: the analysis it edits.
+    const QString edited = m_session->analysisName();
+    return edited.isEmpty() ? m_session->def().name : edited;
+  }
+  const QString kept = m_snapshot.shownAnalysis().value(QStringLiteral("name")).toString();
+  return kept.isEmpty() ? tr("Section Analysis") : kept;
+}
+
+void MainWindow::reportSectionClips() {
+  const QJsonValue plane = cutPlane();
+  const SectionOutcome& outcome = m_sectionState.outcome;
+  // What displayBodies found at the plane shown now; an older plane's is
+  // not this section's.
+  const bool current = !plane.isNull() && outcome.plane == plane;
+  QString key;
+  QString warning;
+  QStringList history; // each body's error, for the message history
+  QStringList errors;  // the same, for the analysis row's tooltip
+  if (current && !outcome.failed.isEmpty()) {
+    const QString section = shownSectionName();
+    QStringList names;
+    for (qsizetype i = 0; i < outcome.failed.size(); ++i) {
+      const QString uid = outcome.failed.at(i);
+      const QString name = m_snapshot.bodies.value(uid).name.isEmpty() ? uid : m_snapshot.bodies.value(uid).name;
+      names << name;
+      history << tr("%1: %2 shown whole: %3").arg(section, name, outcome.errors.value(i));
+      errors << tr("%1: %2").arg(name, outcome.errors.value(i));
+    }
+    if (names.size() == 1) {
+      warning = tr("%1 could not cut %2; it is shown whole.").arg(section, names.first());
+    } else {
+      // The count and the first few names.
+      constexpr qsizetype kNamed = 3;
+      QString listed = names.mid(0, kNamed).join(QStringLiteral(", "));
+      if (names.size() > kNamed) {
+        listed += QStringLiteral(", …");
+      }
+      warning = tr("%1 could not cut %2 bodies (%3); they are shown whole.").arg(section).arg(names.size()).arg(listed);
+    }
+    key = QStringList{section, outcome.failed.join(QLatin1Char(',')), outcome.errors.join(QLatin1Char('\n'))}.join(
+        QLatin1Char('\n'));
+  }
+
+  // The kept analysis' row in the Analysis folder: the warning with each
+  // body's error, or that its plane cuts no shown body. Not while a panel
+  // shows its own section or the sketch's plane cuts the bodies.
+  QHash<QString, BrowserPanel::AnalysisNote> notes;
+  const QString kept = m_snapshot.shownAnalysis().value(QStringLiteral("name")).toString();
+  const bool keptShown = current && !kept.isEmpty() && sectionShown() && plane == m_section &&
+                         !(m_session && m_session->def().inspect);
+  if (keptShown && !warning.isEmpty()) {
+    notes.insert(kept, {true, warning + QLatin1Char('\n') + errors.join(QLatin1Char('\n'))});
+  } else if (keptShown && outcome.cut == 0 && outcome.kept + outcome.removed > 0) {
+    // A sliver cut is a cut: only a plane past every body is told.
+    notes.insert(kept, {false, tr("The plane does not cut any shown body.")});
+  }
+  if (m_controller != nullptr && m_controller->browser() != nullptr) {
+    m_controller->browser()->setAnalysisNotes(notes);
+  }
+
+  // The warning, once per section and set of failed bodies: not again for
+  // every redraw.
+  if (key == m_sectionReport.key) {
+    return;
+  }
+  const QString previous = m_sectionReport.text;
+  m_sectionReport = SectionReport{key, warning};
+  if (!previous.isEmpty()) {
+    // Hidden, or it cuts them again: the warning goes from the band and
+    // the status line; the history keeps it.
+    if (m_messages != nullptr) {
+      m_messages->withdraw(previous);
+    }
+    if (m_statusLabel != nullptr && m_statusLabel->text() == previous) {
+      showStatus(QString(), NoticeLevel::Hint);
+    }
+    qDebug().noquote() << QStringLiteral("Section clip warning cleared: %1").arg(previous);
+  }
+  if (warning.isEmpty()) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Section clip warning: %1").arg(warning);
+  if (m_messages != nullptr) {
+    // The errors in the history first; the warning then shows in full.
+    for (const QString& line : history) {
+      m_messages->post(line, NoticeLevel::Information);
+    }
+  }
+  showStatus(warning, NoticeLevel::Warning);
 }
 
 void MainWindow::measureLater(const QJsonObject& query, QObject* context, Measured done) {

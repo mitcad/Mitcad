@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <memory>
@@ -720,6 +721,21 @@ std::shared_ptr<geometry::Shape> detached_of(const geometry::Shape& shape, const
   });
 }
 
+// How a clip that needed more than the plain cut was made (mitcad#1230),
+// kept as the clipped shape's information (geometry::Shape::infos), which
+// the application logs: "clipped at attempt 2, with a fuzzy value of
+// 1e-06 mm (plain cut: the boolean failed)".
+std::string clip_note(const analysis::ClipReport& report) {
+  char text[128];
+  if (report.attempt == analysis::ClipAttempt::Fuzzy) {
+    std::snprintf(text, sizeof text, "clipped at attempt 2, with a fuzzy value of %g mm", report.fuzzy);
+  } else {
+    std::snprintf(text, sizeof text, "clipped at attempt 3, with the plane moved by %g mm along its normal",
+                  report.shift);
+  }
+  return std::string(text) + " (" + report.failed + ")";
+}
+
 // What Section Analysis shows of a body cut at the plane: null when the
 // plane leaves it whole, for the caller to show the body's own Shape (the
 // same B-rep, which the view keeps drawn as it is, mitcad#438), and no
@@ -744,7 +760,8 @@ std::shared_ptr<geometry::Shape> clip_of(const geometry::Shape& shape, const ana
   }
   return guarded("clip", [&]() -> std::shared_ptr<geometry::Shape> {
     std::vector<analysis::ClippedFace> faces;
-    TopoDS_Shape clipped = analysis::clip(shape.occt(), plane, &faces);
+    analysis::ClipReport report;
+    TopoDS_Shape clipped = analysis::clip(shape.occt(), plane, &faces, &report);
     if (clipped.IsEqual(shape.occt())) {
       return nullptr;
     }
@@ -758,7 +775,11 @@ std::shared_ptr<geometry::Shape> clip_of(const geometry::Shape& shape, const ana
         named.push_back({piece, shape.face_names(i)});
       }
     }
-    return std::make_shared<geometry::Shape>(std::move(clipped), named);
+    auto result = std::make_shared<geometry::Shape>(std::move(clipped), named);
+    if (report.attempt != analysis::ClipAttempt::Plain) {
+      result->add_info(clip_note(report));
+    }
+    return result;
   });
 }
 

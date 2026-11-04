@@ -26,6 +26,13 @@
 //! 5. The stored name stays as it is; the feature warns that it found the
 //!    face, edge or vertex under another name.
 //!
+//! A modelled thread's pieces are numbered along the thread and counted
+//! from each end (mitcad#490, mitcad#1231); a change of the piece count
+//! renumbers the first. An edge name between a piece and another face that
+//! finds no edge finds the edge between a piece of the same thread and
+//! that face ([`thread_edge`]); names in keys take another piece of the
+//! same thread as like it ([`nested_likeness`]).
+//!
 //! An edge name that finds nothing by these rules still fails; its error
 //! lists a few existing edges that share one of its faces as suggestions
 //! (mitcad#1187, [`with_edge_suggestions`]), never taken in its place.
@@ -90,10 +97,12 @@ fn ends_in_place(a: &SegmentKey, b: &SegmentKey) -> usize {
     }
 }
 
-/// A name inside a key: the same piece of a face like it.
+/// A name inside a key: the same piece of a face like it, or another piece
+/// of the same modelled thread (mitcad#1231: a change of the thread's
+/// piece count renumbers its pieces), least alike.
 fn nested_likeness(a: &FaceName, b: &FaceName) -> Option<(usize, usize)> {
     if a.split != b.split {
-        return None;
+        return same_thread(a, b).then_some((0, 0));
     }
     likeness(a, b)
 }
@@ -102,9 +111,16 @@ fn add(a: (usize, usize), b: (usize, usize)) -> (usize, usize) {
     (a.0 + b.0, a.1 + b.1)
 }
 
+/// Edges in keys: the same edge numbers, best; or `#0` and none, where a
+/// face of the edge is a piece of a modelled thread (one edge, numbered
+/// `#0` where its piece met the other face twice before; mitcad#1231).
 fn edge_likeness(a: &EdgeName, b: &EdgeName) -> Option<(usize, usize)> {
-    if a.index != b.index {
-        return None;
+    let same_index = a.index == b.index;
+    if !same_index {
+        let zero_or_none = matches!((a.index, b.index), (Some(0), None) | (None, Some(0)));
+        if !zero_or_none || !a.faces().iter().any(thread_piece) {
+            return None;
+        }
     }
     let [a0, a1] = a.faces();
     let [b0, b1] = b.faces();
@@ -112,7 +128,56 @@ fn edge_likeness(a: &EdgeName, b: &EdgeName) -> Option<(usize, usize)> {
         Some(add(nested_likeness(x, y)?, nested_likeness(z, w)?))
     };
     // Renaming may change the faces' order in the name.
-    pair(a0, b0, a1, b1).max(pair(a0, b1, a1, b0))
+    let best = pair(a0, b0, a1, b1).max(pair(a0, b1, a1, b0))?;
+    Some(add(best, (0, usize::from(same_index))))
+}
+
+/// The roles of a modelled thread's pieces (mitcad#490, mitcad#1231): the
+/// numbers along the axis from the pieces' count on (`thread`), and from
+/// each end of the face's cylinder (`low_thread`, `high_thread`, the name
+/// from the nearer end, which the piece's edges are named after).
+const THREAD_ROLES: [&str; 3] = ["thread", "low_thread", "high_thread"];
+
+/// True for a numbered piece of a modelled thread,
+/// `F3:thread(F2:side(c1))#57` or `F3:high_thread(F2:side(c1))#0`.
+fn thread_piece(face: &FaceName) -> bool {
+    THREAD_ROLES.contains(&face.role.as_str())
+        && matches!(face.key, Some(RoleKey::Face(_)))
+        && face.split.len() == 1
+}
+
+/// True when both names are pieces of the same modelled thread.
+fn same_thread(a: &FaceName, b: &FaceName) -> bool {
+    thread_piece(a) && thread_piece(b) && a.feature == b.feature && a.key == b.key
+}
+
+/// An end of a modelled thread along its face's cylinder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum End {
+    Low,
+    High,
+}
+
+/// The end a piece's name counts from and its place from there
+/// (`F3:low_thread(…)#2`: the low end, 2); None for a number along the
+/// whole thread.
+fn counted_from(face: &FaceName) -> Option<(End, u32)> {
+    let end = match face.role.as_str() {
+        "low_thread" => End::Low,
+        "high_thread" => End::High,
+        _ => return None,
+    };
+    face.split.first().map(|place| (end, *place))
+}
+
+/// A piece of a modelled thread on the shape: the name its edges are
+/// named after (its first name of the thread), the end it is counted from
+/// with its place there, and its number along the whole thread (the
+/// largest, from the pieces' count on; mitcad#490).
+struct ThreadPiece {
+    name: FaceName,
+    from: Option<(End, u32)>,
+    number: Option<u32>,
 }
 
 fn vertex_likeness(a: &VertexName, b: &VertexName) -> Option<(usize, usize)> {
@@ -293,6 +358,118 @@ impl<'a, K: Kernel> Faces<'a, K> {
         edge.index = index;
         (self.kernel.count_edges(self.shape, &edge) > 0).then_some(edge)
     }
+
+    /// The pieces on the shape of the modelled thread `piece` is a piece
+    /// of (mitcad#1231), each face once.
+    fn thread_pieces(&mut self, piece: &FaceName) -> Vec<ThreadPiece> {
+        let (kernel, shape) = (self.kernel, self.shape);
+        let listed = self.listed.get_or_insert_with(|| face_names(kernel, shape));
+        listed
+            .iter()
+            .filter_map(|names| {
+                let own: Vec<&FaceName> = names.iter().filter(|n| same_thread(n, piece)).collect();
+                let name = (*own.first()?).clone();
+                Some(ThreadPiece {
+                    from: own.iter().find_map(|n| counted_from(n)),
+                    number: own
+                        .iter()
+                        .filter(|n| n.role == "thread")
+                        .filter_map(|n| n.split.first().copied())
+                        .max(),
+                    name,
+                })
+            })
+            .collect()
+    }
+}
+
+/// The end of its thread a piece's name means: the end it is counted
+/// from, or for a number along the whole thread (`thread(…)#22`, saved
+/// before the pieces were counted from the ends) the end whose end piece's
+/// number now lies nearer to it (the pieces' count changes less than the
+/// thread's turns); None for a tie, a number of the order before
+/// mitcad#490 or a thread without both end pieces.
+fn meant_end(piece: &FaceName, pieces: &[ThreadPiece]) -> Option<End> {
+    if let Some((end, _)) = counted_from(piece) {
+        return Some(end);
+    }
+    let number = i64::from(*piece.split.first()?);
+    // A number below half the pieces' count is one of the order before
+    // mitcad#490 (by the pieces' centres in X), which tells no end.
+    if 2 * number < pieces.len() as i64 {
+        return None;
+    }
+    let at = |end: End| {
+        pieces
+            .iter()
+            .find(|p| p.from == Some((end, 0)))
+            .and_then(|p| p.number)
+            .map(|n| (number - i64::from(n)).abs())
+    };
+    let (low, high) = (at(End::Low)?, at(End::High)?);
+    match low.cmp(&high) {
+        std::cmp::Ordering::Less => Some(End::Low),
+        std::cmp::Ordering::Greater => Some(End::High),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+/// An edge name between a piece of a modelled thread and another face
+/// that finds no edge (mitcad#1231: a change of the thread's piece count
+/// renumbered its pieces) found again: the edge between a piece of the
+/// same thread and the other face (as rules 1 and 2 find it), with the same
+/// `#k`. Where both ends of the thread meet that face, the end the name
+/// means ([`meant_end`]); of several pieces at that end, the one nearest
+/// the end. None when that leaves no edge or several.
+fn thread_edge<K: Kernel>(
+    faces: &mut Faces<'_, K>,
+    edge: &EdgeName,
+    found: [&Candidates; 2],
+) -> Option<EdgeName> {
+    for (i, piece) in edge.faces().iter().enumerate() {
+        let others = &found[1 - i].faces;
+        if !thread_piece(piece) || others.is_empty() || others.iter().any(|o| same_thread(o, piece))
+        {
+            continue;
+        }
+        let pieces = faces.thread_pieces(piece);
+        let mut meeting: Vec<(Option<(End, u32)>, EdgeName)> = Vec::new();
+        for p in &pieces {
+            for other in others {
+                if let Some(between) = faces.has_edge(&p.name, other, edge.index) {
+                    meeting.push((p.from, between));
+                }
+            }
+        }
+        if meeting.len() > 1 {
+            // Pieces counted from their ends only: those at the end meant.
+            if meeting.iter().any(|(from, _)| from.is_none()) {
+                return None;
+            }
+            let mut ends: Vec<End> = meeting.iter().filter_map(|(f, _)| f.map(|f| f.0)).collect();
+            ends.sort();
+            ends.dedup();
+            let end = match (ends.as_slice(), meant_end(piece, &pieces)) {
+                ([one], None) => *one,
+                ([one], Some(meant)) if *one == meant => meant,
+                ([_, _, ..], Some(meant)) => meant,
+                _ => return None,
+            };
+            meeting.retain(|(from, _)| from.is_some_and(|f| f.0 == end));
+            let nearest = meeting.iter().filter_map(|(f, _)| f.map(|f| f.1)).min()?;
+            meeting.retain(|(from, _)| from.is_some_and(|f| f.1 == nearest));
+        } else if let [(Some((end, _)), _)] = meeting.as_slice()
+            && counted_from(piece).is_some_and(|(meant, _)| meant != *end)
+        {
+            // A name counted from one end does not find the other.
+            return None;
+        }
+        return match meeting.as_slice() {
+            [(_, one)] => Some(one.clone()),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn texts<T: ToString>(names: &[T]) -> Vec<String> {
@@ -306,11 +483,18 @@ pub fn find_face<K: Kernel>(
     shape: &K::Shape,
     face: &FaceName,
 ) -> Result<Option<FaceName>, Lost> {
-    let found = Faces::new(kernel, shape).candidates(face)?;
+    let mut faces = Faces::new(kernel, shape);
+    let found = faces.candidates(face)?;
     if found.exact {
         return Ok(None);
     }
     match found.faces.as_slice() {
+        // A piece of a modelled thread renumbered: the thread's one piece
+        // (mitcad#1231); with several, nothing tells which one it was.
+        [] if thread_piece(face) => match faces.thread_pieces(face).as_slice() {
+            [one] => Ok(Some(one.name.clone())),
+            _ => Err(Lost::Gone),
+        },
         [] => Err(Lost::Gone),
         [one] => Ok(Some(one.clone())),
         several => Err(ambiguous(face, &texts(several))),
@@ -331,22 +515,25 @@ pub(crate) fn find_edge<K: Kernel>(
     let [a, b] = edge.faces();
     let a = faces.candidates(a)?;
     let b = faces.candidates(b)?;
-    if a.exact && b.exact {
-        return Err(Lost::Gone);
-    }
     let mut found: Vec<EdgeName> = Vec::new();
-    for x in &a.faces {
-        for y in &b.faces {
-            if let Some(between) = faces.has_edge(x, y, edge.index)
-                && !found.contains(&between)
-            {
-                found.push(between);
+    if !(a.exact && b.exact) {
+        for x in &a.faces {
+            for y in &b.faces {
+                if let Some(between) = faces.has_edge(x, y, edge.index)
+                    && !found.contains(&between)
+                {
+                    found.push(between);
+                }
             }
         }
     }
     found.sort();
     match found.as_slice() {
-        [] => Err(Lost::Gone),
+        // An edge of a modelled thread's piece the thread renumbered
+        // (mitcad#1231).
+        [] => thread_edge(&mut faces, edge, [&a, &b])
+            .map(Some)
+            .ok_or(Lost::Gone),
         [one] => Ok(Some(one.clone())),
         several => Err(ambiguous(edge, &texts(several))),
     }
@@ -395,9 +582,11 @@ fn resolved<K: Kernel>(faces: &mut Faces<'_, K>, face: &FaceName) -> Option<Face
 
 /// `candidate` as a suggestion for `edge`, whose faces were found as
 /// `found` (None where not found): None unless it has one of them. Best
-/// are edges between both faces found (another `#k`), then those whose
-/// other face was made on the name's other face, then those whose other
-/// face is like it (rule 2), then the rest.
+/// are edges between both faces found (another `#k`), then, for a missing
+/// piece of a modelled thread, those between another piece of that thread
+/// and the same other face (mitcad#1231), then those whose other face was
+/// made on the name's other face, then those whose other face is like it
+/// (rule 2), then the rest.
 fn suggestion(
     edge: &EdgeName,
     found: &[Option<FaceName>; 2],
@@ -419,12 +608,16 @@ fn suggestion(
         let other_found = found[1 - i].as_ref();
         let rank = if other_found.is_some_and(|f| other.matches(f)) {
             0
-        } else if mentions(other, missing) || other_found.is_some_and(|f| mentions(other, f)) {
+        } else if same_thread(missing, other) && !same_thread(face, missing) {
+            // Another piece of the missing piece's thread on the same face
+            // (mitcad#1231): its piece count changed.
             1
-        } else if likeness(missing, other).is_some() {
+        } else if mentions(other, missing) || other_found.is_some_and(|f| mentions(other, f)) {
             2
-        } else {
+        } else if likeness(missing, other).is_some() {
             3
+        } else {
+            4
         };
         return Some(Suggestion {
             rank,
@@ -991,6 +1184,60 @@ mod tests {
         assert_eq!(suggested(&shape, "E{F2:x|F2:y}"), "lost");
         let lone = body(&["F2:a", "F2:c"], &[]);
         assert_eq!(suggested(&lone, "E{F2:a|F2:b}"), "lost");
+    }
+
+    /// The owner's case (mitcad#1231): piece #22 of a thread, which met the
+    /// plain face where the thread ends, lies in the middle after the piece
+    /// count changed, and #20 meets the face now. The edge between #20 and
+    /// the face comes first, before the edges that keep #22 (whose pieces'
+    /// keys name the face, as a face made on it).
+    #[test]
+    fn a_thread_piece_on_the_same_face_comes_before_the_edges_that_keep_the_piece() {
+        let bore = "F3:side(c51[c57,c61])";
+        let piece = |n: u32| format!("F26:thread({bore})#{n}");
+        let (p20, p21, p22, p23) = (piece(20), piece(21), piece(22), piece(23));
+        let shape = body(
+            &[bore, &p20, &p21, &p22, &p23, "F3:end(r{c51})"],
+            &[
+                (bore, &p20),
+                (&p20, &p21),
+                (&p21, &p22),
+                (&p22, &p23),
+                (bore, "F3:end(r{c51})"),
+            ],
+        );
+        let missing = format!("{}#0", between(&p22, bore));
+        let text = suggested(&shape, &missing);
+        assert!(
+            text.starts_with(&format!("{HEAD}{}, ", instead(bore, &p20, &p22))),
+            "{text}"
+        );
+        // Then the edges that keep #22, then the rest.
+        assert!(
+            text.ends_with(&instead(bore, "F3:end(r{c51})", &p22)),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn pieces_of_one_thread_in_keys_are_alike() {
+        let saved = face("F5:chamfer(E{F2:side(c1)|F3:thread(F2:side(c1))#22}#0)");
+        // Another number of the thread, or its name from an end; the same
+        // edge number best.
+        let same_index = likeness(
+            &saved,
+            &face("F5:chamfer(E{F2:side(c1)|F3:high_thread(F2:side(c1))#0}#0)"),
+        );
+        let one_edge = likeness(
+            &saved,
+            &face("F5:chamfer(E{F2:side(c1)|F3:high_thread(F2:side(c1))#0})"),
+        );
+        assert!(one_edge.is_some() && same_index > one_edge);
+        // Another thread's piece, or another edge number, is not.
+        let other_thread = face("F5:chamfer(E{F2:side(c1)|F4:thread(F2:side(c1))#3}#0)");
+        assert_eq!(likeness(&saved, &other_thread), None);
+        let other_edge = face("F5:chamfer(E{F2:side(c1)|F3:thread(F2:side(c1))#3}#1)");
+        assert_eq!(likeness(&saved, &other_edge), None);
     }
 
     #[test]

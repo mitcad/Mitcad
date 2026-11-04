@@ -74,6 +74,9 @@ qt_add_executable(mitcad
   framework/CommandMessage.hpp
   framework/CommandPanel.cpp
   framework/CommandPanel.hpp
+  # The panel's searchable choice drop-downs, also the Make card's (mitcad#1239).
+  framework/PickerComboBox.cpp
+  framework/PickerComboBox.hpp
   # An inspection's answer as rows of names and values (mitcad#1010).
   framework/ResultRows.cpp
   framework/ResultRows.hpp
@@ -141,6 +144,8 @@ qt_add_executable(mitcad
   commands/PointPatternCommands.cpp
   commands/PrimitiveCommands.cpp
   commands/SketchCommands.cpp
+  # The sketch constraints' Shift keys (mitcad#1229).
+  commands/SketchConstraintKeys.hpp
   commands/SweepCommands.cpp
   # Emboss (mitcad#458).
   commands/EmbossCommands.cpp

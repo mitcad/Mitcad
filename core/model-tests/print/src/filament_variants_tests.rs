@@ -493,9 +493,10 @@ fn a_library_merge_keeps_every_item_s_appearances() {
     let mut doc = Document::new(MockKernel::default());
     let libraries = Libraries::load(Vec::new(), None, Some(&project));
     let ids = ["shop-pla-bench-x".to_owned(), "shop-pla-bench-y".to_owned()];
-    let (id, _, _) = doc
+    let id = doc
         .merge_library_materials(&libraries, LibraryKind::Project, &ids)
-        .unwrap();
+        .unwrap()
+        .id;
     assert_eq!(id, "shop-pla-bench-x");
     assert!(!folder.join("shop-pla-bench-y.json").exists());
     let items: Vec<ItemData> = Libraries::load(Vec::new(), None, Some(&project))

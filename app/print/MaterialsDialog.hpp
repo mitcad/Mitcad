@@ -94,7 +94,9 @@ class SlicerImportBar;
 // asked once: Keep Existing, Replace Values, Keep Both) and says on the
 // message line what it did and each row it did not import, with the
 // reason; Export… writes the selected one's place's materials (none
-// selected: the design's) in the design's units.
+// selected: the design's) in the design's units. The settings' Search
+// finds General's fields by name too and shows only those it finds there
+// (mitcad#1228), so the print settings it finds stay in sight below them.
 //
 // Without a design (ManagerHosts) the panel works through a model of its
 // own: This design is no group and no place to ask for.

@@ -271,6 +271,8 @@ public:
   // Before start: the session edits an analysis kept in the document (an
   // entry of the `analyses` query) instead of adding one (mitcad#41).
   void editAnalysis(const QJsonObject& analysis) { m_analysis = analysis; }
+  // The name of the analysis it edits; empty when it adds one.
+  QString analysisName() const { return m_analysis.value(QStringLiteral("name")).toString(); }
   // Whether the active input takes items of this kind.
   bool activeTakes(SelectKind kind) const;
   // Whether the active input also takes the edited sketch's axes

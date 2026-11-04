@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/print/ProfilePickerRows.cpp app/browser/LibraryPicker.cpp app/framework/CommandPanel.cpp
 # check-all sources: app/files/MainWindowPrint.cpp core/model/src/document/library_items.rs tools/cli
+# check-all sources: app/framework/PickerComboBox.cpp
 # Send to Slicer's Printer picker (mitcad#1108) through the real UI, on a
 # design that imported a printer from a 3MF (plate.3mf) whose name a
 # printer of My library has too, beside two more printers there:

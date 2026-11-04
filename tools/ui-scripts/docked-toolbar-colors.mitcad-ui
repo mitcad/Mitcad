@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# The Docked toolbar's colours in both themes (GitHub #127, mitcad#1245):
+# the Classic ribbon's body (the shown page's scroll area) and the bar's
+# own buttons beside it (Undo, Redo, the separator, Chat) show the
+# toolbar's surface, the "panels" colour of the "Window style:" line, as
+# the window draws them ("TestDriver: widget background ..."):
+#   1. In the dark theme (the body was the Windows 11 style's neutral grey
+#      there, not the surface).
+#   2. In the light theme, after a switch while Mitcad runs.
+#   3. In the dark theme again, after the switch back.
+# The scheme is asked for at each step (color-scheme), whichever the session
+# started in; a "Window style:" line is logged at the start and at each
+# change of theme, so the last one of the theme gives its surface.
+# Run by tools/ui-docked-toolbar-colors-test.sh (Linux) and
+# tools/ui-windows-docked-toolbar-colors-test.ps1 (Windows), both Docked.
+expect-ever 'View area' 30
+wait-idle
+
+color-scheme dark
+capture surface '^Window style: dark, window #[0-9a-f]+, panels (#[0-9a-f]+),' 10
+wait-idle
+sleep 500
+expect-widget-background ribbonPageScroll ${surface} 6
+expect-widget-background ribbonToolbarUndo ${surface} 6
+expect-widget-background ribbonToolbarRedo ${surface} 6
+expect-widget-background ribbonToolbarSeparator ${surface} 6
+expect-widget-background ribbonToolbarChat ${surface} 6
+
+color-scheme light
+capture surface '^Window style: light, window #[0-9a-f]+, panels (#[0-9a-f]+),' 10
+wait-idle
+sleep 500
+expect-widget-background ribbonPageScroll ${surface} 6
+expect-widget-background ribbonToolbarUndo ${surface} 6
+expect-widget-background ribbonToolbarRedo ${surface} 6
+expect-widget-background ribbonToolbarSeparator ${surface} 6
+expect-widget-background ribbonToolbarChat ${surface} 6
+
+color-scheme dark
+capture surface '^Window style: dark, window #[0-9a-f]+, panels (#[0-9a-f]+),' 10
+wait-idle
+sleep 500
+expect-widget-background ribbonPageScroll ${surface} 6
+expect-widget-background ribbonToolbarUndo ${surface} 6
+expect-widget-background ribbonToolbarSeparator ${surface} 6
+expect-never 'TestDriver: FAIL'

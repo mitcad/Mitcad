@@ -679,7 +679,7 @@ impl<K: Kernel> Document<K> {
                             Some(look) => (Some(look.id.clone()), Some(look)),
                             None => (None, None),
                         };
-                        doc.edit_library_material_carrying(
+                        let written = doc.edit_library_material_carrying(
                             libraries,
                             library,
                             &existing.id,
@@ -696,7 +696,8 @@ impl<K: Kernel> Document<K> {
                             },
                             carried.as_ref(),
                             &[],
-                        )?
+                        )?;
+                        (written.path, written.version)
                     }
                 };
                 overridden.push(json!({

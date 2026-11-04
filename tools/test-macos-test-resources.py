@@ -33,7 +33,12 @@ def main():
             assert "macos_desktop" not in props.get("RESOURCE_LOCK", []), name
         else:
             assert "macos_desktop" in props.get("RESOURCE_LOCK", []), name
-        assert not props.get("RUN_SERIAL", False), name
+        if name == "repo.macos-ui-lock":
+            # Its fixture children must exchange the real Aqua lock without
+            # an unrelated audited harness taking a turn between them.
+            assert props.get("RUN_SERIAL", False), name
+        else:
+            assert not props.get("RUN_SERIAL", False), name
     for name in ("app.unit", "app.render_devices"):
         props = properties[name]
         assert "QT_QPA_PLATFORM=offscreen" in props.get("ENVIRONMENT", []), name

@@ -10,6 +10,12 @@
 #     with a job count the memory allows (cargo_jobs below), and after it
 #     the profile's folder in CARGO_TARGET_DIR is swept of what the build
 #     did not name (sweep below; MITCAD_CARGO_SWEEP=0 turns that off).
+#   cmake -P cargo-tests.cmake -- sweep <debug|release> <messages file>
+#     The sweep alone (CARGO_TARGET_DIR set as for the build) with the JSON
+#     messages of a build saved in a file (cargo test --no-run
+#     --message-format json-render-diagnostics), as of the file's time;
+#     MITCAD_CARGO_SWEEP=dry finds and counts without removing. For timing
+#     and checking the sweep on a real target folder.
 #   cmake -DLIST=<file> [-DTEST_NAME=<ctest>] -P cargo-tests.cmake -- run <package> [<argument>...]
 #     Runs the package's test binaries in the package's folder, as cargo
 #     test does, with libtest's arguments (a filter, --skip <filter>); on
@@ -197,11 +203,14 @@ endfunction()
 # a folder (links not followed).
 function(entry_size path out)
   set(total 0)
-  if(IS_DIRECTORY "${path}")
-    file(GLOB_RECURSE files LIST_DIRECTORIES false "${path}/*")
-  else()
-    set(files "${path}")
+  if(NOT IS_DIRECTORY "${path}")
+    if(EXISTS "${path}" AND NOT IS_SYMLINK "${path}")
+      file(SIZE "${path}" total)
+    endif()
+    set(${out} ${total} PARENT_SCOPE)
+    return()
   endif()
+  file(GLOB_RECURSE files LIST_DIRECTORIES false "${path}/*")
   foreach(file IN LISTS files)
     if(EXISTS "${file}" AND NOT IS_SYMLINK "${file}")
       file(SIZE "${file}" size)
@@ -211,22 +220,53 @@ function(entry_size path out)
   set(${out} ${total} PARENT_SCOPE)
 endfunction()
 
-# stale(<kind> <path>): marks a file or folder of the sweep for removal
-# (doomed, and its count and size by kind), unless it was written after
-# the build started (by another build in the same folder).
-function(stale kind path)
-  file(TIMESTAMP "${path}" modified "%s" UTC)
-  if(NOT modified MATCHES "^[0-9]+$" OR NOT modified LESS started)
-    return()
+# stale(<kind> <path>): removes a file or folder of the sweep (counted
+# and sized by kind) with the next batch (remove_doomed), unless it was written
+# after the build started (by another build in the same folder). Macros,
+# run in sweep's scope: a function would copy the batch and the counts
+# into its caller for each entry, and a profile's folder can hold a
+# million stale files (split debug information: a .dwo file per codegen
+# unit of every build, mitcad#1224), where the list of all of them, copied
+# for each, kept the sweep running for hours.
+macro(stale kind path)
+  file(TIMESTAMP "${path}" stale_modified "%s" UTC)
+  if(stale_modified MATCHES "^[0-9]+$" AND stale_modified LESS started)
+    if(IS_DIRECTORY "${path}")
+      entry_size("${path}" stale_size)
+    elseif(EXISTS "${path}")
+      file(SIZE "${path}" stale_size)
+    else()
+      set(stale_size 0)
+    endif()
+    math(EXPR count_${kind} "${count_${kind}} + 1")
+    math(EXPR bytes_${kind} "${bytes_${kind}} + ${stale_size}")
+    list(APPEND doomed_batch "${path}")
+    string(LENGTH "${path}" stale_length)
+    math(EXPR doomed_length "${doomed_length} + ${stale_length} + 3")
+    if(doomed_length GREATER doomed_limit)
+      remove_doomed()
+    endif()
   endif()
-  entry_size("${path}" size)
-  math(EXPR count "${count_${kind}} + 1")
-  math(EXPR bytes "${bytes_${kind}} + ${size}")
-  set(count_${kind} ${count} PARENT_SCOPE)
-  set(bytes_${kind} ${bytes} PARENT_SCOPE)
-  list(APPEND doomed "${path}")
-  set(doomed "${doomed}" PARENT_SCOPE)
-endfunction()
+endmacro()
+
+# remove_doomed(): removes the batch by cmake -E rm, which reports what it
+# cannot remove (a file in use) without failing the build, and counts
+# what is left (doomed_left); with MITCAD_CARGO_SWEEP=dry nothing is
+# removed.
+macro(remove_doomed)
+  if(doomed_batch AND NOT sweep_dry)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -rf -- ${doomed_batch} RESULT_VARIABLE doomed_status)
+    if(NOT doomed_status EQUAL 0)
+      foreach(doomed_path IN LISTS doomed_batch)
+        if(EXISTS "${doomed_path}")
+          math(EXPR doomed_left "${doomed_left} + 1")
+        endif()
+      endforeach()
+    endif()
+  endif()
+  set(doomed_batch)
+  set(doomed_length 0)
+endmacro()
 
 # json(<out> <mode> <json> <member|index>...): string(JSON) that keeps its
 # first error in json_error instead of failing the script.
@@ -265,6 +305,10 @@ function(sweep profile)
   if("$ENV{MITCAD_CARGO_SWEEP}" STREQUAL "0")
     message("cargo sweep: off (MITCAD_CARGO_SWEEP=0)")
     return()
+  endif()
+  set(sweep_dry FALSE)
+  if("$ENV{MITCAD_CARGO_SWEEP}" STREQUAL "dry")
+    set(sweep_dry TRUE)
   endif()
   if("$ENV{CARGO_TARGET_DIR}" STREQUAL "")
     message("cargo sweep: skipped (CARGO_TARGET_DIR is not set)")
@@ -347,7 +391,17 @@ function(sweep profile)
   endif()
 
   set(started "${build_started}")
-  set(doomed)
+  # The batches of what is removed: a command line of at most 16000
+  # characters on Windows (its limit is 32767), longer elsewhere, so that a
+  # sweep of a million files starts a few hundred processes.
+  set(doomed_batch)
+  set(doomed_length 0)
+  set(doomed_left 0)
+  if(CMAKE_HOST_WIN32)
+    set(doomed_limit 16000)
+  else()
+    set(doomed_limit 120000)
+  endif()
   foreach(kind deps fingerprint build incremental)
     set(count_${kind} 0)
     set(bytes_${kind} 0)
@@ -357,8 +411,7 @@ function(sweep profile)
   # an if() expands its variables before it evaluates MATCHES.)
   file(GLOB entries LIST_DIRECTORIES true "${dir}/deps/*")
   foreach(entry IN LISTS entries)
-    get_filename_component(name "${entry}" NAME)
-    if(IS_SYMLINK "${entry}" OR NOT name MATCHES "^([A-Za-z0-9_]+)-(${hex16})(\\..*)?$")
+    if(NOT entry MATCHES "/([A-Za-z0-9_]+)-(${hex16})(\\.[^/]*)?$" OR IS_SYMLINK "${entry}")
       continue()
     endif()
     if(NOT DEFINED kept_${CMAKE_MATCH_2} AND NOT DEFINED program_${CMAKE_MATCH_1})
@@ -423,29 +476,7 @@ function(sweep profile)
     endif()
   endforeach()
 
-  # Removed in batches by cmake -E rm, which reports what it cannot remove
-  # (a file in use) without failing the build.
-  set(batch)
-  set(length 0)
-  foreach(path IN LISTS doomed)
-    list(APPEND batch "${path}")
-    string(LENGTH "${path}" size)
-    math(EXPR length "${length} + ${size} + 3")
-    if(length GREATER 16000)
-      execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -rf -- ${batch})
-      set(batch)
-      set(length 0)
-    endif()
-  endforeach()
-  if(batch)
-    execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -rf -- ${batch})
-  endif()
-  set(left 0)
-  foreach(path IN LISTS doomed)
-    if(EXISTS "${path}")
-      math(EXPR left "${left} + 1")
-    endif()
-  endforeach()
+  remove_doomed()
 
   set(count 0)
   set(bytes 0)
@@ -458,10 +489,15 @@ function(sweep profile)
   endforeach()
   list(JOIN parts ", " parts)
   math(EXPR mib "(${bytes} + 524288) / 1048576")
-  message("cargo sweep of ${dir}: ${count} stale entries, ${mib} MiB, removed (${parts}); "
+  if(sweep_dry)
+    set(done "found, not removed (MITCAD_CARGO_SWEEP=dry)")
+  else()
+    set(done "removed")
+  endif()
+  message("cargo sweep of ${dir}: ${count} stale entries, ${mib} MiB, ${done} (${parts}); "
           "${units} units of the build kept")
-  if(left GREATER 0)
-    message("cargo sweep: ${left} entries could not be removed")
+  if(doomed_left GREATER 0)
+    message("cargo sweep: ${doomed_left} entries could not be removed")
   endif()
 endfunction()
 
@@ -513,6 +549,17 @@ if(mode STREQUAL "build")
   file(WRITE "${LIST}" "${text}\n")
   message("${count} test binaries listed in ${LIST}")
   sweep(${profile_folder})
+
+elseif(mode STREQUAL "sweep")
+  # The sweep alone, of a build whose messages were saved to a file.
+  list(POP_FRONT args profile_folder messages_file)
+  file(READ "${messages_file}" messages)
+  file(TIMESTAMP "${messages_file}" build_started "%s" UTC)
+  string(TIMESTAMP sweep_start "%s" UTC)
+  sweep(${profile_folder})
+  string(TIMESTAMP sweep_end "%s" UTC)
+  math(EXPR sweep_seconds "${sweep_end} - ${sweep_start}")
+  message("cargo sweep took ${sweep_seconds} s")
 
 elseif(mode STREQUAL "run")
   list(POP_FRONT args package)

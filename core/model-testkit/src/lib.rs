@@ -285,6 +285,20 @@ pub struct MockKernel {
     /// until something reads them (`shape_unpacker`, mitcad#858);
     /// otherwise they are read whole (`shape_from_bytes`, counted).
     pub lazy: Cell<bool>,
+    /// A modelled thread's pieces (mitcad#1231): with this, a groove makes
+    /// four pieces a turn (whole turns over its part), named as the OCCT
+    /// facade names them from the nearer end of the face
+    /// (`F3:low_thread(F2:side(c1))#0`, `F3:high_thread(…)#0`), each with
+    /// its number along the thread from the pieces' count on
+    /// (`F3:thread(…)#<count + k>`) as another name ([`Self::face_aliases`]),
+    /// meeting the next piece, the face where the part ends inside it and
+    /// an end chamfer's cone; otherwise one face `F3:thread(…)`.
+    pub thread_pieces: Cell<bool>,
+    /// A face's other names by its name (the OCCT facade gives a face
+    /// several; [`MockShape`] one each): `faces` lists them after the name,
+    /// and a face or edge name finds the face by them too. Shared with the
+    /// kernel's forks, which may compute the thread.
+    pub face_aliases: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
 }
 
 /// What a mock kernel and its forks did, and on which threads (the
@@ -610,6 +624,103 @@ impl MockKernel {
         }
     }
 
+    /// A modelled thread's pieces on `face` ([`Self::thread_pieces`]):
+    /// four a turn over the part `span` along the face (from its low end),
+    /// named from the nearer end, numbered along the thread as other names,
+    /// each meeting the next, the end pieces the face where the part ends
+    /// inside it and the end chamfers' cones `chamfered` (low, high).
+    #[allow(clippy::too_many_arguments)]
+    fn thread_pieces_on(
+        &self,
+        shape: &mut MockShape,
+        named: &dyn Fn(&str) -> FaceName,
+        face: &FaceName,
+        span: (f64, f64),
+        length: f64,
+        pitch: f64,
+        chamfered: (bool, bool),
+    ) {
+        let (from, to) = span;
+        let turns = ((to - from) / pitch - 1e-9).ceil().max(1.0) as u32;
+        let count = 4 * turns;
+        let piece = |role: &str, k: u32| {
+            let mut name = named(role);
+            name.split = vec![k];
+            name
+        };
+        let pieces: Vec<FaceName> = (0..count)
+            .map(|k| {
+                let high = count - 1 - k;
+                if k <= high {
+                    piece("low_thread", k)
+                } else {
+                    piece("high_thread", high)
+                }
+            })
+            .collect();
+        let mut aliases = self
+            .face_aliases
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (k, name) in (0u32..).zip(&pieces) {
+            aliases.insert(
+                name.to_string(),
+                vec![piece("thread", count + k).to_string()],
+            );
+        }
+        drop(aliases);
+        shape.faces.extend(pieces.iter().cloned());
+        for pair in pieces.windows(2) {
+            shape.edges.push((pair[0].clone(), pair[1].clone()));
+        }
+        let (first, last) = (pieces[0].clone(), pieces[pieces.len() - 1].clone());
+        if from > 1e-9 {
+            shape.edges.push((face.clone(), first.clone()));
+        } else if chamfered.0 {
+            shape.edges.push((named("thread_chamfer_low"), first));
+        }
+        if to < length - 1e-9 {
+            shape.edges.push((face.clone(), last));
+        } else if chamfered.1 {
+            shape.edges.push((named("thread_chamfer_high"), last));
+        }
+    }
+
+    /// The other names of a face ([`Self::face_aliases`]).
+    fn aliases_of(&self, face: &FaceName) -> Vec<FaceName> {
+        self.face_aliases
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&face.to_string())
+            .map(|names| names.iter().filter_map(|n| n.parse().ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The face of the shape that `reference` finds by another name.
+    fn aliased(&self, shape: &MockShape, reference: &FaceName) -> Option<FaceName> {
+        shape
+            .faces
+            .iter()
+            .find(|f| self.aliases_of(f).iter().any(|a| a.matches(reference)))
+            .cloned()
+    }
+
+    /// `edge` with each face that the shape has only by another name in
+    /// the face's own name.
+    fn unaliased(&self, shape: &MockShape, edge: &EdgeName) -> EdgeName {
+        let own = |f: &FaceName| {
+            if shape.has_face(f) {
+                f.clone()
+            } else {
+                self.aliased(shape, f).unwrap_or_else(|| f.clone())
+            }
+        };
+        let [a, b] = edge.faces();
+        let mut found = EdgeName::new(own(a), own(b));
+        found.index = edge.index;
+        found
+    }
+
     fn dress(
         &self,
         op: &'static str,
@@ -625,7 +736,11 @@ impl MockKernel {
             ..body.clone()
         };
         for edge in edges {
-            let matched: Vec<_> = body.matching_edges(edge).into_iter().cloned().collect();
+            let mut matched: Vec<_> = body.matching_edges(edge).into_iter().cloned().collect();
+            if matched.is_empty() {
+                let own = self.unaliased(body, edge);
+                matched = body.matching_edges(&own).into_iter().cloned().collect();
+            }
             if matched.is_empty() {
                 return Err(KernelError::failed(format!("the body has no edge {edge}")));
             }
@@ -1092,14 +1207,19 @@ impl Kernel for MockKernel {
             &[body],
             &faces_matching(body, spec.faces),
         );
+        // The inside of the wall along each kept face, and the end of the
+        // wall where each removed face was.
         for face in &body.faces {
-            if !spec.faces.iter().any(|r| face.matches(r)) {
-                shape.faces.push(FaceName::new(
-                    feature,
-                    "offset",
-                    Some(RoleKey::Face(Box::new(face.clone()))),
-                ));
-            }
+            let role = if spec.faces.iter().any(|r| face.matches(r)) {
+                "offset_cap"
+            } else {
+                "offset"
+            };
+            shape.faces.push(FaceName::new(
+                feature,
+                role,
+                Some(RoleKey::Face(Box::new(face.clone()))),
+            ));
         }
         Ok(shape)
     }
@@ -1203,7 +1323,10 @@ impl Kernel for MockKernel {
     }
 
     fn count_edges(&self, shape: &MockShape, edge: &EdgeName) -> usize {
-        let count = shape.matching_edges(edge).len();
+        let mut count = shape.matching_edges(edge).len();
+        if count == 0 {
+            count = shape.matching_edges(&self.unaliased(shape, edge)).len();
+        }
         match edge.index {
             Some(k) => usize::from(k < count as u32),
             None => count,
@@ -1211,7 +1334,9 @@ impl Kernel for MockKernel {
     }
 
     fn count_faces(&self, shape: &MockShape, face: &FaceName) -> Result<usize, KernelError> {
-        Ok(usize::from(shape.has_face(face)))
+        Ok(usize::from(
+            shape.has_face(face) || self.aliased(shape, face).is_some(),
+        ))
     }
 
     /// Planes unless `surfaces` names another surface; areas by
@@ -1233,7 +1358,9 @@ impl Kernel for MockKernel {
                         .map_or("plane", SurfaceGeometry::kind)
                         .to_owned(),
                     area: areas.get(&name).copied().unwrap_or(0.0),
-                    names: vec![name],
+                    names: std::iter::once(name)
+                        .chain(self.aliases_of(face).iter().map(ToString::to_string))
+                        .collect(),
                 }
             })
             .collect())
@@ -1897,7 +2024,9 @@ impl Kernel for MockKernel {
             let ends = spec.chamfer.as_ref().and_then(|c| c.ends.get(i).copied());
             let (low, high) = ends.unwrap_or((false, false));
             if spec.groove {
-                shape.faces.push(named("thread"));
+                if !self.thread_pieces.get() {
+                    shape.faces.push(named("thread"));
+                }
                 if let Ok(cylinder) = self.face_cylinder(body, face) {
                     let crest = if cylinder.internal {
                         spec.minor / 2.0 + spec.radial_clearance
@@ -1910,6 +2039,17 @@ impl Kernel for MockKernel {
                         Some((l, offset, true)) => (length - offset - l, length - offset),
                         Some((l, offset, false)) => (offset, offset + l),
                     };
+                    if self.thread_pieces.get() {
+                        self.thread_pieces_on(
+                            &mut shape,
+                            &named,
+                            face,
+                            (from, to),
+                            length,
+                            spec.pitch,
+                            (low, high),
+                        );
+                    }
                     let span = if (crest - cylinder.radius).abs() > 1e-7 {
                         // As the OCCT facade: a crest off the face (a
                         // class's diameter, a radial clearance) takes all
@@ -2908,6 +3048,8 @@ impl Kernel for MockKernel {
             item_boxes: self.item_boxes.clone(),
             split_bounds: self.split_bounds.clone(),
             lists_geometry: self.lists_geometry.clone(),
+            thread_pieces: self.thread_pieces.clone(),
+            face_aliases: Arc::clone(&self.face_aliases),
             ..MockKernel::default()
         })
     }

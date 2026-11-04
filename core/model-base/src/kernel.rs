@@ -2574,7 +2574,10 @@ pub struct HoleSpec<'a, S> {
 /// the axis; Y for axes near X; `geometry/include/mitcad/geometry/thread.hpp`).
 /// `part` limits it to (length, offset, from the high end of the
 /// cylinder's axis); otherwise it covers the face and runs out through its
-/// free ends. The thread's faces are named `<feature>:thread(<face>)`.
+/// free ends. The thread's faces are named `<feature>:thread(<face>)`,
+/// its pieces numbered along it, and also by their places from the nearer
+/// end of the face, `<feature>:low_thread(<face>)#k` or
+/// `<feature>:high_thread(<face>)#k`, their first names (mitcad#1231).
 /// Extra clearance (mitcad#195, mm, 0 or more): `radial_clearance` moves
 /// the whole profile along the radius away from the material (an internal
 /// thread's diameters grow by twice it, an external thread's shrink), then

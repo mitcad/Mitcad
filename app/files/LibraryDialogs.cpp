@@ -147,7 +147,8 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
   auto* intro = new QLabel(tr("Component libraries and community indexes are git repositories. The components a design "
                               "uses keep the version chosen for them; fetching only brings newer versions to "
                               "choose from. Libraries are fetched when you ask. A source with Auto-update on is "
-                              "also fetched in the background when MitCad starts."));
+                              "also fetched in the background when MitCad starts. MitCad fetches https:// "
+                              "addresses itself; folders and SSH addresses need the installed git program."));
   intro->setWordWrap(true);
   layout->addWidget(intro);
   m_table = new QTableWidget(0, 6);
@@ -197,6 +198,21 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
   buttons->addWidget(fetchSelected);
   buttons->addWidget(fetchAll);
   layout->addLayout(buttons);
+  // Use the installed git program (mitcad#1224), an advanced setting: every
+  // fetch through git, for SSH addresses or a sign-in with git's credential
+  // helper; off (the default), https:// libraries need no git.
+  auto* useGit = new QCheckBox(tr("Use the installed &git program"));
+  useGit->setObjectName(QStringLiteral("libraryUseGit"));
+  useGit->setChecked(LibrarySettings::load().useGit);
+  useGit->setToolTip(tr("Fetch every library with git (SSH addresses, sign-ins)"));
+  layout->addWidget(useGit);
+  connect(useGit, &QCheckBox::toggled, this, [](bool on) {
+    LibrarySettings settings = LibrarySettings::load();
+    settings.useGit = on;
+    settings.save();
+    qInfo().noquote() << QStringLiteral("Libraries: use the installed git program %1")
+                             .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  });
   auto* close = new QDialogButtonBox(QDialogButtonBox::Close);
   mac::styleDialogButtons(close);
   layout->addWidget(close);

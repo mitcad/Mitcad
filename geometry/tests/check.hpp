@@ -244,5 +244,10 @@ void face_extrude_tests();
 void face_revolve_tests();
 // Fillets and chamfers that take a face away exactly (mitcad#1106).
 void dressup_takes_face_tests();
+// Section Analysis' clip of a threaded revolved body in its profile's plane
+// (mitcad#1230).
+void section_clip_tests();
+// Shells of bodies with parts no thicker than the wall (mitcad#1233).
+void shell_thin_parts_tests();
 
 } // namespace test

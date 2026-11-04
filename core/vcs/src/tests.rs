@@ -37,6 +37,8 @@ mod library_mounts;
 mod library_rows;
 // A repository's own git configuration as untrusted input (mitcad#920).
 mod untrusted;
+// Libraries over HTTP without the git program (mitcad#1224).
+mod library_https;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);

@@ -321,6 +321,12 @@ void SettingsForm::applyFilter() {
   m_search->setVisible(m_printShown || m_general != nullptr);
   m_advanced->setVisible(m_printShown && !end);
   if (m_general != nullptr) {
+    // While searching, only the general fields found and no more room
+    // than they take: the settings found below keep the rest (mitcad#1228).
+    if (filterGeneral) {
+      filterGeneral(searching && general ? search : QString());
+    }
+    static_cast<QVBoxLayout*>(layout())->setStretchFactor(m_general, searching ? 0 : 1);
     m_general->setVisible(general);
   }
   if (m_end != nullptr) {

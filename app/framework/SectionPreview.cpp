@@ -5,6 +5,10 @@
 #include <cmath>
 
 #include <QJsonArray>
+#include <QChar>
+#include <QDebug>
+#include <QStringList>
+#include <QtGlobal>
 
 #include <BOPTools_AlgoTools3D.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -144,5 +148,27 @@ std::vector<TopoDS_Face> sectionCapFaces(const TopoDS_Shape& cut, const TopoDS_S
 
 // Integrated as the model's areas are (mitcad#1200).
 double facesArea(const std::vector<TopoDS_Face>& faces) { return geometry::faces_area(faces); }
+
+QString testClipFailure(const QString& uid, const std::shared_ptr<geometry::Shape>& clipped,
+                        const std::shared_ptr<geometry::Shape>& source) {
+  static const QStringList failing =
+      qEnvironmentVariable("MITCAD_TEST_SECTION_CLIP_FAIL").split(QLatin1Char(','), Qt::SkipEmptyParts);
+  if (failing.isEmpty() || !failing.contains(uid) || !clipped) {
+    return QString();
+  }
+  // Kept whole (the body itself) or removed whole (nothing left): no cut.
+  const bool cut = (!source || !clipped->occt().IsSame(source->occt())) &&
+                   TopExp_Explorer(clipped->occt(), TopAbs_FACE).More();
+  return cut ? QStringLiteral("the clip failed for the test (MITCAD_TEST_SECTION_CLIP_FAIL)") : QString();
+}
+
+void logClipAttempts(const QString& uid, const std::shared_ptr<geometry::Shape>& clipped) {
+  if (!clipped) {
+    return;
+  }
+  for (const std::string& info : clipped->infos()) {
+    qInfo().noquote() << QStringLiteral("Section: %1 %2").arg(uid, QString::fromStdString(info));
+  }
+}
 
 } // namespace mitcad

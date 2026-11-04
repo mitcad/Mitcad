@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -26,6 +27,7 @@
 #include <NCollection_List.hxx>
 #include <ShapeBuild_ReShape.hxx>
 #include <ShapeUpgrade_ShapeDivideContinuity.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -35,8 +37,10 @@
 
 #include "face_select.hpp"
 #include "history.hpp"
+#include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/split.hpp"
 #include "replace.hpp"
+#include "shell_cavity.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -462,6 +466,46 @@ void check_result(const ShapePtr& shape, const char* operation) {
 
 std::set<int> as_set(const std::vector<int>& faces) { return {faces.begin(), faces.end()}; }
 
+// The shell `primary` builds, or where the geometry kernel fails on it, the
+// body less a cavity (shell_cavity.hpp, mitcad#1233): `fallback`, null
+// when that cannot be built either (then the kernel's failure stands).
+template <class Primary, class Fallback>
+ShapePtr or_by_cavity(Primary&& primary, Fallback&& fallback) {
+  std::exception_ptr failure;
+  try {
+    return primary();
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const Standard_OutOfMemory&) {
+    throw;
+  } catch (const std::runtime_error&) {
+    failure = std::current_exception();
+  } catch (const Standard_Failure&) {
+    failure = std::current_exception();
+  }
+  ShapePtr result = fallback();
+  if (!result) {
+    std::rethrow_exception(failure);
+  }
+  return result;
+}
+
+// The body hollowed inside by the cavity: `outer` the shape it is cut out
+// of (null: the body); null when it cannot be built.
+ShapePtr cavity_shell(const std::string& feature, const Shape& input, const std::set<int>& removed_faces,
+                      double inside, GeomAbs_JoinType join, const Shape* outer) {
+  // OCCT's offset widens the tolerances of its input's sub-shapes.
+  const ShapePtr copy = detail::working_copy(input);
+  std::set<int> removed = removed_faces;
+  const ShapePtr split = split_at_creases(*copy, removed);
+  const Shape& body = split ? *split : *copy;
+  ShapePtr result = detail::shell_by_cavity(feature, body, removed, inside, join, outer ? *outer : body);
+  if (result) {
+    check_result(result, "the shell");
+  }
+  return result;
+}
+
 } // namespace
 
 ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& spec) {
@@ -483,24 +527,39 @@ ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& s
   }
   const GeomAbs_JoinType join = spec.rounded ? GeomAbs_Arc : GeomAbs_Intersection;
   return detail::run("shell", [&] {
+    // Where the kernel's offset fails, the inside of the wall is the body
+    // less a cavity: parts no thicker than the wall stay solid.
+    const std::set<int> removed = as_set(faces);
+    const auto inside_wall = [&](const Shape* outer, auto&& primary) {
+      return or_by_cavity(
+          [&] {
+            ShapePtr wall = primary();
+            check_result(wall, "the shell");
+            detail::note_missing_walls(feature, body, removed, spec.inside, *wall);
+            return wall;
+          },
+          [&] { return cavity_shell(feature, body, removed, spec.inside, join, outer); });
+    };
     ShapePtr result;
     if (faces.empty()) {
       const ShapePtr outer = spec.outside > 0.0
                                  ? offset_body(feature, body, spec.outside, join, false)
                                  : std::make_shared<Shape>(body);
-      const ShapePtr inner = spec.inside > 0.0 ? offset_body(feature, body, -spec.inside, join, true)
-                                               : renamed_as_inner(feature, body);
-      result = hollow(*outer, *inner);
-    } else {
-      const std::set<int> removed = as_set(faces);
-      if (spec.outside == 0.0) {
-        result = thick_solid(feature, body, removed, -spec.inside, join);
-      } else if (spec.inside == 0.0) {
-        result = thick_solid(feature, body, removed, spec.outside, join);
-      } else {
-        result = fuse_walls(*thick_solid(feature, body, removed, -spec.inside, join),
-                            *thick_solid(feature, body, removed, spec.outside, join));
+      if (spec.inside > 0.0) {
+        return inside_wall(spec.outside > 0.0 ? outer.get() : nullptr, [&] {
+          return hollow(*outer, *offset_body(feature, body, -spec.inside, join, true));
+        });
       }
+      result = hollow(*outer, *renamed_as_inner(feature, body));
+    } else if (spec.outside == 0.0) {
+      return inside_wall(nullptr, [&] { return thick_solid(feature, body, removed, -spec.inside, join); });
+    } else if (spec.inside == 0.0) {
+      result = thick_solid(feature, body, removed, spec.outside, join);
+    } else {
+      const ShapePtr inner =
+          inside_wall(nullptr, [&] { return thick_solid(feature, body, removed, -spec.inside, join); });
+      result = fuse_walls(*inner, *thick_solid(feature, body, removed, spec.outside, join));
+      result->copy_notes(*inner);
     }
     check_result(result, "the shell");
     return result;

@@ -227,6 +227,20 @@ fn shell_faces_are_references_for_later_features() {
     let error = b.doc.delete_feature(shell, false).unwrap_err().to_string();
     assert!(error.contains("is used by"), "{error}");
 
+    // The end of the wall at the removed top.
+    let cap = FaceName::new(
+        shell,
+        "offset_cap",
+        Some(crate::topo::RoleKey::Face(Box::new(top(&b)))),
+    );
+    let chamfer = add!(
+        b,
+        json!({"type": "chamfer", "body": b.body, "sets": [
+            {"faces": [cap], "size": {"type": "equal_distance", "distance": 0.2}}]}),
+    )
+    .unwrap();
+    assert_eq!(status(&b, chamfer), FeatureStatus::Ok);
+
     // Neither thickness, or a negative one, is rejected.
     for value in [
         json!({"type": "shell", "body": b.body}),
@@ -236,6 +250,36 @@ fn shell_faces_are_references_for_later_features() {
         let error = add!(b, value).unwrap_err().to_string();
         assert!(error.contains("thickness"), "{error}");
     }
+}
+
+/// A shell whose wall does not fit under some faces (parts no thicker than
+/// the wall, left solid, mitcad#1233) succeeds with the kernel's note as its
+/// warning; the outside keeps its names.
+#[test]
+fn shell_warns_where_the_wall_does_not_fit() {
+    let mut b = block();
+    const NOTE: &str = "the wall does not fit under face F2:side(c1); it is left solid there";
+    b.doc
+        .kernel()
+        .notes
+        .borrow_mut()
+        .insert("shell", NOTE.to_owned());
+    let shell = add!(
+        b,
+        json!({"type": "shell", "body": b.body, "faces": [top(&b)], "inside": 3.0}),
+    )
+    .unwrap();
+    assert_eq!(status(&b, shell), FeatureStatus::Ok);
+    assert_eq!(b.doc.warnings(shell), [NOTE.to_owned()]);
+    // The outside face the note names is a reference as before.
+    let fillet = add!(
+        b,
+        json!({"type": "fillet", "body": b.body, "sets": [
+            {"faces": [side(b.extrude, 1, 0)], "size": {"type": "constant", "radius": 0.5}}]}),
+    )
+    .unwrap();
+    assert_eq!(status(&b, fillet), FeatureStatus::Ok);
+    assert!(b.doc.warnings(fillet).is_empty());
 }
 
 #[test]

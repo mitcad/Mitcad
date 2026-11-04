@@ -18,3 +18,5 @@ mod feature_inputs_tests;
 mod dogbone_tests;
 // Auto Fix of references a warning found again (mitcad#1223).
 mod auto_fix_tests;
+// The end pieces of a modelled thread keep their names (mitcad#1231).
+mod thread_end_tests;

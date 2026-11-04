@@ -315,16 +315,22 @@ void meshForView(const std::vector<TopoDS_Shape>& shapes) {
 // model clips them on all cores (`analysis_clips`, mitcad#438). For each of
 // `which`, what is left of it: its own shape when the plane leaves it whole
 // (the view keeps it drawn as it is), null when its clip failed and it is
-// shown whole (logged; a crash inside OCCT is its error, mitcad#392). The
-// new shapes are meshed for the view.
+// shown whole (logged, its error in `errors`; a crash inside OCCT is its
+// error, mitcad#392). The new shapes are meshed for the view.
 std::vector<std::shared_ptr<geometry::Shape>> clipBodies(const Document& document, const QJsonValue& plane,
                                                          const QJsonArray& targets,
                                                          const std::vector<std::size_t>& which,
-                                                         const std::vector<BodyDisplay>& bodies) {
+                                                         const std::vector<BodyDisplay>& bodies,
+                                                         QStringList& errors) {
   ScopedTiming timing("section clips");
-  const auto shownWhole = [&](std::size_t body, const QString& error) {
+  errors = QStringList();
+  for (std::size_t i = 0; i < which.size(); ++i) {
+    errors << QStringLiteral("not clipped");
+  }
+  const auto shownWhole = [&](std::size_t i, const QString& error) {
+    errors[static_cast<qsizetype>(i)] = error;
     qWarning().noquote() << QStringLiteral("Section: %1 shown whole: %2")
-                                .arg(QString::fromStdString(bodies[body].uid), error);
+                                .arg(QString::fromStdString(bodies[which[i]].uid), error);
   };
   std::vector<std::shared_ptr<geometry::Shape>> left(which.size());
   std::vector<TopoDS_Shape> clipped;
@@ -333,20 +339,29 @@ std::vector<std::shared_ptr<geometry::Shape>> clipBodies(const Document& documen
         rustStr(compactJson({{QStringLiteral("plane"), plane}, {QStringLiteral("bodies"), targets}})));
     for (std::size_t i = 0; i < which.size() && i < results->count(); ++i) {
       const BodyDisplay& body = bodies[which[i]];
+      const QString uid = QString::fromStdString(body.uid);
       const std::shared_ptr<geometry::Shape> shape = results->shape(i);
       if (!shape) {
         const rust::String error = results->error(i);
-        shownWhole(which[i], QString::fromUtf8(error.data(), static_cast<qsizetype>(error.size())));
+        shownWhole(i, QString::fromUtf8(error.data(), static_cast<qsizetype>(error.size())));
         continue;
       }
+      // A body the test hook names fails as a clip OCCT cannot make would
+      // (mitcad#1230).
+      if (const QString forced = testClipFailure(uid, shape, body.shape); !forced.isEmpty()) {
+        shownWhole(i, forced);
+        continue;
+      }
+      logClipAttempts(uid, shape);
       if (!shape->occt().IsSame(body.shape->occt())) {
         clipped.push_back(shape->occt());
       }
       left[i] = shape;
+      errors[static_cast<qsizetype>(i)].clear();
     }
   } catch (const std::exception& e) {
-    for (const std::size_t body : which) {
-      shownWhole(body, errorText(e));
+    for (std::size_t i = 0; i < which.size(); ++i) {
+      shownWhole(i, errorText(e));
     }
     return left;
   }
@@ -1528,15 +1543,20 @@ void MainWindow::createRibbon() {
   bar->setObjectName(QStringLiteral("ribbonToolbar"));
   bar->setMovable(false);
   bar->setFloatable(false);
-  // Undo and Redo at hand in the application bar.
+  // Undo and Redo at hand in the application bar; named for the tests of
+  // the bar's colours (mitcad#1245).
   for (const char* id : {"edit.undo", "edit.redo"}) {
     QAction* action = m_registry->action(QString::fromLatin1(id));
     bar->addAction(action);
     if (auto* button = qobject_cast<QToolButton*>(bar->widgetForAction(action))) {
       button->setFocusPolicy(Qt::NoFocus);
+      button->setObjectName(QLatin1String(id) == QLatin1String("edit.undo") ? QStringLiteral("ribbonToolbarUndo")
+                                                                             : QStringLiteral("ribbonToolbarRedo"));
     }
   }
-  bar->addSeparator();
+  if (QWidget* separator = bar->widgetForAction(bar->addSeparator())) {
+    separator->setObjectName(QStringLiteral("ribbonToolbarSeparator"));
+  }
   bar->addWidget(m_ribbon);
   // The quick-access group in the tabs' row, right of Undo and Redo, as
   // high as the tabs: the groups below keep the toolbar's whole width
@@ -3447,10 +3467,15 @@ std::vector<BodyDisplay> MainWindow::displayBodies(SectionTargets* unclipped) co
   }
   if (!cutting.which.empty()) {
     useClips(cutting, bodies);
-  } else if (cut.isNull() && !m_sectionState.clips.isEmpty()) {
-    // Whole again: what was kept goes.
-    m_sectionState.clips.clear();
-    m_sectionState.plane = QJsonValue();
+  } else {
+    // No body to cut, or no section (mitcad#1230): nothing failed.
+    m_sectionState.outcome = SectionOutcome{};
+    m_sectionState.outcome.plane = cut;
+    if (cut.isNull() && !m_sectionState.clips.isEmpty()) {
+      // Whole again: what was kept goes.
+      m_sectionState.clips.clear();
+      m_sectionState.plane = QJsonValue();
+    }
   }
   for (BodyDisplay& body : bodies) {
     const QString uid = QString::fromStdString(body.uid);
@@ -3487,24 +3512,52 @@ void MainWindow::useClips(const SectionTargets& cut, std::vector<BodyDisplay>& b
     which.push_back(cut.which[i]);
     targets.append(cut.targets.at(static_cast<qsizetype>(i)));
   }
-  if (missing.empty()) {
-    return;
-  }
-  // Clipped here, and their new shapes meshed, beside a round that may run:
-  // the section worker reads only what was detached from the bodies
-  // (mitcad#438).
-  const std::vector<std::shared_ptr<geometry::Shape>> left = clipBodies(idleDocument(), cut.plane, targets, which, bodies);
-  for (std::size_t k = 0; k < missing.size(); ++k) {
-    BodyDisplay& body = bodies[which[k]];
-    const std::shared_ptr<geometry::Shape> shape = k < left.size() ? left[k] : nullptr;
-    kept.clips.insert(cut.keys.value(static_cast<qsizetype>(missing[k])), SectionClip{body.shape, shape});
-    if (shape) {
-      // Cut, not left whole: drawn behind its caps (mitcad#784).
-      body.sectioned = !shape->occt().IsSame(body.shape->occt());
-      body.uncut = body.sectioned ? body.shape : nullptr; // for its caps (mitcad#943)
-      body.shape = shape;
+  if (!missing.empty()) {
+    // Clipped here, and their new shapes meshed, beside a round that may
+    // run: the section worker reads only what was detached from the bodies
+    // (mitcad#438).
+    QStringList errors;
+    const std::vector<std::shared_ptr<geometry::Shape>> left =
+        clipBodies(idleDocument(), cut.plane, targets, which, bodies, errors);
+    for (std::size_t k = 0; k < missing.size(); ++k) {
+      BodyDisplay& body = bodies[which[k]];
+      const std::shared_ptr<geometry::Shape> shape = k < left.size() ? left[k] : nullptr;
+      kept.clips.insert(cut.keys.value(static_cast<qsizetype>(missing[k])),
+                        SectionClip{body.shape, shape, errors.value(static_cast<qsizetype>(k))});
+      if (shape) {
+        // Cut, not left whole: drawn behind its caps (mitcad#784).
+        body.sectioned = !shape->occt().IsSame(body.shape->occt());
+        body.uncut = body.sectioned ? body.shape : nullptr; // for its caps (mitcad#943)
+        body.shape = shape;
+      }
     }
   }
+  // What the plane did to each body (mitcad#1230), for the warning of the
+  // failed clips and the analysis' row: a failed clip shows the body
+  // whole; a clip that is the body itself keeps it whole, one without
+  // faces removes it, any other cuts it (a sliver too).
+  SectionOutcome outcome;
+  outcome.plane = cut.plane;
+  for (std::size_t i = 0; i < cut.which.size(); ++i) {
+    const BodyDisplay& body = bodies[cut.which[i]];
+    const auto found = kept.clips.constFind(cut.keys.value(static_cast<qsizetype>(i)));
+    if (found == kept.clips.cend()) {
+      continue;
+    }
+    if (!found->shape) {
+      if (!outcome.failed.contains(QString::fromStdString(body.uid))) {
+        outcome.failed << QString::fromStdString(body.uid);
+        outcome.errors << found->error;
+      }
+    } else if (found->source && found->shape->occt().IsSame(found->source->occt())) {
+      ++outcome.kept;
+    } else if (!TopExp_Explorer(found->shape->occt(), TopAbs_FACE).More()) {
+      ++outcome.removed;
+    } else {
+      ++outcome.cut;
+    }
+  }
+  kept.outcome = outcome;
 }
 
 QString MainWindow::documentFolder() const {
@@ -3558,6 +3611,9 @@ void MainWindow::showBodies() {
   instances.finish();
   m_viewer->setBodies(bodies);
   showSectionCaps(bodies);
+  // Bodies the section shows whole because their clip failed, or a plane
+  // that cuts none (mitcad#1230).
+  reportSectionClips();
   // The panel's measurement once the view has the section's bodies
   // (mitcad#438).
   measureIfWaiting();
@@ -4268,6 +4324,9 @@ void MainWindow::clearDesignMessages() {
   if (m_messages != nullptr) {
     m_messages->clear("another design");
   }
+  // The section warning went with it (mitcad#1230): the new design's
+  // sections report their own.
+  m_sectionReport = SectionReport{};
 }
 
 void MainWindow::createSketchOn(const SelectionItem& plane) {

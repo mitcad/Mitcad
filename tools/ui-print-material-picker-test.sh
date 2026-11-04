@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/print app/files/MainWindowPrint.cpp app/browser/LibraryPicker.cpp app/browser/BrowserController.cpp
 # check-all sources: app/framework/CommandPanel.cpp app/framework/Command.hpp app/framework/NoteRow.cpp core/model tools/cli
+# check-all sources: app/framework/PickerComboBox.cpp
 # Send to Slicer's material rows (mitcad#1141) through the real UI, on a
 # design of three boxes: Body1 without a material of its own, Body2 of Shop
 # PETG and Body3 of Shop PLA, and Shop TPU, all three materials of the

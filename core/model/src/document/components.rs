@@ -217,7 +217,10 @@ impl DocState {
             .collect();
         removed.extend(makers);
         removed.extend(self.dependents(&removed));
-        self.remove_features(&removed)
+        let order = self.remove_features(&removed);
+        // Cut scopes no longer leave them alone (mitcad#1236).
+        self.drop_gone_exclusions();
+        order
     }
 }
 
@@ -1141,6 +1144,8 @@ impl<K: Kernel> Document<K> {
                 orphans.extend(state.dependents(&orphans));
                 deleted.extend(state.remove_features(&orphans));
             }
+            // Cut scopes no longer leave the occurrence alone (mitcad#1236).
+            state.drop_gone_exclusions();
             Ok((format!("Delete {name}"), deleted))
         })
     }

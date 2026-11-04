@@ -2191,6 +2191,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   rootItem->setData(kName, kRadioRole, snapshot.activeComponent == rootNode.uid);
 
   // The analyses kept in the document (mitcad#41), one shown at a time.
+  m_analysisRows.clear();
   if (!snapshot.analyses.isEmpty()) {
     BrowserNode folder;
     folder.type = BrowserNode::Type::Analyses;
@@ -2209,17 +2210,9 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       // Section and Print Analysis (mitcad#620), each with its icon.
       row.featureType = analysis.value(QStringLiteral("type")).toString();
       const bool print = row.featureType == QStringLiteral("print");
-      const QString error = analysis.value(QStringLiteral("error")).toString();
-      const QString kind = print ? tr("Print Analysis") : tr("Section Analysis");
-      QTreeWidgetItem* item = addRow(analyses, row,
-                                     print ? QStringLiteral("print-analysis") : QStringLiteral("section-analysis"),
-                                     error.isEmpty() ? QStringLiteral("%1: %2").arg(row.name, kind)
-                                                     : QStringLiteral("%1: %2").arg(row.name, error));
-      if (!error.isEmpty()) {
-        setNameRole(item, ColorRole::ErrorText);
-      } else if (!row.visible) {
-        setNameRole(item, ColorRole::TextHidden);
-      }
+      m_analysisRows.insert(row.name, analysis);
+      styleAnalysisRow(addRow(analyses, row, print ? QStringLiteral("print-analysis") : QStringLiteral("section-analysis")),
+                       analysis);
     }
   }
 
@@ -2367,6 +2360,71 @@ void BrowserPanel::setMakeMarkers(const QHash<QString, QString>& markers) {
   }
   m_makeMarkers = markers;
   applyMakeMarkers();
+}
+
+void BrowserPanel::setAnalysisNotes(const QHash<QString, AnalysisNote>& notes) {
+  if (notes == m_analysisNotes) {
+    return;
+  }
+  m_analysisNotes = notes;
+  applyAnalysisNotes();
+}
+
+void BrowserPanel::applyAnalysisNotes() {
+  // Not a rename: the tree's itemChanged is the name's.
+  const QSignalBlocker blocker(m_tree);
+  for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+    if (it.value().type != BrowserNode::Type::Analysis) {
+      continue;
+    }
+    const auto analysis = m_analysisRows.constFind(it.value().uid);
+    if (analysis != m_analysisRows.cend()) {
+      styleAnalysisRow(it.key(), analysis.value());
+    }
+  }
+  logRowColours();
+  m_tree->viewport()->update();
+}
+
+void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& analysis) {
+  const QString name = analysis.value(QStringLiteral("name")).toString();
+  const bool print = analysis.value(QStringLiteral("type")).toString() == QStringLiteral("print");
+  const QString error = analysis.value(QStringLiteral("error")).toString();
+  const QString kind = print ? tr("Print Analysis") : tr("Section Analysis");
+  const QIcon icon = themeIcon(print ? QStringLiteral("print-analysis") : QStringLiteral("section-analysis"));
+  // A plane that cannot be found stays the error it is (mitcad#1230).
+  const AnalysisNote note = error.isEmpty() ? m_analysisNotes.value(name) : AnalysisNote{};
+  QString tooltip = QStringLiteral("%1: %2").arg(name, error.isEmpty() ? kind : error);
+  if (!note.text.isEmpty()) {
+    tooltip += QLatin1Char('\n') + note.text;
+  }
+  item->setToolTip(kName, tooltip);
+  if (!error.isEmpty()) {
+    item->setIcon(kName, icon);
+    setNameRole(item, ColorRole::ErrorText);
+  } else if (note.warning) {
+    // The warning's badge and colour, as a feature row's (mitcad#1040).
+    item->setIcon(kName, QIcon(new LinkedIconEngine(icon, noticeIcon(NoticeLevel::Warning))));
+    setNameRole(item, noticeTextRole(NoticeLevel::Warning));
+  } else {
+    item->setIcon(kName, icon);
+    if (!analysis.value(QStringLiteral("visible")).toBool()) {
+      setNameRole(item, ColorRole::TextHidden);
+    } else {
+      clearNameRole(item);
+    }
+  }
+  const QString path = m_nodes.value(item).path;
+  QString logged = QStringLiteral("none");
+  if (!note.text.isEmpty()) {
+    logged = QStringLiteral("%1 %2").arg(note.warning ? noticeLevelName(NoticeLevel::Warning)
+                                                      : noticeLevelName(NoticeLevel::Information),
+                                         QString(note.text).replace(QLatin1Char('\n'), QStringLiteral(" | ")));
+  }
+  if (m_loggedAnalysisNotes.value(path, QStringLiteral("none")) != logged) {
+    m_loggedAnalysisNotes.insert(path, logged);
+    qDebug().noquote() << QStringLiteral("Browser analysis note %1: %2").arg(path, logged);
+  }
 }
 
 void BrowserPanel::applyMakeMarkers() {

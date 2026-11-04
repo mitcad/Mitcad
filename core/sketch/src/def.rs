@@ -439,6 +439,21 @@ pub struct SketchOutput {
     /// The regions of the sketch's own curves alone, for a sketch whose
     /// supporting face's edges bound its profiles (mitcad#1182).
     pub own: Arc<OwnRegions>,
+    /// The definition with its offsets made again at this evaluation
+    /// (mitcad#1234), with the stored one it was made from; None when none
+    /// was. Queries show it, and edits start from it, while the stored
+    /// definition is the one it was made from.
+    pub retrimmed: Option<Arc<RetrimmedDef>>,
+}
+
+/// A sketch's definition with its offsets made again at an evaluation
+/// (a parameter set outside the sketch, a linked projection that followed
+/// its source, so that other curves vanish at their distances), and the
+/// stored definition it was made from (mitcad#1234).
+#[derive(Debug, PartialEq)]
+pub struct RetrimmedDef {
+    pub from: SketchDef,
+    pub def: SketchDef,
 }
 
 /// The regions a face sketch's own curves bound without the supporting

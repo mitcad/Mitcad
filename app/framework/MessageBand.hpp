@@ -27,7 +27,7 @@ namespace mitcad {
 //
 // Logged for the UI tests: `Message band: <level> <text>` for each message,
 // `Message band full: <level> <text>` when the band shows it in full and
-// `Message band stub: <level> <text> (faded|closed|next command|cleared)`
+// `Message band stub: <level> <text> (faded|closed|next command|cleared|withdrawn)`
 // when the band turns into the stub of the latest message, `Message band
 // cleared (another design)` when another design empties it (mitcad#1174).
 class MessageCenter : public QObject {
@@ -51,6 +51,10 @@ public:
   // next message; the history keeps them. Logged `Message band cleared
   // (<reason>)`.
   void clear(const char* reason);
+  // What the message with this text was about is over (mitcad#1230): shown
+  // in full, it becomes the stub at once, a warning too (logged `Message
+  // band stub: <level> <text> (withdrawn)`); otherwise nothing changes.
+  void withdraw(const QString& text);
 
 signals:
   // What the band shows changed (another message, or the stub).

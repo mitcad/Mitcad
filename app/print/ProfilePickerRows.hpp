@@ -24,6 +24,12 @@ struct ProfilePickerRow {
   QString source;
   // A process listed under the chosen printer (mitcad#1216).
   bool forChosen = false;
+
+  // The Make card shows rows again only when they changed (mitcad#1239).
+  bool operator==(const ProfilePickerRow& other) const {
+    return key == other.key && name == other.name && group == other.group && shortName == other.shortName &&
+           source == other.source && forChosen == other.forChosen;
+  }
 };
 
 // The rows of the `library_items` of a kind (`printer` or `process`) in

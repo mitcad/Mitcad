@@ -55,7 +55,7 @@ use mitcad_model::{BlobStore, LibraryRequest, LibrarySource, LinkResolver, Memor
 use serde::Serialize;
 
 use crate::VcsError;
-use crate::remote::{Control, ErrorClass, GitCli, RemoteError, check_url, redact};
+use crate::remote::{Control, ErrorClass, GitCli, RemoteError, check_url, https, redact};
 use manifest::{
     INDEX_ENTRIES, INDEX_FORMAT, INDEX_MANIFEST, IndexEntry, IndexManifest, LIBRARY_MANIFEST,
     MAX_COMPONENT, MAX_MANIFEST, Manifest, read_json,
@@ -510,6 +510,81 @@ pub struct Fetched {
     pub head: Option<String>,
     pub versions: Vec<LibraryVersion>,
     pub problems: manifest::Problems,
+    /// How it was fetched: `built_in` (gix's own client, no git program)
+    /// or `git` (the installed git program), mitcad#1224.
+    pub transport: String,
+}
+
+/// How a library fetch reaches the repository (mitcad#1224).
+#[derive(Debug, Clone, Default)]
+pub struct FetchOptions {
+    /// Every address through the installed git program (the preference Use
+    /// the installed git program, e.g. for SSH addresses or sign-in through
+    /// git's credential helpers). Off: `https://` and `http://` go through
+    /// gix's own client without the git program, folders and `file://`
+    /// through git, and SSH addresses are refused with what to do.
+    pub use_git: bool,
+    /// The git program (else [`GitCli::find`], when one is needed).
+    pub git: Option<GitCli>,
+}
+
+/// The way a fetch takes.
+enum Way {
+    BuiltIn,
+    Git(GitCli),
+}
+
+impl Way {
+    fn name(&self) -> &'static str {
+        match self {
+            Way::BuiltIn => "built_in",
+            Way::Git(_) => "git",
+        }
+    }
+}
+
+impl FetchOptions {
+    /// The way to fetch `url` (as [`check_url`] returned it).
+    fn way(&self, url: &str) -> Result<Way, RemoteError> {
+        let shown = redact(url);
+        if !self.use_git && https::supports(url) {
+            return Ok(Way::BuiltIn);
+        }
+        if !self.use_git && https::is_ssh(url) {
+            return Err(RemoteError::new(
+                ErrorClass::Unsupported,
+                format!(
+                    "{shown} is an SSH address: libraries over SSH need the installed git \
+                     program. Install git and turn on Use the installed git program \
+                     (Tools > Libraries...), or use the library's https:// address."
+                ),
+            ));
+        }
+        let git = match &self.git {
+            Some(git) => Ok(git.clone()),
+            None => GitCli::find(),
+        };
+        git.map(Way::Git).map_err(|mut error| {
+            if error.class == ErrorClass::GitMissing {
+                let message = if self.use_git {
+                    "Use the installed git program is on (Tools > Libraries...), but no git \
+                     program was found. Install git (on Windows, Git for Windows from \
+                     https://git-scm.com), or turn the setting off: libraries over https:// \
+                     are fetched without it."
+                        .to_owned()
+                } else {
+                    format!(
+                        "{shown} is a folder on this computer: such libraries are fetched with \
+                         the installed git program, which was not found. Install git (on \
+                         Windows, Git for Windows from https://git-scm.com), or use the \
+                         library's https:// address."
+                    )
+                };
+                error.detail = std::mem::replace(&mut error.message, redact(&message));
+            }
+            error
+        })
+    }
 }
 
 impl LibraryCache {
@@ -669,11 +744,9 @@ impl LibraryCache {
         )))
     }
 
-    /// Clones `url` into the cache, or updates its clone: the branches and
-    /// tags, without removing anything, so versions designs use stay. A
-    /// new clone that is not a library or an index, or is too large, is
-    /// removed again; an update that would make a clone too large is not
-    /// taken ([`LibraryCache::max_size`], mitcad#938).
+    /// Clones `url` into the cache, or updates its clone, with the git
+    /// program `git` whatever the address ([`LibraryCache::fetch_with`] with
+    /// `use_git`).
     pub fn fetch(
         &self,
         url: &str,
@@ -681,16 +754,34 @@ impl LibraryCache {
         control: Option<&Control>,
         log: &mut Vec<String>,
     ) -> Result<Fetched, VcsError> {
+        let options = FetchOptions {
+            use_git: true,
+            git: Some(git.clone()),
+        };
+        self.fetch_with(url, &options, control, log)
+    }
+
+    /// Clones `url` into the cache, or updates its clone: the branches and
+    /// tags, without removing anything, so versions designs use stay. A
+    /// new clone that is not a library or an index, or is too large, is
+    /// removed again; an update that would make a clone too large is not
+    /// taken ([`LibraryCache::max_size`], mitcad#938). `https://` and
+    /// `http://` addresses are fetched without the git program unless
+    /// `options` asks for it (mitcad#1224, [`FetchOptions`]).
+    pub fn fetch_with(
+        &self,
+        url: &str,
+        options: &FetchOptions,
+        control: Option<&Control>,
+        log: &mut Vec<String>,
+    ) -> Result<Fetched, VcsError> {
         let url = check_url(url)?;
         let shown = redact(&url);
+        let way = options.way(&url)?;
         fs::create_dir_all(&self.root)
             .map_err(|e| crate::io_error("make the folder", &self.root, e))?;
         let dir = self.dir_for(&url);
         let cloned = !dir.is_dir();
-        // No hooks run in a bare clone; checked objects; no automatic gc,
-        // which would drop versions nothing refers to any more (an update
-        // passes the same, `update_clone`).
-        let safe = ["-c", "transfer.fsckObjects=true", "-c", "gc.auto=0"];
         if cloned {
             let temporary = self.root.join(format!(
                 ".{}.{}.tmp",
@@ -698,17 +789,27 @@ impl LibraryCache {
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
                 std::process::id()
             ));
-            let temp = temporary.to_string_lossy().into_owned();
-            let mut args: Vec<&str> = safe.to_vec();
-            args.extend(["clone", "--bare", "--progress", "--", &url, &temp]);
-            let result = crate::remote::run_logged(
-                git,
-                &self.root,
-                &args,
-                control,
-                &format!("Fetching {shown}"),
-                log,
-            );
+            let result = match &way {
+                Way::Git(git) => {
+                    let temp = temporary.to_string_lossy().into_owned();
+                    // No hooks run in a bare clone; checked objects; no
+                    // automatic gc, which would drop versions nothing
+                    // refers to any more (an update passes the same,
+                    // `update_clone`).
+                    let mut args: Vec<&str> = SAFE.to_vec();
+                    args.extend(["clone", "--bare", "--progress", "--", &url, &temp]);
+                    crate::remote::run_logged(
+                        git,
+                        &self.root,
+                        &args,
+                        control,
+                        &format!("Fetching {shown}"),
+                        log,
+                    )
+                    .map(|_| ())
+                }
+                Way::BuiltIn => clone_built_in(&temporary, &url, control, log),
+            };
             if let Err(e) = result {
                 let _ = fs::remove_dir_all(&temporary);
                 return Err(e);
@@ -742,7 +843,7 @@ impl LibraryCache {
             }
             fs::rename(&temporary, &dir).map_err(|e| crate::io_error("rename", &temporary, e))?;
         } else {
-            self.update_clone(&dir, &url, git, control, log)?;
+            self.update_clone(&dir, &url, &way, control, log)?;
         }
         let repo = LibraryRepo::open(&dir)?;
         let head = repo.head()?;
@@ -776,6 +877,7 @@ impl LibraryCache {
             head: head.map(|h| h.to_string()),
             versions: repo.versions()?,
             problems,
+            transport: way.name().to_owned(),
         })
     }
 
@@ -790,43 +892,41 @@ impl LibraryCache {
         &self,
         dir: &Path,
         url: &str,
-        git: &GitCli,
+        way: &Way,
         control: Option<&Control>,
         log: &mut Vec<String>,
     ) -> Result<(), VcsError> {
         let shown = redact(url);
-        let target = dir.to_string_lossy().into_owned();
         // What an interrupted update left.
         LibraryRepo::open(dir)?.drop_incoming()?;
         let before = object_files(dir);
-        let heads = format!("+refs/heads/*:{INCOMING}heads/*");
-        let tags = format!("+refs/tags/*:{INCOMING}tags/*");
-        let args = [
-            "-c",
-            "transfer.fsckObjects=true",
-            "-c",
-            "gc.auto=0",
-            "--git-dir",
-            &target,
-            "fetch",
-            "--progress",
-            "--no-write-fetch-head",
-            // Tags only by the refspec: git's tag following would write
-            // them to refs/tags/ at once.
-            "--no-tags",
-            "--",
-            url,
-            &heads,
-            &tags,
-        ];
-        let fetched = crate::remote::run_logged(
-            git,
-            &self.root,
-            &args,
-            control,
-            &format!("Fetching {shown}"),
-            log,
-        );
+        let refspecs = incoming_refspecs();
+        let what = format!("Fetching {shown}");
+        let fetched = match way {
+            Way::Git(git) => {
+                let target = dir.to_string_lossy().into_owned();
+                let mut args: Vec<&str> = SAFE.to_vec();
+                args.extend([
+                    "--git-dir",
+                    &target,
+                    "fetch",
+                    "--progress",
+                    "--no-write-fetch-head",
+                    // Tags only by the refspec: git's tag following would
+                    // write them to refs/tags/ at once.
+                    "--no-tags",
+                    "--",
+                    url,
+                ]);
+                args.extend(refspecs.iter().map(String::as_str));
+                crate::remote::run_logged(git, &self.root, &args, control, &what, log).map(|_| ())
+            }
+            Way::BuiltIn => {
+                let result = https::fetch(dir, url, &refspecs, &what, control);
+                log.push(built_in_log(url, &result));
+                result.map(|_| ()).map_err(VcsError::from)
+            }
+        };
         let repo = LibraryRepo::open(dir)?;
         if let Err(error) = fetched {
             let _ = repo.drop_incoming();
@@ -862,6 +962,58 @@ impl LibraryCache {
 /// Where an update of a clone fetches the branches and tags to first
 /// ([`LibraryCache::update_clone`]).
 const INCOMING: &str = "refs/incoming/";
+
+/// The configuration of every git run of a fetch: checked objects, and no
+/// automatic gc, which would drop versions nothing refers to any more.
+const SAFE: [&str; 4] = ["-c", "transfer.fsckObjects=true", "-c", "gc.auto=0"];
+
+/// The refspecs of a fetch: the branches and tags to [`INCOMING`].
+fn incoming_refspecs() -> Vec<String> {
+    vec![
+        format!("+refs/heads/*:{INCOMING}heads/*"),
+        format!("+refs/tags/*:{INCOMING}tags/*"),
+    ]
+}
+
+/// A new clone of `url` in `temporary` without the git program
+/// (mitcad#1224): a bare repository with `remote.origin.url`, the branches
+/// and tags fetched to [`INCOMING`] and taken, and HEAD on the remote's
+/// default branch, as `git clone --bare` leaves it.
+fn clone_built_in(
+    temporary: &Path,
+    url: &str,
+    control: Option<&Control>,
+    log: &mut Vec<String>,
+) -> Result<(), VcsError> {
+    let shown = redact(url);
+    // What a cancelled clone of this process left (a stopped transfer is
+    // not waited for).
+    if temporary.exists() {
+        let _ = fs::remove_dir_all(temporary);
+    }
+    https::init_bare(temporary, url)?;
+    let result = https::fetch(
+        temporary,
+        url,
+        &incoming_refspecs(),
+        &format!("Fetching {shown}"),
+        control,
+    );
+    log.push(built_in_log(url, &result));
+    let transferred = result?;
+    let repo = LibraryRepo::open(temporary)?;
+    repo.accept_incoming()?;
+    repo.set_head(transferred.head.as_deref())
+}
+
+/// The log line of a fetch without the git program.
+fn built_in_log(url: &str, result: &Result<https::Transferred, RemoteError>) -> String {
+    let outcome = match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => error.message.clone(),
+    };
+    redact(&format!("built-in fetch (no git program) {url}: {outcome}"))
+}
 
 impl LibraryRepo {
     /// The direct references whose names start with `prefix`, with the
@@ -921,6 +1073,45 @@ impl LibraryRepo {
             )?);
         }
         self.edit_references(edits)
+    }
+
+    /// Points HEAD of a new clone at `branch` (`refs/heads/main`, the
+    /// remote's default branch) when the clone has it, else at `main`,
+    /// `master` or the first branch there is.
+    fn set_head(&self, branch: Option<&str>) -> Result<(), VcsError> {
+        let branches: Vec<String> = self
+            .references_under("refs/heads/")?
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        let has = |name: &str| branches.iter().any(|b| b == name);
+        let chosen = branch
+            .filter(|b| has(b))
+            .or_else(|| {
+                ["refs/heads/main", "refs/heads/master"]
+                    .into_iter()
+                    .find(|b| has(b))
+            })
+            .or_else(|| branches.first().map(String::as_str));
+        let Some(chosen) = chosen else {
+            return Ok(());
+        };
+        let target: gix::refs::FullName = chosen
+            .try_into()
+            .map_err(|e| VcsError::Git(format!("{chosen}: {e}")))?;
+        let edit = reference_edit(
+            "HEAD",
+            Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "library fetch".into(),
+                },
+                expected: PreviousValue::Any,
+                new: Target::Symbolic(target),
+            },
+        )?;
+        self.edit_references(vec![edit])
     }
 
     /// Moves the fetched references ([`INCOMING`]) over the branches and

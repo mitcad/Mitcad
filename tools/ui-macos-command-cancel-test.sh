@@ -12,6 +12,10 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
 fi
 ui_init "$1" "${2:-ui-macos-command-cancel}"
 UI_TIMEOUT=210
+# Open during a busy preview exercises replacement and its save question.
+# Multi-document tests separately cover the default new-window policy.
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '\n[documents]\nopenInCurrentWindow=true\n' >> "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
 export MITCAD_TEST_WORK=$UI_OUT/files
 mkdir -p "$MITCAD_TEST_WORK"
 cat > "$MITCAD_TEST_WORK/root-design.mitcad" <<'JSON'

@@ -72,6 +72,11 @@ public:
   // neither a message in full (an error too) nor the stub, until the next
   // message; the history keeps them. Returns whether the band changed.
   bool clear();
+  // What a message was about is over (mitcad#1230: a section that cuts
+  // again): when the message shown in full has this text, it becomes the
+  // stub, a problem too; the history keeps it. Returns whether the band
+  // changed.
+  bool withdraw(const QString& text);
 
   Shown shown() const;
   // The message shown in full; null unless shown() is Full.

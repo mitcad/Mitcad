@@ -94,8 +94,7 @@ void LibraryAutoUpdate::next() {
   }
   const QString url = m_queue.takeFirst();
   m_before = knownVersions(url);
-  RemoteTask* task = RemoteTask::library(
-      {{QStringLiteral("cmd"), QStringLiteral("library_fetch")}, {QStringLiteral("url"), url}}, this);
+  RemoteTask* task = RemoteTask::library(libraryFetchCommand(url), this);
   m_task = task;
   connect(task, &RemoteTask::finished, this, [this, url] { fetched(url); });
   task->start();

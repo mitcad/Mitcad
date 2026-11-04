@@ -6,6 +6,7 @@
 # check-all sources: core/model-api/src/body_notes.rs core/model-api/src/cut_sheets.rs core/model/src/document/annotations.rs tools/cli
 # check-all sources: core/model-api/src/annotations.rs app/view/MeasurementOverlay.cpp app/framework/CommandSession.cpp
 # check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
+# check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/print/ProfilePickerRows.cpp
 # The Make tab (mitcad#1049) through the real UI, in the Floating layout,
 # then in the Docked one, on a design mitcad-cli makes: a sheet-metal
 # plate with its flat pattern (Body1) and a 40 x 30 x 10 block with a
@@ -42,6 +43,15 @@
 #     process's Walls again), and one Undo puts 4 back.
 #   - The Browser marks Body2 (its own Walls) on the Make tab, not Body1,
 #     and nothing on the Solid tab.
+#   - The card's Printer and Process pickers (mitcad#1239), on a second
+#     design with the printer Bench but no printer or process chosen, and
+#     My library with the processes Coarse @Alpha and Fine @Bench: the
+#     rows Printer, Process, Material; the Printer picker lists Bench,
+#     "Bench" typed and Enter make it the design's printer (the root's)
+#     and Undo gives Slicer default again; chosen again, the Process
+#     picker lists Bench's library process first, and choosing it sets it
+#     on the body (copied into the design, one undo step); the Printer
+#     picker's last row, Printers…, opens the Printers manager on Bench.
 #   - Docked: the Make tab with its four groups.
 # tools/ui-windows-make-tab-test.ps1 does the same in the Windows VM.
 #
@@ -81,6 +91,25 @@ cat > "$WORK/make.json" << EOF
 EOF
 "$CLI" run "$WORK/make.json" --save "$WORK/make.mitcad" > "$WORK/cli.log" 2>&1 ||
   { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+# The card's pickers (mitcad#1239): a box with the printer Bench in the
+# design, none chosen, no process.
+cat > "$WORK/pickers.json" << EOF
+[
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-10,-10],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"create_print_profile","kind":"printer","name":"Bench","values":{"nozzle_diameter":0.4}}
+]
+EOF
+"$CLI" run "$WORK/pickers.json" --save "$WORK/pickers.mitcad" > "$WORK/cli-pickers.log" 2>&1 ||
+  { cat "$WORK/cli-pickers.log"; ui_fail "mitcad-cli (pickers)"; }
+# My library in the test's own folder: a process for Bench and one for
+# another printer, by their names' @.
+export MITCAD_PRINT_LIBRARY_DIR=$WORK/print-library
+mkdir -p "$MITCAD_PRINT_LIBRARY_DIR/print/processes"
+for process in "fine-bench:Fine @Bench:0.12" "coarse-alpha:Coarse @Alpha:0.28"; do
+  IFS=: read -r id name layer <<< "$process"
+  printf '{"format": "mitcad-print-item", "version": 1, "profile": {"id": "%s", "name": "%s", "kind": "process", "values": {"layer_height": %s}, "version": 1}}\n' \
+    "$id" "$name" "$layer" > "$MITCAD_PRINT_LIBRARY_DIR/print/processes/$id.json"
+done
 
 # menu_line "TAB/GROUP": the entries of that group's menu as last logged.
 menu_line() { grep -F "Ribbon menu $1: " "$UI_LOG" | tail -1 | sed "s|.*Ribbon menu $1: ||"; }
@@ -396,6 +425,90 @@ ui_step "the Solid tab"                    ui_click_logged "Ribbon tab SOLID"
 ui_expect_new "Ribbon tab shown: SOLID" "the Solid tab shown"
 ui_expect_new "Make card: none" "no card on the Solid tab"
 ui_expect_new "Browser Make markers: none" "no markers on the Solid tab"
+
+echo "--- The card's Printer and Process pickers (mitcad#1239)"
+# printer_choose: the card's Printer picker opened, "Bench" typed, Enter.
+printer_choose() {
+  ui_mark
+  ui_step "open the Printer picker"        ui_click_logged "Make card printer"
+  ui_expect_new "Printer picker opened: " "the card's Printer picker opened"
+  ui_focus_dialog '^Printer Picker$'
+  ui_mark
+  xdotool type --delay 40 -- "Bench"
+  ui_expect_new "Printer picker search: Bench, first Bench" "Bench found"
+  ui_mark
+  ui_step "choose (Enter)"                 ui_key Return
+  ui_expect_new "Printer picker chose: Bench" "Bench chosen"
+  ui_focus_main
+  ui_expect_new "Make card Printer set: Bench" "set as the design's printer"
+  ui_expect_new "printer Bench (component Root); process Slicer default (default)" \
+    "the card shows it at once, chosen on the root"
+}
+ui_stop_app
+ui_start_app --open "$WORK/pickers.mitcad" --no-native-dialogs --chrome=floating
+ui_expect_log "Opened $WORK/pickers.mitcad" "the design without a printer opened"
+ui_mark
+ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
+ui_mark
+ui_step "select Body1 in the Browser"      ui_click_logged "Browser Root/Bodies/Body1"
+ui_expect_new "Make card: Body1: material " "Body1's card"
+ui_expect_new "printer Slicer default (default); process Slicer default (default)" "no printer and no process chosen"
+ui_expect_new "Make card rows: Printer, Process, Material" "the rows from the widest choice: Printer, Process, Material"
+printers=$(grep -F "Make card printers: " "$UI_LOG" | tail -1)
+case "$printers" in
+  *Bench*) echo "ok   the Printer picker lists the printers: ${printers#*: }" ;;
+  *) ui_fail "the Printer picker lists '${printers#*: }'" ;;
+esac
+ui_expect_new "Make card processes: Alpha: Coarse @Alpha | Bench: Fine @Bench" \
+  "the library's processes under their printers"
+printer_choose
+ui_expect_new "Make card processes: Bench: Fine @Bench | Alpha: Coarse @Alpha" \
+  "the design's printer's processes first now (mitcad#1216)"
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "printer Slicer default (default); process Slicer default (default)" \
+  "one undo step: Slicer default again"
+printer_choose
+ui_mark
+ui_step "open the Process picker"          ui_click_logged "Make card process"
+ui_expect_new "Process picker opened: " "the card's Process picker opened"
+ui_expect_new "Process picker sections: Bench 1 | Alpha 1" "Bench's library process first"
+ui_focus_dialog '^Process Picker$'
+ui_mark
+xdotool type --delay 40 -- "@Bench"
+ui_expect_new "Process picker search: @Bench, first " "the process for Bench found"
+ui_mark
+ui_step "choose (Enter)"                   ui_key Return
+ui_expect_new "Process picker chose: " "chosen"
+ui_focus_main
+ui_expect_new "Make card Process set: Fine @Bench" "the library's process chosen"
+ui_expect_new "printer Bench (component Root); process Fine @Bench (body Body1)" \
+  "copied into the design and set on the body"
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "printer Bench (component Root); process Slicer default (default)" \
+  "one undo step: the body without a process again"
+ui_mark
+ui_step "open the Printer picker"          ui_click_logged "Make card printer"
+ui_expect_new "Printer picker opened: " "the card's Printer picker opened"
+ui_focus_dialog '^Printer Picker$'
+ui_mark
+xdotool type --delay 40 -- "Printers"
+ui_expect_new "Printer picker search: Printers, first Printers…" "the last row found"
+ui_mark
+ui_step "choose (Enter)"                   ui_key Return
+ui_expect_new "Make card printer manager: design/bench" "Printers… on the design's printer"
+ui_expect_new "Printers opened" "the Printers manager opened"
+ui_expect_new "Profile selected: printer Bench (design)" "on Bench"
+ui_focus_dialog '^Printers$'
+ui_step "close it (Esc)"                   ui_key Escape
+ui_focus_main
+ui_sync
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Make card Printer set: "; then
+  ui_fail "Printers… changed the printer"
+fi
+echo "ok   Printers… keeps the printer"
 
 echo "--- Docked: the Make tab and its groups"
 ui_stop_app

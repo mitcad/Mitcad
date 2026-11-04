@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# A My library material whose file lacks its own color (mitcad#1242),
+# through the real Qt controls; shared by
+# tools/ui-library-material-own-colour-test.sh (Linux, Xvfb) and
+# tools/ui-windows-library-material-own-colour-test.ps1. No design is open
+# (the empty Untitled window). My library is the test's own folder
+# (MITCAD_PRINT_LIBRARY_DIR) with library-material-own-colour/: Generic
+# TPU X, as a slicer import or an older version wrote it, names its own
+# color generic_tpu_x_colour as its default but does not carry it.
+#   1. The Materials window lists Generic TPU X under My library; it is
+#      selected.
+#   2. Its name typed (Shop TPU) and Enter: the edit is not refused and
+#      the new name is listed in My library (the runners check the file:
+#      the new name and the own color made again).
+wait-idle
+focus-main
+mark
+
+# 1. The Materials window: My library's only item, at the top.
+command solid.materials
+focus-dialog '^Materials$'
+wait-log '^Materials row: [a-z_]+/generic-tpu-x Generic TPU X \(user\)$' 60
+expect-log '^Materials user item Generic TPU X at ' 30
+mark
+dialog-click-logged '^Materials user item Generic TPU X at '
+expect-log '^Material selected: Generic TPU X \(user\)$'
+
+# 2. Renamed: saved in its file, listed under the new name.
+focus-widget materialName
+mark
+key ctrl+a
+type 'Shop TPU'
+key Return
+expect-log '^Material Generic TPU X \(user\) name = Shop TPU$'
+expect-log '^Materials row: [a-z_]+/generic-tpu-x Shop TPU \(user\)$'
+expect-no-log 'refused'
+mark
+button '^Close$'
+expect-log '^Materials closed after changes$'
+focus-main

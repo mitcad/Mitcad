@@ -3,6 +3,7 @@
 # check-all sources: app/print app/files/MainWindowPrint.cpp app/MainWindowMake.cpp app/framework/TestDriver.cpp tools/cli
 # check-all sources: app/browser/LibraryPicker.cpp app/browser/PropertySetsDialog.cpp app/framework/CommandPanel.cpp
 # check-all sources: core/model/src/print_profile.rs core/model/src/print_files core/model/src/document/library_items.rs
+# check-all sources: app/framework/PickerComboBox.cpp
 # Processes grouped by printer (mitcad#1216), on a private Xvfb display:
 # the test driver's script tools/ui-scripts/processes-by-printer.mitcad-ui
 # (shared with the Windows test; it says what it does) on a design

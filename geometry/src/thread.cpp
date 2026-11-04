@@ -888,6 +888,9 @@ struct FacePlan {
   double even_high = std::numeric_limits<double>::infinity();
   // A modelled thread's faces' name.
   std::string name;
+  // Whether the thread's axis points against the face's cylinder's: the
+  // low end along the thread is then the face's high end.
+  bool reversed = false;
 };
 
 // The first step of a face's modelled straight thread where the face lies
@@ -1116,11 +1119,19 @@ bool thread_named(const NameList& names, const std::vector<std::string>& threads
   return false;
 }
 
-// A name per_turn_names numbers, with the axis of its thread.
+// A name per_turn_names numbers, with the axis of its thread. A thread's
+// own faces (not the threaded face's pieces) are also counted from its
+// ends (`low`, `high`: <feature>:low_thread(<face>) and
+// <feature>:high_thread(<face>), the ends along the face's cylinder's axis
+// as the end chamfers' cones name them), `reversed` when the thread's axis
+// points against the cylinder's.
 struct TurnNamed {
   std::string name;
   gp_Pnt origin;
   gp_Dir along;
+  std::string low;
+  std::string high;
+  bool reversed = false;
 };
 
 // How far apart (mm, and mm^2 for areas) two pieces' places must lie to
@@ -1180,6 +1191,13 @@ void order_places(std::vector<Place>& places, std::size_t first, std::size_t las
 // every platform (its centre apart from all the others' in X) keeps that
 // name as well, so that references saved before still find it; references
 // to the other pieces find no face and are reported.
+// A thread's own pieces are also named by their places from the nearer end
+// of the face (mitcad#1231), `<feature>:low_thread(<face>)#k` or
+// `<feature>:high_thread(<face>)#k`, k from 0 at the end: the names sort
+// before the others, so the pieces' edges are named after them, and the
+// edges at the thread's ends (where it meets the rest of its face, a
+// chamfer's cone or the body's end) keep their names when turns come or go
+// at the other end, by a length, an offset, a pitch or a profile change.
 ShapePtr per_turn_names(const Shape& body, const std::vector<TurnNamed>& threads) {
   std::vector<NameList> names(static_cast<std::size_t>(body.face_count()));
   for (int i = 0; i < body.face_count(); ++i) {
@@ -1218,9 +1236,17 @@ ShapePtr per_turn_names(const Shape& body, const std::vector<TurnNamed>& threads
       }
     }
     order_places(places, 0, places.size(), 0);
-    for (std::size_t k = 0; k < places.size(); ++k) {
-      names[static_cast<std::size_t>(places[k].face)].push_back(thread.name + '#' +
-                                                                std::to_string(places.size() + k));
+    const std::size_t count = places.size();
+    for (std::size_t k = 0; k < count; ++k) {
+      NameList& own = names[static_cast<std::size_t>(places[k].face)];
+      // The name from the nearer end of the face (mitcad#1231).
+      if (!thread.low.empty()) {
+        const std::size_t from_low = thread.reversed ? count - 1 - k : k;
+        const std::size_t from_high = count - 1 - from_low;
+        own.push_back(from_low <= from_high ? thread.low + '#' + std::to_string(from_low)
+                                            : thread.high + '#' + std::to_string(from_high));
+      }
+      own.push_back(thread.name + '#' + std::to_string(count + k));
     }
   }
   detail::FaceNamer namer(body.occt());
@@ -1588,6 +1614,7 @@ FacePlan plan_face(const Shape& body, const ThreadSpec& spec, std::size_t k, Fac
   FacePlan plan;
   plan.face = face;
   plan.thread = thread;
+  plan.reversed = reversed;
   plan.from = from;
   plan.to = to;
   plan.chamfers = chamfers;
@@ -1979,8 +2006,10 @@ ShapePtr modeled_thread(const Shape& body, const ThreadSpec& spec) {
         const FacePlan& plan = plans[k];
         threads.push_back(plan.name);
         screws.insert(screws.end(), face_screws[k].begin(), face_screws[k].end());
-        named.push_back({plan.name, plan.thread.origin, plan.thread.along});
-        named.push_back({plan.face, plan.thread.origin, plan.thread.along});
+        named.push_back({plan.name, plan.thread.origin, plan.thread.along,
+                         face_name(spec.feature, "low_thread", plan.face),
+                         face_name(spec.feature, "high_thread", plan.face), plan.reversed});
+        named.push_back({plan.face, plan.thread.origin, plan.thread.along, {}, {}, false});
       }
     }
     // The threads' faces and the threaded faces' pieces (a crest the face

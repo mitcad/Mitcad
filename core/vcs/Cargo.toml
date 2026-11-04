@@ -13,7 +13,15 @@ publish.workspace = true
 # task of its own (tests, cargo deny). Objects, trees, commits, references,
 # the revision walk and the index are all P12 needs. The default features
 # are not allowed: one of them pulls in an MPL-2.0 crate (cargo deny).
-gix = { version = "=0.88.0", default-features = false, features = ["sha1", "index"] }
+# The blocking HTTP client fetches libraries over https and http without
+# the git program (mitcad#1224): reqwest, its TLS chosen below.
+gix = { version = "=0.88.0", default-features = false, features = ["sha1", "index", "blocking-http-transport-reqwest"] }
+# The TLS of gix's HTTP client: rustls with no crypto provider of its own
+# (reqwest's `rustls` feature brings aws-lc-rs, whose C library needs CMake
+# and NASM and carries the OpenSSL licence); remote/https.rs installs ring,
+# which the live updates use already. Certificates are checked against the
+# system's roots (rustls-platform-verifier): no OpenSSL anywhere.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 mitcad-model.workspace = true
 # Comparison of two designs or versions (P12c, mitcad#777).
 mitcad-model-diff = { path = "../model-diff" }

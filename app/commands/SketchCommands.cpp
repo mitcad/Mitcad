@@ -28,6 +28,7 @@
 #include "../sketch/SketchTool.hpp"
 #include "CommandSupport.hpp"
 #include "PatternOptions.hpp"
+#include "SketchConstraintKeys.hpp"
 
 namespace mitcad {
 namespace {
@@ -1522,6 +1523,10 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
                : type == QStringLiteral("smooth")            ? QStringLiteral("curvature")
                                                               : type;
     def.pinned = pinned.contains(type);
+    // Shift and a letter, in sketches only (mitcad#1229): the same command
+    // as the palette's and the toolbar's button, its key in their tooltips,
+    // Keyboard Shortcuts (Sketch) and the Keyboard and Mouse Overview.
+    def.shortcut = sketchConstraintShortcut(type);
     def.keywords = {QStringLiteral("constraint")};
     c.setToolIcon(def.name, def.icon);
     def.run = [&c, type] {

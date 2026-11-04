@@ -440,8 +440,15 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             }
             ComponentCommand::DeleteOccurrence { occurrence } => {
                 let uid = self.occurrence_ref(&occurrence)?;
+                let before = self.state().clone();
                 let deleted = self.delete_occurrence(uid)?;
-                json!({"deleted": deleted})
+                let mut reply = json!({"deleted": deleted});
+                // The cut-scope exclusions it dropped (mitcad#1236).
+                let dropped = self.state().dropped_exclusions(&before);
+                if !dropped.is_empty() {
+                    reply["notices"] = mitcad_model::notice::to_json(&dropped);
+                }
+                reply
             }
             ComponentCommand::InsertComponent {
                 path,

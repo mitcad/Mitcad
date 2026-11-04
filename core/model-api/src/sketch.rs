@@ -991,6 +991,9 @@ pub(super) fn report_json(report: &EditReport, def: Option<&SketchDef>) -> Value
     if !report.warnings.is_empty() {
         value["warnings"] = json!(report.warnings);
     }
+    if !report.notes.is_empty() {
+        value["notes"] = json!(report.notes);
+    }
     if let Some(def) = def {
         value["status"] = status_json(&report.status, def);
     }
@@ -3402,6 +3405,10 @@ mod notice_tests {
             distance: ParamId::from_raw(0),
             left: false,
             results: vec![c(2)],
+            dropped: Vec::new(),
+            merged: Vec::new(),
+            outlines: Vec::new(),
+            ends: Vec::new(),
             corners: Vec::new(),
             helpers: Vec::new(),
             derived: false,

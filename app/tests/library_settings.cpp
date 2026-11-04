@@ -2,7 +2,8 @@
 // The library sources' settings (mitcad#576): the defaults, Auto-update kept
 // with a source and read back, settings written before the key existed
 // (Auto-update off), the sources a start-up fetch takes, added sources, and
-// the index's libraries an enabled source has left out (mitcad#949).
+// the index's libraries an enabled source has left out (mitcad#949), and Use
+// the installed git program (mitcad#1224).
 #include "files/Libraries.hpp"
 
 #include <cstdio>
@@ -180,6 +181,37 @@ void indexLibraryTests() {
 
 } // namespace
 
+void useGitTests() {
+  using namespace mitcad;
+  // Use the installed git program (mitcad#1224): off by default, so that
+  // https:// libraries are fetched without git; the fetch command says so.
+  QSettings().remove(QStringLiteral("libraries/useGit"));
+  CHECK(!LibrarySettings::load().useGit);
+  const QJsonObject plain = libraryFetchCommand(text("https://example.invalid/a.git"));
+  CHECK(plain.value(QStringLiteral("cmd")).toString() == QStringLiteral("library_fetch"));
+  CHECK(plain.value(QStringLiteral("url")).toString() == QStringLiteral("https://example.invalid/a.git"));
+  CHECK(!plain.contains(QStringLiteral("use_git")));
+
+  // Turned on, it is kept with the sources and every fetch asks for git.
+  LibrarySettings settings = LibrarySettings::load();
+  settings.sources = {{text("ssh://git@example.invalid/e.git"), true, false}};
+  settings.useGit = true;
+  settings.save();
+  const LibrarySettings back = LibrarySettings::load();
+  CHECK(back.useGit && back.sources.size() == 1);
+  CHECK(libraryFetchCommand(text("ssh://git@example.invalid/e.git")).value(QStringLiteral("use_git")).toBool());
+
+  // A change of the sources keeps it; turned off, the key says off.
+  LibrarySettings changed = back;
+  CHECK(changed.add(text("https://example.invalid/f.git")));
+  changed.save();
+  CHECK(LibrarySettings::load().useGit);
+  changed.useGit = false;
+  changed.save();
+  CHECK(!LibrarySettings::load().useGit);
+  CHECK(!libraryFetchCommand(text("https://example.invalid/f.git")).contains(QStringLiteral("use_git")));
+}
+
 int librarySettingsTests() {
   // The settings in a folder of the test's own, never the user's.
   QTemporaryDir directory;
@@ -197,6 +229,7 @@ int librarySettingsTests() {
   oldSettingsTests();
   addTests();
   indexLibraryTests();
+  useGitTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

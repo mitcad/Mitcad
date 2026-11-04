@@ -255,8 +255,14 @@ std::size_t mesh_all_in_place(const std::vector<TopoDS_Shape>& shapes, const Mes
 // means on the same surface and location, with the same edges in the same
 // order, each on the same curve and parameter curves over the same range
 // between the same points; a face any of whose edges has no polygon on the
-// donor's triangulation is not taken. Nothing is kept between calls (no
-// cache to invalidate): the donors are read, never written, and only the
+// donor's triangulation is not taken. The copy's nodes are moved from the
+// donor face's frame into the face's (mitcad#1243: the same placement may
+// be the face's location in one and the surface's in the other, as a
+// prism's top and a boolean's rebuilt copy of it), and a copy that then
+// does not lie on the face (triangulation_on_face) is not taken either:
+// the meshing that follows meshes such a face. Nothing is kept between
+// calls (no cache to invalidate): the donors are read, never written, and
+// only the
 // nodes, parameters and triangles are read (not the normals a presentation
 // adds), so the view may draw them meanwhile; `shape` is written, and must
 // be the caller's alone. The caller passes donors meshed with the options
@@ -264,6 +270,14 @@ std::size_t mesh_all_in_place(const std::vector<TopoDS_Shape>& shapes, const Mes
 // keeps a reused face only when its deviation meets the options, as for
 // any face meshed before. Returns how many faces were given one.
 std::size_t reuse_triangulations(const TopoDS_Shape& shape, const std::vector<TopoDS_Shape>& donors);
+
+// Whether the face has a triangulation that lies on it as the view places
+// it (by the face's location): a sample of its nodes on the face's surface
+// at their parameters, within twice the largest tolerance of the face, its
+// edges and vertices (without parameters: inside the face's bounds so
+// widened). False for a face without a triangulation, or one without
+// triangles.
+bool triangulation_on_face(const TopoDS_Face& face);
 
 // Whether every face of the shape has a triangulation.
 bool has_triangulation(const TopoDS_Shape& shape);

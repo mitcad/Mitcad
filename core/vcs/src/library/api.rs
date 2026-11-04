@@ -15,7 +15,7 @@ use super::build::{self, Fit, Picker, System};
 use super::manifest::{
     ACCEPTED_LICENSES, IndexEntry, Manifest, ManifestComponent, license_note, matches, search_words,
 };
-use super::{LibraryCache, LibraryRepo, LibraryVersion, RepoKind, publish};
+use super::{FetchOptions, LibraryCache, LibraryRepo, LibraryVersion, RepoKind, publish};
 use crate::VcsError;
 use crate::api::{optional, text};
 use crate::remote::commands::answer;
@@ -43,13 +43,17 @@ pub fn command(
         "library_fetch" => {
             let url = text(&command, "url")?;
             let mut log = Vec::new();
-            let git = match git {
-                Some(git) => Ok(git.clone()),
-                None => GitCli::find(),
+            // https:// without the git program unless `use_git` (the
+            // preference Use the installed git program, mitcad#1224); the
+            // git program is looked for only when the address needs it.
+            let options = FetchOptions {
+                use_git: command
+                    .get("use_git")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                git: git.cloned(),
             };
-            let result = git
-                .map_err(VcsError::from)
-                .and_then(|git| cache.fetch(url, &git, control, &mut log));
+            let result = cache.fetch_with(url, &options, control, &mut log);
             let (mut value, _) = answer(
                 result,
                 |_| json!({"url": crate::remote::redact(url), "kind": null, "id": null}),

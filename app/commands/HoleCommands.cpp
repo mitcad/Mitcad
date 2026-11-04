@@ -354,6 +354,59 @@ QString sideOf(const Selection& faces, const CommandContext& model) {
   return side;
 }
 
+// A hole's Hole Type options, also named by its hover text (mitcad#1235).
+const QVector<QPair<QString, QString>> kHoleTypes{{QStringLiteral("simple"), QStringLiteral("Simple")},
+                                                  {QStringLiteral("counterbore"), QStringLiteral("Counterbore")},
+                                                  {QStringLiteral("countersink"), QStringLiteral("Countersink")},
+                                                  {QStringLiteral("counterdrill"), QStringLiteral("Counterdrill")}};
+
+// A thread's key value for the hover text (mitcad#1235): its designation
+// and class as the Thread panel shows them (`M76x2 6H`, a trapezoidal or a
+// multi-start thread's own designation), or a custom thread's major
+// diameter and pitch (`Custom Ø76 mm × 2 mm`, with its starts), then its side
+// and whether it is modelled: `M76x2 6H, internal, modelled`. The side is
+// the class's (6H internal, 6g external), else `side` (the faces' side).
+QString threadKey(const CommandState& state, const CommandContext& context, const QString& side) {
+  const bool custom = customThread(state);
+  QStringList parts;
+  QString thread;
+  if (custom) {
+    // The loaded texts (a loaded definition has no evaluated values), in
+    // the document's units: `Custom Ø76 mm × 2 mm`.
+    thread = QObject::tr("Custom %1%2 × %3")
+                 .arg(QChar(0x00D8))
+                 .arg(state.text(kThreadMajor).trimmed(), state.text(kThreadPitch).trimmed());
+    const QString starts = state.text(kStarts).trimmed();
+    if (state.checked(QStringLiteral("modeled")) && !starts.isEmpty() && starts != QStringLiteral("1")) {
+      thread += QObject::tr(" (%1 starts)").arg(starts);
+    }
+  } else {
+    thread = QStringLiteral("%1 %2")
+                 .arg(state.choice(QStringLiteral("designation")), state.choice(QStringLiteral("class")))
+                 .trimmed();
+  }
+  if (thread.isEmpty()) {
+    return QString();
+  }
+  parts << thread;
+  QString own = side;
+  if (const ThreadStandard* standard = custom ? nullptr : standardOf(context, state.choice(QStringLiteral("standard")))) {
+    const QString cls = state.choice(QStringLiteral("class"));
+    const bool inside = standard->internal.contains(cls);
+    const bool outside = standard->external.contains(cls);
+    if (inside != outside) {
+      own = inside ? kInternal : kExternal;
+    }
+  }
+  if (own == kInternal) {
+    parts << QObject::tr("internal");
+  } else if (own == kExternal) {
+    parts << QObject::tr("external");
+  }
+  parts << (state.checked(QStringLiteral("modeled")) ? QObject::tr("modeled") : QObject::tr("cosmetic"));
+  return parts.join(QStringLiteral(", "));
+}
+
 // Keeps the class on the faces' side (mitcad#691): a class of the other
 // side becomes the standard's default of the faces' side (6g on a hole
 // becomes 6H); `internalOnly`: always the internal side (tapped holes).
@@ -771,12 +824,7 @@ CommandDef holeCommand(const CommandContext& context) {
   def.inputs += {
       valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(choiceIs(QStringLiteral("extent"), QStringLiteral("to_object"))),
-      choiceInput(QStringLiteral("type"), QObject::tr("Hole Type"),
-                  {{QStringLiteral("simple"), QStringLiteral("Simple")},
-                   {QStringLiteral("counterbore"), QStringLiteral("Counterbore")},
-                   {QStringLiteral("countersink"), QStringLiteral("Countersink")},
-                   {QStringLiteral("counterdrill"), QStringLiteral("Counterdrill")}},
-                  QStringLiteral("simple"))
+      choiceInput(QStringLiteral("type"), QObject::tr("Hole Type"), kHoleTypes, QStringLiteral("simple"))
           .withOnChange(fillSized),
       // Clearance (mitcad#903): the hole and its recesses for a screw size.
       choiceInput(QStringLiteral("tap"), QObject::tr("Hole Tap Type"),
@@ -1177,6 +1225,22 @@ CommandDef holeCommand(const CommandContext& context) {
     }
     return QStringLiteral("Added %1 hole(s) (%2), %3%4").arg(count).arg(state.choice(QStringLiteral("type")), tap, taper);
   };
+  // The hover text's key line (mitcad#1235): the Hole Type and the size, a
+  // tapped hole's thread as a Thread shows it (`Simple hole, M6x1 6H,
+  // internal, cosmetic`), else the diameter (`Counterbore hole, Ø6.6 mm`).
+  def.keyText = [](const CommandState& state, const CommandContext& model) {
+    QString holeType = state.choice(QStringLiteral("type"));
+    for (const auto& option : kHoleTypes) {
+      if (option.first == holeType) {
+        holeType = option.second;
+      }
+    }
+    const QString holeSize =
+        state.choice(QStringLiteral("tap")) == QStringLiteral("tapped")
+            ? threadKey(state, model, kInternal)
+            : QStringLiteral("%1%2").arg(QChar(0x00D8)).arg(state.text(QStringLiteral("diameter")).trimmed());
+    return QObject::tr("%1 hole, %2").arg(holeType, holeSize);
+  };
   return def;
 }
 
@@ -1337,6 +1401,14 @@ CommandDef threadCommand(const CommandContext& context) {
   def.canEdit = [](const QJsonObject& feature) {
     return !feature.contains(kStarts) ||
            str(feature.value(QStringLiteral("thread")).toObject(), "standard") == kCustom;
+  };
+
+  // The hover text's key line (mitcad#1235): `M76x2 6H, internal, modelled`.
+  // A custom thread has no class, so its side is the faces' (measured only
+  // then).
+  def.keyText = [](const CommandState& state, const CommandContext& model) {
+    return threadKey(state, model,
+                     customThread(state) ? sideOf(state.items(QStringLiteral("faces")), model) : QString());
   };
 
   def.describe = [](const CommandState& state, const CommandContext&) {

@@ -21,6 +21,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QIcon>
 #include <QImage>
@@ -71,11 +72,13 @@
 #include "GlassCard.hpp"
 #include "TestSync.hpp"
 #include "Dialogs.hpp"
+#include "DisplayMeshes.hpp"
 #include "Icons.hpp"
 #include "ComputeProgress.hpp"
 #include "Theme.hpp"
 #include "TreeItemDelegate.hpp"
 #include "mitcad/geometry/geometry.hpp"
+#include "mitcad/io/mesh.hpp"
 
 namespace mitcad {
 namespace {
@@ -272,6 +275,7 @@ const StepSpec kSpecs[] = {
     {"expect-input-text", 2, 2, kIdle},
     {"expect-shown-body", 3, 9, kIdle},
     {"capture-shown-body", 3, 3, kIdle},
+    {"expect-shown-body-meshes", 3, 3, kIdle},
     {"expect-native-dialog-gone", 1, 2, kPlain},
     {"focus-dialog", 1, 2, kPlain},
     {"focus-main", 0, 0, kPlain},
@@ -371,6 +375,8 @@ const StepSpec kSpecs[] = {
     {"document-tab-drop", 3, 3, kInputOfMain},
     {"expect-document-hidden-quiet", 2, 2, kIdle},
     {"observe-document-frame-close-all", 0, 0, kIdle},
+    // The colour a widget shows as drawn in its window (mitcad#1245).
+    {"expect-widget-background", 3, 3, kIdle},
 };
 
 const StepSpec* findSpec(const QString& name) {
@@ -1999,6 +2005,48 @@ void TestDriver::run(const Step& step) {
       m_waitDetail = QStringLiteral("no displayed shape for %1 at %2").arg(uid, occurrence);
       return false;
     }, 6, QStringLiteral("displayed geometry differs for %1 at %2").arg(uid, occurrence));
+  } else if (name == QLatin1String("expect-shown-body-meshes")) {
+    bool counted = false;
+    const int wanted = a.at(2).toInt(&counted);
+    if (!counted || wanted < 0) {
+      fail(line, QStringLiteral("expect-shown-body-meshes <uid> <occurrence|-> <faces>"));
+      return;
+    }
+    const QString uid = a.at(0);
+    const QString occurrence = a.at(1) == QLatin1String("-") ? QString() : a.at(1);
+    // The shape the view draws for the body (its stand-in while a preview
+    // shows one): each face with a triangulation that lies on it where the
+    // view places it (mitcad#1243: a face given another face's mesh in the
+    // wrong frame was drawn and picked elsewhere).
+    const QString where = occurrence.isEmpty() ? uid : QStringLiteral("%1 in %2").arg(uid, occurrence);
+    whenReady([this, uid, occurrence, where, wanted] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      for (const BodyDisplay& body : window->viewer().shownBodies()) {
+        if (QString::fromStdString(body.uid) != uid || QString::fromStdString(body.occurrence) != occurrence) continue;
+        const std::shared_ptr<geometry::Shape> drawn = displayShape(body.shape);
+        if (!drawn) break;
+        int meshed = 0;
+        QStringList missing;
+        for (int i = 0; i < drawn->face_count(); ++i) {
+          if (io::triangulation_on_face(drawn->face(i))) {
+            ++meshed;
+          } else {
+            missing << (drawn->face_names(i).empty() ? QStringLiteral("face %1").arg(i)
+                                                     : QString::fromStdString(drawn->face_names(i).front()));
+          }
+        }
+        const QString counts =
+            QStringLiteral("%1 of %2 faces meshed on their faces").arg(meshed).arg(drawn->face_count());
+        m_waitDetail = QStringLiteral("shown body %1: %2").arg(where, counts);
+        if (!missing.isEmpty()) m_waitDetail += QStringLiteral("; not: ") + missing.join(QStringLiteral(", "));
+        if (drawn->face_count() != wanted || !missing.isEmpty()) return false;
+        qInfo().noquote() << QStringLiteral("TestDriver: shown body %1: %2").arg(where, counts);
+        return true;
+      }
+      m_waitDetail = QStringLiteral("no displayed shape for %1").arg(where);
+      return false;
+    }, 6, QStringLiteral("display meshes differ for %1").arg(where));
   } else if (name == QLatin1String("expect-native-history-wheel")) {
     QString error;
     if (!mac::test::historyWheel(error)) { fail(line, error); }
@@ -4399,6 +4447,60 @@ void TestDriver::run(const Step& step) {
     if (!value.isValid() || value.toString() != a.at(2)) {
       fail(line, QStringLiteral("widget %1.%2 is '%3', expected '%4'").arg(a.at(0), a.at(1), value.toString(), a.at(2)));
     }
+  } else if (name == QLatin1String("expect-widget-background")) {
+    // The colour that covers most of a visible widget's area as its window
+    // draws it, the parents' backgrounds under it included (mitcad#1245:
+    // the Docked toolbar's surface under the ribbon's groups and beside
+    // Undo, not a style's own fill).
+    const QColor wanted(a.at(1));
+    bool number = false;
+    const int tolerance = a.at(2).toInt(&number);
+    if (!wanted.isValid() || !number || tolerance < 0) {
+      fail(line, QStringLiteral("expect-widget-background <object-name> <#rrggbb> <tolerance>"));
+      return;
+    }
+    const QString widgetName = a.at(0);
+    whenReady(
+        [this, widgetName, wanted, tolerance] {
+          QWidget* top = topWindow();
+          QWidget* widget = namedWidget(m_main.data(), widgetName);
+          if (top == nullptr || widget == nullptr || !widget->isVisible()) {
+            m_waitDetail = QStringLiteral("no visible widget %1").arg(widgetName);
+            return false;
+          }
+          const QRect area =
+              QRect(top->mapFromGlobal(widget->mapToGlobal(QPoint(0, 0))), widget->size()).intersected(top->rect());
+          const QImage shot = area.isEmpty() ? QImage() : top->grab(area).toImage().convertToFormat(QImage::Format_RGB32);
+          if (shot.isNull()) {
+            m_waitDetail = QStringLiteral("%1 has no area in its window").arg(widgetName);
+            return false;
+          }
+          QHash<QRgb, int> counts;
+          QRgb most = 0;
+          int mostCount = 0;
+          for (int y = 0; y < shot.height(); ++y) {
+            for (int x = 0; x < shot.width(); ++x) {
+              const QRgb rgb = shot.pixel(x, y);
+              const int count = ++counts[rgb];
+              if (count > mostCount) {
+                most = rgb;
+                mostCount = count;
+              }
+            }
+          }
+          const QColor seen(most);
+          const int off = std::abs(seen.red() - wanted.red()) + std::abs(seen.green() - wanted.green()) +
+                          std::abs(seen.blue() - wanted.blue());
+          m_waitDetail = QStringLiteral("%1 %2 (%3 of %4 pixels), wanted %5, off by %6")
+                             .arg(widgetName, seen.name())
+                             .arg(mostCount)
+                             .arg(shot.width() * shot.height())
+                             .arg(wanted.name())
+                             .arg(off);
+          return off <= tolerance;
+        },
+        6, QStringLiteral("the background of %1 is not %2").arg(a.at(0), a.at(1)),
+        [this] { qDebug().noquote() << QStringLiteral("TestDriver: widget background %1").arg(m_waitDetail); });
   } else if (name == QLatin1String("expect-setting")) {
     const QVariant value = QSettings().value(a.at(0));
     if (!value.isValid() || value.toString() != a.at(1)) {

@@ -202,11 +202,14 @@ void test_chamfers() {
 // A chamfer the geometry kernel cannot build says what it was asked for
 // (mitcad#1185): its edge, and the faces its chain ends against, with the
 // kernel's own message kept and the message's start as before (the .f3d
-// import tells a failure of the kernel by it). The block is 20 high: a
-// bevel of 30 down its front face cannot be built.
+// import tells a failure of the kernel by it). The block is 20 high and 40
+// deep: a bevel of 100 down its front face and across its top would take
+// all of it away, which cannot be built; the error says the bevel is
+// wider than the faces beside the edge (mitcad#1232; one of 30 is built
+// past the front face, cut by the bottom).
 void test_chamfer_failure_names_its_edges_and_ends() {
   ChamferSpec huge;
-  huge.distance = 30;
+  huge.distance = 100;
   std::string message;
   try {
     chamfer("F5", *block(), {top_front()}, huge);
@@ -222,6 +225,11 @@ void test_chamfer_failure_names_its_edges_and_ends() {
   CHECK(message.find("its chain ending against faces") != std::string::npos);
   CHECK(message.find(side("F2", 1, 1)) != std::string::npos);
   CHECK(message.find(side("F2", 1, 3)) != std::string::npos);
+  CHECK(message.find("is wider than face") != std::string::npos);
+  // 30: the plane z = y - 10 takes away 200 mm2 down to the bottom and the
+  // triangle of legs 20 above it, along 60.
+  huge.distance = 30;
+  CHECK(near(volume(*chamfer("F5", *block(), {top_front()}, huge)), 60.0 * 40.0 * 20.0 - (200.0 + 200.0) * 60.0));
 }
 
 // The block's corner edge i (between side i - 1 and side i).

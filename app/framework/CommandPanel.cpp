@@ -54,6 +54,7 @@
 #include "NoteRow.hpp"
 #include "PanelTree.hpp"
 #include "ParameterField.hpp"
+#include "PickerComboBox.hpp"
 #include "ResultRows.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
@@ -63,10 +64,6 @@
 
 namespace mitcad {
 namespace {
-
-// The size of an option's swatch in a choice's picker, in pixels
-// (mitcad#1141; the Material tool's picker's too).
-constexpr int kPickerSwatch = 32;
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -180,133 +177,6 @@ void styleLineEdit(QLineEdit* edit, const QColor& accent, const QColor& error) {
       "QLineEdit:disabled { background: rgba(128, 128, 128, 12); }")
                           .arg(accent.name(), error.name()));
 }
-
-// A drop-down whose chosen text is cut in the middle, and only when it
-// must, so that a long name keeps its start and its end (mitcad#655: 3D
-// Print's printer and process); it may be narrower than its longest
-// option.
-class MiddleElideComboBox : public QComboBox {
-public:
-  MiddleElideComboBox() {
-    setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    setMinimumContentsLength(8);
-  }
-
-  // What the closed field shows of the chosen option.
-  virtual QString shownText() const { return currentText(); }
-
-protected:
-  void paintEvent(QPaintEvent*) override {
-    QStylePainter painter(this);
-    QStyleOptionComboBox option;
-    initStyleOption(&option);
-    painter.drawComplexControl(QStyle::CC_ComboBox, option);
-    const QRect field = style()->subControlRect(QStyle::CC_ComboBox, &option, QStyle::SC_ComboBoxEditField, this);
-    const int icon = option.currentIcon.isNull() ? 0 : option.iconSize.width() + 4;
-    option.currentText = fontMetrics().elidedText(shownText(), Qt::ElideMiddle, std::max(0, field.width() - icon));
-    painter.drawControl(QStyle::CE_ComboBoxLabel, option);
-  }
-};
-
-// A drop-down that opens a searchable picker instead of its list
-// (InputDef::choicePicker, mitcad#1108: Send to Slicer's Printer and
-// Process): the options in their order under the rows' headings, by their
-// short labels with their tags, the chosen one checked, a line where the
-// options have a separator, the options' pictures as their swatches
-// (mitcad#1141); a window titled "<label> Picker" (LibraryPicker,
-// logged "<label> picker …") under the field, as wide as its names need.
-// Its choice is the drop-down's, as if chosen in its list. The closed
-// field shows the chosen row's short label.
-class PickerComboBox : public MiddleElideComboBox {
-public:
-  explicit PickerComboBox(const QString& label) : m_label(label) {}
-
-  void setRows(const QVector<ChoicePickerRow>& rows) {
-    m_rows.clear();
-    for (const ChoicePickerRow& row : rows) {
-      m_rows.insert(row.value, row);
-    }
-    update();
-  }
-
-  QString shownText() const override {
-    const QString shortLabel = m_rows.value(currentData().toString()).shortLabel;
-    return shortLabel.isEmpty() ? currentText() : shortLabel;
-  }
-
-  // "Panel <command> input <key> shows: <short label>" when it changes, for
-  // UI tests.
-  void logShown(const QString& command, const QString& key) {
-    const QString line = QStringLiteral("Panel %1 input %2 shows: %3").arg(command, key, shownText());
-    if (line != m_logged) {
-      m_logged = line;
-      qDebug().noquote() << line;
-    }
-  }
-
-  void showPopup() override {
-    if (m_picker != nullptr && m_picker->isVisible()) {
-      return; // open already
-    }
-    const QString chosenValue = currentData().toString();
-    QVector<PickerEntry> entries;
-    bool lineAbove = false;
-    for (int i = 0; i < count(); ++i) {
-      const QString value = itemData(i).toString();
-      if (isChoiceSeparator(value)) {
-        lineAbove = true;
-        continue;
-      }
-      if (value.startsWith(choiceHeadingPrefix())) {
-        continue; // the rows carry the headings
-      }
-      const auto found = m_rows.constFind(value);
-      const bool known = found != m_rows.constEnd();
-      PickerEntry entry;
-      entry.value = value;
-      entry.name = known && !found->shortLabel.isEmpty() ? found->shortLabel : itemText(i);
-      entry.section = known ? found->heading : QString();
-      // The option's picture as its swatch (InputDef::choiceImage,
-      // mitcad#1141: Send to Slicer's materials).
-      const QIcon icon = itemIcon(i);
-      if (!icon.isNull()) {
-        entry.swatch = icon.pixmap(QSize(kPickerSwatch, kPickerSwatch)).toImage();
-      }
-      entry.tooltip = itemText(i);
-      entry.tag = known ? found->tag : QString();
-      entry.search = known ? QStringList{itemText(i), found->heading, found->search}.join(QLatin1Char(' ')) : itemText(i);
-      entry.checked = value == chosenValue;
-      entry.lineBefore = lineAbove;
-      lineAbove = false;
-      entries.append(entry);
-    }
-    QPointer<PickerComboBox> self(this);
-    m_picker = LibraryPicker::open(this, QObject::tr("%1 Picker").arg(m_label),
-                                   QStringLiteral("%1 picker").arg(m_label), entries, chosenValue,
-                                   mapToGlobal(QPoint(0, height())),
-                                   [self](const QString& value) {
-                                     if (self != nullptr) {
-                                       self->choose(value);
-                                     }
-                                   },
-                                   objectName(), width());
-  }
-
-private:
-  void choose(const QString& value) {
-    const int at = findData(value);
-    if (at < 0) {
-      return;
-    }
-    setCurrentIndex(at);
-    emit activated(at);
-  }
-
-  QString m_label;
-  QHash<QString, ChoicePickerRow> m_rows;
-  QPointer<LibraryPicker> m_picker;
-  QString m_logged;
-};
 
 // What a drop-down's closed field shows of its chosen option.
 QString shownChoiceText(const QComboBox* combo) {

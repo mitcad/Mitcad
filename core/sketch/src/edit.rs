@@ -31,6 +31,9 @@ pub struct EditReport {
     /// What the user is to know about the edit (mitcad#741: a curve left
     /// out of an offset or a projection as the same as another).
     pub warnings: Vec<String>,
+    /// What the user may like to know that is no warning (mitcad#1234: the
+    /// curves of an offset that vanish at its distance).
+    pub notes: Vec<String>,
 }
 
 /// A point of a command: an existing point or a new one at a position.
@@ -47,9 +50,12 @@ pub struct SketchEdit<'a> {
     owner: FeatureUid,
     owner_name: String,
     next_entity: u32,
-    /// Ids to give out again before new ones (a remade offset keeps its
-    /// curves' ids).
-    pub(crate) reuse: Vec<EntityUid>,
+    /// The result ids an offset made again gives its source curves
+    /// (mitcad#1234: a curve kept before and after keeps its id).
+    pub(crate) reuse_results: std::collections::BTreeMap<EntityUid, EntityUid>,
+    /// The sources' geometry an offset made again is fitted to (mitcad#1234),
+    /// in place of a solve of the sketch as it is.
+    pub(crate) known_sources: Option<Solved>,
     next_constraint: u32,
     pub report: EditReport,
     /// Solve and store when finishing (false for edits that set positions
@@ -75,7 +81,8 @@ impl<'a> SketchEdit<'a> {
             owner,
             owner_name: owner_name.to_owned(),
             next_entity,
-            reuse: Vec::new(),
+            reuse_results: std::collections::BTreeMap::new(),
+            known_sources: None,
             next_constraint,
             report: EditReport::default(),
             solve: true,
@@ -96,9 +103,6 @@ impl<'a> SketchEdit<'a> {
     pub fn ids(&mut self, count: usize) -> Vec<EntityUid> {
         (0..count)
             .map(|_| {
-                if !self.reuse.is_empty() {
-                    return self.reuse.remove(0);
-                }
                 self.next_entity += 1;
                 EntityUid(self.next_entity - 1)
             })
@@ -489,18 +493,18 @@ impl<'a> SketchEdit<'a> {
         if self.solve {
             // A drag just solved this very definition with these values
             // and stored its solution (mitcad#679): solving it again gives
-            // the same. Derived offsets refit first, which solves anyway.
+            // the same. Derived offsets refit first, which solves anyway,
+            // and an offset whose curves that vanish changed with the drag
+            // is made again (mitcad#1234).
             let dragged = self.dragged.take().filter(|dragged| {
                 dragged.0 == self.def
                     && dragged.1 == *self.params
                     && !self.def.offsets.iter().any(|o| o.derived)
+                    && !self.offsets_stale(&dragged.2)
             });
             let solved = match dragged {
                 Some(dragged) => dragged.2,
-                None => {
-                    self.refit_offsets()?;
-                    self.solved()?
-                }
+                None => self.settle_offsets()?,
             };
             solved.store(&mut self.def.entities);
             // Texts in frames keep their frame's corner and direction.

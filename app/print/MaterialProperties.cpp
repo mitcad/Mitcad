@@ -194,16 +194,16 @@ void MaterialPropertiesBox::rebuild() {
     delete child;
   }
   m_fields.clear();
-  m_printingRows.clear();
+  m_groups.clear();
   auto* form = new QFormLayout(m_rows);
   form->setContentsMargins(0, 8, 0, 0);
-  const auto heading = [&form](const QString& title) {
+  const auto heading = [this, &form](const QString& title) {
     auto* label = new QLabel(title);
     QFont bold = label->font();
     bold.setBold(true);
     label->setFont(bold);
     form->addRow(label);
-    return label;
+    m_groups.append(std::pair<QLabel*, QVector<int>>(label, QVector<int>()));
   };
   const auto addField = [this, &form](const QJsonObject& entry, bool printing) {
     Field field;
@@ -228,7 +228,9 @@ void MaterialPropertiesBox::rebuild() {
     const int index = static_cast<int>(m_fields.size());
     connect(field.edit, &QLineEdit::editingFinished, this, [this, index] { finish(index); });
     m_fields.append(field);
-    return index;
+    if (!m_groups.isEmpty()) {
+      m_groups.last().second.append(index);
+    }
   };
   QString group;
   for (const QJsonValue& value : std::as_const(m_units.properties)) {
@@ -240,12 +242,42 @@ void MaterialPropertiesBox::rebuild() {
     addField(entry, false);
   }
   if (!m_units.printing.isEmpty()) {
-    m_printingRows << heading(tr("Printing"));
+    heading(tr("Printing"));
     for (const QJsonValue& value : std::as_const(m_units.printing)) {
-      const int index = addField(value.toObject(), true);
-      m_printingRows << m_fields[index].edit << m_fields[index].unit << m_fields[index].label;
+      addField(value.toObject(), true);
     }
   }
+}
+
+void MaterialPropertiesBox::setSearch(const QString& search) {
+  if (search == m_search) {
+    return;
+  }
+  m_search = search;
+  applyVisibility();
+}
+
+void MaterialPropertiesBox::applyVisibility() {
+  bool anyShown = false;
+  for (Field& field : m_fields) {
+    const bool shown = (!field.printing || m_printing) &&
+                       (m_search.isEmpty() || field.name.contains(m_search, Qt::CaseInsensitive));
+    field.edit->setVisible(shown);
+    field.unit->setVisible(shown);
+    field.label->setVisible(shown);
+    anyShown = anyShown || shown;
+  }
+  for (const auto& [label, indices] : std::as_const(m_groups)) {
+    bool any = false;
+    for (int index : indices) {
+      any = any || m_fields[index].label->isVisibleTo(this);
+    }
+    label->setVisible(any);
+  }
+  // Where the values came from and that they are typical: with the values.
+  const bool lines = m_search.isEmpty() || anyShown;
+  m_reference->setVisible(lines && !m_reference->text().isEmpty());
+  m_caution->setVisible(lines);
 }
 
 void MaterialPropertiesBox::setMaterial(const QJsonObject& fields, bool editable, bool printing) {
@@ -265,12 +297,9 @@ void MaterialPropertiesBox::setMaterial(const QJsonObject& fields, bool editable
     field.edit->setReadOnly(!editable);
     field.unit->setText(m_units.unit(field.quantity).symbol);
   }
-  for (QWidget* widget : std::as_const(m_printingRows)) {
-    widget->setVisible(printing);
-  }
   const QString reference = materialReferenceText(fields);
   m_reference->setText(reference.isEmpty() ? QString() : tr("Source: %1").arg(reference));
-  m_reference->setVisible(!reference.isEmpty());
+  applyVisibility();
   m_error->hide();
 }
 

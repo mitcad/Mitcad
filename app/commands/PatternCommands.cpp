@@ -261,6 +261,8 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
     return [type](const CommandState& s) { return s.choice(type) != symmetricDirection(); };
   };
   def.inputs = patternObjects();
+  // The hover text names the Pattern Type first (mitcad#1235).
+  def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
       distanceTypeInput(),
       lineInput(QStringLiteral("direction1"), QObject::tr("Direction 1"), 1),
@@ -374,6 +376,8 @@ CommandDef circularPatternCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("array"), QStringLiteral("polar pattern"), QStringLiteral("radial")};
   def.featureType = QStringLiteral("circular_pattern");
   def.inputs = patternObjects();
+  // The hover text names the Pattern Type first (mitcad#1235).
+  def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
       selectionInput(QStringLiteral("axis"), QObject::tr("Axis"), kAxisKinds, 1, 1)
           .withTooltip(QObject::tr("An axis, a straight or circular edge, a sketch line or a "
@@ -461,6 +465,8 @@ CommandDef pathPatternCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("array"), QStringLiteral("path pattern"), QStringLiteral("curve")};
   def.featureType = QStringLiteral("path_pattern");
   def.inputs = patternObjects();
+  // The hover text names the Pattern Type first (mitcad#1235).
+  def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
       // Several curves are a chain, joined end to end (mitcad#464).
       selectionInput(QStringLiteral("path"), QObject::tr("Path"), SelectKind::SketchCurve, 1, 0)

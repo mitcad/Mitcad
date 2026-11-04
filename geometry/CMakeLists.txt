@@ -276,6 +276,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/node_dressup.cpp
   src/node_dressup.hpp)
+# Shells whose body has parts no thicker than the wall: the body less a
+# cavity where the kernel's thick solid fails (mitcad#1233).
+target_sources(mitcad_geometry PRIVATE
+  src/shell_cavity.cpp
+  src/shell_cavity.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -376,6 +381,11 @@ if(BUILD_TESTING)
   target_sources(test_geometry PRIVATE tests/test_face_revolve.cpp)
   # Fillets and chamfers that take a face away exactly (mitcad#1106).
   target_sources(test_geometry PRIVATE tests/test_dressup_takes_face.cpp)
+  # Section Analysis' clip of a threaded revolved body in its profile's plane
+  # (mitcad#1230).
+  target_sources(test_geometry PRIVATE tests/test_section_clip.cpp)
+  # Shells of bodies with parts no thicker than the wall (mitcad#1233).
+  target_sources(test_geometry PRIVATE tests/test_shell_thin_parts.cpp)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry_analysis)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry mitcad_warnings)
   # The suite in parts, a ctest each (geometry.suite.<part>, label
@@ -439,7 +449,9 @@ if(BUILD_TESTING)
     move_faces
     face_extrude
     face_revolve
-    dressup_takes_face)
+    dressup_takes_face
+    section_clip
+    shell_thin_parts)
   foreach(part IN LISTS geometry_suite_parts)
     add_test(NAME geometry.suite.${part} COMMAND test_geometry --part ${part})
     set_tests_properties(geometry.suite.${part} PROPERTIES LABELS geometry_suite)
@@ -536,6 +548,11 @@ if(BUILD_TESTING)
   add_executable(test_fillet_narrow_cut tests/test_fillet_narrow_cut.cpp)
   target_link_libraries(test_fillet_narrow_cut PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_narrow_cut COMMAND test_fillet_narrow_cut)
+  # Chamfers wider than a narrow face beside their edge, cut by the face
+  # beyond (mitcad#1232).
+  add_executable(test_chamfer_narrow_face tests/test_chamfer_narrow_face.cpp)
+  target_link_libraries(test_chamfer_narrow_face PRIVATE mitcad_geometry mitcad_geometry_analysis mitcad_warnings)
+  add_test(NAME geometry.chamfer_narrow_face COMMAND test_chamfer_narrow_face)
   # Boundary Fill: the cells tool bodies enclose (mitcad#457).
   add_executable(test_boundary_fill tests/test_boundary_fill.cpp)
   target_link_libraries(test_boundary_fill PRIVATE mitcad_geometry mitcad_warnings)

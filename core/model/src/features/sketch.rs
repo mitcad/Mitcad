@@ -257,6 +257,39 @@ fn solve_using_driven<K: Kernel>(
     solved.map_err(|e| e.message)
 }
 
+/// The definition with its offsets made again for this evaluation, and its
+/// solution, when an offset's curves that vanish at its distance changed
+/// outside the sketch: a parameter set elsewhere, a linked projection that
+/// followed its source (mitcad#1234,
+/// [`crate::sketch::offset::retrim_for_evaluation`]). What the edit would
+/// have said becomes the feature's warnings (a constraint on a curve that
+/// vanished) and information (the curves that vanish). `solved` is the
+/// evaluation's solve of `def` when it solved.
+fn retrim<K: Kernel>(
+    def: &SketchDef,
+    solved: Option<&Solved>,
+    ctx: &mut super::EvalContext<'_, K>,
+) -> Option<(SketchDef, Solved)> {
+    if def.offsets.is_empty() {
+        return None;
+    }
+    if let Some(solved) = solved {
+        let mut value = |id: ParamId| ctx.param(id).ok();
+        if !crate::sketch::offset::stale_in(def, solved, &mut value) {
+            return None;
+        }
+    }
+    let params = ctx.env.params;
+    let made = crate::sketch::offset::retrim_for_evaluation(def, params, ctx.uid, solved)?;
+    for warning in made.warnings {
+        ctx.warn(warning);
+    }
+    for note in made.notes {
+        ctx.inform(note);
+    }
+    Some((made.def, made.solved))
+}
+
 /// The features a projection's source names: those of its topological
 /// name, or the sketch whose curve or point it is (mitcad#904).
 pub(crate) fn topo_features(source: &ProjectionSource) -> BTreeSet<FeatureUid> {
@@ -314,7 +347,7 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         // Driving dimensions that use the sketch's own driven ones are
         // solved after them (mitcad#1116).
         let uses = driven_uses(def, ctx.env.params);
-        let solved = if uses.is_empty() {
+        let solving = if uses.is_empty() {
             match &followed {
                 None => def.solve_with(&mut |id| ctx.param(id), &name),
                 Some(followed) => crate::sketch::project::solve_followed(
@@ -324,24 +357,33 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                     &name,
                 ),
             }
-            .map_err(|e| e.message)?
+            .map_err(|e| e.message)
         } else {
-            solve_using_driven(self, followed.as_ref(), &uses, ctx, &name)?
+            solve_using_driven(self, followed.as_ref(), &uses, ctx, &name)
+        };
+        // Offsets whose curves that vanish at their distances changed with
+        // a parameter set outside the sketch or a projection that followed
+        // its source are made again for this evaluation (mitcad#1234).
+        let (retrimmed, solved) = match retrim(def, solving.as_ref().ok(), ctx) {
+            Some((retrimmed, solved)) => (Some(retrimmed), solved),
+            None => (None, solving?),
         };
         // A line or round curve the constraints collapsed leaves no region
         // (mitcad#365).
         if let Some(warning) = solved.status.degenerate_warning() {
             ctx.warn(warning);
         }
-        // Where linked projections and what hangs on them are now.
-        let moved = match &followed {
-            None => Vec::new(),
-            Some(followed) => {
+        // Where linked projections and what hangs on them are now (the
+        // definition with its offsets made again holds them where they are).
+        let moved = match (&followed, &retrimmed) {
+            (None, _) | (_, Some(_)) => Vec::new(),
+            (Some(followed), None) => {
                 let mut solution = followed.clone();
                 solved.store(&mut solution.entities);
                 crate::sketch::project::moved_entities(self, &solution)
             }
         };
+        let def = retrimmed.as_ref().unwrap_or(def);
         // Texts that follow text parameters (mitcad#664) take their values.
         let valued;
         let def = if def.text_values.is_empty() {
@@ -373,6 +415,11 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             // face's edges cut (mitcad#1182).
             (region_info, layout, OwnRegions::new(own))
         };
+        // The definition shown, with the stored one it was made from.
+        let retrimmed = retrimmed.map(|def| {
+            let from = self.clone();
+            Arc::new(RetrimmedDef { from, def })
+        });
         Ok(FeatureOutput {
             sketch: Some(SketchOutput {
                 frame,
@@ -385,6 +432,7 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                 moved: Arc::new(moved),
                 follow: Arc::new(follow),
                 own: Arc::new(own),
+                retrimmed,
             }),
             ..FeatureOutput::default()
         })

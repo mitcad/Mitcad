@@ -503,12 +503,55 @@ pub(crate) fn plastic_appearance(material: &str, name: &str, color: [f64; 3]) ->
     let mut look = library_appearance("plastic_white")
         .cloned()
         .unwrap_or_default();
-    look.id = format!("{}_colour", material.replace(['-', '/'], "_"));
+    look.id = own_colour_id(material);
     look.name = format!("{name} color");
     look.base_color = color;
     look.texture = None;
     // A filament's colour: an FDM plastic's look (mitcad#1102).
     look.class = Some(crate::material::MaterialClass::FdmPlastic);
+    look
+}
+
+/// The id of a material's own colour ([`plastic_appearance`]): the
+/// material's id with `-` and `/` as `_`, then `_colour`
+/// (`generic-tpu` → `generic_tpu_colour`).
+pub(crate) fn own_colour_id(material: &str) -> String {
+    format!("{}_colour", material.replace(['-', '/'], "_"))
+}
+
+/// Whether an appearance id is the own colour of a material, or of the
+/// one it was made from (`based_on`: a copy keeps its source's default).
+pub(crate) fn is_own_colour(material: &Material, id: &str) -> bool {
+    std::iter::once(&material.id)
+        .chain(&material.based_on)
+        .any(|owner| own_colour_id(owner) == id)
+}
+
+/// A material's own colour made again (mitcad#1242), under the id `id`
+/// it names, for a library file or a design that lost it (a slicer import
+/// or an older version wrote the item without it): as [`plastic_appearance`]
+/// makes it, in the material's filament colour: its own `filament_colour`
+/// (a file from before mitcad#1055), else a slicer's
+/// `default_filament_colour` it keeps, else the neutral grey
+/// ([`NEUTRAL_FILAMENT_COLOR`]).
+pub(crate) fn own_colour_again(material: &Material, id: &str) -> Appearance {
+    let color = material
+        .filament
+        .get("filament_colour")
+        .and_then(Value::as_str)
+        .and_then(hex_rgb)
+        .or_else(|| {
+            material
+                .slicer
+                .values()
+                .filter_map(|keys| keys.get("default_filament_colour"))
+                .map(String::as_str)
+                .find_map(first_colour)
+                .and_then(|hex| hex_rgb(&hex))
+        })
+        .unwrap_or(NEUTRAL_FILAMENT_COLOR);
+    let mut look = plastic_appearance(&material.id, &material.name, color);
+    look.id = id.to_owned();
     look
 }
 

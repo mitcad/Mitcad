@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BodyChange, CheckContext, Env, EvalContext, FeatureEntry, FeatureOutput, OccurrencePath,
-    References,
 };
 use crate::assembly::{Assembly, inverse};
 use crate::fingerprint::Fingerprint;
@@ -41,6 +40,14 @@ impl BodyTarget {
             occurrence: self.occurrence.clone(),
         }
     }
+}
+
+/// One thing a scope leaves alone: an excluded component at its path, or
+/// an excluded body (mitcad#1236).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Exclusion {
+    Component(ComponentTarget),
+    Body(BodyTarget),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +239,81 @@ impl CutScope {
             .collect()
     }
 
+    /// The components an explicit scope cuts by name; an automatic scope
+    /// names none, it cuts what it finds.
+    pub(crate) fn included(&self) -> &[ComponentTarget] {
+        match &self.targets {
+            TargetScope::Automatic { .. } => &[],
+            TargetScope::Explicit { included, .. } => included,
+        }
+    }
+
+    /// The paths the extrusion needs: its context and an explicit scope's
+    /// included components. Exclusions name what the cut leaves alone and
+    /// need nothing (mitcad#1236).
+    pub(crate) fn reference_paths(&self) -> Vec<&OccurrencePath> {
+        std::iter::once(&self.context.occurrence)
+            .chain(self.included().iter().map(|t| &t.occurrence))
+            .collect()
+    }
+
+    /// Its exclusions: an automatic scope's excluded components, then the
+    /// excluded bodies.
+    pub(crate) fn exclusions(&self) -> Vec<Exclusion> {
+        let components: &[ComponentTarget] = match &self.targets {
+            TargetScope::Automatic { excluded, .. } => excluded,
+            TargetScope::Explicit { .. } => &[],
+        };
+        components
+            .iter()
+            .cloned()
+            .map(Exclusion::Component)
+            .chain(self.excluded_bodies().iter().cloned().map(Exclusion::Body))
+            .collect()
+    }
+
+    /// Drops the exclusions of what is no longer in the design
+    /// (mitcad#1236): a component excluded at a path that no longer places
+    /// it, a body whose maker is gone (`made` false) or whose path no longer
+    /// places its component. Returns the dropped ones.
+    pub(crate) fn drop_gone_exclusions(
+        &mut self,
+        assembly: &Assembly,
+        made: &dyn Fn(BodyUid) -> bool,
+    ) -> Vec<Exclusion> {
+        let placed = |component: ComponentUid, path: &OccurrencePath| {
+            crate::joints::path_component(assembly, ComponentUid::ROOT, &path.0)
+                .is_ok_and(|c| c == component)
+        };
+        let mut dropped = Vec::new();
+        let (components, bodies) = match &mut self.targets {
+            TargetScope::Automatic {
+                excluded,
+                excluded_bodies,
+            } => (Some(excluded), excluded_bodies),
+            TargetScope::Explicit {
+                excluded_bodies, ..
+            } => (None, excluded_bodies),
+        };
+        if let Some(components) = components {
+            components.retain(|t| {
+                let kept = placed(t.component, &t.occurrence);
+                if !kept {
+                    dropped.push(Exclusion::Component(t.clone()));
+                }
+                kept
+            });
+        }
+        bodies.retain(|b| {
+            let kept = made(b.body) && placed(b.component, &b.occurrence);
+            if !kept {
+                dropped.push(Exclusion::Body(b.clone()));
+            }
+            kept
+        });
+        dropped
+    }
+
     /// Every stored place, the context first, for the edits that move
     /// them: Move to Component and moving an occurrence to another parent.
     pub(crate) fn places_mut(&mut self) -> Vec<PlaceMut<'_>> {
@@ -311,13 +393,10 @@ impl CutScope {
         changed
     }
 
-    pub(crate) fn add_references(&self, refs: &mut References) {
-        for target in self.excluded_bodies() {
-            refs.body(target.body);
-        }
-    }
-
-    pub(crate) fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+    /// Checks the scope's own consistency. An excluded body need not be
+    /// made before the extrusion (mitcad#1236): the scope refers to nothing
+    /// it leaves alone.
+    pub(crate) fn check(&self) -> Result<(), String> {
         if self.initialize_on_cut {
             return Err("cut_scope.initialize_on_cut must be resolved before Cut".to_owned());
         }
@@ -331,7 +410,6 @@ impl CutScope {
             if self.excluded_bodies()[..i].contains(target) {
                 return Err("a cut-scope body is listed more than once".to_owned());
             }
-            ctx.body(target.body)?;
         }
         Ok(())
     }
@@ -348,9 +426,9 @@ impl CutScope {
         // Stored component identities also depend on their timeline creators.
         // Missing paths are left to recompute, so a failed cut can be repaired
         // after save/reopen instead of silently acquiring a different target.
+        // Exclusions are no such identities (mitcad#1236).
         for component in std::iter::once(self.context.component)
-            .chain(self.stored_targets().iter().map(|t| t.component))
-            .chain(self.excluded_bodies().iter().map(|t| t.component))
+            .chain(self.included().iter().map(|t| t.component))
         {
             if let Some(creator) = assembly.component(component).and_then(|c| c.created_by) {
                 ctx.feature(creator)?;
@@ -359,15 +437,16 @@ impl CutScope {
         Ok(())
     }
 
-    /// Stored component selection depends on its earlier geometry and maker.
-    /// Automatic discovery without a stored selection is a timeline-state read.
+    /// An explicit selection depends on its components' earlier geometry
+    /// and makers, the context on its maker. Automatic discovery is a
+    /// timeline-state read, and an exclusion names what the cut leaves
+    /// alone (mitcad#1236): neither depends on anything.
     pub(crate) fn depends_on(&self, assembly: &Assembly, earlier: &FeatureEntry) -> bool {
-        self.stored_targets()
+        self.included()
             .iter()
             .any(|t| t.component == earlier.component)
             || std::iter::once(self.context.component)
-                .chain(self.stored_targets().iter().map(|t| t.component))
-                .chain(self.excluded_bodies().iter().map(|t| t.component))
+                .chain(self.included().iter().map(|t| t.component))
                 .any(|component| {
                     assembly
                         .component(component)
@@ -448,6 +527,18 @@ fn resolve<K: Kernel>(
         transform = transform.after(&placed);
     }
     Ok(transform)
+}
+
+/// The target's path places its component in the design, but not at this
+/// timeline position: an occurrence on it is not placed yet.
+fn unplaced<K: Kernel>(ctx: &EvalContext<'_, K>, target: &ComponentTarget) -> bool {
+    crate::joints::path_component(ctx.env.assembly, ComponentUid::ROOT, &target.occurrence.0)
+        .is_ok_and(|actual| actual == target.component)
+        && target
+            .occurrence
+            .0
+            .iter()
+            .any(|uid| !ctx.env.placements.contains_key(uid))
 }
 
 struct Candidate<S> {
@@ -591,13 +682,21 @@ impl CutScope {
         }
         let mut report = self.report();
         let mut error = None;
+        // Each stored place, and whether it is an exclusion.
+        let automatic = matches!(self.targets, TargetScope::Automatic { .. });
         let stored: Vec<_> = self
             .stored_targets()
             .iter()
-            .cloned()
-            .chain(self.excluded_bodies().iter().map(BodyTarget::target))
+            .map(|t| (t.clone(), automatic))
+            .chain(self.excluded_bodies().iter().map(|b| (b.target(), true)))
             .collect();
-        for target in stored {
+        for (target, exclusion) in stored {
+            // An exclusion of an occurrence not placed at this timeline
+            // position (its maker comes later or is suppressed) leaves
+            // nothing alone here (mitcad#1236).
+            if exclusion && unplaced(ctx, &target) {
+                continue;
+            }
             if let Err(message) = resolve(ctx, &target) {
                 error.get_or_insert(message.clone());
                 if !report
@@ -629,9 +728,17 @@ impl CutScope {
                 .push(row(ctx.env.assembly, target, Some(message)));
         }
         for body in self.excluded_bodies() {
-            if ctx.env.owners.get(&body.body) != Some(&body.component) {
+            // A body not made yet at this position, or consumed before it,
+            // leaves nothing alone (mitcad#1236); one in another component
+            // is a stale choice.
+            if ctx
+                .env
+                .owners
+                .get(&body.body)
+                .is_some_and(|owner| *owner != body.component)
+            {
                 let message = format!(
-                    "excluded body {} is unavailable in component {}",
+                    "excluded body {} is no longer in component {}",
                     body.body, body.component
                 );
                 error.get_or_insert(message.clone());

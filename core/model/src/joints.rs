@@ -633,9 +633,10 @@ pub(crate) fn occurrences_used(def: &FeatureDef) -> Vec<OccurrenceUid> {
             .into_iter()
             .flat_map(|p| p.0.iter().copied())
             .collect(),
+        // Not the scope's exclusions: they use nothing (mitcad#1236).
         FeatureDef::Extrude(e) => e.active_cut_scope().map_or_else(Vec::new, |scope| {
             scope
-                .paths()
+                .reference_paths()
                 .into_iter()
                 .flat_map(|path| path.0.iter().copied())
                 .collect()

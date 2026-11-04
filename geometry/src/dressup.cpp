@@ -1273,6 +1273,25 @@ double largest_size(const std::vector<ChamferSet>& sets) {
   return size;
 }
 
+// The largest ratio of a set's two chamfer distances (1 for equal ones).
+double steepness(const std::vector<ChamferSet>& sets) {
+  double ratio = 1.0;
+  for (const ChamferSet& set : sets) {
+    const ChamferSpec& spec = set.spec;
+    double a = spec.distance;
+    double b = spec.distance;
+    if (spec.type == ChamferType::TwoDistances) {
+      b = spec.distance2;
+    } else if (spec.type == ChamferType::DistanceAngle) {
+      b = spec.distance * std::tan(spec.angle);
+    }
+    if (a > 0.0 && b > 0.0) {
+      ratio = std::max(ratio, std::max(a, b) / std::min(a, b));
+    }
+  }
+  return ratio;
+}
+
 // Why OCCT's fillet did not build the corner at its first faulty vertex
 // (port patch 0330, mitcad#323): which corner (a rounding's end, two or
 // more roundings meeting) and why, from the computation's exception. The
@@ -2916,6 +2935,72 @@ ShapePtr over_cutouts(const Shape& input, const std::vector<FilletSet>& sets, co
   return result;
 }
 
+// A chamfer wider than a narrow face beside its edges (mitcad#1232,
+// cutouts.hpp's fill_overflow): `build` bevels the body with the narrow
+// faces continued past their far edges, and the space filled there is cut
+// out again, the walls taken away put back: the chamfer at its full size,
+// cut by the faces beyond, the narrow faces gone where it is wider. Null
+// where no such face is found or the result is not one valid solid (never
+// throws but for cancelling).
+template <class Build>
+ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
+                           const std::vector<int>& owner, Build&& build, std::string* why = nullptr) {
+  // First with only the space past the far edges filled, the geometry
+  // kernel cutting the chamfer by a wall it meets there; then with the
+  // walls rising past the far edges taken away and put back.
+  // Last, where selected edges meet at a vertex, with each edge's regions
+  // on its own (mitcad#1238: an overflowing chamfer meeting others there).
+  bool corner = false;
+  {
+    NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edges_at;
+    TopExp::MapShapesAndUniqueAncestors(input.occt(), TopAbs_VERTEX, TopAbs_EDGE, edges_at);
+    for (int v = 1; v <= edges_at.Extent() && !corner; ++v) {
+      int count = 0;
+      for (const TopoDS_Shape& edge : edges_at(v)) {
+        const int e = input.edge_index(edge);
+        count += e >= 0 && owner[static_cast<std::size_t>(e)] >= 0 ? 1 : 0;
+      }
+      corner = count >= 2;
+    }
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    const bool walls = (mode & 1) != 0;
+    const bool at_corners = mode >= 2;
+    if (at_corners && !corner) {
+      continue;
+    }
+    try {
+      const ShapePtr copy = detail::working_copy(input);
+      const std::optional<detail::Cutouts> cleared =
+          detail::fill_overflow(*copy, owner, largest_size(sets), steepness(sets), walls, at_corners);
+      if (!cleared) {
+        continue;
+      }
+      detail::Cutouts cutouts = *cleared;
+      ShapePtr chamfered;
+      try {
+        chamfered = build(*cutouts.body, cutouts.owner);
+      } catch (const std::exception& error) {
+        // (Why the chamfer past the narrow faces failed at a corner.)
+        if (at_corners && why != nullptr) {
+          *why = error.what();
+        }
+        throw;
+      }
+      if (!chamfered || !detail::put_walls_back(cutouts, *chamfered, feature + ":chamfer(", *copy)) {
+        continue;
+      }
+      if (ShapePtr result = detail::cut_out_again(chamfered, cutouts, *copy)) {
+        return result;
+      }
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+    }
+  }
+  return nullptr;
+}
+
 // The body with the pieces of one surface joined (detail::join_surface_pieces)
 // where the selected edges (`owner`, as select_edges gives it) run along
 // them: a thread's flanks, root and crest, a face a turn on one screw
@@ -3283,6 +3368,12 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
 
 namespace detail {
 
+namespace {
+// Set while a failed chamfer tries the other corner types for its error,
+// so that those tries do not try again.
+thread_local bool trying_other_corners = false;
+} // namespace
+
 ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
                              ChamferCorner corner) {
   detail::require_surfaces(input.occt(), "chamfer");
@@ -3304,10 +3395,82 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
       // A chamfer's distances are along its faces.
       const auto contact = [&] { return largest_size(sets); };
       return with_shrink_retry("chamfer", input, contact, [&](double scale) {
-        return dress(input, sets, selected, scale, feature, "chamfer", false,
-                     [&](const Shape& body, const std::vector<int>& own, double size_scale, bool) {
-                       return bevel(feature, body, sets, own, corner, size_scale);
-                     });
+        const auto bevelled = [&](const Shape& target, const std::vector<int>& own_edges) {
+          return dress(target, sets, own_edges, scale, feature, "chamfer", false,
+                       [&](const Shape& body, const std::vector<int>& own, double size_scale, bool) {
+                         return bevel(feature, body, sets, own, corner, size_scale);
+                       });
+        };
+        // Where the chamfer is wider than a face beside its edges, never
+        // smaller than asked (mitcad#1232): no 0.1 % smaller retry.
+        const auto overflows = [&] {
+          return detail::overflow_failure(*detail::working_copy(input), selected, largest_size(sets));
+        };
+        if (scale != 1.0) {
+          if (!overflows().empty()) {
+            throw std::runtime_error("the chamfer is wider than a face beside its edges");
+          }
+          return bevelled(input, selected);
+        }
+        try {
+          return bevelled(input, selected);
+        } catch (const std::invalid_argument&) {
+          throw;
+        } catch (const Cancelled&) {
+          throw;
+        } catch (...) {
+          // At the exact size, before the 0.1 % smaller retry: a chamfer
+          // wider than a narrow face beside its edges goes on past the
+          // face's far edge, cut by the faces beyond (mitcad#1232).
+          std::string why;
+          if (ShapePtr over = over_narrow_faces(feature, input, sets, selected, bevelled, &why)) {
+            return over;
+          }
+          // Else the error says where, and at a corner why the chamfer past
+          // the narrow face failed there and which corner types build it
+          // (mitcad#1238).
+          const std::string where = overflows();
+          if (where.empty()) {
+            throw;
+          }
+          std::string at_corner;
+          if (!why.empty()) {
+            at_corner = "; past the narrow face the corner fails: " + why;
+            std::vector<std::string> working;
+            if (!trying_other_corners) {
+              struct Guard {
+                Guard() { trying_other_corners = true; }
+                ~Guard() { trying_other_corners = false; }
+                Guard(const Guard&) = delete;
+                Guard& operator=(const Guard&) = delete;
+              } guard;
+              for (const ChamferCorner other : {ChamferCorner::Chamfer, ChamferCorner::Miter, ChamferCorner::Blend}) {
+                if (other == corner) {
+                  continue;
+                }
+                try {
+                  chamfer_unexplained(feature, input, sets, other);
+                  working.emplace_back(corner_name(other));
+                } catch (const Cancelled&) {
+                  throw;
+                } catch (...) {
+                }
+              }
+            }
+            if (!working.empty()) {
+              at_corner += "; the corner type " + working.front() +
+                           (working.size() > 1 ? " or " + working.back() : std::string()) + " builds it";
+            }
+          }
+          try {
+            throw;
+          } catch (const std::exception& error) {
+            // (OCCT's failures, std::exceptions too, as "chamfer: …".)
+            const bool kernel = dynamic_cast<const Standard_Failure*>(&error) != nullptr;
+            throw std::runtime_error((kernel ? "chamfer: " : "") + std::string(error.what()) + "; " + where +
+                                     at_corner);
+          }
+        }
       });
     }, rings);
   }));

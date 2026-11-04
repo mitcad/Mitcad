@@ -262,7 +262,9 @@ impl<K: Kernel> Document<K> {
                         names.contains(&candidate.to_lowercase())
                     }));
                 }
-                let (id, _, _) = self.create_library_material(&libraries, library, &change)?;
+                let id = self
+                    .create_library_material(&libraries, library, &change)?
+                    .id;
                 outcome.added.push(id);
             }
         }

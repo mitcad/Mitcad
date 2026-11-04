@@ -52,6 +52,14 @@ hover-logged '^Timeline Later plane at '
 expect-timeline-hover none
 expect-timeline-tooltip '(?s)Later plane.*Rolled back.*No geometry to show'
 expect-view-image '${MITCAD_TEST_SHOTS}/baseline.png' same
+# A thread's hover text leads with its size, before its sizes; a tapped
+# hole names its thread (mitcad#1235).
+hover-logged '^Timeline Thread M76 at '
+expect-timeline-tooltip '(?s)Thread: Thread M76.*Component: Root.*M76x2 6H, internal, modeled.*Radial Clearance: 0\.2 mm; Flank clearance: 0\.1 mm; Length: 10 mm'
+hover-logged '^Timeline Thread M6 at '
+expect-timeline-tooltip '(?s)Thread: Thread M6.*Component: Root.*M6x1 6g, external, cosmetic'
+hover-logged '^Timeline Tapped hole at '
+expect-timeline-tooltip '(?s)Hole: Tapped hole.*Component: Root.*Simple hole, M6x1 6H, internal, cosmetic'
 timeline-leave
 # A Fillet's picked edges are drawn where they were, its card names how
 # many, and they go with the selection (mitcad#957).

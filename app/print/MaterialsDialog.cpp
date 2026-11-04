@@ -130,6 +130,30 @@ int depthOf(const QTreeWidgetItem* row) {
   return depth;
 }
 
+// Shows or hides a row of a form (mitcad#1228: Search filtering the
+// General tab): its label and field, and every widget of a field that is
+// a layout, which QFormLayout::setRowVisible leaves as they are.
+void setLayoutWidgetsVisible(QLayout* layout, bool on) {
+  for (int i = 0; i < layout->count(); ++i) {
+    QLayoutItem* item = layout->itemAt(i);
+    if (item->widget() != nullptr) {
+      item->widget()->setVisible(on);
+    } else if (item->layout() != nullptr) {
+      setLayoutWidgetsVisible(item->layout(), on);
+    }
+  }
+}
+
+void showFormRow(QFormLayout* form, int row, bool on) {
+  form->setRowVisible(row, on);
+  for (QFormLayout::ItemRole role : {QFormLayout::LabelRole, QFormLayout::FieldRole}) {
+    QLayoutItem* item = form->itemAt(row, role);
+    if (item != nullptr && item->layout() != nullptr) {
+      setLayoutWidgetsVisible(item->layout(), on);
+    }
+  }
+}
+
 const QStringList& groupOrder() {
   // The classes' groups (mitcad#655, mitcad#1102): FDM plastics hold the
   // filaments.
@@ -328,6 +352,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   }
   m_class->setFixedWidth(160);
   form->addRow(tr("Class"), m_class);
+  const int classRow = form->rowCount() - 1;
   auto* densityRow = new QHBoxLayout;
   m_density = new QLineEdit;
   // The same widths as the settings form's fields (mitcad#655).
@@ -339,6 +364,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   densityRow->addWidget(m_densityUnit);
   densityRow->addStretch(1);
   form->addRow(tr("Density"), densityRow);
+  const int densityRowIndex = form->rowCount() - 1;
   // A refused density under its field (mitcad#655).
   m_densityError = new QLabel;
   m_densityError->setWordWrap(true);
@@ -394,6 +420,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   appearancesRow->addLayout(appearanceButtons);
   appearancesRow->addStretch(1);
   form->addRow(tr("Appearances"), appearancesRow);
+  const int appearancesRowIndex = form->rowCount() - 1;
   // Its mechanical, thermal and printing values (mitcad#1213), in the
   // design's units.
   m_properties = new MaterialPropertiesBox;
@@ -405,6 +432,18 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
                            tr("Poisson's ratio"), tr("Yield strength"), tr("Maximum service temperature"),
                            tr("Coefficient of thermal expansion"), tr("Extruder temperature"),
                            tr("Bed temperature")});
+  // Search shows General's fields it finds and only those (mitcad#1228),
+  // so a search such as "temperature" keeps the print settings found in
+  // sight below them.
+  m_form->filterGeneral = [this, form, classRow, densityRowIndex, appearancesRowIndex](const QString& search) {
+    const auto found = [&search](const QString& name) {
+      return search.isEmpty() || name.contains(search, Qt::CaseInsensitive);
+    };
+    showFormRow(form, classRow, found(tr("Class")));
+    showFormRow(form, densityRowIndex, found(tr("Density")));
+    showFormRow(form, appearancesRowIndex, found(tr("Appearances")));
+    m_properties->setSearch(search);
+  };
   // A filament's values per printer and nozzle (mitcad#1054): the last
   // tab, with the print settings.
   m_variants = new MaterialVariantsPage(m_log);

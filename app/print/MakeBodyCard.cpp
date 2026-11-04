@@ -14,6 +14,8 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QToolButton>
 #include <QVector>
 #include <QWidget>
@@ -22,10 +24,14 @@
 #include "../framework/Command.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PickerComboBox.hpp"
 #include "PrintLibrary.hpp"
 
 namespace mitcad {
 namespace {
+
+// The value of a picker's last row, Printers… or Processes… (mitcad#1239).
+QString managerRow() { return QStringLiteral("__manager"); }
 
 // A level and its owner in words, as the Properties window's Source
 // column names them: "body Body1", "component Root".
@@ -80,7 +86,7 @@ QString makeCardSummary(const MakeCardData& data) {
            own.isEmpty() ? QStringLiteral("none") : own.join(QStringLiteral("; ")));
 }
 
-QString makeCardProcessList(const MakeCardData& data) {
+QString makeCardChoiceList(const QVector<ProfilePickerRow>& rows) {
   QStringList groups;
   QString group;
   QStringList names;
@@ -91,13 +97,12 @@ QString makeCardProcessList(const MakeCardData& data) {
     }
     names.clear();
   };
-  for (int i = 0; i < data.processes.size(); ++i) {
-    const QString itsGroup = i < data.processGroups.size() ? data.processGroups.at(i) : QString();
-    if (i == 0 || itsGroup != group) {
+  for (int i = 0; i < rows.size(); ++i) {
+    if (i == 0 || rows.at(i).group != group) {
       closeGroup();
-      group = itsGroup;
+      group = rows.at(i).group;
     }
-    names << data.processes.at(i).second;
+    names << rows.at(i).name;
   }
   closeGroup();
   return groups.join(QStringLiteral(" | "));
@@ -156,6 +161,64 @@ QLabel* MakeBodyCard::levelIcon(const QString& level, const QString& owner) {
   return icon;
 }
 
+PickerComboBox* MakeBodyCard::profilePicker(const QString& kind, const QVector<ProfilePickerRow>& rows,
+                                            const QString& current, const QString& currentName) {
+  const bool printer = kind == QLatin1String("printer");
+  auto* box = new PickerComboBox(printer ? tr("Printer") : tr("Process"), this);
+  box->setObjectName(printer ? QStringLiteral("makeCardPrinter") : QStringLiteral("makeCardProcess"));
+  fitToCard(box);
+  {
+    const QSignalBlocker blocker(box);
+    // Slicer default while none is chosen; then the rows in the pickers'
+    // order under their headings (the picker carries them), as Send to
+    // Slicer's.
+    if (current.isEmpty()) {
+      box->addItem(currentName, QString());
+    }
+    QVector<ChoicePickerRow> picks;
+    for (const ProfilePickerRow& row : rows) {
+      box->addItem(row.name, row.key);
+      picks.append(ChoicePickerRow{row.key, row.group, row.shortName, row.source, QString()});
+    }
+    if (!current.isEmpty() && box->findData(current) < 0) {
+      box->addItem(currentName, current); // a profile no list has (none of the kind's)
+    }
+    // Last, below a line: the kind's manager on the one chosen. The wheel
+    // and the arrow keys on the closed field pass over both (not enabled
+    // in its list; the picker lists them all the same).
+    box->addItem(QString(), choiceSeparatorPrefix() + managerRow());
+    box->addItem(printer ? tr("Printers…") : tr("Processes…"), managerRow());
+    if (auto* model = qobject_cast<QStandardItemModel*>(box->model())) {
+      for (int i = box->count() - 2; i < box->count(); ++i) {
+        QStandardItem* item = model->item(i);
+        item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+      }
+    }
+    box->setRows(picks);
+    box->setCurrentIndex(std::max(0, box->findData(current)));
+  }
+  connect(box, &QComboBox::activated, this, [this, box, kind, printer, current](int index) {
+    const QString key = box->itemData(index).toString();
+    if (key == managerRow() || isChoiceSeparator(key) || key.startsWith(choiceHeadingPrefix())) {
+      // Not a profile: the choice stays.
+      const QSignalBlocker blocker(box);
+      box->setCurrentIndex(std::max(0, box->findData(current)));
+      if (key == managerRow()) {
+        emit managerRequested(kind, current);
+      }
+      return;
+    }
+    if (!key.isEmpty() && key != current) {
+      if (printer) {
+        emit printerChosen(key);
+      } else {
+        emit processChosen(key);
+      }
+    }
+  });
+  return box;
+}
+
 void MakeBodyCard::rebuild() {
   // A field that had the keyboard goes with the rows: the keyboard goes
   // back to the window, whose shortcuts (Undo) then work.
@@ -174,10 +237,28 @@ void MakeBodyCard::rebuild() {
   m_removes.clear();
   m_icons.clear();
   m_add = nullptr;
-  m_material = nullptr;
+  m_printer = nullptr;
   m_process = nullptr;
+  m_material = nullptr;
   setTitle(tr("Make: %1").arg(m_data.body));
   int row = 0;
+
+  // From the widest choice to the body's own (mitcad#1239): the printer,
+  // the process, the material, then the values.
+  // The printer: chosen for the whole design (its root), its icon the
+  // level's that chose it.
+  m_grid->addWidget(levelIcon(m_data.printerLevel, m_data.printerOwner), row, 0);
+  m_grid->addWidget(new QLabel(tr("Printer"), this), row, 1);
+  m_printer = profilePicker(QStringLiteral("printer"), m_data.printers, m_data.printerId, m_data.printer);
+  m_printer->setToolTip(tr("The printer of the whole design, for every body"));
+  m_grid->addWidget(m_printer, row++, 2, 1, 2);
+
+  // The process profile, chosen for the body.
+  m_grid->addWidget(levelIcon(m_data.processLevel, m_data.processOwner), row, 0);
+  m_grid->addWidget(new QLabel(tr("Process"), this), row, 1);
+  m_process = profilePicker(QStringLiteral("process"), m_data.processes, m_data.processId, m_data.process);
+  m_process->setToolTip(tr("The process profile the body prints with; another one is chosen for the body"));
+  m_grid->addWidget(m_process, row++, 2, 1, 2);
 
   // The material, chosen from the design's materials.
   m_grid->addWidget(levelIcon(m_data.materialLevel == QLatin1String("default") ? QString() : m_data.materialLevel,
@@ -207,48 +288,6 @@ void MakeBodyCard::rebuild() {
     }
   });
   m_grid->addWidget(m_material, row++, 2, 1, 2);
-
-  // The printer: chosen for the whole design (its root), shown here.
-  m_grid->addWidget(levelIcon(m_data.printerLevel, m_data.printerOwner), row, 0);
-  m_grid->addWidget(new QLabel(tr("Printer"), this), row, 1);
-  auto* printer = new QLabel(m_data.printer, this);
-  printer->setObjectName(QStringLiteral("makeCardPrinter"));
-  printer->setWordWrap(true);
-  printer->setToolTip(tr("The design's printer: the Printers manager (Make › 3D Print) changes it"));
-  m_grid->addWidget(printer, row++, 2, 1, 2);
-
-  // The process profile, chosen for the body.
-  m_grid->addWidget(levelIcon(m_data.processLevel, m_data.processOwner), row, 0);
-  m_grid->addWidget(new QLabel(tr("Process"), this), row, 1);
-  m_process = new QComboBox(this);
-  m_process->setObjectName(QStringLiteral("makeCardProcess"));
-  fitToCard(m_process);
-  m_process->setToolTip(tr("The process profile the body prints with; another one is chosen for the body"));
-  {
-    const QSignalBlocker blocker(m_process);
-    if (m_data.processId.isEmpty()) {
-      m_process->addItem(m_data.process, QString());
-    }
-    // Under their printers' headings, the body's printer's first
-    // (mitcad#1216).
-    QString heading;
-    for (int i = 0; i < m_data.processes.size(); ++i) {
-      const QString group = i < m_data.processGroups.size() ? m_data.processGroups.at(i) : QString();
-      if (!group.isEmpty() && group != heading) {
-        addComboHeading(m_process, group);
-        heading = group;
-      }
-      m_process->addItem(m_data.processes.at(i).second, m_data.processes.at(i).first);
-    }
-    m_process->setCurrentIndex(std::max(0, m_process->findData(m_data.processId)));
-  }
-  connect(m_process, &QComboBox::activated, this, [this](int index) {
-    const QString id = m_process->itemData(index).toString();
-    if (!id.isEmpty() && id != m_data.processId && !id.startsWith(choiceHeadingPrefix())) {
-      emit processChosen(id);
-    }
-  });
-  m_grid->addWidget(m_process, row++, 2, 1, 2);
 
   // The values that differ from the profiles, each with its level's icon;
   // a value typed is set on the body. A value set on the body has a remove
@@ -332,12 +371,33 @@ QStringList MakeBodyCard::places() const {
   if (!isVisible()) {
     return lines;
   }
-  if (m_material != nullptr) {
-    lines << QStringLiteral("Make card material at %1").arg(at(m_material));
+  if (m_printer != nullptr) {
+    lines << QStringLiteral("Make card printer at %1").arg(at(m_printer));
   }
   if (m_process != nullptr) {
     lines << QStringLiteral("Make card process at %1").arg(at(m_process));
   }
+  if (m_material != nullptr) {
+    lines << QStringLiteral("Make card material at %1").arg(at(m_material));
+  }
+  // The rows' names as laid out, from the top (mitcad#1239): the labels of
+  // the name column, not a line across the card.
+  QStringList names;
+  for (int row = 0; row < m_grid->rowCount(); ++row) {
+    QLayoutItem* item = m_grid->itemAtPosition(row, 1);
+    const auto* label = item != nullptr ? qobject_cast<const QLabel*>(item->widget()) : nullptr;
+    int top = 0;
+    int column = 0;
+    int rows = 0;
+    int columns = 0;
+    if (label != nullptr) {
+      m_grid->getItemPosition(m_grid->indexOf(item->widget()), &top, &column, &rows, &columns);
+    }
+    if (label != nullptr && column == 1) {
+      names << label->text();
+    }
+  }
+  lines << QStringLiteral("Make card rows: %1").arg(names.join(QStringLiteral(", ")));
   for (auto it = m_fields.cbegin(); it != m_fields.cend(); ++it) {
     lines << QStringLiteral("Make card value %1 at %2").arg(it.key(), at(it.value()));
     lines << QStringLiteral("Make card value %1 icon %2").arg(it.key(), m_icons.value(it.key()));

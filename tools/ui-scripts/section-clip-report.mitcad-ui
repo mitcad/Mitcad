@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+# A section that shows a body whole because its clip failed is reported
+# (mitcad#1230), on section-clip-report.json: Body1 (F2.b0) 20 x 20 x 20,
+# Body2 (F4.b0) at x = 30, Section1 at x = 10 shown, Beyond at x = 30
+# hidden. MITCAD_TEST_SECTION_CLIP_FAIL=F2.b0 makes the clips that cut
+# Body1 fail (Body2 is removed whole: no cut, no failure).
+#   1. Section1 shows Body1 whole: the warning once, in the message band
+#      and the status line, the error in the message history; Section1's
+#      row in the Analysis folder in the warning's colour, the warning and
+#      the error in its tooltip.
+#   2. A redraw with the same failed body does not repeat the warning.
+#   3. Hiding Section1 withdraws the warning and the row's note.
+#   4. Edited in the Section Analysis panel, the panel's section reports
+#      it as Section1's; moved to x = 30 the plane cuts nothing: the panel's
+#      status line says so and the warning goes.
+#   5. Beyond shown: its plane cuts no shown body, and its row's tooltip
+#      says so.
+# Run by tools/ui-section-clip-report-test.sh (Linux) and
+# tools/ui-windows-section-clip-report-test.ps1 (Windows).
+wait-idle 60
+
+# 1. The warning, the history and the row.
+wait-log '^Section clip warning: Section1 could not cut Body1; it is shown whole\.$' 60
+expect-ever '^Section: F2\.b0 shown whole: the clip failed for the test'
+expect-ever '^Message band: info Section1: Body1 shown whole: the clip failed for the test'
+expect-ever '^Message band full: warning Section1 could not cut Body1; it is shown whole\.$'
+expect-ever '^Status warning: Section1 could not cut Body1; it is shown whole\.$'
+wait-log '^Browser analysis note Root/Analysis/Section1: warning Section1 could not cut Body1; it is shown whole\. \| Body1: the clip failed for the test'
+wait-log '^Browser row colours: .*warning #[0-9a-f]{6}: [^;]*Root/Analysis/Section1'
+expect-never 'could not cut .*Body2'
+
+# 2. Body2 hidden: the bodies are drawn again, Body1 still whole, and the
+# warning is not posted again.
+mark
+model-command '{"cmd":"set_body_visible","uid":"F4.b0","visible":false}'
+wait-log '^Bodies shown: F2\.b0$'
+wait-idle
+expect-no-log '^Section clip warning'
+expect-no-log '^Message band: warning Section1 could not cut'
+
+# 3. Section1 hidden: the warning is withdrawn, the row's note goes.
+mark
+command inspect.remove_section
+wait-log '^Section analysis off$'
+wait-log '^Section clip warning cleared: Section1 could not cut Body1; it is shown whole\.$'
+wait-log '^Browser analysis note Root/Analysis/Section1: none$'
+expect-no-log '^Message band full: warning Section1 could not cut'
+
+# 4. The Section Analysis panel's own section, editing Section1.
+mark
+context-menu-logged '^Browser Root/Analysis/Section1 at ' 'Edit Section Analysis'
+wait-log '^Editing analysis Section1 with Section Analysis'
+wait-log '^Section clip warning: Section1 could not cut Body1; it is shown whole\.$' 30
+mark
+type-in '^Panel Section Analysis input offset at ' '30 mm'
+wait-log '^Inspect Section Analysis: The plane is beyond the bodies: it cuts nothing\.$' 30
+wait-log '^Section clip warning cleared: Section1 could not cut Body1; it is shown whole\.$'
+mark
+key Escape
+wait-log '^Command Section Analysis cancelled'
+wait-idle
+expect-no-log '^Section clip warning: '
+
+# 5. Beyond shown: no body cut, the row's tooltip says so; no warning.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Beyond","visible":true}'
+wait-log '^Browser analysis note Root/Analysis/Beyond: info The plane does not cut any shown body\.$' 30
+expect-no-log '^Section clip warning: '
+expect-never 'TestDriver: FAIL'

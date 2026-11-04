@@ -1400,7 +1400,12 @@ them through operations and derives edge names.
   differs between platforms, decides no number (mitcad#490). The numbers
   start at the pieces' count; the pieces whose number of the earlier
   order (centres of mass in X, Y, Z) held on every platform keep that name
-  too, and the old names of the other pieces find no face.
+  too, and the old names of the other pieces find no face. Each piece is
+  also named by its place from the nearer end of the face,
+  `low_thread(<face>)#k` or `high_thread(<face>)#k` (mitcad#1231); these
+  names sort first, so the edges at the thread's ends keep their names
+  when its piece count changes, and an edge saved with a number along the
+  thread finds the end's edge again (`core/model/src/features/renamed.rs`).
 - **Edge:** `E{<face A>|<face B>}` (sorted), `#k` when the same faces meet
   more than once; a seam has the same face twice. **Vertex:** the set of
   faces meeting at it, `#k` likewise. Sorting is byte-wise in both
@@ -1861,7 +1866,11 @@ not recompute.
   faces a command or preview left untouched from the bodies as shown
   (`io::reuse_triangulations`: the same surface, curves, parameter curves,
   ranges and end points; nothing cached between jobs), so only the changed
-  faces are meshed. Opening a design with the result store
+  faces are meshed. A copied triangulation's nodes are moved into the new
+  face's frame (a prism's top is its base's face placed by the face's
+  location, a boolean's rebuilt top by its surface's, mitcad#1243), and a
+  copy that does not then lie on the face (`io::triangulation_on_face`) is
+  not taken: the face is meshed. Opening a design with the result store
   (`meshOpenedForDisplay`, mitcad#858) first gives each shown body whose
   shape's version has display triangulations stored with the final
   tier's options its faces' triangulations and edge polygons back
@@ -2730,8 +2739,9 @@ rename is retried for up to 2 s while another program holds the file
 
 ### Version history
 
-`core/vcs`, gitoxide (`gix =0.88.0`, default features off: only `sha1`
-and `index`; a default feature pulls in an MPL-2.0 crate). No gix types
+`core/vcs`, gitoxide (`gix =0.88.0`, default features off: only `sha1`,
+`index` and `blocking-http-transport-reqwest` for libraries over HTTPS,
+mitcad#1224; a default feature pulls in an MPL-2.0 crate). No gix types
 in the crate's API. JSON commands: [commands.md](../core/model-api/src/commands.md)
 ("Version history").
 
@@ -2788,7 +2798,8 @@ preview in the user's local app data, `thumbnails/<blob id>.png`.
 
 ### Remote repositories
 
-gix has no push or checkout, so network operations run the system's git
+gix has no push or checkout, so the network operations of projects run
+the system's git (component libraries over `https://` excepted, below)
 (`core/vcs/src/remote/cli.rs`; `MITCAD_GIT`, else `PATH`, on Windows also
 Git for Windows' usual folders; 2.34+): `ls-remote`, `fetch`, `push`,
 `clone`, `merge --ff-only`. TLS, SSH and credentials are git's (SSH
@@ -3256,9 +3267,16 @@ expressions). Formats: [libraries.md](libraries.md).
   are shortened in missing-version messages.
 - **Cache** (`core/vcs/src/library/`): bare clones in the user's data
   folder, one per URL (`<name>-<8 hex of the URL's SHA-256>.git`), made
-  and updated by the system's git (`clone --bare`, `fetch` of branches
-  and tags; `transfer.fsckObjects`, `gc.auto=0` so versions designs use
-  stay) only on request; read with gix's isolated options (no user or
+  and updated only on request: `https://` and `http://` by gix's own
+  client without the git program (`core/vcs/src/remote/https.rs`,
+  mitcad#1224: reqwest with rustls, ring installed as the process's
+  crypto provider, the system's roots through rustls-platform-verifier;
+  no credentials, no helpers; the fetch on a thread of its own, its
+  progress and Cancel through `Control`), folders, `file://` and, with
+  the setting Use the installed git program (`use_git`), every address
+  by the system's git (`clone --bare`, `fetch` of branches and tags;
+  `transfer.fsckObjects`, `gc.auto=0` so versions designs use stay); SSH
+  addresses need that setting; read with gix's isolated options (no user or
   system git configuration). A part is read from the clone of its URL,
   else from any clone that has its commit with the library's id. Library
   content is data: no hooks or filters run, manifests and files have

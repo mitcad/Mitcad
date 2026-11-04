@@ -802,10 +802,24 @@ private:
     QStringList keys;
   };
   // A body clipped at the plane of the kept clips: the body's shape that
-  // was clipped and what is left (null when its clip failed).
+  // was clipped and what is left (null when its clip failed, with its
+  // error).
   struct SectionClip {
     std::shared_ptr<geometry::Shape> source;
     std::shared_ptr<geometry::Shape> shape;
+    QString error;
+  };
+  // What the plane did to the bodies shown at it last (mitcad#1230), as
+  // displayBodies found them: the bodies whose clip failed (shown whole),
+  // by uid with their errors, and how many it cut, kept whole and removed
+  // whole.
+  struct SectionOutcome {
+    QJsonValue plane;
+    QStringList failed;
+    QStringList errors;
+    int cut = 0;
+    int kept = 0;
+    int removed = 0;
   };
   // The panel's measurement, waiting for the view's clips, then for its
   // round (posted).
@@ -818,12 +832,30 @@ private:
   };
   // The clips kept for the plane last clipped (by key), for every way the
   // bodies are shown at that plane again (visibility, the round's own
-  // display), and the measurement asked for.
+  // display), the measurement asked for and what the plane did to the
+  // bodies last shown.
   struct SectionState {
     QJsonValue plane;
     QHash<QString, SectionClip> clips;
     std::optional<SectionMeasurement> measurement;
     quint64 measurements = 0;
+    SectionOutcome outcome;
+  };
+  // The warning of the shown section's failed clips (mitcad#1230), once
+  // per section and set of failed bodies: posted (the message band, the
+  // status line), with each body's error in the message history, when the
+  // set changes; withdrawn when the section is hidden or cuts them again.
+  // The kept analysis' row in the browser's Analysis folder shows it too,
+  // or that its plane cuts no shown body. Called by showBodies.
+  void reportSectionClips();
+  // The name the warning gives the section shown: the kept analysis', the
+  // Section Analysis panel's (the analysis it edits) or Hide Above Sketch.
+  QString shownSectionName() const;
+  // The section warning reported (`key`: the section and its failed
+  // bodies with their errors; `text`: the warning posted).
+  struct SectionReport {
+    QString key;
+    QString text;
   };
   // modelBodies, or with `unclipped`, the bodies before their clip with
   // what the plane cuts (no face looks).
@@ -1477,6 +1509,7 @@ private:
   QJsonValue& m_section = m_documentSession->state().section;
   SectionWorker* m_sectionWorker = nullptr; // mitcad#438
   mutable SectionState m_sectionState;
+  SectionReport m_sectionReport; // mitcad#1230
   QString m_loggedCaps;       // the section caps last logged
   QString m_loggedReach;      // how far the bodies reach in front of the sketch, last logged
   QString m_loggedThreads = QStringLiteral("Cosmetic threads shown: 0"); // as last logged
@@ -1650,11 +1683,16 @@ private:
   void exportFaceDxf();
   // The selected body's card on the Make tab: made with the idle page,
   // shown and filled by updateMakeCard (logged "Make card: <summary>" or
-  // "Make card: none"); its edits set the material, the process or a print
-  // value on the body, one undo step each.
+  // "Make card: none"); its edits set the design's printer, or the
+  // material, the process or a print value on the body, one undo step
+  // each.
   MakeBodyCard* createMakeCard();
   void updateMakeCard();
   void setMakeCardMaterial(const QString& id);
+  // The card's printer (`kind` printer: the design's, on its root) or
+  // process (the body's) chosen by its picker key (mitcad#1239), a
+  // library's copied into the design in the same undo step.
+  void setMakeCardProfile(const QString& kind, const QString& key);
   void setMakeCardProperty(const QString& set, const QString& key, const QJsonValue& value, const QString& plain,
                            const QString& shown);
   void setMakeCardValue(const QString& set, const QString& key, const QString& typed);

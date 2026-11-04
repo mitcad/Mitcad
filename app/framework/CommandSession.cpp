@@ -173,6 +173,21 @@ QString warningsLog(const QStringList& warnings) {
   return warnings.isEmpty() ? QString() : QStringLiteral(", warning: ") + warnings.join(QStringLiteral("; "));
 }
 
+// A sketch command's `notes` (mitcad#1234: the curves of an offset that
+// vanish at its distance), information beside the warnings.
+QStringList answerNotes(const QJsonObject& answer) {
+  QStringList notes;
+  for (const QJsonValue& note : answer.value(QStringLiteral("notes")).toArray()) {
+    notes << note.toString();
+  }
+  return notes;
+}
+
+// Notes for a preview's log line: ", note: a; b", or nothing.
+QString notesLog(const QStringList& notes) {
+  return notes.isEmpty() ? QString() : QStringLiteral(", note: ") + notes.join(QStringLiteral("; "));
+}
+
 } // namespace
 
 CommandSession::CommandSession(const CommandDef& def, CommandHost& host, const QString& editUid,
@@ -3119,7 +3134,9 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
     // What the command says the user is to know before keeping it
     // (Clean Up Projections, mitcad#232), not in red.
     const QStringList warnings = answerWarnings(answer);
-    QStringList shown = warnings;
+    // Then the model's notes (mitcad#1234: what of an offset vanishes).
+    const QStringList notes = answerNotes(answer);
+    QStringList shown = warnings + notes;
     // The command's own values first, as a feature's (mitcad#656: Belt
     // Drive's belt).
     if (m_def.note) {
@@ -3134,7 +3151,7 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
     m_presenter->setMessage(shown.join(QLatin1Char('\n')),
                             warnings.isEmpty() ? NoticeLevel::Information : NoticeLevel::Warning);
     m_host.showHint(selectionHint(tr("%1: Enter to confirm, Esc to cancel.").arg(m_def.name)));
-    qDebug().noquote() << QStringLiteral("Preview %1: ok%2").arg(m_def.name, warningsLog(warnings));
+    qDebug().noquote() << QStringLiteral("Preview %1: ok%2%3").arg(m_def.name, warningsLog(warnings), notesLog(notes));
   } else {
     m_presenter->setMessage(problem, NoticeLevel::Error);
     qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, problem);
@@ -3610,18 +3627,22 @@ void CommandSession::showSketchPreviewAsync(const Built& built) {
         // A sketch command's warnings (mitcad#232): warnings, amber with
         // their icon (mitcad#1040), not in red.
         const QStringList warnings = result.succeeded() ? answerWarnings(result.answer) : QStringList();
+        // Its notes as information (mitcad#1234: what of an offset vanishes).
+        const QStringList notes = result.succeeded() ? answerNotes(result.answer) : QStringList();
         const NoticeLevel level = result.cancelled ? NoticeLevel::Information
                                   : !m_previewOk   ? NoticeLevel::Error
-                                  : warnings.isEmpty() ? NoticeLevel::Hint
-                                                       : NoticeLevel::Warning;
+                                  : !warnings.isEmpty() ? NoticeLevel::Warning
+                                  : notes.isEmpty()     ? NoticeLevel::Hint
+                                                        : NoticeLevel::Information;
         m_presenter->setMessage(result.cancelled ? tr("Preview canceled; change an input to preview again.")
-                                                 : (m_previewOk ? warnings.join(QLatin1Char('\n')) : result.error),
+                                                 : (m_previewOk ? (warnings + notes).join(QLatin1Char('\n'))
+                                                                : result.error),
                                 level);
         m_presenter->setOkEnabled(m_previewOk);
         updateHighlights();
         qDebug().noquote() << QStringLiteral("Preview %1: %2").arg(m_def.name,
             result.cancelled ? QStringLiteral("cancelled")
-                             : (m_previewOk ? QStringLiteral("ok") + warningsLog(warnings)
+                             : (m_previewOk ? QStringLiteral("ok") + warningsLog(warnings) + notesLog(notes)
                                             : QStringLiteral("failed: ") + result.error));
         resumePendingCommit();
       };

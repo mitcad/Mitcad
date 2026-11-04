@@ -14,8 +14,10 @@
 #   2. Send to Slicer's Process picker: Bench Y's processes first (the
 #      design's printer), Shared among them, then Bench X's, then Any
 #      printer; with Bench X chosen in the Printer picker, Bench X's first.
-#   3. The Make tab's body card: its Process drop-down under the printers,
-#      the body's printer (Bench X now) first.
+#   3. The Make tab's body card: its Process picker under the printers,
+#      the body's printer (Bench X now) first; the libraries' processes
+#      for any printer (the built-in ones, where this computer has them)
+#      after Draft (mitcad#1239).
 wait-idle
 window-resize 1280 860
 focus-main
@@ -94,6 +96,6 @@ expect-log 'Ribbon tab shown: MAKE'
 mark
 click-logged '^Browser Root/Bodies/Body1 at '
 expect-log 'Make card: Body1: material '
-expect-log 'Make card processes: Bench X: 0\.12mm Fine @Bench X, 0\.20mm Standard @Bench X, Shared \| Bench Y: 0\.16mm Optimal @Bench Y, Strong \| Any printer: Draft$'
+expect-log 'Make card processes: Bench X: 0\.12mm Fine @Bench X, 0\.20mm Standard @Bench X, Shared \| Bench Y: 0\.16mm Optimal @Bench Y, Strong \| Any printer: Draft(, .+)?$'
 key Escape
 expect-never 'TestDriver: FAIL'

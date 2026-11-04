@@ -32,6 +32,7 @@
 
 #include "browser/DocumentSnapshot.hpp"
 #include "browser/TimelineSearch.hpp"
+#include "commands/SketchConstraintKeys.hpp"
 #include "files/CloudAddress.hpp"
 #include "files/Print3d.hpp"
 #include "framework/Cursors.hpp"
@@ -502,6 +503,99 @@ void shortcutContextTests() {
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);
   QSettings::setDefaultFormat(format);
+}
+
+// The sketch constraints' keys (mitcad#1229): twelve different Shift and
+// letter keys, in sketches only, beside the plain letters of the sketch
+// tools, the model's keys, Add Comment's Shift+N and the reserved keys.
+// app.default_shortcuts (main.cpp) checks the registered defaults
+// of the whole application.
+void sketchConstraintShortcutTests() {
+  using namespace mitcad;
+  const auto make = [](const QString& id, unsigned contexts, const QKeySequence& key) {
+    return ShortcutBinding{id, id, contexts, key, key, {}, false};
+  };
+  struct Expected {
+    const char* type;
+    const char* key;
+  };
+  static const Expected table[] = {
+      {"horizontal_vertical", "Shift+V"}, {"coincident", "Shift+C"}, {"tangent", "Shift+T"},
+      {"equal", "Shift+E"},               {"parallel", "Shift+P"},   {"perpendicular", "Shift+R"},
+      {"fix", "Shift+F"},                 {"midpoint", "Shift+M"},   {"concentric", "Shift+O"},
+      {"collinear", "Shift+L"},           {"symmetric", "Shift+S"},  {"smooth", "Shift+G"},
+  };
+  QList<ShortcutBinding> bindings = fixedShortcutBindings();
+  QSet<QString> distinct;
+  for (const Expected& expected : table) {
+    const QKeySequence key = sketchConstraintShortcut(QString::fromLatin1(expected.type));
+    CHECK(key.toString(QKeySequence::PortableText) == QLatin1String(expected.key));
+    CHECK(key.count() == 1 && key[0].keyboardModifiers() == Qt::ShiftModifier);
+    distinct.insert(key.toString(QKeySequence::PortableText));
+    bindings.append(make(QStringLiteral("sketch.constraint.") + QLatin1String(expected.type), SketchShortcutContext,
+                         key));
+  }
+  CHECK(distinct.size() == 12);
+  // Equal Spacing is a panel without a key; an unknown name has none.
+  CHECK(sketchConstraintShortcut(QStringLiteral("equal_spacing")).isEmpty());
+  CHECK(sketchConstraintShortcut(QStringLiteral("horizontal")).isEmpty());
+  // The plain letters of the sketch tools (Line, Rectangle, Circle,
+  // Dimension, Trim, Construction, Offset, Project, Move/Copy), the
+  // profile features that live in sketches too (Extrude, Revolve), the
+  // model's own letters, Command Search's S everywhere, Create Sketch's
+  // Alt+S and Add Comment's Shift+N in the model.
+  for (const char letter : {'L', 'R', 'C', 'D', 'T', 'X', 'O', 'P', 'M'}) {
+    const Qt::Key key = static_cast<Qt::Key>(Qt::Key_A + (letter - 'A'));
+    bindings.append(
+        make(QStringLiteral("sketch.tool.") + QLatin1Char(letter), SketchShortcutContext, QKeySequence(key)));
+  }
+  for (const char letter : {'E', 'Q'}) {
+    const Qt::Key key = static_cast<Qt::Key>(Qt::Key_A + (letter - 'A'));
+    bindings.append(make(QStringLiteral("solid.profile.") + QLatin1Char(letter),
+                         ModelShortcutContext | SketchShortcutContext, QKeySequence(key)));
+  }
+  for (const char letter : {'F', 'H', 'I', 'J', 'M'}) {
+    const Qt::Key key = static_cast<Qt::Key>(Qt::Key_A + (letter - 'A'));
+    bindings.append(
+        make(QStringLiteral("solid.model.") + QLatin1Char(letter), ModelShortcutContext, QKeySequence(key)));
+  }
+  bindings.append(make(QStringLiteral("tools.search"), AllShortcutContexts, QKeySequence(Qt::Key_S)));
+  bindings.append(make(QStringLiteral("sketch.create"), ModelShortcutContext, QKeySequence(Qt::ALT | Qt::Key_S)));
+  bindings.append(make(QStringLiteral("comment.add"), ModelShortcutContext, QKeySequence(Qt::SHIFT | Qt::Key_N)));
+  CHECK(shortcutConflicts(bindings).isEmpty());
+  // A model command's saved Shift+C (tools/ui-command-test.sh gives
+  // Chamfer one) meets Coincident nowhere...
+  {
+    QList<ShortcutBinding> withChamfer = bindings;
+    ShortcutBinding chamfer = make(QStringLiteral("solid.chamfer"), ModelShortcutContext, QKeySequence());
+    chamfer.primary = QKeySequence(Qt::SHIFT | Qt::Key_C);
+    withChamfer.append(chamfer);
+    CHECK(shortcutConflicts(withChamfer).isEmpty());
+  }
+  // ...a command that lives in sketches too does, there.
+  {
+    QList<ShortcutBinding> withProfile = bindings;
+    withProfile.append(make(QStringLiteral("solid.revolve"), ModelShortcutContext | SketchShortcutContext,
+                            QKeySequence(Qt::SHIFT | Qt::Key_P)));
+    const QList<ShortcutConflict> conflicts = shortcutConflicts(withProfile);
+    CHECK(conflicts.size() == 1);
+    CHECK(!conflicts.isEmpty() && conflicts.front().contexts == SketchShortcutContext &&
+          conflicts.front().description().contains(QStringLiteral(" in a sketch. ")));
+  }
+  // A sketch tool with the key has it in sketches only.
+  {
+    CommandRegistry registry;
+    CommandDef def;
+    def.id = QStringLiteral("sketch.constraint.parallel");
+    def.name = QStringLiteral("Parallel");
+    def.kind = CommandDef::Kind::Tool;
+    def.mode = CommandDef::Mode::Sketch;
+    def.shortcut = sketchConstraintShortcut(QStringLiteral("parallel"));
+    registry.add(def);
+    CHECK(registry.shortcutContexts(def.id) == unsigned(SketchShortcutContext));
+    CHECK(registry.defaultShortcut(def.id) == QKeySequence(Qt::SHIFT | Qt::Key_P));
+    CHECK(registry.defaultShortcutConflicts().isEmpty());
+  }
 }
 
 // Numbers typed with a decimal comma or point (mitcad#2).
@@ -2710,6 +2804,7 @@ int main(int argc, char* argv[]) {
     workerThreadStartTests();
     shortcutBindingTests();
     shortcutContextTests();
+    sketchConstraintShortcutTests();
     numberTests();
     cursorTests();
     printTests();

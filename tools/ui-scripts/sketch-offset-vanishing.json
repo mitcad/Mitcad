@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Sketch Offset where corner arcs vanish (mitcad#1234): two free points that frame the view's fit (p1, p2) and a regular hexagon of circumradius 20 about the origin, its sides counter-clockwise from (20, 0) (c3 from p4 to p5, c6 to p7, c8 to p9, c10 to p11, c12 to p13, c14 back to p4), its six corners rounded with 2 mm arcs by one Sketch Fillet."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[20,0],"end":[10,17.320508075688775]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p5","end":[-10,17.320508075688775]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p7","end":[-20,0]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p9","end":[-10,-17.320508075688775]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p11","end":[10,-17.320508075688775]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p13","end":"p4"},
+  {"cmd":"sketch.fillet","sketch":"F1","points":["p4","p5","p7","p9","p11","p13"],"radius":2}
+]

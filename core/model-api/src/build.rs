@@ -259,12 +259,19 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
             }
             BuildCommand::BuildPanel(input) => placed_json(&self.build_panel(&input)?),
             BuildCommand::BuildRemove { component, set } => {
+                let before = self.state().clone();
                 let removed = self.build_remove_with(&component, set)?;
-                json!({"removed": {
+                let mut reply = json!({"removed": {
                     "components": removed.components,
                     "features": removed.features,
                     "detached": removed.detached,
-                }})
+                }});
+                // The cut-scope exclusions it dropped (mitcad#1236).
+                let dropped = self.state().dropped_exclusions(&before);
+                if !dropped.is_empty() {
+                    reply["notices"] = mitcad_model::notice::to_json(&dropped);
+                }
+                reply
             }
             BuildCommand::BuildSwapFasteners(input) => {
                 let swapped = self.build_swap_fasteners(&input)?;

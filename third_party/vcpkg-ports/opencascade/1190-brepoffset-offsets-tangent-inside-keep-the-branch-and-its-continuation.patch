@@ -44,7 +44,8 @@ hundredths of a millimetre in the extension up to the end, are left out.
 Only where the crease's faces are tangent at one end of the edge and not
 at its middle and the intersection gave more than one piece; a single edge
 that runs on along the branch itself is left as it is. Where the tangency
-lies further past the end, 1130 is unchanged.
+lies further past the end and the main branch reaches the end plane,
+1130 is unchanged.
 
 BRepOffset_MakeLoops substitutes vertices (myVerVerMap) and gives the new
 one the old one's points on the edges' curves, which may lie further from
@@ -70,6 +71,17 @@ the loft splits (a square to a circle of radius 10, its seam on a side,
 shelled 1 mm through the geometry facade) stopped 8 % of the offset short
 of it on Windows, and the inner wall came out with a wire the wrong way
 round; on Linux it passed.
+
+An outward loft can need the same continuation when the pave filler stops
+its main branch before the removed end: the octagon to radius 21.7 with
+its circle seam at 22.5 degrees, shelled 0.5 mm. On macOS the branch
+stopped 0.08229064 mm before the end plane while the tangency lay
+0.01750246 mm past it. Leaving all crossings then produced no inner
+walls, and MakeThickSolid reported UnknownError. Join the continuation
+also when the main branch does not reach the end; its near piece may use
+the same 20 % neighbourhood as the continuation. The existing validity,
+wall-distance, rim, volume and closed-offset checks remain unchanged.
+
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 +++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
@@ -220,7 +232,7 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
    {
      return;
    }
-@@ -1612,11 +1629,293 @@
+@@ -1612,11 +1629,303 @@
        aMain       = i;
      }
    }
@@ -243,7 +255,11 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +  // and past the tangency.
 +  const double aNear = 0.05 * aOffsetDist;
 +  const double aStep = 0.01 * aOffsetDist;
-+  if (aStep > Precision::Confusion() && gp_Vec(aPEnd, aPQ).Dot(aEndNormal) <= aStep)
++  // The pave filler may stop the main branch before the removed end even
++  // when the tangency lies past it. Join its continuation then, too:
++  // leaving all crossings there loses the inner walls (the octagon-to-circle shell).
++  if (aStep > Precision::Confusion()
++      && (gp_Vec(aPEnd, aPQ).Dot(aEndNormal) <= aStep || aMainBeyond <= Precision::Confusion()))
 +  {
 +    // The tangency inside the solid or on its end: the branch along the edge
 +    // up to the tangency and its continuation past it, as one edge.
@@ -292,6 +308,12 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
 +    const TopoDS_Edge&             aMainE   = TopoDS::Edge(TrueEdges(aMain));
 +    double                         aMainFar = 0.;
 +    occ::handle<Geom_BSplineCurve> aB1      = aPiece(aMainE, true, aMainFar, aNear);
++    // The main branch may have the same gap as the continuation: use its
++    // existing 20 % neighbourhood before giving up on this intersection.
++    if (aB1.IsNull())
++    {
++      aB1 = aPiece(aMainE, true, aMainFar, 4. * aNear);
++    }
 +    if (aB1.IsNull() || aMainFar <= aNear)
 +    {
 +      return;
@@ -517,7 +539,7 @@ diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/sr
    {
      return;
    }
-@@ -1716,7 +2015,44 @@
+@@ -1716,7 +2025,44 @@
    if (!RefEdge.IsNull())
    {
      CheckIntersFF(aPF.PDS(), RefEdge, TrueEdges);

@@ -1230,8 +1230,9 @@ fn add_segment(
 fn band(path: &SubPath, width: f64) -> Result<Vec<Made>, String> {
     let sources: Vec<(Curve2, bool)> = path.segments.iter().map(curve_of).collect();
     let half = width / 2.0;
-    let right = offset::compute(&sources, half, path.closed, None)?;
-    let left = offset::compute(&sources, -half, path.closed, None)?;
+    let name = |i: usize| format!("segment {}", i + 1);
+    let right = offset::compute(&sources, half, path.closed, None, &name)?;
+    let left = offset::compute(&sources, -half, path.closed, None, &name)?;
     let mut made: Vec<Made> = Vec::new();
     for side in [&right, &left] {
         made.extend(side.made.iter().cloned());

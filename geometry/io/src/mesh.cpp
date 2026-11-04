@@ -1471,12 +1471,21 @@ bool polygons_of(const TopoDS_Edge& edge, const occ::handle<Poly_Triangulation>&
 
 // A copy of what a triangulation holds of the face (nodes, parameters,
 // triangles, deviation), without the normals a presentation may be adding
-// to the original meanwhile.
-occ::handle<Poly_Triangulation> copy_triangulation(const occ::handle<Poly_Triangulation>& source) {
+// to the original meanwhile, its nodes moved by `move` (from the donor
+// face's frame to the target's, mitcad#1243). Null for a move that mirrors
+// or scales: the copy's triangles would turn the other way round, or its
+// deviation would not be the donor's.
+occ::handle<Poly_Triangulation> copy_triangulation(const occ::handle<Poly_Triangulation>& source,
+                                                   const TopLoc_Location& move) {
+  const bool moved = !move.IsIdentity();
+  const gp_Trsf trsf = moved ? move.Transformation() : gp_Trsf();
+  if (moved && (trsf.IsNegative() || std::abs(std::abs(trsf.ScaleFactor()) - 1.0) > 1e-12)) {
+    return occ::handle<Poly_Triangulation>();
+  }
   occ::handle<Poly_Triangulation> copy =
       new Poly_Triangulation(source->NbNodes(), source->NbTriangles(), source->HasUVNodes(), false);
   for (int i = 1; i <= source->NbNodes(); ++i) {
-    copy->SetNode(i, source->Node(i));
+    copy->SetNode(i, moved ? source->Node(i).Transformed(trsf) : source->Node(i));
     if (source->HasUVNodes()) {
       copy->SetUVNode(i, source->UVNode(i));
     }
@@ -1489,8 +1498,73 @@ occ::handle<Poly_Triangulation> copy_triangulation(const occ::handle<Poly_Triang
   return copy;
 }
 
+// How many nodes of a triangulation triangulation_lies_on checks at most
+// (spread over them, and the last).
+constexpr int kCheckedNodes = 64;
+
+// Whether a triangulation, given to the face, lies on it: each node checked
+// (kCheckedNodes), placed by the face's location as the view places it, on
+// the face's surface at the node's parameters, within twice the largest
+// tolerance of the face, its edges and its vertices (an edge's nodes lie
+// on its curve); a triangulation without parameters, its nodes inside the
+// face's bounds so widened. One without nodes or triangles does not.
+bool triangulation_lies_on(const TopoDS_Face& face, const Poly_Triangulation& triangulation) {
+  const int nodes = triangulation.NbNodes();
+  if (nodes <= 0 || triangulation.NbTriangles() <= 0) {
+    return false;
+  }
+  double tolerance = std::max(BRep_Tool::Tolerance(face), Precision::Confusion());
+  for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+    tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Edge(it.Current())));
+  }
+  for (TopExp_Explorer it(face, TopAbs_VERTEX); it.More(); it.Next()) {
+    tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Vertex(it.Current())));
+  }
+  tolerance *= 2.0;
+  std::vector<int> checked;
+  const int step = std::max(1, nodes / kCheckedNodes);
+  for (int i = 1; i <= nodes; i += step) {
+    checked.push_back(i);
+  }
+  if (checked.back() != nodes) {
+    checked.push_back(nodes);
+  }
+  if (triangulation.HasUVNodes()) {
+    TopLoc_Location placed;
+    const occ::handle<Geom_Surface>& surface = BRep_Tool::Surface(face, placed);
+    if (surface.IsNull()) {
+      return false;
+    }
+    // The surface's points in the triangulation's frame, the face's.
+    const gp_Trsf to_nodes = placed.Predivided(face.Location()).Transformation();
+    for (const int i : checked) {
+      const gp_Pnt2d uv = triangulation.UVNode(i);
+      const gp_Pnt on = surface->Value(uv.X(), uv.Y()).Transformed(to_nodes);
+      if (!(on.Distance(triangulation.Node(i)) <= tolerance)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  Bnd_Box bounds;
+  BRepBndLib::Add(face, bounds, false);
+  if (bounds.IsVoid()) {
+    return false;
+  }
+  bounds.Enlarge(tolerance);
+  const gp_Trsf placement = face.Location().Transformation();
+  for (const int i : checked) {
+    if (bounds.IsOut(triangulation.Node(i).Transformed(placement))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Gives `face` a copy of the donor face's triangulation and of its edges'
-// polygons; false (nothing written) when an edge has no polygon there.
+// polygons; false (nothing written) when an edge has no polygon there, or
+// when the copy, in the target face's frame, does not lie on the target
+// face (triangulation_lies_on): the meshing that follows meshes it then.
 bool reuse_face(const FaceKey& target, const FaceKey& donor) {
   TopLoc_Location donor_location;
   const occ::handle<Poly_Triangulation>& source = BRep_Tool::Triangulation(donor.face, donor_location);
@@ -1523,7 +1597,19 @@ bool reuse_face(const FaceKey& target, const FaceKey& donor) {
       return false;
     }
   }
-  const occ::handle<Poly_Triangulation> copy = copy_triangulation(source);
+  // A triangulation's nodes are in its face's frame (the face's location
+  // places them), and the same surface placed alike may be placed by the
+  // face in the donor and by the surface in the target (mitcad#1243): a
+  // prism's top is its base's face moved up by its location, and a
+  // boolean that rebuilds it keeps the move in the surface's placement.
+  // Copied as they were, the top's nodes stayed where the base is: the top
+  // was drawn and picked there, over the bottom, and missing above. Moved
+  // from the donor's frame into the target's, they lie on the face.
+  const TopLoc_Location move = donor_location.Predivided(target.face.Location());
+  const occ::handle<Poly_Triangulation> copy = copy_triangulation(source, move);
+  if (copy.IsNull() || !triangulation_lies_on(target.face, *copy)) {
+    return false;
+  }
   BRep_Builder builder;
   builder.UpdateFace(target.face, copy);
   TopLoc_Location location;
@@ -1593,6 +1679,15 @@ std::size_t reuse_triangulations(const TopoDS_Shape& shape, const std::vector<To
     }
   }
   return reused;
+}
+
+bool triangulation_on_face(const TopoDS_Face& face) {
+  if (face.IsNull()) {
+    return false;
+  }
+  TopLoc_Location location;
+  const occ::handle<Poly_Triangulation>& triangulation = BRep_Tool::Triangulation(face, location);
+  return !triangulation.IsNull() && triangulation_lies_on(face, *triangulation);
 }
 
 void use_bounded_presentation_meshes(std::size_t face_triangles) {

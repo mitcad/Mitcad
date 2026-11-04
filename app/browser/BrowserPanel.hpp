@@ -5,6 +5,7 @@
 
 #include <QHash>
 #include <QIcon>
+#include <QJsonObject>
 #include <QPoint>
 #include <QRect>
 #include <QRegion>
@@ -241,6 +242,22 @@ public:
   // Logged when they change: "Browser Make markers: Root/Bodies/Body1:
   // Own print settings: Walls", "Browser Make markers: none".
   void setMakeMarkers(const QHash<QString, QString>& markers);
+  // What the view found of a kept analysis it shows (mitcad#1230), by the
+  // analysis' name: a warning (the Section Analysis shows bodies whole
+  // because their clip failed) gives its row the warning's badge and
+  // colour, and the text is its tooltip; a note that is no warning (its
+  // plane cuts no shown body) only its tooltip. An analysis whose plane
+  // cannot be found stays an error. Kept over rebuilds; an empty map takes
+  // them away. Logged when a row's note changes: "Browser analysis note
+  // Root/Analysis/Section1: warning <text>" (the text's lines joined by
+  // " | "), "...: none".
+  struct AnalysisNote {
+    bool warning = false;
+    QString text;
+    bool operator==(const AnalysisNote& other) const { return warning == other.warning && text == other.text; }
+    bool operator!=(const AnalysisNote& other) const { return !(*this == other); }
+  };
+  void setAnalysisNotes(const QHash<QString, AnalysisNote>& notes);
 
 signals:
   // With the Rows background, rowsRegion changed (the rows scrolled, opened,
@@ -330,6 +347,14 @@ private:
   void applyMakeMarkers();
   QHash<QString, QString> m_makeMarkers; // by body uid
   QString m_loggedMakeMarkers;           // the markers' log line, as last logged
+  // An analysis row as its entry of the `analyses` query and its note
+  // (setAnalysisNotes) give it: icon, tooltip and name colour (mitcad#1230).
+  void styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& analysis);
+  // The notes of setAnalysisNotes on the analysis rows there are.
+  void applyAnalysisNotes();
+  QHash<QString, AnalysisNote> m_analysisNotes;   // by analysis name
+  QHash<QString, QJsonObject> m_analysisRows;     // the rows' analyses, by name
+  QHash<QString, QString> m_loggedAnalysisNotes;  // the notes last logged, by path
   // Logs the rows whose names have a colour role, by role, with the colour
   // it gives on the rows' palette now (mitcad#1104), when it changed:
   // "Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin".

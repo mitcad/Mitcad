@@ -29,7 +29,7 @@ WORK=$(mktemp -d /tmp/mitcad-ui-watermark.XXXXXX)
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 SETTINGS=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
 
-VERSION=$("$UI_APP" --version 2> /dev/null | sed -n 's/^MitCad //p')
+VERSION=$(QT_QPA_PLATFORM=offscreen "$UI_APP" --version 2> /dev/null | sed -n 's/^MitCad //p')
 [ -n "$VERSION" ] || ui_fail "no version from $UI_APP --version"
 TEXT="MitCad $VERSION"
 

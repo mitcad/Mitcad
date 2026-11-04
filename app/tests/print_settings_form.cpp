@@ -324,6 +324,22 @@ int printSettingsFormTests() {
   CHECK(!withGeneral.keyShown(QStringLiteral("layer_height")));
   withGeneral.setPrintShown(true);
   CHECK(withGeneral.shownTabs().contains(QStringLiteral("quality")));
+  // Search finds the general page's fields: the window is told the text,
+  // to show only those it finds there (mitcad#1228); otherwise nothing.
+  QString filtered = QStringLiteral("not called");
+  withGeneral.filterGeneral = [&filtered](const QString& search) { filtered = search; };
+  withGeneral.setGeneralNames({QStringLiteral("Bed temperature")});
+  CHECK(filtered.isEmpty());
+  QLineEdit* generalSearch = withGeneral.findChild<QLineEdit*>(QStringLiteral("settingsSearch"));
+  CHECK(generalSearch != nullptr);
+  if (generalSearch != nullptr) {
+    generalSearch->setText(QStringLiteral("temperature"));
+    CHECK(filtered == QStringLiteral("temperature"));
+    generalSearch->setText(QStringLiteral("layer"));
+    CHECK(filtered.isEmpty());
+    generalSearch->clear();
+    CHECK(filtered.isEmpty());
+  }
 
   // Round 6 (mitcad#655): [mm | %] only where the design's slicer takes a
   // percentage; else the unit as a label, "%" for a percentage set.

@@ -70,6 +70,14 @@
 //                           visible, including hidden native presenters
 //   expect-widget-property <object-name> <property> <value>
 //                           a Qt target widget's property as text
+//   expect-widget-background <object-name> <#rrggbb> <tolerance>  wait until
+//                           the colour covering most of the visible main
+//                           window widget's area, in a grab of its window
+//                           (its parents' backgrounds under it), is within
+//                           the tolerance (the sum of the channels'
+//                           differences); logs "TestDriver: widget
+//                           background <name> #rrggbb (n of m pixels), ..."
+//                           (mitcad#1245)
 //   expect-projects-layout <count>  actual Projects/Browser bounds and card
 //                           slots, toolbar containment and loaded project count
 //   expect-sketch-finish-layout  no title-row Finish Sketch or reserved gap;
@@ -413,6 +421,12 @@
 //   capture-shown-body <prefix> <uid> <occurrence|-> save that actual shape's
 //                           volume and world bounds as prefix_volume,
 //                           prefix_min_x/y/z and prefix_max_x/y/z variables
+//   expect-shown-body-meshes <uid> <occurrence|-> <faces> wait until the
+//                           shape the view draws for the body has that many
+//                           faces, each with a triangulation lying on it
+//                           where the view places it (io::triangulation_on_face);
+//                           logs "TestDriver: shown body <uid>[ in
+//                           <occurrence>]: N of N faces meshed on their faces"
 //   expect-native-dialog-gone <regex> [seconds] assert native window closed
 //                           These native steps require the macOS AppKit UI.
 //                           key/type/button/menu/focus-dialog/screenshot

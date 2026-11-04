@@ -1769,8 +1769,15 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 reply
             }
             Command::DeleteFeature { uid, dependents } => {
+                let before = self.state().clone();
                 let deleted = self.delete_feature(uid, dependents)?;
-                json!({"deleted": deleted})
+                let mut reply = json!({"deleted": deleted});
+                // The cut-scope exclusions it dropped (mitcad#1236).
+                let dropped = self.state().dropped_exclusions(&before);
+                if !dropped.is_empty() {
+                    reply["notices"] = notice::to_json(&dropped);
+                }
+                reply
             }
             Command::SuppressFeature {
                 uid,

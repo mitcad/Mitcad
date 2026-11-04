@@ -255,7 +255,10 @@ def run(app, cli, out, ui):
         env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
         settings = work / "settings" / "nocodo.fi"
         settings.mkdir(parents=True)
-        (settings / "Mitcad.ini").write_text("[autosave]\nenabled=false\n", encoding="utf-8")
+        # This workflow replaces a dirty document and rejects its old handle.
+        # Multi-document tests separately check the default new-window policy.
+        (settings / "Mitcad.ini").write_text(
+            "[autosave]\nenabled=false\n[documents]\nopenInCurrentWindow=true\n", encoding="utf-8")
         for filename in ("created.png", "edited.png", "replaced.png"):
             (out / filename).unlink(missing_ok=True)
         script = "expect-ever 'View area'\n"

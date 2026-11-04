@@ -17,6 +17,9 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
   kind.replace(QLatin1Char('_'), QLatin1Char(' '));
   if (!kind.isEmpty()) kind[0] = kind[0].toUpper();
   QStringList dimensions;
+  // The key value's line (mitcad#1235), before the sizes; not counted in
+  // their three places.
+  QString key;
   try {
     QJsonObject definition = model.queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
                                                 {QStringLiteral("uid"), feature.uid}})
@@ -31,6 +34,22 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
       }
       definition.insert(QStringLiteral("uid"), feature.uid);
       editor->load(definition, state, model);
+      if (editor->keyText) key = editor->keyText(state, model).trimmed();
+      if (key.isEmpty()) {
+        QStringList keys;
+        for (const QString& id : editor->keyInputs) {
+          for (const InputDef& input : editor->inputs) {
+            if (input.id != id || input.type != InputDef::Type::Choice || (input.visible && !input.visible(state))) {
+              continue;
+            }
+            const QString chosen = state.choice(id);
+            for (const auto& option : input.choicesIn(state)) {
+              if (option.first == chosen) keys << QStringLiteral("%1: %2").arg(input.labelIn(state), option.second);
+            }
+          }
+        }
+        key = keys.join(QStringLiteral("; "));
+      }
       // A value input's text as "Label: value"; false once three are shown.
       const auto add = [&dimensions](const InputDef& input, const CommandState& in) {
         if (input.type != InputDef::Type::Value || input.id.startsWith(QStringLiteral("at_")) ||
@@ -85,6 +104,7 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
   QString result = QStringLiteral("<b>%1: %2</b><br>%3")
                        .arg(kind.toHtmlEscaped(), feature.name.toHtmlEscaped(),
                             QObject::tr("Component: %1").arg(snapshot.componentName(feature.component)).toHtmlEscaped());
+  if (!key.isEmpty()) result += QStringLiteral("<br>%1").arg(key.toHtmlEscaped());
   if (!dimensions.isEmpty()) result += QStringLiteral("<br>%1").arg(dimensions.join(QStringLiteral("; ")));
   return result;
 }

@@ -86,6 +86,14 @@ bool MessageLog::clear() {
   return changed;
 }
 
+bool MessageLog::withdraw(const QString& text) {
+  if (!m_full || text.isEmpty() || m_full->text != text) {
+    return false;
+  }
+  m_full.reset();
+  return true;
+}
+
 MessageLog::Shown MessageLog::shown() const {
   if (m_full) {
     return Shown::Full;

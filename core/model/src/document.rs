@@ -121,7 +121,7 @@ pub use print_import::read_print_file;
 // Materials and print profiles listed, edited and chosen where they live
 // (mitcad#655).
 mod library_items;
-pub use library_items::{library_kind, writable_library};
+pub use library_items::{MaterialWrite, library_kind, with_warnings, writable_library};
 // Annotations: dimensions and notes kept in the design (mitcad#702), grown
 // from the measurement objects of mitcad#649.
 mod annotations;
@@ -227,6 +227,7 @@ use crate::appearance::Appearance;
 use crate::assembly::Assembly;
 use crate::expr::ParamLimits;
 use crate::expr::{LengthUnit, ParamSpec, Unit, value_to_expression, with_decimal_points};
+use crate::features::extrude_scope::Exclusion;
 use crate::features::sketch::LinkedReferences;
 use crate::features::{
     CheckContext, FeatureDef, FeatureEntry, HelixConstruction, SketchDef, SketchPlane, ValueInput,
@@ -625,6 +626,75 @@ impl DocState {
             }
         }
         dependents
+    }
+
+    /// Drops the cut scopes' exclusions of what a delete took out of the
+    /// design (mitcad#1236): an excluded occurrence, an excluded body or
+    /// its maker. A scope refers to nothing it leaves alone, so the delete
+    /// neither needs it nor makes it fail.
+    pub fn drop_gone_exclusions(&mut self) {
+        let features: BTreeSet<FeatureUid> = self.features.iter().map(|f| f.uid).collect();
+        let made = |body: BodyUid| features.contains(&body.feature);
+        let mut changed = Vec::new();
+        for (i, entry) in self.features.iter().enumerate() {
+            if let FeatureDef::Extrude(extrude) = &entry.def
+                && let Some(scope) = &extrude.cut_scope
+            {
+                let mut scope = scope.clone();
+                let dropped = scope.drop_gone_exclusions(&self.assembly, &made);
+                if !dropped.is_empty() {
+                    changed.push((i, scope));
+                }
+            }
+        }
+        for (i, scope) in changed {
+            if let FeatureDef::Extrude(extrude) = &mut Arc::make_mut(&mut self.features[i]).def {
+                extrude.cut_scope = Some(scope);
+            }
+        }
+    }
+
+    /// The notices of the cut-scope exclusions `before` had that this
+    /// state's features no longer have ([`DocState::drop_gone_exclusions`]),
+    /// named as `before` named them: one information per exclusion, about
+    /// its feature.
+    pub fn dropped_exclusions(&self, before: &DocState) -> Vec<crate::notice::Notice> {
+        let place = |path: &[OccurrenceUid]| {
+            if path.is_empty() {
+                before.assembly.root_name.clone()
+            } else {
+                before.assembly.path_name(path)
+            }
+        };
+        let mut notices = Vec::new();
+        for entry in &self.features {
+            let FeatureDef::Extrude(now) = &entry.def else {
+                continue;
+            };
+            let Some(FeatureDef::Extrude(was)) = before.entry(entry.uid).map(|e| &e.def) else {
+                continue;
+            };
+            let (Some(now), Some(was)) = (&now.cut_scope, &was.cut_scope) else {
+                continue;
+            };
+            let kept = now.exclusions();
+            for gone in was.exclusions().into_iter().filter(|e| !kept.contains(e)) {
+                let what = match &gone {
+                    Exclusion::Component(target) => place(&target.occurrence.0),
+                    Exclusion::Body(target) => {
+                        let name = before.body_names.get(&target.body);
+                        let name = name.cloned().unwrap_or_else(|| target.body.to_string());
+                        format!("body {name} of {}", place(&target.occurrence.0))
+                    }
+                };
+                let message = format!(
+                    "{}: its exclusion of {what} was dropped; it is no longer in the design",
+                    entry.name
+                );
+                notices.push(crate::notice::Notice::info(message).with_target(entry.uid));
+            }
+        }
+        notices
     }
 
     fn names_of(&self, uids: &[FeatureUid]) -> Vec<String> {
@@ -2212,6 +2282,11 @@ impl<K: Kernel> Document<K> {
     /// (the stored definition keeps them where the last edit left them).
     pub fn followed_sketch(&self, sketch: FeatureUid, def: &SketchDef) -> Option<SketchDef> {
         let output = self.sketch_output(sketch)?;
+        // Its offsets made again for what vanishes at their distances now
+        // (mitcad#1234), when the evaluation was of this definition.
+        if let Some(retrimmed) = output.retrimmed.as_ref().filter(|r| r.from == *def) {
+            return Some(retrimmed.def.clone());
+        }
         crate::sketch::project::with_moved(def, &output.moved)
     }
 
@@ -2614,6 +2689,9 @@ impl<K: Kernel> Document<K> {
             }
             let removed: BTreeSet<FeatureUid> = dependents.iter().copied().chain([uid]).collect();
             let order = state.remove_features(&removed);
+            // What the deleted features made is no longer left alone
+            // (mitcad#1236).
+            state.drop_gone_exclusions();
             Ok((format!("Delete {name}"), order))
         })
     }
@@ -3019,6 +3097,9 @@ impl<K: Kernel> Document<K> {
         // Edits start from the sketch as it evaluated: linked projections
         // where their sources are now (mitcad#40).
         let moved = self.sketch_output(sketch).map(|o| o.moved.clone());
+        // And its offsets made again for what vanishes at their distances
+        // now (mitcad#1234).
+        let retrimmed = self.sketch_output(sketch).and_then(|o| o.retrimmed.clone());
         self.apply(|state| {
             let position = state.require(sketch)?;
             let entry = state.features[position].clone();
@@ -3028,9 +3109,12 @@ impl<K: Kernel> Document<K> {
                     entry.name
                 )));
             };
-            let def = moved
-                .and_then(|m| crate::sketch::project::with_moved(def, &m))
-                .unwrap_or_else(|| def.clone());
+            let def = match retrimmed.filter(|r| r.from == *def) {
+                Some(retrimmed) => retrimmed.def.clone(),
+                None => moved
+                    .and_then(|m| crate::sketch::project::with_moved(def, &m))
+                    .unwrap_or_else(|| def.clone()),
+            };
             let (value, def, report) = {
                 let mut editor = SketchEdit::new(def, &mut state.parameters, sketch, &entry.name);
                 let value = edit(&mut editor).map_err(invalid)?;

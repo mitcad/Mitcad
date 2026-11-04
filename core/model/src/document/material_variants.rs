@@ -13,11 +13,11 @@
 //! step too.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::library_items::library_item;
+use super::library_items::{MaterialWrite, library_item, with_warnings};
 use super::{Document, ModelError, invalid};
 use crate::appearance::Appearance;
 use crate::kernel::Kernel;
@@ -88,8 +88,9 @@ impl<K: Kernel> Document<K> {
 
     /// Merges the design's own materials `ids` (two or more, one
     /// filament's) into the first: see the module documentation. Returns
-    /// its id.
-    pub fn merge_materials(&mut self, ids: &[String]) -> Result<String, ModelError> {
+    /// its id and the warnings: a default appearance the design does not
+    /// have is kept (mitcad#1242), the material's own colour made again.
+    pub fn merge_materials(&mut self, ids: &[String]) -> Result<(String, Vec<String>), ModelError> {
         if ids.len() < 2 {
             return Err(invalid("merge_materials needs two materials or more"));
         }
@@ -128,19 +129,32 @@ impl<K: Kernel> Document<K> {
             merged.name = state.materials[first].name.clone();
         }
         merged.check().map_err(invalid)?;
+        // A default nothing has (mitcad#1242): the own colour of one of the
+        // merged materials is made again, another kept with a warning.
+        let mut made: Option<Appearance> = None;
+        let mut warnings = Vec::new();
         if let Some(a) = &merged.appearance
             && self.appearance(a).is_none()
         {
-            return Err(invalid(format!(
-                "material {}: there is no appearance {a}",
-                merged.id
-            )));
+            match refs
+                .iter()
+                .find(|m| crate::print_files::is_own_colour(m, a))
+            {
+                Some(owner) => made = Some(crate::print_files::own_colour_again(owner, a)),
+                None => warnings.push(format!(
+                    "material {}: there is no appearance {a}; kept as its default",
+                    merged.id
+                )),
+            }
         }
         let id = merged.id.clone();
         let gone: Vec<String> = ids[1..].to_vec();
         let label = format!("Merge Materials {}", merged.name);
         let kept = id.clone();
         self.apply_with(move |state| {
+            if let Some(look) = &made {
+                state.add_item_appearance(look);
+            }
             state.materials[first] = merged;
             state.materials.retain(|m| !gone.contains(&m.id));
             for attributes in state.body_attributes.values_mut() {
@@ -162,18 +176,18 @@ impl<K: Kernel> Document<K> {
             }
             Ok((label, (), false))
         })?;
-        Ok(id)
+        Ok((id, warnings))
     }
 
     /// Merges the materials `ids` of the user's or the project's library
     /// into the first's file: see the module documentation. Returns its
-    /// id, its file and its version.
+    /// id, its file, its version and the warnings of the write.
     pub fn merge_library_materials(
         &mut self,
         libraries: &Libraries,
         library: LibraryKind,
         ids: &[String],
-    ) -> Result<(String, PathBuf, u32), ModelError> {
+    ) -> Result<MaterialWrite, ModelError> {
         if ids.len() < 2 {
             return Err(invalid("merge_materials needs two materials or more"));
         }
@@ -264,13 +278,13 @@ impl<K: Kernel> Document<K> {
         let first_id = ids[0].clone();
         let others: Vec<String> = ids[1..].to_vec();
         self.as_one_step(|doc| {
-            let (path, version) = doc.edit_library_material_carrying(
+            let written = doc.edit_library_material_carrying(
                 libraries, library, &first_id, &change, None, &carried,
             )?;
             for id in &others {
                 doc.delete_library_material(libraries, library, id)?;
             }
-            Ok((first_id.clone(), path, version))
+            Ok(written)
         })
     }
 
@@ -290,21 +304,24 @@ impl<K: Kernel> Document<K> {
             let ids: Vec<String> = group.into_iter().map(|(id, _)| id).collect();
             let entry = match into {
                 None => {
-                    let id = self.merge_materials(&ids)?;
+                    let (id, warnings) = self.merge_materials(&ids)?;
                     let name = self.material(&id).map(|m| m.name.clone());
-                    json!({"id": id, "name": name, "from": ids})
+                    with_warnings(json!({"id": id, "name": name, "from": ids}), warnings)
                 }
                 Some(library) => {
                     // Read again: an earlier merge changed the files.
                     let libraries = self.print_libraries(project);
-                    let (id, path, version) =
-                        self.merge_library_materials(&libraries, library, &ids)?;
+                    let written = self.merge_library_materials(&libraries, library, &ids)?;
                     let name = self
                         .print_libraries(project)
-                        .find(Some(library), ItemKind::Material, &id)
+                        .find(Some(library), ItemKind::Material, &written.id)
                         .map(|i| i.data.name().to_owned());
-                    json!({"id": id, "name": name, "from": ids, "version": version,
-                           "path": path.to_string_lossy()})
+                    with_warnings(
+                        json!({"id": written.id, "name": name, "from": ids,
+                               "version": written.version,
+                               "path": written.path.to_string_lossy()}),
+                        written.warnings,
+                    )
                 }
             };
             merged.push(entry);

@@ -38,7 +38,7 @@ for scheme in light dark; do
   MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_STEP_MS=90 MITCAD_TEST_INPUT=$here/ui-scripts/print-plates.mitcad-ui \
     ui_run_app "print-plates-$scheme" --ui=qt --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/plates.mitcad"
   ui_expect_log '^TestDriver: done' "$scheme: Plates… adds plates, puts Body2 on Plate 2 in vase mode, Send writes them"
-  for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints' 'OCCT view event failed:'; do
+  for problem in '^TestDriver: FAIL' 'Unable to simultaneously satisfy constraints' 'OCCT view event failed:'; do
     ui_expect_no_log "$problem" "$scheme: no $problem"
   done
   if [ "$UI_FAILURES" -gt 0 ]; then ui_log_tail; exit 1; fi

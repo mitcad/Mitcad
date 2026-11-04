@@ -4,6 +4,7 @@
 // Planar sections of bodies and the clipped view of section analysis.
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "mitcad/analysis/common.hpp"
@@ -42,6 +43,28 @@ struct ClippedFace {
   std::vector<TopoDS_Shape> pieces;
 };
 
+// The ways clip cuts a shape the plane crosses, tried in this order until
+// one works (mitcad#1230): the plain boolean against the slab beyond the
+// plane; the same with a fuzzy value (a small multiple of the shape's
+// largest tolerance), for a plane that runs along edges and seams of the
+// shape (a revolved body cut in its profile's plane); the plain boolean
+// with the plane moved by kClipShift along its normal, the baseline
+// tolerance, which no one sees.
+enum class ClipAttempt { Plain = 1, Fuzzy = 2, Moved = 3 };
+
+// How far the last attempt moves the plane along its normal, mm.
+inline constexpr double kClipShift = 1e-6;
+
+// How clip cut the shape: the attempt that worked, its fuzzy value or how
+// far it moved the plane (mm; 0 for none), and why the attempts before it
+// failed (empty after the plain one).
+struct ClipReport {
+  ClipAttempt attempt = ClipAttempt::Plain;
+  double fuzzy = 0.0;
+  double shift = 0.0;
+  std::string failed;
+};
+
 // The shape with the half-space on the normal side of the plane removed,
 // as section analysis shows it (the normal points towards the viewer).
 // Faces lying on the plane stay whole: the removed half-space only touches
@@ -56,8 +79,19 @@ struct ClippedFace {
 // (mitcad#438): the result is the shape itself when it lies behind the
 // plane (each face its own piece), and an empty compound when it lies
 // wholly on the normal side (no face has a piece).
+//
+// Any other shape is cut by the attempts of ClipAttempt in turn; with
+// `report`, how it was cut. When every attempt fails, Error says so with
+// each attempt's reason. The shape itself is never changed (the booleans
+// leave their inputs as they are).
 TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane,
-                  std::vector<ClippedFace>* faces = nullptr);
+                  std::vector<ClippedFace>* faces = nullptr, ClipReport* report = nullptr);
+
+// One attempt of clip on a shape with surfaces, whichever side of the
+// plane it lies on: the result as clip gives it, or Error when that cut
+// fails. For tests of each attempt; clip tries them in turn.
+TopoDS_Shape clip_by(const TopoDS_Shape& shape, const Plane& plane, ClipAttempt attempt,
+                     std::vector<ClippedFace>* faces = nullptr);
 
 // The signed distances (mm, along the plane's normal) of a box's corners
 // from the plane: the least and the greatest. Throws Error for a zero

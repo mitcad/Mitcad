@@ -157,6 +157,14 @@ void MessageCenter::clear(const char* reason) {
   }
 }
 
+void MessageCenter::withdraw(const QString& text) {
+  if (m_log.withdraw(text)) {
+    m_timer.stop();
+    toStub("withdrawn");
+    emit changed();
+  }
+}
+
 void MessageCenter::toStub(const char* reason) {
   const MessageEntry* latest = m_log.latest();
   if (latest == nullptr) {

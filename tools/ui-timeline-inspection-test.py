@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/MainWindow.cpp app/OcctViewer.cpp app/framework tools/cli
+# check-all sources: app/browser app/MainWindow.cpp app/OcctViewer.cpp app/framework tools/cli app/commands/HoleCommands.cpp
 """Timeline inspection through Qt input, visible tooltips and the OCCT framebuffer."""
 import os
 from pathlib import Path
@@ -34,6 +34,28 @@ def main():
         {"cmd": "suppress_feature", "uid": "F6", "suppressed": True},
         {"cmd": "add_feature", "name": "Later plane", "def": {"type": "construction_plane",
             "definition": {"type": "offset", "plane": "xy", "distance": 50}}},
+        # Threads after the marker (rolled back, so the windows open without
+        # building them): their hover text leads with the size (mitcad#1235).
+        {"cmd": "add_feature", "name": "Nut", "def": {"type": "box", "plane": "xy",
+            "corner": [60, -50], "length": 100, "width": 100, "height": 20,
+            "operation": "new_body"}},
+        {"cmd": "add_feature", "name": "Tapped hole", "def": {"type": "hole",
+            "placement": {"type": "face", "body": "F8.b0", "face": "F8:top",
+                          "points": [[70, -40, 20]]},
+            "diameter": 5, "extent": {"type": "through_all"},
+            "thread": {"designation": "M6x1", "class": "6H", "modeled": False}}},
+        {"cmd": "add_feature", "name": "Bore", "def": {"type": "cylinder", "plane": "xy",
+            "center": [110, 0], "diameter": 73.835, "height": 20, "operation": "cut",
+            "participants": ["F8.b0"]}},
+        {"cmd": "add_feature", "name": "Thread M76", "def": {"type": "thread",
+            "faces": [{"body": "F8.b0", "face": "F10:side0"}],
+            "thread": {"designation": "M76x2", "class": "6H"}, "modeled": True,
+            "radial_clearance": 0.2, "flank_clearance": 0.1, "length": 10, "offset": 0}},
+        {"cmd": "add_feature", "name": "Shaft", "def": {"type": "cylinder", "plane": "xy",
+            "center": [190, 0], "diameter": 6, "height": 30, "operation": "new_body"}},
+        {"cmd": "add_feature", "name": "Thread M6", "def": {"type": "thread",
+            "faces": [{"body": "F12.b0", "face": "F12:side0"}],
+            "thread": {"designation": "M6x1", "class": "6g"}}},
         {"cmd": "group_features", "features": ["F1", "F2"], "name": "Inner details"},
         {"cmd": "set_marker", "position": 6},
     ])
@@ -68,8 +90,8 @@ def main():
             if result.returncode or "TestDriver: done" not in text or errors:
                 raise RuntimeError(chrome + " timeline inspection failed (exit " + str(result.returncode)
                     + (", " + errors[0] if errors else "") + "); see " + str(out / (chrome + ".log")))
-    print("PASS: hidden-feature hover, selection, groups, tooltip, card and a fillet's picked edges"
-          " in Floating/Docked")
+    print("PASS: hidden-feature hover, selection, groups, tooltip, card, a fillet's picked edges"
+          " and the threads' sizes in Floating/Docked")
 
 
 if __name__ == "__main__":

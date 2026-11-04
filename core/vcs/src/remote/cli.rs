@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! The system's git program, which does Mitcad's network work (fetch,
 //! push, clone, `ls-remote`) and updates the work tree after one; objects,
-//! trees and commits stay with gix.
+//! trees and commits stay with gix. Component libraries over `https://`
+//! need no git program (`https.rs`, mitcad#1224); they use this one only
+//! for folders, SSH addresses, and when the preference Use the installed
+//! git program is on.
 //!
 //! The program is `MITCAD_GIT` when set (the application sets it from
 //! Preferences), else the first `git` on `PATH` (absolute folders only, so
@@ -573,10 +576,11 @@ pub(crate) fn locate_in(
         .ok_or_else(|| {
             RemoteError::new(
                 ErrorClass::GitMissing,
-                "git is not installed: remote repositories need the git program (on Windows, \
+                "git is not installed: Cloud projects need the git program (on Windows, \
                  Git for Windows from https://git-scm.com; on macOS, Homebrew or MacPorts git, \
                  or Apple's Command Line Tools). Set its path in MITCAD_GIT when it \
-                 is not on PATH. The local version history works without it.",
+                 is not on PATH. The local version history and component libraries over \
+                 https:// work without it.",
             )
         })
 }

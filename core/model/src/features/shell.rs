@@ -9,6 +9,11 @@
 //! The outside of the wall keeps the body's face names; the inside is
 //! `<shell>:offset(<face>)` and the end of the wall where a removed face was
 //! `<shell>:offset_cap(<face>)`.
+//!
+//! Parts of the body no thicker than the wall stay solid with their own
+//! faces, and the feature warns, naming the faces the wall does not fit
+//! under (and the roundings it runs past); where nothing can be hollowed it
+//! fails with that message (mitcad#1233).
 
 use serde::{Deserialize, Serialize};
 
@@ -127,6 +132,9 @@ impl<K: Kernel> Evaluate<K> for ShellDef {
             .kernel
             .shell(ctx.uid, &shape, &spec)
             .map_err(kernel_error)?;
+        // Where the wall does not fit (parts no thicker than it, left solid)
+        // or runs past faces too small for it to follow (mitcad#1233).
+        ctx.warn_notes(&hollow);
         Ok(FeatureOutput {
             changes: vec![BodyChange::Set(self.body, hollow)],
             ..FeatureOutput::default()

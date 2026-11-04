@@ -134,6 +134,32 @@ void clearTests() {
   CHECK(log.size() == 2);
 }
 
+// A withdrawn message (mitcad#1230): the warning shown in full with that
+// text becomes the stub, a warning too; another text, or a message no
+// longer shown in full, changes nothing; the history keeps it.
+void withdrawTests() {
+  MessageLog log;
+  const QString warning = QStringLiteral("Section1 could not cut Body1; it is shown whole.");
+  CHECK(!log.withdraw(warning)); // nothing shown
+  const QString details = QStringLiteral("Section1: Body1: the boolean failed");
+  CHECK(log.add(details, NoticeLevel::Information, QString(), at(0)));
+  CHECK(log.add(warning, NoticeLevel::Warning, QString(), at(0)));
+  CHECK(!log.withdraw(QStringLiteral("Another warning.")));
+  CHECK(!log.withdraw(QString()));
+  CHECK(log.shown() == MessageLog::Shown::Full);
+  CHECK(log.withdraw(warning));
+  CHECK(log.shown() == MessageLog::Shown::Stub);
+  CHECK(log.stub()->text == warning);
+  CHECK(!log.withdraw(warning)); // already the stub
+  CHECK(log.size() == 2);
+  CHECK(log.entries().at(1).text == details);
+  // A newer message shown in full is not the warning: it stays.
+  CHECK(log.add(warning, NoticeLevel::Warning, QString(), at(1)));
+  CHECK(log.add(QStringLiteral("Nothing to pick there"), NoticeLevel::Error, QString(), at(2)));
+  CHECK(!log.withdraw(warning));
+  CHECK(log.full()->text == QStringLiteral("Nothing to pick there"));
+}
+
 void historyTests() {
   MessageLog log;
   log.add(QStringLiteral("Fillet2: too large"), NoticeLevel::Error, QStringLiteral("F5"), at(0));
@@ -167,6 +193,7 @@ int messageLogTests() {
   lifetimeTests();
   bandTests();
   clearTests();
+  withdrawTests();
   historyTests();
   return failures;
 }

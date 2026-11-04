@@ -114,7 +114,11 @@ Rust libraries compiled into mitcad and mitcad-cli
   Apache-2.0), wuff (MIT) with brotli-decompressor (BSD-3-Clause or MIT)
   and flate2 (MIT or Apache-2.0). SVG drawings: svgtypes and kurbo (MIT
   or Apache-2.0) with roxmltree (MIT or Apache-2.0). QR codes: qrcode
-  (MIT or Apache-2.0).
+  (MIT or Apache-2.0). Fetching libraries over HTTPS without git: gix's
+  HTTP transport (MIT or Apache-2.0) with reqwest, hyper, h2, tokio and
+  their helpers (MIT or Apache-2.0), rustls-platform-verifier (MIT or
+  Apache-2.0, the system's root certificates) and the ICU 4X crates of
+  url's idna (Unicode-3.0); TLS by the rustls and ring above.
 
 The render worker (docs/rendering.md): the executable
 usr/bin/mitcad-render, which alone links the following; mitcad starts it

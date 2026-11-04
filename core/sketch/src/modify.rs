@@ -291,6 +291,24 @@ impl SketchEdit<'_> {
         // Offsets forget removed results; one whose sources are gone goes.
         for offset in &mut self.def.offsets {
             offset.results.retain(|r| !entities.contains(r));
+            // An open outline (mitcad#1246) stays open: the result before an
+            // end that is gone ends it.
+            let open: Vec<bool> = offset
+                .outlines
+                .iter()
+                .map(|o| o.last().is_some_and(|r| offset.ends.contains(r)))
+                .collect();
+            for outline in &mut offset.outlines {
+                outline.retain(|r| !entities.contains(r));
+            }
+            offset.ends = offset
+                .outlines
+                .iter()
+                .zip(&open)
+                .filter(|(_, open)| **open)
+                .filter_map(|(o, _)| o.last().copied())
+                .collect();
+            offset.outlines.retain(|o| !o.is_empty());
             offset.helpers.retain(|h| !entities.contains(h));
             if offset.curves.iter().any(|c| entities.contains(c)) || offset.results.is_empty() {
                 gone.insert(offset.id);
@@ -2634,7 +2652,7 @@ impl SketchEdit<'_> {
         for c in curves {
             self.editable(*c)?;
         }
-        let solved = self.solved()?;
+        let solved = self.offset_solve()?;
         let chain = self.chain(curves, &solved)?;
         // A curve taken in place of the same one picked (mitcad#741).
         for (c, _) in &chain.curves {
@@ -2652,12 +2670,71 @@ impl SketchEdit<'_> {
         if !exact {
             return self.derived_offset(&chain.curves, chain.closed, distance, d);
         }
+        let mut sources: Vec<(Curve2, bool)> = Vec::new();
+        for (id, forward) in &chain.curves {
+            let c = solved
+                .curves
+                .get(id)
+                .cloned()
+                .ok_or("a curve without geometry")?;
+            sources.push((c, *forward));
+        }
+        // What vanishes at the distance is left out, and the curves on
+        // either side meet where their offsets cross (mitcad#1234); lines on
+        // one line across it are one, and the outline may fall into several
+        // (mitcad#1244).
+        let vanishing = if sources.len() > 1 {
+            let name = |i: usize| format!("c{}", chain.curves[i].0.0);
+            super::offset::exact_vanishing(&sources, d, chain.closed, &name)?
+        } else {
+            super::offset::Vanishing::none(1, false)
+        };
+        // Where a curve's offset ends at a corner across what vanished.
+        let corner_at: BTreeMap<EntityUid, P2> = vanishing
+            .across
+            .iter()
+            .map(|(i, p)| (chain.curves[*i].0, *p))
+            .collect();
+        let curves: Vec<(EntityUid, bool)> = chain
+            .curves
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !vanishing.dropped.contains(i))
+            .map(|(_, c)| *c)
+            .collect();
+        let dropped: Vec<EntityUid> = vanishing
+            .dropped
+            .iter()
+            .map(|i| chain.curves[*i].0)
+            .collect();
+        let merged: Vec<super::offset::OffsetMerge> = vanishing
+            .merged
+            .iter()
+            .map(|&(curve, into)| super::offset::OffsetMerge {
+                curve: chain.curves[curve].0,
+                into: chain.curves[into].0,
+            })
+            .collect();
+        // Left out as a part too small for the distance, and the arcs whose
+        // offset runs round its whole circle (mitcad#1246).
+        let small: Vec<EntityUid> = vanishing.left.iter().map(|i| chain.curves[*i].0).collect();
+        let whole: BTreeSet<EntityUid> =
+            vanishing.whole.iter().map(|i| chain.curves[*i].0).collect();
+        // The curve after each along its outline, and where the last of an
+        // open chain or outline ends when others run on along it.
+        let next = vanishing.next;
+        let reach: BTreeMap<EntityUid, P2> = vanishing
+            .reach
+            .iter()
+            .map(|(i, p)| (chain.curves[*i].0, *p))
+            .collect();
         let id = self.constraint_id();
+        let first = self.report.constraints.len();
         let param = self.offset_param(id, distance, None)?;
         let parameter = Some(self.params.name(param));
         // The offset of each curve, in chain direction.
         let mut pieces: Vec<Offset> = Vec::new();
-        for (id, forward) in &chain.curves {
+        for (id, forward) in &curves {
             let c = solved
                 .curves
                 .get(id)
@@ -2681,13 +2758,16 @@ impl SketchEdit<'_> {
                         return Err("the offset is larger than an arc's radius".to_owned());
                     }
                     let (s, e) = if *forward { (start, end) } else { (end, start) };
-                    Offset::Arc {
-                        center,
-                        radius: r,
-                        start: s,
-                        end: e,
-                        ccw: *forward,
-                        middle: (start + end) / 2.0,
+                    if whole.contains(id) {
+                        Offset::Circle(center, r)
+                    } else {
+                        Offset::Arc {
+                            center,
+                            radius: r,
+                            start: s,
+                            end: e,
+                            ccw: *forward,
+                        }
                     }
                 }
                 Curve2::Circle { center, radius, .. } if chain.curves.len() == 1 => {
@@ -2702,45 +2782,61 @@ impl SketchEdit<'_> {
         }
         let n = pieces.len();
         let mut helpers = Vec::new();
-        let ids = self.ids(n);
-        // Corner points where neighbouring offset curves meet.
-        let mut corners: Vec<Option<EntityUid>> = vec![None; n + 1];
-        if !matches!(pieces[0], Offset::Circle(..)) {
-            let pairs = if chain.closed { n } else { n - 1 };
-            for i in 0..pairs {
-                let j = (i + 1) % n;
-                let p = meet(&pieces[i], &pieces[j], pieces[i].end()).ok_or_else(|| {
-                    format!(
-                        "the offsets of c{} and c{} do not meet at their corner",
-                        chain.curves[i].0.0, chain.curves[j].0.0
-                    )
-                })?;
-                corners[i + 1] = Some(self.add_point(p));
+        let ids = self.result_ids(&curves);
+        // Corner points where offset curves that follow each other meet:
+        // each curve's start and end.
+        let mut starts: Vec<Option<EntityUid>> = vec![None; n];
+        let mut ends: Vec<Option<EntityUid>> = vec![None; n];
+        // A circle has no corners (a circle offset alone, or an arc's offset
+        // round its whole circle, mitcad#1246).
+        let round = |i: usize| matches!(pieces[i], Offset::Circle(..));
+        for i in 0..n {
+            let Some(j) = next.get(i).copied().flatten() else {
+                continue;
+            };
+            if round(i) || round(j) {
+                continue;
             }
-            if chain.closed {
-                corners[0] = corners[n];
+            // Across a curve that vanished, where the offsets cross.
+            let near = corner_at
+                .get(&curves[i].0)
+                .copied()
+                .unwrap_or_else(|| pieces[i].end());
+            let p = meet(&pieces[i], &pieces[j], near).ok_or_else(|| {
+                format!(
+                    "the offsets of c{} and c{} do not meet at their corner",
+                    curves[i].0.0, curves[j].0.0
+                )
+            })?;
+            let corner = self.add_point(p);
+            ends[i] = Some(corner);
+            starts[j] = Some(corner);
+        }
+        for i in 0..n {
+            if starts[i].is_none() && !round(i) {
+                starts[i] = Some(self.add_point(pieces[i].start()));
             }
-            if corners[0].is_none() {
-                corners[0] = Some(self.add_point(pieces[0].start()));
-            }
-            if corners[n].is_none() {
-                corners[n] = Some(self.add_point(pieces[n - 1].end()));
+        }
+        for i in 0..n {
+            if ends[i].is_none() && !round(i) {
+                let end = reach
+                    .get(&curves[i].0)
+                    .copied()
+                    .unwrap_or_else(|| pieces[i].end());
+                ends[i] = Some(self.add_point(end));
             }
         }
         for (i, piece) in pieces.iter().enumerate() {
-            let (original, _) = chain.curves[i];
+            let (original, _) = curves[i];
             let kind = match piece {
                 Offset::Line(..) => EntityKind::Line {
-                    start: corners[i].expect("a corner"),
-                    end: corners[i + 1].expect("a corner"),
+                    start: starts[i].expect("a corner"),
+                    end: ends[i].expect("a corner"),
                     centerline: false,
                 },
                 Offset::Arc { ccw, .. } => {
                     let center = self.center_of(original)?;
-                    let (start, end) = (
-                        corners[i].expect("a corner"),
-                        corners[i + 1].expect("a corner"),
-                    );
+                    let (start, end) = (starts[i].expect("a corner"), ends[i].expect("a corner"));
                     if *ccw {
                         EntityKind::Arc { center, start, end }
                     } else {
@@ -2776,12 +2872,13 @@ impl SketchEdit<'_> {
                     )?;
                 }
                 Offset::Arc { center, radius, .. } | Offset::Circle(center, radius) => {
-                    let angle = match piece {
-                        Offset::Arc { middle, .. } => *middle,
-                        _ => 0.0,
-                    };
-                    let old_radius = match solved.curves.get(&original) {
-                        Some(Curve2::Arc { radius, .. } | Curve2::Circle { radius, .. }) => *radius,
+                    // Across an arc's middle (that of an arc whose offset
+                    // runs round its whole circle too), a circle's angle 0.
+                    let (old_radius, angle) = match solved.curves.get(&original) {
+                        Some(Curve2::Arc {
+                            radius, start, end, ..
+                        }) => (*radius, (start + end) / 2.0),
+                        Some(Curve2::Circle { radius, .. }) => (*radius, 0.0),
                         _ => return Err("an arc without geometry".to_owned()),
                     };
                     // A construction line across the gap, along a radius.
@@ -2813,18 +2910,36 @@ impl SketchEdit<'_> {
                 }
             }
         }
+        let (outlines, open) = super::offset::outlines_of(&next, &ids, chain.closed);
+        self.note_trimmed(&dropped, &merged, &small, outlines.len());
         self.def.offsets.push(super::offset::SketchOffset {
             id,
             curves: chain.curves.iter().map(|(c, _)| *c).collect(),
             distance: param,
             left: d < 0.0,
             results: ids.clone(),
+            dropped,
+            merged,
+            outlines,
+            ends: open,
             corners: Vec::new(),
             helpers,
             derived: false,
         });
-        self.report.constraints.push(id);
+        // The offset's id first in the result, before its own constraints.
+        self.report.constraints.insert(first, id);
         Ok((id, ids))
+    }
+
+    /// The curves in the order of the chain they make, each with whether it
+    /// runs from its start to its end along it, as [`SketchEdit::offset`]
+    /// takes them.
+    pub(crate) fn chain_order(
+        &self,
+        curves: &[EntityUid],
+        solved: &Solved,
+    ) -> Result<Vec<(EntityUid, bool)>, String> {
+        Ok(self.chain(curves, solved)?.curves)
     }
 
     /// The centre point of a circle or an arc.
@@ -3237,8 +3352,6 @@ enum Offset {
         start: f64,
         end: f64,
         ccw: bool,
-        /// The original arc's middle angle.
-        middle: f64,
     },
     Circle(P2, f64),
 }

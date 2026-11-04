@@ -63,6 +63,35 @@ assembly constraints:
 4. A vertex finds each of its faces by rule 2.
 5. A name with nothing like it fails as before (`the body has no face …`).
 
+A modelled thread's pieces are renumbered when the thread gets more or
+fewer turns ([A modelled thread's end
+pieces](#a-modelled-threads-end-pieces), mitcad#1231). For their names:
+
+- An edge name between a piece of a thread (`<f>:thread(<face>)#n`,
+  `<f>:low_thread(<face>)#k`, `<f>:high_thread(<face>)#k`) and another
+  face that finds no edge, also where the piece still exists elsewhere on
+  the thread, finds the edge with the same `#k` between a piece of the
+  same thread and that face (the other face by rules 1 and 2). Where
+  both ends of the thread meet that face, the end the name means counts:
+  a name from an end means that end; a number along the thread the end
+  whose end piece's number now lies nearer to it (the count changes by
+  less than the thread is long); a number below half the pieces' count,
+  of the order before mitcad#490, tells no end. Of several pieces at that
+  end, the one nearest the end. A name counted from one end never finds
+  the other end; when nothing tells the end, or the edges found are
+  several, the name is not found (with suggestions, below).
+- A face name in a key (a chamfer's or a fillet's face of such an edge,
+  `F4:chamfer(E{…|F3:thread(…)#22}#0)`) takes another piece of the same
+  thread as like it (rule 2), least alike, and a key's edge `#0` as like
+  the same edge without a number (one edge where there were two), less
+  alike than the same number.
+- A face name of a piece that is gone finds the thread's piece only
+  when the thread has one: a face alone says nothing of its neighbours.
+
+The feature warns as for a sketch change (`edge E{…#22…} found as
+E{…high_thread(…)#0…} after a change in Thread1`), and Auto Fix writes
+the new name into the definition.
+
 The feature keeps the name it was given (undo and the comparison of
 versions see no change) and succeeds with a warning (`timeline` status
 `warning`, the feature's `warnings`), shown in the timeline and the
@@ -93,7 +122,10 @@ of F2:side(c1[c4,c2])), E{F2:side(c1[c4,c2])|F3:chamfer(E{…})}
   not changed and no feature takes a suggested edge. Pick one and edit
   the feature. A name found again by rule 3 (one edge) is used with its
   warning, and a tie fails with its candidates, as above.
-- Best first: edges between the same two faces (another `#k`), then
+- Best first: edges between the same two faces (another `#k`), then, for
+  a missing piece of a modelled thread, the edges between another piece
+  of that thread and the name's other face (mitcad#1231: the thread's
+  pieces renumbered, before the edges that keep the piece number), then
   edges whose other face was made on the name's other face (a chamfer or
   fillet of the edge, an offset of the face), then edges whose other face
   is like it by rule 2, then the rest; each group in text order.
@@ -731,7 +763,167 @@ millimetres, angles radians. Build sketches with the
     (`sketch.move` with `copy`) is an ordinary curve that no longer
     follows the source. Each corner's kind is fixed when the offset is
     made: an edit that would change it is refused (as .f3d offsets fail
-    likewise).
+    likewise), but for the curves that vanish (below).
+  - **What vanishes is left out** (mitcad#1234, both kinds,
+    `offset::trim`): an arc whose offset radius is not above zero (1e-7
+    of the chain's size), a curve of another kind whose offset folds over
+    (the distance passes its radius of curvature), and then, again until
+    none is left, a curve whose offset turns inside out because its
+    neighbors' offsets cross beyond it (a loop on the source's side).
+    The offsets of the curves on either side are cut or run on (lines
+    along themselves, arcs round their circles) to where they cross, so
+    the overlap on the source's side is trimmed away and the outer
+    outline is kept: a hexagon with 2 mm corner arcs offset 2 mm or more
+    inward is a sharp hexagon. The record lists those source curves in
+    `dropped` (`"dropped": ["c4", "c7"]`, left out when empty); `results`
+    are those of the others in chain order, and the corners of a derived
+    offset count their `join` between the results. An offset made by
+    constraints joins the two results across a curve that vanished at a
+    shared point (a coincidence) where their offset curves cross, which
+    the results' own constraints place, so it stays fully constrained
+    when its source is. An open chain keeps its free ends. It fails,
+    naming the curve, where the curves on either side do not meet
+    (`c2 vanishes at this distance, and the offsets of c1 and c3 on either
+    side do not meet`: a slot offset inward past its arcs' radius, whose
+    sides are parallel), where every curve (of a closed chain, all but
+    one) vanishes, and where the point they meet at lies nearer than the
+    distance to a curve that folds over (only part of it would vanish:
+    `the offset is larger than c2's radius of curvature on that side`).
+    The command's result has `notes` (not `warnings`): `corner arcs c4
+    and c7 vanish at this distance`, which the panel's preview shows as
+    information.
+  - **What vanishes changes**: when an edit leaves other curves vanishing
+    at the distance (`sketch.edit_offset` with a distance, or any edit
+    that moves or resizes the source), the offset is made again with the
+    curves it needs (`SketchEdit::settle_offsets`; an offset made by
+    constraints at once from the source's stored places on a distance
+    edit, so that it never solves in a shape that no longer fits). The
+    result of a source curve that has one before and after keeps its id,
+    so constraints, dimensions and profile regions that name it keep
+    working; a curve that comes back gets a new id. The user's
+    constraints and dimensions on the results move onto the points made
+    again in the same place of their curves; one on a result that
+    vanishes is removed (`removed`) with a warning, `k12 is removed: it
+    was on c30, which vanishes at this distance`. This replaces "an
+    offset fails when its topology would change" for this case.
+  - **Outside the sketch**: when a parameter set elsewhere (the
+    parameters table, an expression) or a linked projection that follows
+    its source at a recompute changes what vanishes, the sketch's
+    evaluation makes the offsets again the same way
+    (`offset::retrim_for_evaluation`, from the evaluation's solve, or a
+    solve of the sources without the offsets' curves when the stale
+    offsets do not solve): kept results keep their ids, so the profile
+    regions and the features made from them follow. The evaluation's
+    output carries that definition with the stored one it was made from
+    (`SketchOutput::retrimmed`); the `sketch` query shows it and the next
+    edit of the sketch starts from it and stores it. The notes become the
+    feature's information (`infos`) and the warnings its warnings. While
+    the stored definition is the one it was made from, an evaluation
+    makes it again the same way, with the same ids.
+  - **Loops away from the joins**: where two neighbors' offsets do not
+    meet, and after the joins are trimmed, a curve whose offset lies
+    wholly nearer the source than the distance (sampled inside its range:
+    the overlap on the source's side) is left out too, and the curves on
+    either side meet instead; for example the walls of a neck narrower
+    than twice the distance, whose offsets pass each other, so that the
+    sides on either side of the neck meet at a sharp corner. When nothing
+    would be left (a slot's two sides) the offset fails as above.
+    Tests:
+    `core/model-tests/sketch/src/sketch_offset_vanishing_1234_tests.rs`,
+    `tools/ui-sketch-offset-vanishing-test.sh` and
+    `app.ui-windows-sketch-offset-vanishing`.
+  - **Lines on one line** (mitcad#1244, both kinds): two lines whose
+    offsets lie on one line, running the same way, across what vanished
+    (a narrow notch in a straight side that the offset closes) are one
+    result, that of the first along the chain: the later line is listed in
+    `dropped` and in `merged` with the line it runs on along
+    (`"merged": [{"curve": "c13", "into": "c1"}]`, left out when empty),
+    and the result runs on to where the curve after the later line meets
+    it (at an open chain's end, to the later line's end). The result is
+    held by the first line's constraints, so the sketch stays fully
+    constrained. The note says `c13's offset runs on along c1's at this
+    distance`.
+  - **Several outlines** (mitcad#1244, closed chains, both kinds): across
+    a waist narrower than twice the distance between two wider parts, the
+    offsets of the curves on either side of the waist do not meet; where
+    each meets the offset of a curve on the other side of the waist
+    instead (on one line, or crossing no nearer any curve than the
+    distance), the outline falls into two there, and so on for each such
+    waist. The one record keeps all of them: `results` stay in the
+    source's chain order (with the ids of their source curves as above),
+    and `outlines` lists the results of each closed outline in order
+    (`"outlines": [["c20", "c21", "c24", "c25"], ["c22", "c23", "c26",
+    "c27"]]`, left out for one outline or an open chain, whose results
+    follow each other in `results`' order). Each outline is joined at
+    shared points like a single one, so each is fully constrained when its
+    source is; a derived offset's corner arcs count their `join` by the
+    result before them in `results`. The note says `the offset falls into
+    2 outlines at this distance`. A dog-bone offset inward past its waist
+    is two outlines, each wall on either side of the waist running on
+    along the one across it. Where no such pairing is found the offset
+    fails as before, or, made by constraints where no arc collapses, is
+    made as before with its curves crossing. An open chain falls into parts
+    since mitcad#1246 (below).
+  - **Offsets of offsets** (mitcad#1244): when an offset made by
+    constraints is made again (its distance edited, its source changed,
+    or at an evaluation), the offsets of its results, and theirs, are made
+    again after it from its new results, with their ids, distances and
+    sides and the user's constraints as above: an offset of all of its
+    results takes all of the new ones (those that come back too), an
+    offset of some keeps those that are kept (a result whose source now
+    runs on along another's becomes that one's) and notes the others
+    (`offset k9 is made again without c31, which vanishes at this
+    distance`); one whose curves all vanish is removed with a warning.
+    An offset of an offset whose middle arc vanishes is no longer refused
+    by the definition check.
+  - The record's `merged` and `outlines` are new in mitcad#1244 and left
+    out when empty: designs saved before read and solve as before, and a
+    design with them is saved and read back the same
+    (`a_dog_bone_offset_inward_past_its_waist_falls_into_two_outlines`).
+    Tests: `core/model-tests/sketch/src/sketch_offset_outlines_1244_tests.rs`.
+  - **Open parts, arcs on one circle, crossing walls, parts too small**
+    (mitcad#1246, both kinds, `offset::trim`):
+    - An open chain falls into parts as a closed one does (a waist whose
+      sides meet across it), and where the offsets on either side of what
+      vanished do not meet at all and no such pairing is found, it ends on
+      both sides, each part keeping its own end there, when those ends lie
+      no nearer any curve than the distance (else it fails as before). The
+      record lists every part in `outlines` and the last result of each
+      open one in `ends` (`"ends": ["c24", "c29"]`, left out when empty);
+      an outline whose last result is not in `ends` closes on its first.
+      An open dog-bone (a dog-bone outline without one wall of its waist)
+      offset inward past its waist is two open parts. As for any open
+      chain, each part's two free ends slide along their curves (two
+      degrees of freedom per part); the rest is held as above.
+    - Two arcs whose offsets lie on one circle, running the same way,
+      across what vanished (a notch in a circle that the offset closes)
+      are one result, as two lines on one line are (`merged`): the result
+      runs on round the circle to where the curve after the later arc
+      meets it. An arc left alone in its outline whose offset circle lies
+      no nearer any curve than the distance runs round its whole circle:
+      its result is a circle about the arc's centre, held by the helper
+      across the arc's middle, so a circle drawn as two arcs with a narrow
+      notch, offset outward past it, is one circle, fully constrained.
+    - Where the offsets of two curves that do not follow each other cross
+      at a point no nearer any curve than the distance, and what runs on
+      past the crossing lies nearer the source than the distance (the walls
+      of a tapered waist, whose offsets cross on the source's side; an
+      outline that merely crosses itself is left as it is), the
+      outline is split there as across a waist: the first runs into the
+      crossing and on along the second, and the curve before the second
+      goes on to the one after the first; the loop between is then
+      trimmed as above. A dog-bone whose waist is a trapezoid, offset
+      inward past its narrow end, is two outlines with no crossing curves.
+    - An outline left with one curve that cannot close, or what is left of
+      a part between two neighbours whose offsets do not meet, which cannot
+      close on its own while the curves on either side of it meet (a lobe
+      narrower than twice the distance beyond a waist that vanished), is
+      left out when anything else is left; it is listed in `dropped`, and
+      the note says `the offset leaves out c5, a part too small for this
+      distance`.
+    - The record's `ends` is new and left out when empty: designs saved
+      before read and solve as before.
+    Tests: `core/model-tests/sketch/src/sketch_offset_open_parts_1246_tests.rs`.
 
 Evaluation solves the sketch (an over- or inconsistently constrained
 sketch fails with the conflicting constraint ids; a solve that does not
@@ -991,13 +1183,38 @@ then cuts eligible actual intersections except the persistent component and
 body exclusions. New intersections join the scope; changing an extent never
 removes an exclusion. Alternatively, `{"type":"explicit","included":[...]}`
 limits it to the listed component/path pairs; `included: []` means no targets.
-Both modes accept `excluded_bodies` for finer selection. Missing stored targets
-or excluded bodies fail the cut, instead of broadening its scope. Body references
-and component creators must precede the feature. Automatic discovery reads only
+Both modes accept `excluded_bodies` for finer selection. A missing included
+target fails the cut, instead of broadening its scope; so does an exclusion
+whose path does not exist in the design or places another component, and an
+excluded body that is in another component. The creators of the context and of
+included components must precede the feature. Automatic discovery reads only
 the preceding timeline state, so later features cannot form a dependency cycle.
 Deleting a component definition follows normal dependent-feature deletion,
-including cuts that explicitly include or exclude it; Undo restores the cut and
-its scope. Missing occurrence paths after other edits remain repairable failures.
+including cuts that explicitly include it; Undo restores the cut and its scope.
+Missing occurrence paths after other edits remain repairable failures.
+
+Exclusions are no references (mitcad#1236). An occurrence in `excluded` or a
+body in `excluded_bodies` names what the cut leaves alone, so it makes the cut
+a dependent of no feature that builds that occurrence's bodies or that body:
+the `dependents` query does not list the cut for them, `delete_feature`
+deletes them without refusing, `delete_feature` with `"dependents": true`
+does not take the cut along, and they may be suppressed or moved after the
+cut. An exclusion of an occurrence that is not placed yet at the cut, or of a
+body that is not there at the cut, leaves nothing alone there and does not
+fail it. When a delete (`delete_feature`, `delete_occurrence`, `build_remove`) takes the
+excluded occurrence or body out of the design, or the feature that made the
+body, the exclusion is dropped from the scope: the cut keeps working, and the
+command's result has an `info` notice about the cut (`target`: its uid) for
+each exclusion dropped. Undo restores it. The real references keep their
+dependencies: an explicit scope's `included` components, `participants`,
+`object_links`, the profile's sketch and its projections, and planes on
+another component's geometry. The cut scope is the only stored list of what
+something leaves out: `combine` (its tools and `tool_links`), `split_body`
+(its tools and `tool_links`), the moves (the bodies and occurrences they
+move), the patterns (their objects) and Section Analysis (its plane's and
+axis' occurrences) name only what they use, so what they name stays a
+reference; the `interference` query's `bodies` are a query's input, not
+stored in the design.
 
 Only Cut activates `cut_scope`, and an active scope cannot be combined with
 nonempty legacy `participants`. Other solid operations may retain a dormant
@@ -1516,6 +1733,28 @@ threads have no end chamfers: the thread properties the imports read
 (`core/import/SCHEMA.md`, `ThreadFeature`) include none; a chamfer in
 those designs is a feature of its own.
 
+#### A modelled thread's end pieces
+
+(mitcad#1231) The numbers along the thread change with the pieces'
+count: more or fewer turns (a length, an offset, a pitch or a profile
+change) renumber every piece, the pieces at the thread's ends too. So
+each piece of a modelled thread is also named by its place from the
+nearer end of the face, from 0 at the end: `low_thread(<face>)#k` from
+the face's low end and `high_thread(<face>)#k` from its high end (the
+ends along the face's cylinder's axis, as the chamfers' cones name
+them). A piece has one of them, from the end it lies nearer to, besides
+its number along the thread. These names come first, so the piece's
+edges are named after them: the edge where the thread meets the plain
+rest of its face, a chamfer's cone or the body's end face keeps its name,
+`E{F3:side(c51[c57,c61])|F26:high_thread(F3:side(c51[c57,c61]))#0}`,
+when turns come or go at the other end. Pieces of whole turns in the
+middle may change their end and place.
+
+A design saved before that names the end's edge by the piece's number
+along the thread (`E{F26:thread(F3:side(c51[c57,c61]))#22|F3:side(c51[c57,c61])}#0`)
+finds it again after a change of the pieces' count ([Faces, edges and
+vertices a sketch change renamed](#faces-edges-and-vertices-a-sketch-change-renamed)).
+
 #### Custom and multi-start threads, modelled trapezoidal threads
 
 (mitcad#893)
@@ -1719,7 +1958,8 @@ form lists edge sets:
   face beyond one edge to the face beyond the other. Where a rounding is
   wider only along part of the edge, OCCT's rounding rolls on the far
   edge where its contact reaches it, and near an end of the edge it is
-  cut by the face beyond, as before. Chamfers do not overflow.
+  cut by the face beyond, as before. Chamfers overflow too (mitcad#1232,
+  see [chamfer](#chamfer)).
 - Overlapping roundings of opposite kinds (mitcad#235): where the
   roundings of a convex and a concave edge overlap on the face between
   them (a step narrower than the two are wide) and OCCT's fillet fails
@@ -1775,6 +2015,37 @@ The general form has edge sets with a reference face:
   rings, as for fillets.
 - A failed bevel is built again on the body with merged edge pieces, and
   an input's own faults away from it are taken over, as for fillets.
+- Edge overflow (mitcad#1232): a bevel wider than a face next to its edge
+  (its contact on that face running past the face's far edge) goes on past
+  that edge at its full size and is cut by the faces beyond: the face
+  beyond cuts it where the bevel meets it (a face falling away from the
+  narrow face, or a slope it runs into); where it cannot meet that face (a
+  wall rising past the narrow face's far edge, on any of the narrow face
+  types below, mitcad#1238), the bevel is cut at the far edge, the wall's
+  faces continued down to it along their own surfaces (a plane or cylinder
+  as itself, a B-spline flank to its bounds and extrapolated past them),
+  and where the bevel comes out of a thin wall again near the far edge it
+  cuts through the wall. The
+  narrow face vanishes where the bevel is wider than it and stays,
+  narrower, where it is not: along part of an edge or all of it, on one
+  or both sides, round a closed edge, over several narrow faces in a row,
+  any surface beyond (a thread's B-spline flanks); the narrow face itself
+  a plane, cylinder, cone, sphere or torus. All sizes, `flip` and `reference_face` as elsewhere, and the
+  corner types: the bevel is built on the body with the narrow faces
+  continued past their far edges (the space beyond filled, a wall there
+  taken away), and that space is cut out again and the walls are put back
+  (geometry/src/cutouts.hpp). The bevel's faces are
+  `<chamfer>:chamfer(<edge>)`, the pieces of the narrow face left keep its
+  name, a wall's face continued down the wall's. It is never built
+  smaller than asked (no 0.1 % smaller retry where a face beside the edges
+  is narrower than the bevel): where it cannot be built so, the error says
+  where, `…; the chamfer of edge E{…} is wider than face F… and cannot
+  meet face F… beyond it`. Where an overflowing bevel meets other bevels
+  at a vertex (mitcad#1238), the corner is built as without the overflow
+  on the body continued past each edge's narrow faces on its own; where
+  the corner type cannot build it there, the error adds the corner's
+  failure and the other corner types that build it, `…; past the narrow
+  face the corner fails: …; the corner type chamfer or miter builds it`.
 - A bevel the geometry kernel cannot build fails with what was asked in
   its error, the kernel's own message kept at its end (mitcad#1185): the
   selected edges and the faces their chains end against, `chamfer: the
@@ -1812,10 +2083,51 @@ parametrisation, as imported bodies have them) is split at the creases
 first, so its wall comes in pieces (`#k`) under the face's name. A face
 that vanishes at the wall's thickness (a strip narrower, or a convex
 rounding tighter, than the wall) has no inside face: the insides of the
-faces beside it meet (mitcad#172, the OCCT port's patch 0100). One that
-vanishes only in parts still makes the shell fail, and so does a wall
+faces beside it meet (mitcad#172, the OCCT port's patch 0100). A wall
 the kernel cannot close (an open face ending smoothly in a kept one,
-without the tangent chain), which before came back as the body itself. A loft from a polygon to a circle, whose corners'
+without the tangent chain), which before came back as the body itself,
+makes the shell fail.
+
+Parts no thicker than the wall stay solid (mitcad#1233). Where the
+kernel's thick solid (or closed offset) fails, the inside of the wall is
+the body less a cavity: the body's inward offset with the removed faces
+moved out past the body, so that it opens through them. Left out of the
+cavity, and solid with their own faces: the part under a face no further
+from a removed face than the wall (a 2 mm flange shelled 2 or 3 mm from
+its removed bottom; the exact coincident case is no special one), a
+plate between two opposite planar faces no further apart than twice the
+wall (cut off the body before the offset), and a curved or tapered part
+(a conical skirt, a cylindrical sleeve, a wedge-shaped fin, mitcad#1237):
+a kept face no further than twice the wall from another kept face across
+the body under at least half of it, together with the faces it turns
+away from convexly (up to the concave edges where the part stands on the
+rest of the body), taken away before the offset with the faces round it
+extended over its root. Where no face round such a part can be extended
+over its root (a fin whose ends continue the body's sides, mitcad#1240)
+and the offset fails, the part is cut off at its root instead: the body
+is split by the surfaces the faces its thin faces stand on concavely lie
+on (each reaching past the body; several where it stands in a corner, a
+whole cylinder where its root is curved, mitcad#1241), and the pieces the thin faces bound are cut off before the offset,
+unless they hold more volume than the wall times their area, are the
+whole body or hold all of a removed face. Where the offset still fails, convex roundings
+tighter than the wall (and the curved faces round them, such as a
+chamfer's cone round a rounded corner) are taken away before it: the
+inside of the wall runs past them. Where the cavity then comes nearer
+than the wall to a face it runs past or leaves out, the faces the
+nearest part of it is offset from go deeper by the difference, so that
+the wall keeps its thickness; where that does not help, the feature
+warns "the wall is thinner than <t> mm beside face(s) …: down to <d> mm
+(<t - d> mm less)". A cavity that would cut into a kept face is refused. The outside keeps every face's name; the inside is
+`<shell>:offset(<face>)` and what is left of a removed face
+`<shell>:offset_cap(<face>)`, as above. The feature warns, naming the
+named faces without an inside of the wall (the first four, then "and N
+more"), whichever way the shell was built: "the wall does not fit under
+face(s) …; it is (the body is) left solid there" where some of the face
+is further than twice the wall from the inside of the wall, else "the
+inside of the wall runs past face(s) …, which is (are) too small or too
+tightly curved for it to follow". Where the wall fits under no face, the
+shell fails: "shell failed; the wall does not fit under faces …: nothing
+can be hollowed". A loft from a polygon to a circle, whose corners'
 creases flatten to tangency at the circle, shells and offsets where the
 walls lean out towards the circle (the OCCT port's patch 1130,
 mitcad#1184) and where they lean in (patch 1190, mitcad#1193). Leaning
@@ -3497,7 +3809,7 @@ results](#failed-features-in-command-results)).
 |---|---|---|
 | `add_feature` | `def`, `name` (optional), `component` (optional: a component's uid or name; the active component when left out), `after` or `index` (optional: where in the timeline, see [Adding a feature in the middle of the timeline](#adding-a-feature-in-the-middle-of-the-timeline)) | `uid`, `name`, `parameters` (created); for a new-component operation placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
 | `edit_feature` | `uid`, `def` (same type) | `parameters` (created); when the edit makes a new component placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
-| `delete_feature` | `uid`, `dependents` (default false) | `deleted`: uids in timeline order |
+| `delete_feature` | `uid`, `dependents` (default false) | `deleted`: uids in timeline order; `notices` for the cut-scope exclusions it dropped ([Assembly scope for Extrude Cut](#assembly-scope-for-extrude-cut)) |
 | `suppress_feature` | `uid`, `suppressed` (default true), or `expression` (a condition the suppression follows; [Bindings](#bindings-values-from-expressions)) | |
 | `reorder_feature` | `uid`, `index` (new timeline index) | |
 | `rename_feature` | `uid`, `name` | |
@@ -3528,7 +3840,10 @@ results](#failed-features-in-command-results)).
   these copied expressions. Their parameter references remain editable.
 - `delete_feature` refuses while other features refer to the feature
   (`Extrude1 is used by Fillet1; …`); with `"dependents": true` they go
-  too (the `dependents` query lists them).
+  too (the `dependents` query lists them). A cut whose `cut_scope` only
+  excludes the feature's component or body does not refer to it
+  (mitcad#1236): the delete goes ahead, the cut stays, and an exclusion of
+  a body the feature made is dropped with an `info` notice.
 - `reorder_feature` refuses a position where a feature would come before
   something it refers to (the `can_reorder` query asks first).
 - Features after the marker are rolled back (not evaluated); suppressed
@@ -4125,7 +4440,7 @@ timeline marker.
 | `profiles` | `hashes` | `sketch`, `sketch_name`, `region`, `consumed` (an extrude uses it), `face_bounded`: true when an implicit supporting-face boundary participates; with `"hashes": true` also `hash` (16 hex digits of the region's geometry and sketch frame: the same while the profile's face would be the same) |
 | `faces` | `body`; `geometry`, filters `surface`, `min_area`, `max_area`, `normal`, `normal_tolerance`, and `offset`, `limit` ([Faces and edges with geometry](#faces-and-edges-with-geometry)) | per face: `names`, `surface` (`plane`, `cylinder`, …), `area`; with `"geometry": true` also its surface's geometry and `bbox`; with a filter, `offset` or `limit` an object: `total`, `offset`, `faces` (each also with `index`) |
 | `edges` | `body`; `geometry`, filters `curve`, `min_length`, `max_length`, and `offset`, `limit` ([Faces and edges with geometry](#faces-and-edges-with-geometry)) | per edge: `name`, `curve` (`line`, `circle`, …), `length`; with `"geometry": true` also its curve's geometry and `bbox`; with a filter, `offset` or `limit` an object: `total`, `offset`, `edges` (each also with `index`) |
-| `dependents` | `uid` | `dependents`: `uid`, `name` of the features that refer to it, directly or through others, in timeline order (what `delete_feature` with `dependents` deletes too) |
+| `dependents` | `uid` | `dependents`: `uid`, `name` of the features that refer to it, directly or through others, in timeline order (what `delete_feature` with `dependents` deletes too); a cut-scope exclusion is no reference, so a cut that only excludes the feature's component or body is not listed (mitcad#1236) |
 | `can_reorder` | `uid`, `index` | `ok`, and `error` (the reason `reorder_feature` would give) when not |
 | `sketch` | `uid` | see [Sketch commands](#sketch-commands) |
 | `threads` | `cosmetic` (optional, false: only the cosmetic threads, the ones the view draws; a modelled thread is in the geometry, and measuring its face cost a design with modelled threads 0.3-0.6 s each time the window showed it, mitcad#878) | threads on the bodies (thread features and tapped holes): `feature`, `name`, `body`, `face`, `standard`, `designation`, `class`, `right_handed`, `modeled`, `major_diameter`, `minor_diameter`, `pitch`, a multi-start thread's `starts` and `lead` (mitcad#893), and from the face `internal`, `radius`, `start`, `end` (points on the axis where the thread begins and ends; a cosmetic thread's end chamfers move them to where their cones meet the cylinder). A modelled thread whose crest lies on its face leaves pieces of the face between its grooves, and the face at the marker is measured. A modelled thread feature whose crest lies off its face (a class's diameters, a radial clearance) takes or covers all of the face along its part, leaving nothing of it (over the whole face) or only what lies outside the part, which does not show where the thread runs: it is listed with the face measured on the body before the feature, as long as the faces it made from it are on the body, and its end chamfers move `start` and `end` to where their cones meet the crest (mitcad#433, mitcad#628). A tapped hole's modelled thread whose crest lies off its wall (a radial clearance) is listed on the wall as the hole measured it before cutting the thread, as long as the thread's faces made from it are on the body (mitcad#436, mitcad#628); a result stored before mitcad#628 keeps only the walls left without any piece, and a part's wall in it is measured at the marker |
@@ -4575,8 +4890,8 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.insert_spline_point` | `curve` (a spline), `at` [x, y] | a point on the spline where it is nearest `at`: a fit point between its neighbours, or a control point by knot insertion that keeps the shape exactly; result `made`: the new point; see [Insert Point on a spline](#insert-point-on-a-spline) (mitcad#836) |
 | `sketch.fillet` | `a`, `b` (lines, or a circular arc and a line or arc that end together, mitcad#1192), or `curves` (lines and arcs) and/or `points` (corners) for several corners; `radius` (value) | a tangent arc with a radius dimension; the corner stays as a point on both curves ([Fillets at corners of arcs](#fillets-at-corners-of-arcs)), and a length dimension of either line becomes a distance to it, so dimensions keep their meaning; several corners: one arc each, one radius dimension and the others Equal to the first ([Rounded rectangles and fillets of several corners](#rounded-rectangles-and-fillets-of-several-corners)) |
 | `sketch.chamfer` | `a`, `b`, `distance`, and `distance2` or `angle` (values) | a line and its distance (and distance or angle) dimensions from the kept corner |
-| `sketch.offset` | `curves` (a chain of joined curves, or one closed curve), `distance` (value) | to the right of the chain direction (a closed curve: positive is out); one parameter for the distance; an `offsets` record (derived with ellipses and splines); result `constraints` [the offset's id] and `warnings`; a curve the same as another counts once, see [Projected outlines and their offsets](#projected-outlines-and-their-offsets) |
-| `sketch.edit_offset` | `offset` (`k8`), `distance` (value), `flip` | the distance changes, `flip` moves it to the other side; the curves keep their ids |
+| `sketch.offset` | `curves` (a chain of joined curves, or one closed curve), `distance` (value) | to the right of the chain direction (a closed curve: positive is out); one parameter for the distance; an `offsets` record (derived with ellipses and splines); result `constraints` [the offset's id] and `warnings`; a curve the same as another counts once, see [Projected outlines and their offsets](#projected-outlines-and-their-offsets); curves that vanish at the distance are left out and their neighbors trimmed to meet, named in the record's `dropped` and the result's `notes` (mitcad#1234, see `offsets` in the sketch definition); lines on one line across them are one result (`merged`), and a closed chain may fall into several outlines in one record (`outlines`, mitcad#1244) |
+| `sketch.edit_offset` | `offset` (`k8`), `distance` (value), `flip` | the distance changes, `flip` moves it to the other side; the curves keep their ids; when other curves vanish at the new distance the offset is made again, kept curves keeping their ids and a curve that comes back getting a new one (mitcad#1234) |
 | `sketch.mirror` | `entities`, `axis` (a line `c4`, or the sketch's own axis `"x"` or `"y"`, made in the same undo step when the sketch has none, see [The sketch's axes and origin as entities](#the-sketchs-axes-and-origin-as-entities); mitcad#876) | copies with symmetric constraints (an ellipse copy also keeps an equal minor radius); points on the axis are shared; the axis line among `entities` is left out (refused only when nothing else is left), and a point whose curve is mirrored too (a circle's centre picked with the circle) gets no symmetry of its own, which would be redundant (mitcad#876) |
 | `sketch.circular_pattern` | `entities`, `center` (point input; a new point is fixed), `count` (originals included), `angle` (value, default a full turn) | a `patterns` record; result `constraints` [the pattern's id] |
 | `sketch.rectangular_pattern` | `entities`, `direction` (default [1, 0]), `count` [n1, n2], `spacing` [s1, s2] (values, signed: a negative spacing goes against its direction, mitcad#447; not zero), `symmetric` ([bool, bool], default none: per direction the originals are the middle instance, an odd count, and the copies lie on both sides) | as above |
@@ -5150,6 +5465,9 @@ Examples: `tools/cli/tests/f6_*.json`.
   of a component deletes the component with its features, the feature
   that made it and what depends on them, and the components only it
   contained (a component made from bodies gives them back to its parent).
+  A cut that excludes the occurrence stays: its exclusion is dropped, with
+  an `info` notice in the result (mitcad#1236,
+  [Assembly scope for Extrude Cut](#assembly-scope-for-extrude-cut)).
 
 ### Component commands and queries
 
@@ -5164,7 +5482,7 @@ Examples: `tools/cli/tests/f6_*.json`.
 | `set_occurrence_transform` | `occurrence`, `transform`, `capture` (default false) | `feature`: the capture, or null |
 | `copy_occurrence` | `occurrence`, `transform` (optional) | `occurrence`, `name` |
 | `paste_new` | `occurrence`, `transform` (optional) | `component`, `occurrence`, `name` |
-| `delete_occurrence` | `occurrence` | `deleted`: features |
+| `delete_occurrence` | `occurrence` | `deleted`: features; `notices` for the cut-scope exclusions it dropped |
 | `insert_component` | `path` or `library` ([Component libraries](#library-parts)), `link` (default true), `transform`, `name`, `base` (directory of relative paths), `mount` (placed by a mount frame instead of `transform`, [Mount frames](#mount-frames)), `parameters` (linked with options, [Options of inserted components](#options-of-inserted-components)) | `component`, `occurrence`, `name`, `bodies` (the new component's), `frames` (its mount frames: `name`, `kind`, `joint`, `pitch`, `cells`, `footprint`, `feature` (the joint origin), `occurrence`), `joint` and `joint_name` (a mount placement's, else null), `mount` (what the placement did, as `mount_preview` answers); with `parameters` also `moves` and `refused` |
 | `update_links` | `base` (optional) | `messages` |
 | `reparent_occurrence` | `occurrence` (path from the root), `parent` (path; empty: the root) | see [Moving an occurrence to another parent](#moving-an-occurrence-to-another-parent) |
@@ -8552,7 +8870,7 @@ with `error` (`class`, `message`, `detail`, as the remote commands') and
 
 | Command | Fields | Result |
 |---|---|---|
-| `library_fetch` | `url` (https, ssh, a file:// URL or a folder; never with credentials) | `kind` (`library`, `index`), `id`, `name`, `url`, `dir`, `cloned`, `head`, `versions`, `problems` (`errors`, `warnings`), `error`, `log`: a bare clone into the cache (`git clone --bare`), or new branches and tags fetched into it; a repository that is neither, or larger than 200 MB, is refused and leaves nothing. An update that would make the clone larger than 200 MB is `too_large` and is not taken: its references (fetched to `refs/incoming/` first) and new object files are removed, the versions fetched before stay (mitcad#938) |
+| `library_fetch` | `url` (https, ssh, a file:// URL or a folder; never with credentials), `use_git` (default false, mitcad#1224: every address through the installed git program; off, https:// and http:// are fetched without git, folders and file:// with git, and an SSH address is `unsupported`, "needs the installed git program") | `kind` (`library`, `index`), `id`, `name`, `url`, `dir`, `cloned`, `head`, `versions`, `problems` (`errors`, `warnings`), `transport` (`built_in` or `git`), `error`, `log`: a bare clone into the cache (as `git clone --bare` makes it), or new branches and tags fetched into it; a repository that is neither, or larger than 200 MB, is refused and leaves nothing. An update that would make the clone larger than 200 MB is `too_large` and is not taken: its references (fetched to `refs/incoming/` first) and new object files are removed, the versions fetched before stay (mitcad#938) |
 | `library_list` | | `root`, `libraries`: `dir`, `url`, `kind`, `versions`, and a library's `id`, `name`, `description`, `license`, `authors`, `components` (count), `problems`, an index's `name`, `entries` |
 | `library_show` | `url` or `id`, `rev` (default: the newest version) | `dir`, `url`, `rev`, `labels`, `versions`; a library's `manifest`, `problems` and `components` (`id`, `name`, `path`, `category` (its home category), `categories` (every one, the home first), `groups` (per category `{"category", "path", "order"}`: the group's names from the top and each name's place in the manifest's list, [Groups](../../../docs/libraries.md#groups), mitcad#527), `standard`, `description`, `keywords`, `license`, `license_note`, `preview`, `designation`, `supplier`, `part_number`, `supplier_url`, `build` (as the manifest has it, or null), `mounts` (likewise, mitcad#525), `configurations`: `selectors`, `selector_values`, `default`, `rows` with `name`, `select` and, when the row has them, its own `part_number`, `supplier_url` and `designation`); an index's `name`, `description`, `entries` |
 | `library_search` | `text` (words that must all match name, id, standard, description, categories, keywords, supplier, part number, the library), `role` and `system` (BUILD parts only, [BUILD parts](../../../docs/libraries.md#build-components): the role, and the slot system as `{"type", "slot", "grid"}` or text `B/8/30`, a series left out matching any; a linear part's `kind` and `size`), `supplier` (the same, without case), `part_number` (the component's or a row's own, without case), `licenses` (SPDX ids an item may have; left out: any), `unlicensed` (default false: items without a licence are hidden), `category` (any of a component's categories), `libraries` (ids or URLs) | `components` (of fetched libraries at their newest versions: as `library_show`'s with `library`, `library_name`, `url`, `rev`, `version`, `authors`), `libraries` (index entries with `index`, `index_url`, `fetched`, `license_note`), `hidden` (left out for their licence) |
@@ -8575,7 +8893,11 @@ runs `tools/libraries/make-fastener-library.py` and
 
 Tests: `core/model-tests/links/src/library_tests.rs` (tables, parts with a resolver
 in memory: versions kept, explicit updates, copies, the parts list),
-`core/model-base/src/configurations.rs`, `core/vcs/src/tests/library.rs`
+`core/model-base/src/configurations.rs`, `core/vcs/src/tests/library_https.rs`
+(mitcad#1224: a library fetched and updated over http:// from a test
+server without a git program, plain errors, SSH refused, `use_git`),
+`core/vcs/src/remote/https.rs` (routing, error classes, progress),
+`core/vcs/src/tests/library.rs`
 (libraries made, tagged and fetched from folders and file:// URLs,
 versions, the resolver, comparisons, checks, an index, parts recorded
 under a library's old id and address; skipped without git), ctest `cli.library` (`tools/cli/library-test.cmake`: the generator,
@@ -11392,7 +11714,7 @@ points*).
 | `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`); undo step `Edit <name>` |
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
-| `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them) and `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths); the parts placed on it keep where they are; undo step `Remove <name>` |
+| `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them) and `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths); the parts placed on it keep where they are; `notices` for the cut-scope exclusions it dropped (mitcad#1236); undo step `Remove <name>` |
 | `build_upgrade` | | `upgraded` (the connectors and fasteners placed again) and `count`: the slot connectors and their fasteners that the first placing rule placed, placed by the current one (*Where a connector goes*, mitcad#1115); undo step `Place connectors by the current rule`, none when nothing changes. The application and `mitcad-cli` run it when they open a design; a refusal leaves the design as loaded, with a warning (mitcad#1151) |
 
 `at` says where the part goes: `{"occurrence", "geometry", "point",
@@ -20009,7 +20331,7 @@ follow from the printer and nozzle in use.
 |---|---|---|
 | `edit_material` | as in [Materials](#materials), and `variants` (every variant, in the place of those it has), `variant` (one: `{"printer", "nozzle", "filament"}` sets its values, a key with null removed, and makes it when the material has none of that printer and nozzle; `{"printer", "nozzle", "remove": true}` removes it), `slicer` (a slicer's own keys by slicer id, a key with null removed); also with `library` | as `edit_material` |
 | `create_material` | as in [Materials](#materials), with `variants` and `slicer` too | as `create_material` |
-| `merge_materials` | `ids` (two or more: the first takes the others), `library` (`user` or `project`: that library's items), `project` | `id` (the first's). In the design the first takes the merged values and the filament's name (unless another material shows it), the others go and the bodies and components that named them name it; one undo step `Merge Materials Shop PLA`. In a library the first item's file takes them (its next version) and the others' files go, one undo step; the design's copies of those that bodies use stay as the design's own. Refused for materials two of which are for any printer |
+| `merge_materials` | `ids` (two or more: the first takes the others), `library` (`user` or `project`: that library's items), `project` | `id` (the first's). In the design the first takes the merged values and the filament's name (unless another material shows it), the others go and the bodies and components that named them name it; one undo step `Merge Materials Shop PLA`. In a library the first item's file takes them (its next version) and the others' files go, one undo step; the design's copies of those that bodies use stay as the design's own. Refused for materials two of which are for any printer. A merged default appearance nothing has is kept (mitcad#1242, *A library's material* in [A filament's color is its appearance](#a-filaments-colour-is-its-appearance)): a material's own color made again, another id named in `warnings` |
 | `import_slicer_presets` | as in [Print profiles](#print-profiles), and `printers`, `merge_separate` | as there, `merged` (`[{"id", "name", "from"}]`, `from` the ids merged) with `merge_separate` |
 
 | Query | Fields | Result |
@@ -20329,10 +20651,24 @@ has a material and one of its appearances.
   whole list: a carried appearance the design does not have is added; one
   the design has of the same id and look is used; one of the same id and
   another look comes under a free id (`translucent_blue_1`) in its place of
-  the list, and counts as the same when a newer version is compared. A
-  default that is neither the library's nor carried nor the design's is
-  refused as before; another of the list that is none of these is left
-  out. `library_items` gives a library material row's
+  the list, and counts as the same when a newer version is compared.
+  Another of the list that is neither the library's nor carried nor the
+  design's is left out. A *default* that is none of these (mitcad#1242:
+  a slicer import or an older version wrote the item without it) refuses
+  only a change that names it (`appearance`): `edit_material` and
+  `create_material` with a `library` (a rename, a density, print
+  settings, a Duplicate of the item) and `merge_materials` go on. When
+  it is the material's own color, `<id>_colour` of its id or of the one
+  it was copied from (`based_on`), its `-` and `/` as `_`
+  (`generic-tpu-bbl-a1m` → `generic_tpu_bbl_a1m_colour`), it is made
+  again as an import makes it (the library's white plastic in the
+  material's filament color: its own `filament_colour`, else a slicer's
+  `default_filament_colour` it keeps, else the neutral gray `#BFBFBF`;
+  named `<name> color`, an FDM plastic's look) and the file carries it
+  from then on (a design copy showing it gets it too); another id stays
+  the default, carried by none, and the answer's `warnings` names it
+  (`material generic-tpu: there is no appearance lost_look; kept as its
+  default`). `library_items` gives a library material row's
   `carried_appearances` (`id`, `name`, `base_color`, `display_color`), so
   that its appearances are named and coloured before the design has them.
 - **Replace Appearance** (the application's question when a material is
@@ -20358,7 +20694,13 @@ saved into a library and inserted into a new design with the same three,
 the Replace Appearance condition in the application's unit test
 `tests/material_menu.cpp`; the application's in
 `tools/ui-filament-appearance-test.sh`, `app.ui-windows-filament-appearance`
-and `app.ui-macos-filament-appearance`.
+and `app.ui-macos-filament-appearance`. A library material without its
+own color (mitcad#1242): `library_own_colour_tests` (`core/model-tests/print`:
+renamed, its density and a print setting changed, each carrying the color
+made again; another missing default kept with a warning; a Duplicate; the
+design's copy taking the edit) and the Materials window's rename in
+`tools/ui-library-material-own-colour-test.sh` and
+`app.ui-windows-library-material-own-colour`.
 
 ## Center of Mass
 

@@ -23,30 +23,31 @@ class AppKitBindingsCard final : public NativeBindingsCardView {
 public:
   AppKitBindingsCard(QWidget* source, std::function<void()> closed)
       : m_source(source), m_closed(std::move(closed)) {
-    m_popover = [NSPopover new];
-    m_popover.animates = NO;
-    m_delegate = [MitcadBindingsPopoverDelegate new];
-    m_delegate->owner = this;
-    m_popover.delegate = m_delegate;
     m_scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 460, 200)];
     m_scroll.hasVerticalScroller = YES;
     m_scroll.autohidesScrollers = YES;
     m_scroll.drawsBackground = NO;
     m_scroll.accessibilityIdentifier = @"native.bindingsCard.scroll";
-    NSViewController* controller = [NSViewController new];
-    controller.view = m_scroll;
-    m_popover.contentViewController = controller;
   }
 
   ~AppKitBindingsCard() override {
     hide();
-    m_delegate->owner = nullptr;
-    m_popover.delegate = nil;
   }
 
-  void show(const QRect& anchor, bool pinned) override {
+  void show(const QRect& anchor, bool) override {
     NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(m_source);
     if (!m_source || !window.visible || !NSApp.active) return;
+    hide();
+    // A close notification can arrive after the next presentation starts.
+    // Keep each presentation's popover and delegate separate from its successor.
+    m_popover = [NSPopover new];
+    m_popover.animates = NO;
+    m_delegate = [MitcadBindingsPopoverDelegate new];
+    m_delegate->owner = this;
+    m_popover.delegate = m_delegate;
+    NSViewController* controller = [NSViewController new];
+    controller.view = m_scroll;
+    m_popover.contentViewController = controller;
     if (!m_view) {
       m_view = createNativeWidgetView(m_source);
       NSView* root = (__bridge NSView*)m_view->nativeView();
@@ -60,8 +61,9 @@ public:
       ]];
     }
     refresh();
-    if (m_open) hide();
-    m_popover.behavior = pinned ? NSPopoverBehaviorTransient : NSPopoverBehaviorApplicationDefined;
+    // Use the local monitor for dismissal. AppKit's transient event observer
+    // can close a successor when an earlier outside click finishes dispatching.
+    m_popover.behavior = NSPopoverBehaviorApplicationDefined;
     const CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
     const NSRect screen = NSMakeRect(anchor.left(), top - anchor.bottom() - 1,
                                      std::max(1, anchor.width()), std::max(1, anchor.height()));
@@ -70,6 +72,9 @@ public:
     [m_popover showRelativeToRect:local ofView:window.contentView preferredEdge:NSRectEdgeMinY];
     m_scroll.window.identifier = @"native.bindingsCardWindow";
     m_scroll.window.title = m_source->windowTitle().toNSString();
+    m_deactivation = [NSNotificationCenter.defaultCenter
+        addObserverForName:NSApplicationDidResignActiveNotification object:NSApp queue:nil
+        usingBlock:^(NSNotification*) { closed(); }];
     if (m_monitor == nil) {
       m_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown |
           NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent* event) {
@@ -83,7 +88,10 @@ public:
         if (event.type != NSEventTypeKeyDown) {
           const NSPoint pointer = event.window ? [event.window convertPointToScreen:event.locationInWindow]
                                                : NSEvent.mouseLocation;
-          if (!NSPointInRect(pointer, m_scroll.window.frame)) closed();
+          // A press sent to another window is outside even if its frame
+          // overlaps the popover at the same screen coordinates.
+          if ((event.window != nil && event.window != m_scroll.window) ||
+              !NSPointInRect(pointer, m_scroll.window.frame)) closed();
         }
         return event;
       }];
@@ -96,7 +104,15 @@ public:
       [NSEvent removeMonitor:m_monitor];
       m_monitor = nil;
     }
+    if (m_deactivation != nil) {
+      [NSNotificationCenter.defaultCenter removeObserver:m_deactivation];
+      m_deactivation = nil;
+    }
+    if (m_delegate != nil) m_delegate->owner = nullptr;
+    m_popover.delegate = nil;
     [m_popover close];
+    m_popover = nil;
+    m_delegate = nil;
   }
 
   void closed() {
@@ -136,6 +152,7 @@ private:
   NSScrollView* __strong m_scroll = nil;
   NSLayoutConstraint* __strong m_height = nil;
   id __strong m_monitor = nil;
+  id __strong m_deactivation = nil;
   bool m_open = false;
 };
 

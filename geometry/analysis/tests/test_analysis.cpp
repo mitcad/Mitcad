@@ -1059,6 +1059,54 @@ void test_sections() {
         near(mitcad::analysis::physical_properties(corner).volume, 6000.0 - 27.0 / 6.0, 1e-7));
 }
 
+// Each of clip's attempts (mitcad#1230) on its own: the plain cut, the cut
+// with a fuzzy value and the cut at the plane moved by kClipShift keep the
+// same side, the last 1e-6 mm more of it; clip reports the attempt that
+// worked. The input is left as it was.
+void test_clip_attempts() {
+  using mitcad::analysis::clip;
+  using mitcad::analysis::clip_by;
+  using mitcad::analysis::ClipAttempt;
+  using mitcad::analysis::ClipReport;
+  using mitcad::analysis::kClipShift;
+  const TopoDS_Shape a = box(0, 0, 0, 10, 20, 30);
+  const Plane plane{{0, 0, 10}, {0, 0, 1}};
+  const auto volume_of = [](const TopoDS_Shape& shape) {
+    return mitcad::analysis::physical_properties(shape).volume;
+  };
+  // At least the baseline tolerance of 1e-6 mm on every length.
+  for (const ClipAttempt attempt : {ClipAttempt::Plain, ClipAttempt::Fuzzy, ClipAttempt::Moved}) {
+    std::vector<mitcad::analysis::ClippedFace> faces;
+    const TopoDS_Shape cut = clip_by(a, plane, attempt, &faces);
+    const double shift = attempt == ClipAttempt::Moved ? kClipShift : 0.0;
+    CHECK(near(volume_of(cut), 200.0 * (10.0 + shift), 1e-6));
+    CHECK(faces.size() == 6);
+    const auto reach = mitcad::analysis::bounds(cut);
+    CHECK(near(reach.max.z, 10.0 + shift, 1e-6) && near(reach.min.z, 0.0, 1e-6));
+    // The top is gone, the bottom whole, each side cut once.
+    std::size_t pieces = 0;
+    for (const auto& face : faces) {
+      pieces += face.pieces.size();
+    }
+    CHECK(pieces == 5);
+  }
+  CHECK(near(volume_of(a), 6000.0, 1e-9));
+  CHECK(near(mitcad::analysis::bounds(a).max.z, 30.0, 1e-9));
+
+  ClipReport report;
+  report.attempt = ClipAttempt::Moved;
+  report.failed = "left from before";
+  const TopoDS_Shape plain = clip(a, plane, nullptr, &report);
+  CHECK(near(volume_of(plain), 2000.0, 1e-7));
+  CHECK(report.attempt == ClipAttempt::Plain && report.fuzzy == 0.0 && report.shift == 0.0 &&
+        report.failed.empty());
+  // A shape the plane does not reach needs no attempt.
+  report.attempt = ClipAttempt::Fuzzy;
+  CHECK(clip(a, Plane{{0, 0, 40}, {0, 0, 1}}, nullptr, &report).IsEqual(a));
+  CHECK(report.attempt == ClipAttempt::Plain);
+  CHECK(throws([&] { clip_by(TopoDS_Shape(), plane, ClipAttempt::Fuzzy); }));
+}
+
 // Which side of a plane a box lies on, for clip (mitcad#438).
 void test_clip_sides() {
   using mitcad::analysis::Bounds;
@@ -1291,6 +1339,7 @@ int main() {
     test_interference();
     test_sections();
     test_clip_sides();
+    test_clip_attempts();
     test_mesh_sections();
     test_compare();
   } catch (const std::exception& error) {

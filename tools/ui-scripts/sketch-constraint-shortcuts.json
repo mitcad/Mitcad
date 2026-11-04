@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for the constraints' Shift keys (mitcad#1229): two free points that frame the view's fit, two slanted lines for Parallel (A from (-30, 10) to (-5, 16), B from (-30, -8) to (-5, -14)), a nearly vertical line for Horizontal/Vertical (C from (10, -20) to (14, 0)) and a horizontal one for a dimension (D from (5, 15) to (30, 15))."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-30,10],"end":[-5,16]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-30,-8],"end":[-5,-14]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[10,-20],"end":[14,0]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[5,15],"end":[30,15]}
+]

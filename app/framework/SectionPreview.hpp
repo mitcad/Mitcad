@@ -110,4 +110,21 @@ std::vector<TopoDS_Face> sectionCapFaces(const TopoDS_Shape& cut, const TopoDS_S
 // The faces' area together (mm²).
 double facesArea(const std::vector<TopoDS_Face>& faces);
 
+// MITCAD_TEST_SECTION_CLIP_FAIL=<uid>[,<uid>...] (mitcad#1230): for UI
+// tests, the clips that cut these bodies fail, wherever a section clips
+// them (the view's rounds, the clips on the UI thread, a feature
+// preview's), as a clip OCCT cannot make would: the body is drawn whole
+// and the window reports it. A plane that keeps or removes such a body
+// whole cuts nothing and fails nothing. The error of a body named there
+// whose clip `clipped` of `source` cut it; empty otherwise and without the
+// variable.
+QString testClipFailure(const QString& uid, const std::shared_ptr<geometry::Shape>& clipped,
+                        const std::shared_ptr<geometry::Shape>& source);
+
+// Logs how a body's clip was made when it took more than the plain cut
+// (mitcad#1230; the clip's geometry::Shape::infos): "Section: F2.b0
+// clipped at attempt 2, with a fuzzy value of 1e-06 mm (plain cut: the
+// boolean failed)". Nothing for a null clip or one made at once.
+void logClipAttempts(const QString& uid, const std::shared_ptr<geometry::Shape>& clipped);
+
 } // namespace mitcad

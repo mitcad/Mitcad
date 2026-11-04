@@ -293,8 +293,8 @@ builds, its circle's seam splitting a side), and a curve tangent to both
 between them, each parametrised by its
 length. The sideways crossings, slivers in the walls' extension up to a
 removed end, are left out. A single edge that runs on along the branch
-itself is left as it is; where the tangency lies further past the end, 1130
-is unchanged.
+itself is left as it is; where the tangency lies further past the end and
+the main branch reaches the end plane, 1130 is unchanged.
 
 Where no piece goes on from within 5 % of the offset of the tangency, a
 piece from within 20 % is taken, bridged by the same tangent curve
@@ -309,6 +309,16 @@ gave it, and an inner wall's wire came out the wrong way round,
 valid. With 1200 off the gap was under 5 % there too. The shell is now
 valid on Windows, its volume within 0.04 mm³ (1.5e-5) of the one without
 1200's extension.
+
+An outward loft can need the same continuation when the pave filler stops
+its main branch before the removed end: the octagon to radius 21.7 with
+its circle seam at 22.5 degrees, shelled 0.5 mm. On macOS the branch
+stopped 0.08229064 mm before the end plane while the tangency lay
+0.01750246 mm past it. Leaving all crossings then produced no inner
+walls, and MakeThickSolid reported UnknownError. Join the continuation
+also when the main branch does not reach the end; its near piece may use
+the same 20 % neighbourhood as the continuation. The existing validity,
+wall-distance, rim, volume and closed-offset checks remain unchanged.
 
 `BRepOffset_MakeLoops` substitutes vertices and gives the new one the old
 one's points on the edges' curves, which could lie further from it than

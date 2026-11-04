@@ -159,6 +159,7 @@ class NativeMenuPopup;
   // (nil: the defaults), and whether an edit is being discarded.
   NSColor* tone;
   NSColor* fill;
+  BOOL refused; // validation feedback remains visible in the selected row
   BOOL discarding;
   BOOL finishing; // Return, Escape or Tab ends the edit (finishEditing:, modelEditNext)
   BOOL userEdited; // a real text change, rather than a model refresh behind the editor
@@ -739,6 +740,18 @@ public:
       const bool nested = [line isKindOfClass:MitcadNativeLayoutView.class] &&
                           [line.superview isKindOfClass:MitcadNativeLayoutView.class];
       row = nested ? line : nil;
+    }
+    if (row == nil && m_source->objectName() == QStringLiteral("materialsManager")) {
+      // Materials keeps Close beside its panel's New/Import/Export actions,
+      // rather than in a top-level button box. Keep that complete row in
+      // the window footer too, so a tall editor cannot scroll Close away.
+      for (const Binding& binding : m_bindings) {
+        if (binding.widget != nullptr && binding.widget->objectName() == QStringLiteral("printManagerClose")) {
+          NSView* line = binding.view.superview;
+          if ([line isKindOfClass:MitcadNativeLayoutView.class]) { row = line; }
+          break;
+        }
+      }
     }
     m_footer.edgeInsets = row != nil ? NSEdgeInsetsMake(8, 16, 16, 16) : NSEdgeInsetsMake(0, 0, 0, 0);
     m_footer.hidden = row == nil;
@@ -1858,6 +1871,7 @@ public:
     cell->owner = this;
     cell->binding = id;
     cell->index = index;
+    cell->refused = index.data(NativeRefusedRole).toBool();
     cell->rowIdentifier = index.siblingAtColumn(0).data(NativeControlIdentifierRole).toString();
     [m_cells addObject:cell];
     if (index.flags().testFlag(Qt::ItemIsUserCheckable) && index.data(Qt::CheckStateRole).isValid()) {
@@ -5084,10 +5098,10 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
   return YES;
 }
 - (void)applyTone {
-  // An emphasized selection shows the selection's own text, as the shared
-  // delegate leaves selected cells to the highlighted-text colour.
+  // Selection uses its own text colour, except for a refused value: its
+  // error text and fill must remain visible while that cell is selected.
   const BOOL emphasized = self.backgroundStyle == NSBackgroundStyleEmphasized;
-  NSColor* color = (tone == nil || emphasized) ? NSColor.labelColor : tone;
+  NSColor* color = (tone == nil || (emphasized && !refused)) ? NSColor.labelColor : tone;
   if (self.textField != nil && ![self.textField.textColor isEqual:color]) { self.textField.textColor = color; }
   // A number on its decimal axis keeps its attributes in that colour; an
   // edit has its own text until it ends (mitcad#1080).
@@ -5109,7 +5123,7 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
   [self applyTone];
 }
 - (void)drawRect:(NSRect)dirty {
-  if (fill != nil && self.backgroundStyle != NSBackgroundStyleEmphasized) {
+  if (fill != nil && (refused || self.backgroundStyle != NSBackgroundStyleEmphasized)) {
     [fill setFill];
     NSRectFillUsingOperation(NSIntersectionRect(self.bounds, dirty), NSCompositingOperationSourceOver);
   }

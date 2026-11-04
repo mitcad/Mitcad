@@ -60,6 +60,7 @@ search: type the start of a command's name and press Enter.
   - [Move Face](#move-face)
   - [Fillet](#fillet)
   - [Chamfer](#chamfer)
+  - [Shell](#shell)
   - [Dogbone](#dogbone)
   - [Tangent Chain](#tangent-chain)
   - [Cutting across components](#cutting-across-components)
@@ -1060,6 +1061,7 @@ unpins it.)
 | Trim | T | Remove the part of a curve between intersections (also Extend) |
 | Offset, Project, Move/Copy | O, P, M | In a sketch: offset a curve, make a projection, move. Project is also in the context menu of a face, an edge or a vertex |
 | Construction | X | Change the selected curves to construction geometry and back |
+| Sketch constraints | Shift+V, Shift+C, Shift+T, Shift+E, Shift+P, Shift+R, Shift+F, Shift+M, Shift+O, Shift+L, Shift+S, Shift+G | In a sketch: Horizontal/Vertical, Coincident, Tangent, Equal, Parallel, Perpendicular, Fix/Unfix, Midpoint, Concentric, Collinear, Symmetry, Curvature ([Constraints](#constraints)) |
 | Delete | Delete | Delete the selected sketch geometry, constraints and dimensions |
 | Copy, Cut, Paste | Ctrl+C, Ctrl+X, Ctrl+V | In a sketch: copy or cut the selected sketch geometry with its constraints and dimensions, and paste it into this or another sketch ([Copy, Cut and Paste](#copy-cut-and-paste)) |
 | Extrude | E | Extrude profiles, also directly from sketch mode, or one planar face of a body. Set the direction, the extent, the taper, a thin wall and the Operation ([Extrude](#extrude), [Thin Extrude](#thin-extrude)) |
@@ -1132,7 +1134,7 @@ submenus.
 - Press Pull ([Press Pull](#press-pull))
 - Fillet ([Fillet](#fillet))
 - Chamfer ([Chamfer](#chamfer))
-- Shell
+- Shell ([Shell](#shell))
 - Draft
 - Scale
 - Combine
@@ -1332,14 +1334,23 @@ material, make a cut sheet ([Drawings](#drawings)).
 
 On the Make tab, select one body (or a face of it): the card on the right
 shows its **Make** section under the selection, where the other tabs show
-the Create row:
+the Create row. Its rows go from the widest choice to the body's own:
 
+- **Printer**: the printer of the whole design, for every body. Click it
+  to open a list of the printers, grouped by vendor, from this design and
+  from your libraries (This project, My library, Built-in). Type a part
+  of a name to find one and press Enter. The design then prints with it,
+  and the Process list puts that printer's processes first. A printer
+  from a library is copied into the design. Without one, the row says
+  *Slicer default*. The last row, **Printers…**, opens the Printers
+  manager on the design's printer.
+- **Process**: the process profile the body prints with. Its list works
+  the same way: the processes of the design's printer first, then the
+  others under their printers, and those for any printer last. The one
+  you choose is set for the body; a process from a library is copied into
+  the design. **Processes…** opens the Processes manager.
 - **Material**: the body's material. Choose another one in the list to
   set it on the body.
-- **Printer**: the printer the design prints with. Change it in the
-  Printers manager (Make › 3D Print › Printers…).
-- **Process**: the process profile the body prints with. Choose another
-  one to set it for the body.
 - The print values that differ from the profiles, each with the icon of
   where it is set: the body, the occurrence or the component. Type a new
   value and press Enter to set it on the body.
@@ -1885,10 +1896,51 @@ measured on. That face is the Reference Face, or else the edge's first
 face. Flip takes the other face. The arrow of Distance 2 runs along the
 other face. You type the angle.
 
+A chamfer may be wider than a face beside its edge, such as a narrow
+ring between a hole's rim and the cone of a thread's end chamfer. It is
+built at its full size: the bevel goes on past the narrow face and is cut
+by the faces beyond it, and the narrow face vanishes where the bevel is
+wider than it. Where it stays narrower, the face stays. Where a wall rises
+past the narrow face (also past a curved one, such as a flange below a
+cylinder's band), the bevel ends at the narrow face's edge and the wall's
+faces continue down to it along their own surfaces, a thread's flanks
+too. Where such a chamfer meets other chamfers at a corner, the corner is
+built as without the overflow. A chamfer is never made smaller than you
+asked: where it cannot be built, the error names the edge, the narrow
+face and the face beyond it, and at a corner the corner types that would
+build it.
+
 A new chamfer starts with the Distance of your last chamfer, in any
 design, as a new fillet starts with the last Radius. Distance 2 and
 Angle start with the values of the last chamfer that had them. The first
 chamfer starts at 1 mm and 45 degrees.
+
+### Shell
+
+**Shell** hollows a body. In *Faces/Body*, pick the faces to remove:
+they become the openings. Pick the body instead for a closed void inside
+it. *Direction* puts the wall inside the body (*Inside Thickness*),
+outside it (*Outside Thickness*) or both. *Shell Type* Rounded rounds the
+outer corners of an outside wall; Sharp keeps them sharp. The faces of
+the body keep their names, so later features on them still find them.
+
+A part of the body that is no thicker than the wall stays solid, and the
+cavity is only where the wall fits. For example, a cap with a flange
+2 mm thick, shelled 3 mm from its open bottom: the cap becomes a cup with
+3 mm walls, the cavity goes through the flange, and the flange stays
+whole. A plate, a fin, a sleeve or a skirt thinner than twice the wall
+stays solid in the same way, flat, curved or tapered, also where its
+ends continue the body's sides (a keel as long as the body), where it
+stands in a corner on two faces, or where it stands on a curved face. Roundings and
+chamfers smaller than the wall do not stop the shell: the inside of the
+wall runs past them, keeping at least the wall's thickness from them.
+
+The feature then shows a warning with the faces where this happened:
+"the wall does not fit under face …; it is left solid there", or "the
+inside of the wall runs past face …". If the wall still comes out
+thinner than given somewhere, the warning says where and how thin. If
+the wall fits under no face at all, the feature fails with that message.
+Make the wall thinner to hollow more of the body.
 
 ### Dogbone
 
@@ -2236,7 +2288,22 @@ A design with a turned section needs this version of MitCad.
 When the Distance puts the Section Analysis plane past every body, the
 panel shows a warning instead of the zero area: "it cuts them all away"
 when the view no longer shows the bodies, "it cuts nothing" when it shows
-them whole. Change Distance, or turn on Flip to keep the other side.
+them whole. Change Distance, or turn on Flip to keep the other side. A
+section you keep in the Analysis folder tells it in the tooltip of its
+row: "The plane does not cut any shown body." A plane that cuts only a
+thin sliver off a body is a cut, and nothing is said.
+
+Sometimes MitCad cannot cut a body at the plane. It then tries again
+with a small tolerance, and then with the plane moved by 0.000001 mm,
+which you cannot see. A plane through the axis of a revolved body, in
+the plane of its profile, needs this. When no try works, MitCad shows the
+body whole and tells you so once: the message band shows "Section1 could
+not cut Body1; it is shown whole." (with several bodies, how many and the
+first names), and the message history keeps the reason for each body.
+The row of the section in the Analysis folder turns to the warning color,
+and its tooltip names the bodies and the reasons. The warning goes away
+when you hide the section or when it cuts the bodies again. The Section
+Analysis panel and Hide Above Sketch tell it the same way.
 
 **Section Analysis** draws a cap over every cut face. **Hide Above
 Sketch** draws the same caps. Thin parallel lines at 45 degrees cover a
@@ -2691,6 +2758,56 @@ two points (a Coincident constraint joins them), or three curves that
 end at one point. If an open chain stops where another curve ends on a
 point of its own, the panel tells that too.
 
+When the offset goes toward the inside of a bend, some curves of the
+copy can vanish: an arc whose radius is smaller than the distance, or a
+short curve whose neighbors' copies cross before they reach it. Offset
+leaves those curves out and cuts or extends the copies on either side to
+where they cross, so the copy is the clean outline on its side. For
+example, a hexagon with 2 mm rounded corners offset 2 mm or more toward
+the inside gives a hexagon with sharp corners. The preview shows the
+result as you type the distance, and the panel names the curves that
+vanish as a note, for example *corner arcs c4 and c7 vanish at this
+distance*. An open chain keeps its ends. If the copies on either side do
+not meet, for example the parallel sides of a slot offset inward past
+the radius of its ends, the panel names the curve that vanishes and the
+offset is not made.
+
+When you later change the distance with Edit Offset, or change the
+source curves, so that other curves vanish or come back, MitCad makes
+the offset again. The copies that stay keep their names, so dimensions,
+constraints and profiles that use them keep working. A copy that comes
+back gets a new name. If you had put a constraint or dimension on a copy
+that vanishes, MitCad removes it and tells you which. This also happens
+when the distance is a parameter you change in the parameters table, or
+when projected curves follow a changed body: the sketch shows the offset
+made again, and the timeline's information names the curves that
+vanish.
+
+The same holds for parts of the copy away from the corners: if the copies
+of two walls of a narrow neck pass each other, the walls are left out and
+the curves on either side meet. If a narrow notch in a straight side
+closes, the two pieces of the side become one line. A closed outline
+whose copy falls apart, for example across a waist narrower than twice
+the distance, gives one offset with two separate outlines: a dog bone
+offset inward past its waist gives two rectangles. The panel tells you
+in a note. Each outline is fully constrained when its source is.
+
+An open chain falls apart the same way: where the copies on either side
+of what vanished do not meet, the copy ends on both sides and the offset
+keeps both parts. If a narrow notch in a circle closes, the two arcs of
+the circle become one, and a circle with one notch gives a whole circle.
+If the copies of two walls cross each other inside a narrowing neck, for
+example a dog bone whose waist is a trapezoid, the copy is split where
+they cross and the part beyond is trimmed, so no copies cross. If a part
+of the outline is too small to keep any copy of its own, for example a
+lobe of a dog bone narrower than twice the distance, the offset leaves
+it out, keeps the rest and tells you in a note, for example *the offset
+leaves out c5, a part too small for this distance*.
+
+If you offset the copy again, and the first offset later changes so that
+some of its curves vanish or come back, MitCad makes the second offset
+again from the first one's new curves.
+
 **Mirror** (Create › Patterns) copies the curves and points of Objects
 to the other side of the Mirror Line. Each copy gets a Symmetry
 constraint, so it follows its original when you change the original.
@@ -2986,6 +3103,23 @@ The constraint buttons are in the Constraints group of the Sketch tab
 and on the sketch palette. A constraint button applies to the selected
 geometry. If nothing that fits is selected, the button lets you select
 the geometry.
+
+In a sketch, each constraint also has a key: Shift and a letter. The key
+does what the button does.
+
+| Constraint | Key | Constraint | Key |
+|---|---|---|---|
+| Horizontal/Vertical | Shift+V | Fix/Unfix | Shift+F |
+| Coincident | Shift+C | Midpoint | Shift+M |
+| Tangent | Shift+T | Concentric | Shift+O |
+| Equal | Shift+E | Collinear | Shift+L |
+| Parallel | Shift+P | Symmetry | Shift+S |
+| Perpendicular | Shift+R | Curvature | Shift+G |
+
+The keys work only in a sketch. In a value or text field, such as a
+dimension's value, Shift and a letter types the capital letter. You can
+change the keys in Keyboard Shortcuts, under Sketch. The tooltips of the
+buttons and Help › Keyboard and Mouse Overview show them.
 
 Equal, Parallel, Perpendicular, Collinear, Concentric, Tangent and
 Coincident on more than two selected entities constrain the first
@@ -8243,8 +8377,9 @@ them, and `mitcad-cli lock release --force` removes them.
 
 Libraries give you standard components and the designs that other people
 share. Component libraries and community indexes are git repositories.
-MitCad fetches them with the git program, when you ask or, for the
-sources that you choose, when MitCad starts. This
+MitCad fetches them, when you ask or, for the sources that you choose,
+when MitCad starts. Libraries from `https://` addresses need no git
+program. This
 chapter describes the component libraries, the component picker that shows
 their components, and the community library.
 
@@ -8266,8 +8401,11 @@ countersunk screws M3 to M20). Up to its version
 1.0.0, this library was the fastener library. Designs made with the
 fastener library keep their components.
 
-MitCad must have the git program to fetch a library. For components that are
-already in a design, git is not necessary.
+MitCad fetches libraries from `https://` addresses itself: you do not
+have to install git. A library in a folder or at an SSH address
+(`ssh://…`, `git@host:…`) needs the installed git program, and so does a
+library that asks you to sign in. For components that are already in a
+design, nothing has to be fetched.
 
 **Tools › Libraries › Libraries…** lists the libraries and the
 community indexes that MitCad uses. At the start, the list has MitCad's
@@ -8278,6 +8416,10 @@ component library and the community index. In **Libraries…** you can:
 - Select **Fetch** to get a library or its newer versions
 - Select **Auto-update** for a library that MitCad must fetch when it
   starts
+- Select **Use the installed git program** (an advanced setting, off at
+  first) to fetch every library with git: for SSH addresses, or for a
+  library that needs a sign-in, which git does with its SSH key or its
+  credential helper
 
 **Auto-update** is off at first. When it is on, MitCad fetches the
 library in the background when it starts. No dialog opens, and you can
@@ -8287,6 +8429,13 @@ library, it writes a short note in the status bar and goes on. The
 library browser and the component picker show new versions when they are
 open. The components in your designs keep their version. You choose a newer
 version yourself.
+
+If MitCad cannot fetch a library, it says why in plain words: the server
+cannot be reached (check the network and the address), there is no
+repository at that address, the server asks for a sign-in (turn on **Use
+the installed git program**), or an SSH address needs the installed git
+program. Cloud projects still need git; libraries from `https://` addresses
+do not.
 
 **Auto-update** has an effect only while the library is on. When you
 switch the library off, the check box is gray. MitCad keeps its state.
@@ -8478,8 +8627,9 @@ for that command. Earlier CLI caches in the data folder's `mitcad/libraries`
 remain readable with the default configuration; new fetches use the shared
 cache. Explicit cache overrides read only the selected folder.
 MitCad makes and
-updates the clones with the git program of the system, and only when you
-ask with one of these commands:
+updates the clones (itself for `https://` addresses, with the git program
+for folders, SSH addresses and when **Use the installed git program** is
+on), and only when you ask with one of these commands:
 
 - **Fetch** in **Libraries…**
 - **Update** in **Insert from Library**

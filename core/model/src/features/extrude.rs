@@ -664,9 +664,8 @@ impl FeatureInfo for ExtrudeDef {
         for object in self.objects() {
             object.add_references(&mut references);
         }
-        if let Some(scope) = self.active_cut_scope() {
-            scope.add_references(&mut references);
-        }
+        // A cut scope's excluded bodies are no references (mitcad#1236):
+        // they name what the cut leaves alone.
         if let Some(face) = &self.wrap {
             face.add_references(&mut references);
         }
@@ -730,7 +729,7 @@ impl FeatureInfo for ExtrudeDef {
             if !self.participants.is_empty() {
                 return Err("cut_scope requires no legacy participant list".to_owned());
             }
-            scope.check(ctx)?;
+            scope.check()?;
         }
         check_participants(ctx, self.operation, &self.participants)?;
         if let Start::Object { object, .. } = &self.start

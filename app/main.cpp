@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <cstdio>
+#include <cstring>
+
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
@@ -436,6 +439,32 @@ int runApplication(int argc, char* argv[]) {
     const auto conflicts = registry->defaultShortcutConflicts();
     for (const auto& conflict : conflicts) qCritical().noquote() << conflict.description();
     if (!conflicts.isEmpty()) return 1;
+    // The sketch constraints' keys (mitcad#1229), in sketches only; Add
+    // Comment keeps Shift+N.
+    static const char* const expected[][2] = {
+        {"sketch.constraint.horizontal_vertical", "Shift+V"}, {"sketch.constraint.coincident", "Shift+C"},
+        {"sketch.constraint.tangent", "Shift+T"},             {"sketch.constraint.equal", "Shift+E"},
+        {"sketch.constraint.parallel", "Shift+P"},            {"sketch.constraint.perpendicular", "Shift+R"},
+        {"sketch.constraint.fix", "Shift+F"},                 {"sketch.constraint.midpoint", "Shift+M"},
+        {"sketch.constraint.concentric", "Shift+O"},          {"sketch.constraint.collinear", "Shift+L"},
+        {"sketch.constraint.symmetric", "Shift+S"},           {"sketch.constraint.smooth", "Shift+G"},
+        {"comment.add", "Shift+N"}};
+    bool expectedKeys = true;
+    for (const auto& entry : expected) {
+      const QString id = QString::fromLatin1(entry[0]);
+      const QString key = registry->defaultShortcut(id).toString(QKeySequence::PortableText);
+      const QString wanted = QString::fromLatin1(entry[1]);
+      if (key != wanted) {
+        qCritical().noquote() << QStringLiteral("%1 has the default key '%2', expected %3").arg(id, key, wanted);
+        expectedKeys = false;
+      }
+      if (id.startsWith(QLatin1String("sketch.constraint.")) &&
+          registry->shortcutContexts(id) != unsigned(mitcad::SketchShortcutContext)) {
+        qCritical().noquote() << QStringLiteral("%1 has a key outside sketches").arg(id);
+        expectedKeys = false;
+      }
+    }
+    if (!expectedKeys) return 1;
     qInfo() << "Registered default shortcuts have no conflicts";
     return 0;
   }
@@ -538,6 +567,16 @@ int runApplication(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+  // --version answers before any window, display or log is set up (a run
+  // without a display, as in the release's build root, and its output
+  // reaches a pipe even if a later teardown would crash).
+  for (int index = 1; index < argc; ++index) {
+    if (std::strcmp(argv[index], "--version") == 0 || std::strcmp(argv[index], "-v") == 0) {
+      std::printf("MitCad %s\n", MITCAD_VERSION);
+      std::fflush(stdout);
+      return 0;
+    }
+  }
   // The window, the document session and the autosave are gone here, and
   // QApplication's post routines have run (a staged restart or update was
   // started); a face of a cancelled display meshing that never ended, or

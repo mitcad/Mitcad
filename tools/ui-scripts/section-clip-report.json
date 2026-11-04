@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A section whose clip fails, reported (mitcad#1230, tools/ui-section-clip-report-test.sh): Body1 (F2.b0) 20 x 20 x 20 from the origin and Body2 (F4.b0) 10 x 10 x 10 at x = 30; Section Analysis Beyond at the YZ plane moved 30 (past both: it keeps Body1 whole and removes Body2 whole) and Section1 at the YZ plane moved 10 (it cuts Body1 and removes Body2), Section1 shown."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":20,"height":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F3","corner":[30,0],"width":10,"height":10},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":10},"operation":"new_body"}},
+  {"cmd":"add_analysis","name":"Beyond","def":{"type":"section","plane":"yz","offset":30}},
+  {"cmd":"add_analysis","name":"Section1","def":{"type":"section","plane":"yz","offset":10}}
+]

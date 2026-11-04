@@ -79,8 +79,7 @@ QList<QJsonObject> fetchLibraries(QWidget* parent, const QStringList& urls) {
     const QString& url = urls[i];
     progress.setValue(i);
     progress.setLabelText(QObject::tr("Fetching %1").arg(url));
-    RemoteTask* task = RemoteTask::library(
-        {{QStringLiteral("cmd"), QStringLiteral("library_fetch")}, {QStringLiteral("url"), url}}, nullptr);
+    RemoteTask* task = RemoteTask::library(libraryFetchCommand(url), nullptr);
     QObject waiting;
     bool finished = false;
     const QPointer<RemoteTask> pending = task;

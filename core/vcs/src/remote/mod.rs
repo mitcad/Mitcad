@@ -11,7 +11,9 @@
 //! the SSH agent, or a credential helper for HTTPS. MitCad never asks for,
 //! keeps or passes passwords or tokens, and refuses URLs that hold them
 //! ([`check_url`]); what git prints is shown and logged with credentials
-//! hidden ([`redact`]).
+//! hidden ([`redact`]). Component libraries are fetched over `https://`
+//! without the git program, by gix's own client (`https.rs`, mitcad#1224);
+//! Cloud projects need the installed git.
 //!
 //! - [`ProjectRepo::remote_check`]: whether a remote can be reached, is
 //!   empty, holds a MitCad project and shares the project's history.
@@ -46,6 +48,8 @@ pub(crate) mod sync;
 pub mod locks;
 // A repository's own configuration as untrusted input (mitcad#920).
 pub(crate) mod trust;
+// Fetches over https:// without the git program: libraries (mitcad#1224).
+pub(crate) mod https;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;

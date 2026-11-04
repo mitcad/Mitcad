@@ -3179,7 +3179,10 @@ Joint (outside sketches) runs its `drive_joint` the same way. A sketch
 command's `warnings` are the panel's message, a warning in its box (yellow
 with the warning's icon and word, not red; see "Messages in the command
 panel" below), and the preview's log line (`Preview <name>: ok, warning:
-...`).
+...`). Its `notes` (mitcad#1234: the curves of an offset that vanish at
+its distance, `corner arcs c4 and c7 vanish at this distance`) follow
+them in the message, information when there is no warning, and in the
+log line (`Preview Offset: ok, note: ...`).
 
 **Mirror** has Objects (curves and points of the sketch, any number) and
 Mirror Line (one line). `build` leaves the line out of Objects and
@@ -3211,6 +3214,15 @@ selection that is no chain with the reason (a branch, two ends at one
 place that are two points), and warns where an open chain stops at
 another curve's end that is a point of its own (`sketch.offset`,
 [commands.md](../core/model-api/src/commands.md#projected-outlines-and-their-offsets)).
+Curves that vanish at the distance (a corner arc smaller than it) are
+left out by the model and their neighbors trimmed to meet (mitcad#1234),
+so the preview shows the trimmed outline as the distance is typed, with
+the note naming them. `tools/ui-sketch-offset-vanishing-test.sh` and
+`app.ui-windows-sketch-offset-vanishing` (the shared script
+`tools/ui-scripts/sketch-offset-vanishing.mitcad-ui`) open Offset on a
+side of a hexagon with 2 mm corner arcs, preview 5 mm and 2 mm inward
+(`Preview Offset: ok, note: corner arcs ... vanish at this distance`)
+and keep it.
 
 **Move/Copy** (`sketch.move`, MODIFY, **M**) has Objects (curves and
 points of the sketch), Move Type (Translate or Rotate), X and Y
@@ -3417,6 +3429,47 @@ The constraint tools and the selection (mitcad#865; `ConstraintTool` in
   redundant goes in its favour (the hint `Coincident removed: implied by
   the new Symmetry.`). Tests: the `sketch_symmetry_865_tests` model tests
   and step 5 of `tools/ui-sketch-axes-test.sh`.
+
+The constraints' keys (mitcad#1229; `commands/SketchConstraintKeys.hpp`,
+set in `registerSketchCommands`): Shift and a letter, in sketches only
+(the Sketch context of Keyboard Shortcuts), each running the same command
+as its palette and toolbar button, so a fitting selection is constrained
+at once and any other starts the tool:
+
+| Constraint | Key | | Constraint | Key |
+|---|---|---|---|---|
+| Horizontal/Vertical | Shift+V | | Fix/Unfix | Shift+F |
+| Coincident | Shift+C | | Midpoint | Shift+M |
+| Tangent | Shift+T | | Concentric | Shift+O |
+| Equal | Shift+E | | Collinear | Shift+L |
+| Parallel | Shift+P | | Symmetry | Shift+S |
+| Perpendicular | Shift+R | | Curvature (G2) | Shift+G |
+
+Ctrl letters were left out: too few are free for twelve, Ctrl is the
+file and editing commands' modifier, and on macOS it is Cmd, whose H, M,
+Q and W the system keeps. Shift letters meet none of the plain letters of
+the sketch tools (L, R, C, D, T, X, O, P, M), the model's keys, or Add
+Comment's Shift+N, which is a model command. Equal Spacing has no key.
+The keys are changed in Keyboard Shortcuts like any other; the tooltips
+of the buttons show them (`CommandRegistry::applyShortcut`) and the
+Keyboard and Mouse Overview lists them under `SKETCH / CONSTRAINTS`. A
+focused text or value field (a dimension's value editor, a command
+panel's field, a search) takes Shift and a letter as the capital letter
+before any shortcut: a line edit accepts the key's `ShortcutOverride`,
+as for the plain letters. A click with Shift selects as before. The
+native macOS frontend reads the same keys from the registry
+(`MainWindow::refreshNativeActions` takes `effectiveShortcuts`) and
+dispatches Shift and a letter like any other key (`NativeKeys.hpp`), so
+it needs no code of its own for them. Tests: `app.unit`'s
+`sketchConstraintShortcutTests` (the twelve keys, no conflict beside the
+other defaults and the reserved keys), `app.default_shortcuts` (the
+registered defaults have no conflict and the twelve keys, in sketches
+only), and `tools/ui-sketch-constraint-shortcuts-test.sh` with
+`app.ui-windows-sketch-constraint-shortcuts` (the shared script
+`tools/ui-scripts/sketch-constraint-shortcuts.mitcad-ui`): Shift+P on two
+selected lines logs `Added constraint parallel …`, Shift+V on a nearly
+vertical line `Added constraint vertical …`, and Shift+P in a
+dimension's value editor types `P` and adds nothing.
 
 Texts, patterns and offsets stay editable:
 
@@ -4256,7 +4309,13 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   `delete_analysis`); the folder's menu starts a new Section Analysis or
   a new Print Analysis. An
   analysis whose plane cannot be found at the marker is red with the
-  reason in its tooltip, and cuts nothing. Remove Section Analysis hides
+  reason in its tooltip, and cuts nothing. While a kept Section Analysis is
+  shown and shows bodies whole because their clip failed (mitcad#1230), its
+  row has the warning's badge and colour, with the warning and each body's
+  error in its tooltip; while its plane cuts none of the shown bodies (it
+  keeps or removes each whole), its tooltip adds `The plane does not cut
+  any shown body.` A plane that cannot be found stays red
+  (`BrowserPanel::setAnalysisNotes`). Remove Section Analysis hides
   the shown section (it stays in the folder); Flip Section Analysis edits
   it with `flip` toggled; neither is offered while a Print Analysis is
   the one shown. A Print Analysis (mitcad#620) is a row `Print1` with
@@ -7397,8 +7456,51 @@ settings in the user's settings (`ViewSettings`, group `view`);
   Distance or turn on Flip.`; all kept whole, `The plane is beyond the
   bodies: it cuts nothing.`; some of each, `The plane passes between the
   bodies: it cuts none of them.` The log line is `Inspect Section
-  Analysis: <the warning>`. A saved analysis' Browser row does not say so
-  (it would need the clip). Test: `tools/ui-section-beyond-test.sh`.
+  Analysis: <the warning>`. A shown kept analysis' Browser row says `The
+  plane does not cut any shown body.` in its tooltip, from the view's clips
+  (mitcad#1230; a sliver cut is a cut and says nothing). Test:
+  `tools/ui-section-beyond-test.sh`.
+- **Section clips that fail** (mitcad#1230): a body the plane crosses is
+  clipped by a boolean against the slab beyond the plane
+  (`analysis::clip`, `geometry/analysis/src/section.cpp`). When that cut
+  fails or reports errors, the clip tries again with a fuzzy value (ten
+  times the body's largest tolerance, at most 0.01 mm), then with the plane
+  moved by 1e-6 mm along its normal (`analysis::kClipShift`, the baseline
+  tolerance): a plane in a revolved body's profile plane, along its seams,
+  its axis and its modelled threads' start sections, made the plain cut
+  fail. A clip that needed another attempt is logged (`Section: F2.b0
+  clipped at attempt 2, with a fuzzy value of 1e-06 mm (plain cut: the
+  boolean failed)`). A body whose clip still fails is shown whole, as
+  before, and the window says so once per section and set of failed
+  bodies (`MainWindow::reportSectionClips`): the message band and the
+  status line show the warning `Section1 could not cut Body1; it is shown
+  whole.` (several: `Section1 could not cut 4 bodies (Body1, Body2, Body3,
+  …); they are shown whole.`), each body's error goes into the message
+  history first (`Section1: Body1 shown whole: <error>`, information),
+  and the kept analysis' row in the Analysis folder shows it (above). A
+  redraw with the same failed bodies does not post it again; when the
+  section is hidden or cuts them again, the warning is withdrawn from the
+  band (its stub) and the status line (`MessageCenter::withdraw`), and the
+  row's note goes. The section is named as shown: the kept analysis, the
+  Section Analysis panel's (the analysis it edits, or `Section Analysis`
+  for a new one) or `Hide Above Sketch`. A feature preview's clip that
+  fails is only logged, as before. For UI tests,
+  `MITCAD_TEST_SECTION_CLIP_FAIL=<uid>[,<uid>...]` makes the clips that
+  cut these bodies fail (one that keeps or removes a body whole is no
+  cut) with the error `the clip failed for the test
+  (MITCAD_TEST_SECTION_CLIP_FAIL)`. Tests: `geometry.analysis` (each
+  attempt, the report), `geometry.suite.input_check` (the attempts leave
+  their input as it was), `geometry.suite.section_clip` (a gland body
+  with modelled M45x3 internal and M30x2 external threads cut in its
+  profile plane and 1 mm off it: valid, about half, with caps),
+  `app.unit` (`tests/message_log.cpp`: a withdrawn message),
+  `tools/ui-section-clip-report-test.sh` and
+  `app.ui-windows-section-clip-report`
+  (`tools/ui-scripts/section-clip-report.mitcad-ui`: the warning, the
+  history, the row and its withdrawal, the panel's section, a plane that
+  cuts nothing), `tools/ui-section-gland-test.sh` and
+  `app.ui-windows-section-gland` (`tools/ui-scripts/section-gland.mitcad-ui`:
+  the gland cut with caps at Distance 0 and 1 mm).
 
 - **Rendered** (`view.rendered`, in View > Visual Style; only when the
   render worker `mitcad-render`, which every build has, is next to the
@@ -8051,12 +8153,13 @@ the Make tab's 3D Print group; `files/MainWindowPrint.cpp`,
   Processes manager, matched against the printer's `printer_names` in any
   case and spacing; logged by the picker, `Process picker sections:
   Bench Y 3 | Bench X 2 | Any printer 1`); the Make tab's body card's
-  Process drop-down and the Process row of Property Sets list them so
-  too, under headings that cannot be chosen, with the body's or the
-  level's printer first (only when a process names a printer; logged
-  `Make card processes: Bench Y: Shared, Strong | Bench X: Fine | Any
-  printer: Draft` and `Property sets profile list: …`, the headings
-  among the names), and last, below a separator
+  Printer and Process pickers list them so too, the libraries' with the
+  design's (mitcad#1239, the body's printer first; logged `Make card
+  processes: Bench Y: Shared, Strong | Bench X: Fine | Any printer:
+  Draft`), and the Process row of Property Sets under headings that
+  cannot be chosen, with the level's printer first (only
+  when a process names a printer; logged `Property sets profile list:
+  …`, the headings among the names), and last, below a separator
   line (`choiceSeparatorPrefix()`, mitcad#828), **New printer…** /
   **New process…** (`MainWindow::newDesignProfile`: a new profile in this
   design named by the model, `Process 1`, `Process 2`, ...,
@@ -9252,7 +9355,7 @@ SOLID tab's ASSEMBLE group.
 | `insert.library_component` Insert from Library | `LibraryBrowser`: search (words, a licence filter, items without a licence only when asked), the results as the component picker's grid (`PartGrid`, [Component picker](#component-picker): groups with Favourites and In this design, the libraries' groups as a tree (mitcad#527), stars, the tiles' size, the hover's larger picture; an index's libraries not fetched in "Libraries to get"; a double click or Return inserts), details with the licence and the attribution, the version (newest first) and the size (a closed table's cascaded combo boxes per option, `SizeChooser`; an open table's chooser per option filtered by the rules, mitcad#810, [Options of library components](#options-of-library-components)), the row's designation and its suppliers' articles behind Supplier Articles (n)… (mitcad#979), linked or a copy; **Update** fetches every enabled source (as Fetch All, one warning for the failures) and searches again, keeping the selected item; while no enabled source is fetched the empty list says to press Update (mitcad#317); a part whose manifest lists mount frames goes on to Place Component (below, mitcad#525), the selection made before the command its Place On where it takes it (mitcad#1197); any other is dropped in at the origin as before, and the message band says so (Information: `Inserted <name> at the origin: no mount frame; join it with Joint.`) | `library_search`, `library_show`, `library_preview`, `library_list`, `library_fetch`, `library_configure`; then `insert_component` with `library` (and `parameters`) |
 | `insert.mount_part` Place Component (mitcad#525, `commands/MountCommands.cpp`) | Insert from Library starts it for a part whose manifest lists mount frames (`mounts`, [docs/libraries.md](../docs/libraries.md#mount-frames): mitcad-parts' screws, nuts, washers and wood fasteners, mitcad#1197); not in the ribbon. What was selected before Insert from Library goes to Place On when it takes it (a hole's circular edge or round face, an axis; a flat face or a plane for a face or grid frame), with its click's place and the way towards the viewer then: the part shows there at once and Place (Enter) places it (mitcad#1197). Place On (a flat face or a plane for a face or grid frame; for a foot frame any face of the part with the grid, the cell under the click, so that the planes of the frames of the parts already placed, which lie in the cells' faces, take no clicks; a round face, a circular edge or an axis for a shaft or hole frame; none: a drop-in), Mount Frame (the part's frames, the first chosen), Rotate (about the frame's z; on a grid quarter turns), Offset, Flip (a plane's other side, a hole's other end). A click snaps the frame to the pick face to face, its way towards the viewer kept with it (`towardViewer`: a hole's end); the preview shows the part there (`analysis_shape` `mount_preview`) with a marker on its frame, the panel the frame, where it goes (a grid's cells) and how it may move, or why it cannot (a taken cell). **Place** (Enter) places it and the panel stays for the next one; **Shift + click** places at once; Enter without a pick drops it in at the origin as before, to be joined later with Joint, whose origins take its frames (its component's joint origins, the browser's Joints rows); **Close** (Esc) keeps what was placed | `mount_preview` while the inputs change; `insert_component` with `mount` (without: as before) |
 | `tools.library_parts` Library Components... | `LibraryPartsDialog`: each part's recorded version and size (with the Standard and Supplier filters, mitcad#949), the row's suppliers' articles behind Supplier Articles (n)… (mitcad#979, [Options of library components](#options-of-library-components)), another version or size, Show Changes, Update; Check for Newer Versions and Get Missing Libraries fetch (the latter after showing the addresses, which come from the design); the Bill of Materials tab (Copy as CSV; the column Supplier part numbers, `parts_list`'s `supplier_parts_text`) | `library_parts`, `parts_list`, `library_show`, `library_diff`, `library_fetch`; then `update_library_parts` |
-| `tools.libraries` Libraries... | `LibrariesDialog`: the sources (settings `libraries/sources`: URL or folder, on or off, and Auto-update, mitcad#576; the defaults are MitCad's fastener library and the community index, both with Auto-update off), the columns On, Auto-update (tooltip "Fetch this library when MitCad starts"; greyed out, its state kept, while the source is off), Source, Library, Versions, Licence; Add URL, Add Folder, Remove, Fetch Selected, Fetch All | `library_list`, `library_fetch` |
+| `tools.libraries` Libraries... | `LibrariesDialog`: the sources (settings `libraries/sources`: URL or folder, on or off, and Auto-update, mitcad#576; the defaults are MitCad's fastener library and the community index, both with Auto-update off), the columns On, Auto-update (tooltip "Fetch this library when MitCad starts"; greyed out, its state kept, while the source is off), Source, Library, Versions, Licence; Add URL, Add Folder, Remove, Fetch Selected, Fetch All; the advanced check box **Use the installed git program** (`libraryUseGit`, setting `libraries/useGit`, off by default, mitcad#1224): on, every fetch goes through git (SSH addresses, a sign-in with git's credential helper); off, `https://` libraries are fetched without git | `library_list`, `library_fetch` (with `use_git` when the box is on) |
 | `tools.community_library` Community Library... | the browser with the indexes' libraries first; Get Library adds a library an index lists to the sources and fetches it after a question with its address and licence | as Insert from Library |
 | `tools.publish_library` Publish to Library... | `PublishLibraryDialog`: the open design (a single file) added to a library folder of one's own (made when new), an image of the view as its preview, recorded as a version of the folder's project, pushed (`connect` with a remote URL, else `push`), and the index entry (copied) | `library_init`, `library_add`, the project's `commit`, `connect`/`push`, `index_entry` |
 
@@ -9273,9 +9376,21 @@ SOLID tab's ASSEMBLE group.
   the CLI (`configure_libraries`), including read access to earlier CLI
   caches. Explicit overrides are isolated.
 - Fetches run as `RemoteTask::library` on a thread of their own with a
-  progress dialog whose Cancel ends git; when the user asks, and at
+  progress dialog whose Cancel ends the transfer; when the user asks, and at
   start-up for the sources with Auto-update (below). The other library
   commands are local and run at once.
+- **Without an installed git** (mitcad#1224, [docs/libraries.md](../docs/libraries.md#fetching-without-git)):
+  every fetch sends `libraryFetchCommand(url)` (`files/LibrarySettings.cpp`),
+  `library_fetch` with `use_git: true` only while **Use the installed git
+  program** is on. Off, the model fetches `https://` and `http://` itself
+  (gix's client), folders with git, and refuses SSH addresses with a plain
+  message (`unsupported`: they need the installed git program); the dialogs
+  show the answer's `error.message` as before (the server cannot be reached,
+  no repository at that address, a sign-in needs git). Cloud projects keep
+  using git and say so when it is missing (`CloudSection`,
+  `gitMissingNote`: "Cloud projects need the installed git program …
+  Component libraries over https:// work without it."). Test:
+  `tests/library_settings.cpp` (the setting and the command).
 - **Auto-update at start-up** (mitcad#576, `files/LibraryAutoUpdate.*`,
   `files/LibrarySettings.cpp`): `LibrarySource::autoUpdate` (default off;
   settings without the key read as off) is saved with `url` and
@@ -9303,7 +9418,7 @@ failed` (Fetch All, Update), `Library auto-update: fetching <n>
 source(s) in the background` (only with a source on Auto-update),
 `Library auto-update: <n> source(s) fetched, <m> failed; new: ...`,
 `Library auto-update: Libraries updated: ...`, `Library auto-update ended
-before it was done`, `Library source <url>: auto-update on|off` (the
+before it was done`, `Libraries: use the installed git program on|off`, `Library source <url>: auto-update on|off` (the
 check box), `Library browser: libraries updated in the background`,
 `Part picker refreshed: <n> parts for <command>`, `Library browser update: <n> enabled
 source(s)`, `Library browser empty: nothing fetched yet, press Update` (or
@@ -11450,7 +11565,7 @@ next screenshot.
 | `Timeline search opened` / `closed`, `Timeline search field at x,y`, `Timeline button search at x,y` (`search-previous`, `search-next`), `Timeline search "fillet in:cover": 2 matches: Fillet2 (Cover), Fillet7 (Cover)` (`no matches`, `unknown filter is:x`), `Timeline search result Fillet2 (Cover) at x,y`, `Timeline search results hidden`, `Timeline search match 1 of 2: Fillet2 (Cover)`, `Timeline search cleared` / `cleared: selected Plane1 again, scrolled to 0`, `Selection restored after the timeline search: 1 item(s)` | the timeline search (mitcad#179): its field, the matches (when they change), the listed ones in sight, a step, the end and what it restored |
 | `Timeline colours: dark, marker #c8d0da, buttons #f0f0f0, window #1f2024, handle #5aa2ff` (`light, marker #2b3a4a, buttons the style's, …`), `Asking the platform for the dark colour scheme` | the timeline's palette colours at start and when the theme changes (the marker's handle: the Docked window's accent colour, orange in the Floating layout); the switch of `MITCAD_TEST_COLOR_SCHEME` |
 | `Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin, Root/Sketches/Sketch1; error #ff9c9c: Root/Sketches/Sketch1/Fillet1` (`light, hidden #4c525c: …`; `none`; groups hidden, error, warning, success, info, each its colour on the rows' palette now and at most 12 paths in order, then `<n> more`; a value that is none of these last, as `unknown <n>: <paths>`, mitcad#1143) | the Browser rows whose names have a colour role (a hidden, failed or warned row; mitcad#1104: the item keeps the role, the delegate paints its colour in the theme of the moment), after each rebuild and when the theme changes, when it changed; the test driver's `color-scheme light\|dark` switches the scheme at a step (`tools/ui-theme-test.sh`, `tools/ui-windows-test.ps1`) |
-| `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font Segoe UI Variable Text` (`light, …`; `font the platform's`), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme |
+| `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font Segoe UI Variable Text` (`light, …`; `font the platform's`), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme. `panels` is the toolbar's surface, which the Classic ribbon's body and the bar's Undo, Redo, separator and Chat buttons show in both themes (the test driver's `expect-widget-background`, `TestDriver: widget background ribbonPageScroll #1f2024 (…)`; `tools/ui-docked-toolbar-colors-test.sh`, `app.ui-windows-docked-toolbar-colors`, mitcad#1245) |
 | `Timeline hover highlighted: F3 1, F4 2` / `none`, `F5 12 (edges 4)` | timeline hover preview (uid and number of faces; a Fillet's or Chamfer's picked edges drawn with it, mitcad#1076), without changing selection; folded groups include every active member; the AppKit timeline's hover sets the same preview; drawn in the hover colour with the Browser hover's look (in sight as the view's hover, fainter through what hides it, with outlines; `HighlightDisplay::hoverLook`, mitcad#1041) |
 | `Feature faces highlighted: F3 1, F4 2` / `none` | the faces of the features selected on the timeline (uid and number of faces), when they change |
 | `Feature inputs highlighted: Fillet1 edges 4, Chamfer1 edges 2` / `none` | the picked edges of the Fillets and Chamfers selected, drawn where they were (mitcad#957; name and number of edges), when they change |
@@ -11468,7 +11583,7 @@ next screenshot.
 | `Feature warnings: Fillet1: <warning>` / `none`, `Preview Fillet: ok, warning: <warning>` | features that succeeded with warnings, when they change; a preview's warning |
 | `Warnings badge: Fillet1: <message>; Tilted: <message>` / `none`, `Warnings button at x,y` | the yellow badge's features (built with warnings; an import note is information since mitcad#1040), when they change |
 | `Status <level>: <text>`, `Native message band: full\|stub <level> <text>`, `Browser level <path>: <level>`, `Selection card level <feature>: <level>`, `Panel <command> message box: <level>: <text>`, `Sketch Palette solve: <level>: <text>; …` / `none`, `Sketch notice level: <level>`, `View message level: <level>`, `Rules status level: <level>`, `Configurations option marks: …` / `Configurations row marks: …`, `Annotations level <name>: <level>` | a message's level on each surface (mitcad#1040, mitcad#1051, "Messages and their levels") |
-| `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y`, `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
+| `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`, `withdrawn`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y`, `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
 | `Browser sketch DOF: Sketch1 0, Sketch2 4` | the sketches' degrees of freedom the browser shows, when they change |
 | `Browser joints: Joint1 placed, AsBuiltJoint1 satisfied, DOF Root 1` | the joints' states and each component's degrees of freedom (mitcad#55), when they change |
 | `Added joint Joint1 (revolute): placed, rz 30 deg, moved O2; DOF 7` (a failure: `failed: <error>`), `Added as-built joint …`, `Added joint origin JointOrigin1: origin (5, 5, 10), normal (0, 0, 1)`, `Added rigid group RigidGroup1: Pin:1, Cap:1`, `Drove joint Joint1 (revolute): placed, rz 45 deg, …`, `Added constraint Constraint1: insert placed, moved O2; DOF 1` (each row's type, `(does not hold)` after one that does not), `Preview Joint moves O2` | the ASSEMBLE group's commands (mitcad#55, mitcad#148; the joint as the `joints` query has it after OK) and a preview that places occurrences elsewhere |
@@ -11531,6 +11646,9 @@ next screenshot.
 | `Section caps: 2 face(s) at {"normal":[1,0,0],"origin":[30,…]}, area 400.0`, `Section caps: 3 face(s) at {…}, area 599.5 (preview)`, `Section caps: none` | the caps of Section Analysis or Hide Above Sketch drawn (when they change), with their area in mm², a feature preview's with its clips (mitcad#943), and gone again (the bodies whole) |
 | `Computing section preview started`, `Section preview clips at {"plane":…} off the UI thread (section worker): 1 bodies, 1 new, 1 meshed in 30 ms`, `Section preview ready at {"plane":…}: 1 bodies from the section worker`, `Section round preview superseded` | a feature preview's bodies clipped at the section's plane off the UI thread (mitcad#943), a newer preview's round stopping one that runs |
 | `Section: F2.b0 shown whole: section: clip: SIGSEGV 'segmentation violation' detected. …` (warning) | a body whose clip failed, shown uncut (mitcad#392) |
+| `Section: F2.b0 clipped at attempt 2, with a fuzzy value of 1e-06 mm (plain cut: the boolean failed)` (`attempt 3, with the plane moved by 1e-06 mm along its normal (plain cut: …; fuzzy cut: …)`) | a body clipped only by a later attempt of the clip (mitcad#1230) |
+| `Section clip warning: Section1 could not cut Body1; it is shown whole.` (`… could not cut 2 bodies (Body1, Body2); they are shown whole.`), `Section clip warning cleared: <the warning>` | the warning of a shown section's failed clips posted (once per section and set of failed bodies; the message band's and status line's own lines follow) and withdrawn when the section is hidden or cuts them again (mitcad#1230) |
+| `Browser analysis note Root/Analysis/Section1: warning Section1 could not cut Body1; it is shown whole. \| Body1: <error>` (`info The plane does not cut any shown body.`; `none`) | a kept analysis' row note from the view (mitcad#1230), when it changes |
 | `Section caps: 3 colour(s) [#e0892a hatch #4b2d0b at 135 deg, 12 lines; …] in Shaded, bodies in appearance colours` | the viewer's caps (mitcad#382): per colour group the cap colour (the component's timeline colour, the default orange for the root), the hatch's colour, direction and line count; again when the visual style or Component Colors change |
 | `Hide Above Sketch on`/`off`, `In front of the sketch plane: F2.b0 5.0, F5.b0 10.0` | the sketch palette's option; in sketch mode (also while a sketch command's panel is open), how far each shown body reaches in front of the sketch plane (mm, when it changes; 0 or less once cut, a body cut away entirely is left out) |
 | `Exported <path>: dxf flat pattern of Body1, 5 entities (CUT_OUTER 4, BEND_DOWN 1), mm`, `Export of the flat pattern of Body1 refused: <reasons>`, `Flat pattern of Body1 shown` (`folded`), `Flat pattern of Body1: valid, area 1086.39 mm2, 1 bend(s)`, `Deleted the flat pattern of Body1`, `Added sheet face of 1 profile(s), new rules, thickness 2`, `Added flange, length 15 (tangent), angle 90 deg`, `Sheet rules: thickness …` | sheet metal (mitcad#210): the Flat Pattern's export, display and item, the commands' describe lines |
@@ -11554,7 +11672,7 @@ next screenshot.
 | `Drag proxy Move/Copy: shown for tx 12 mm (the exact preview at 0 mm) at 12.000,0.000,10.000` (`rz 30 deg`), `Drag proxy Move/Copy: hidden: <why>` (`the exact preview shows 12 mm`, …, as Extrude's), `Drag proxy Move/Copy: not shown: <why>` (`no motion of these inputs`: an exact preview whose report has no `motion` for Rotate or Point to Position; `not for these inputs`: a value that is not a number; `no exact preview to start from`), `Drag proxy Move/Copy tx: 44 inputs, 44 proxy updates (…), 1 exact previews (…), 120 frames in 3120 ms; …` (at the release), `Drag proxy Move/Copy: the exact preview of 27.5 mm replaced it 120 ms after the release, 0.000000 mm from the proxy` (`37 deg`; the distance only when the proxy was drawn at that value: between where the proxy last drew the first moved body's middle and where the exact preview draws it) | Move/Copy's provisional motion while a handle of Free Move, Translate, Rotate (its ring) or Point to Position (its X, Y and Z arrows) is dragged (mitcad#838, `CommandDef::dragMotion`, `framework/CommandSessionProxy.cpp`, `commands/MoveDragMotion.cpp`): the bodies or components the exact preview moved are drawn where the dragged value puts them, their meshes only placed elsewhere (no model preview, no meshing), until the exact preview of that value replaces them; while the button is held the exact preview waits until the pointer rests for 250 ms. Rotate turns them about the axis and Point to Position moves them from the point the model resolved for the exact preview (its report's `motion`, commands.md; `DragMotion::resolve`, `basisMotion`), so the proxy and the result agree; Rotate's ring itself runs about that reported axis once a preview has reported one (`previewReported` keeps it in the state with the Axis pick it is of, `keptRotateAxis`; before that, or after another axis is picked, about the picked geometry's own axis, `axisOf`), so its angle grows the way the bodies turn even where a circle's own axis points against the model's (Move Face's ring alike, mitcad#854, with no proxy: its body is not moved rigidly); Point to Point has no value to drag. `at`: where the middle of the first moved body is drawn. `tools/ui-move-drag-test.sh` (Free Move's arrow and ring, a component's arrow, Rotate's ring and Point to Position's arrow on a component of 64 pegs) |
 | `Preview tool at 60.000,50.000,22.500` (`none`) | where the preview draws its tool, the middle of its box in the design: at each placement of its component's occurrences (the report's `tool_instances`, mitcad#636) |
 | `Preview extended tool: 10.0,-3.7,-3.7 to 10.0,43.7,23.7` (`none`) | a split's or trim's tool as the feature extends it (`CommandDef::extendedToolPreview`, mitcad#712): its box in the design, logged when it changes; `none` while Extend is off or the tool is a body or sketch curves |
-| `Preview Extrude: refining the display meshes of 2 bodies`, `Preview Extrude: display meshes refined` | a preview shown in the interactive tier, once a drag has ended and no input changed for 250 ms: its bodies meshed in the final tier in a job of their own (`Display meshes of preview refinement: …`), which changes nothing in the model, and drawn instead of their stand-ins (mitcad#635). OK meshes them in its own job when this has not happened yet |
+| `Preview Extrude: refining the display meshes of 2 bodies`, `Preview Extrude: display meshes refined` | a preview shown in the interactive tier, once a drag has ended and no input changed for 250 ms: its bodies meshed in the final tier in a job of their own (`Display meshes of preview refinement: …`), which changes nothing in the model, and drawn instead of their stand-ins (mitcad#635). OK meshes them in its own job when this has not happened yet, and otherwise commits them as they are: every face, those taken from the body as shown included, drawn and picked where it is (`tools/ui-join-mesh-reuse-test.sh`, `app.ui-windows-join-mesh-reuse`, mitcad#1243) |
 | `Mesh trace preview interactive: 0 bodies ready, 2 meshed, 88 faces reused; faces=99 kept=88 meshed=11 failed=0 build=… edges=… heal=… check=… triangulate=… write=… total=… ms; meshed plane 7, …; slowest plane wires=85 points=11960 31.4 ms, …` (`final` for a command's, an open's or a refinement's), on standard error `mesh-trace: presentation faces=… kept=… meshed=…` | with `MITCAD_MESH_TRACE=1` (mitcad#635): each display meshing of a job (bodies that had meshes or stand-ins, bodies meshed, faces taken from the bodies as shown, then BRepMesh's faces kept and meshed, its phases and the slowest faces; "; planes redone N" when the final tier's check made N planes again by the default insertion after Delabella, mitcad#644), and each meshing a presentation asks for on the UI thread (none is expected for a body a job meshed); `tools/ui-preview-meshing-test.sh`, `app.preview_meshing` |
 | `Display meshes of 2.dwg: 4 bodies with faces that could not be meshed (not drawn)` (a warning) | bodies with faces OCCT's mesher failed on when the job meshed them for display: those faces are not drawn, and neither the job nor the view meshes those bodies again (meshing such a face again took without end, on the UI thread, mitcad#589; `viewMeshes` in `view/ViewTessellation.hpp`) |
 | `Autosave every 300 s to <folder>`, `Autosave off`, `Autosaved block.mitcad: 2865 bytes to <folder>`, `Autosave removed for block.mitcad`, `Autosave skipped: busy` (or `previewing`), `Autosave of block.mitcad failed: <reason>` | autosave: the timer set at start and by Preferences, a write, the session's files removed, a write put off (`MITCAD_TEST_AUTOSAVE_SECONDS` for tests; `tools/ui-autosave-test.sh`) |
@@ -11808,6 +11926,30 @@ cached geometry. The strip has a 350 ms tooltip timer of its own.
 The tooltip and idle selection card share `FeaturePresentation`: the command
 registry supplies the feature kind and its loader supplies the main visible
 dimensions, with their editor labels. The component is named from the snapshot.
+
+**The key line (mitcad#1235).** A feature whose value a choice carries
+shows it on a line of its own, after the component and before the sizes:
+the command definition names it, as `keyInputs` (choice inputs shown as
+`Label: Option` while visible: a pattern's `Pattern Type: Features`) or
+as a `keyText` of its own. A Thread's is its size from the definition,
+its designation and class as the Thread panel shows them (a trapezoidal
+or a multi-start thread's own designation), then its side and whether
+it is modelled: `M76x2 6H, internal, modeled`, `M6x1 6g, external,
+cosmetic`. The side is the class's (the size table's internal and
+external classes, no geometry measured); a custom thread, which has no
+class, takes its faces' side and shows its major diameter and pitch as
+the definition's texts (`Custom Ø76 mm × 2 mm`, with its starts when
+there are more than one). A Hole's names its Hole Type and its size: a
+tapped hole's thread as a Thread's (`Simple hole, M6x1 6H, internal,
+cosmetic`), else its diameter (`Counterbore hole, Ø6.6 mm`). The sizes'
+three places count the value inputs only, so the key line never pushes
+a Thread's length out (`Radial Clearance: 0.2 mm; Flank clearance:
+0.1 mm; Length: 10 mm`). The heading, the component line and a Fillet's
+or a Chamfer's edge count are as before. `timeline-inspection.mitcad-ui`
+(`app.ui-linux-timeline-inspection`, `app.ui-windows-timeline-inspection`)
+hovers a modelled internal M76x2 6H thread, a cosmetic external M6 one
+and a tapped hole.
+
 The AppKit timeline (mitcad#1076) shows the same: its cells report the
 hovered feature, or a folded group's first feature for the group, to
 `TimelineWidget::hoverFeature`, which sets the same preview, and their
@@ -13526,11 +13668,10 @@ until CAM exists.
 - **The selected body's card.** On the Make tab, with one body (or a
   face, edge or vertex of it) selected outside commands, the selection
   card shows the **Make** section under the selection's text
-  (`MakeBodyCard`): the **Material** (a drop-down of the design's
-  materials; another one is set on the body with `set_body_material`),
-  the **Printer** (the design's, read-only here), the **Process** (a
-  drop-down of the design's process profiles; another one is chosen for
-  the body, `set_property` of `Print Process`/`profile`) and every printer
+  (`MakeBodyCard`), its rows from the widest choice to the body's own
+  (mitcad#1239): the **Printer**, the **Process**, the **Material** (a
+  drop-down of the design's materials; another one is set on the body
+  with `set_body_material`) and every printer
   or process value set on a level rather than taken from a profile, each
   with the icon of the level that gives it (body, occurrence, component,
   as the Properties window's Source column has it) and its own field: a
@@ -13539,6 +13680,29 @@ until CAM exists.
   a command hides it. On the Make tab the card has no Create row
   (mitcad#1178): the Make section takes its place; the row comes back
   with another tab (`updateSelectionCreate` follows `Ribbon::tabChanged`).
+  - **Printer and Process** (mitcad#1239) are searchable pickers as Send
+    to Slicer's (`PickerComboBox`, `framework/PickerComboBox.*`, shared
+    with the panels' choice pickers): the printers and processes of
+    `library_items`, the design's and the libraries' (This project, My
+    library, Built-in), in `profilePickerRows`' order under the same
+    headings (the printers by vendor, the processes by printer, the
+    body's printer's processes first, mitcad#1216, Any printer last),
+    each by its short name with where it comes from; *Slicer default*
+    first while none is chosen; last, below a line, **Printers…** or
+    **Processes…**, which opens the Printers or Processes manager on the
+    one chosen (on none selected for Slicer default; the choice stays).
+    The printer is the whole design's: the one chosen is set on the root
+    as the Printers manager and Send to Slicer set it (`set_property` of
+    `Print Printer`/`profile` on `C0`), its tooltip *The printer of the
+    whole design, for every body*, its level icon the root's (component)
+    once chosen, never the body's. The process
+    is the body's (`set_property` of `Print Process`/`profile` on the
+    body). A library's profile is named by its `library` and copied into
+    the design in the same undo step (`nameItem`; the design's copy
+    reused); either choice is one undo step and the card shows it at once,
+    the Process picker then with the new printer's processes first. The
+    wheel and the arrow keys on a closed field skip the line and the
+    manager's row.
   - **Add Print Value…** (mitcad#1178), a button under the values, opens
     the picker `PrintValuePicker` ("Add Print Value"): a search field
     over the settings the body can take as its own
@@ -13591,8 +13755,17 @@ until CAM exists.
   Dimension | Note | … | - | Annotations…`; `Make card: Body2: material
   PLA (component); printer Bench (component Root); process Standard
   (component Root); own: Walls = 5 (body Body2)` or `Make card: none`,
-  the card's places `Make card material at x,y`, `Make card process at
-  x,y`, `Make card value <key> at x,y`, its edits `Make card Walls set:
+  the card's places `Make card printer at x,y`, `Make card process at
+  x,y`, `Make card material at x,y`, `Make card value <key> at x,y`, its
+  rows from the top `Make card rows: Printer, Process, Material, Walls`
+  (mitcad#1239), its pickers' rows with the summary `Make card printers:
+  Acme Lab: Acme Lab X1 | Other: Bench` and `Make card processes: Bench:
+  Fine @Bench | Alpha: Coarse @Alpha | Any printer: Draft` (the names
+  alone without headings; the pickers' own `Printer picker opened: …`,
+  `Process picker sections: …`, `… search: …`, `… chose: …`), its edits
+  `Make card Printer set: Bench`, `Make card Process set: Fine @Bench`,
+  `Make card printer manager: design/bench` (`process`; `slicer
+  default`: Printers… or Processes…), `Make card Walls set:
   3`, `Make card material of Body2: abs` and their refusals; with
   mitcad#1178 also `Make card value <key> icon body` (the level's icon:
   `body`, `insert-component`, `component`, `settings`), `Make card

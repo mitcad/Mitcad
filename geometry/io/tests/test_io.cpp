@@ -29,6 +29,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -51,6 +52,7 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom_Surface.hxx>
 #include <IMeshData_Edge.hxx>
 #include <IMeshData_Face.hxx>
 #include <IMeshData_Model.hxx>
@@ -970,6 +972,150 @@ void test_reuse_triangulations() {
   CHECK(mitcad::io::mesh_in_place(plate, view));
   CHECK(mitcad::io::reuse_triangulations(anew, {plate}) == 0);
   CHECK(mitcad::io::reuse_triangulations(anew, {}) == 0);
+}
+
+// The area (mm²) of a face's triangulation in space, 0 without one.
+double triangulated_area(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  const occ::handle<Poly_Triangulation> triangulation = BRep_Tool::Triangulation(face, location);
+  if (triangulation.IsNull()) {
+    return 0.0;
+  }
+  double twice = 0.0;
+  for (int t = 1; t <= triangulation->NbTriangles(); ++t) {
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    triangulation->Triangle(t).Get(a, b, c);
+    const gp_Pnt pa = triangulation->Node(a);
+    twice += gp_Vec(pa, triangulation->Node(b)).Crossed(gp_Vec(pa, triangulation->Node(c))).Magnitude();
+  }
+  return 0.5 * twice;
+}
+
+// A length x width rectangle on the xy plane, its corner at (x, 0, 0).
+TopoDS_Face xy_rectangle(double x, double length, double width) {
+  BRepBuilderAPI_MakePolygon outline(gp_Pnt(x, 0, 0), gp_Pnt(x + length, 0, 0), gp_Pnt(x + length, width, 0),
+                                     gp_Pnt(x, width, 0), true);
+  return BRepBuilderAPI_MakeFace(outline.Wire(), true).Face();
+}
+
+// A face's triangulation given to the same face placed the other way
+// (GitHub #126, mitcad#1243): a prism's top is its base's face moved up by
+// the face's location; a boolean that rebuilds the top keeps the move in
+// its surface's placement instead. The copy's nodes are moved into the
+// target face's frame, so the top lies at its height (it lay on the base,
+// drawn and picked over the bottom, and was missing above); a triangulation
+// copied as it was does not lie on the face (triangulation_on_face), and
+// such a face is meshed rather than taken.
+void test_reuse_moved_face() {
+  using mitcad::io::MeshOptions;
+  const MeshOptions view{0.01, 5.0 * std::atan(1.0) / 45.0, false, 20000, false, false};
+  const TopoDS_Face base = xy_rectangle(0.0, 177.2, 25.0);
+  gp_Trsf up;
+  up.SetTranslation(gp_Vec(0, 0, 5));
+  const TopoDS_Face donor = TopoDS::Face(base.Moved(TopLoc_Location(up)));
+  CHECK(mitcad::io::mesh_in_place(donor, view));
+  CHECK(mitcad::io::triangulation_on_face(donor));
+  // The same face with the move in its surface's placement, bounded by the
+  // donor's edges as placed in it.
+  const auto rebuilt = [&donor]() {
+    TopLoc_Location placed;
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(donor, placed);
+    TopoDS_Face face;
+    BRep_Builder builder;
+    builder.MakeFace(face, surface, placed, BRep_Tool::Tolerance(donor));
+    const TopoDS_Shape forward = donor.Oriented(TopAbs_FORWARD);
+    for (TopExp_Explorer it(forward, TopAbs_WIRE); it.More(); it.Next()) {
+      builder.Add(face, it.Current());
+    }
+    face.Orientation(donor.Orientation());
+    return face;
+  };
+  const TopoDS_Face target = rebuilt();
+  CHECK(target.Location().IsIdentity());
+  CHECK(mitcad::io::reuse_triangulations(target, {donor}) == 1);
+  CHECK(mitcad::io::triangulation_on_face(target));
+  TopLoc_Location location;
+  const occ::handle<Poly_Triangulation> given = BRep_Tool::Triangulation(target, location);
+  CHECK(!given.IsNull());
+  if (!given.IsNull()) {
+    double lowest = 1e9;
+    double highest = -1e9;
+    for (int i = 1; i <= given->NbNodes(); ++i) {
+      const double z = given->Node(i).Transformed(location.Transformation()).Z();
+      lowest = std::min(lowest, z);
+      highest = std::max(highest, z);
+    }
+    std::printf("Moved face: its copied nodes at z %.9g to %.9g\n", lowest, highest);
+    CHECK(near(lowest, 5.0, 1e-6) && near(highest, 5.0, 1e-6));
+    CHECK(relative_near(triangulated_area(target), 177.2 * 25.0, 1e-9));
+  }
+  mitcad::io::MeshReport report;
+  CHECK(mitcad::io::mesh_in_place(target, view, Message_ProgressRange(), &report));
+  CHECK(report.kept == 1 && report.meshed == 0);
+  CHECK(mitcad::io::triangulation_on_face(target));
+
+  // The donor's triangulation as it was, in the donor's frame: it lies on
+  // the base, not on the face.
+  const TopoDS_Face misplaced = rebuilt();
+  TopLoc_Location donor_location;
+  BRep_Builder().UpdateFace(misplaced, BRep_Tool::Triangulation(donor, donor_location));
+  CHECK(!mitcad::io::triangulation_on_face(misplaced));
+  CHECK(!mitcad::io::triangulation_on_face(rebuilt()));
+}
+
+// The reported design's two bodies (GitHub #126, mitcad#1243): the
+// 177.2 x 25 x 5 plate as shown, meshed, gives the faces a Join of a
+// 6 x 25 x 10 block on its end left as they were (the top, the far end) to
+// the joined body, made as the Join makes it (on a copy of the plate that
+// shares its geometry, the coplanar faces merged after). Every face of the
+// joined body then has a triangulation on the face covering its area, the
+// faces given one kept by the meshing.
+void test_reuse_join_on_end() {
+  using mitcad::io::MeshOptions;
+  const MeshOptions view{0.01, 5.0 * std::atan(1.0) / 45.0, false, 20000, false, false};
+  const TopoDS_Shape plate = BRepPrimAPI_MakePrism(xy_rectangle(0.0, 177.2, 25.0), gp_Vec(0, 0, 5)).Shape();
+  const TopoDS_Shape block = BRepPrimAPI_MakePrism(xy_rectangle(177.2, 6.0, 25.0), gp_Vec(0, 0, 10)).Shape();
+  CHECK(mitcad::io::mesh_in_place(plate, view));
+  const TopoDS_Shape operand = BRepBuilderAPI_Copy(plate, false, false).Shape();
+  BRepAlgoAPI_Fuse join(operand, block);
+  CHECK(join.IsDone());
+  if (!join.IsDone()) {
+    return;
+  }
+  join.SimplifyResult();
+  const TopoDS_Shape joined = join.Shape();
+  CHECK(relative_near(volume(joined), 177.2 * 25.0 * 5.0 + 6.0 * 25.0 * 10.0, 1e-9));
+  int faces = 0;
+  for (TopExp_Explorer it(joined, TopAbs_FACE); it.More(); it.Next()) {
+    ++faces;
+  }
+  CHECK(faces == 8);
+  const std::size_t given = mitcad::io::reuse_triangulations(joined, {plate});
+  std::printf("Join on the plate's end: %zu of %d faces reused\n", given, faces);
+  CHECK(given >= 1);
+  for (TopExp_Explorer it(joined, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    TopLoc_Location location;
+    if (!BRep_Tool::Triangulation(face, location).IsNull()) {
+      CHECK(mitcad::io::triangulation_on_face(face));
+    }
+  }
+  mitcad::io::MeshReport report;
+  CHECK(mitcad::io::mesh_in_place(joined, view, Message_ProgressRange(), &report));
+  CHECK(report.kept == given);
+  int covered = 0;
+  for (TopExp_Explorer it(joined, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    const bool on = mitcad::io::triangulation_on_face(face);
+    const double exact = area(face);
+    const double meshed = triangulated_area(face);
+    CHECK(on);
+    CHECK(near(meshed, exact, std::max(1e-6, 1e-9 * exact)));
+    covered += on && near(meshed, exact, std::max(1e-6, 1e-9 * exact)) ? 1 : 0;
+  }
+  std::printf("Join on the plate's end: %d of %d faces meshed on the face, covering it\n", covered, faces);
 }
 
 // How many of the shape's edges have a polygon on each face's
@@ -2013,6 +2159,8 @@ int main(int argc, char** argv) {
     test_mesh_all_in_place();
     test_mesh_report_and_fast_planes();
     test_reuse_triangulations();
+    test_reuse_moved_face();
+    test_reuse_join_on_end();
     test_display_mesh_bytes();
     test_compare_meshing();
     test_checked_planes();

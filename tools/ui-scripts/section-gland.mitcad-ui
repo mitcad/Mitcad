@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# A cable gland body cut in its profile's plane (mitcad#1230), on
+# section-gland.json: Body1 (F2.b0) revolved about the Y axis from profiles
+# in the XY plane, with a modelled M45x3 internal thread at one end and an
+# M30x2 external thread at the other. Section Analysis Profile at the XY
+# plane itself (Distance 0, through the axis: the revolutions' seams, the
+# axis and the threads' start sections lie on the cut) is shown: Body1 is
+# cut with caps, as Off at 1 mm cuts it, and no clip fails. The caps are
+# the body's section through the axis, about 2 x 356 mm² (the profile less
+# what the threads take); what is left lies behind the plane.
+# Run by tools/ui-section-gland-test.sh (Linux) and
+# tools/ui-windows-section-gland-test.ps1 (Windows).
+wait-idle 180
+
+# Profile, Distance 0.
+wait-log '^Section caps: [1-9][0-9]* face\(s\) at .*, area [0-9.]+$' 120
+capture capsAt0 '^Section caps: [1-9][0-9]* face\(s\) at .*, area ([0-9.]+)$'
+expect-near ${capsAt0} 712 0.1
+capture-shown-body at0 F2.b0 -
+expect-near ${at0_max_z} 0 0 0.001
+expect-near ${at0_min_z} -30 0 0.01
+expect-never '^Section: F2\.b0 shown whole'
+expect-never '^Section clip warning: '
+
+# Off, 1 mm from the profiles' plane: cut with caps as well.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Off","visible":true}'
+wait-log '^Section caps: [1-9][0-9]* face\(s\) at .*, area [0-9.]+$' 120
+wait-idle 120
+capture capsAt1 '^Section caps: [1-9][0-9]* face\(s\) at .*, area ([0-9.]+)$'
+expect-near ${capsAt1} 712 0.1
+capture-shown-body at1 F2.b0 -
+expect-near ${at1_max_z} 1 0 0.001
+expect-never '^Section: F2\.b0 shown whole'
+expect-never '^Section clip warning: '
+expect-never 'TestDriver: FAIL'

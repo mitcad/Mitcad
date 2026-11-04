@@ -1634,6 +1634,68 @@ void test_thread_under_a_serrated_head() {
   }
 }
 
+// The pieces of a thread counted from each end of its face (mitcad#1231):
+// a part of a rod's face, 2 from its high end, 8, 9.5 and 12 long (other
+// piece counts). Each piece's first name, which its edges are named after,
+// is its place from the nearer end, `F3:low_thread(F2:side(c1))#k` or
+// `F3:high_thread(…)#k`; its number along the thread (mitcad#490) stays
+// as another name. The edges where the thread meets the plain face at
+// either end keep their names whatever the count.
+void test_thread_pieces_counted_from_their_ends() {
+  const ShapePtr rod = extrude("F2", {circle(1, 0, 0, 5)}, 0, 20);
+  const std::string low = "F3:low_thread(F2:side(c1))#";
+  const std::string high = "F3:high_thread(F2:side(c1))#";
+  for (const double length : {8.0, 9.5, 12.0}) {
+    ThreadSpec spec = spec_of("F3", "F2:side(c1)", 1.5, k6g);
+    spec.full_length = false;
+    spec.length = length;
+    spec.offset = 2;
+    const ShapePtr bolt = modeled_thread(*rod, spec);
+    const int count = static_cast<int>(bolt->find_faces("F3:thread(F2:side(c1))").size());
+    CHECK(count > 20);
+    // Each piece's first name from the nearer end, each place once.
+    int named = 0;
+    double low_z = 0.0;
+    double high_z = 0.0;
+    double lowest = 100.0;
+    double highest = -100.0;
+    for (int i = 0; i < bolt->face_count(); ++i) {
+      const NameList& names = bolt->face_names(i);
+      if (!face_matches(names, "F3:thread(F2:side(c1))")) {
+        continue;
+      }
+      const std::string& first = names.front();
+      const bool from_low = first.rfind(low, 0) == 0;
+      CHECK(from_low || first.rfind(high, 0) == 0);
+      const int place = std::stoi(first.substr(first.find('#') + 1));
+      CHECK(2 * place <= count);
+      ++named;
+      GProp_GProps properties;
+      BRepGProp::SurfaceProperties(bolt->face(i), properties);
+      const double z = properties.CentreOfMass().Z();
+      lowest = std::min(lowest, z);
+      highest = std::max(highest, z);
+      if (first == low + "0") {
+        low_z = z;
+      }
+      if (first == high + "0") {
+        high_z = z;
+      }
+    }
+    CHECK(named == count);
+    CHECK(bolt->find_faces(low + "0").size() == 1);
+    CHECK(bolt->find_faces(high + "0").size() == 1);
+    // The end pieces at the ends: the face's cylinder's axis points down
+    // here, so its high end, from which the part is measured, is the rod's
+    // base, and the high end's piece lies 2 above it.
+    CHECK(near(high_z, 2.0, 1e-6) && near(high_z, lowest, 1e-6));
+    CHECK(near(low_z, 2.0 + length, 1e-6) && near(low_z, highest, 1e-6));
+    // The edges with the plain face at both ends, by the same names.
+    CHECK(!bolt->find_edges("E{F2:side(c1)|" + high + "0}").empty());
+    CHECK(!bolt->find_edges("E{F2:side(c1)|" + low + "0}").empty());
+  }
+}
+
 } // namespace
 
 // The suite's parts thread.1-thread.3 (test_main.cpp), each a ctest of its
@@ -1668,6 +1730,7 @@ void thread_tests_3() {
   guarded("test_pieces_on_screw_surfaces_and_legacy_names", test_pieces_on_screw_surfaces_and_legacy_names);
   guarded("test_thread_tools_in_parallel", test_thread_tools_in_parallel);
   guarded("test_trapezoidal_threads", test_trapezoidal_threads);
+  guarded("test_thread_pieces_counted_from_their_ends", test_thread_pieces_counted_from_their_ends);
 }
 
 } // namespace test

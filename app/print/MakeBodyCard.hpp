@@ -3,13 +3,19 @@
 
 // The selected body on the Make tab (mitcad#1049; app/COMMANDS.md "The
 // Make tab"): a section of the selection card under the selection's text
-// with the body's material and its 3D print settings, as the Properties
-// window shows them: the printer and the process profile and every print
-// value set on the body, its occurrences or its components rather than
-// taken from a profile, each with the icon of the level that gives it
-// (body, occurrence, component). The material, the process and the values
-// are edited here; the window asks the model and sets them on the body
-// (MainWindowMake.cpp), each one undo step. Add Print Value… under the
+// with the body's 3D print settings and its material, as the Properties
+// window shows them, from the widest choice to the body's own
+// (mitcad#1239): the printer, the process profile, the material and every
+// print value set on the body, its occurrences or its components rather
+// than taken from a profile, each with the icon of the level that gives it
+// (body, occurrence, component). The printer is the whole design's (its
+// root); the process, the material and the values are the body's. Each is
+// edited here; the window asks the model and sets them (MainWindowMake.cpp),
+// each one undo step. The printer and the process are chosen in
+// searchable pickers as Send to Slicer's (PickerComboBox,
+// profilePickerRows): the design's and the libraries' profiles, a
+// library's copied into the design as it is chosen; their last rows open
+// the Printers and the Processes managers. Add Print Value… under the
 // values asks for a setting to add to the body (PrintValuePicker,
 // mitcad#1178); a value set on the body has a remove button, which clears
 // it there. The Properties window stays for full editing.
@@ -21,12 +27,16 @@
 #include <QStringList>
 #include <QVector>
 
+#include "ProfilePickerRows.hpp"
+
 class QComboBox;
 class QGridLayout;
 class QLabel;
 class QLineEdit;
 
 namespace mitcad {
+
+class PickerComboBox;
 
 // A print value set on a level, as the card shows it.
 struct MakeCardValue {
@@ -52,30 +62,32 @@ struct MakeCardData {
   QString materialLevel;
   QVector<QPair<QString, QString>> materials;
   // The printer and process profiles it prints with ("Slicer default"
-  // when none is chosen), the level that chose each and its name; the
-  // design's process profiles (id, name) it can choose.
+  // when none is chosen), their pickers' keys ("<place>/<id>"; empty for
+  // none), the level that chose each and its name.
   QString printer;
+  QString printerId;
   QString printerLevel;
   QString printerOwner;
   QString process;
   QString processId;
   QString processLevel;
   QString processOwner;
-  QVector<QPair<QString, QString>> processes;
-  // The printer each process is listed under (mitcad#1216: the body's
-  // printer's processes first, then the others under their printers, Any
-  // printer last; profilePickerRows), as many as `processes`; empty when
-  // no process names a printer: then no headings.
-  QStringList processGroups;
+  // The printers and processes it can choose, as Send to Slicer's pickers
+  // list them (mitcad#1239, profilePickerRows): the design's and the
+  // libraries'; the printers under their vendors, the processes under
+  // their printers, the body's printer's first (mitcad#1216), Any printer
+  // last; no headings when none has a group.
+  QVector<ProfilePickerRow> printers;
+  QVector<ProfilePickerRow> processes;
   QVector<MakeCardValue> values;
 
   bool operator==(const MakeCardData& other) const {
     return body == other.body && material == other.material && materialId == other.materialId &&
            materialLevel == other.materialLevel && materials == other.materials && printer == other.printer &&
-           printerLevel == other.printerLevel && printerOwner == other.printerOwner && process == other.process &&
-           processId == other.processId && processLevel == other.processLevel &&
-           processOwner == other.processOwner && processes == other.processes &&
-           processGroups == other.processGroups && values == other.values;
+           printerId == other.printerId && printerLevel == other.printerLevel && printerOwner == other.printerOwner &&
+           process == other.process && processId == other.processId && processLevel == other.processLevel &&
+           processOwner == other.processOwner && printers == other.printers && processes == other.processes &&
+           values == other.values;
   }
   bool operator!=(const MakeCardData& other) const { return !(*this == other); }
 };
@@ -85,11 +97,11 @@ struct MakeCardData {
 // (component Root); own: Walls = 5 (body Body1)".
 QString makeCardSummary(const MakeCardData& data);
 
-// The card's process drop-down for the UI tests' log (mitcad#1216): its
-// processes under their printers, "Bench Y: Shared, Strong | Bench X:
-// Fine | Any printer: Draft"; the names alone, "Fine, Draft", without
-// groups.
-QString makeCardProcessList(const MakeCardData& data);
+// A picker of the card for the UI tests' log (mitcad#1216, mitcad#1239):
+// its rows under their headings, the processes "Bench Y: Shared, Strong |
+// Bench X: Fine | Any printer: Draft", the printers "Acme Lab: Acme Lab
+// X1 | Other: Bench"; the names alone, "Fine, Draft", without groups.
+QString makeCardChoiceList(const QVector<ProfilePickerRow>& rows);
 
 // The icon of a level in app/icons, as the Properties window's Source
 // column has it: body, insert-component (an occurrence), component;
@@ -116,16 +128,24 @@ public:
   // card has no such field.
   bool focusValue(const QString& key);
   // The places of its fields in the main window's coordinates, for the UI
-  // tests: "Make card material at x,y", "Make card process at x,y", "Make
-  // card value perimeters at x,y", "Make card remove perimeters at x,y"
-  // (a value set on the body), "Make card add value at x,y"; and each
-  // value's level icon, "Make card value perimeters icon body".
+  // tests: "Make card printer at x,y", "Make card process at x,y", "Make
+  // card material at x,y", "Make card value perimeters at x,y", "Make
+  // card remove perimeters at x,y" (a value set on the body), "Make card
+  // add value at x,y"; each value's level icon, "Make card value
+  // perimeters icon body"; and its rows' names from the top, "Make card
+  // rows: Printer, Process, Material, Walls" (mitcad#1239).
   QStringList places() const;
 
 signals:
-  // Another material, or another process profile, chosen (its id).
+  // Another material chosen (its id), or another printer or process
+  // profile (its picker key, "<place>/<id>"): the printer for the whole
+  // design, the process for the body.
   void materialChosen(const QString& id);
-  void processChosen(const QString& id);
+  void printerChosen(const QString& key);
+  void processChosen(const QString& key);
+  // A picker's last row, Printers… or Processes… (`kind` printer or
+  // process): the manager on `key`, the one chosen now (empty: none).
+  void managerRequested(const QString& kind, const QString& key);
   // A value typed and confirmed (Enter, or the field left changed).
   void valueEdited(const QString& set, const QString& key, const QString& text);
   // Add Print Value… clicked.
@@ -137,13 +157,17 @@ signals:
 private:
   void rebuild();
   QLabel* levelIcon(const QString& level, const QString& owner);
+  // A printer or process picker (`kind`) of the rows, on `current`.
+  PickerComboBox* profilePicker(const QString& kind, const QVector<ProfilePickerRow>& rows, const QString& current,
+                                const QString& currentName);
 
   MakeCardData m_data;
   MakeCardValue m_pending; // key empty: none
   bool m_hasData = false;
   QGridLayout* m_grid = nullptr;
+  PickerComboBox* m_printer = nullptr;
+  PickerComboBox* m_process = nullptr;
   QComboBox* m_material = nullptr;
-  QComboBox* m_process = nullptr;
   QHash<QString, QLineEdit*> m_fields;    // the values' fields, by key
   QHash<QString, QWidget*> m_removes;     // the body values' remove buttons, by key
   QHash<QString, QString> m_icons;        // the values' level icons, by key

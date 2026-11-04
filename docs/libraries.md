@@ -1827,9 +1827,9 @@ The default configuration also reads the earlier CLI cache under
 `mitcad/libraries`, preserving versions already fetched there without moving
 or deleting them; new fetches use the shared folder. Explicit overrides do
 not add this legacy cache. There is
-one clone for each URL. MitCad makes and updates the clones with the
-system's git only when you ask, or at start-up for a source with
-Auto-update (the check box in Libraries). These commands ask for it:
+one clone for each URL. MitCad makes and updates the clones only when
+you ask, or at start-up for a source with Auto-update (the check box in
+Libraries). These commands ask for it:
 
 - Libraries › Fetch
 - Update in the library browser
@@ -1844,6 +1844,43 @@ missing. The CLI and the MCP server do not fetch at start-up.
 Updates add branches and tags. They remove nothing. Git's automatic
 garbage collection is off there. Thus the versions that designs use
 stay readable.
+
+### Fetching without git
+
+Libraries need no git program (mitcad#1224). MitCad fetches `https://`
+and `http://` addresses itself, with the git library it is built with
+(gix and its HTTP client: rustls with the system's root certificates, no
+OpenSSL). The clone it makes is the bare clone `git clone --bare` would
+make: `remote.origin.url`, the branches and tags, and HEAD on the
+remote's default branch. Either way of fetching can update a clone the
+other made.
+
+| Address | Use the installed git program off (default) | on |
+|---|---|---|
+| `https://`, `http://` | MitCad itself, no git needed | git |
+| SSH (`ssh://`, `git@host:path`) | refused: "needs the installed git program" (`unsupported`) | git |
+| a folder, `file://` | git (`git_missing` without it) | git |
+
+**Use the installed git program** is an advanced setting in Libraries
+(`libraries/useGit`, off by default; the command's `use_git`,
+`mitcad-cli library fetch --git`). Turn it on for SSH addresses or for a
+library that needs a sign-in: git signs in with its SSH keys or its
+credential helper. MitCad's own transfer fetches public repositories
+only; a server that asks for a sign-in gives the error `auth_failed`,
+which says to turn the setting on. It asks for no password and runs no
+credential helper. Proxies come from the environment (`HTTPS_PROXY`,
+`NO_PROXY`). An address that cannot be reached is `network` ("the server
+cannot be reached"), one without a repository `not_found`. Progress
+(the phase and its percentage) and Cancel work as with git, and a
+transfer that shows no progress for five minutes is stopped. A fetch's
+answer says which way it took (`transport`: `built_in` or `git`), and
+its log has a line `built-in fetch (no git program) <url>: ok` or the
+git commands.
+
+Cloud projects still need the installed git program (Cloud in
+Preferences); without it they say so, and libraries over `https://`
+work all the same. Git itself is not shipped with MitCad: it is
+GPL-2.0-only ([licence policy](development.md#licence-policy)).
 
 A clone may have at most 200 MB, a new one and an updated one alike
 (mitcad#938). An update fetches the branches and tags under

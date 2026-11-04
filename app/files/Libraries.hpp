@@ -32,6 +32,11 @@ struct LibrarySource {
 // them; the defaults before the user changed anything.
 struct LibrarySettings {
   QList<LibrarySource> sources;
+  // Use the installed git program (mitcad#1224, the setting
+  // libraries/useGit, off by default): every fetch through git, e.g. for
+  // SSH addresses or a sign-in through git's credential helper. Off:
+  // https:// libraries are fetched without git, by MitCad itself.
+  bool useGit = false;
 
   static LibrarySettings load();
   void save() const;
@@ -71,6 +76,10 @@ QString librariesDirectory();
 
 // Tells the model where libraries are (once, at start).
 void configureLibraries();
+
+// The library_fetch command for `url`, with use_git as the settings say
+// (mitcad#1224).
+QJsonObject libraryFetchCommand(const QString& url);
 
 // Runs a local library command; a failure is {"error": {"message"}}.
 QJsonObject libraryCommand(const QJsonObject& command);

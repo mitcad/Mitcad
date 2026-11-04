@@ -195,7 +195,11 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad)
     add_test(NAME repo.macos-ui-lock
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/test-macos-ui-lock.py"
               --bash "${BASH_EXECUTABLE}" --lib "${CMAKE_SOURCE_DIR}/tools/ui-macos-lib.sh")
-    set_tests_properties(repo.macos-ui-lock PROPERTIES TIMEOUT 600 RESOURCE_LOCK macos_desktop)
+    # This protocol test repeatedly hands Aqua between its own children.
+    # Audited harnesses lock each app rather than their whole CTest entry,
+    # so the desktop resource alone cannot exclude them from those hand-offs.
+    set_tests_properties(repo.macos-ui-lock PROPERTIES
+      TIMEOUT 600 RESOURCE_LOCK macos_desktop RUN_SERIAL TRUE)
     add_test(NAME repo.macos-test-resources
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/test-macos-test-resources.py"
               --ctest "${CMAKE_CTEST_COMMAND}" --build "${CMAKE_BINARY_DIR}")

@@ -15,7 +15,7 @@ use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::NameConflict;
 use mitcad_model::ids::BodyUid;
-use mitcad_model::internal::document::{library_kind, writable_library};
+use mitcad_model::internal::document::{library_kind, with_warnings, writable_library};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::material::{Material, MaterialChange, PRINTING_KEYS, PROPERTY_DEFS, PropertyDef};
 use mitcad_model::material_dataset;
@@ -136,10 +136,12 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
                 Some(library) => {
                     let library = writable_library(library)?;
                     let libraries = self.print_libraries(change.project.as_deref().map(Path::new));
-                    let (id, path, version) =
-                        self.create_library_material(&libraries, library, &change)?;
-                    json!({"id": id, "library": library.id(), "version": version,
-                           "path": path.to_string_lossy()})
+                    let written = self.create_library_material(&libraries, library, &change)?;
+                    with_warnings(
+                        json!({"id": written.id, "library": library.id(),
+                               "version": written.version, "path": written.path.to_string_lossy()}),
+                        written.warnings,
+                    )
                 }
                 None => json!({"id": self.create_material(&change)?}),
             },
@@ -156,9 +158,15 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
                         let library = writable_library(library)?;
                         let libraries =
                             self.print_libraries(change.project.as_deref().map(Path::new));
-                        let (path, version) =
+                        // A missing default appearance kept is a warning
+                        // (mitcad#1242).
+                        let written =
                             self.edit_library_material(&libraries, library, &id, &change)?;
-                        json!({"version": version, "path": path.to_string_lossy()})
+                        with_warnings(
+                            json!({"version": written.version,
+                                   "path": written.path.to_string_lossy()}),
+                            written.warnings,
+                        )
                     }
                     None => {
                         self.edit_material(&id, &change)?;
@@ -225,12 +233,17 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
                 Some(library) => {
                     let library = writable_library(library)?;
                     let libraries = self.print_libraries(project.as_deref().map(Path::new));
-                    let (id, path, version) =
-                        self.merge_library_materials(&libraries, library, &ids)?;
-                    json!({"id": id, "library": library.id(), "version": version,
-                           "path": path.to_string_lossy()})
+                    let written = self.merge_library_materials(&libraries, library, &ids)?;
+                    with_warnings(
+                        json!({"id": written.id, "library": library.id(),
+                               "version": written.version, "path": written.path.to_string_lossy()}),
+                        written.warnings,
+                    )
                 }
-                None => json!({"id": self.merge_materials(&ids)?}),
+                None => {
+                    let (id, warnings) = self.merge_materials(&ids)?;
+                    with_warnings(json!({"id": id}), warnings)
+                }
             },
             MaterialCommand::ImportMaterials {
                 text,

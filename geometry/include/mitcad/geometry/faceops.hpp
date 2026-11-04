@@ -31,6 +31,15 @@ struct ShellSpec {
 //   <feature>:offset_cap(<face>)  the end of the wall where a removed face was
 //                                 (offset_cap(<edge>) when it comes from an edge)
 //   <feature>:offset(<edge>), <feature>:offset(<vertex>)  rounded joins
+// Where the geometry kernel's offset fails, the inside wall is the body less
+// a cavity (mitcad#1233): the parts of the body no thicker than the wall
+// (under a face no further from a removed face than the wall, a plate
+// between two faces no further apart than twice the wall) stay solid with
+// their own faces, and roundings tighter than the wall are run past. The
+// result's notes name the faces whose inside of the wall is missing: "the
+// wall does not fit under face …; it is left solid there", or "the inside
+// of the wall runs past face …". Where the wall fits under no face, the
+// shell fails with that message.
 ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& spec);
 
 // Tilts the faces about their intersection with the fixed plane by `angle`.

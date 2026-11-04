@@ -103,6 +103,8 @@ BindingsCard::BindingsCard(const CommandContext& model, Actions actions, QWidget
   connect(&m_follow, &QTimer::timeout, this, &BindingsCard::followPointer);
   m_native = createNativeBindingsCardView(this, [this] { hide(); });
   if (m_native) {
+    // AppKit owns dismissal; the hidden presenter must not be a Qt tooltip.
+    setWindowFlags(Qt::Tool | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_DontShowOnScreen);
     setProperty("nativeCompactPanel", true);
   }
@@ -127,9 +129,10 @@ void BindingsCard::showFor(const BindingItem& item, const QRect& anchor, bool pi
     if (wasVisible) {
       hide();
     }
-    setWindowFlags(pinned && !m_native ? (Qt::Popup | Qt::FramelessWindowHint)
-                                      : (Qt::ToolTip | Qt::FramelessWindowHint));
-    setAttribute(Qt::WA_ShowWithoutActivating, !pinned);
+    setWindowFlags(m_native ? (Qt::Tool | Qt::FramelessWindowHint)
+                           : pinned ? (Qt::Popup | Qt::FramelessWindowHint)
+                                    : (Qt::ToolTip | Qt::FramelessWindowHint));
+    setAttribute(Qt::WA_ShowWithoutActivating, m_native || !pinned);
   }
   place();
   show();

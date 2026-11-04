@@ -17,6 +17,11 @@ cli=$2
 ui_init "$1" "$3"
 trap 'projects_edit_exit=$?; trap - EXIT; set +e; ui_cleanup; exit "$projects_edit_exit"' EXIT
 UI_TIMEOUT=240
+# This workflow edits successive designs in the same Projects outline.
+# Keep that explicit now that new documents normally open in another window;
+# the separate multi-document workflow checks the default window policy.
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '\n[documents]\nopenInCurrentWindow=true\n' >> "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
 export MITCAD_TEST_WORK=$UI_OUT/files
 mkdir -p "$MITCAD_TEST_WORK"
 author='UI Tester <ui@example.invalid>'

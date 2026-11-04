@@ -15,6 +15,7 @@ namespace mitcad {
 namespace {
 
 const QString kSourcesKey = QStringLiteral("libraries/sources");
+const QString kUseGitKey = QStringLiteral("libraries/useGit");
 
 } // namespace
 
@@ -36,6 +37,7 @@ QString normalLibraryUrl(const QString& url) {
 LibrarySettings LibrarySettings::load() {
   LibrarySettings settings;
   QSettings store;
+  settings.useGit = store.value(kUseGitKey, false).toBool();
   if (!store.contains(kSourcesKey)) {
     settings.sources = defaultLibrarySources();
     return settings;
@@ -60,7 +62,17 @@ void LibrarySettings::save() const {
                             {QStringLiteral("enabled"), source.enabled},
                             {QStringLiteral("autoUpdate"), source.autoUpdate}});
   }
-  QSettings().setValue(kSourcesKey, QJsonDocument(list).toJson(QJsonDocument::Compact));
+  QSettings store;
+  store.setValue(kSourcesKey, QJsonDocument(list).toJson(QJsonDocument::Compact));
+  store.setValue(kUseGitKey, useGit);
+}
+
+QJsonObject libraryFetchCommand(const QString& url) {
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("library_fetch")}, {QStringLiteral("url"), url}};
+  if (LibrarySettings::load().useGit) {
+    command.insert(QStringLiteral("use_git"), true);
+  }
+  return command;
 }
 
 QStringList LibrarySettings::enabledUrls() const {

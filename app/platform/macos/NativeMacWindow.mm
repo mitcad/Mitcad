@@ -3704,6 +3704,7 @@ bool NativeMacWindow::isEmbedded() const { return m_state->error.isEmpty() && bo
 bool NativeMacWindow::modalBlocked() const { return m_state->nativeModalBlocked(); }
 QString NativeMacWindow::embeddingError() const { return m_state->error; }
 void NativeMacWindow::show() {
+  const bool firstPresentation = !m_state->frameInitialized;
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   const bool separate = m_state->viewport && m_state->viewport->property("mitcadSeparateWindow").toBool();
   m_state->window.tabbingMode = separate ? NSWindowTabbingModeDisallowed : NSWindowTabbingModeAutomatic;
@@ -3730,7 +3731,10 @@ void NativeMacWindow::show() {
     [m_state->window.contentView layoutSubtreeIfNeeded];
   }
   m_state->syncViewport();
-  focusViewport();
+  // Presenting an existing document must keep its focused control (for
+  // example the Projects outline that opened it), as AppKit normally does.
+  // Only a new document starts with the keyboard in its viewport.
+  if (firstPresentation) focusViewport();
 }
 bool NativeMacWindow::close() { [m_state->window performClose:nil]; return m_state->closing; }
 void NativeMacWindow::focusViewport() {

@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use mitcad_model::features::extrude_scope::CutScope;
 use mitcad_model::features::{FeatureDef, SketchPlane, ValueInput};
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::test_support::{def, num};
@@ -257,6 +258,24 @@ fn cut_scope_missing_exclusion_fails_and_repaired_definition_recovers() {
     assert_eq!(reopened.status(uid), Some(&FeatureStatus::Ok));
 }
 
+fn command(doc: &mut Document<MockKernel>, command: Value) -> Value {
+    let result = doc
+        .command(&command.to_string())
+        .unwrap_or_else(|e| panic!("{command}: {e}"));
+    serde_json::from_str(&result).unwrap()
+}
+
+fn query(doc: &Document<MockKernel>, query: Value) -> Value {
+    serde_json::from_str(&doc.query(&query.to_string()).unwrap()).unwrap()
+}
+
+fn scope_of(doc: &Document<MockKernel>, uid: FeatureUid) -> CutScope {
+    let FeatureDef::Extrude(extrude) = &doc.feature(uid).unwrap().def else {
+        panic!("expected an extrusion");
+    };
+    extrude.cut_scope.clone().unwrap()
+}
+
 #[test]
 fn cut_scope_body_and_component_references_are_dependencies() {
     let mut f = fixture();
@@ -267,6 +286,13 @@ fn cut_scope_body_and_component_references_are_dependencies() {
         .add_feature(&cut_definition(&f.cut), None)
         .unwrap()
         .uid;
+    // An included component is a real reference: the `dependents` query
+    // of its feature lists the cut (mitcad#1236 keeps it).
+    let dependents = query(
+        &f.doc,
+        json!({"query":"dependents","uid":f.bodies[0].feature}),
+    );
+    assert_eq!(dependents["dependents"][0]["uid"], json!(uid));
     assert!(matches!(
         f.doc.delete_feature(f.bodies[0].feature, false),
         Err(ModelError::Dependents { .. })
@@ -279,8 +305,175 @@ fn cut_scope_body_and_component_references_are_dependencies() {
         {"component":"C2","occurrence":"O2","body":f.bodies[1]}]);
     f.doc.edit_feature(uid, &cut_definition(&f.cut)).unwrap();
     assert!(f.doc.move_feature(uid, 0).is_err());
-    let end = f.doc.features().count();
-    assert!(f.doc.move_feature(f.bodies[1].feature, end).is_err());
+    // An excluded body is no reference (mitcad#1236): its maker may move
+    // after the cut, which then has nothing there to leave alone.
+    let last = f.doc.features().count() - 1;
+    f.doc.move_feature(f.bodies[1].feature, last).unwrap();
+    assert_eq!(f.doc.status(uid), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.bodies[0]));
+    assert!(!is_cut(&f.doc, f.bodies[1]));
+}
+
+/// mitcad#1236: Part (C1 at O1) with two boxes; Holder (C2 at O2, at the
+/// same place) with a box and a cut of its own whose automatic scope
+/// excludes Part:1.
+struct Excluding {
+    doc: Document<MockKernel>,
+    part: [BodyUid; 2],
+    holder: BodyUid,
+    cut: FeatureUid,
+    definition: Value,
+}
+
+fn excluding() -> Excluding {
+    let mut doc = Document::new(MockKernel::default());
+    doc.create_component(Some("Part"), Transform::IDENTITY, true)
+        .unwrap();
+    let part = [box_body(&mut doc), box_body(&mut doc)];
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    doc.create_component(Some("Holder"), Transform::IDENTITY, true)
+        .unwrap();
+    let holder = box_body(&mut doc);
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [2.0, 2.0], &num(4.0), &num(4.0))
+        .unwrap()
+        .region;
+    let definition = json!({"type":"extrude",
+        "profiles":[{"sketch":sketch,"region":region}], "extent":{"type":"distance","distance":60},
+        "operation":"cut", "cut_scope":{"context":{"component":"C2","occurrence":"O2"},
+            "targets":{"type":"automatic","excluded":[{"component":"C1","occurrence":"O1"}]}}});
+    let cut = doc
+        .add_feature(&cut_definition(&definition), None)
+        .unwrap()
+        .uid;
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    assert_eq!(doc.status(cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&doc, holder));
+    assert!(part.iter().all(|b| !is_cut(&doc, *b)));
+    Excluding {
+        doc,
+        part,
+        holder,
+        cut,
+        definition,
+    }
+}
+
+#[test]
+fn cut_scope_exclusion_makes_no_dependent_of_the_excluded_component() {
+    let mut f = excluding();
+    let last = f.part[1].feature;
+    for feature in [f.part[0].feature, last] {
+        assert_eq!(
+            query(&f.doc, json!({"query":"dependents","uid":feature})),
+            json!({"dependents": []})
+        );
+    }
+    // The excluded component's last feature deletes alone; the cut keeps
+    // working and keeps its exclusion, as Part:1 is still there.
+    let reply = command(&mut f.doc, json!({"cmd":"delete_feature","uid":last}));
+    assert_eq!(reply["deleted"], json!([last]));
+    assert!(!reply.to_string().contains("exclusion"), "{reply}");
+    assert!(f.doc.feature(last).is_none());
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.holder));
+    assert!(!is_cut(&f.doc, f.part[0]));
+    assert_eq!(scope_of(&f.doc, f.cut).stored_targets().len(), 1);
+    // With its dependents, a delete takes no feature of the other component.
+    f.doc.undo();
+    let deleted = f.doc.delete_feature(f.part[0].feature, true).unwrap();
+    assert_eq!(deleted, vec![f.part[0].feature]);
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.holder));
+    assert!(!is_cut(&f.doc, f.part[1]));
+    // Nor does suppressing it, or moving it after the cut, make the cut
+    // fail.
+    f.doc.undo();
+    f.doc.set_suppressed(f.part[0].feature, true).unwrap();
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    f.doc.undo();
+    let end = f.doc.features().count() - 1;
+    f.doc.move_feature(f.part[0].feature, end).unwrap();
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.holder));
+}
+
+#[test]
+fn deleting_an_excluded_occurrence_drops_the_exclusion_with_a_notice() {
+    let mut f = excluding();
+    let reply = command(
+        &mut f.doc,
+        json!({"cmd":"delete_occurrence","occurrence":"O1"}),
+    );
+    // Part's features go with its last occurrence; the cut stays.
+    assert_eq!(
+        reply["deleted"],
+        json!([f.part[0].feature, f.part[1].feature])
+    );
+    let notices = reply["notices"].as_array().unwrap();
+    let notice = notices
+        .iter()
+        .find(|n| n["target"] == json!(f.cut))
+        .unwrap_or_else(|| panic!("{reply}"));
+    assert_eq!(notice["level"], "info");
+    let message = notice["message"].as_str().unwrap();
+    assert!(
+        message.contains("Part:1") && message.contains("dropped"),
+        "{message}"
+    );
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.holder));
+    assert!(scope_of(&f.doc, f.cut).stored_targets().is_empty());
+    let saved = f.doc.to_json();
+    let mut reopened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    reopened.recompute();
+    assert_eq!(reopened.status(f.cut), Some(&FeatureStatus::Ok));
+    // Undo brings the occurrence and the exclusion back.
+    f.doc.undo();
+    assert_eq!(scope_of(&f.doc, f.cut).stored_targets().len(), 1);
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(f.part.iter().all(|b| !is_cut(&f.doc, *b)));
+}
+
+#[test]
+fn deleting_an_excluded_body_drops_the_exclusion_with_a_notice() {
+    let mut f = excluding();
+    f.definition["cut_scope"]["targets"] = json!({"type":"automatic",
+        "excluded_bodies":[{"component":"C1","occurrence":"O1","body":f.part[1]}]});
+    f.doc
+        .edit_feature(f.cut, &cut_definition(&f.definition))
+        .unwrap();
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.part[0]));
+    assert!(!is_cut(&f.doc, f.part[1]));
+    // The excluded body's maker has no dependents, and suppressing it
+    // leaves the cut working.
+    let maker = f.part[1].feature;
+    assert_eq!(
+        query(&f.doc, json!({"query":"dependents","uid":maker})),
+        json!({"dependents": []})
+    );
+    f.doc.set_suppressed(maker, true).unwrap();
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    f.doc.undo();
+    let reply = command(&mut f.doc, json!({"cmd":"delete_feature","uid":maker}));
+    assert_eq!(reply["deleted"], json!([maker]));
+    let notice = reply["notices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["target"] == json!(f.cut))
+        .unwrap_or_else(|| panic!("{reply}"));
+    assert_eq!(notice["level"], "info");
+    assert!(
+        notice["message"].as_str().unwrap().contains("dropped"),
+        "{notice}"
+    );
+    assert!(scope_of(&f.doc, f.cut).excluded_bodies().is_empty());
+    assert_eq!(f.doc.status(f.cut), Some(&FeatureStatus::Ok));
+    assert!(is_cut(&f.doc, f.part[0]));
+    assert!(is_cut(&f.doc, f.holder));
 }
 
 #[test]
@@ -446,19 +639,23 @@ fn cut_scope_excluded_body_failure_never_skips_other_requested_bodies() {
 }
 
 #[test]
-fn cut_scope_deleting_an_excluded_definition_deletes_its_dependent_cut_and_undo_restores_it() {
+fn cut_scope_deleting_an_excluded_definition_keeps_the_cut_and_undo_restores_the_exclusion() {
     let mut f = fixture();
     let uid = f
         .doc
         .add_feature(&cut_definition(&f.cut), None)
         .unwrap()
         .uid;
+    // The exclusion is no reference (mitcad#1236): the cut stays, without
+    // the exclusion of what is gone.
     let deleted = f.doc.delete_occurrence(OccurrenceUid(2)).unwrap();
-    assert!(deleted.contains(&uid));
-    assert!(f.doc.feature(uid).is_none());
-    assert!(!is_cut(&f.doc, f.bodies[0]));
-    assert!(!is_cut(&f.doc, f.bodies[2]));
+    assert_eq!(deleted, vec![f.bodies[1].feature]);
+    assert_eq!(f.doc.status(uid), Some(&FeatureStatus::Ok));
+    assert!(scope_of(&f.doc, uid).stored_targets().is_empty());
+    assert!(is_cut(&f.doc, f.bodies[0]));
+    assert!(is_cut(&f.doc, f.bodies[2]));
     f.doc.undo();
+    assert_eq!(scope_of(&f.doc, uid).stored_targets().len(), 1);
     assert_eq!(f.doc.status(uid), Some(&FeatureStatus::Ok));
     assert!(is_cut(&f.doc, f.bodies[0]));
     assert!(!is_cut(&f.doc, f.bodies[1]));

@@ -126,9 +126,9 @@ expect-log 'Command Box cancelled' 30
 expect-model-bodies 1 12000
 expect-undo-depth ${committed_depth} 0
 
-# Exit requests the actual main-window close. Its closeEvent cancels an
-# edit and restores the marker before asking about the earlier unsaved
-# change. Cancel that Quit/save question, retain the live document with
+# Exit requests Quit through the document-window manager, which cancels
+# the busy edit and restores the marker before asking about the earlier
+# unsaved change. Cancel that Quit/save question, retain the live document with
 # its prior body/undo history, and verify another command still works.
 mark
 dblclick-logged '^Timeline Box1 at'
@@ -140,7 +140,8 @@ qt-type-now input_height '15 mm'
 wait-log 'Computing preview started' 30
 expect-model-busy true
 menu-now 'File/Exit'
-wait-log 'Close while computing: cancelling' 30
+wait-log 'Computing preview: cancel requested after ' 30
+wait-log 'Computing preview cancelled after ' 30
 focus-dialog '^MitCad$|^Save changes'
 button '^Cancel$'
 hold-model-preview false

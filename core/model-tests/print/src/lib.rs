@@ -28,3 +28,5 @@ mod print_orient_tests;
 mod print_plates_tests;
 // The printers a process is for (mitcad#1216).
 mod process_printers_tests;
+// A library material whose file lacks its own colour (mitcad#1242).
+mod library_own_colour_tests;

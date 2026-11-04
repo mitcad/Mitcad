@@ -410,10 +410,20 @@ MakeBodyCard* MainWindow::createMakeCard() {
   connect(card, &MakeBodyCard::materialChosen, this, [this](const QString& id) {
     QTimer::singleShot(0, this, [this, id] { setMakeCardMaterial(id); });
   });
-  connect(card, &MakeBodyCard::processChosen, this, [this](const QString& id) {
-    QTimer::singleShot(0, this, [this, id] {
-      setMakeCardProperty(QStringLiteral("Print Process"), QStringLiteral("profile"), QJsonValue(id),
-                          tr("Process"), id);
+  connect(card, &MakeBodyCard::printerChosen, this, [this](const QString& key) {
+    QTimer::singleShot(0, this, [this, key] { setMakeCardProfile(QStringLiteral("printer"), key); });
+  });
+  connect(card, &MakeBodyCard::processChosen, this, [this](const QString& key) {
+    QTimer::singleShot(0, this, [this, key] { setMakeCardProfile(QStringLiteral("process"), key); });
+  });
+  connect(card, &MakeBodyCard::managerRequested, this, [this](const QString& kind, const QString& key) {
+    QTimer::singleShot(0, this, [this, kind, key] {
+      // The Printers or Processes manager on the one chosen (its key names
+      // its place), as Send to Slicer's last rows; on none selected for
+      // Slicer default. The choice stays.
+      qDebug().noquote() << QStringLiteral("Make card %1 manager: %2")
+                                .arg(kind, key.isEmpty() ? QStringLiteral("slicer default") : key);
+      m_controller->openProfiles(kind, key.contains(QLatin1Char('/')) ? key : QString());
     });
   });
   connect(card, &MakeBodyCard::valueEdited, this, [this](const QString& set, const QString& key, const QString& typed) {
@@ -440,6 +450,40 @@ void MainWindow::setMakeCardMaterial(const QString& id) {
   } else {
     showError(tr("Material: %1").arg(lastError()));
     qInfo().noquote() << QStringLiteral("Make card material refused: %1").arg(lastError());
+  }
+  updateMakeCard();
+}
+
+void MainWindow::setMakeCardProfile(const QString& kind, const QString& key) {
+  QString body;
+  QString occurrence;
+  if (!selectedBody(m_selection, &body, &occurrence)) {
+    return;
+  }
+  const QString project = projectFolder();
+  const QVector<LibraryItem> items = queryLibraryItems(model(), kind, project);
+  const LibraryItem* item = findItem(items, key);
+  if (item == nullptr) {
+    updateMakeCard();
+    return;
+  }
+  // The printer for the whole design, on its root as the Printers manager
+  // and Send to Slicer choose it; the process for the body. A library's
+  // item is copied into the design in the same undo step (`set_property`
+  // with its `library`, mitcad#655): one step either way.
+  const bool printer = kind == QLatin1String("printer");
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_property")},
+                      {QStringLiteral("owner"), printer ? QStringLiteral("C0") : body},
+                      {QStringLiteral("set"), printer ? QStringLiteral("Print Printer") : QStringLiteral("Print Process")},
+                      {QStringLiteral("key"), QStringLiteral("profile")}};
+  nameItem(command, *item, project, QStringLiteral("value"));
+  const QString plain = printer ? tr("Printer") : tr("Process");
+  const QString name = item->name;
+  if (runModelCommand(command)) {
+    qInfo().noquote() << QStringLiteral("Make card %1 set: %2").arg(plain, name);
+  } else {
+    showError(tr("%1: %2").arg(plain, lastError()));
+    qInfo().noquote() << QStringLiteral("Make card %1: %2 refused: %3").arg(plain, name, lastError());
   }
   updateMakeCard();
 }
@@ -639,50 +683,36 @@ void MainWindow::updateMakeCard() {
     const auto profile = [&settings](const char* layer, QString* name, QString* id, QString* level, QString* owner) {
       const QJsonObject chosen = settings.value(QLatin1String(layer)).toObject().value(QStringLiteral("profile")).toObject();
       *name = chosen.isEmpty() ? tr("Slicer default") : text(chosen, "name");
-      if (id != nullptr) {
-        *id = text(chosen, "id");
-      }
+      *id = text(chosen, "id");
       *level = text(chosen, "level");
       *owner = text(chosen, "owner_name");
     };
-    profile("printer", &card.printer, nullptr, &card.printerLevel, &card.printerOwner);
-    profile("process", &card.process, &card.processId, &card.processLevel, &card.processOwner);
-    // The design's processes; under their printers, the body's printer's
-    // first, when one names a printer (mitcad#1216, profilePickerRows).
+    QString printerId;
+    QString processId;
+    profile("printer", &card.printer, &printerId, &card.printerLevel, &card.printerOwner);
+    profile("process", &card.process, &processId, &card.processLevel, &card.processOwner);
+    // The printers and processes as Send to Slicer's pickers list them
+    // (mitcad#1239, profilePickerRows): the design's and the libraries',
+    // the printers under their vendors, the processes under their
+    // printers, the body's printer's first (mitcad#1216). The ones it
+    // prints with by their keys ("<place>/<id>"), a library's by its row.
     const QString project = projectFolder();
-    const QVector<LibraryItem> processItems = queryLibraryItems(model(), QStringLiteral("process"), project);
-    QVector<LibraryItem> designProcesses;
-    for (const QJsonValue& value : queryArray(QStringLiteral("print_profiles"))) {
-      const QJsonObject item = value.toObject();
-      if (text(item, "kind") == QLatin1String("process")) {
-        card.processes.append(qMakePair(text(item, "id"), text(item, "name")));
-        const LibraryItem* found = findDesignCopy(processItems, text(item, "id"));
-        LibraryItem process = found != nullptr ? *found : LibraryItem();
-        process.place = QStringLiteral("design");
-        process.id = text(item, "id");
-        process.name = text(item, "name");
-        designProcesses.append(process);
-      }
-    }
-    QStringList bodyPrinter;
-    const QString printerId = text(
-        settings.value(QStringLiteral("printer")).toObject().value(QStringLiteral("profile")).toObject(), "id");
     const QVector<LibraryItem> printerItems = queryLibraryItems(model(), QStringLiteral("printer"), project);
+    const QVector<LibraryItem> processItems = queryLibraryItems(model(), QStringLiteral("process"), project);
+    const auto keyOf = [](const QVector<LibraryItem>& items, const QString& designId) -> QString {
+      if (const LibraryItem* item = findDesignCopy(items, designId)) {
+        return item->key();
+      }
+      return designId.isEmpty() ? QString() : QStringLiteral("design/") + designId;
+    };
+    card.printerId = keyOf(printerItems, printerId);
+    card.processId = keyOf(processItems, processId);
+    QStringList bodyPrinter;
     if (const LibraryItem* printerItem = findDesignCopy(printerItems, printerId)) {
       bodyPrinter = printerNames(*printerItem);
     }
-    const QVector<ProfilePickerRow> processRows =
-        profilePickerRows(designProcesses, QStringLiteral("process"), bodyPrinter);
-    const bool grouped = std::any_of(processRows.cbegin(), processRows.cend(),
-                                     [](const ProfilePickerRow& row) { return !row.group.isEmpty(); });
-    if (grouped) {
-      card.processes.clear();
-      for (const ProfilePickerRow& row : processRows) {
-        // "design/<id>": the id may hold a '/' itself.
-        card.processes.append(qMakePair(row.key.mid(row.key.indexOf(QLatin1Char('/')) + 1), row.name));
-        card.processGroups << row.group;
-      }
-    }
+    card.printers = profilePickerRows(printerItems, QStringLiteral("printer"));
+    card.processes = profilePickerRows(processItems, QStringLiteral("process"), bodyPrinter);
     // The values that differ from the profiles: those set on a level.
     for (const char* layer : {"printer", "process"}) {
       const QJsonArray values =
@@ -714,8 +744,9 @@ void MainWindow::updateMakeCard() {
   if (logged != m_loggedMakeCard) {
     m_loggedMakeCard = logged;
     qDebug().noquote() << QStringLiteral("Make card: %1").arg(logged);
-    // Its process drop-down, under their printers (mitcad#1216).
-    qDebug().noquote() << QStringLiteral("Make card processes: %1").arg(makeCardProcessList(card));
+    // Its pickers' rows under their headings (mitcad#1216, mitcad#1239).
+    qDebug().noquote() << QStringLiteral("Make card printers: %1").arg(makeCardChoiceList(card.printers));
+    qDebug().noquote() << QStringLiteral("Make card processes: %1").arg(makeCardChoiceList(card.processes));
     // Where its fields are, once laid out (UI tests).
     TestSync::singleShot(300, m_makeCard, [this] {
       for (const QString& line : m_makeCard->places()) {

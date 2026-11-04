@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -347,6 +348,103 @@ void test_chamfer_intersect_and_several_profiles() {
   run(*document, sketch_circle("F5", 30, 20, 10));
   run(*document, extrude("F5", "r{c1}", 10, "intersect", R"(["F2.b0"])"));
   CHECK(near(body_volume(*document), kPi * 25.0 * 10.0));
+}
+
+// The name of the edge of the body whose middle lies at p (empty for none).
+std::string edge_name_at(const mitcad::Document& document, const gp_Pnt& p, const char* uid = "F2.b0") {
+  const auto body = document.body_shape(uid);
+  if (!body) {
+    return {};
+  }
+  for (TopExp_Explorer it(body->occt(), TopAbs_EDGE); it.More(); it.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())).Distance(p) < 1e-6) {
+      const auto name = body->name_of_edge(edge);
+      return name ? *name : std::string();
+    }
+  }
+  return {};
+}
+
+// A chamfer wider than the face beside its edge (mitcad#1232): the demo
+// block (60 x 40 x 20, its width `width`) with a slot cut through it, a
+// rectangle x 19..59, y 10..30 with its corners rounded 5, so that its
+// right side leaves a wall 1 thick at the block's width 60. The slot's top
+// rim, a closed tangent chain of lines and arcs, chamfered from its right
+// side by `size`: along that side, the middle of the chain, the chamfer is
+// wider than the wall's top, which vanishes, the chamfer cut by the block's
+// side. Returns the document.
+rust::Box<mitcad::Document> slot_chamfered(double width, const std::string& size) {
+  rust::Box<mitcad::Document> document = mitcad::new_demo_document();
+  run(*document, set("d1", width));
+  run(*document, R"({"cmd": "sketch.create"})"); // F3
+  run(*document, sketch_rectangle("F3", 19, 10, 40, 20));
+  run(*document, extrude("F3", kRectangle, 20, "cut", R"(["F2.b0"])")); // F4
+  run(*document, R"({"cmd": "sketch.fillet", "sketch": "F3", "curves": ["c1", "c2", "c3", "c4"], "radius": 5})");
+  const std::string edge = edge_name_at(*document, gp_Pnt(59, 20, 20));
+  CHECK(!edge.empty());
+  const std::string added =
+      run(*document, R"({"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0", "sets": [{"edges": [")" +
+                         edge + R"("], "size": )" + size + R"x(, "reference_face": "F2:end()x" + kRectangle +
+                         R"x()", "tangent_chain": true}]}})x"); // F5
+  if (!contains(added, R"("error":null)")) {
+    std::fprintf(stderr, "chamfer over a narrow wall (width %g, %s): %s\n", width, size.c_str(), added.c_str());
+  }
+  CHECK(contains(added, R"("error":null)"));
+  return document;
+}
+
+void test_chamfer_over_a_narrow_wall() {
+  const std::string sizes[] = {
+      R"({"type": "equal_distance", "distance": 2})",
+      R"({"type": "two_distances", "distance1": 2.5, "distance2": 1.5})",
+      R"({"type": "distance_angle", "distance": 2, "angle": 0.5235987755982988})",
+  };
+  for (const std::string& size : sizes) {
+    // The chamfer of the narrow wall is that of the block 10 wider, the
+    // wall's top wide enough, less what lies past the narrow block's side.
+    const auto narrow = slot_chamfered(60, size);
+    const auto wide = slot_chamfered(70, size);
+    const auto bevelled = narrow->body_shape("F2.b0");
+    const auto reference = wide->body_shape("F2.b0");
+    CHECK(bevelled && reference);
+    if (!bevelled || !reference) {
+      continue;
+    }
+    const TopoDS_Shape past = BRepPrimAPI_MakeBox(gp_Pnt(60, -10, -10), gp_Pnt(100, 50, 30)).Shape();
+    const double expected =
+        mitcad::geometry::volume(*reference) -
+        mitcad::geometry::volume(mitcad::geometry::Shape(BRepAlgoAPI_Common(reference->occt(), past).Shape()));
+    if (!near(body_volume(*narrow), expected)) {
+      std::fprintf(stderr, "chamfer over a narrow wall (%s): %.9f, expected %.9f\n", size.c_str(),
+                   body_volume(*narrow), expected);
+    }
+    CHECK(near(body_volume(*narrow), expected));
+    CHECK(bevelled->notes().empty() && bevelled->infos().empty());
+    // The wall's top is gone along the chain's middle edge: no face of the
+    // top comes near the middle of the wall's top.
+    const TopoDS_Shape middle = BRepBuilderAPI_MakeVertex(gp_Pnt(59.5, 20, 20)).Vertex();
+    double top_left = 1e300;
+    for (int f = 0; f < bevelled->face_count(); ++f) {
+      for (const std::string& name : bevelled->face_names(f)) {
+        if (name.rfind("F2:end(", 0) == 0) {
+          top_left = std::min(top_left, BRepExtrema_DistShapeShape(bevelled->face(f), middle).Value());
+        }
+      }
+    }
+    CHECK(top_left > 1.0);
+    int chamfer_faces = 0;
+    for (int f = 0; f < bevelled->face_count(); ++f) {
+      for (const std::string& name : bevelled->face_names(f)) {
+        chamfer_faces += name.rfind("F5:chamfer(", 0) == 0 ? 1 : 0;
+      }
+    }
+    CHECK(chamfer_faces >= 1);
+  }
 }
 
 void test_preview_and_profile_handles() {
@@ -1578,13 +1676,145 @@ void test_exceptions_across_the_bridge() {
   CHECK(probe("occt", "again") == "Err: again");
 }
 
+// The end pieces of a modelled thread (mitcad#1231): a revolved body with
+// a bore 8 mm across and an M10x1.5 thread modelled in it, 4 mm in from
+// its high end down to its low mouth (its length follows the profile's
+// height d2), with end chamfers asked for at both ends (the mouth gets
+// one). Chamfer1 chamfers the edge where the thread meets the plain rest
+// of the bore, Fillet1 rounds an edge of that chamfer. A change of the
+// profile's height gives the thread more turns or fewer: the end's pieces
+// are counted from the end, so the chamfer and the fillet keep working
+// with their references as they are. A design that names the end piece by
+// its number along the thread (as designs saved before name it) finds the
+// edge again, with a notice.
+const std::string kBore = "F2:side(c4[c3,c1])";
+
+rust::Box<mitcad::Document> threaded_bore() {
+  auto document = mitcad::new_document();
+  run(*document, R"({"cmd": "sketch.create"})");
+  run(*document, sketch_rectangle("F1", 4.0, 0, 6.0, 20)); // d1 width, d2 height
+  run(*document, R"j({"cmd": "add_feature", "def": {"type": "revolve", "profiles": [{"sketch": "F1", "region": ")j" +
+                     kRectangle + R"j("}], "axis": "y", "extent": {"type": "full"}, "operation": "new_body"}})j");
+  run(*document, R"j({"cmd": "add_feature", "def": {"type": "thread", "faces": [{"body": "F2.b0", "face": ")j" + kBore +
+                     R"j("}], "thread": {"designation": "M10x1.5", "class": "6H"}, "modeled": true,
+                     "length": "d2 - 4 mm", "offset": 4, "chamfer": "both"}})j");
+  return document;
+}
+
+// Chamfer1 (F4) on `chamfered` and Fillet1 (F5) on `filleted`.
+void chamfer_and_fillet(mitcad::Document& document, const std::string& chamfered, const std::string& filleted) {
+  run(document, R"({"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0", "edges": [)" + quoted(chamfered) +
+                    R"(], "size": {"type": "equal_distance", "distance": 0.15}}})");
+  run(document, fillet(quoted(filleted), 0.05));
+}
+
+// The timeline entry of a feature (its text), or "" when there is none.
+std::string timeline_entry(const mitcad::Document& document, const std::string& name) {
+  const std::string timeline(document.query(R"({"query": "timeline"})"));
+  const std::size_t at = timeline.find("\"name\":\"" + name + "\"");
+  if (at == std::string::npos) {
+    return {};
+  }
+  // The entry's braces around its name.
+  std::size_t begin = at;
+  int depth = 0;
+  while (begin > 0) {
+    --begin;
+    if (timeline[begin] == '}') {
+      ++depth;
+    } else if (timeline[begin] == '{' && depth-- == 0) {
+      break;
+    }
+  }
+  depth = 0;
+  for (std::size_t i = begin; i < timeline.size(); ++i) {
+    depth += timeline[i] == '{' ? 1 : timeline[i] == '}' ? -1 : 0;
+    if (depth == 0) {
+      return timeline.substr(begin, i - begin + 1);
+    }
+  }
+  return timeline.substr(begin);
+}
+
+bool feature_ok(const mitcad::Document& document, const std::string& name) {
+  const std::string entry = timeline_entry(document, name);
+  if (!contains(entry, R"("status":"ok")")) {
+    std::fprintf(stderr, "  %s: %s\n", name.c_str(), entry.c_str());
+    return false;
+  }
+  return true;
+}
+
+void test_thread_end_pieces_keep_their_names() {
+  const std::string end = "E{" + kBore + "|F3:high_thread(" + kBore + ")#0}";
+  const std::string chamfer_face = "F4:chamfer(" + end + ")#0";
+  {
+    auto document = threaded_bore();
+    CHECK(feature_ok(*document, "Thread1"));
+    // One edge between the bore and the thread, at the thread's high end,
+    // named after the end's first piece; the mouth's end its first piece
+    // from the low end, by the chamfer's cone.
+    const auto threaded = document->body_shape("F2.b0");
+    CHECK(threaded->find_edges(end).size() == 1);
+    CHECK(!threaded->find_faces("F3:low_thread(" + kBore + ")#0").empty());
+    chamfer_and_fillet(*document, end, "E{" + kBore + "|" + chamfer_face + "}");
+    double previous = body_volume(*document);
+    for (const double height : {23.0, 17.0, 21.5}) {
+      CHECK(contains(run(*document, set("d2", height)), R"("error":null)"));
+      for (const char* name : {"Thread1", "Chamfer1", "Fillet1"}) {
+        CHECK(feature_ok(*document, name));
+      }
+      // The same end piece's edge, now with another number along the
+      // thread, was chamfered and rounded.
+      const auto body = document->body_shape("F2.b0");
+      CHECK(body->find_edges(end).empty());
+      CHECK(!body->find_faces(chamfer_face).empty());
+      CHECK(!body->find_faces("F5:fillet(E{" + kBore + "|" + chamfer_face + "})").empty());
+      const double volume = body_volume(*document);
+      CHECK(std::abs(volume - previous) > 1.0);
+      previous = volume;
+    }
+  }
+  {
+    // As saved before: the end piece by its number along the thread (#50
+    // of the 50 pieces from #50 to #99, at the high end), the chamfer's
+    // face after it.
+    const std::string saved = "E{" + kBore + "|F3:thread(" + kBore + ")#50}";
+    auto document = threaded_bore();
+    chamfer_and_fillet(*document, saved, "E{" + kBore + "|F4:chamfer(" + saved + ")#0}");
+    // The number still names the end piece: the chamfer as it was. The
+    // chamfer's face is named after the end's name: the fillet finds it
+    // with a notice.
+    CHECK(feature_ok(*document, "Chamfer1"));
+    CHECK(contains(timeline_entry(*document, "Fillet1"), R"("status":"warning")"));
+    CHECK(contains(timeline_entry(*document, "Fillet1"), " found as E{" + kBore + "|" + chamfer_face + "}"));
+    // 58 pieces (#58 to #115): #50 is none of them; 42 (#42 to #83): #50
+    // lies in the middle. The end's edge either way, with a notice.
+    for (const double height : {23.0, 17.0}) {
+      CHECK(contains(run(*document, set("d2", height)), R"("error":null)"));
+      CHECK(contains(timeline_entry(*document, "Chamfer1"), R"("status":"warning")"));
+      CHECK(contains(timeline_entry(*document, "Chamfer1"), "edge " + saved + " found as " + end));
+      CHECK(contains(timeline_entry(*document, "Fillet1"), R"("status":"warning")"));
+      const auto body = document->body_shape("F2.b0");
+      CHECK(!body->find_faces("F4:chamfer(" + end + ")").empty());
+      CHECK(!body->find_faces("F5:fillet(E{" + kBore + "|" + chamfer_face + "})").empty());
+    }
+  }
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  // One test by its name (`test_bridge thread-ends`), else all.
+  if (argc > 1 && std::string(argv[1]) == "thread-ends") {
+    test_thread_end_pieces_keep_their_names();
+    return failures == 0 ? 0 : 1;
+  }
   test_block_fillet_and_dimension_change();
   test_join_boss_fillet_follows_the_boss();
   test_cut_hole_lost_edge_and_split_body();
   test_chamfer_intersect_and_several_profiles();
+  test_chamfer_over_a_narrow_wall();
   test_preview_and_profile_handles();
   test_rejected_commands();
   test_design_file_load_and_recompute();
@@ -1609,6 +1839,7 @@ int main() {
   test_live_hub();
   test_pattern_of_features_in_one_boolean();
   test_exceptions_across_the_bridge();
+  test_thread_end_pieces_keep_their_names();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

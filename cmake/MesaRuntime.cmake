@@ -1189,6 +1189,17 @@ if(MITCAD_MESA_DIR)
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-material-properties PROPERTIES TIMEOUT 300)
 
+    # A My library material whose file lacks its own color (mitcad#1242):
+    # the Materials window renames it, the new name listed and its own
+    # color made again in the file (the Linux test's shared driver script).
+    add_test(NAME app.ui-windows-library-material-own-colour
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-library-material-own-colour-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-library-material-own-colour"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-library-material-own-colour PROPERTIES TIMEOUT 300)
+
     # Processes grouped by printer (mitcad#1216): the Processes manager's
     # sub-groups, Send to Slicer's Process picker with the chosen printer's
     # processes first, the body card's drop-down; the Linux test's shared
@@ -1269,6 +1280,70 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-extrude-from-sketch"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-extrude-from-sketch PROPERTIES TIMEOUT 240)
+    # The sketch constraints' Shift keys (mitcad#1229): Shift+P adds
+    # Parallel to two selected lines, Shift+V makes a line vertical, and
+    # Shift+P in a dimension's value field types P; the Linux test's shared
+    # input script.
+    add_test(NAME app.ui-windows-sketch-constraint-shortcuts
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-constraint-shortcuts-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-constraint-shortcuts"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-constraint-shortcuts PROPERTIES TIMEOUT 240)
+    # A section that shows a body whole because its clip failed is reported
+    # in the message band and the Analysis folder's row, withdrawn when the
+    # analysis is hidden; a plane that cuts nothing is told (mitcad#1230);
+    # the Linux test's shared input script.
+    add_test(NAME app.ui-windows-section-clip-report
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-section-clip-report-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-section-clip-report"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-section-clip-report PROPERTIES TIMEOUT 240)
+    # A cable gland body with modelled threads cut by Section Analysis in
+    # its profile's plane and 1 mm off it, with caps (mitcad#1230); the
+    # Linux test's shared input script.
+    add_test(NAME app.ui-windows-section-gland
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-section-gland-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-section-gland"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-section-gland PROPERTIES TIMEOUT 360)
+    # Sketch Offset of a hexagon whose 2 mm corner arcs vanish at 2 mm
+    # inward (mitcad#1234): the preview and OK without an error, the note
+    # naming the arcs; the Linux test's shared input script.
+    add_test(NAME app.ui-windows-sketch-offset-vanishing
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-offset-vanishing-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-offset-vanishing"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-offset-vanishing PROPERTIES TIMEOUT 300)
+    # A Join made in the Extrude panel on a plate's end: every face of the
+    # joined body meshed where the view draws it, the plate's top (its mesh
+    # taken from the plate as shown) pickable (GitHub #126, mitcad#1243);
+    # the Linux test's shared input script.
+    add_test(NAME app.ui-windows-join-mesh-reuse
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-join-mesh-reuse-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-join-mesh-reuse"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-join-mesh-reuse PROPERTIES TIMEOUT 240)
+    # The Docked toolbar's colours in the dark and the light theme: the
+    # Classic ribbon's body and the bar's Undo, Redo, separator and Chat
+    # buttons on the toolbar's surface (GitHub #127, mitcad#1245); the Linux
+    # test's shared input script.
+    add_test(NAME app.ui-windows-docked-toolbar-colors
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-docked-toolbar-colors-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-docked-toolbar-colors"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-docked-toolbar-colors PROPERTIES TIMEOUT 180)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.
