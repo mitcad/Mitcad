@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: MIT
+# AppKit lifecycle: focused pixel-scroll first, then menu-induced blur and
+# a fresh edit at each new camera. Entered with Extrude1 distance focused.
+# Each ordinary-paint assertion and WindowServer capture precedes its
+# geometry reference composite. The composite manually paints overlays and
+# is visual context only: it is never independent repaint evidence. Keep
+# four representative composites; every stage retains its original capture
+# and ordinary-paint/lifecycle assertions without repeated manual rendering.
+expect-log '^Parameter labels for Extrude: Sketch1 k5 d1'
+expect-log '^Parameter label Sketch1 k7 d3 drawn at '
+screenshot-screen '${MITCAD_TEST_WORK}/initial.png'
+screenshot '${MITCAD_TEST_WORK}/initial-reference-composite.png'
+
+# The isolated settings explicitly use TrackpadShift. Pixel scroll does not click
+# the view or take the distance field's keyboard. These are synthetic Qt
+# scroll events, not a claim to reproduce physical trackpad delivery.
+capture-view-orientation before
+mark
+trackpad-scroll 45 45 45 25 shift
+expect-view-orientation ${before} changed
+sleep 400
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/orbit.png'
+screenshot '${MITCAD_TEST_WORK}/orbit-reference-composite.png'
+capture-view-target target
+mark
+trackpad-scroll 45 45 45 25 ''
+expect-view-pan ${target} changed
+sleep 400
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/pan.png'
+capture-view-height height
+mark
+trackpad-scroll 45 45 0 45 alt
+expect-view-zoom ${height} in
+sleep 400
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/zoom.png'
+
+mark
+menu 'View/Standard Views/Right View'
+wait-log '^Camera direction -1 0 0 up 0 0 1'
+# The AppKit menu ends the field's edit. Its labels must disappear, not
+# remain as a frozen layer over the newly projected geometry.
+expect-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/right-blurred.png'
+mark
+native-pointer-click input_distance
+native-type input_distance '10 mm'
+expect-native-focus input_distance '^10 mm$'
+expect-log '^Parameter labels for Extrude: Sketch1 k5 d1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-log '^Parameter label Sketch1 k7 d3 drawn at '
+screenshot-screen '${MITCAD_TEST_WORK}/right.png'
+screenshot '${MITCAD_TEST_WORK}/right-reference-composite.png'
+
+mark
+menu 'View/Standard Views/Front View'
+wait-log '^Camera direction 0 1 0 up 0 0 1'
+# The AppKit menu ends the field's edit. Its labels must disappear, not
+# remain as a frozen layer over the newly projected geometry.
+expect-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/front-blurred.png'
+mark
+native-pointer-click input_distance
+native-type input_distance '10 mm'
+expect-native-focus input_distance '^10 mm$'
+expect-log '^Parameter labels for Extrude: Sketch1 k5 d1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-log '^Parameter label Sketch1 k7 d3 drawn at '
+screenshot-screen '${MITCAD_TEST_WORK}/front.png'
+
+mark
+menu 'View/Standard Views/Right View'
+wait-log '^Camera direction -1 0 0 up 0 0 1'
+# The AppKit menu ends the field's edit. Its labels must disappear, not
+# remain as a frozen layer over the newly projected geometry.
+expect-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/right-again-blurred.png'
+mark
+native-pointer-click input_distance
+native-type input_distance '10 mm'
+expect-native-focus input_distance '^10 mm$'
+expect-log '^Parameter labels for Extrude: Sketch1 k5 d1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-log '^Parameter label Sketch1 k7 d3 drawn at '
+screenshot-screen '${MITCAD_TEST_WORK}/right-again.png'
+
+mark
+menu 'View/Standard Views/Front View'
+wait-log '^Camera direction 0 1 0 up 0 0 1'
+# The AppKit menu ends the field's edit. Its labels must disappear, not
+# remain as a frozen layer over the newly projected geometry.
+expect-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/front-again-blurred.png'
+mark
+native-pointer-click input_distance
+native-type input_distance '10 mm'
+expect-native-focus input_distance '^10 mm$'
+expect-log '^Parameter labels for Extrude: Sketch1 k5 d1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-log '^Parameter label Sketch1 k7 d3 drawn at '
+screenshot-screen '${MITCAD_TEST_WORK}/front-again.png'
+key Escape
+expect-log '^Command Extrude cancelled$'
+expect-model-bodies 1 10000
+wait-idle 30
+sleep 400
+screenshot-screen '${MITCAD_TEST_WORK}/cancelled.png'
+mark
+menu 'View/Standard Views/Right View'
+wait-log '^Camera direction -1 0 0 up 0 0 1'
+expect-no-log '^Parameter label Sketch1 '
+screenshot-screen '${MITCAD_TEST_WORK}/cancelled-right.png'
+screenshot '${MITCAD_TEST_WORK}/cancelled-right-reference-composite.png'
+quit

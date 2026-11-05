@@ -167,6 +167,9 @@ fn without_a_face_the_sketch_plane_is_the_start() {
         participants: Vec::new(),
         projection: false,
         direction: None,
+        along_axis: None,
+        around_angle: None,
+        rotation_angle: None,
     }))
     .unwrap();
     assert_eq!(
@@ -275,6 +278,104 @@ fn a_wrap_needs_a_sketch_along_the_axis() {
         .uid;
     assert!(
         error(&doc, uid).contains("the sketch plane must be parallel to the cylinder's axis"),
+        "{}",
+        error(&doc, uid)
+    );
+}
+
+/// The highest point of a body's bounds (the mock's wrapped tool is the
+/// profiles' prism in the sketch frame the offsets moved).
+fn top(doc: &Document<MockKernel>, body: BodyUid) -> f64 {
+    doc.body_shape(body)
+        .and_then(|s| s.bounds)
+        .map_or(f64::NAN, |b| b.max[2])
+}
+
+/// Wrap offsets (mitcad#1259): Along Axis, Around and Rotation move a
+/// wrapped rectangle from where the sketch places it; zero offsets are the
+/// sketch's wrap; the values take expressions of parameters and are saved;
+/// off a cylinder or cone they are refused. (Where exactly the offsets put
+/// the profiles: `features::emboss::tests`; the volumes and places on the
+/// real kernel: `cli.emboss_wrap_offsets`.)
+#[test]
+fn a_wrap_moves_along_the_axis_around_it_and_turns_on_the_face() {
+    let (mut doc, rod) = rod();
+    doc.add_parameter("shift", 15.0, "").unwrap();
+    // Sketch2 (F3) on XZ (sketch y along -Z), through the rod's axis: a 4 x
+    // 8 rectangle from x = -2 to 2 and z = 2 to 10, its middle at z = 6.
+    let (sketch, region) = rectangle(&mut doc, SketchPlane::Xz, [-2.0, -10.0], [4.0, 8.0]);
+    let wrap = |offsets: serde_json::Value| {
+        let mut value = emboss(sketch, &region, Some((rod, "F2:side(c1)")), 1.0, "raise");
+        for (key, slot) in offsets.as_object().unwrap() {
+            value[key] = slot.clone();
+        }
+        def(value)
+    };
+    let uid = doc.add_feature(&wrap(json!({})), None).unwrap().uid;
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    let plain = (last_spec(&doc), history(&doc, rod), top(&doc, rod));
+    assert_eq!(plain.2, 30.0, "the rod's top: the tool lies within it");
+
+    // Zero offsets: today's wrap.
+    doc.edit_feature(
+        uid,
+        &wrap(json!({"along_axis": 0, "around_angle": 0, "rotation_angle": 0})),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!((last_spec(&doc), history(&doc, rod), top(&doc, rod)), plain);
+
+    // Along the axis by twice `shift` (30 mm): from z = 32 to 40, over the
+    // rod's top; the cylinder and the radii are the same.
+    doc.edit_feature(uid, &wrap(json!({"along_axis": "shift * 2"})))
+        .unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(last_spec(&doc), plain.0);
+    assert!((top(&doc, rod) - 40.0).abs() < 1e-9, "{}", top(&doc, rod));
+
+    // And turned a quarter turn on the face about its middle (z = 36): 8
+    // across and 4 along, from z = 34 to 38; turned about the axis too.
+    doc.edit_feature(
+        uid,
+        &wrap(json!({"along_axis": "shift * 2", "around_angle": "90 deg",
+                     "rotation_angle": "90 deg"})),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert!((top(&doc, rod) - 38.0).abs() < 1e-9, "{}", top(&doc, rod));
+    let FeatureDef::Emboss(made) = &doc.feature(uid).unwrap().def else {
+        panic!("an emboss");
+    };
+    assert!(
+        made.along_axis.is_some() && made.around_angle.is_some() && made.rotation_angle.is_some()
+    );
+
+    // The parameter drives it: shift 20, 40 mm along, z = 44 to 48.
+    doc.set_parameter("shift", 20.0).unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert!((top(&doc, rod) - 48.0).abs() < 1e-9, "{}", top(&doc, rod));
+
+    // Saved and opened again: the offsets are kept.
+    let saved = doc.to_json();
+    for key in ["\"along_axis\"", "\"around_angle\"", "\"rotation_angle\""] {
+        assert!(saved.contains(key), "{key} not in {saved}");
+    }
+    // An opened document is recomputed when asked (as the app does).
+    let mut opened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    opened.recompute();
+    assert_eq!(status(&opened, uid), FeatureStatus::Ok);
+    assert!(
+        (top(&opened, rod) - 48.0).abs() < 1e-9,
+        "{}",
+        top(&opened, rod)
+    );
+
+    // On the rod's planar end they move nothing and are refused.
+    let mut flat = emboss(sketch, &region, Some((rod, "F2:end(r{c1})")), 1.0, "raise");
+    flat["along_axis"] = json!(5);
+    doc.edit_feature(uid, &def(flat)).unwrap();
+    assert!(
+        error(&doc, uid).contains("Along Axis, Around and Rotation move only profiles wrapped"),
         "{}",
         error(&doc, uid)
     );

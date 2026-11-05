@@ -16,8 +16,11 @@
 #include <QFont>
 #include <QGuiApplication>
 #include <QHeaderView>
+#include <QHideEvent>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMainWindow>
+#include <QMetaObject>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -63,6 +66,14 @@ const QString kSuffix = QStringLiteral(".mitcad");
 
 // A design's name as the panel shows it: its file's name without .mitcad.
 QString designName(const QString& path) { return designDisplayName(path); }
+
+// What a name typed in place is for, as the log names it.
+QString namingWhat(bool isNew, bool folder, const QString& from) {
+  if (isNew) {
+    return folder ? QStringLiteral("new folder") : QStringLiteral("new design");
+  }
+  return QStringLiteral("rename of %1").arg(from);
+}
 
 // Delete deletes; on macOS the delete key of the keyboard (Backspace) too.
 bool isDeleteKey(int key) {
@@ -256,6 +267,16 @@ public:
   }
 
 protected:
+  // Every end of the name editor (Return, Esc, the focus elsewhere, and
+  // another row made current, which takes the name without the delegate's
+  // signal), told to the panel once the view is done with the editor; an
+  // editor out of sight then is not taken (mitcad#1268).
+  void closeEditor(QWidget* editor, QAbstractItemDelegate::EndEditHint hint) override {
+    const bool hidden = editor == nullptr || !editor->isVisible() || !isVisible();
+    QTreeWidget::closeEditor(editor, hint);
+    m_panel.treeEditorClosed(hint != QAbstractItemDelegate::RevertModelCache, hidden);
+  }
+
   bool event(QEvent* event) override {
     // The panel's keys before the window's shortcuts (Return confirms a
     // command there, Delete deletes in a sketch).
@@ -576,12 +597,7 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   connect(m_tree, &QTreeWidget::itemExpanded, this, [remember](QTreeWidgetItem* item) { remember(item, true); });
   connect(m_tree, &QTreeWidget::itemCollapsed, this, [remember](QTreeWidgetItem* item) { remember(item, false); });
   connect(m_tree->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { scheduleLayoutLog(); });
-  // The end of a name typed in place: after the view has taken the text.
-  connect(m_tree->itemDelegate(), &QAbstractItemDelegate::closeEditor, this,
-          [this](QWidget*, QAbstractItemDelegate::EndEditHint hint) {
-            editingClosed(hint != QAbstractItemDelegate::RevertModelCache);
-          },
-          Qt::QueuedConnection);
+  // The end of a name typed in place: ProjectsTreeWidget::closeEditor.
   updateActions();
 }
 
@@ -593,6 +609,23 @@ void ProjectsPanel::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
   refresh();
   scheduleLayoutLog();
+}
+
+void ProjectsPanel::hideEvent(QHideEvent* event) {
+  QWidget::hideEvent(event);
+  // Not when the system hides the window (minimized): it comes back as it
+  // was. The AppKit presentation keeps this widget hidden throughout.
+  if (event->spontaneous() || m_nativePresented) {
+    return;
+  }
+  if (m_isEditing && !m_nativeEditing) {
+    qInfo().noquote() << QStringLiteral("Projects panel: hidden under the name editor: the name is not taken");
+    cancelEditing();
+  } else if (m_hasPending) {
+    m_hasPending = false;
+    qInfo().noquote() << QStringLiteral("Projects panel: hidden before the name was asked: nothing to name");
+    scheduleNamingEnd();
+  }
 }
 
 void ProjectsPanel::resizeEvent(QResizeEvent* event) {
@@ -710,6 +743,7 @@ void ProjectsPanel::rebuild() {
   const QString current = m_host.currentRoot ? m_host.currentRoot() : QString();
   m_building = true;
   m_tree->clear();
+  m_messageItem = nullptr; // not there while a name is typed (the rows wait)
   // The projects at the top, nothing above them (mitcad#173), by the name
   // shown.
   QVector<const ProjectRow*> rows;
@@ -767,6 +801,7 @@ void ProjectsPanel::rebuild() {
     } else {
       qInfo().noquote() << QStringLiteral("Projects panel: %1 is not listed: nothing to name")
                                .arg(joinPath(m_pending.root, m_pending.parent));
+      scheduleNamingEnd();
     }
   }
 }
@@ -1070,7 +1105,7 @@ void ProjectsPanel::logLayout() {
   // they changed: a name elided in the middle keeps its start and end.
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
     QTreeWidgetItem* item = *it;
-    if (typeOf(item) == RowType::NewItem) {
+    if (typeOf(item) == RowType::NewItem || typeOf(item) == RowType::Message) {
       continue;
     }
     const QString shown = m_tree->shownText(item, kName);
@@ -1116,7 +1151,7 @@ void ProjectsPanel::updateActions() {
 }
 
 QString ProjectsPanel::settingsRoot(const QTreeWidgetItem* item) const {
-  if (item == nullptr || typeOf(item) == RowType::NewItem) {
+  if (item == nullptr || typeOf(item) == RowType::NewItem || typeOf(item) == RowType::Message) {
     return {};
   }
   const ProjectRow* row = project(rootOf(item));
@@ -1220,6 +1255,7 @@ QString ProjectsPanel::folderFor(const QTreeWidgetItem* item) const {
   switch (typeOf(item)) {
   case RowType::Folder:
   case RowType::NewItem:
+  case RowType::Message: // its path is the folder it is in
     return pathOf(item);
   case RowType::Design:
     return dirOf(pathOf(item));
@@ -1261,51 +1297,34 @@ void ProjectsPanel::startNew(bool folder, const QString& root, const QString& pa
   if (m_isEditing) {
     cancelEditing();
   }
+  m_hasRequest = false;
+  const bool reading = m_task != nullptr;
+  // Where the name is typed in sight first (mitcad#1268): a panel that is
+  // shown now reads its projects (showEvent), and the name waits for them.
+  revealForNaming();
   QTreeWidgetItem* host = folderItem(root, parent);
   if (host == nullptr || m_task != nullptr) {
-    // Not read yet (a project just made): named once it is.
+    // Not read yet (a project just made, the panel just shown) or being
+    // read: named once it is, from those rows.
     m_pending = {folder, QDir::cleanPath(root), parent};
     m_hasPending = true;
     m_revealed.insert(QDir::cleanPath(root));
     m_reveal = QDir::cleanPath(root);
-    if (m_task != nullptr) {
+    if (reading) {
       m_readAgain = true;
-    } else {
+    } else if (m_task == nullptr) {
       refresh();
     }
+    qInfo().noquote() << QStringLiteral("Projects panel: a new %1 in %2 is named once the projects are read")
+                             .arg(folder ? QStringLiteral("folder") : QStringLiteral("design"),
+                                  joinPath(QDir::cleanPath(root), parent));
     return;
-  }
-  // A free name among the folder's rows.
-  QStringList taken;
-  int firstDesign = host->childCount();
-  for (int i = 0; i < host->childCount(); ++i) {
-    taken << host->child(i)->text(kName).toLower();
-    if (typeOf(host->child(i)) == RowType::Design && firstDesign == host->childCount()) {
-      firstDesign = i;
-    }
-  }
-  const QString base = folder ? tr("Folder") : tr("Design");
-  int n = 1;
-  while (taken.contains(QStringLiteral("%1%2").arg(base).arg(n).toLower())) {
-    ++n;
   }
   for (QTreeWidgetItem* up = host; up != nullptr; up = up->parent()) {
     up->setExpanded(true);
   }
-  auto* item = new QTreeWidgetItem;
-  if (folder) {
-    host->insertChild(firstDesign, item);
-  } else {
-    host->addChild(item);
-  }
-  item->setText(kName, QStringLiteral("%1%2").arg(base).arg(n));
-  item->setIcon(kName, themeIcon(folder ? QStringLiteral("folder") : QStringLiteral("project")));
-  item->setData(kName, kTypeRole, static_cast<int>(RowType::NewItem));
-  item->setData(kName, kRootRole, rootOf(host));
-  item->setData(kName, kPathRole, parent);
-  item->setData(kName, kKeyRole, QStringLiteral("%1 (new)").arg(keyOf(host)));
-  item->setData(kName, NativeControlIdentifierRole, QStringLiteral("projects.row.%1 (new)").arg(keyOf(host)));
-  item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
+  const QString name = freeName(folder, rootOf(host), parent, host);
+  QTreeWidgetItem* item = addNewRow(host, folder, parent, name);
   m_editing = Editing();
   m_editing.kind = RowType::NewItem;
   m_editing.folder = folder;
@@ -1313,20 +1332,142 @@ void ProjectsPanel::startNew(bool folder, const QString& root, const QString& pa
   m_editing.parent = parent;
   m_editing.item = item;
   m_isEditing = true;
+  ++m_editSerial;
   m_tree->setCurrentItem(item);
   m_tree->scrollToItem(item);
-  const QString line = QStringLiteral("Projects panel: naming a new %1 in %2")
-                           .arg(folder ? QStringLiteral("folder") : QStringLiteral("design"), keyOf(host));
+  // The name proposed (mitcad#1268), as the editor shows it.
+  const QString line = QStringLiteral("Projects panel: naming a new %1 in %2: %3")
+                           .arg(folder ? QStringLiteral("folder") : QStringLiteral("design"), keyOf(host), name);
   openEditor(item, line);
   emit contentHeightChanged();
   scheduleLayoutLog();
 }
 
+QString ProjectsPanel::freeName(bool folder, const QString& root, const QString& parent,
+                                const QTreeWidgetItem* host) const {
+  // Among the folder's rows, and on disk (mitcad#1268): a design made since
+  // the rows were read, one another program wrote or one not listed is
+  // there all the same, and the core refuses a name that is (as it does on
+  // a system that does not tell the case of letters apart, compared here
+  // without it).
+  QSet<QString> taken;
+  for (int i = 0; host != nullptr && i < host->childCount(); ++i) {
+    taken.insert(host->child(i)->text(kName).toLower());
+  }
+  const QDir dir(parent.isEmpty() ? root : QDir(root).filePath(parent));
+  const QStringList entries = dir.entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+  for (const QString& entry : entries) {
+    taken.insert(entry.toLower());
+  }
+  const QString base = folder ? tr("Folder") : tr("Design");
+  for (int n = 1;; ++n) {
+    const QString name = QStringLiteral("%1%2").arg(base).arg(n);
+    const QString lower = name.toLower();
+    if (!taken.contains(lower) && !taken.contains(lower + kSuffix)) {
+      return name;
+    }
+  }
+}
+
+QTreeWidgetItem* ProjectsPanel::addNewRow(QTreeWidgetItem* host, bool folder, const QString& parent,
+                                          const QString& name) {
+  // A folder before the designs, a design after them.
+  int firstDesign = host->childCount();
+  for (int i = 0; i < host->childCount(); ++i) {
+    if (typeOf(host->child(i)) == RowType::Design) {
+      firstDesign = i;
+      break;
+    }
+  }
+  auto* item = new QTreeWidgetItem;
+  if (folder) {
+    host->insertChild(firstDesign, item);
+  } else {
+    host->addChild(item);
+  }
+  item->setText(kName, name);
+  item->setIcon(kName, themeIcon(folder ? QStringLiteral("folder") : QStringLiteral("project")));
+  item->setData(kName, kTypeRole, static_cast<int>(RowType::NewItem));
+  item->setData(kName, kRootRole, rootOf(host));
+  item->setData(kName, kPathRole, parent);
+  item->setData(kName, kKeyRole, QStringLiteral("%1 (new)").arg(keyOf(host)));
+  item->setData(kName, NativeControlIdentifierRole, QStringLiteral("projects.row.%1 (new)").arg(keyOf(host)));
+  item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
+  return item;
+}
+
+void ProjectsPanel::revealForNaming() {
+  m_namingShown = true;
+  if (m_host.showForNaming) {
+    m_host.showForNaming(true);
+  }
+}
+
+void ProjectsPanel::scheduleNamingEnd() {
+  if (!m_namingShown) {
+    return;
+  }
+  // Once the event loop is back: the window's answer to the name (queued
+  // before this) may open the editor again (nameRefused).
+  QMetaObject::invokeMethod(
+      this,
+      [this] {
+        if (!m_namingShown || m_isEditing || m_hasPending) {
+          return;
+        }
+        m_namingShown = false;
+        if (m_host.showForNaming) {
+          m_host.showForNaming(false);
+        }
+      },
+      Qt::QueuedConnection);
+}
+
+void ProjectsPanel::showRefusal(QTreeWidgetItem* item, const QString& message) {
+  clearRefusal();
+  QTreeWidgetItem* parent = item != nullptr ? item->parent() : nullptr;
+  if (parent == nullptr) {
+    return;
+  }
+  // A row of its own below the name (its icon and text not greyed although
+  // it takes no clicks: a click there would end the editor).
+  auto* row = new QTreeWidgetItem;
+  parent->insertChild(parent->indexOfChild(item) + 1, row);
+  const QIcon warning = themeIcon(QStringLiteral("warning"));
+  QIcon icon;
+  const QPixmap mark = warning.pixmap(m_tree->iconSize(), devicePixelRatioF());
+  icon.addPixmap(mark, QIcon::Normal);
+  icon.addPixmap(mark, QIcon::Disabled);
+  row->setText(kName, message);
+  row->setIcon(kName, icon);
+  row->setToolTip(kName, message);
+  row->setForeground(kName, m_tree->palette().brush(QPalette::Active, QPalette::Text));
+  row->setData(kName, kTypeRole, static_cast<int>(RowType::Message));
+  row->setData(kName, kRootRole, rootOf(item));
+  row->setData(kName, kPathRole, folderFor(item));
+  row->setData(kName, kKeyRole, QStringLiteral("%1 (message)").arg(keyOf(item)));
+  row->setData(kName, NativeControlIdentifierRole, QStringLiteral("projects.row.%1 (message)").arg(keyOf(item)));
+  row->setFlags(Qt::NoItemFlags);
+  row->setFirstColumnSpanned(true);
+  m_messageItem = row;
+  emit contentHeightChanged();
+  scheduleLayoutLog();
+}
+
+void ProjectsPanel::clearRefusal() {
+  if (m_messageItem != nullptr) {
+    delete m_messageItem;
+    m_messageItem = nullptr;
+    emit contentHeightChanged();
+  }
+}
+
 void ProjectsPanel::openEditor(QTreeWidgetItem* item, const QString& line) {
   // After the menu or the dialog that asked for it has closed and given the
   // focus back, so that the editor keeps it.
-  TestSync::singleShot(0, this, [this, item, line] {
-    if (!m_isEditing || m_editing.item != item) {
+  const int serial = m_editSerial;
+  TestSync::singleShot(0, this, [this, item, line, serial] {
+    if (!m_isEditing || m_editing.item != item || serial != m_editSerial) {
       return;
     }
     m_tree->setCurrentItem(item);
@@ -1344,9 +1485,30 @@ void ProjectsPanel::openEditor(QTreeWidgetItem* item, const QString& line) {
     }
     m_tree->setFocus(Qt::OtherFocusReason);
     m_tree->editItem(item, kName);
+    // The editor has the focus and the name selected, so that typing
+    // replaces it (mitcad#1268).
+    if (auto* editor = qobject_cast<QLineEdit*>(m_tree->indexWidget(m_tree->indexOf(item)))) {
+      editor->setFocus(Qt::OtherFocusReason);
+      editor->selectAll();
+    }
     qInfo().noquote() << line;
+    logEditor(item);
     scheduleLayoutLog();
   });
+}
+
+void ProjectsPanel::logEditor(QTreeWidgetItem* item) {
+  QWidget* editor = m_tree->indexWidget(m_tree->indexOf(item));
+  const auto* field = qobject_cast<QLineEdit*>(editor);
+  const bool focused = editor != nullptr && editor->window()->focusWidget() == editor;
+  const bool selected = field != nullptr && (field->text().isEmpty() || field->selectedText() == field->text());
+  const bool inSight = editor != nullptr && editor->isVisible() && isVisible() &&
+                       m_tree->viewport()->rect().intersects(m_tree->visualItemRect(item));
+  qInfo().noquote() << QStringLiteral("Projects panel: name editor on %1: \"%2\", %3, %4, %5")
+                           .arg(keyOf(item), field != nullptr ? field->text() : item->text(kName),
+                                focused ? QStringLiteral("focused") : QStringLiteral("not focused"),
+                                selected ? QStringLiteral("all selected") : QStringLiteral("not all selected"),
+                                inSight ? QStringLiteral("in sight") : QStringLiteral("not in sight"));
 }
 
 void ProjectsPanel::startRename(QTreeWidgetItem* item) {
@@ -1357,6 +1519,8 @@ void ProjectsPanel::startRename(QTreeWidgetItem* item) {
   if (m_isEditing) {
     cancelEditing();
   }
+  m_hasRequest = false;
+  revealForNaming();
   m_editing = Editing();
   m_editing.kind = type;
   m_editing.folder = type == RowType::Folder;
@@ -1365,6 +1529,7 @@ void ProjectsPanel::startRename(QTreeWidgetItem* item) {
   m_editing.from = pathOf(item);
   m_editing.item = item;
   m_isEditing = true;
+  ++m_editSerial;
   m_tree->setCurrentItem(item);
   openEditor(item, QStringLiteral("Projects panel: renaming %1").arg(keyOf(item)));
 }
@@ -1379,6 +1544,27 @@ bool ProjectsPanel::cancelEditing() {
   return true;
 }
 
+void ProjectsPanel::treeEditorClosed(bool accepted, bool hidden) {
+  const int serial = m_editSerial;
+  // Once the view is done with the editor (the row of a new name goes).
+  QMetaObject::invokeMethod(
+      this,
+      [this, serial, accepted, hidden] {
+        if (serial != m_editSerial || !m_isEditing || m_nativeEditing) {
+          return; // ended already, or another editor's
+        }
+        if (accepted && hidden) {
+          // A click elsewhere ended an editor nobody saw: not taken.
+          qInfo().noquote()
+              << QStringLiteral("Projects panel: the name editor was not in sight: the name is not taken");
+          editingClosed(false);
+          return;
+        }
+        editingClosed(accepted);
+      },
+      Qt::QueuedConnection);
+}
+
 void ProjectsPanel::editingClosed(bool accepted) {
   if (!m_isEditing) {
     return;
@@ -1391,24 +1577,30 @@ void ProjectsPanel::editingClosed(bool accepted) {
       m_closeNativeEditor();
     }
   }
+  clearRefusal();
   const Editing editing = m_editing;
-  m_isEditing = false;
-  m_editing = Editing();
-  QString name = editing.item != nullptr ? editing.item->text(kName).trimmed() : QString();
-  if (editing.kind == RowType::NewItem && editing.item != nullptr) {
-    delete editing.item; // the project's tree read again shows what was made
-  }
-  const QString what = editing.kind == RowType::NewItem
-                           ? (editing.folder ? QStringLiteral("new folder") : QStringLiteral("new design"))
-                           : QStringLiteral("rename of %1").arg(editing.from);
-  if (!accepted) {
+  const QString typed = editing.item != nullptr ? editing.item->text(kName).trimmed() : QString();
+  const QString what = namingWhat(editing.kind == RowType::NewItem, editing.folder, editing.from);
+  // The naming ends: a new name's row goes (the project's tree read again
+  // shows what was made).
+  const auto end = [this, &editing] {
+    m_isEditing = false;
+    m_editing = Editing();
+    if (editing.kind == RowType::NewItem && editing.item != nullptr) {
+      delete editing.item;
+    }
+  };
+  if (!accepted || editing.item == nullptr) {
+    end();
     qInfo().noquote() << QStringLiteral("Projects panel: %1 cancelled").arg(what);
     if (editing.kind != RowType::NewItem && editing.item != nullptr) {
       editing.item->setText(kName, editing.folder ? lastPart(editing.from) : designName(editing.from));
     }
     applyWaitingRows();
+    scheduleNamingEnd();
     return;
   }
+  QString name = typed;
   if (!editing.folder && name.endsWith(kSuffix, Qt::CaseInsensitive)) {
     name.chop(kSuffix.size());
     name = name.trimmed();
@@ -1420,36 +1612,106 @@ void ProjectsPanel::editingClosed(bool accepted) {
   }
   if (bad) {
     qInfo().noquote() << QStringLiteral("Projects panel: %1 refused: the name \"%2\"").arg(what, name);
-    emit statusMessage(tr("“%1” cannot be a name: it may not be empty, start or end with a dot, or hold "
-                          "/ \\ < > : \" | ? *.")
-                           .arg(name),
-                       true);
-    if (editing.kind != RowType::NewItem && editing.item != nullptr) {
-      editing.item->setText(kName, editing.folder ? lastPart(editing.from) : designName(editing.from));
-    }
-    applyWaitingRows();
+    const QString message = tr("“%1” cannot be a name: it may not be empty, start or end with a dot, or hold "
+                               "/ \\ < > : \" | ? *.")
+                                .arg(name);
+    emit statusMessage(message, true);
+    // The editor stays on the row with what was typed, the refusal below it
+    // (mitcad#1268), so that another name can be typed.
+    showRefusal(editing.item, message);
+    ++m_editSerial;
+    openEditor(editing.item,
+               QStringLiteral("Projects panel: %1 refused at %2: %3").arg(what, keyOf(editing.item), message));
     return;
   }
   const QString file = editing.folder ? name : name + kSuffix;
-  if (editing.kind == RowType::NewItem) {
-    const QString path = joinPath(editing.parent, file);
-    qInfo().noquote() << QStringLiteral("Projects panel: %1 %2 in %3").arg(what, path, editing.root);
+  const QString path = joinPath(editing.parent, file);
+  end();
+  if (editing.kind != RowType::NewItem && path == editing.from) {
     applyWaitingRows();
-    if (editing.folder) {
-      emit newFolderRequested(editing.root, path);
-    } else {
-      emit newDesignRequested(editing.root, path);
-    }
-    return;
-  }
-  const QString to = joinPath(editing.parent, file);
-  applyWaitingRows();
-  if (to == editing.from) {
     qInfo().noquote() << QStringLiteral("Projects panel: %1: the same name").arg(what);
+    scheduleNamingEnd();
     return;
   }
-  qInfo().noquote() << QStringLiteral("Projects panel: rename %1 to %2").arg(editing.from, to);
-  emit moveRequested(editing.root, editing.from, to, editing.folder);
+  if (editing.kind == RowType::NewItem) {
+    qInfo().noquote() << QStringLiteral("Projects panel: %1 %2 in %3").arg(what, path, editing.root);
+  } else {
+    qInfo().noquote() << QStringLiteral("Projects panel: rename %1 to %2").arg(editing.from, path);
+  }
+  applyWaitingRows();
+  // Answered by the window: a refusal opens the editor again (nameRefused).
+  m_request = Request();
+  m_request.root = editing.root;
+  m_request.path = path;
+  m_request.from = editing.kind == RowType::NewItem ? QString() : editing.from;
+  m_request.folder = editing.folder;
+  m_hasRequest = true;
+  if (editing.kind != RowType::NewItem) {
+    emit moveRequested(editing.root, editing.from, path, editing.folder);
+  } else if (editing.folder) {
+    emit newFolderRequested(editing.root, path);
+  } else {
+    emit newDesignRequested(editing.root, path);
+  }
+  scheduleNamingEnd();
+}
+
+bool ProjectsPanel::nameRefused(const QString& root, const QString& path, const QString& from,
+                                const QString& message) {
+  if (!m_hasRequest || !sameRoot(m_request.root, root) || m_request.path != path || m_request.from != from) {
+    return false;
+  }
+  const Request request = m_request;
+  m_hasRequest = false;
+  if (m_isEditing) {
+    cancelEditing();
+  }
+  const QString parent = dirOf(path);
+  const QString name = request.folder ? lastPart(path) : designName(path);
+  Editing editing;
+  editing.folder = request.folder;
+  QTreeWidgetItem* item = nullptr;
+  if (from.isEmpty()) {
+    QTreeWidgetItem* host = folderItem(root, parent);
+    if (host == nullptr) {
+      return false;
+    }
+    for (QTreeWidgetItem* up = host; up != nullptr; up = up->parent()) {
+      up->setExpanded(true);
+    }
+    item = addNewRow(host, request.folder, parent, name);
+    editing.kind = RowType::NewItem;
+    editing.root = rootOf(host);
+    editing.parent = parent;
+  } else {
+    for (QTreeWidgetItemIterator it(m_tree); *it != nullptr && item == nullptr; ++it) {
+      const RowType type = typeOf(*it);
+      if ((type == RowType::Design || type == RowType::Folder) && sameRoot(rootOf(*it), root) && pathOf(*it) == from) {
+        item = *it;
+      }
+    }
+    if (item == nullptr) {
+      return false;
+    }
+    item->setText(kName, name);
+    editing.kind = typeOf(item);
+    editing.root = rootOf(item);
+    editing.parent = dirOf(from);
+    editing.from = from;
+  }
+  editing.item = item;
+  m_editing = editing;
+  m_isEditing = true;
+  ++m_editSerial;
+  revealForNaming();
+  showRefusal(item, message);
+  m_tree->setCurrentItem(item);
+  m_tree->scrollToItem(item);
+  const QString what = namingWhat(editing.kind == RowType::NewItem, editing.folder, editing.from);
+  openEditor(item, QStringLiteral("Projects panel: %1 refused at %2: %3").arg(what, keyOf(item), message));
+  emit contentHeightChanged();
+  scheduleLayoutLog();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1473,6 +1735,7 @@ void ProjectsPanel::openCurrent() {
     item->setExpanded(!item->isExpanded());
     break;
   case RowType::NewItem:
+  case RowType::Message:
     break;
   }
 }
@@ -1499,6 +1762,9 @@ void ProjectsPanel::deleteCurrent() {
 
 void ProjectsPanel::contextMenu(const QPoint& at) {
   QTreeWidgetItem* item = m_tree->itemAt(at);
+  if (item != nullptr && typeOf(item) == RowType::Message) {
+    return; // a refusal's row: nothing to do there, and the editor above it stays
+  }
   if (item != nullptr && item != m_tree->currentItem()) {
     m_tree->setCurrentItem(item); // a right click selects the row
   }
@@ -1582,6 +1848,7 @@ bool ProjectsPanel::dropTarget(const QTreeWidgetItem* dragged, const QTreeWidget
     target = dirOf(pathOf(over));
     break;
   case RowType::NewItem:
+  case RowType::Message:
     return false;
   }
   const QString from = pathOf(dragged);

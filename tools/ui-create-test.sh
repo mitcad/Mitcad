@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands app/sketch app/framework/HybridAssembly.cpp
 # check-all sources: app/framework/CommandPanel.cpp
+# check-all sources: core/model/src/features/thread.rs
 # The CREATE group (U4) through the real UI, with the volumes the model
 # reports (analytic, or tools/cli/tests/f1_*.json):
 #   - Extrude: a thin extrusion (walls centred on the profile), edited to
@@ -25,7 +26,9 @@
 #     then given extra radial and flank clearance, then end chamfers.
 #   - Thread on a 5 mm hole (mitcad#691): picked in the open command it
 #     suggests M6x1 6H, offers only a hole's classes, and keeps 6H when the
-#     size changes; selected before Thread from the view's context menu it
+#     size changes (M8, whose minor diameter is far from the hole: the
+#     preview and the panel's message warn, mitcad#1262, and the thread is
+#     made); selected before Thread from the view's context menu it
 #     suggests M6x1 6H too, and the modelled thread is made.
 #   - Custom thread (mitcad#893): Thread Type Custom with a typed major
 #     diameter (10) and pitch (1.5), Starts 2, modelled, its printed-fit
@@ -36,6 +39,10 @@
 #     Component.
 #   - Emboss (mitcad#458): a rectangle wrapped onto a rod's side and
 #     raised, edited to sunk (tools/cli/tests/emboss.json's volumes).
+#   - Emboss wrap offsets (mitcad#1259): the Along Axis arrow dragged
+#     changes Along Axis, and Along Axis, Around and Rotation typed each
+#     preview again; OK keeps them and the volume (the rectangle moved, not
+#     changed), and they load for editing.
 #   - Emboss by projection (mitcad#1091): two letters of a text projected
 #     onto a ball (the face takes the projection by itself) and raised.
 #
@@ -458,6 +465,99 @@ ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" 9390.57
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 
+echo "=== Emboss: the wrap moved along the axis, around it and turned (mitcad#1259)"
+# emboss_tool_at x y z tolerance what: the newest "Preview tool at" (the
+# middle of the previewed tool's box in the design) within the tolerance of
+# x, y, z in each coordinate.
+emboss_tool_at() {
+  local at
+  at=$(grep "Preview tool at " "$UI_LOG" | tail -1 | sed 's/.*Preview tool at //')
+  awk -v at="$at" -v x="$1" -v y="$2" -v z="$3" -v d="$4" 'BEGIN { n = split(at, p, ",")
+    exit !(n == 3 && (p[1] - x) ^ 2 <= d * d && (p[2] - y) ^ 2 <= d * d && (p[3] - z) ^ 2 <= d * d) }' ||
+    ui_fail "$5: the preview's tool at '$at', not within $4 of $1,$2,$3"
+  echo "ok   $5: the preview's tool at $at"
+}
+ui_start_app --open "$WORK/emboss.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_step "emboss (search)"                  ui_command "Emboss"
+ui_expect_log "Command Emboss started" "emboss started"
+ui_expect_log "Emboss Profiles: 1 profile [profile $RECT of F3]" "the newest profile taken"
+# The face picked previews at once with the default depth (1 mm): typing 1
+# changes nothing, so the mark goes before the pick.
+ui_step "the face input"                   ui_click_logged "Panel Emboss input face"
+ui_mark
+ui_step "pick the rod's side"              ui_click_pick "face F2.b0/F2:side(c1)"
+ui_expect_new "Emboss Face: 1 face" "the cylindrical face picked"
+# The handles come with the face (the overlay logs its places when they
+# change, not again for a click in a field): Along Axis's arrow up the rod,
+# counted towards +Z.
+ui_expect_new "Manipulator Emboss along_axis at" "Along Axis has an arrow"
+ui_expect_new "Arrow direction Emboss along_axis: 0.000,0.000,1.000" "the arrow points up the rod"
+ui_expect_new "Manipulator Emboss around_angle at" "Around has a ring"
+ui_expect_new "Manipulator Emboss rotation_angle at" "Rotation has a ring"
+ui_expect_new "Preview Emboss: ok" "previewed where the sketch puts it"
+# The 6 x 6 rectangle wrapped on the +Y side from z = 2 to 8, radius 10 to
+# 11: its box's middle (the logged "Preview tool at").
+emboss_tool_at 0 10.277 5 0.02 "on the +Y side, z = 2 to 8"
+ui_step "depth 1"                          ui_type_in "Panel Emboss input depth" "1"
+ui_expect_log "Emboss Depth: 1" "depth 1"
+
+echo "--- The offsets typed: each previews the rectangle where it puts it"
+ui_mark
+ui_step "Along Axis 10"                    ui_type_in "Panel Emboss input along_axis" "10"
+ui_expect_new "Emboss Along Axis: 10" "10 mm typed"
+ui_expect_new "Preview Emboss: ok" "previewed 10 mm along the axis"
+emboss_tool_at 0 10.277 15 0.02 "10 mm up the rod"
+ui_mark
+ui_step "Around 90 deg"                    ui_type_in "Panel Emboss input around_angle" "90 deg"
+ui_expect_new "Emboss Around: 90 deg" "90 deg typed"
+ui_expect_new "Preview Emboss: ok" "previewed a quarter turn around the axis"
+emboss_tool_at -10.277 0 15 0.02 "a quarter turn about +Z: on the -X side"
+ui_mark
+ui_step "Rotation 30 deg"                  ui_type_in "Panel Emboss input rotation_angle" "30 deg"
+ui_expect_new "Emboss Rotation: 30 deg" "30 deg typed"
+# The rotation ring's knob moved: the handles' places logged again, the
+# Along Axis arrow's where the rectangle is now.
+ui_expect_new "Manipulator Emboss along_axis at" "the handles logged where they are now"
+ui_expect_new "Preview Emboss: ok" "previewed turned on the face"
+# Turned 30 deg about its middle: 8.196 across (0.41 rad), so its box's
+# middle comes in to -(11 + 10 cos 0.41) / 2 = -10.086; the walls are no
+# longer along the axis, so the box may be looser.
+emboss_tool_at -10.086 0 15 0.3 "turned on the face about its middle"
+
+echo "--- The Along Axis arrow dragged (from its newest logged place)"
+ui_mark
+ui_step "drag the arrow up"                ui_drag_from "Manipulator Emboss along_axis" 0 -40
+ui_expect_new "Manipulator Emboss along_axis dragged to" "arrow dragged"
+ui_expect_new "Preview Emboss:" "previewed where the drag put it"
+dragged=$(grep "Emboss Along Axis: " "$UI_LOG" | tail -1 | sed -n 's/.*= \([-0-9.]*\) mm$/\1/p')
+awk -v d="$dragged" 'BEGIN { exit !(d != "" && d + 0 != 10) }' ||
+  ui_fail "the drag left Along Axis at '$dragged', not moved from 10"
+echo "ok   Along Axis dragged to $dragged mm"
+# Then typed again, to a value it was not yet (a cached preview would log
+# nothing new).
+AGAIN=11
+awk -v d="$dragged" 'BEGIN { exit !(d + 0 == 11) }' && AGAIN=12
+ui_mark
+ui_step "Along Axis $AGAIN"                ui_type_in "Panel Emboss input along_axis" "$AGAIN"
+ui_expect_new "Preview Emboss: ok" "previewed $AGAIN mm along the axis"
+emboss_tool_at -10.086 0 $((5 + AGAIN)) 0.3 "$AGAIN mm up the rod"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_log "Added emboss (Raise) of 1 profile(s) on a cylindrical face, wrapped, depth 1, along axis $AGAIN, around 90 deg, rotation 30 deg" "emboss added with its offsets"
+# The same 36 mm2 wrapped and raised to 11, only elsewhere: 36 * 21 / 20 more.
+ui_expect_volume "Body Body1 (F2.b0): volume 9424.778 -> \([0-9.]*\) mm3" 9462.577961 "raised on the rod, moved"
+
+echo "--- Edited: the offsets come back"
+ui_mark
+ui_step "double-click Emboss1"             ui_double_click_logged "Timeline Emboss1"
+ui_expect_new "Editing F4 with Emboss" "editing Emboss1"
+ui_expect_new "Emboss Along Axis: $AGAIN mm" "Along Axis loaded"
+ui_expect_new "Emboss Around: 90 deg" "Around loaded"
+ui_expect_new "Emboss Rotation: 30 deg" "Rotation loaded"
+ui_step "Esc"                              ui_key Escape
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
 echo "=== Emboss: a text projected onto a ball (mitcad#1091)"
 ui_start_app --open "$WORK/emboss-ball.mitcad"
 ui_step "fit (F6)"                         ui_key F6
@@ -511,6 +611,12 @@ ui_mark
 ui_step "Size: two down (8)"               ui_choose "Panel Thread input size" 2
 ui_expect_new "Thread: Size = 8" "size 8 chosen"
 ui_expect_new "Preview Thread: ok" "M8 previewed, its class still a hole's"
+# M8x1.25's minor diameter is far from the 5 mm hole (mitcad#1262): the
+# preview says so in its warning and the panel's message, and the thread
+# is made all the same.
+M8_ON_BORE="M8x1.25 (Ø8 mm, minor Ø6.647 mm) on face $BORE_B (Ø5 mm): the hole's diameter is 1.647 mm smaller than the thread's minor diameter"
+ui_expect_new "Preview Thread: ok, warning: $M8_ON_BORE" "the preview warns of the size"
+ui_expect_new "Panel Thread message box: warning: $M8_ON_BORE" "the panel's message shows the warning"
 ui_focus_main
 ui_mark
 ui_step "OK (Enter)"                       ui_key Return

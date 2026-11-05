@@ -1344,7 +1344,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
           .withTooltip(QObject::tr("The steepest overhang the printer makes without support, from the vertical")),
       checkInput(QStringLiteral("thin_wall"), QObject::tr("Thin Walls"), true)
           .withTooltip(QObject::tr("Walls thinner than the printer can make")),
-      valueInput(QStringLiteral("minimum"), QObject::tr("Minimum wall"), ValueKind::Length, QStringLiteral("0.8 mm"))
+      valueInput(QStringLiteral("minimum"), QObject::tr("Minimum wall"), ValueKind::Length, QStringLiteral("0.8 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(thin)
           .withTooltip(QObject::tr("The thinnest wall the printer makes: about twice the line width")),
@@ -1352,14 +1352,14 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
           .withTooltip(QObject::tr("About the weight, filament length and cost of the print")),
       choiceInput(QStringLiteral("material"), QObject::tr("Material"), printMaterials(), QStringLiteral("bodies"))
           .withVisible(estimate),
-      valueInput(QStringLiteral("line_width"), QObject::tr("Line width"), ValueKind::Length, QStringLiteral("0.4 mm"))
+      valueInput(QStringLiteral("line_width"), QObject::tr("Line width"), ValueKind::Length, QStringLiteral("0.4 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(estimate),
       valueInput(QStringLiteral("walls"), QObject::tr("Walls"), ValueKind::Unitless, QStringLiteral("2"))
           .withVisible(estimate)
           .withTooltip(QObject::tr("The perimeters around each layer")),
       valueInput(QStringLiteral("layer_height"), QObject::tr("Layer Height"), ValueKind::Length,
-                 QStringLiteral("0.2 mm"))
+                 QStringLiteral("0.2 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(estimate),
       valueInput(QStringLiteral("top_bottom_layers"), QObject::tr("Top/bottom layers"), ValueKind::Unitless,
@@ -1369,7 +1369,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
           .withVisible(estimate)
           .withTooltip(QObject::tr("How much of the inside is filled, in per cent")),
       valueInput(QStringLiteral("filament_diameter"), QObject::tr("Filament diameter"), ValueKind::Length,
-                 QStringLiteral("1.75 mm"))
+                 QStringLiteral("1.75 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(estimate),
       textInput(QStringLiteral("price"), QObject::tr("Price €/kg"))

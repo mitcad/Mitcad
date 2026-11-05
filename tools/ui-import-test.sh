@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files app/projects app/web third_party/three
+# check-all sources: core/model/src/document/repeated_parts.rs geometry/src/repeated_parts.cpp
 # Files (U6) through the File menu, on the demo block (60 x 40 x 20 mm):
 #   - STEP, STL and DXF round trips: File > Export writes the block (its
 #     sketch for DXF), File > Import brings the file back: a base feature
@@ -54,6 +55,9 @@
 #     a pin in a moved and turned occurrence, read back where the view
 #     shows it, and with the Coordinates row set to the component's where
 #     its component has it.
+#   - A STEP assembly through File > Import (mitcad#1274): the Import STEP
+#     Assembly question, Enter keeps the assembly, the part placed twice
+#     one component with two occurrences; one undo step.
 #   - Saving in a project (P12a): version 3, the B-rep data in the
 #     project's store, opened again with the same body.
 #
@@ -688,6 +692,47 @@ cat > "$WORK/placed.json" << EOF
 EOF
 "$CLI" run "$WORK/placed.json" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "the STEP files' places"; }
 echo "ok   read back: the pin where the view shows it, and where its component has it"
+
+# A STEP assembly that places the pin's part twice (mitcad#1274): Import
+# asks how it comes in, and Enter keeps the assembly, the part one
+# component placed twice.
+cat > "$WORK/pins.json" << EOF
+[
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 20, "width": 10, "height": 5, "operation": "new_body"}},
+  {"cmd": "rename_body", "uid": "F1.b0", "name": "Pin"},
+  {"cmd": "components_from_bodies", "bodies": ["F1.b0"]},
+  {"cmd": "copy_occurrence", "occurrence": "Pin:1", "transform": {"translation": [0, 50, 0]}},
+  {"cmd": "export", "path": "$WORK/pins.step"}
+]
+EOF
+"$CLI" run "$WORK/pins.json" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "the pins' STEP file"; }
+ui_mark
+ui_step "File > Import the STEP assembly"  import_from "$WORK/pins.step"
+ui_expect_new "Import STEP Assembly dialog opened: pins.step" "Import asks how the assembly comes in"
+ui_focus_dialog '^Import STEP Assembly$'
+ui_step "as components (Enter)"            ui_key Return
+ui_focus_main
+ui_expect_new "Import STEP Assembly: components" "the assembly kept"
+ui_expect_new "pins.step as Base1: 1 body(ies), 1 component(s), 2 occurrence(s)" \
+  "the pin's part once, placed twice"
+ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z
+ui_expect_new "Undo: Import pins.step" "the import is one undo step"
+# Find repeated parts (mitcad#1277): with One base feature the two pins
+# are bodies of their own, and the box makes them one component placed
+# twice, in the import's undo step.
+ui_mark
+ui_step "File > Import the STEP assembly again" import_from "$WORK/pins.step"
+ui_expect_new "Import STEP Assembly dialog opened: pins.step" "Import asks again"
+ui_focus_dialog '^Import STEP Assembly$'
+ui_step "Find repeated parts (Alt+R)"      ui_key alt+r
+ui_step "One base feature (Alt+O)"         ui_key alt+o
+ui_focus_main
+ui_expect_new "Import STEP Assembly: base, repeated parts" "one base feature, its copies to be found"
+ui_expect_new "pins.step as Base1: 2 body(ies), repeated parts: 1 component(s), 1 copies" \
+  "the two pins one component placed twice"
+ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z
+ui_expect_new "Undo: Import pins.step" "the import and its repeated parts are one undo step"
 
 echo "--- Saving in a project (P12a)"
 # A project folder: its files are saved in version 3, the B-rep data of

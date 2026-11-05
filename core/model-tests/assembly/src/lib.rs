@@ -21,3 +21,11 @@ mod transparency_tests;
 
 // Read-only bill-of-materials grouping (mitcad#1176).
 mod bom_tests;
+// Find Repeated Parts (mitcad#1277).
+mod repeated_parts_tests;
+
+// A linked component shown by its envelope (mitcad#1271).
+mod link_envelope_tests;
+
+// An Envelope's source through copies and reparenting (mitcad#1276).
+mod envelope_source_tests;

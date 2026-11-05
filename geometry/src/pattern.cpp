@@ -4,9 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
+#include <Message_Alert.hxx>
+#include <Message_Report.hxx>
+#include <TopoDS_AlertWithShape.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBndLib.hxx>
@@ -39,7 +43,10 @@
 #include <gp_Pln.hxx>
 
 #include "history.hpp"
+#include "mitcad/analysis/common.hpp"
 #include "mitcad/geometry/cancel.hpp"
+#include "mitcad/geometry/query.hpp"
+#include "union_groups.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -50,6 +57,15 @@ constexpr double kTolerance = 1.0e-6;
 // The first fuzzy value a union within a tolerance tries (mm, mitcad#397;
 // as a join's, boolean.cpp).
 constexpr double kFuzzyStart = 1.0e-5;
+
+// The most shapes with free-form faces that a union joins after the
+// elementary ones (united, mitcad#400 and mitcad#1273).
+constexpr std::size_t kFewFreeForm = 4;
+
+// The fewest shapes a union looks for near misses between before it unites
+// them all (united, mitcad#1278): a union of fewer, made again where it went
+// wrong, costs little.
+constexpr std::size_t kProbeFrom = 8;
 
 double area(const TopoDS_Shape& face) {
   GProp_GProps props;
@@ -133,53 +149,58 @@ TopAbs_Orientation orientation_in(const TopoDS_Shape& face, const TopoDS_Shape& 
   return TopAbs_EXTERNAL;
 }
 
-// The union of shapes whose boxes are apart, as one compound of their
-// solids without a boolean operation (they share nothing to merge); null
-// when two boxes meet. A pattern's copies are mostly so, and fusing 90 of
-// them took most of a minute.
-ShapePtr disjoint_union(const std::vector<const Shape*>& shapes) {
-  // Boxes sorted by their low x, each compared with those that start
-  // before it ends (all pairs: 12 million for 4900 copies).
-  std::vector<Bnd_Box> boxes(shapes.size());
-  std::vector<std::size_t> order(shapes.size());
-  for (std::size_t i = 0; i < shapes.size(); ++i) {
-    BRepBndLib::Add(shapes[i]->occt(), boxes[i]);
-    boxes[i].Enlarge(kTolerance);
-    if (boxes[i].IsVoid()) {
-      return nullptr;
+// Whether a union of the shapes lost material they hold (mitcad#1273): it
+// has no solid where they have some, or holds less volume than the largest
+// of them by more than 1e-6 of the larger of 1 and that volume. A union
+// never does. OCCT's exact union of a nut lying inside a threaded carriage,
+// whose bore's seam and chamfer circle pass a few micrometres from the
+// vertices of the carriage's thread, split a face of the carriage with
+// edges left over and came out empty: its result checks as valid (it has
+// nothing to check). The volumes are measured only for a union OCCT warned
+// about (lost).
+class MaterialCheck {
+public:
+  explicit MaterialCheck(const std::vector<const Shape*>& shapes) : m_shapes(shapes) {
+    for (const Shape* shape : shapes) {
+      m_solids = m_solids || TopExp_Explorer(shape->occt(), TopAbs_SOLID).More();
     }
-    order[i] = i;
   }
-  std::sort(order.begin(), order.end(), [&boxes](std::size_t a, std::size_t b) {
-    return boxes[a].CornerMin().X() < boxes[b].CornerMin().X();
-  });
-  for (std::size_t k = 0; k < order.size(); ++k) {
-    const Bnd_Box& box = boxes[order[k]];
-    const double end = box.CornerMax().X();
-    for (std::size_t m = k + 1; m < order.size() && boxes[order[m]].CornerMin().X() <= end; ++m) {
-      if (!box.IsOut(boxes[order[m]])) {
-        return nullptr;
+
+  // No solid where the shapes have some.
+  bool empty(const TopoDS_Shape& result) const {
+    return m_solids && !TopExp_Explorer(result, TopAbs_SOLID).More();
+  }
+
+  // Empty, or less volume than the largest shape.
+  bool lost(const TopoDS_Shape& result) const {
+    if (!m_solids) {
+      return false;
+    }
+    if (empty(result)) {
+      return true;
+    }
+    if (m_largest < 0.0) {
+      m_largest = 0.0;
+      for (const Shape* shape : m_shapes) {
+        m_largest = std::max(m_largest, volume(*shape));
       }
     }
+    const double held = analysis::volume_properties(result).Mass();
+    return held < m_largest - 1.0e-6 * std::max(1.0, m_largest);
   }
-  BRep_Builder builder;
-  TopoDS_Compound compound;
-  builder.MakeCompound(compound);
-  for (const Shape* shape : shapes) {
-    for (TopExp_Explorer it(shape->occt(), TopAbs_SOLID); it.More(); it.Next()) {
-      builder.Add(compound, it.Current());
-    }
-  }
-  detail::FaceNamer namer(compound);
-  for (const Shape* shape : shapes) {
-    for (int i = 0; i < shape->face_count(); ++i) {
-      for (const std::string& name : shape->face_names(i)) {
-        namer.add(shape->face(i), name);
-      }
-    }
-  }
-  namer.finish();
-  return namer.shape();
+
+private:
+  const std::vector<const Shape*>& m_shapes;
+  bool m_solids = false;
+  mutable double m_largest = -1.0;
+};
+
+// The shape, marked as found valid by OCCT's checker (Shape::checked_valid):
+// a union checks its result, and the operations on it then check only
+// what they change (mitcad#1278).
+ShapePtr checked(ShapePtr shape) {
+  shape->set_checked_valid(true);
+  return shape;
 }
 
 // Whether a face of the shape lies on a free-form surface (not a plane,
@@ -200,12 +221,27 @@ bool free_form(const Shape& shape) {
   return false;
 }
 
-ShapePtr united(const std::vector<const Shape*>& shapes, double within) {
+// How a union starts (united): with the near misses between its shapes
+// united first (detail::near_misses) when it has enough shapes, or with the
+// exact union of all (a union whose near misses are united already).
+enum class Start { probe, exact };
+
+ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start start = Start::probe) {
   if (shapes.size() == 1) {
     return std::make_shared<Shape>(*shapes.front());
   }
-  if (ShapePtr apart = disjoint_union(shapes)) {
-    return apart;
+  // Shapes whose boxes meet, directly or through others, are united group
+  // by group, the groups beside each other, and put together without a
+  // boolean operation (union_groups.hpp, mitcad#1273). A pattern's copies
+  // are mostly apart: fusing 90 of them took most of a minute; one union of
+  // a machine's 257 bodies at once took most of a minute and 12.7 GB. Boxes
+  // within the tolerance of a union within one meet (its fuzzy value may
+  // join them).
+  const std::vector<std::vector<std::size_t>> groups =
+      detail::box_groups(shapes, std::max(kTolerance, within));
+  if (groups.size() > 1) {
+    return detail::grouped_union(shapes, groups,
+                                 [within](const std::vector<const Shape*>& group) { return united(group, within); });
   }
   // (mitcad#400) The shapes of elementary faces are joined first, and the
   // shapes with free-form faces then with their union. OCCT's union
@@ -217,18 +253,97 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within) {
   // whole of both, and the merge after it broke the result, which was then
   // joined again without it (a spiral stair's 40 treads and two stringers:
   // 10 s on 16 cores, 72 s on fewer, 2292 faces). Joined first, the
-  // treads' merged faces meet the stringers once each.
+  // treads' merged faces meet the stringers once each. Only a few shapes
+  // with free-form faces among many (mitcad#1273): a machine's 257 bodies,
+  // 30 of them with threads and other free-form faces, each meeting a few
+  // others, took two unions of most of the bodies so, and a fault between
+  // a body joined first and one joined after could be mended only in the
+  // union of all.
   std::vector<const Shape*> elementary;
   std::vector<const Shape*> rest;
   for (const Shape* shape : shapes) {
     (free_form(*shape) ? rest : elementary).push_back(shape);
   }
-  if (elementary.size() > 1 && !rest.empty()) {
+  if (elementary.size() > 1 && !rest.empty() && rest.size() <= kFewFreeForm) {
     const ShapePtr first = united(elementary, within);
     rest.insert(rest.begin(), first.get());
     return united(rest, within);
   }
-  const auto fused = [&](bool simplify, double fuzzy) {
+  // (mitcad#1278) Shapes that meet only within micrometres, a vertex of
+  // one near a face of the other but not on it (detail::near_misses: two
+  // copies of a plate whose side walls lie 1e-4 mm apart, a nut inside a
+  // threaded carriage whose thread's vertices lie micrometres from the
+  // nut's bore), are where OCCT's exact union goes wrong. Before the union
+  // of many, such pairs, and those linked through each other, are united
+  // first, each such union beside the others and finding its own fuzzy
+  // value where its exact one is wrong (below); the union of all is then
+  // made once, with them in their places. Found only in the union of all,
+  // such places took a second union of all (below): a machine's 257
+  // bodies, 105 places in 18 of them, two unions of some 10 s each. Pairs
+  // whose boxes do not meet have no such place.
+  if (start == Start::probe && shapes.size() >= kProbeFrom) {
+    const std::vector<std::pair<std::size_t, std::size_t>> pairs =
+        detail::box_pairs(shapes, std::max(kTolerance, within));
+    const std::vector<char> missed = detail::near_misses(shapes, pairs, detail::kUnusedReach);
+    std::vector<std::pair<std::size_t, std::size_t>> links;
+    for (std::size_t k = 0; k < pairs.size(); ++k) {
+      if (missed[k] != 0) {
+        links.push_back(pairs[k]);
+      }
+    }
+    std::vector<std::vector<std::size_t>> spots;
+    for (std::vector<std::size_t>& group : detail::linked_groups(shapes.size(), links)) {
+      if (group.size() > 1) {
+        spots.push_back(std::move(group));
+      }
+    }
+    if (!spots.empty() && spots.front().size() < shapes.size()) {
+      std::vector<ShapePtr> mended(spots.size());
+      detail::parallel_jobs(spots.size(), [&](std::size_t k) {
+        std::vector<const Shape*> members;
+        for (const std::size_t i : spots[k]) {
+          members.push_back(shapes[i]);
+        }
+        mended[k] = united(members, within, Start::exact);
+      });
+      // The shapes in their order, each spot's union in the place of its
+      // first shape.
+      std::vector<std::size_t> spot_of(shapes.size(), spots.size());
+      for (std::size_t k = 0; k < spots.size(); ++k) {
+        for (const std::size_t i : spots[k]) {
+          spot_of[i] = k;
+        }
+      }
+      std::vector<const Shape*> next;
+      for (std::size_t i = 0; i < shapes.size(); ++i) {
+        const std::size_t k = spot_of[i];
+        if (k == spots.size()) {
+          next.push_back(shapes[i]);
+        } else if (spots[k].front() == i) {
+          next.push_back(mended[k].get());
+        }
+      }
+      return united(next, within, Start::exact);
+    }
+  }
+  // The union, whether OCCT left edges or faces of it unused (a face it
+  // could not rebuild of its pieces, faces it could not make a solid of:
+  // such a union lacks what those built) and the boxes of those, and
+  // whether it has no solid where the shapes have some. `merged` is the
+  // union with its faces merged, `plain` as OCCT's union left them (the
+  // merge works on copies of what it changes, SetSafeInputMode, so the
+  // union it starts from stays as it was). Without `whole`, a union OCCT
+  // left pieces of unused, or an empty one, is not named (it is not used).
+  struct Fused {
+    std::optional<detail::FaceNamer> merged;
+    std::optional<detail::FaceNamer> plain;
+    bool dropped = false;
+    bool empty = false;
+    bool warned = false; // any warning of OCCT's
+    std::vector<Bnd_Box> unused;
+  };
+  const MaterialCheck material(shapes);
+  const auto fused = [&](double fuzzy, bool whole) {
     // On a copy of the shapes, as a boolean operation (boolean.cpp): the
     // face merge writes into the sub-shapes the union kept.
     std::vector<TopoDS_Shape> inputs;
@@ -257,51 +372,183 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within) {
     if (!fuse.IsDone() || fuse.HasErrors()) {
       throw std::runtime_error("the union failed");
     }
-    if (simplify) {
-      fuse.SimplifyResult();
-    }
-    detail::FaceNamer namer(fuse.Shape());
-    for (const Shape* shape : shapes) {
-      namer.carry(fuse, *shape, copy);
-    }
-    namer.finish();
-    return namer;
-  };
-  // As a boolean operation's (boolean.cpp): when merging the faces the
-  // union left breaks its result, the faces stay as it left them.
-  detail::FaceNamer namer = fused(true, 0.0);
-  if (!detail::is_valid(namer.result())) {
-    namer = fused(false, 0.0);
-    // (mitcad#397) Within the caller's tolerance: the smallest fuzzy
-    // value that gives a valid union (faces that lie on each other only
-    // within an importer's geometric tolerance).
-    if (!detail::is_valid(namer.result()) && within > 0.0) {
-      std::vector<double> steps;
-      for (double decade = kFuzzyStart; decade < within; decade *= 10.0) {
-        steps.push_back(decade);
-        if (3.0 * decade < within) {
-          steps.push_back(3.0 * decade);
-        }
+    Fused out;
+    out.warned = fuse.HasWarnings();
+    out.empty = material.empty(fuse.Shape());
+    // Where the unused pieces are: the edges an alert lists beside its
+    // face, else what it lists. Sub-shapes of one shape that the union's
+    // tolerances made meet (an acquired self-intersection) are such a
+    // place too: a threaded carriage and a mount whose stud stands in the
+    // thread's hole, coaxial with it, came out of the exact union as two
+    // solids, OCCT warning only of that.
+    for (const occ::handle<Message_Alert>& alert : fuse.GetReport()->GetAlerts(Message_Warning)) {
+      if (!detail::leaves_pieces_unused(alert)) {
+        continue;
       }
-      steps.push_back(within);
-      for (const double step : steps) {
-        for (const bool simplify : {true, false}) {
-          try {
-            detail::FaceNamer fuzzy = fused(simplify, step);
-            if (detail::is_valid(fuzzy.result())) {
-              return fuzzy.shape();
-            }
-          } catch (const Cancelled&) {
-            throw;
-          } catch (...) {
-            throw_if_cancelled();
+      out.dropped = true;
+      const occ::handle<TopoDS_AlertWithShape> with = occ::down_cast<TopoDS_AlertWithShape>(alert);
+      Bnd_Box box;
+      if (!with.IsNull() && !with->GetShape().IsNull()) {
+        for (TopoDS_Iterator it(with->GetShape()); it.More(); it.Next()) {
+          if (it.Value().ShapeType() != TopAbs_FACE) {
+            BRepBndLib::Add(it.Value(), box);
           }
         }
+        if (box.IsVoid()) {
+          BRepBndLib::Add(with->GetShape(), box);
+        }
+      }
+      out.unused.push_back(box);
+    }
+    if (!whole && (out.dropped || out.empty)) {
+      return out;
+    }
+    const auto named = [&] {
+      detail::FaceNamer namer(fuse.Shape());
+      for (const Shape* shape : shapes) {
+        namer.carry(fuse, *shape, copy);
+      }
+      namer.finish();
+      return namer;
+    };
+    out.plain.emplace(named());
+    fuse.SimplifyResult();
+    out.merged.emplace(named());
+    return out;
+  };
+  // The union to take of a candidate: nothing left unused, a solid where
+  // the shapes have one, and valid; its faces merged, else as OCCT's union
+  // left them where the merge breaks it (as a boolean operation's,
+  // boolean.cpp).
+  const auto sound = [&](const Fused& candidate) -> const detail::FaceNamer* {
+    if (candidate.dropped || candidate.empty || !candidate.merged) {
+      return nullptr;
+    }
+    const detail::FaceNamer* taken = &*candidate.merged;
+    if (!detail::is_valid(taken->result())) {
+      taken = &*candidate.plain;
+      if (!detail::is_valid(taken->result())) {
+        return nullptr;
       }
     }
-    detail::require_valid(namer.result(), "the union");
+    return taken;
+  };
+  const auto lost_in = [&](const Fused& candidate) {
+    return candidate.empty ||
+           (candidate.warned && candidate.plain && material.lost(candidate.plain->result()));
+  };
+  Fused exact = fused(0.0, false);
+  if (const detail::FaceNamer* taken = sound(exact)) {
+    return checked(taken->shape());
   }
-  return namer.shape();
+  const bool wrong = exact.dropped || lost_in(exact);
+  // (mitcad#1273) A union whose pieces OCCT left unused, or that lost
+  // material, is wrong whatever the tolerance: OCCT's exact union of
+  // shapes that meet only within micrometres (two copies of a plate whose
+  // side walls lie 1e-4 mm apart; a nut inside a threaded carriage, its
+  // bore's seam micrometres from the vertices of the thread's faces)
+  // splits their faces with edges left over. Where the unused pieces lie,
+  // the shapes whose boxes reach them are united first, group by group of
+  // meeting boxes, each such union finding its own fuzzy value (below);
+  // the union of all is then made again with those unions in their
+  // places, exactly. So the fuzzy value stays where it is needed, and the
+  // union of all is made twice, not once for every fuzzy value tried; a
+  // union of many whose near misses (above) were the wrong places is made
+  // once.
+  if (wrong && !exact.unused.empty() && shapes.size() > 2) {
+    std::vector<const Shape*> reaching;
+    std::vector<const Shape*> others;
+    for (const Shape* shape : shapes) {
+      Bnd_Box box;
+      BRepBndLib::Add(shape->occt(), box);
+      box.Enlarge(detail::kUnusedReach);
+      bool reaches = false;
+      for (const Bnd_Box& place : exact.unused) {
+        reaches = reaches || (!place.IsVoid() && !box.IsOut(place));
+      }
+      (reaches ? reaching : others).push_back(shape);
+    }
+    if (reaching.size() > 1 && reaching.size() < shapes.size()) {
+      std::vector<const Shape*> next = others;
+      std::vector<std::vector<std::size_t>> spots;
+      for (std::vector<std::size_t>& spot : detail::box_groups(reaching, detail::kUnusedReach)) {
+        if (spot.size() == 1) {
+          next.push_back(reaching[spot.front()]);
+        } else {
+          spots.push_back(std::move(spot));
+        }
+      }
+      // (The spots beside each other, mitcad#1278.)
+      std::vector<ShapePtr> repaired(spots.size());
+      detail::parallel_jobs(spots.size(), [&](std::size_t k) {
+        std::vector<const Shape*> members;
+        for (const std::size_t i : spots[k]) {
+          members.push_back(reaching[i]);
+        }
+        repaired[k] = united(members, within);
+      });
+      for (const ShapePtr& spot : repaired) {
+        next.push_back(spot.get());
+      }
+      if (next.size() < shapes.size()) {
+        return united(next, within, Start::exact);
+      }
+    }
+  }
+  // (mitcad#397) Within the caller's tolerance: the smallest fuzzy value
+  // that gives a sound union (faces that lie on each other only within an
+  // importer's geometric tolerance); a wrong union tries fuzzy values from
+  // kUnusedStart up to kUnusedReach also without one.
+  if (wrong || within > 0.0) {
+    const double lowest = wrong ? detail::kUnusedStart : kFuzzyStart;
+    const double reach = std::max(within, wrong ? detail::kUnusedReach : kFuzzyStart);
+    std::vector<double> steps;
+    for (double decade = lowest; decade < reach; decade *= 10.0) {
+      steps.push_back(decade);
+      if (3.0 * decade < reach) {
+        steps.push_back(3.0 * decade);
+      }
+    }
+    steps.push_back(reach);
+    // An exact union that is only invalid takes, as before, the first
+    // valid one where no fuzzy value gives a sound one.
+    ShapePtr valid;
+    for (const double step : steps) {
+      try {
+        const Fused fuzzy = fused(step, !wrong);
+        if (const detail::FaceNamer* taken = sound(fuzzy)) {
+          return checked(taken->shape());
+        }
+        if (!wrong && !valid && fuzzy.merged) {
+          if (detail::is_valid(fuzzy.merged->result())) {
+            valid = checked(fuzzy.merged->shape());
+          } else if (detail::is_valid(fuzzy.plain->result())) {
+            valid = checked(fuzzy.plain->shape());
+          }
+        }
+      } catch (const Cancelled&) {
+        throw;
+      } catch (...) {
+        throw_if_cancelled();
+      }
+    }
+    if (valid) {
+      return valid;
+    }
+  }
+  // A union OCCT left pieces of unused that no fuzzy value mends stands
+  // as it was when it is valid and holds the shapes' material, as before.
+  if (!exact.plain) {
+    exact = fused(0.0, true);
+  }
+  if (lost_in(exact)) {
+    throw std::runtime_error(exact.empty ? "the union of the shapes gave an empty result"
+                                         : "the union lost material of the shapes it joins");
+  }
+  const detail::FaceNamer& taken =
+      detail::is_valid(exact.merged->result()) ? *exact.merged : *exact.plain;
+  detail::require_valid(taken.result(), "the union");
+  return checked(taken.shape());
 }
 
 } // namespace

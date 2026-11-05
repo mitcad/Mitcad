@@ -394,6 +394,11 @@ public:
   // Logs "Native cards: Browser only (a drawing is open)" and "Native
   // cards: all (the drawing closed)".
   void setDrawingOpen(bool open);
+  // While the Start page shows over the canvas (mitcad#1258): no card over
+  // it, as the Qt layout; left, the cards come back as they were asked to
+  // be. Logs "Native cards: none (the Start page is shown)" and "Native
+  // cards: all (the Start page left)".
+  void setStartPageShown(bool shown);
   // The left column's remembered split (columnSplitChosen); empty: the
   // automatic one. The Configuration card's remembered disclosure.
   void setColumnSplit(const std::vector<std::pair<QString, int>>& split);

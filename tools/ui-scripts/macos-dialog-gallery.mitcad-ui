@@ -3,7 +3,7 @@
 wait-idle
 show-dialog-style-fixture setup
 command tools.libraries
-focus-dialog '^Libraries$'
+focus-dialog '^Library Sources$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 test-dialog-controls sources
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/libraries-${MITCAD_TEST_COLOR_SCHEME}.png'
@@ -23,7 +23,7 @@ screenshot-dialog '${MITCAD_STYLE_SHOTS}/community-${MITCAD_TEST_COLOR_SCHEME}.p
 key Escape
 focus-main
 show-dialog-style-fixture parts
-focus-dialog '^Library Components$'
+focus-dialog '^Components in This Design$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 test-dialog-controls parts
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/parts-${MITCAD_TEST_COLOR_SCHEME}.png'

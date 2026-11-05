@@ -82,9 +82,9 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
     def.tooltip = QObject::tr("A box: corner, length, width and height");
     def.keywords << QStringLiteral("cube") << QStringLiteral("block");
     def.inputs += {
-        valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("30 mm"))
+        valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("30 mm")).withStepMinimum(0.0, true)
             .withManipulator(handle(place, Along::X, 1.0)),
-        valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("20 mm"))
+        valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("20 mm")).withStepMinimum(0.0, true)
             .withManipulator(handle(place, Along::Y, 1.0, 0.5, 0.0)),
         valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("10 mm"))
             .withManipulator(handle(place, Along::Normal, 1.0, 0.5, 0.5)),
@@ -94,7 +94,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
   case Primitive::Cylinder:
     def.tooltip = QObject::tr("A cylinder standing on a face, an axis or a point");
     def.inputs += {
-        valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("20 mm"))
+        valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("20 mm")).withStepMinimum(0.0, true)
             .withManipulator(handle(place, Along::X, 0.5)),
         valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm"))
             .withManipulator(handle(place, Along::Normal, 1.0)),
@@ -104,7 +104,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
   case Primitive::Sphere:
     def.tooltip = QObject::tr("A sphere centered where it is placed");
     def.inputs += {
-        valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("30 mm"))
+        valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("30 mm")).withStepMinimum(0.0, true)
             .withManipulator(handle(place, Along::X, 0.5)),
     };
     break;
@@ -112,9 +112,9 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
     def.tooltip = QObject::tr("A ring about where it is placed");
     def.keywords << QStringLiteral("ring") << QStringLiteral("donut");
     def.inputs += {
-        valueInput(QStringLiteral("diameter"), QObject::tr("Inner Diameter"), ValueKind::Length, QStringLiteral("40 mm"))
+        valueInput(QStringLiteral("diameter"), QObject::tr("Inner Diameter"), ValueKind::Length, QStringLiteral("40 mm")).withStepMinimum(0.0, true)
             .withManipulator(handle(place, Along::X, 0.5)),
-        valueInput(QStringLiteral("section"), QObject::tr("Torus Diameter"), ValueKind::Length, QStringLiteral("10 mm")),
+        valueInput(QStringLiteral("section"), QObject::tr("Torus Diameter"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true),
         choiceInput(QStringLiteral("position"), QObject::tr("Torus Position"),
                     {{QStringLiteral("inside"), QStringLiteral("Inside")},
                      {QStringLiteral("on_center"), QStringLiteral("On Center")},

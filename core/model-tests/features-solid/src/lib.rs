@@ -20,3 +20,5 @@ mod dogbone_tests;
 mod auto_fix_tests;
 // The end pieces of a modelled thread keep their names (mitcad#1231).
 mod thread_end_tests;
+// A fillet on a face joined from pieces on one surface (mitcad#1261).
+mod same_surface_join_tests;

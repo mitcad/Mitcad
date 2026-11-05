@@ -288,21 +288,19 @@ bool hasMeshFaces(const TopoDS_Shape& shape) {
 // faces a clip left as they were keep the meshes they have; mesh bodies
 // (and their caps) are left to the view, as before.
 void meshForView(const std::vector<TopoDS_Shape>& shapes) {
-  BRep_Builder builder;
-  TopoDS_Compound all;
-  builder.MakeCompound(all);
-  bool any = false;
+  // Each body by itself, as the view draws it: its deviation is its own
+  // size's (io::shape_deviation, mitcad#1275), not the whole compound's.
+  std::vector<TopoDS_Shape> pending;
   for (const TopoDS_Shape& shape : shapes) {
     if (!io::has_triangulation(shape) && !hasMeshFaces(shape)) {
-      builder.Add(all, shape);
-      any = true;
+      pending.push_back(shape);
     }
   }
-  if (!any) {
+  if (pending.empty()) {
     return;
   }
   try {
-    io::mesh_in_place(all, viewMeshOptions());
+    io::mesh_all_in_place(pending, viewMeshOptions());
   } catch (const Standard_Failure&) {
     // The view meshes them when it draws them, as before.
   } catch (const std::exception&) {
@@ -830,6 +828,7 @@ MainWindow::~MainWindow() {
 #ifdef MITCAD_MACOS_NATIVE_UI
   m_nativeForm.reset();
   m_nativeIdleForm.reset();
+  m_nativeSketchFooterForm.reset();
   m_nativeWindow.reset();
   bindNativeDialogWindow(this, nullptr);
 #endif
@@ -1468,6 +1467,8 @@ void MainWindow::createRibbon() {
   // with the tab.
   connect(m_ribbon, &Ribbon::tabChanged, this, [this](const QString& tab) {
     qDebug().noquote() << QStringLiteral("Ribbon tab shown: %1").arg(tab);
+    // The Start page over the view with the Start tab (mitcad#1258).
+    updateStartPage(tab);
     updateSelectionCreate(); // none on the Make tab (mitcad#1178)
     updateMakeCard();
     updateMakeMarkers();
@@ -1580,6 +1581,22 @@ void MainWindow::createPanels() {
     m_palette = new sketch::SketchPalette(*m_sketch, *m_registry, sketchConstraintCommands());
     m_palettePage = m_palette;
     m_commandPages->addWidget(m_palette);
+#ifdef MITCAD_MACOS_NATIVE_UI
+    // Match the shared palette: Finish stays below the scrolling inputs.
+    if (QWidget* finish = m_palette->takeFinish()) {
+      auto* footer = new QWidget(m_commandPages);
+      footer->setObjectName(QStringLiteral("nativeSketchFooter"));
+      footer->setProperty("nativeLayoutContract", true);
+      auto* row = new QHBoxLayout(footer);
+      const QMargins inset = m_palette->layout()->contentsMargins();
+      row->setContentsMargins(inset.left(), 4, inset.right(), inset.bottom());
+      row->addStretch(1);
+      row->addWidget(finish);
+      finish->show();
+      footer->show();
+      m_nativeSketchFooter = footer;
+    }
+#endif
     m_commandPages->hide();
     setCentralWidget(m_viewer);
     return;
@@ -1996,6 +2013,14 @@ void MainWindow::trigger(const QString& id) {
   if (def->kind == CommandDef::Kind::Feature || (!def->tab.isEmpty() && !isDrawingCommand(*def))) {
     leaveDrawing();
   }
+  // So does a command of the view from the Start tab (mitcad#1258): a
+  // feature, a tool, a ribbon tab's command; the File commands and the
+  // menus' others (Open, Import, Undo, Preferences) leave it only when a
+  // design opens or something comes in.
+  if (def->kind != CommandDef::Kind::Action ||
+      (!def->tab.isEmpty() && !def->id.startsWith(QLatin1String("file.")))) {
+    leaveStartPage();
+  }
   // Each start of a sketch tool counts for the Sketch Palette's Create
   // section (mitcad#1027), kept in the local settings.
   if (m_mode == Mode::Sketch && sketch::SketchPalette::isCreateTool(*def)) {
@@ -2073,6 +2098,7 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   endAnnotationPick(); // an annotation's pick waited for ends with it
   endImageCalibration(true); // and a calibration of an image reference (mitcad#782)
   m_mode = Mode::Command;
+  m_documentSession->cancelBackgroundEvaluation(QStringLiteral("a command")); // mitcad#1267
   if (!m_commandInSketch && !editUid.isEmpty()) {
     // The sketches the edited feature uses are shown for its time
     // (mitcad#546): before the session starts, as its roll-back refreshes
@@ -5361,6 +5387,7 @@ void MainWindow::startSketch() {
   }
   endAnnotationPick();
   m_mode = Mode::PickPlane;
+  m_documentSession->cancelBackgroundEvaluation(QStringLiteral("Create Sketch")); // mitcad#1267
   setSelection({});
   // The origin planes in every design, whatever the Origin folder's light
   // bulb says, for the pick only (mitcad#844): behind the model's faces, so
@@ -5498,6 +5525,7 @@ void MainWindow::enterSketch(const QString& uid, bool existing, const QString& p
   m_mcpSketchEdited = false;
   endAnnotationPick();
   m_mode = Mode::Sketch;
+  m_documentSession->cancelBackgroundEvaluation(QStringLiteral("a sketch")); // mitcad#1267
   updateModeBanner(); // no plane is waited for (mitcad#474)
   m_selection.clear();
   inputActivated(SelectFilter()); // hides the origin planes
@@ -6209,6 +6237,8 @@ void MainWindow::afterSaved(const QString& path, QByteArrayView content, const Q
   updateWindowTitle();
   addRecentFile(m_filePath);
   qInfo().noquote() << "Saved" << m_filePath;
+  // Its preview for the Start tab and File › Open Recent (mitcad#1258).
+  saveDesignPreview(m_filePath);
   if (status.isEmpty()) {
     showHint(tr("Saved %1").arg(QDir::toNativeSeparators(m_filePath)));
   } else if (problem) {
@@ -6504,6 +6534,9 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   }
   // Its edit lock (mitcad#89): taken, or the same design's kept.
   m_locks->designOpened(path, readOnlyOpen);
+  // A design opened, recovered or made new shows in the 3D view, not
+  // under the Start page (mitcad#1258).
+  leaveStartPage();
   updateActions();
   return true;
 }

@@ -94,6 +94,13 @@ std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& fi
 // Insert Component: linked (true) or a copy (false).
 std::optional<bool> askLinked(QWidget* parent, const QString& file);
 
+// Import or Open of a STEP file with an assembly (mitcad#1274): its parts
+// as components with an occurrence per instance ("components", the
+// default) or one base feature ("base"); nothing when cancelled. Its
+// "Find repeated parts" box (mitcad#1277, off by default) goes to
+// `repeatedParts`.
+std::optional<QString> askStepStructure(QWidget* parent, const QString& file, bool* repeatedParts = nullptr);
+
 // File > Open or Import of an .iam assembly (mitcad#507): Parts with
 // their design history (true, the default) or the parts' stored bodies
 // only (false); the choice is remembered (iamPartsHistory). Nothing when

@@ -1,4 +1,4 @@
-# Fillet corners where a rounding ends: 0130–0540, 1140, 1170, 1210, 1220
+# Fillet corners where a rounding ends: 0130–0540, 1140, 1170, 1210, 1220, 1240
 
 The corners OCCT's rolling ball fillet builds where a rounding ends at a
 vertex (`PerformIntersectionAtEnd`, `PerformOneCorner`), in the rounds of
@@ -45,6 +45,10 @@ mitcad#342. Most cases are rebuilt with OCCT alone in
 - **1220** ends a rounding whose contact stops at a slight crease of its
   face square to the plane at the end: the ball turns on about the crease
   (mitcad#1203).
+- **1240** walks the end of a short edge's rounding on past the spine's
+  extension until both contacts reach the edges of the face at the end,
+  where the extension (half the edge's length) stopped it short
+  (mitcad#1256).
 
 - **1210** rounds over the mouths of slots whose rounded ends touch the
   top face along a crest line, as a construction of its own where the
@@ -567,6 +571,50 @@ comes before the stripe, its pieces reversed. The degenerated side's
 transition is the one that orients the face as the contact's does
 (`ChFi3d_FilDS` orients a blend face's edges from side 1's alone).
 
+## 1240: a short edge's end walked on until both contacts leave
+
+The patch 1240 follows mitcad#1253 (mitcad#1256, GitHub mitcad/Mitcad#130):
+a short slanted edge of an imported STEP part, rounded with a radius larger
+than half its length, whose end vertex lies on an earlier rounding.
+
+### 1240-chfi3d-short-end-walked-on-until-both-contacts-leave
+
+At a vertex of three edges where the face at the end cuts a rounding
+(AllSame, OnDiff), the blend is walked past the vertex over the spine's
+extension until both contacts have left their faces across that face's
+edges, and `PerformOneCorner` cuts it with the face at the end between the
+two points. `ExtentOneCorner` prolongs the spine by half the edge's length
+whatever the radius. On the reported part a thin wall meets an overhanging
+end band along an edge of 0.84 whose top vertex lies on a rounding of 2:
+rounded with 0.75 or 1, the contact on the wall meets the rounding's edge
+0.16 past the vertex, the contact on the band only 0.49 (0.63 at 1), past
+the extension's 0.42. The walk stopped with that contact inside the band,
+`FindFace` found no face holding both points, and
+`PerformIntersectionAtEnd` built a corner face folded back on itself (0.035
+out of the body at 0.75, accepted by the checker) or an invalid shape (at
+1, where the bottom end stopped short of the floor too). After the part's
+floor was rounded, the edge's remaining sliver of 0.25 gave spikes 0.16
+and 0.77 out of the body.
+
+`PerformSetOfSurf` now walks such an end again: where the last piece at an
+AllSame or OnDiff end reaches the end of the extension with a contact still
+inside its face (the other on an edge of the vertex, or both inside,
+`ChFi3d_EndStoppedShort`), the stripe is computed again with that end's
+extension longer by twice the largest radius (the walk still stops where
+both contacts have left). The new walk is kept where both contacts of each
+such end then lie on edges; otherwise the first walk is made again, as
+where a narrow face at the end pokes through the blend and two ends are
+joined over it (0933). Every other rounding is as before.
+
+On the reported part both corners build one blend face, valid, at 0.5,
+0.75, 0.9 and 1, and the sliver at 0.5 to 1, without the warning of
+mitcad#1253. A synthetic body with the same corner (planes and a rounding
+cylinder, its faces converted to B-splines so that the blend is walked)
+builds one blend face at 0.5, 0.75 and 1, removing within 1e-5 mm3 what
+the same rounding removes from the body of planes, where OCCT builds a
+cylinder exactly; before, 0.75 and 1 built a folded corner face 0.32 out of
+the body and an invalid shape.
+
 ## 1210: a rounding over slot mouths that touch the top along a crest
 
 ### 1210-brepfilletapi-rounding-over-slot-mouths-touching-the-top-along-a-crest
@@ -679,3 +727,9 @@ it (39 degrees) 0.19 mm³ more. The rounding of the rim takes about 10 s.
   `geometry/tests/test_fillet_slot_mouths.cpp`: the eight arcs rounded with
   OCCT alone, valid, of the expected volume within 1e-6, the history's
   faces (failing without the patch).
+- 1240: mitcad#1256 and, in `geometry/tests/test_fillet_step_corner.cpp`,
+  the synthetic corner rounded with OCCT alone at 0.5, 0.75 and 1 against
+  the body of planes (failing without the patch) and through MitCad's
+  fillet, also after its floor is rounded; the reported part
+  (`MITCAD_STEP_REPORTED`, skipped without it) at both corners and on the
+  sliver, clean at every radius.

@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Component libraries in the main window (mitcad#64, mitcad#63): Insert
-// from Library (the INSERT group, the File menu), and in Tools > Libraries:
-// Libraries..., Library Components... (versions, sizes, updates, the parts
-// list), Community Library... and Publish to Library....
+// from Library (the INSERT group, the File menu), and Tools > Libraries
+// (mitcad#1250), grouped: Insert from Library... and Community Library...;
+// Components in This Design... (versions, sizes, updates, the parts list)
+// and Publish to Library...; Material, Printer and Process Library... (the
+// print managers on My library, also without a design); Library
+// Sources... (which component libraries to use).
 #include "../MainWindow.hpp"
 
 #include <QJsonArray>
 #include <QMenu>
+#include <QStringList>
 #include <QtLogging>
 
+#include "../browser/BrowserController.hpp"
 #include "../commands/MountCommands.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
@@ -49,18 +54,22 @@ void MainWindow::registerLibraryCommands() {
                      QStringLiteral("bolt"), QStringLiteral("nut"), QStringLiteral("washer"),
                      QStringLiteral("standard part"), QStringLiteral("iso")};
   m_registry->add(insert);
-  CommandDef parts = def("tools.library_parts", tr("Library Components…"), "parts-list",
+  // Named for what it shows, this design's library components (mitcad#1250:
+  // once Library Components…, the id and the old name as a keyword kept).
+  CommandDef parts = def("tools.library_parts", tr("Components in This Design…"), "parts-list",
                          tr("The design's library components: versions, sizes, updates, bill of materials"),
                          [this] { showLibraryParts(); });
-  parts.keywords = {QStringLiteral("update library"), QStringLiteral("bill of materials"), QStringLiteral("bom"),
-                    QStringLiteral("parts"), QStringLiteral("license"), QStringLiteral("licence"),
-                    QStringLiteral("attribution")};
+  parts.keywords = {QStringLiteral("library components"), QStringLiteral("update library"),
+                    QStringLiteral("bill of materials"), QStringLiteral("bom"), QStringLiteral("parts"),
+                    QStringLiteral("license"), QStringLiteral("licence"), QStringLiteral("attribution")};
   m_registry->add(parts);
-  CommandDef libraries = def("tools.libraries", tr("Libraries…"), "library",
+  // Which component libraries and community indexes to use (mitcad#1250:
+  // once Libraries…, the id and the old name as a keyword kept).
+  CommandDef libraries = def("tools.libraries", tr("Library Sources…"), "library",
                              tr("The component libraries and community indexes to use; fetch them"),
                              [this] { manageLibraries(); });
-  libraries.keywords = {QStringLiteral("library"), QStringLiteral("fetch"), QStringLiteral("git"),
-                        QStringLiteral("sources")};
+  libraries.keywords = {QStringLiteral("libraries"), QStringLiteral("library"), QStringLiteral("fetch"),
+                        QStringLiteral("git"), QStringLiteral("sources")};
   m_registry->add(libraries);
   CommandDef community = def("tools.community_library", tr("Community Library…"), "library",
                              tr("Searches and inserts designs others share in git repositories"),
@@ -74,6 +83,34 @@ void MainWindow::registerLibraryCommands() {
   publish.keywords = {QStringLiteral("share"), QStringLiteral("publish"), QStringLiteral("library"),
                       QStringLiteral("community")};
   m_registry->add(publish);
+  // The print managers on My library (mitcad#1250, GitHub #132): also with
+  // no design open, where they work on the libraries alone (mitcad#1135),
+  // and in a sketch; with a design as the Make tab's buttons, the group of
+  // My library in sight and the place New and Import offer first.
+  const auto library = [this, &def](const char* id, const QString& name, const char* icon, const QString& tooltip,
+                                    const QString& kind, const QStringList& keywords) {
+    CommandDef entry = def(id, name, icon, tooltip, [this, kind] {
+      if (m_controller != nullptr) {
+        m_controller->openLibrary(kind);
+      }
+    });
+    entry.keywords = keywords;
+    entry.keywords << QStringLiteral("my library") << QStringLiteral("library");
+    entry.enabled = [this] { return m_controller != nullptr; };
+    m_registry->add(entry);
+  };
+  library("tools.material_library", tr("Material Library…"), "material",
+          tr("Your own materials: create, edit, import and delete them"), QStringLiteral("material"),
+          {QStringLiteral("material"), QStringLiteral("filament"), QStringLiteral("density"),
+           QStringLiteral("physical material")});
+  library("tools.printer_library", tr("Printer Library…"), "print-settings",
+          tr("Your own printers: create, edit, import and delete them"), QStringLiteral("printer"),
+          {QStringLiteral("printer"), QStringLiteral("print"), QStringLiteral("slicer"), QStringLiteral("profile"),
+           QStringLiteral("nozzle")});
+  library("tools.process_library", tr("Process Library…"), "print-process",
+          tr("Your own print processes: create, edit, import and delete them"), QStringLiteral("process"),
+          {QStringLiteral("process"), QStringLiteral("print"), QStringLiteral("slicer"), QStringLiteral("profile"),
+           QStringLiteral("layer height"), QStringLiteral("infill")});
 }
 
 void MainWindow::updateLibrariesAtStart() {
@@ -92,18 +129,38 @@ void MainWindow::updateLibrariesAtStart() {
 void MainWindow::createLibraryMenu(QMenu* tools) {
   QMenu* menu = tools->addMenu(tr("&Libraries"));
   menu->setObjectName(QStringLiteral("librariesMenu"));
+  // Grouped (mitcad#1250): what to place, this design's components and
+  // publishing, the print libraries, then where the libraries come from.
+  // An empty id is a separator. The native macOS menu reads this one
+  // (MainWindow::refreshNativeActions), separators included.
   const std::pair<const char*, QString> entries[] = {
       {"insert.library_component", tr("&Insert from Library…")},
-      {"tools.library_parts", tr("Library Com&ponents…")},
       {"tools.community_library", tr("&Community Library…")},
+      {"", QString()},
+      {"tools.library_parts", tr("Components in This &Design…")},
       {"tools.publish_library", tr("P&ublish to Library…")},
-      {"tools.libraries", tr("&Libraries…")}};
+      {"", QString()},
+      {"tools.material_library", tr("&Material Library…")},
+      {"tools.printer_library", tr("P&rinter Library…")},
+      {"tools.process_library", tr("Pr&ocess Library…")},
+      {"", QString()},
+      {"tools.libraries", tr("Library &Sources…")}};
   for (const auto& [id, text] : entries) {
-    if (QAction* action = m_registry->action(QString::fromLatin1(id))) {
+    if (*id == '\0') {
+      menu->addSeparator();
+    } else if (QAction* action = m_registry->action(QString::fromLatin1(id))) {
       action->setText(text);
       menu->addAction(action);
     }
   }
+  // For the UI tests: the entries as the menu opens, `-` a separator.
+  connect(menu, &QMenu::aboutToShow, this, [menu] {
+    QStringList shown;
+    for (const QAction* entry : menu->actions()) {
+      shown << (entry->isSeparator() ? QStringLiteral("-") : entry->text().remove(QLatin1Char('&')));
+    }
+    qDebug().noquote() << QStringLiteral("Libraries menu: %1").arg(shown.join(QStringLiteral(" | ")));
+  });
 }
 
 void MainWindow::insertFromLibrary(bool community) {

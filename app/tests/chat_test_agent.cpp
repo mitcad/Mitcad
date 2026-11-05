@@ -15,6 +15,9 @@
 //              "slowly" it waits between them for continue.png in the work
 //              folder (the UI script's screenshot)
 //   "save"     document_save to MITCAD_TEST_CHAT_SAVE_PATH
+//   "new design" reads the open design, makes "nipple" with document_new,
+//              builds a 10 mm box in it without a handle and reads both
+//              designs again; chat-new-design.jsonl records it (mitcad#1266)
 //   "undo"     model_command undo (a step from before the message)
 //   "wait"     streams a line, then waits for its turn to be stopped
 //   "account failure" (or the work folder's account-blocked file) an
@@ -392,6 +395,50 @@ int printMode(const QStringList& args) {
                 {QStringLiteral("error"), QStringLiteral("authentication_failed")},
                 {QStringLiteral("message"), QJsonObject{{QStringLiteral("content"), content}}}});
       conversation.end(true, QStringLiteral("error_during_execution"), accountFailure());
+    } else if (text.contains(QStringLiteral("new design"))) {
+      // A design from a design (mitcad#1266): read the open one, make a
+      // new one beside it, build in it without a handle (the call goes to
+      // the design made), and read both again.
+      conversation.answer(QStringLiteral("Reading the open design."));
+      const QString own = conversation.document();
+      const QJsonObject read = conversation.call(QStringLiteral("model_query"), query(own, QStringLiteral("bodies")), &error);
+      const qsizetype ownBodies = read.value(QStringLiteral("result")).toArray().size();
+      QJsonObject named;
+      named.insert(QStringLiteral("name"), QStringLiteral("nipple"));
+      const QJsonObject made = conversation.call(QStringLiteral("document_new"), named, &error);
+      const bool madeOk = !error;
+      const QString design = made.value(QStringLiteral("document")).toString();
+      QJsonObject build = box(QString(), 0, 10, 10, 10);
+      build.remove(QStringLiteral("document"));
+      QJsonObject built;
+      bool buildError = true;
+      for (int attempt = 0; attempt < 100; ++attempt) {
+        built = conversation.call(QStringLiteral("model_command"), build, &buildError);
+        if (!buildError || !built.value(QStringLiteral("busy")).toBool()) {
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      }
+      const QJsonObject newBodies = conversation.call(QStringLiteral("model_query"), query(design, QStringLiteral("bodies")), &error);
+      const QJsonObject ownAfter = conversation.call(QStringLiteral("model_query"), query(own, QStringLiteral("bodies")), &error);
+      const bool ok = madeOk && !design.isEmpty() && design != own &&
+                      made.value(QStringLiteral("previous")).toString() == own && !buildError &&
+                      built.value(QStringLiteral("document")).toString() == design &&
+                      newBodies.value(QStringLiteral("result")).toArray().size() == 1 &&
+                      ownAfter.value(QStringLiteral("result")).toArray().size() == ownBodies;
+      appendLine(QStringLiteral("chat-new-design.jsonl"),
+                 {{QStringLiteral("own"), own},
+                  {QStringLiteral("design"), design},
+                  {QStringLiteral("path"), made.value(QStringLiteral("path"))},
+                  {QStringLiteral("built_in"), built.value(QStringLiteral("document"))},
+                  {QStringLiteral("own_bodies"), static_cast<qint64>(ownBodies)},
+                  {QStringLiteral("own_bodies_after"), static_cast<qint64>(ownAfter.value(QStringLiteral("result")).toArray().size())},
+                  {QStringLiteral("new_bodies"), static_cast<qint64>(newBodies.value(QStringLiteral("result")).toArray().size())},
+                  {QStringLiteral("ok"), ok}});
+      const QString reply = ok ? QStringLiteral("The new design has its first body; the open design is unchanged.")
+                               : QStringLiteral("The new design could not be built.");
+      conversation.answer(reply);
+      conversation.end(!ok, ok ? QStringLiteral("success") : QStringLiteral("error_during_execution"), reply);
     } else if (text.contains(QStringLiteral("several"))) {
       // Three calls in a row (the second fails: no such document), a text,
       // two calls, a text: two group rows (mitcad#983).

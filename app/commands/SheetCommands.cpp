@@ -167,7 +167,7 @@ QVector<InputDef> overrideInputs(bool relief) {
   QVector<InputDef> inputs{
       checkInput(QStringLiteral("custom_radius"), QObject::tr("Own Bend Radius"), false)
           .withTooltip(QObject::tr("Off: the rules' bend radius")),
-      valueInput(QStringLiteral("radius"), QObject::tr("Bend Radius"), ValueKind::Length, QStringLiteral("1 mm"))
+      valueInput(QStringLiteral("radius"), QObject::tr("Bend Radius"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
           .withVisible(custom),
   };
   if (relief) {
@@ -221,7 +221,7 @@ QVector<InputDef> ruleInputs(std::function<bool(const CommandState&)> shown, boo
   QVector<InputDef> inputs{
       valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("1 mm"))
           .withVisible(shown),
-      valueInput(QStringLiteral("bend_radius"), QObject::tr("Bend Radius"), ValueKind::Length, QStringLiteral("1 mm"))
+      valueInput(QStringLiteral("bend_radius"), QObject::tr("Bend Radius"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The default inside radius of bends"))
           .withVisible(shown),
       valueInput(QStringLiteral("k_factor"), QObject::tr("K-Factor"), ValueKind::Unitless, QStringLiteral("0.44"))
@@ -454,9 +454,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("Where the edge ends up: the bend line's middle, the inner or the outer "
                                    "virtual sharp corner")),
       checkInput(QStringLiteral("use_offsets"), QObject::tr("Offsets from the Ends"), false),
-      valueInput(QStringLiteral("start"), QObject::tr("Start Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+      valueInput(QStringLiteral("start"), QObject::tr("Start Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible(offsets),
-      valueInput(QStringLiteral("end"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+      valueInput(QStringLiteral("end"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible(offsets),
   };
   def.inputs += overrideInputs(true);
@@ -725,11 +725,11 @@ CommandDef cornerCommand(const CommandContext& context, bool round) {
           .withAccepts(isCorner),
   };
   if (round) {
-    def.inputs << valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("2 mm"));
+    def.inputs << valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0, true);
   } else {
-    def.inputs << valueInput(QStringLiteral("first"), QObject::tr("Distance 1"), ValueKind::Length, QStringLiteral("2 mm"))
+    def.inputs << valueInput(QStringLiteral("first"), QObject::tr("Distance 1"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0, true)
                       .withTooltip(QObject::tr("Along the contour's edge coming into the corner"))
-               << valueInput(QStringLiteral("second"), QObject::tr("Distance 2"), ValueKind::Length, QStringLiteral("2 mm"))
+               << valueInput(QStringLiteral("second"), QObject::tr("Distance 2"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0, true)
                       .withTooltip(QObject::tr("Along the contour's edge leaving the corner"));
   }
   def.enabled = [&context] { return hasSheets(context); };

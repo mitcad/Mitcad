@@ -250,6 +250,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     component.name = text(c, "name");
     component.linked = c.value(QStringLiteral("link")).isString();
     component.library = c.value(QStringLiteral("library")).isObject();
+    component.envelope = c.value(QStringLiteral("envelope")).toDouble();
     for (const QJsonValue& body : c.value(QStringLiteral("bodies")).toArray()) {
       component.bodies << body.toString();
     }
@@ -619,6 +620,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("mortise_tenon"), QStringLiteral("mortise-tenon")},
       // Convert Mesh (mitcad#462, mitcad#1082).
       {QStringLiteral("mesh_convert"), QStringLiteral("convert-mesh")},
+      // Envelopes (mitcad#1271, mitcad#1276).
+      {QStringLiteral("envelope"), QStringLiteral("envelope")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

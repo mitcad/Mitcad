@@ -281,6 +281,29 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/shell_cavity.cpp
   src/shell_cavity.hpp)
+# The warning for a fillet or chamfer whose made faces reach to the wrong
+# side of the body, a folded or spiked corner (mitcad#1253).
+target_sources(mitcad_geometry PRIVATE
+  src/dressup_check.cpp
+  src/dressup_check.hpp)
+# Outlines of faces seen along a direction: Project of a curved face, its
+# silhouettes and its seams only on the outline (mitcad#1265; HLR's outlines
+# need TKHLR, linked for the drawings).
+target_sources(mitcad_geometry PRIVATE
+  src/face_outline.cpp
+  include/mitcad/geometry/face_outline.hpp)
+
+# Unions of many shapes group by group of meeting boxes, the groups beside
+# each other (mitcad#1273).
+target_sources(mitcad_geometry PRIVATE
+  src/union_groups.cpp
+  src/union_groups.hpp)
+
+# Repeated parts: bodies that are copies of one another moved by a rigid
+# motion (mitcad#1277).
+target_sources(mitcad_geometry PRIVATE
+  src/repeated_parts.cpp
+  include/mitcad/geometry/repeated_parts.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -386,6 +409,9 @@ if(BUILD_TESTING)
   target_sources(test_geometry PRIVATE tests/test_section_clip.cpp)
   # Shells of bodies with parts no thicker than the wall (mitcad#1233).
   target_sources(test_geometry PRIVATE tests/test_shell_thin_parts.cpp)
+  # Outlines of faces seen along a direction: Project of a curved face
+  # (mitcad#1265).
+  target_sources(test_geometry PRIVATE tests/test_face_outline.cpp)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry_analysis)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry mitcad_warnings)
   # The suite in parts, a ctest each (geometry.suite.<part>, label
@@ -451,7 +477,8 @@ if(BUILD_TESTING)
     face_revolve
     dressup_takes_face
     section_clip
-    shell_thin_parts)
+    shell_thin_parts
+    face_outline)
   foreach(part IN LISTS geometry_suite_parts)
     add_test(NAME geometry.suite.${part} COMMAND test_geometry --part ${part})
     set_tests_properties(geometry.suite.${part} PROPERTIES LABELS geometry_suite)
@@ -737,3 +764,48 @@ endif()
 # Data exchange and analysis services, separate libraries on top of OCCT.
 add_subdirectory(io)
 add_subdirectory(analysis)
+
+if(BUILD_TESTING)
+  # Roundings of a short slanted corner edge where a thin wall meets a
+  # rounded end wall (mitcad#1253).
+  add_executable(test_fillet_step_corner tests/test_fillet_step_corner.cpp)
+  target_link_libraries(test_fillet_step_corner PRIVATE mitcad_geometry mitcad_geometry_io mitcad_warnings)
+  add_test(NAME geometry.fillet_step_corner COMMAND test_fillet_step_corner)
+  set_tests_properties(geometry.fillet_step_corner PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # A chamfer of a concave edge wider than the narrow face beside it, cut by
+  # the face beyond, never hanging out past it (mitcad#1260).
+  add_executable(test_chamfer_overflow_concave tests/test_chamfer_overflow_concave.cpp)
+  target_link_libraries(test_chamfer_overflow_concave PRIVATE mitcad_geometry mitcad_geometry_io
+    mitcad_geometry_analysis mitcad_warnings)
+  add_test(NAME geometry.chamfer_overflow_concave COMMAND test_chamfer_overflow_concave)
+  set_tests_properties(geometry.chamfer_overflow_concave PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # Faces on one surface joined after a cut, keeping all their names: a
+  # cut's wall from eight arcs of one circle, going on from a rim
+  # (mitcad#1261).
+  add_executable(test_same_surface_join tests/test_same_surface_join.cpp)
+  target_link_libraries(test_same_surface_join PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.same_surface_join COMMAND test_same_surface_join)
+endif()
+
+if(BUILD_TESTING)
+  # Unions of many bodies group by group, and a union that lost material
+  # tried with a fuzzy value, on the reported design of GitHub #133 read
+  # from MITCAD_MITCAD_REPORTED (its B-rep data zlib-compressed, mitcad#1273).
+  find_package(ZLIB REQUIRED)
+  add_executable(test_join_many_bodies tests/test_join_many_bodies.cpp)
+  target_link_libraries(test_join_many_bodies PRIVATE mitcad_geometry ZLIB::ZLIB mitcad_warnings)
+  add_test(NAME geometry.join_many_bodies COMMAND test_join_many_bodies)
+  set_tests_properties(geometry.join_many_bodies PROPERTIES TIMEOUT 600)
+
+  # Repeated parts: copies of a body moved by rigid motions found as one
+  # part, its mirror image apart (mitcad#1277).
+  add_executable(test_repeated_parts tests/test_repeated_parts.cpp)
+  target_link_libraries(test_repeated_parts PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.repeated_parts COMMAND test_repeated_parts)
+endif()

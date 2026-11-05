@@ -81,6 +81,15 @@ pub struct BaseBody {
     #[serde(default, skip_serializing_if = "is_false")]
     pub mesh: bool,
     pub brep: Brep,
+    /// Its number in the feature, its id `<feature>.b<number>`, kept when
+    /// bodies before it were taken out (Find Repeated Parts, mitcad#1277);
+    /// none: its place in the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u32>,
+    /// The number of its first face, `<feature>:import(<first_face>)`, kept
+    /// likewise; none: the faces of the bodies before it counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_face: Option<u32>,
 }
 
 impl<P> BaseDef<P> {
@@ -124,7 +133,13 @@ impl<P> BaseDef<P> {
                     }
                 })
                 .bool(body.mesh)
-                .u128(body.brep.fingerprint());
+                .u128(body.brep.fingerprint())
+                .option(body.number, |f, number| {
+                    f.u64(u64::from(number));
+                })
+                .option(body.first_face, |f, face| {
+                    f.u64(u64::from(face));
+                });
         }
         let rest = (
             &self.operation,
@@ -135,12 +150,23 @@ impl<P> BaseDef<P> {
         serde_json::to_writer(&mut *fingerprint, &rest).expect("definitions serialize");
     }
 
-    /// The id of new body `i`: the body it replaces, else `<feature>.b<i>`.
-    fn body_uid(&self, feature: crate::ids::FeatureUid, i: u32) -> BodyUid {
-        self.replaces
-            .get(i as usize)
-            .copied()
-            .unwrap_or_else(|| BodyUid::new(feature, i))
+    /// The id of new body `i`: the body it replaces, else
+    /// `<feature>.b<number>` (its number, else `i`).
+    pub(crate) fn body_uid(&self, feature: crate::ids::FeatureUid, i: u32) -> BodyUid {
+        self.replaces.get(i as usize).copied().unwrap_or_else(|| {
+            let number = self.bodies.get(i as usize).and_then(|b| b.number);
+            BodyUid::new(feature, number.unwrap_or(i))
+        })
+    }
+
+    /// The body whose id is `<feature>.b<number>` (mitcad#1277: its number
+    /// is not always its place in the list).
+    pub fn body_numbered(&self, number: u32) -> Option<&BaseBody> {
+        self.bodies
+            .iter()
+            .zip(0u32..)
+            .find(|(body, i)| body.number.unwrap_or(*i) == number)
+            .map(|(body, _)| body)
     }
 }
 
@@ -174,6 +200,25 @@ impl FeatureInfo for BaseDef {
                     "bodies[{i}] is a mesh body, which can only be a new body"
                 ));
             }
+        }
+        // Kept numbers (mitcad#1277): new bodies only, each after the one
+        // before it.
+        let numbered = self
+            .bodies
+            .iter()
+            .any(|b| b.number.is_some() || b.first_face.is_some());
+        if numbered && self.operation != Operation::NewBody {
+            return Err("only new bodies keep their numbers".to_owned());
+        }
+        let mut last: Option<u32> = None;
+        for (i, body) in (0u32..).zip(&self.bodies) {
+            let number = body.number.unwrap_or(i);
+            if last.is_some_and(|last| number <= last) {
+                return Err(format!(
+                    "bodies[{i}]: its number {number} does not follow the one before it"
+                ));
+            }
+            last = Some(number);
         }
         if self.operation == Operation::NewBody && !self.participants.is_empty() {
             return Err("a new body base feature has no participant bodies".to_owned());
@@ -210,6 +255,16 @@ impl<K: Kernel> Evaluate<K> for BaseDef {
         let mut shapes = Vec::with_capacity(self.bodies.len());
         let mut first_face = 0;
         for (i, body) in self.bodies.iter().enumerate() {
+            // A body whose bodies before it were taken out keeps its face
+            // names (mitcad#1277).
+            if let Some(kept) = body.first_face {
+                if kept < first_face {
+                    return Err(format!(
+                        "body {i}: its first face {kept} is a face of a body before it"
+                    ));
+                }
+                first_face = kept;
+            }
             let data = body.brep.data().ok_or_else(|| {
                 format!(
                     "body {i}: its B-rep data {} is missing from the project store ({})",

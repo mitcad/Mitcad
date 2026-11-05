@@ -435,6 +435,10 @@ impl<P> ThreadDef<P> {
 /// and the angle each is turned by.
 type ThreadedBody<S> = (BodyUid, S, Vec<FaceName>, Vec<(bool, bool)>, Vec<f64>);
 
+/// A threaded face with its body, the body's shape before the thread and
+/// the face's cylinder (the fit checks, mitcad#1262).
+type PlacedFace<S> = (BodyUid, S, FaceName, Cylinder);
+
 /// Whether an axis points "up" as a modelled thread's helix takes it
 /// (`geometry/include/mitcad/geometry/thread.hpp`): +Z, across Z +Y, else
 /// +X.
@@ -951,6 +955,10 @@ impl ThreadDef {
         // chamfer's check.
         let mut extreme_diameter: Option<f64> = None;
         let mut internal = None;
+        // Each face with its body's shape and cylinder, for the checks of
+        // the size against the face and the material behind it
+        // (mitcad#1262).
+        let mut placed: Vec<PlacedFace<K::Shape>> = Vec::new();
         for (body, shape, found, moved) in targets(ctx)? {
             let cylinder = ctx
                 .kernel
@@ -1026,6 +1034,7 @@ impl ThreadDef {
                 Some(d) if cylinder.internal => d.max(material),
                 Some(d) => d.min(material),
             });
+            placed.push((body, shape.clone(), found.clone(), cylinder));
             match bodies.iter_mut().find(|(uid, _, _, _, _)| *uid == body) {
                 Some((_, _, faces, all_ends, angles)) => {
                     faces.push(found);
@@ -1101,6 +1110,25 @@ impl ThreadDef {
             }
             _ => None,
         };
+        // The size far from a face's diameter (mitcad#1262): a warning,
+        // the thread made all the same. A tapered thread's faces are cut
+        // to its cone, whatever their diameter.
+        let unit = ctx.env.params.context().default_length_unit;
+        let fit = ThreadFit {
+            name: thread_name(data),
+            internal: is_internal,
+            major,
+            minor,
+            unit,
+        };
+        if !self.tapers() {
+            for (_, _, face, cylinder) in &placed {
+                let allowance = fit_allowance(data.pitch, radial_clearance);
+                if let Some(warning) = fit.diameter_warning(face, cylinder, allowance) {
+                    ctx.warn(warning);
+                }
+            }
+        }
         if !self.modeled && chamfer.is_none() && taper.is_none() {
             return Ok(output);
         }
@@ -1113,6 +1141,7 @@ impl ThreadDef {
                 flank_angle,
             )?;
         }
+        let mut counts = Vec::new();
         for (uid, shape, faces, ends, angles) in bodies {
             // Faces turned otherwise (copies of a pattern, mitcad#733): their
             // own angles, in one operation.
@@ -1157,10 +1186,294 @@ impl ThreadDef {
                 .kernel
                 .modeled_thread(&shape, &spec)
                 .map_err(|e| e.to_string())?;
+            // How many solids the body held and holds (mitcad#1262; none
+            // where the kernel cannot count them).
+            if self.modeled
+                && let (Ok(before), Ok(after)) = (
+                    ctx.kernel.solid_count(&shape),
+                    ctx.kernel.solid_count(&threaded),
+                )
+            {
+                counts.push((uid, before, after));
+            }
             output.push((uid, threaded));
+        }
+        if self.modeled && !self.tapers() {
+            self.warn_cut_through(ctx, &fit, &placed, part, radial_clearance, &counts);
         }
         Ok(output)
     }
+
+    /// Warns where a modelled thread's root reached through the material
+    /// behind a face (mitcad#1262): the wall behind it thinner than the
+    /// thread's cut, so that the thread takes the wall with it (a ring
+    /// threaded down to a root inside its bore vanishes). The result is
+    /// kept. The wall is measured on the body before the thread, along the
+    /// radius at a few places where the thread runs ([`wall_cut_through`]);
+    /// a body the thread left in more solids than it was, or none, is
+    /// named too when no wall told why.
+    fn warn_cut_through<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        fit: &ThreadFit,
+        placed: &[PlacedFace<K::Shape>],
+        part: Option<(f64, f64, bool)>,
+        radial: f64,
+        counts: &[(BodyUid, usize, usize)],
+    ) {
+        let mut cut = Vec::new();
+        for (body, shape, face, cylinder) in placed {
+            // (Nothing to measure on a face of no diameter the kernel told.)
+            let depth = fit.cut_depth(cylinder, radial);
+            if !(cylinder.radius.is_finite() && cylinder.radius > 0.0)
+                || !depth.is_finite()
+                || depth <= 0.0
+            {
+                continue;
+            }
+            if let Some(wall) = wall_cut_through(ctx.kernel, shape, cylinder, part, depth) {
+                ctx.warn(fit.wall_warning(face, cylinder, wall));
+                cut.push(*body);
+            }
+        }
+        for &(body, before, after) in counts {
+            if cut.contains(&body) {
+                continue;
+            }
+            if after == 0 {
+                ctx.warn(format!(
+                    "{}: the thread left nothing of body {body}",
+                    fit.name
+                ));
+            } else if after > before {
+                ctx.warn(format!(
+                    "{}: the thread cut body {body} into {after} pieces",
+                    fit.name
+                ));
+            }
+        }
+    }
+}
+
+/// A thread's name in its warnings: its designation, a custom thread's
+/// (mitcad#893) as `custom 12x3`.
+fn thread_name(data: &ThreadData) -> String {
+    if data.standard == ThreadStandard::Custom {
+        format!("custom {}", data.designation)
+    } else {
+        data.designation.clone()
+    }
+}
+
+/// The half millimetre by which a face's diameter may differ from a
+/// thread's crest diameter beyond the class's tolerance before the thread
+/// warns (mitcad#1262).
+pub const FIT_MARGIN: f64 = 0.5;
+
+/// The classes' tolerance of a thread's crest diameter, in pitches: about
+/// the widest of the common classes' (6g's on an external thread's major
+/// diameter is about 0.14 P, 7H's on an internal thread's minor one up to
+/// about 0.3 P at fine pitches), a quarter of a pitch.
+pub const CLASS_TOLERANCE: f64 = 0.25;
+
+/// How far (mm) a face's diameter may lie from a thread's crest diameter
+/// without a warning (mitcad#1262): the classes' tolerance
+/// ([`CLASS_TOLERANCE`] pitches), [`FIT_MARGIN`], and twice an extra
+/// radial clearance, which moves the crest away from the material.
+pub fn fit_allowance(pitch: f64, radial_clearance: f64) -> f64 {
+    CLASS_TOLERANCE * pitch + FIT_MARGIN + 2.0 * radial_clearance
+}
+
+/// A length as the warnings of a thread show it (mitcad#1262): in the
+/// design's length unit, up to three decimals (four in units larger than
+/// a millimetre), no trailing zeros, with the unit's symbol.
+pub fn length_text(mm: f64, unit: crate::expr::LengthUnit) -> String {
+    let decimals = if unit.millimetres() > 1.0 { 4 } else { 3 };
+    let text = format!("{:.*}", decimals, mm / unit.millimetres());
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    let text = if text == "-0" { "0" } else { text };
+    format!("{text} {}", unit.symbol())
+}
+
+/// A thread's size as its fit warnings name it (mitcad#1262): its name,
+/// the profile's major and minor diameters (given, or the size's), on an
+/// internal or an external face, the lengths in `unit`.
+#[derive(Debug, Clone)]
+pub struct ThreadFit {
+    pub name: String,
+    pub internal: bool,
+    pub major: f64,
+    pub minor: f64,
+    pub unit: crate::expr::LengthUnit,
+}
+
+impl ThreadFit {
+    /// The thread on a face, as its warnings begin: `M80x2 (Ø80 mm) on
+    /// face F45:side(c21) (Ø87.1 mm)`, an internal thread's with its minor
+    /// diameter (`M10x1.5 (Ø10 mm, minor Ø8.376 mm) on face …`).
+    pub fn on_face(&self, face: &FaceName, cylinder: &Cylinder) -> String {
+        let size = if self.internal {
+            format!(
+                "Ø{}, minor Ø{}",
+                length_text(self.major, self.unit),
+                length_text(self.minor, self.unit)
+            )
+        } else {
+            format!("Ø{}", length_text(self.major, self.unit))
+        };
+        format!(
+            "{} ({size}) on face {face} (Ø{})",
+            self.name,
+            length_text(2.0 * cylinder.radius, self.unit)
+        )
+    }
+
+    /// The warning when the face's diameter lies further than `allowance`
+    /// from the thread's crest diameter: an external thread's major one,
+    /// an internal thread's minor one (the bore of a tapped hole).
+    pub fn diameter_warning(
+        &self,
+        face: &FaceName,
+        cylinder: &Cylinder,
+        allowance: f64,
+    ) -> Option<String> {
+        // A face whose diameter the kernel did not measure warns of nothing.
+        if !(cylinder.radius.is_finite() && cylinder.radius > 0.0) {
+            return None;
+        }
+        let diameter = 2.0 * cylinder.radius;
+        let (crest, what, whose) = if self.internal {
+            (self.minor, "hole's", "minor")
+        } else {
+            (self.major, "face's", "major")
+        };
+        let off = diameter - crest;
+        if off.abs() <= allowance {
+            return None;
+        }
+        Some(format!(
+            "{}: the {what} diameter is {} {} than the thread's {whose} diameter",
+            self.on_face(face, cylinder),
+            length_text(off.abs(), self.unit),
+            if off > 0.0 { "larger" } else { "smaller" }
+        ))
+    }
+
+    /// How deep a modelled thread cuts into the material behind a face:
+    /// from the face to the profile's root (an external thread's minor
+    /// diameter, an internal thread's major one, each moved by the radial
+    /// clearance).
+    pub fn cut_depth(&self, cylinder: &Cylinder, radial: f64) -> f64 {
+        if self.internal {
+            self.major / 2.0 + radial - cylinder.radius
+        } else {
+            cylinder.radius - (self.minor / 2.0 - radial)
+        }
+    }
+
+    /// The warning when the thread cut through the `wall` behind a face.
+    pub fn wall_warning(&self, face: &FaceName, cylinder: &Cylinder, wall: f64) -> String {
+        format!(
+            "{}: the thread cut through the {} wall behind the face",
+            self.on_face(face, cylinder),
+            length_text(wall, self.unit)
+        )
+    }
+}
+
+/// How far off its face a probe of the wall behind it starts, in the open
+/// (mm), and how near the face it must enter the material to be on the
+/// face (mitcad#1262).
+const WALL_PROBE: f64 = 0.1;
+const PROBE_ON_FACE: f64 = 0.01;
+
+/// The span along a face's cylinder (from its low end) that a thread's
+/// part covers ([`thread_part`]: the whole face without one); None when
+/// it covers nothing of the face.
+pub(crate) fn thread_span(part: Option<(f64, f64, bool)>, length: f64) -> Option<(f64, f64)> {
+    let (from, to) = match part {
+        None => (0.0, length),
+        Some((l, offset, true)) => (length - offset - l, length - offset),
+        Some((l, offset, false)) => (offset, offset + l),
+    };
+    let (from, to) = (from.max(0.0), to.min(length));
+    (to > from).then_some((from, to))
+}
+
+/// The wall behind a face that a modelled thread `depth` deep cuts through
+/// (mitcad#1262), measured on the body before the thread: along the radius
+/// at the middle, a quarter and three quarters of the thread's part, each
+/// in four directions round the axis, from just off the face in the open
+/// into the material ([`Kernel::segment_crossings`]) to where the material
+/// ends. Where the thread cuts through at every direction that finds the
+/// face at one of those places (a cross hole under the thread thins the
+/// wall at some directions only), the thickest of those walls; None where
+/// it holds, or the kernel cannot tell.
+pub fn wall_cut_through<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    cylinder: &Cylinder,
+    part: Option<(f64, f64, bool)>,
+    depth: f64,
+) -> Option<f64> {
+    let along = mitcad_vec3::unit(cylinder.axis.direction)?;
+    let (reference, across) = thread_reference(along)?;
+    let (from, to) = thread_span(part, cylinder.length)?;
+    let radius = cylinder.radius;
+    // Far enough to find a wall as thin as the cut, or the axis.
+    let reach = depth + 1.0;
+    let (start, end) = if cylinder.internal {
+        (radius - WALL_PROBE, radius + reach)
+    } else {
+        (radius + WALL_PROBE, (radius - reach).max(0.0))
+    };
+    let length = (end - start).abs();
+    let directions = [reference, across, reference.map(|v| -v), across.map(|v| -v)];
+    for fraction in [0.5, 0.25, 0.75] {
+        let at = from + fraction * (to - from);
+        let centre: [f64; 3] = std::array::from_fn(|i| cylinder.axis.origin[i] + at * along[i]);
+        let mut walls = Vec::new();
+        let mut through = true;
+        for direction in directions {
+            let point =
+                |r: f64| -> [f64; 3] { std::array::from_fn(|i| centre[i] + r * direction[i]) };
+            let crossings = kernel
+                .segment_crossings(shape, point(start), point(end))
+                .ok()?;
+            // Into the material at the face, then out where the wall ends.
+            let mut entered = None;
+            let mut wall = None;
+            for (t, entering) in crossings {
+                let s = t * length;
+                match entered {
+                    None if entering && (s - WALL_PROBE).abs() <= PROBE_ON_FACE => {
+                        entered = Some(s);
+                    }
+                    None => break,
+                    Some(e) if !entering => {
+                        wall = Some(s - e);
+                        break;
+                    }
+                    Some(_) => {}
+                }
+            }
+            if entered.is_none() {
+                // The face is not here (a face in pieces, a slot).
+                continue;
+            }
+            match wall {
+                Some(w) if w <= depth + 1e-6 => walls.push(w),
+                _ => {
+                    through = false;
+                    break;
+                }
+            }
+        }
+        if through && let Some(wall) = walls.into_iter().reduce(f64::max) {
+            return Some(wall);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1180,6 +1493,55 @@ mod tests {
     fn close(a: f64, b: f64) -> bool {
         let d = (a - b).rem_euclid(std::f64::consts::TAU);
         d.min(std::f64::consts::TAU - d) < 1e-9
+    }
+
+    /// A thread's fit warnings show lengths in the design's unit
+    /// (mitcad#1262), the face by its name.
+    #[test]
+    fn fit_warnings_show_lengths_in_the_designs_unit() {
+        use crate::expr::LengthUnit;
+        assert_eq!(length_text(87.1, LengthUnit::Millimetre), "87.1 mm");
+        assert_eq!(length_text(80.0, LengthUnit::Millimetre), "80 mm");
+        assert_eq!(length_text(87.1, LengthUnit::Inch), "3.4291 in");
+        let face: FaceName = "F45:side(c21)".parse().unwrap();
+        let ring = Cylinder {
+            radius: 43.55,
+            ..rod([0.0; 3], [0.0, 0.0, 1.0])
+        };
+        let fit = ThreadFit {
+            name: "M80x2".to_owned(),
+            internal: false,
+            major: 80.0,
+            minor: 77.835,
+            unit: LengthUnit::Millimetre,
+        };
+        assert_eq!(
+            fit.diameter_warning(&face, &ring, fit_allowance(2.0, 0.0)),
+            Some(
+                "M80x2 (Ø80 mm) on face F45:side(c21) (Ø87.1 mm): the face's diameter is 7.1 mm \
+                 larger than the thread's major diameter"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            fit.wall_warning(&face, &ring, 3.5),
+            "M80x2 (Ø80 mm) on face F45:side(c21) (Ø87.1 mm): the thread cut through the 3.5 mm \
+             wall behind the face"
+        );
+        // Within the classes' tolerance and the margin: no warning.
+        let fitting = Cylinder {
+            radius: 39.9,
+            ..ring
+        };
+        assert_eq!(
+            fit.diameter_warning(&face, &fitting, fit_allowance(2.0, 0.0)),
+            None
+        );
+        // The parts of a face a thread covers.
+        assert_eq!(thread_span(None, 9.0), Some((0.0, 9.0)));
+        assert_eq!(thread_span(Some((4.0, 1.0, true)), 9.0), Some((4.0, 8.0)));
+        assert_eq!(thread_span(Some((4.0, 1.0, false)), 9.0), Some((1.0, 5.0)));
+        assert_eq!(thread_span(Some((4.0, 10.0, false)), 9.0), None);
     }
 
     /// A modelled thread's copy is turned as the original moved there

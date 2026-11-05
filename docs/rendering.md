@@ -2089,6 +2089,13 @@ manifest's libraries through `arm64-osx-dynamic` and the overlay
 triplet. Cycles' NEON headers use sse2neon (MIT). The CPU denoiser uses
 ISPC's NEON kernels and Apple's Accelerate framework (BNNS).
 
+The builder validates the complete ordered patch stack against a temporary
+pristine checkout of the pinned revision. It applies that verified stack to
+a pristine source or accepts an identical already patched source, including
+file contents, symbolic links and executable modes. Unknown or partial
+tracked edits are refused without replacing them. Independent reverse checks
+cannot validate overlapping patches after the whole stack is applied.
+
 Both dependency builds request arm64 and macOS 14.4, matching the app's
 presets and vcpkg triplet. A narrow patch of Open Image Denoise's
 `cmake/oidn_platform.cmake` keeps it from overriding that deployment
@@ -2098,7 +2105,9 @@ retains its CPU/BNNS implementation. The generated
 `mitcad-cycles.cmake` exports the actual Cycles definitions and host
 options, both libraries' device configurations, source/tool pins and hashes of the builder,
 manifest, triplet and patches. Those inputs form the completion stamp.
-An old CPU-only prefix or changed input is rebuilt in place by the script;
+An old CPU-only prefix or changed build input is rebuilt in place when its
+vendor source still matches the current patch stack; use a fresh prefix
+when the stack itself changes.
 MitCad's configure rejects an outdated export with the rebuild command.
 OIDN's installed files are refreshed before its install-time rpath edits,
 so rebuilding an existing prefix is safe.
@@ -2288,8 +2297,21 @@ On Metal devices below the Apple6 family, the patch also preserves explicit
 inlined shaders can stall pipeline creation and trigger a driver command
 timeout even when a separate GPU comparison passes. The bounded functions
 keep rendering on Metal; Apple6 and later devices retain upstream inlining.
+The lower-family viewport also retains full scene specialization: its
+specialized surface pipeline can replace a rejected generic pipeline, as
+in background rendering. Apple6 and later devices retain the upstream
+intersection-only viewport specialization cap.
 Guest validation includes the rendering tests in parallel and a check that no new
 GPU command timeout or device-detach failure appears in the guest kernel log.
+
+A patch change invalidates the renderer prefix's recorded input hash. Prepare
+the updated dependencies before cutting the next macOS release candidate.
+Build a new prefix through `tools/dev-env/build-cycles-macos.sh <new-prefix>`
+and select it with `-DMITCAD_RENDER_DEPS=<new-prefix>` in a new build directory.
+This preserves any older producer still using the previous prefix and starts
+from the pinned pristine vendor source; an already patched source tree may
+correctly refuse a changed patch. Keep the normal builder's completion stamps
+and source manifests intact.
 
 ### Physical Apple Silicon denoising validation
 

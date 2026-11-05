@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <QAbstractItemView>
+#include <QCheckBox>
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QFont>
@@ -71,7 +72,7 @@ ProfilesDialog::ProfilesDialog(DocumentHost& host, const QString& kind, QWidget*
   // before it, the default as New's (mitcad#1135); its line and Details…
   // before it.
   m_import = new SlicerImportBar(m_hosts.current(), m_log);
-  m_import->target = [this] { return defaultPlace(m_hosts.onDesign()); };
+  m_import->target = [this] { return homePlace(); };
   layout->addWidget(m_import);
   m_panel = new ProfilesPanel(m_hosts.current(), kind, m_log);
   layout->addWidget(m_panel, 1);
@@ -117,32 +118,49 @@ ProfilesDialog::~ProfilesDialog() {
 }
 
 void ProfilesDialog::open(const QString& key) {
+  // Its own command's opening: This design first again (mitcad#1250).
+  m_homePlace.clear();
+  m_panel->setHomePlace(QString());
+  openWith([this, key] { m_panel->showItem(key); });
+}
+
+void ProfilesDialog::openPlace(const QString& place) {
+  m_homePlace = place;
+  m_panel->setHomePlace(place);
+  openWith([this, place] { m_panel->showPlace(place); });
+}
+
+void ProfilesDialog::openWith(const std::function<void()>& show) {
   if (m_hosts.choose()) {
     m_panel->setHost(m_hosts.current(), false);
     m_import->setHost(m_hosts.current());
   }
-  m_import->setPlaces(m_panel->places(), defaultPlace(m_hosts.onDesign()));
+  m_import->setPlaces(m_panel->places(), homePlace());
   if (m_hosts.onDesign()) {
-    m_panel->showItem(key);
+    show();
     return;
   }
   // Without a design (mitcad#1135): the libraries are read off the UI
   // thread (mitcad#1018), the list fills when they came.
   const int reading = ++m_reads;
   readAhead(this, managerRequests(m_kind, m_hosts.library().projectFolder()),
-            [this, reading, key](const QueryAnswers& answers, qint64 readMs) {
+            [this, reading, show](const QueryAnswers& answers, qint64 readMs) {
               if (reading != m_reads || m_hosts.onDesign()) {
                 return;
               }
               m_hosts.library().setAnswers(answers);
               QElapsedTimer timer;
               timer.start();
-              m_panel->showItem(key);
+              show();
               qDebug().noquote() << QStringLiteral("%1 loaded: read %2 ms, list %3 ms")
                                         .arg(m_log)
                                         .arg(readMs)
                                         .arg(timer.elapsed());
             });
+}
+
+QString ProfilesDialog::homePlace() const {
+  return m_panel->places().contains(m_homePlace) ? m_homePlace : defaultPlace(m_hosts.onDesign());
 }
 
 void ProfilesDialog::refresh() {
@@ -151,7 +169,7 @@ void ProfilesDialog::refresh() {
     m_panel->setHost(m_hosts.current(), false);
     m_import->setHost(m_hosts.current());
   }
-  m_import->setPlaces(m_panel->places(), defaultPlace(m_hosts.onDesign()));
+  m_import->setPlaces(m_panel->places(), homePlace());
   ++m_reads; // read now: a reading under way shows nothing older
   m_panel->refresh();
 }
@@ -201,7 +219,14 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& kind, const QS
   // The places' headings keep their fold arrows, in the grouped list's
   // step (mitcad#1214).
   panel::setCompactIndentation(m_list, panel::Indent::GroupedList);
+  // A row's Duplicate, Hide or Delete (mitcad#1270).
+  m_list->setContextMenuPolicy(Qt::CustomContextMenu);
   sideBox->addWidget(m_list, 1);
+  // The hidden built-ins listed, grayed, with Unhide (mitcad#1270).
+  // At its own width: a check box takes clicks on its box and label only,
+  // never on the empty rest of a stretched row.
+  m_showHidden = makeShowHiddenBox();
+  sideBox->addWidget(m_showHidden, 0, Qt::AlignLeft);
   splitter->addWidget(side);
 
   // The editor of the selected one: the header the managers share (its
@@ -243,14 +268,17 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& kind, const QS
   // The selected one as the design's printer or process (mitcad#655).
   m_use = new QPushButton(tr("Use in this design"));
   m_use->setObjectName(QStringLiteral("printManagerUse"));
+  // A base item's Hide in Delete's place beside it (mitcad#1270).
+  m_hide = makeHideButton();
   m_buttons->addWidget(m_new);
   m_buttons->addWidget(m_duplicate);
   m_buttons->addWidget(m_delete);
+  m_buttons->addWidget(m_hide);
   m_buttons->addStretch(1);
   m_buttons->addWidget(m_use);
   layout->addLayout(m_buttons);
   // Enter in a field saves it: no button takes Enter.
-  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_use}) {
+  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_hide, m_use}) {
     mac::auxiliaryButton(button);
   }
 
@@ -258,7 +286,7 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& kind, const QS
     rebuildList();
     int shown = 0;
     for (const LibraryItem& item : std::as_const(m_items)) {
-      shown += matchesSearch(item, wanted) && m_places.contains(item.place) ? 1 : 0;
+      shown += listed(item) && m_places.contains(item.place) ? 1 : 0;
     }
     qDebug().noquote() << QStringLiteral("%1 search: %2, %3 shown").arg(m_log, wanted).arg(shown);
     logRows();
@@ -305,6 +333,37 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& kind, const QS
   connect(m_headerDuplicate, &QPushButton::clicked, this, [this] { duplicate(m_headerDuplicate); });
   connect(m_use, &QPushButton::clicked, this, &ProfilesPanel::useInDesign);
   connect(m_delete, &QPushButton::clicked, this, &ProfilesPanel::remove);
+  // Hidden built-ins and the folded groups (mitcad#1270).
+  connect(m_hide, &QPushButton::clicked, this, &ProfilesPanel::toggleHidden);
+  connect(m_list, &QWidget::customContextMenuRequested, this, &ProfilesPanel::itemMenu);
+  connect(m_showHidden, &QCheckBox::toggled, this, [this](bool on) {
+    qDebug().noquote() << QStringLiteral("%1 show hidden: %2")
+                              .arg(m_log, on ? QStringLiteral("on") : QStringLiteral("off"));
+    // A hidden one selected goes out of sight with the others.
+    const LibraryItem* item = current();
+    if (!on && item != nullptr && item->hidden) {
+      m_currentKey.clear();
+      m_currentPrinter.clear();
+    }
+    rebuildList();
+    showCurrent();
+    logRows();
+  });
+  const auto folded = [this](QTreeWidgetItem* row, bool fold) {
+    if (m_building || row == nullptr || row->parent() != nullptr) {
+      return; // a process's printer is no place
+    }
+    const QString place = row->data(1, kKeyRole).toString();
+    if (fold) {
+      m_folded.insert(place);
+    } else {
+      m_folded.remove(place);
+    }
+    logRows();
+    scheduleLogPlaces();
+  };
+  connect(m_list, &QTreeWidget::itemCollapsed, this, [folded](QTreeWidgetItem* row) { folded(row, true); });
+  connect(m_list, &QTreeWidget::itemExpanded, this, [folded](QTreeWidgetItem* row) { folded(row, false); });
 }
 
 ProfilesPanel::~ProfilesPanel() = default;
@@ -317,6 +376,7 @@ void ProfilesPanel::setHost(PrintItemsHost& host, bool read) {
   m_loggedValues.clear();
   m_loggedEditing.clear();
   m_keys = PrintKeyTable(); // asked of the new model
+  m_startFold = true;       // another opening (mitcad#1270)
   if (read) {
     refresh();
   } else {
@@ -339,6 +399,7 @@ void ProfilesPanel::showItem(const QString& key) {
   m_currentKey = key;
   m_currentPrinter.clear(); // its first row
   m_loggedValues.clear();
+  m_startFold = true; // an opening (mitcad#1270)
   refresh();
   const LibraryItem* item = current();
   if (key.isEmpty()) {
@@ -361,6 +422,57 @@ void ProfilesPanel::showItem(const QString& key) {
     }
     qDebug().noquote() << QStringLiteral("Profile selected: %1 %2 (%3)").arg(shown->kind, shown->name, shown->place);
   }
+  scheduleLogPlaces();
+}
+
+void ProfilesPanel::showPlace(const QString& place) {
+  m_currentKey.clear();
+  m_currentPrinter.clear();
+  m_loggedValues.clear();
+  m_startFold = true; // an opening (mitcad#1270)
+  refresh();
+  // The place's first item in the list's order (mitcad#1250), under its
+  // first printer for processes.
+  const auto headingOf = [this, &place]() -> QTreeWidgetItem* {
+    for (int index = 0; index < m_list->topLevelItemCount(); ++index) {
+      QTreeWidgetItem* row = m_list->topLevelItem(index);
+      if (row->data(1, kKeyRole).toString() == place) {
+        return row;
+      }
+    }
+    return nullptr;
+  };
+  QTreeWidgetItem* heading = headingOf();
+  if (heading == nullptr) {
+    qDebug().noquote() << QStringLiteral("%1 has no group %2").arg(m_log, placeName(place));
+    return;
+  }
+  for (QTreeWidgetItemIterator it(heading); *it != nullptr; ++it) {
+    if (*it != heading && (*it)->parent() == nullptr) {
+      break; // the next place's heading
+    }
+    const QString key = (*it)->data(0, kKeyRole).toString();
+    if (!key.isEmpty()) {
+      m_currentKey = key;
+      m_currentPrinter = (*it)->data(0, kPrinterRole).toString();
+      break;
+    }
+  }
+  if (!m_currentKey.isEmpty()) {
+    rebuildList();
+    showCurrent();
+    heading = headingOf();
+  }
+  if (heading != nullptr) {
+    m_list->scrollToItem(heading, QAbstractItemView::PositionAtTop);
+  }
+  const LibraryItem* item = current();
+  if (item != nullptr) {
+    qDebug().noquote() << QStringLiteral("Profile selected: %1 %2 (%3)").arg(item->kind, item->name, item->place);
+  }
+  qDebug().noquote() << QStringLiteral("%1 on %2: %3")
+                            .arg(m_log, placeName(place),
+                                 item != nullptr ? item->name : QStringLiteral("nothing selected"));
   scheduleLogPlaces();
 }
 
@@ -389,6 +501,15 @@ void ProfilesPanel::refresh() {
     order.removeAll(QStringLiteral("design"));
   }
   m_places = order;
+  // At an opening the built-ins out of the way while the user has their
+  // own (mitcad#1270); later the user's folding stays.
+  if (m_startFold) {
+    m_startFold = false;
+    m_folded.clear();
+    if (hasOwnLibraryItems(m_items)) {
+      m_folded.insert(QStringLiteral("mitcad"));
+    }
+  }
   try {
     m_profiles = m_host->model().queryArray(QStringLiteral("print_profiles"));
     // The design's slicer: whose percentages the fields offer (mitcad#655).
@@ -430,6 +551,9 @@ void ProfilesPanel::rebuildList() {
     row->setData(0, kPrinterRole, printer);
     row->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.item.") + item.key());
     markInDesign(row, usedByDesign(item), tr("Used in this design"));
+    if (item.hidden) {
+      markHiddenRow(row, m_list->palette()); // listed by Show hidden (mitcad#1270)
+    }
     // A process under two printers: its row under the printer it was
     // chosen under, else its first (mitcad#1216).
     if (item.key() == m_currentKey && !selectedUnderPrinter) {
@@ -447,7 +571,7 @@ void ProfilesPanel::rebuildList() {
   for (const QString& place : std::as_const(m_places)) {
     int count = 0;
     for (const LibraryItem& item : std::as_const(m_items)) {
-      count += item.place == place && matchesSearch(item, wanted) ? 1 : 0;
+      count += item.place == place && listed(item) ? 1 : 0;
     }
     auto* heading = new QTreeWidgetItem(m_list, {placeHeading(place, count)});
     heading->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.group.") + place);
@@ -460,7 +584,7 @@ void ProfilesPanel::rebuildList() {
     heading->setFont(0, bold);
     if (!byPrinter) {
       for (const LibraryItem& item : std::as_const(m_items)) {
-        if (item.place == place && matchesSearch(item, wanted)) {
+        if (item.place == place && listed(item)) {
           addRow(heading, item, QString());
         }
       }
@@ -471,7 +595,7 @@ void ProfilesPanel::rebuildList() {
     QStringList printers;
     bool anyPrinter = false;
     for (const LibraryItem& item : std::as_const(m_items)) {
-      if (item.place != place || !matchesSearch(item, wanted)) {
+      if (item.place != place || !listed(item)) {
         continue;
       }
       const QStringList itemPrinters = processPrinters(item);
@@ -501,7 +625,7 @@ void ProfilesPanel::rebuildList() {
                      QStringLiteral("printManager.printer.") + place + QLatin1Char('.') + title);
       group->setForeground(0, themeColor(ColorRole::TextSecondary, m_list->palette()));
       for (const LibraryItem& item : std::as_const(m_items)) {
-        if (item.place != place || !matchesSearch(item, wanted)) {
+        if (item.place != place || !listed(item)) {
           continue;
         }
         const QStringList itemPrinters = processPrinters(item);
@@ -516,15 +640,83 @@ void ProfilesPanel::rebuildList() {
       }
     }
   }
-  // Every group open, the selected item's sub-group too (mitcad#1216).
+  // Every group open, the selected item's sub-group too (mitcad#1216),
+  // but the folded ones (mitcad#1270: Built-in while the user has their
+  // own); a search shows every match, and the selected item's group stays
+  // open.
   m_list->expandAll();
+  if (wanted.trimmed().isEmpty()) {
+    for (int index = 0; index < m_list->topLevelItemCount(); ++index) {
+      QTreeWidgetItem* heading = m_list->topLevelItem(index);
+      const QString place = heading->data(1, kKeyRole).toString();
+      QTreeWidgetItem* top = selected;
+      while (top != nullptr && top->parent() != nullptr) {
+        top = top->parent();
+      }
+      if (top == heading) {
+        m_folded.remove(place);
+      } else if (m_folded.contains(place)) {
+        heading->setExpanded(false);
+      }
+    }
+  }
   if (selected != nullptr) {
     m_list->setCurrentItem(selected);
   } else {
     m_list->setCurrentItem(nullptr);
   }
+  // Show hidden while one is hidden, or while it is on.
+  const bool anyHidden = std::any_of(m_items.cbegin(), m_items.cend(), [](const LibraryItem& item) {
+    return item.hidden;
+  });
+  m_showHidden->setVisible(anyHidden || m_showHidden->isChecked());
   m_building = false;
   scheduleLogPlaces();
+}
+
+bool ProfilesPanel::listed(const LibraryItem& item) const {
+  return matchesSearch(item, m_search->text()) && (!item.hidden || m_showHidden->isChecked());
+}
+
+void ProfilesPanel::toggleHidden() {
+  const LibraryItem* item = current();
+  if (item == nullptr || !canHide(*item)) {
+    return;
+  }
+  const LibraryItem target = *item;
+  // A user setting, no undo step (mitcad#1270).
+  setItemHidden(target, !target.hidden, m_log);
+  if (!target.hidden && !m_showHidden->isChecked()) {
+    // Out of the list: nothing selected.
+    m_currentKey.clear();
+    m_currentPrinter.clear();
+  }
+  m_loggedValues.clear();
+  refresh();
+  // The pickers of an open command panel without it, or with it again.
+  m_host->commandInputsChanged();
+  emit changed();
+}
+
+void ProfilesPanel::itemMenu(const QPoint& at) {
+  QTreeWidgetItem* row = m_list->itemAt(at);
+  if (row == nullptr || row->data(0, kKeyRole).toString().isEmpty()) {
+    return; // a heading
+  }
+  m_list->setCurrentItem(row);
+  const LibraryItem* item = current();
+  if (item == nullptr) {
+    return;
+  }
+  const LibraryItem target = *item;
+  const ItemMenuChoice choice = itemContextMenu(this, target, m_list->viewport()->mapToGlobal(at));
+  if (choice == ItemMenuChoice::Duplicate) {
+    duplicate(m_duplicate);
+  } else if (choice == ItemMenuChoice::Hide) {
+    toggleHidden();
+  } else if (choice == ItemMenuChoice::Delete) {
+    remove();
+  }
 }
 
 void ProfilesPanel::showCurrent() {
@@ -534,6 +726,8 @@ void ProfilesPanel::showCurrent() {
   // of which it uses (mitcad#1135).
   m_use->setVisible(item != nullptr && hasDesign() && !usedByDesign(*item) && !item->copyUsed);
   m_delete->setEnabled(item != nullptr && !item->readOnly);
+  // A base item's Hide or Unhide (mitcad#1270); the user's own keep Delete.
+  showHideButton(m_hide, item);
   // Nothing selected (Slicer default): a quiet line, never a blank side
   // or an empty disabled form (mitcad#655).
   m_emptyState->setVisible(item == nullptr);
@@ -679,7 +873,10 @@ void ProfilesPanel::edit(const QJsonObject& change, const QString& what, const Q
 }
 
 QString ProfilesPanel::askWhere(QPushButton* anchor, const QString& what) {
-  return choosePlaceAmong(anchor, QStringLiteral("%1 %2").arg(m_log, what), places(), defaultPlace(hasDesign()));
+  // The home place first while it is one (mitcad#1250), else the default.
+  const QStringList where = places();
+  const QString first = where.contains(m_homePlace) ? m_homePlace : defaultPlace(hasDesign());
+  return choosePlaceAmong(anchor, QStringLiteral("%1 %2").arg(m_log, what), where, first);
 }
 
 void ProfilesPanel::selectMade(const QString& place, const QString& id) {
@@ -843,8 +1040,26 @@ void ProfilesPanel::logRows() {
   }
   QStringList rows;
   for (const LibraryItem& item : std::as_const(m_items)) {
-    rows << QStringLiteral("%1/%2 %3 (%4)%5")
-                .arg(item.kind, item.id, item.name, item.place, item.chosen ? QStringLiteral(", the design's") : QString());
+    rows << QStringLiteral("%1/%2 %3 (%4)%5%6")
+                .arg(item.kind, item.id, item.name, item.place,
+                     item.chosen ? QStringLiteral(", the design's") : QString(),
+                     item.hidden ? QStringLiteral(", hidden") : QString());
+  }
+  // The hidden ones the list shows, grayed, and the folded groups
+  // (mitcad#1270).
+  QStringList grayed;
+  for (QTreeWidgetItemIterator it(m_list); *it != nullptr; ++it) {
+    const LibraryItem* item = findItem(m_items, (*it)->data(0, kKeyRole).toString());
+    if (item != nullptr && item->hidden && !grayed.contains(item->name)) {
+      grayed << item->name;
+    }
+  }
+  QStringList foldedGroups;
+  for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+    QTreeWidgetItem* heading = m_list->topLevelItem(i);
+    if (heading->childCount() > 0 && !heading->isExpanded()) {
+      foldedGroups << placeName(heading->data(1, kKeyRole).toString());
+    }
   }
   // The groups as the list shows them (mitcad#1135), "This design 1 | ...".
   QStringList groups;
@@ -876,13 +1091,19 @@ void ProfilesPanel::logRows() {
     }
   }
   const QString logged = rows.join(QLatin1Char('\n')) + QLatin1Char('|') + groups.join(QLatin1Char('|')) +
-                         QLatin1Char('|') + printerGroups.join(QLatin1Char('\n'));
+                         QLatin1Char('|') + printerGroups.join(QLatin1Char('\n')) + QLatin1Char('|') +
+                         grayed.join(QLatin1Char('\n')) + QLatin1Char('|') + foldedGroups.join(QLatin1Char('|'));
   if (logged == m_loggedRows) {
     return;
   }
   m_loggedRows = logged;
   qDebug().noquote() << QStringLiteral("%1: %2 items").arg(m_log).arg(rows.size());
   qDebug().noquote() << QStringLiteral("%1 groups: %2").arg(m_log, groups.join(QStringLiteral(" | ")));
+  qDebug().noquote() << QStringLiteral("%1 folded: %2")
+                            .arg(m_log, foldedGroups.isEmpty() ? QStringLiteral("none")
+                                                               : foldedGroups.join(QStringLiteral(" | ")));
+  qDebug().noquote() << QStringLiteral("%1 grayed: %2")
+                            .arg(m_log, grayed.isEmpty() ? QStringLiteral("none") : grayed.join(QStringLiteral(", ")));
   for (const QString& row : std::as_const(rows)) {
     qDebug().noquote() << QStringLiteral("%1 row: %2").arg(m_log).arg(row);
   }
@@ -969,6 +1190,8 @@ void ProfilesPanel::logPlaces() {
                                                {QStringLiteral("new"), m_new},
                                                {QStringLiteral("duplicate"), m_duplicate},
                                                {QStringLiteral("delete"), m_delete},
+                                               {QStringLiteral("hide"), m_hide},
+                                               {QStringLiteral("show_hidden"), m_showHidden},
                                                {QStringLiteral("use"), m_use}};
   // The window's buttons (Close).
   for (const auto& [name, button] : std::as_const(m_windowButtons)) {

@@ -96,6 +96,9 @@ use mcp::{
 };
 // Live MCP's compact command results and command arrays (mitcad#689).
 use mcp::{mcp_command_document, mcp_entry_failed, mcp_recomputed, mcp_snapshot_queries};
+// The rolled-back features evaluated in the background (mitcad#1267).
+mod background;
+use background::BackgroundRun;
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -685,6 +688,37 @@ mod ffi {
         /// A control of the stream (Codex: start, message, interrupt): its
         /// panel events, a JSON array, or an object with "error".
         fn control(self: &mut ChatStream, request: &str) -> String;
+    }
+
+    // The rolled-back features evaluated in the background (mitcad#1267,
+    // background.rs; app/framework/DocumentSession.cpp): a fork of the
+    // document with its marker at the end, run on a thread of its own
+    // while the window is idle, and adopted by the document.
+
+    extern "Rust" {
+        type BackgroundRun;
+        /// A run of the features after the marker on a fork of the
+        /// document, reporting to `control` (cancelled through it); empty
+        /// (is_empty) when there is nothing after the marker to evaluate.
+        /// Made on the thread that owns the idle document.
+        fn background_run(self: &Document, control: &JobControl) -> Box<BackgroundRun>;
+        /// Takes what the run evaluated (also before a cancel) into the
+        /// document's cache, when the document's definition is still the
+        /// one the run was made from, the nearest the marker first and
+        /// within the memory budget; returns how many results were taken.
+        /// The run must have ended.
+        fn adopt_background_run(self: &mut Document, run: Box<BackgroundRun>) -> usize;
+        fn is_empty(self: &BackgroundRun) -> bool;
+        /// The features after the marker it evaluates.
+        fn rolled_back(self: &BackgroundRun) -> usize;
+        /// Runs it to the end of the timeline on the calling thread (the
+        /// background one); false when cancelled. Failed features are not
+        /// reported.
+        fn run(self: &mut BackgroundRun) -> bool;
+        /// The features it evaluated, also those of a cancelled run.
+        fn evaluated(self: &BackgroundRun) -> usize;
+        /// The revision of the document's state it was made from.
+        fn base_revision(self: &BackgroundRun) -> u64;
     }
 }
 

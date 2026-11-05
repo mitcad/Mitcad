@@ -93,7 +93,10 @@ expect-native-window-fits '^Appearances$'
 # A committed multiword name stays whole on the Name field's single line,
 # not wrapped onto an unseen second line that hid its last word, here and
 # in the lower screen frame in both appearances (mitcad#982).
+native-type appearanceSearch 'Paint - Red'
+expect-log '^Appearances filtered "Paint - Red" .*: [1-9][0-9]* shown$'
 native-pointer-click appearance.paint_red
+native-type appearanceSearch ''
 native-pointer-click appearanceNew
 expect-log '^Created appearance .* \(Paint - Red Copy\) from paint_red$'
 native-type appearanceName 'Key test appearance'

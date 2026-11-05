@@ -45,5 +45,7 @@ if(BUILD_TESTING)
   add_executable(test_geometry_io tests/test_io.cpp)
   target_link_libraries(test_geometry_io PRIVATE mitcad_geometry_io TKTopAlgo TKPrim TKBO TKFillet
                                                  mitcad_warnings)
+  # The test writes STEP assemblies through OCCT's documents (mitcad#1274).
+  target_link_libraries(test_geometry_io PRIVATE TKXSBase TKDE TKDESTEP TKLCAF TKCAF TKXCAF)
   add_test(NAME geometry.io COMMAND test_geometry_io "${CMAKE_CURRENT_BINARY_DIR}/test-files")
 endif()

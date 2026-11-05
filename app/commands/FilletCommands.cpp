@@ -316,6 +316,7 @@ CommandDef filletCommand(const CommandContext& context) {
                              QStringLiteral("constant")),
                  valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length,
                             QStringLiteral("2 mm"))
+                     .withStepMinimum(0.0, true) // a radius above 0 (mitcad#1254)
                      .withTooltip(QObject::tr("The radius, or the first size of the other radius types"))
                      // A new fillet starts with the radius of the last one (mitcad#1028).
                      .withRemembered()
@@ -340,7 +341,7 @@ CommandDef filletCommand(const CommandContext& context) {
                        return std::nullopt;
                      }),
                  valueInput(QStringLiteral("end"), QObject::tr("End Radius"), ValueKind::Length,
-                            QStringLiteral("4 mm"))
+                            QStringLiteral("4 mm")).withStepMinimum(0.0, true)
                      .withTooltip(QObject::tr("The radius at the end; a spline's last control radius"))
                      .withVisible([](const CommandState& row) {
                        const QString size = row.choice(QStringLiteral("size"));
@@ -350,7 +351,7 @@ CommandDef filletCommand(const CommandContext& context) {
                      .withTooltip(QObject::tr("The spline's knots from 0 to 1; empty: evenly spaced"))
                      .withVisible(sizeIs(QStringLiteral("spline"))),
                  valueInput(QStringLiteral("distance2"), QObject::tr("Distance 2"), ValueKind::Length,
-                            QStringLiteral("4 mm"))
+                            QStringLiteral("4 mm")).withStepMinimum(0.0, true)
                      .withTooltip(QObject::tr("The distance from the edge on the other face"))
                      .withVisible(sizeIs(QStringLiteral("asymmetric"))),
                  selectionInput(QStringLiteral("start_vertex"), QObject::tr("Start Vertex"),
@@ -388,7 +389,7 @@ CommandDef filletCommand(const CommandContext& context) {
                             QStringLiteral("0.5"))
                      .withTooltip(QObject::tr("Where along the chain, 0 at the start to 1 at the end")),
                  valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length,
-                            QStringLiteral("3 mm"))},
+                            QStringLiteral("3 mm")).withStepMinimum(0.0, true)},
                 QObject::tr("Add Mid Radius"), QObject::tr("Mid %1"), 0)
           .withVisible(anyVariable),
       // The control radii of spline sets between the first and the last
@@ -397,7 +398,7 @@ CommandDef filletCommand(const CommandContext& context) {
                 {valueInput(QStringLiteral("set"), QObject::tr("Set"), ValueKind::Unitless, QStringLiteral("1"))
                      .withTooltip(QObject::tr("The spline set (1, 2, …) the control radius is of")),
                  valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length,
-                            QStringLiteral("3 mm"))},
+                            QStringLiteral("3 mm")).withStepMinimum(0.0, true)},
                 QObject::tr("Add Control Radius"), QObject::tr("Control %1"), 0)
           .withVisible(anySpline),
       checkInput(QStringLiteral("tangent_chain"), QObject::tr("Tangent Chain"), true)
@@ -676,7 +677,7 @@ CommandDef chamferCommand(const CommandContext& context) {
                  // Each distance has an arrow in the view (mitcad#534); the
                  // angle is typed only.
                  valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length,
-                            QStringLiteral("1 mm"))
+                            QStringLiteral("1 mm")).withStepMinimum(0.0, true)
                      .withTooltip(QObject::tr("From the edge on each face, or on the reference face; "
                                               "its arrow drags it"))
                      // A new chamfer starts with the sizes of the last one (mitcad#1028).
@@ -685,7 +686,7 @@ CommandDef chamferCommand(const CommandContext& context) {
                        return chamferHandle(row, model, false);
                      }),
                  valueInput(QStringLiteral("distance2"), QObject::tr("Distance 2"), ValueKind::Length,
-                            QStringLiteral("1 mm"))
+                            QStringLiteral("1 mm")).withStepMinimum(0.0, true)
                      .withTooltip(QObject::tr("From the edge on the other face; its arrow along that "
                                               "face drags it"))
                      .withRemembered()
@@ -694,7 +695,7 @@ CommandDef chamferCommand(const CommandContext& context) {
                        return chamferHandle(row, model, true);
                      }),
                  valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle,
-                            QStringLiteral("45 deg"))
+                            QStringLiteral("45 deg")).withStepMinimum(0.0, true)
                      .withTooltip(QObject::tr("The bevel's angle from the reference face"))
                      .withRemembered()
                      .withVisible(typeIs("distance_angle")),

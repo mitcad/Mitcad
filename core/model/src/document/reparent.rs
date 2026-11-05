@@ -7,7 +7,8 @@
 //! stays where it is in the design at the timeline marker. Occurrence
 //! paths that lead through it follow it in the same undo step: links of
 //! sketch planes, projections and modelling features to other components,
-//! cut scopes, joints and assembly constraints, section analyses,
+//! cut scopes, Envelopes' sources (mitcad#1276), joints and assembly
+//! constraints, section analyses,
 //! Isolate, the model's annotations and the drawings' views, dimensions
 //! and balloons (mitcad#743).
 //!
@@ -235,6 +236,37 @@ impl Rewrite<'_> {
         Ok(true)
     }
 
+    /// A path relative to its feature's component that only reads what it
+    /// leads to (an Envelope's source, mitcad#1276): it follows the
+    /// occurrence while the occurrence stays in that component.
+    fn relative(&self, path: &mut Vec<OccurrenceUid>) -> Result<bool, String> {
+        let Some(k) = path.iter().position(|o| *o == self.occurrence) else {
+            return Ok(false);
+        };
+        let n = self.old.len();
+        if k >= n || path[..k] != self.old[n - 1 - k..n - 1] {
+            // Not a path to it: recompute reports such a path.
+            return Ok(false);
+        }
+        // The feature's component is placed at old[..j].
+        let j = n - 1 - k;
+        let parents = &self.new[..self.new.len() - 1];
+        if parents.len() < j || parents[..j] != self.old[..j] {
+            return Err(format!(
+                "{} would no longer be in the component it reads it in",
+                self.name()
+            ));
+        }
+        if let Some(why) = &self.varying {
+            return Err(why.clone());
+        }
+        let mut moved = parents[j..].to_vec();
+        moved.push(self.occurrence);
+        moved.extend_from_slice(&path[k + 1..]);
+        *path = moved;
+        Ok(true)
+    }
+
     /// A cut scope's paths (from the root).
     fn scope(&self, scope: &mut CutScope) -> Result<bool, String> {
         if !scope.paths().iter().any(|p| self.through(&p.0)) {
@@ -351,6 +383,10 @@ impl Rewrite<'_> {
                         changed |= self.unit(&mut origin.occurrence.0)?;
                     }
                 }
+            }
+            // An Envelope's source (mitcad#1276).
+            FeatureDef::Envelope(e) => {
+                changed |= self.relative(&mut e.occurrence.0)?;
             }
             FeatureDef::RigidGroup(g) if g.occurrences.contains(&o) => {
                 return Err(format!(

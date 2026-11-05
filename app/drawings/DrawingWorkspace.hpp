@@ -60,6 +60,7 @@
 // labels: on" and "Exported <path>: cut sheet <name>, <n> parts".
 
 #include <functional>
+#include <optional>
 
 #include <QHash>
 #include <QJsonArray>
@@ -196,8 +197,41 @@ private:
   void fillTablePanel(int annotation, const QJsonObject& json);
   void picked(ToolPicks picks);
   // An annotation tool's click: the model says what it picks; enough
-  // picks lead to its placing click, or make it.
+  // picks lead to its placing click, or make it. The Dimension tool's
+  // same pick again is no pick (mitcad#1272: it made 0 mm). Its Auto
+  // (kAutoPicks) places one circle, arc or straight edge at once and a
+  // corner after a second pick.
   void pickRequested(int view, QPointF at);
+  // What a click picks: the `drawing_pick` query's answer on a view, for
+  // the active tool (addWanted); none, with why in the status bar, when
+  // the query failed.
+  std::optional<QJsonObject> askPick(int view, QPointF at);
+  // A `drawing_pick` query's `type` (or `want`) for the active tool: its
+  // annotation type's; anything for a dimension whose picks choose its
+  // type; a point to snap to for a line or an arc (mitcad#1272).
+  void addWanted(QJsonObject& query, const QHash<QString, QString>& options) const;
+  // A pick the model found (its `drawing_pick` answer) added to the
+  // tool's picks on `view`, marked and logged ("Drawing picked line (2):
+  // …").
+  void addPick(const QJsonObject& answer, int view, QPointF at);
+  // The picks are there: the sheet waits for the click that places what
+  // they make, its preview following the pointer.
+  void placePicks();
+  // Whether the placing click may still pick (mitcad#1272): one pick of
+  // the Dimension tool's Auto.
+  bool picksWhilePlacing() const;
+  // A placing click on another edge, circle or corner while one pick of
+  // the Dimension tool's Auto is placed (without Alt): picked as its
+  // second, the placing click awaited again; false when it places.
+  bool secondPick(QPointF at);
+  // Where a line's or an arc's click on a view snaps (mitcad#1272): the
+  // nearest end, straight edge's middle or centre the model finds there
+  // (`"want": "snap"`), logged "Drawing point snapped to …"; none.
+  std::optional<QPointF> snapPoint(int view, const QPointF& at);
+  // The preview of what a placing click makes, from its `drawing_snap`
+  // answer (mitcad#1272: `type`, `along`, a linear dimension's `ends` and
+  // `direction`): "dimension <along>" lines or "leader <type>".
+  void previewMade(const QJsonObject& answer);
   // Drops an annotation tool's picks so far; false when there were none.
   bool clearToolPicks();
   // What an annotation tool asks before it is made: a note's text (#702's

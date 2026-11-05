@@ -529,6 +529,8 @@ fn cut_scope_linked_target_is_disabled_and_never_modified() {
             path: "synthetic-part.mitcad".to_owned(),
             digest: String::new(),
             feature: f.bodies[0].feature,
+            envelope: None,
+            frames: Vec::new(),
         });
     let mut doc = Document::from_state(MockKernel::default(), state);
     doc.recompute();

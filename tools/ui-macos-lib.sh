@@ -175,6 +175,9 @@ ui_init() {
   # Panels start from their defaults, not remembered values (mitcad#1028),
   # as in ui-test-lib.sh.
   export MITCAD_REMEMBER_PANEL_VALUES=0
+  # An empty design at the start, not the Start tab (mitcad#1258), as in
+  # ui-test-lib.sh.
+  export MITCAD_START_PAGE=0
   # Git's configuration of our own (empty), as in ui-test-lib.sh.
   : > "$UI_ROOT/gitconfig"
   export GIT_CONFIG_GLOBAL=$UI_ROOT/gitconfig

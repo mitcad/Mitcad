@@ -339,24 +339,24 @@ CommandDef pulleyCommand(const CommandContext& context) {
           .withVisible(toothed),
       valueInput(QStringLiteral("teeth"), QObject::tr("Teeth"), ValueKind::Unitless, QStringLiteral("20"))
           .withVisible(toothed),
-      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("20 mm"))
+      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("20 mm")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return !toothed(s); }),
-      valueInput(QStringLiteral("belt_width"), QObject::tr("Belt Width"), ValueKind::Length, QStringLiteral("6 mm"))
+      valueInput(QStringLiteral("belt_width"), QObject::tr("Belt Width"), ValueKind::Length, QStringLiteral("6 mm")).withStepMinimum(0.0, true)
           .withExactDefault(),
-      valueInput(QStringLiteral("clearance"), QObject::tr("Belt Clearance"), ValueKind::Length, QStringLiteral("1 mm")),
+      valueInput(QStringLiteral("clearance"), QObject::tr("Belt Clearance"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0),
       valueInput(QStringLiteral("pitch_correction"), QObject::tr("Pitch Correction"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(toothed),
       choiceInput(QStringLiteral("flanges"), QObject::tr("Flanges"), kFlangeSides, QStringLiteral("both"))
           .withHeading(QObject::tr("Flanges")),
       // Left empty, worked out by the model (mitcad#656): Auto with its value.
-      valueInput(QStringLiteral("flange_diameter"), QObject::tr("Flange Diameter"), ValueKind::Length, QString())
+      valueInput(QStringLiteral("flange_diameter"), QObject::tr("Flange Diameter"), ValueKind::Length, QString()).withStepMinimum(0.0, true)
           .withAuto(workedOut(QStringLiteral("flange_diameter")))
           .withVisible(flangesShown),
-      valueInput(QStringLiteral("flange_thickness"), QObject::tr("Flange Thickness"), ValueKind::Length, QStringLiteral("1 mm"))
+      valueInput(QStringLiteral("flange_thickness"), QObject::tr("Flange Thickness"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
           .withVisible(flangesShown),
       choiceInput(QStringLiteral("bore"), QObject::tr("Bore"), kBores, QStringLiteral("plain"))
           .withHeading(QObject::tr("Bore and Hub")),
-      valueInput(QStringLiteral("bore_diameter"), QObject::tr("Bore Diameter"), ValueKind::Length, QStringLiteral("5 mm"))
+      valueInput(QStringLiteral("bore_diameter"), QObject::tr("Bore Diameter"), ValueKind::Length, QStringLiteral("5 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(ownPlainBore),
       textInput(QStringLiteral("thread"), QObject::tr("Thread Size"), QStringLiteral("M5x0.8"))
@@ -364,10 +364,10 @@ CommandDef pulleyCommand(const CommandContext& context) {
       checkInput(QStringLiteral("keyway"), QObject::tr("Keyway"), false)
           .withVisible([](const CommandState& s) { return plainBore(s) || shaftBore(s); }),
       checkInput(QStringLiteral("hub"), QObject::tr("Hub"), true).withVisible(takesHub),
-      valueInput(QStringLiteral("hub_diameter"), QObject::tr("Hub Diameter"), ValueKind::Length, QString())
+      valueInput(QStringLiteral("hub_diameter"), QObject::tr("Hub Diameter"), ValueKind::Length, QString()).withStepMinimum(0.0, true)
           .withAuto(workedOut(QStringLiteral("hub_diameter")))
           .withVisible(hubShown),
-      valueInput(QStringLiteral("hub_length"), QObject::tr("Hub Length"), ValueKind::Length, QStringLiteral("7 mm"))
+      valueInput(QStringLiteral("hub_length"), QObject::tr("Hub Length"), ValueKind::Length, QStringLiteral("7 mm")).withStepMinimum(0.0, true)
           .withVisible(hubShown),
       checkInput(QStringLiteral("set_screws"), QObject::tr("Set Screws"), true)
           .withVisible(hubShown),

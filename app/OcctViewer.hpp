@@ -1195,6 +1195,18 @@ private:
   bool occluded(const gp_Pnt& point) const;
   EdgeSight edgeSight(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   EdgeSight windowSight(const TopoDS_Edge& edge, const gp_Trsf& toWorld) const;
+  // A window selection of whole bodies (only bodies pickable, mitcad#1275):
+  // each pickable body (and a body's highlight) whose box, seen from the
+  // camera, lies wholly inside the window is taken as picked and one wholly
+  // outside as not, both without OCCT's pick, which tests their triangles;
+  // only the bodies the window crosses are left to it. Logs "Window pick by
+  // bounds: <i> inside, <o> outside, <c> crossing". restoreWindowDecided
+  // makes them pickable again (the selection reported or given up).
+  void decideWindowByBounds();
+  void restoreWindowDecided();
+  // A body's box where the view shows it (its occluder's, made when first
+  // needed).
+  const Bnd_Box& placedBox(const BodyEntry& entry) const;
   void sceneChanged();
   // Asks for a frame (update()). The view handles its events (picks,
   // camera animations) while it draws a frame; where Qt never exposes the
@@ -1302,6 +1314,12 @@ private:
   bool m_windowSelecting = false;
   QRectF m_windowRect;
   bool m_windowCrossing = false;
+  // A window selection of whole bodies decided by their boxes first
+  // (decideWindowByBounds, mitcad#1275): the objects whose box the window
+  // holds or misses, out of OCCT's pick until it reports (or the window is
+  // given up), and the owners of those it holds, added to what it picks.
+  std::vector<occ::handle<AIS_Shape>> m_windowDecided;
+  std::vector<occ::handle<SelectMgr_EntityOwner>> m_windowInside;
   // With MITCAD_LOG_TIMING: from a window selection's release until the
   // frame that shows it (windowSelectionApplied).
   QElapsedTimer m_windowClock;

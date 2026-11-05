@@ -206,11 +206,11 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
                             {QStringLiteral("ring"), QStringLiteral("gear-ring")},
                             {QStringLiteral("rack"), QStringLiteral("gear-rack")},
                             {QStringLiteral("bevel"), QStringLiteral("gear-bevel")}}),
-      valueInput(QStringLiteral("module"), QObject::tr("Module"), ValueKind::Length, QStringLiteral("2 mm"))
+      valueInput(QStringLiteral("module"), QObject::tr("Module"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0, true)
           .withExactDefault(),
       valueInput(QStringLiteral("teeth"), QObject::tr("Teeth"), ValueKind::Unitless, QStringLiteral("20")),
       choiceInput(QStringLiteral("pressure_angle"), QObject::tr("Pressure Angle"), kPressureAngles, QStringLiteral("20")),
-      valueInput(QStringLiteral("face_width"), QObject::tr("Face Width"), ValueKind::Length, QStringLiteral("10 mm")),
+      valueInput(QStringLiteral("face_width"), QObject::tr("Face Width"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true),
       selectionInput(QStringLiteral("mesh_with"), QObject::tr("Mesh With"), SelectKind::Feature | SelectKind::Face, 0, 1)
           .withAccepts([](const SelectionItem& item) { return !item.creatingFeature().isEmpty(); })
           .withConvert([](const SelectionItem& item) {
@@ -232,12 +232,12 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
           .withVisible(rackMate),
       checkInput(QStringLiteral("helical"), QObject::tr("Helical Teeth"), false)
           .withVisible([](const CommandState& s) { return isOneOf(s, {"ring", "rack"}); }),
-      valueInput(QStringLiteral("helix_angle"), QObject::tr("Helix Angle"), ValueKind::Angle, QStringLiteral("20") + QChar(0x00B0))
+      valueInput(QStringLiteral("helix_angle"), QObject::tr("Helix Angle"), ValueKind::Angle, QStringLiteral("20") + QChar(0x00B0)).withStepMinimum(0.0, true)
           .withVisible(helixShown),
       checkInput(QStringLiteral("left_handed"), QObject::tr("Left-Handed"), false).withVisible(helixShown),
-      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("0 mm"))
+      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("herringbone"); }),
-      valueInput(QStringLiteral("rim"), QObject::tr("Rim Thickness"), ValueKind::Length, QStringLiteral("5 mm"))
+      valueInput(QStringLiteral("rim"), QObject::tr("Rim Thickness"), ValueKind::Length, QStringLiteral("5 mm")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("ring"); }),
       valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("20 mm"))
           .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("rack"); }),
@@ -256,7 +256,7 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
       choiceInput(QStringLiteral("bore"), QObject::tr("Bore"), kBores, QStringLiteral("none"))
           .withHeading(QObject::tr("Bore and Hub"))
           .withVisible(takesBore),
-      valueInput(QStringLiteral("bore_diameter"), QObject::tr("Bore Diameter"), ValueKind::Length, QStringLiteral("8 mm"))
+      valueInput(QStringLiteral("bore_diameter"), QObject::tr("Bore Diameter"), ValueKind::Length, QStringLiteral("8 mm")).withStepMinimum(0.0, true)
           .withVisible(ownPlainBore),
       textInput(QStringLiteral("thread"), QObject::tr("Thread Size"), QStringLiteral("M8x1.25"))
           .withVisible([](const CommandState& s) { return takesBore(s) && s.choice(QStringLiteral("bore")) == QStringLiteral("thread"); }),
@@ -265,9 +265,9 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
             return (takesBore(s) && s.choice(QStringLiteral("bore")) == QStringLiteral("plain")) || shaftBore(s);
           }),
       checkInput(QStringLiteral("hub"), QObject::tr("Hub"), false).withVisible(takesBore),
-      valueInput(QStringLiteral("hub_diameter"), QObject::tr("Hub Diameter"), ValueKind::Length, QString())
+      valueInput(QStringLiteral("hub_diameter"), QObject::tr("Hub Diameter"), ValueKind::Length, QString()).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return takesBore(s) && s.checked(QStringLiteral("hub")); }),
-      valueInput(QStringLiteral("hub_length"), QObject::tr("Hub Length"), ValueKind::Length, QStringLiteral("8 mm"))
+      valueInput(QStringLiteral("hub_length"), QObject::tr("Hub Length"), ValueKind::Length, QStringLiteral("8 mm")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return takesBore(s) && s.checked(QStringLiteral("hub")); }),
   };
   def.inputs += operationInputs();

@@ -171,20 +171,20 @@ CommandDef bearingCommand(const CommandContext& context) {
       valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(grooved),
       valueInput(QStringLiteral("fit_clearance"), QObject::tr("Fit Clearance"), ValueKind::Length,
-                 QStringLiteral("0.5 mm"))
+                 QStringLiteral("0.5 mm")).withStepMinimum(0.0)
           .withPrintedFit(QStringLiteral("printable_bearing"))
           .withVisible(onSeat),
       choiceInput(QStringLiteral("size"), QObject::tr("Size"), {}, QStringLiteral("608"))
           .withChoices([&context, sizes](const CommandState&) { return sizeChoices(context, sizes); })
           .withHeading(QObject::tr("Size")),
-      valueInput(QStringLiteral("bore"), QObject::tr("Bore"), ValueKind::Length, QStringLiteral("8 mm"))
+      valueInput(QStringLiteral("bore"), QObject::tr("Bore"), ValueKind::Length, QStringLiteral("8 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(custom),
       valueInput(QStringLiteral("outside_diameter"), QObject::tr("Outside Diameter"), ValueKind::Length,
-                 QStringLiteral("22 mm"))
+                 QStringLiteral("22 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(custom),
-      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("7 mm"))
+      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("7 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(custom),
       checkInput(QStringLiteral("flange"), QObject::tr("Flange"), false),
@@ -208,11 +208,11 @@ CommandDef bearingCommand(const CommandContext& context) {
           .withAuto(workedOut(QStringLiteral("element_gap"), true)),
       valueInput(QStringLiteral("element_count"), QObject::tr("Elements"), ValueKind::Unitless, QString())
           .withAuto(workedOut(QStringLiteral("element_count"), false)),
-      valueInput(QStringLiteral("element_diameter"), QObject::tr("Element Diameter"), ValueKind::Length, QString())
+      valueInput(QStringLiteral("element_diameter"), QObject::tr("Element Diameter"), ValueKind::Length, QString()).withStepMinimum(0.0, true)
           .withAuto(workedOut(QStringLiteral("element_diameter"), true)),
-      valueInput(QStringLiteral("chamfer"), QObject::tr("Chamfer"), ValueKind::Length, QStringLiteral("0.4 mm")),
-      valueInput(QStringLiteral("min_wall"), QObject::tr("Smallest Wall"), ValueKind::Length, QStringLiteral("1.2 mm")),
-      valueInput(QStringLiteral("flank_angle"), QObject::tr("Flank Angle"), ValueKind::Angle, QStringLiteral("45") + QChar(0x00B0)),
+      valueInput(QStringLiteral("chamfer"), QObject::tr("Chamfer"), ValueKind::Length, QStringLiteral("0.4 mm")).withStepMinimum(0.0),
+      valueInput(QStringLiteral("min_wall"), QObject::tr("Smallest Wall"), ValueKind::Length, QStringLiteral("1.2 mm")).withStepMinimum(0.0, true),
+      valueInput(QStringLiteral("flank_angle"), QObject::tr("Flank Angle"), ValueKind::Angle, QStringLiteral("45") + QChar(0x00B0)).withStepMinimum(0.0, true),
       choiceInput(QStringLiteral("operation"), QObject::tr("Operation"), kOperationsMade,
                   QStringLiteral("new_component"))
           .withVisible(ungrooved),

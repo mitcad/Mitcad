@@ -652,6 +652,9 @@ struct NativeMacWindowState {
   // While a drawing is open (setDrawingOpen, mitcad#1073): the cards it
   // hides and the shown state each was asked for meanwhile.
   bool drawingOpen = false;
+  // While the Start page shows (setStartPageShown, mitcad#1258): every card,
+  // in the same table of the cards hidden.
+  bool startPageShown = false;
   NSMapTable<NSView*, NSNumber*>* __strong suppressedCards = [NSMapTable strongToStrongObjectsMapTable];
   // The Browser row under the pointer, as last reported (mitcad#1072).
   QString hoveredTreeRow;
@@ -1994,7 +1997,7 @@ struct NativeMacWindowState {
         child.toolTip = ns(arrow.toolTip);
         child.accessibilityLabel = ns(arrow.toolTip);
       }
-      card.hidden = drawingOpen; // the view is under the drawing's sheet
+      card.hidden = drawingOpen || startPageShown; // the view is under the drawing's sheet or the Start page
       shown.append(arrow.id);
     }
     bool gone = false;
@@ -2043,6 +2046,38 @@ struct NativeMacWindowState {
     applyChatButtons();
     qInfo().noquote() << (open ? QStringLiteral("Native cards: Browser only (a drawing is open)")
                                : QStringLiteral("Native cards: all (the drawing closed)"));
+  }
+
+  // The cards over the canvas while the Start page shows (mitcad#1258): none,
+  // as the Qt layout hides them; the page is the shared Qt page over the
+  // embedded view. Left, each comes back as it was asked to be meanwhile.
+  void setStartPageShown(bool shown) {
+    if (shown == startPageShown || drawingOpen) return;
+    startPageShown = shown;
+    if (shown) {
+      NSMutableArray<NSView*>* cards = [NSMutableArray array];
+      if (sidebarCard != nil) [cards addObject:sidebarCard];
+      if (projectsCard != nil) [cards addObject:projectsCard];
+      if (inspectorCard != nil) [cards addObject:inspectorCard];
+      if (historyCard != nil) [cards addObject:historyCard];
+      if (chatCard != nil) [cards addObject:chatCard];
+      if (configurationCard != nil) [cards addObject:configurationCard];
+      if (navigationCard != nil) [cards addObject:navigationCard];
+      for (NSView* card in cards) {
+        const bool visible = !card.hidden;
+        setCardVisible(card, false);
+        [suppressedCards setObject:@(visible) forKey:card];
+      }
+    } else {
+      NSMapTable<NSView*, NSNumber*>* wanted = suppressedCards;
+      suppressedCards = [NSMapTable strongToStrongObjectsMapTable];
+      for (NSView* card in wanted) setCardVisible(card, [wanted objectForKey:card].boolValue);
+    }
+    for (const NativeMacCubeArrow& arrow : cubeArrowPresentation) cubeArrows[ns(arrow.id)].hidden = shown;
+    layoutOverlays();
+    applyChatButtons();
+    qInfo().noquote() << (shown ? QStringLiteral("Native cards: none (the Start page is shown)")
+                                : QStringLiteral("Native cards: all (the Start page left)"));
   }
 
   // At the Qt arrows' places in the viewport, inset to the circle drawn.
@@ -4014,6 +4049,7 @@ void NativeMacWindow::showChat(bool shown) {
 
 bool NativeMacWindow::chatShown() const { return !m_state->chatCard.hidden; }
 void NativeMacWindow::setDrawingOpen(bool open) { m_state->setDrawingOpen(open); }
+void NativeMacWindow::setStartPageShown(bool shown) { m_state->setStartPageShown(shown); }
 void NativeMacWindow::setNavigationBar(const NativeMacNavigationBar& bar) { m_state->setNavigationBar(bar); }
 
 void* nativeDocumentWindowMenu(void* nativeWindow) {

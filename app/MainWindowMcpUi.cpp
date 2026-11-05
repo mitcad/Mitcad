@@ -62,6 +62,7 @@
 #include "mcp/LogRing.hpp"
 #include "mcp/ModalGuard.hpp"
 #include "mcp/ScreenshotBudget.hpp"
+#include "mcp/UiCommandList.hpp"
 #include "platform/MacChrome.hpp"
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
@@ -212,29 +213,6 @@ bool waitUntil(const std::function<bool()>& done, int milliseconds) {
     loop.exec();
   }
   return true;
-}
-
-// Commands an agent cannot use: they open file dialogs, interactive windows or
-// the system's applications (mitcad#265). Any other modal dialog a command
-// opens is closed at once (mcp::ModalGuard) and the call refused.
-bool opensDialog(const QString& id) {
-  // This creates an empty document owner without a file, modal question or
-  // external application. All existing dialog/file refusals still apply.
-  if (id == QStringLiteral("window.new")) return false;
-  for (const char* prefix : {"file.", "help.", "tools.", "insert."}) {
-    if (id.startsWith(QLatin1String(prefix))) {
-      return true;
-    }
-  }
-  for (const char* known : {"sketch.insert_dxf", "sketch.import_dxf", "sketch.insert_svg", "sketch.import_svg",
-                            "sheet.export_dxf", "make.print3d",
-                            "view.render_environment", "view.grid_settings", "solid.parameters",
-                            "sketch.parameters", "solid.configurations"}) {
-    if (id == QLatin1String(known)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // The log lines since a sequence number, as text.
@@ -1106,6 +1084,23 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
 }
 
 QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
+  // The commands an agent may run (mitcad#1269): their ids, names and
+  // whether ui_command runs them and can now. It reads the registry only,
+  // also while the model computes.
+  const auto listing = [this](const QString& search, const QString& note) {
+    QJsonObject listed = mcp::commandListing(*m_registry, search, [this](const CommandDef& def) {
+      return isAvailable(def) && (!windowReadOnly() || readOnlyCommand(def));
+    });
+    listed.insert(QStringLiteral("document"), m_mcpDocumentId);
+    listed.insert(QStringLiteral("mode"), modeName(m_mode));
+    if (!note.isEmpty()) {
+      listed.insert(QStringLiteral("note"), note);
+    }
+    return listed;
+  };
+  if (arguments.contains(QStringLiteral("search"))) {
+    return listing(arguments.value(QStringLiteral("search")).toString(), QString());
+  }
   mcpRefuseBusy();
   if (m_closePending || QApplication::activeModalWidget() != nullptr) {
     refuse(tr("The design is closing or waiting for a dialog."));
@@ -1226,7 +1221,8 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
       }
       qInfo().noquote() << QStringLiteral("MCP: an agent cancelled the sketch %1").arg(name);
     } else {
-      refuse(tr("Nothing is open to finish: give id or edit."));
+      // Nothing to end: what could be run instead (mitcad#1269).
+      return listing(QString(), tr("Nothing is open to finish: give id (one of these commands) or edit."));
     }
   } else if (!edit.isEmpty()) {
     // As a double-click in the timeline: a sketch opens in sketch mode,
@@ -1252,11 +1248,20 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
       refuse(m_statusLabel->text().isEmpty() ? tr("%1 could not be edited.").arg(edit) : m_statusLabel->text());
     }
   } else {
+    // New Design waits for the user: it names the design in place in the
+    // Projects panel, or asks the name (mitcad#1266); document_new makes it
+    // without either.
+    if (id == QStringLiteral("file.new_design") || id == QStringLiteral("file.new")) {
+      refuse(tr("New Design asks the user to name the design, which an agent cannot do: call document_new (optional "
+                "name and folder) to make an empty design beside the open ones."));
+    }
     const CommandDef* def = m_registry->find(id);
     if (def == nullptr) {
-      refuse(tr("No command %1 in the command registry (app/COMMANDS.md).").arg(mcp::echoed(id)));
+      // The nearest ids, not a file the agent cannot read (mitcad#1269).
+      refuse(tr("No command %1 in the command registry. %2")
+                 .arg(mcp::echoed(id), mcp::nearestCommandsText(*m_registry, id)));
     }
-    if (opensDialog(id)) {
+    if (mcp::opensDialog(id)) {
       refuse(tr("%1 opens a file dialog or another window, which an agent cannot use: run it in the application.")
                  .arg(def->name));
     }

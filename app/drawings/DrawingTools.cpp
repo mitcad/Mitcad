@@ -147,13 +147,17 @@ QJsonObject annotationOn(const QString& drawing, const ToolPicks& picks, const Q
 }
 
 // Whether the picks are there: on a view, `count` of them (kOpenPicks: two
-// at least), and the placing click when the tool has one.
+// at least; kAutoPicks: one or two), and the placing click when the tool
+// has one.
 bool picked(const ToolPicks& picks, int count, bool place) {
   if (picks.view <= 0) {
     return false;
   }
   const qsizetype n = picks.picks.size();
-  if (count == kOpenPicks ? n < 2 : n != count) {
+  const bool enough = count == kOpenPicks   ? n >= 2
+                      : count == kAutoPicks ? n == 1 || n == 2
+                                            : n == count;
+  if (!enough) {
     return false;
   }
   return !place || !picks.points.isEmpty();
@@ -170,11 +174,17 @@ int openPicks(const QHash<QString, QString>& /*options*/) { return kOpenPicks; }
 
 int dimensionPicks(const QHash<QString, QString>& options) {
   const QString type = toolOption("drawing.dimension", options, "type");
+  if (type == QStringLiteral("auto")) {
+    return kAutoPicks;
+  }
   return type == QStringLiteral("radius") || type == QStringLiteral("diameter") ? 1 : 2;
 }
 
 QString dimensionType(const QHash<QString, QString>& options) {
   const QString type = toolOption("drawing.dimension", options, "type");
+  if (type == QStringLiteral("auto")) {
+    return QStringLiteral("dimension"); // the picks choose (mitcad#1272)
+  }
   return type == QStringLiteral("aligned") ? QStringLiteral("linear") : type;
 }
 
@@ -440,13 +450,16 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
   tools.append({QStringLiteral("drawing.dimension"), tr("Dimension"), QStringLiteral("dimension"),
                 tr("Dimensions edges, circles and corners of a view"), SheetPick::Picks,
                 tr("Click the edges, circles or corners to dimension on a view"),
+                // Auto: the picks choose (mitcad#1272); the others
+                // override it.
                 {choice(QStringLiteral("type"), tr("Type"),
-                        {{QStringLiteral("linear"), tr("Linear")},
+                        {{QStringLiteral("auto"), tr("Auto")},
+                         {QStringLiteral("linear"), tr("Linear")},
                          {QStringLiteral("aligned"), tr("Aligned")},
                          {QStringLiteral("angle"), tr("Angle")},
                          {QStringLiteral("radius"), tr("Radius")},
                          {QStringLiteral("diameter"), tr("Diameter")}},
-                        QStringLiteral("linear"))},
+                        QStringLiteral("auto"))},
                 &dimension, true, tr("Click where the dimension goes (Alt: no snap)"), &dimensionPicks, &dimensionType, true});
   tools.append({QStringLiteral("drawing.ordinate"), tr("Ordinate"), QStringLiteral("drawing-ordinate"),
                 tr("Dimensions a point from an origin along the view"), SheetPick::Picks,

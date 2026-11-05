@@ -12,22 +12,27 @@ use super::geometry::{P2, add, angle_after, cross, dist, dot, norm, perp, scale,
 use super::{ConstraintKind, Entity, EntityKind, SketchText};
 use crate::ids::EntityUid;
 
-/// Rectangle tools.
+/// Rectangle tools. A corner or centre given as an existing point is that
+/// point (mitcad#1269); `c` of three points is only a position.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RectangleMode {
     /// Opposite corners, sides along the sketch axes.
-    TwoPoint { a: [f64; 2], b: [f64; 2] },
+    TwoPoint { a: PointInput, b: PointInput },
     /// One side from `a` to `b`, the other through `c`'s side distance.
     ThreePoint {
-        a: [f64; 2],
-        b: [f64; 2],
+        a: PointInput,
+        b: PointInput,
         c: [f64; 2],
     },
     /// Centre and a corner, sides along the sketch axes.
-    Center { center: [f64; 2], corner: [f64; 2] },
+    Center {
+        center: PointInput,
+        corner: PointInput,
+    },
 }
 
-/// Circle tools.
+/// Circle tools. A point the circle passes through given as an existing
+/// point is held on it (mitcad#1269).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CircleMode {
     CenterRadius {
@@ -36,13 +41,13 @@ pub enum CircleMode {
     },
     /// The ends of a diameter.
     TwoPoint {
-        a: [f64; 2],
-        b: [f64; 2],
+        a: PointInput,
+        b: PointInput,
     },
     ThreePoint {
-        a: [f64; 2],
-        b: [f64; 2],
-        c: [f64; 2],
+        a: PointInput,
+        b: PointInput,
+        c: PointInput,
     },
     /// Tangent to two lines, of a radius, near a point.
     TwoTangent {
@@ -62,10 +67,11 @@ pub enum CircleMode {
 /// Arc tools.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArcMode {
-    /// From `start` through `through` to `end`.
+    /// From `start` through `through` to `end` (an existing point as
+    /// `through` is held on the arc, mitcad#1269).
     ThreePoint {
         start: PointInput,
-        through: [f64; 2],
+        through: PointInput,
         end: PointInput,
     },
     /// Counter-clockwise around `center` from `start` to the direction of
@@ -80,19 +86,39 @@ pub enum ArcMode {
     Tangent { from: EntityUid, end: PointInput },
 }
 
-/// Slot tools; `width` is the slot's width.
+/// Slot tools; `width` is the slot's width. A centre given as an existing
+/// point is that point (mitcad#1269); an arc slot's `end` is a direction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SlotMode {
     /// Between the centres of its ends.
-    CenterToCenter { a: [f64; 2], b: [f64; 2] },
+    CenterToCenter { a: PointInput, b: PointInput },
     /// The centre of the slot and the centre of one end.
-    CenterPoint { center: [f64; 2], end: [f64; 2] },
+    CenterPoint { center: PointInput, end: PointInput },
     /// Along an arc around `center` from `start` to the direction of `end`.
     Arc {
-        center: [f64; 2],
-        start: [f64; 2],
+        center: PointInput,
+        start: PointInput,
         end: [f64; 2],
     },
+}
+
+/// The corner (0 lower left, then counter-clockwise) of an axis-aligned
+/// rectangle that `p` is, `other` lying across the rectangle from it.
+fn corner_index(p: P2, other: P2) -> usize {
+    match (p[0] > other[0], p[1] > other[1]) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (true, true) => 2,
+        (false, true) => 3,
+    }
+}
+
+/// The existing point a point input names, if any.
+fn existing(input: PointInput) -> Option<EntityUid> {
+    match input {
+        PointInput::Existing(id) => Some(id),
+        PointInput::At(_) => None,
+    }
 }
 
 fn finite(points: &[[f64; 2]]) -> Result<(), String> {
@@ -176,15 +202,26 @@ impl SketchEdit<'_> {
         mode: RectangleMode,
         construction: bool,
     ) -> Result<Vec<EntityUid>, String> {
+        // The existing points among the inputs, at the corners they are
+        // (mitcad#1269): the rectangle's corner there is that point.
+        let mut joined: [Option<EntityUid>; 4] = [None; 4];
         let (corners, axis_aligned) = match mode {
-            RectangleMode::TwoPoint { a, b } => {
-                finite(&[a, b])?;
+            RectangleMode::TwoPoint { a: pa, b: pb } => {
+                let (a, b) = (self.input_position(pa)?, self.input_position(pb)?);
                 let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
                 let (y0, y1) = (a[1].min(b[1]), a[1].max(b[1]));
+                joined[corner_index(a, b)] = existing(pa);
+                if let Some(p) = existing(pb) {
+                    joined[corner_index(b, a)] = Some(p);
+                }
                 ([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true)
             }
-            RectangleMode::Center { center, corner } => {
-                finite(&[center, corner])?;
+            RectangleMode::Center {
+                center: pc,
+                corner: pk,
+            } => {
+                let (center, corner) = (self.input_position(pc)?, self.input_position(pk)?);
+                joined[corner_index(corner, center)] = existing(pk);
                 let (dx, dy) = ((corner[0] - center[0]).abs(), (corner[1] - center[1]).abs());
                 let (cx, cy) = (center[0], center[1]);
                 (
@@ -197,8 +234,9 @@ impl SketchEdit<'_> {
                     true,
                 )
             }
-            RectangleMode::ThreePoint { a, b, c } => {
-                finite(&[a, b, c])?;
+            RectangleMode::ThreePoint { a: pa, b: pb, c } => {
+                let (a, b) = (self.input_position(pa)?, self.input_position(pb)?);
+                finite(&[c])?;
                 let side = sub(b, a);
                 if norm(side) == 0.0 {
                     return Err("the first side has no length".to_owned());
@@ -206,9 +244,12 @@ impl SketchEdit<'_> {
                 let n = perp(unit(side));
                 let h = scale(n, dot(sub(c, b), n));
                 let corners = [a, b, add(b, h), add(a, h)];
+                joined[0] = existing(pa);
                 if cross(side, h) < 0.0 {
+                    joined[3] = existing(pb);
                     ([corners[0], corners[3], corners[2], corners[1]], false)
                 } else {
+                    joined[1] = existing(pb);
                     (corners, false)
                 }
             }
@@ -220,14 +261,22 @@ impl SketchEdit<'_> {
             return Err("the rectangle has no area".to_owned());
         }
         let lines = self.ids(4);
-        let points = self.ids(4);
+        let mut points = Vec::with_capacity(4);
+        for corner in joined {
+            points.push(match corner {
+                Some(p) => p,
+                None => self.id(),
+            });
+        }
         for i in 0..4 {
             let mut e = Entity::new(lines[i], line(points[i], points[(i + 1) % 4]));
             e.construction = construction;
             self.push(e);
         }
-        for i in 0..4 {
-            self.push(Entity::point(points[i], corners[i]));
+        for ((point, at), corner) in points.iter().zip(corners).zip(joined) {
+            if corner.is_none() {
+                self.push(Entity::point(*point, at));
+            }
         }
         if axis_aligned {
             for (i, l) in lines.iter().enumerate() {
@@ -246,8 +295,9 @@ impl SketchEdit<'_> {
             }
         }
         if let RectangleMode::Center { center, .. } = mode {
-            // A construction diagonal with the centre at its middle.
-            let c = self.new_point(center);
+            // A construction diagonal with the centre at its middle (an
+            // existing point given as the centre).
+            let c = self.point(center)?;
             let diagonal = self.curve_entity(line(points[0], points[2]), true);
             self.add_constraint(ConstraintKind::Midpoint {
                 point: c,
@@ -258,18 +308,30 @@ impl SketchEdit<'_> {
     }
 
     pub fn circle(&mut self, mode: CircleMode, construction: bool) -> Result<EntityUid, String> {
+        // Existing points the circle passes through (mitcad#1269).
+        let mut on: Vec<EntityUid> = Vec::new();
         let (center, radius, tangents): (PointInput, f64, Vec<EntityUid>) = match mode {
             CircleMode::CenterRadius { center, radius } => (center, radius, Vec::new()),
-            CircleMode::TwoPoint { a, b } => {
-                finite(&[a, b])?;
+            CircleMode::TwoPoint { a: pa, b: pb } => {
+                let (a, b) = (self.input_position(pa)?, self.input_position(pb)?);
+                on.extend([pa, pb].into_iter().filter_map(existing));
                 (
                     PointInput::At(scale(add(a, b), 0.5)),
                     dist(a, b) / 2.0,
                     Vec::new(),
                 )
             }
-            CircleMode::ThreePoint { a, b, c } => {
-                finite(&[a, b, c])?;
+            CircleMode::ThreePoint {
+                a: pa,
+                b: pb,
+                c: pc,
+            } => {
+                let (a, b, c) = (
+                    self.input_position(pa)?,
+                    self.input_position(pb)?,
+                    self.input_position(pc)?,
+                );
+                on.extend([pa, pb, pc].into_iter().filter_map(existing));
                 let center = circumcenter(a, b, c)?;
                 (PointInput::At(center), dist(center, a), Vec::new())
             }
@@ -311,20 +373,40 @@ impl SketchEdit<'_> {
             self.curve(t)?;
             self.add_constraint(ConstraintKind::tangent(t, id));
         }
+        self.hold_on(&on, id);
         Ok(id)
+    }
+
+    /// Holds existing points on a new curve through them (mitcad#1269: a
+    /// circle's or an arc's point given as an existing point); a point
+    /// given twice is held once.
+    fn hold_on(&mut self, points: &[EntityUid], curve: EntityUid) {
+        let mut held: Vec<EntityUid> = Vec::new();
+        for p in points {
+            if !held.contains(p) {
+                held.push(*p);
+                self.add_constraint(ConstraintKind::Coincident {
+                    point: *p,
+                    entity: super::Ref::Curve(curve),
+                });
+            }
+        }
     }
 
     pub fn arc(&mut self, mode: ArcMode, construction: bool) -> Result<EntityUid, String> {
         let id = self.id();
+        // An existing point the arc passes through (mitcad#1269).
+        let mut on: Vec<EntityUid> = Vec::new();
         let entity = match mode {
             ArcMode::ThreePoint {
                 start,
-                through,
+                through: pt,
                 end,
             } => {
+                let through = self.input_position(pt)?;
+                on.extend(existing(pt));
                 let (s, e) = (self.point(start)?, self.point(end)?);
                 let (ps, pe) = (self.at(s)?, self.at(e)?);
-                finite(&[through])?;
                 let c = circumcenter(ps, through, pe)?;
                 let center = self.new_point(c);
                 // Counter-clockwise from start to end must pass through the
@@ -418,7 +500,9 @@ impl SketchEdit<'_> {
         };
         let mut e = Entity::new(id, entity);
         e.construction = construction;
-        Ok(self.push(e))
+        self.push(e);
+        self.hold_on(&on, id);
+        Ok(id)
     }
 
     /// A regular polygon around `center`: `inscribed` puts the corners on a
@@ -433,15 +517,30 @@ impl SketchEdit<'_> {
     /// alone are not enough: with an even number of sides the touching
     /// points can slide off the sides' middles in turn (alternate tangent
     /// lengths `a`, `L - a`), which skews the polygon.
+    ///
+    /// An existing point as `center` is the polygon's centre point, and as
+    /// the `vertex` of an inscribed polygon its first corner (mitcad#1269);
+    /// a circumscribed polygon's `vertex`, the middle of a side, is a
+    /// position only.
     pub fn polygon(
         &mut self,
-        center: [f64; 2],
-        vertex: [f64; 2],
+        center_input: PointInput,
+        vertex_input: PointInput,
         sides: usize,
         inscribed: bool,
         construction: bool,
     ) -> Result<Vec<EntityUid>, String> {
-        finite(&[center, vertex])?;
+        let center = self.input_position(center_input)?;
+        let vertex = self.input_position(vertex_input)?;
+        let first_corner = existing(vertex_input);
+        if !inscribed && first_corner.is_some() {
+            return Err(
+                "the vertex of a circumscribed polygon is the middle of a side, a position \
+                 [x, y]: a point id is taken as the vertex of an inscribed polygon (its first \
+                 corner)"
+                    .to_owned(),
+            );
+        }
         if !(3..=256).contains(&sides) {
             return Err(format!("a polygon has 3 to 256 sides, got {sides}"));
         }
@@ -457,20 +556,30 @@ impl SketchEdit<'_> {
             (r / (PI / n).cos(), a0 - PI / n)
         };
         let lines = self.ids(sides);
-        let corners = self.ids(sides);
+        let mut corners = Vec::with_capacity(sides);
+        for i in 0..sides {
+            corners.push(match first_corner {
+                Some(p) if i == 0 => p,
+                _ => self.id(),
+            });
+        }
         for i in 0..sides {
             let mut e = Entity::new(lines[i], line(corners[i], corners[(i + 1) % sides]));
             e.construction = construction;
             self.push(e);
         }
         for (i, id) in corners.iter().enumerate() {
+            if i == 0 && first_corner.is_some() {
+                continue; // the existing point
+            }
             let a = first + TAU * i as f64 / n;
             self.push(Entity::point(
                 *id,
                 [center[0] + big * a.cos(), center[1] + big * a.sin()],
             ));
         }
-        let c = self.new_point(center);
+        // The centre point: the existing one given, or a new one.
+        let c = self.point(center_input)?;
         let circle = self.curve_entity(
             EntityKind::Circle {
                 center: c,
@@ -525,21 +634,25 @@ impl SketchEdit<'_> {
         match mode {
             SlotMode::CenterToCenter { a, b } => self.straight_slot(a, b, r, None),
             SlotMode::CenterPoint { center, end } => {
-                finite(&[center, end])?;
-                let a = sub(scale(center, 2.0), end);
-                self.straight_slot(a, end, r, Some(center))
+                let (pc, pe) = (self.input_position(center)?, self.input_position(end)?);
+                let a = sub(scale(pc, 2.0), pe);
+                self.straight_slot(PointInput::At(a), end, r, Some(center))
             }
             SlotMode::Arc { center, start, end } => self.arc_slot(center, start, end, r),
         }
     }
 
+    /// A straight slot between the end arcs' centres `a` and `b` (existing
+    /// points or new ones), with `middle` held at the middle of its centre
+    /// line.
     fn straight_slot(
         &mut self,
-        a: [f64; 2],
-        b: [f64; 2],
+        a_input: PointInput,
+        b_input: PointInput,
         r: f64,
-        middle: Option<[f64; 2]>,
+        middle: Option<PointInput>,
     ) -> Result<Vec<EntityUid>, String> {
+        let (a, b) = (self.input_position(a_input)?, self.input_position(b_input)?);
         finite(&[a, b])?;
         let length = dist(a, b);
         if length == 0.0 {
@@ -548,8 +661,8 @@ impl SketchEdit<'_> {
         let d = unit(sub(b, a));
         let n = perp(d);
         let curves = self.ids(4); // top, arc at b, bottom, arc at a
-        let ca = self.new_point(a);
-        let cb = self.new_point(b);
+        let ca = self.point(a_input)?;
+        let cb = self.point(b_input)?;
         let p1 = self.new_point(add(a, scale(n, r)));
         let p2 = self.new_point(add(b, scale(n, r)));
         let p3 = self.new_point(sub(b, scale(n, r)));
@@ -581,7 +694,7 @@ impl SketchEdit<'_> {
             b: curves[3],
         });
         if let Some(m) = middle {
-            let m = self.new_point(m);
+            let m = self.point(m)?;
             self.add_constraint(ConstraintKind::Midpoint {
                 point: m,
                 curve: axis,
@@ -590,14 +703,19 @@ impl SketchEdit<'_> {
         Ok(curves)
     }
 
+    /// An arc slot around `center` from `start` (existing points or new
+    /// ones: the centre and the start's end arc centre) to the direction of
+    /// `end`.
     fn arc_slot(
         &mut self,
-        center: [f64; 2],
-        start: [f64; 2],
+        center_input: PointInput,
+        start_input: PointInput,
         end: [f64; 2],
         r: f64,
     ) -> Result<Vec<EntityUid>, String> {
-        finite(&[center, start, end])?;
+        let center = self.input_position(center_input)?;
+        let start = self.input_position(start_input)?;
+        finite(&[end])?;
         let big = dist(center, start);
         if big <= r {
             return Err("the slot's arc must be larger than half the width".to_owned());
@@ -606,8 +724,11 @@ impl SketchEdit<'_> {
         let a1 = angle_after(a0, (end[1] - center[1]).atan2(end[0] - center[0]));
         let at = |radius: f64, a: f64| [center[0] + radius * a.cos(), center[1] + radius * a.sin()];
         let curves = self.ids(4); // outer, cap at end, inner, cap at start
-        let c = self.new_point(center);
-        let es = self.new_point(at(big, a0));
+        let c = self.point(center_input)?;
+        let es = match existing(start_input) {
+            Some(p) => p,
+            None => self.new_point(at(big, a0)),
+        };
         let ee = self.new_point(at(big, a1));
         let outer_s = self.new_point(at(big + r, a0));
         let outer_e = self.new_point(at(big + r, a1));
@@ -629,10 +750,12 @@ impl SketchEdit<'_> {
         Ok(curves)
     }
 
+    /// An ellipse or an elliptical arc; `major`, the end of the major axis,
+    /// may be an existing point as `center` may (mitcad#1269).
     pub fn ellipse(
         &mut self,
         center: PointInput,
-        major: [f64; 2],
+        major: PointInput,
         minor_radius: f64,
         arc: Option<(PointInput, PointInput)>,
         construction: bool,
@@ -642,10 +765,13 @@ impl SketchEdit<'_> {
                 "the minor radius must be positive, got {minor_radius}"
             ));
         }
-        finite(&[major])?;
+        self.input_position(major)?;
         let id = self.id();
         let c = self.point(center)?;
-        let m = self.new_point(major);
+        let m = self.point(major)?;
+        if c == m {
+            return Err("the major axis has no length".to_owned());
+        }
         let kind = match arc {
             None => EntityKind::Ellipse {
                 center: c,

@@ -508,7 +508,7 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
           .withExactDefault()
           .withOnChange(find)
           .withVisible([folded, ranged](const CommandState& state) { return folded(state) && ranged(state); }),
-      valueInput(QStringLiteral("face_width"), QObject::tr("Face Width"), ValueKind::Length, QStringLiteral("10 mm")),
+      valueInput(QStringLiteral("face_width"), QObject::tr("Face Width"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true),
       valueInput(QStringLiteral("bore_clearance"), QObject::tr("Bore Clearance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withPrintedFit(QStringLiteral("gear"))
           .withVisible([](const CommandState& state) { return onBody(state, kFirst) || onBody(state, kSecond); }),
@@ -669,7 +669,7 @@ CommandDef beltDriveCommand(const CommandContext& context) {
       checkInput(kMore, QObject::tr("More"), false).withDisclosure(),
       offsetInput(kFirst, QObject::tr("First Offset"), find),
       offsetInput(kSecond, QObject::tr("Second Offset"), find),
-      valueInput(QStringLiteral("belt_width"), QObject::tr("Belt Width"), ValueKind::Length, QStringLiteral("6 mm"))
+      valueInput(QStringLiteral("belt_width"), QObject::tr("Belt Width"), ValueKind::Length, QStringLiteral("6 mm")).withStepMinimum(0.0, true)
           .withExactDefault(),
       valueInput(QStringLiteral("bore_clearance"), QObject::tr("Bore Clearance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withPrintedFit(QStringLiteral("pulley"))

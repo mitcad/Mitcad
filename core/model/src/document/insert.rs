@@ -38,11 +38,14 @@ impl<K: Kernel> Document<K> {
         // A new component of a component that takes none goes beside it
         // (mitcad#292).
         let beside = self.component_parent_beside(component);
+        // An Envelope's body takes its source's appearance (mitcad#1271).
+        let appearance = self.made_appearance(def, component);
         self.apply(|state| {
             state.marker = position;
             let added = state.add_feature_in(def, name, component)?;
             state.marker = marker + 1;
             state.place_made_beside(added.uid, None, beside);
+            state.take_appearance(added.uid, appearance.as_deref());
             Ok((format!("Add {}", added.name), added))
         })
     }

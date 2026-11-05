@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Show start page at launch off (mitcad#1258; start-page.mitcad-ui turned
+# it off): MitCad starts on an empty design on the Solid tab, as before the
+# Start tab; the Start tab is still there. Run with MITCAD_START_PAGE=1 by
+# tools/ui-start-page-test.sh (Linux) and tools/ui-windows-start-page-test.ps1
+# (Windows).
+expect-ever '^Start page at launch: off \(Show start page at launch\)$' 30
+expect-ever 'View area' 30
+wait-idle
+sleep 2000
+expect-ever '^Opened the new design with .* active$'
+expect-never '^Start page shown$'
+expect-never '^Ribbon tab shown: START$'
+expect-setting start/showAtLaunch false
+expect-ever '^Ribbon tab START at ' 10
+expect-ever '^Ribbon tab SOLID at ' 10
+expect-never 'TestDriver: FAIL'

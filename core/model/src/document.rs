@@ -230,8 +230,8 @@ use crate::expr::{LengthUnit, ParamSpec, Unit, value_to_expression, with_decimal
 use crate::features::extrude_scope::Exclusion;
 use crate::features::sketch::LinkedReferences;
 use crate::features::{
-    CheckContext, FeatureDef, FeatureEntry, HelixConstruction, SketchDef, SketchPlane, ValueInput,
-    slot_label,
+    CheckContext, FeatureDef, FeatureEntry, HelixConstruction, ProfileRef, SketchDef, SketchPlane,
+    ValueInput, slot_label,
 };
 use crate::ids::{BodyUid, ComponentUid, EntityUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
@@ -2585,6 +2585,30 @@ impl<K: Kernel> Document<K> {
         Ok(())
     }
 
+    /// The profile references of a feature's definition that no region of
+    /// their sketch, as last computed, shares a curve with: profiles that
+    /// were deleted from the sketch (mitcad#1264). An edit panel leaves
+    /// them out, so that a new pick is not refused beside them. A sketch
+    /// the last recompute did not reach is not judged.
+    pub fn missing_profiles(&self, uid: FeatureUid) -> Vec<ProfileRef> {
+        let Some(entry) = self.feature(uid) else {
+            return Vec::new();
+        };
+        entry
+            .def
+            .info()
+            .profiles()
+            .iter()
+            .filter(|p| {
+                self.result
+                    .sketches
+                    .get(&p.sketch)
+                    .is_some_and(|output| output.value.resolve_region(&p.region).is_none())
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Adds a feature at the timeline marker, to the active component.
     /// Numbers in the definition become dimension parameters owned by the
     /// feature.
@@ -2613,9 +2637,12 @@ impl<K: Kernel> Document<K> {
         // A new component of a component that takes none goes beside it
         // (mitcad#292).
         let beside = self.component_parent_beside(component);
+        // An Envelope's body takes its source's appearance (mitcad#1271).
+        let appearance = self.made_appearance(def, component);
         self.apply(|state| {
             let added = state.add_feature_in(def, name, component)?;
             state.place_made_beside(added.uid, None, beside);
+            state.take_appearance(added.uid, appearance.as_deref());
             Ok((format!("Add {}", added.name), added))
         })
     }
@@ -3415,6 +3442,7 @@ impl<K: Kernel> Document<K> {
                 })),
                 chain: Vec::new(),
                 curves,
+                outline: false,
             });
         }
         if groups.is_empty() {
@@ -3519,12 +3547,19 @@ impl<K: Kernel> Document<K> {
                 )));
             }
         };
-        let one = |curves: Vec<crate::kernel::Curve3>| {
+        let one = |curves: Vec<crate::kernel::Curve3>, outline: bool| {
             vec![SourceCurves {
                 source: source.cloned().map(crate::sketch::ProjectionSource::Topo),
                 chain: Vec::new(),
                 curves,
+                outline,
             }]
+        };
+        // The sketch's normal where the source is: a face is projected as
+        // it is seen along it, its outline (mitcad#1265).
+        let direction = match &to_sketch {
+            Some(t) => crate::assembly::inverse(t).apply_vector(frame.normal()),
+            None => frame.normal(),
         };
         let error =
             |e: crate::kernel::KernelError| invalid(format!("{what} of {source_name}: {e}"));
@@ -3542,22 +3577,35 @@ impl<K: Kernel> Document<K> {
                         .section_curves(shape, None, plane)
                         .map_err(error)?,
                 ),
-                (Some(plane), Some(TopoName::Face(face))) => one(self
-                    .kernel
-                    .section_curves(shape, Some(face), plane)
-                    .map_err(error)?
-                    .into_iter()
-                    .map(|c| c.curve)
-                    .collect()),
+                (Some(plane), Some(TopoName::Face(face))) => one(
+                    self.kernel
+                        .section_curves(shape, Some(face), plane)
+                        .map_err(error)?
+                        .into_iter()
+                        .map(|c| c.curve)
+                        .collect(),
+                    false,
+                ),
                 // Where the plane crosses an edge: points (mitcad#736).
-                (Some(plane), Some(TopoName::Edge(edge))) => one(self
-                    .kernel
-                    .section_points(shape, edge, plane)
-                    .map_err(error)?
-                    .into_iter()
-                    .map(crate::kernel::Curve3::Point)
-                    .collect()),
-                (_, Some(source)) => one(self.kernel.curves_of(shape, source).map_err(error)?),
+                (Some(plane), Some(TopoName::Edge(edge))) => one(
+                    self.kernel
+                        .section_points(shape, edge, plane)
+                        .map_err(error)?
+                        .into_iter()
+                        .map(crate::kernel::Curve3::Point)
+                        .collect(),
+                    false,
+                ),
+                (_, Some(source)) => {
+                    let (curves, outline) = crate::features::sketch::projected_curves(
+                        &self.kernel,
+                        shape,
+                        source,
+                        direction,
+                    )
+                    .map_err(error)?;
+                    one(curves, outline)
+                }
                 (None, None) => Vec::new(),
             };
             groups.retain(|g| !g.curves.is_empty());
@@ -3742,6 +3790,7 @@ impl<K: Kernel> Document<K> {
                         section,
                         chain: group.chain,
                         after: None,
+                        outline: group.outline,
                     });
                 }
             }
@@ -4412,6 +4461,18 @@ fn display_names<S>(state: &DocState, result: &Recomputed<S>) -> BTreeMap<BodyUi
             if names.contains_key(uid) {
                 continue;
             }
+            // An Envelope's body is named after its feature (mitcad#1271),
+            // which marks it in the browser.
+            let envelope = state
+                .entry(uid.feature)
+                .filter(|f| matches!(f.def, FeatureDef::Envelope(_)) && uid.index == 0)
+                .map(|f| f.name.clone())
+                .filter(|name| !used.contains(name));
+            if let Some(name) = envelope {
+                used.insert(name.clone());
+                names.insert(*uid, name);
+                continue;
+            }
             while used.contains(&format!("Body{next}")) {
                 next += 1;
             }
@@ -4464,3 +4525,14 @@ pub use material_import::{MaterialImport, NameConflict};
 // definitions (mitcad#1223).
 mod auto_fix;
 pub use auto_fix::{AutoFix, AutoFixLeft, Repair};
+// The rolled-back features evaluated beside the document, adopted by it
+// (mitcad#1267).
+mod rolled_back;
+pub use rolled_back::RolledBackRun;
+// Find Repeated Parts: the copies among a base feature's bodies as
+// occurrences of one component (mitcad#1277).
+mod repeated_parts;
+pub use repeated_parts::{REPEATED_PARTS_TOLERANCE, RepeatedPart, RepeatedParts};
+// Envelope: its body takes its source's appearance when added, and a
+// linked component shown by its envelope (mitcad#1271).
+mod envelope;

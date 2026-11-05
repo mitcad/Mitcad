@@ -356,6 +356,16 @@ are hidden, and when the drawing closes each card is shown or hidden as it
 was asked to be meanwhile. The log reads `Native workspaces: Drawing (shown
 Drawing)` and `Native cards: Browser only (a drawing is open)`.
 
+The Start tab (mitcad#1258) is the retained ribbon's first tab, so the
+workspace selector lists it before Solid, Build and Make (`Native
+workspaces: Start, Solid, Build, Make (shown Start)`). Its content is the
+shared Qt Start page (`files/StartPage.hpp`), a child of the embedded 3D
+view, with the same quick actions, recent designs (previews, pins, search,
+compact list), resources and footer as in the Qt frontend.
+`NativeMacWindow::setStartPageShown` hides every card over the canvas,
+the Browser too, while it shows (`Native cards: none (the Start page is
+shown)`) and shows each as it was asked to be when it is left.
+
 A pinned command (mitcad#1074, after mitcad#1001 and mitcad#1084) is a
 button in its own group, after the group's own buttons, read from the
 retained ribbon's group row (`Ribbon::addPinnedButtons`, a button's
@@ -598,7 +608,7 @@ forms, a spanning row over stretched grid columns, hiding and showing,
 unambiguous layout, and the role order with its gaps, Return, Escape, a
 helper action and later role changes. Then, in light and dark appearance, it
 opens Parameters, New Project, Settings > Navigation, Insert from Library,
-Render Image and Library Components at the normal and a narrow document size and
+Render Image and Components in This Design at the normal and a narrow document size and
 at each dialog's narrowest size. In Settings every section button must show
 its template icon and complete name within its bounds, and real clicks
 switch to Display and back to Navigation. It asserts the visible, unclipped
@@ -1015,8 +1025,13 @@ The manager controls have stable identifiers: `printProfilesList` or
 `materialsList`, `printManagerSearch`, `printProfileName` or `materialName`,
 `printManagerEditing`, `printManagerBuiltInDuplicate`, `printManagerCopyTo`
 and the bottom `printManagerNew`, `printManagerDuplicate`,
-`printManagerDelete`, `printManagerUse` (profiles only) and
-`printManagerClose`. Place cells use `printManager.group.<place>`;
+`printManagerDelete`, `printManagerHide` (a base library item's Hide or
+Unhide, mitcad#1270), `printManagerUse` (profiles only) and
+`printManagerClose`, with `printManagerShowHidden` (Show hidden) under
+the list. A row's context menu (Duplicate, Hide or Delete) is the shared
+panel's `customContextMenuRequested` menu, and a folded Built-in group is
+the shared tree's folded heading; the native list has no path of its
+own for them. Place cells use `printManager.group.<place>`;
 profile cells use `printManager.item.<place>/<id>`, material cells keep
 `material.<place>/<id>`. These are the actual first-column cell identifiers
 from `NativeControlIdentifierRole`, not separate row-view identifiers.
@@ -1229,10 +1244,14 @@ Card titles keep their system-font metrics inside a 30-pixel header with
 The Floating Projects toolbar has a transparent background, so its native
 buttons sit on the same glass material as the rows in both appearances.
 
-`app.ui-macos-projects-cards` checks both requested slots and actual native
+`app.ui-macos-projects-cards-*` checks both requested slots and actual native
 window bounds, plus toolbar/button containment, with zero, one and 24 local
 synthetic projects. It covers project expansion, window resizes, card
 folding and visibility, in Floating and Docked layout at Qt scales 1 and 2.
+The sixteen variants have separate CTest entries and private fixtures, so
+repeated Aqua queue waits do not consume one deadline for the whole matrix.
+The one-project variants cover both appearances; all retain the same bounds
+and input assertions. The script's unfiltered invocation still runs the matrix.
 Scale overrides exercise Qt's high-density layout and artwork; they do not
 establish physical Retina-display acceptance. Screenshots of each state
 support the visual pass over the toolbar, rows, card titles and ribbon.
@@ -1275,6 +1294,11 @@ ribbon group's menu and the standard shortcut. Floating and Docked layout,
 light and dark appearance, and wide and narrow windows are covered. The
 AppKit toolbar's default items already omit Finish Sketch; its native
 ribbon retains the Finish Sketch group when other groups collapse.
+The native palette places its ordinary Finish action in the inspector's
+fixed footer, below the scrolling inputs. Long palette contents therefore
+keep the complete caption and pointer target visible, matching the shared
+palette. Native sketch workflows check the whole button bounds and caption
+and finish through its real pointer action.
 
 ## Viewport anti-aliasing measurements
 
@@ -1723,6 +1747,20 @@ preview and then accepts the unchanged value: a cancelled preview is not
 cached, so OK computes the command itself. Accepting a successful small
 Box preview instead adopts its cached result and does not demonstrate
 busy commit cancellation.
+The UI driver holds that synchronous `edit_feature` worker with
+`hold-model-edit true` until the real progress Cancel is pressed, then
+releases it with `hold-model-edit false`. Cancellation also unblocks the
+held worker, and driver exit cancels and releases any remaining test gate.
+This keeps the busy-state assertion independent of paint speed; ordinary
+application jobs have no armed gate.
+CTest registers the unchanged preview/cache, cancellation/Open and Quit
+scenarios separately for Floating and Docked chrome. Each process first
+makes the same unsaved 12 mm edit through the real controls, then checks
+its own captured undo depth. The original 210-second app and 240-second
+CTest deadlines apply per case, with desktop exclusion retained. This
+keeps all scenarios without charging one process for the whole matrix.
+A direct harness call without `MITCAD_TEST_CANCEL_CASE` retains the full
+combined workflow for diagnosis.
 Each physical run retains `windowed-ui-light.png` and
 `windowed-ui-dark.png` as framebuffer/widget composites, and
 `windowed-screen-light.png` and `windowed-screen-dark.png` from the

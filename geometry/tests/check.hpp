@@ -249,5 +249,8 @@ void dressup_takes_face_tests();
 void section_clip_tests();
 // Shells of bodies with parts no thicker than the wall (mitcad#1233).
 void shell_thin_parts_tests();
+// Outlines of faces seen along a direction: Project of a curved face
+// (mitcad#1265).
+void face_outline_tests();
 
 } // namespace test

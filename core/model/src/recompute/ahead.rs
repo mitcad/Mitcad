@@ -325,6 +325,9 @@ fn role<S>(
             .is_some_and(|p| p >= start && state.features[p].component != entry.component)
     };
     let reads_others = crate::policy::links_other_components(def)
+        // An Envelope reads the bodies of the occurrences placed in its
+        // source (mitcad#1271), from its first evaluation on.
+        || matches!(def, FeatureDef::Envelope(_))
         || newest.is_some_and(|output| {
             output.reads.iter().any(|read| match read {
                 Read::BodyIn(..) | Read::BodiesIn(..) | Read::Placement(..) | Read::Assembly(_) => {

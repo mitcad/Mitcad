@@ -396,6 +396,38 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
     QJsonObject def = feature.value(QStringLiteral("def")).toObject();
     // With the feature's uid, so that its own parameters can be told apart.
     def.insert(QStringLiteral("uid"), m_editUid);
+    // Profiles deleted from their sketch are left out: beside them the
+    // model refuses every new pick (mitcad#1264).
+    const QJsonArray missing = feature.value(QStringLiteral("missing_profiles")).toArray();
+    if (!missing.isEmpty() && def.value(QStringLiteral("profiles")).isArray()) {
+      QJsonArray kept;
+      for (const QJsonValue& profile : def.value(QStringLiteral("profiles")).toArray()) {
+        if (missing.contains(profile)) {
+          ++m_missingProfiles;
+        } else {
+          kept.append(profile);
+        }
+      }
+      def.insert(QStringLiteral("profiles"), kept);
+      QStringList sketches;
+      for (const QJsonValue& profile : missing) {
+        const QString uid = profile.toObject().value(QStringLiteral("sketch")).toString();
+        QString name = uid;
+        for (const QJsonValue& entry : timeline) {
+          if (entry.toObject().value(QStringLiteral("uid")).toString() == uid) {
+            name = entry.toObject().value(QStringLiteral("name")).toString();
+          }
+        }
+        if (!sketches.contains(name)) {
+          sketches.append(name);
+        }
+      }
+      m_missingSketches = sketches.join(QStringLiteral(", "));
+      qDebug().noquote() << QStringLiteral("Panel %1 left out %2 profile(s) deleted from %3")
+                                .arg(m_def.name)
+                                .arg(m_missingProfiles)
+                                .arg(m_missingSketches);
+    }
     const QString type = def.value(QStringLiteral("type")).toString();
     if ((type != m_def.featureType && !m_def.editsAlso.contains(type)) || !m_def.load ||
         (m_def.canEdit && !m_def.canEdit(def))) {
@@ -2008,7 +2040,10 @@ bool CommandSession::previewReady(QString& message, bool& error) {
   for (const Slot& slot : slotsOf(true)) {
     const InputDef& input = *slot.def;
     if (input.type == InputDef::Type::Selection && m_state.items(slot.key).size() < input.min) {
-      message = tr("Select %1.").arg(input.label.toLower());
+      message = m_missingProfiles > 0 && input.id == QStringLiteral("profiles")
+                    ? tr("%n profile(s) deleted from %1: select a new one.", nullptr, m_missingProfiles)
+                          .arg(m_missingSketches)
+                    : tr("Select %1.").arg(input.label.toLower());
       error = false;
       return false;
     }
@@ -2684,6 +2719,11 @@ QString CommandSession::okMessage(const QJsonObject& report) {
   message << report.value(QStringLiteral("infos")).toVariant().toStringList();
   m_shownNote.clear();
   refreshRowNotes();
+  if (m_missingProfiles > 0) {
+    // What the edit left out of the feature (mitcad#1264).
+    message.prepend(
+        tr("%n profile(s) deleted from %1 left out.", nullptr, m_missingProfiles).arg(m_missingSketches));
+  }
   if (m_def.note) {
     // The command's own note first (mitcad#472: a gear's derived values).
     m_shownNote = m_def.note(m_state, m_host);

@@ -48,7 +48,8 @@ PROTOCOL = "2025-11-25"
 TIMEOUT = 60
 FRAME_LIMIT = 8 * 1024 * 1024
 LIVE_TOOLS = {"document_list", "model_query", "model_command", "document_save", "document_open", "ui_state", "ui_log",
-              "ui_screenshot", "ui_select", "ui_command", "ui_camera", "model_export", "model_reference"}
+              "ui_screenshot", "ui_select", "ui_command", "ui_camera", "model_export", "model_reference",
+              "document_new"}
 # The projection of the block's bottom face in the sketch F4, as the
 # design's definition lists it.
 PROJECTED = ["p1", "p2", "c3", "p4", "c5", "p6", "c7", "c8"]
@@ -416,6 +417,21 @@ def run_flow(bridge, design, say=print):
     unknown = bridge.tool("model_query", {"document": document, "query": {"query": "bbox"}}, error=True)
     check("unknown query bbox" in unknown["error"] and "bodies" in unknown["error"],
           "An unknown query does not list the queries: " + repr(unknown))
+    # The commands an agent may run, and the nearest ids to an unknown one,
+    # in a text that names no file (mitcad#1269).
+    listed = bridge.tool("ui_command", {"document": document, "search": "stale projections"})
+    entries = {entry["id"]: entry for entry in listed["commands"]}
+    check("sketch.clean_up_stale_projections" in entries and entries["sketch.clean_up_stale_projections"]["agents"]
+          and listed["count"] == len(entries) and listed["total"] > listed["count"],
+          "ui_command's search: " + repr(listed)[:2000])
+    files = [entry for entry in bridge.tool("ui_command", {"document": document, "search": "file."})["commands"]
+             if entry["id"].startswith("file.")]
+    check(files and all(not entry["agents"] and entry.get("why") for entry in files),
+          "ui_command's search of the file commands: " + repr(files)[:2000])
+    nearest = bridge.tool("ui_command", {"document": document, "id": "sketch.clean_stale"}, error=True)
+    check("Nearest ids: sketch.clean_up_stale_projections" in nearest["error"] and ".md" not in nearest["error"],
+          "An unknown command id does not name the nearest ones: " + repr(nearest))
+    say("ok   ui_command lists the commands and names the nearest ids")
 
     # Refusals must preserve the complete live camera, including FOV. The
     # new eye/FOV would previously be applied before framing was checked.

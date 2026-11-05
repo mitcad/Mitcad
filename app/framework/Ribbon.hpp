@@ -31,8 +31,9 @@ namespace mitcad {
 
 class CommandRegistry;
 
-// The toolbar: workspace tabs (SOLID, BUILD, MAKE (mitcad#1049), and SKETCH
-// while sketching; DRAWING alone while a drawing is open, mitcad#1008),
+// The toolbar: workspace tabs (START (mitcad#1258, a page without groups:
+// the window shows the Start page), SOLID, BUILD, MAKE (mitcad#1049), and
+// SKETCH while sketching; DRAWING alone while a drawing is open, mitcad#1008),
 // each with groups (CREATE, MODIFY, ...) of command buttons; the group's
 // name opens a menu of all its commands, a subgroup's (CommandDef::subgroup)
 // as a submenu whose pinned command is a split button (mitcad#222), with
@@ -68,7 +69,7 @@ public:
   // SHEET for a cut sheet, mitcad#853), SOLID, BUILD and MAKE hidden, so
   // that the toolbar is one row; closed, they come back with the tab the
   // drawing was opened from shown. Logs "Ribbon tabs: DRAWING (shown
-  // DRAWING)", "Ribbon tabs: SOLID, BUILD, MAKE (shown BUILD)".
+  // DRAWING)", "Ribbon tabs: START, SOLID, BUILD, MAKE (shown BUILD)".
   void setDrawingMode(bool open, bool cutSheet = false);
   // The shown page's button of a command (its own, or one that runs it:
   // a pinned command's, a group's extra), or a group's caption by
@@ -85,6 +86,9 @@ public:
   // The internal name of the tab shown ("SOLID", "MAKE"), empty before
   // the tabs are built (mitcad#1049).
   QString currentTab() const;
+  // Shows the tab of that internal name ("START", "SOLID"), if it is there
+  // (mitcad#1258).
+  void showTab(const QString& tab);
   // The same full/collapsed group geometry for other native presentations.
   std::pair<int, int> groupWidths(const QString& tab, const QString& group) const;
 
@@ -220,9 +224,9 @@ private:
   // group's pinned buttons.
   bool dragPinned(QToolButton* button, QEvent* event);
   // The tab that shows a page (SOLID 0, SKETCH 1, BUILD 2, DRAWING 3, CUT
-  // SHEET 4, MAKE 5), or -1.
+  // SHEET 4, MAKE 5, START 6), or -1.
   int tabOfPage(int page) const;
-  // SOLID, BUILD and MAKE as the first tabs (built, a drawing closed).
+  // START, SOLID, BUILD and MAKE as the first tabs (built, a drawing closed).
   void addModelTabs();
   // The places logLayout logs: the tabs, the group menus, the split buttons.
   QStringList layoutLines() const;

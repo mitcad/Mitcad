@@ -1458,3 +1458,168 @@ fn export_usdz_keeps_components_and_appearances() {
         assert!(error.contains(expected), "{bad}: {error}");
     }
 }
+
+#[test]
+fn import_file_keeps_a_step_assembly_as_components() {
+    let mut doc = Document::new(MockKernel::default());
+    let instance = |part: usize, x: f64| ImportInstance {
+        part,
+        name: None,
+        transform: Transform::translation([x, 0.0, 0.0]),
+    };
+    let mut plate = body(Some("Plate"), "plate", 6);
+    plate.color = Some([0.0, 0.5, 1.0]);
+    let assembly = ImportAssembly {
+        parts: vec![
+            ImportPart {
+                name: Some("Plate".to_owned()),
+                bodies: vec![plate],
+                instances: Vec::new(),
+            },
+            // A part with an empty body beside its solid.
+            ImportPart {
+                name: Some("Pin".to_owned()),
+                bodies: vec![body(Some("Pin"), "pin", 3), body(None, "nothing", 0)],
+                instances: Vec::new(),
+            },
+            // A sub-assembly placing the pin twice.
+            ImportPart {
+                name: Some("Arm".to_owned()),
+                bodies: Vec::new(),
+                instances: vec![instance(1, 0.0), instance(1, 5.0)],
+            },
+            // A part without geometry.
+            ImportPart {
+                name: Some("Label".to_owned()),
+                bodies: Vec::new(),
+                instances: Vec::new(),
+            },
+        ],
+        roots: vec![
+            instance(0, 0.0),
+            instance(0, 100.0),
+            instance(0, 200.0),
+            instance(0, 300.0),
+            instance(2, 50.0),
+            instance(2, 150.0),
+            instance(3, 0.0),
+        ],
+    };
+    let path = "/models/machine.step";
+    doc.kernel()
+        .assemblies
+        .borrow_mut()
+        .insert(path.to_owned(), assembly);
+    // The same file flattened, as the kernel reads it for one base feature.
+    doc.kernel().files.borrow_mut().insert(
+        path.to_owned(),
+        (0..8).map(|_| body(Some("Plate"), "plate", 6)).collect(),
+    );
+    let result = command(&mut doc, json!({"cmd": "import_file", "path": path})).unwrap();
+    assert_eq!(result["structure"], "components");
+    let components = result["components"].as_array().unwrap();
+    let summary: Vec<(String, usize, usize)> = components
+        .iter()
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                c["occurrences"].as_array().unwrap().len(),
+                c["bodies"].as_u64().unwrap() as usize,
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("Plate".to_owned(), 4, 1),
+            ("Arm".to_owned(), 2, 0),
+            ("Pin".to_owned(), 2, 1)
+        ]
+    );
+    assert_eq!(result["occurrences"], 8);
+    assert_eq!(result["bodies"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        result["warnings"],
+        json!(["Pin: body 1 is empty: left out", "Label is empty: left out"])
+    );
+    assert_eq!(doc.undo_label(), Some("Import machine.step"));
+    // Each part once: two body definitions, eight placed instances (four
+    // plates and the two pins of each of the two arms).
+    assert_eq!(doc.bodies().len(), 2);
+    let instances = doc.instances();
+    assert_eq!(instances.len(), 8);
+    let plate = doc
+        .bodies()
+        .into_iter()
+        .find(|b| b.name == "Plate")
+        .unwrap();
+    assert_eq!(instances.iter().filter(|i| i.body == plate.uid).count(), 4);
+    let mut xs: Vec<f64> = instances
+        .iter()
+        .filter(|i| i.body != plate.uid)
+        .map(|i| i.transform.translation[0])
+        .collect();
+    xs.sort_by(f64::total_cmp);
+    assert_eq!(xs, [50.0, 55.0, 150.0, 155.0]);
+    // The design file holds each part's B-rep once.
+    let file = doc.to_json();
+    assert_eq!(file.matches("\"brep\"").count(), 2, "{file}");
+    // One undo step takes it all back.
+    doc.undo();
+    assert!(doc.bodies().is_empty());
+    assert!(doc.assembly().is_empty());
+
+    // One base feature: the file as the kernel flattens it.
+    let result = command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": path, "structure": "base"}),
+    )
+    .unwrap();
+    assert!(result.get("structure").is_none(), "{result}");
+    assert_eq!(result["bodies"].as_array().unwrap().len(), 8);
+    assert_eq!(doc.bodies().len(), 8);
+    let error = command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": path, "structure": "parts"}),
+    )
+    .unwrap_err();
+    assert!(error.contains("unknown variant"), "{error}");
+}
+
+#[test]
+fn file_structure_query_finds_step_assemblies() {
+    let dir = mitcad_model::testing::unique_temp_dir("file-structure");
+    let write = |name: &str, text: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let usage = "#7=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','','',#1,#2,$);\n";
+    let assembly = write(
+        "machine.step",
+        &format!("ISO-10303-21;\n{usage}{usage}END-ISO-10303-21;\n"),
+    );
+    let once = write(
+        "one.stp",
+        &format!("ISO-10303-21;\n{usage}END-ISO-10303-21;\n"),
+    );
+    let other = write("machine.igs", usage);
+    let doc = Document::new(MockKernel::default());
+    for (path, expected) in [(&assembly, true), (&once, false), (&other, false)] {
+        let result: Value = serde_json::from_str(
+            &doc.query(&json!({"query": "file_structure", "path": path}).to_string())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["assembly"], expected, "{path}");
+    }
+    // A name that spans two blocks of the scan is found too.
+    let long = format!(
+        "ISO-10303-21;\n{}{usage}{usage}",
+        " ".repeat((1 << 20) - 20)
+    );
+    let spanning = write("long.step", &long);
+    assert!(file_has_assembly(&spanning).unwrap());
+    assert!(file_has_assembly(dir.join("missing.step").to_str().unwrap()).is_err());
+    mitcad_model::testing::remove_temp(&dir);
+}

@@ -470,6 +470,9 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # an earlier OK (mitcad#1028), as in the Linux tests; a test of the
   # remembered values sets it to 1 first.
   if (-not $env:MITCAD_REMEMBER_PANEL_VALUES) { $env:MITCAD_REMEMBER_PANEL_VALUES = '0' }
+  # MitCad starts on an empty design, not on the Start tab (mitcad#1258), as
+  # in the Linux tests; a test of the Start page sets it to 1 first.
+  if (-not $env:MITCAD_START_PAGE) { $env:MITCAD_START_PAGE = '0' }
   $env:MITCAD_AUTOSAVE_DIR = $script:UiAutosave
   # Crash reports of the test's own (mitcad#62): none offered from the user's.
   $env:MITCAD_CRASH_DIR = Join-Path $script:UiOut 'crashes'

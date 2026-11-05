@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch app/commands/SketchCommands app/commands/InspectCommands app/framework/TestDriver app/commands/MeasureHistory app/MainWindowMeasureHistory.cpp app/MainWindowMeasurements.cpp app/platform/NativeForms app/platform/macos/NativeForms.mm app/platform/macos/NativeDialogs.mm
+# check-all sources: app/MainWindow.cpp app/MainWindow.hpp app/MainWindowNative.cpp
 # Small current-main canvas regressions, paired Qt/AppKit and light/dark.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

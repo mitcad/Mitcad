@@ -579,4 +579,6 @@ std::vector<gp_Pnt> section_points(const Shape& shape, const std::string& name, 
   });
 }
 
+ModelCurve edge_curve(const TopoDS_Edge& edge) { return curve_of(edge); }
+
 } // namespace mitcad::geometry

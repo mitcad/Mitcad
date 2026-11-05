@@ -136,6 +136,18 @@ sheet_at() {
 sheet_click() { ui_sync; xdotool mousemove $(sheet_at "$1" "$2") click 1; ui_sync; }
 # sheet_hover x y: the pointer moved to a sheet point (mm), no click.
 sheet_hover() { ui_sync; xdotool mousemove $(sheet_at "$1" "$2"); ui_sync; }
+# hover_is what "description": the newest "Drawing hover:" line names `what`.
+# The hover is logged only when it changes (mitcad#1272), so a pointer that
+# finds what it already found logs nothing new.
+hover_is() {
+  local last
+  ui_wait_idle
+  last=$(grep -F "Drawing hover: " "$UI_LOG" | tail -n 1)
+  case "$last" in
+    *"Drawing hover: $1 "*) echo "ok   $2" ;;
+    *) ui_fail "$2: the newest hover line is '$last'" ;;
+  esac
+}
 # hover_then_redo x y: the pointer moved to a sheet point (mm) and Redo
 # (Ctrl+Y) at once, before the hover's question is asked (mitcad#753).
 hover_then_redo() {
@@ -511,7 +523,7 @@ ui_expect_new "Drawing picked line (2)" "the top edge picked"
 ui_expect_new "Drawing placing view" "its place is clicked next"
 ui_expect_new "Drawing preview: dimension" "its lines follow the pointer while it is placed"
 ui_step "where the dimension goes"         sheet_click 172 120
-ui_expect_new '"type":"linear"' "a linear dimension asked for"
+ui_expect_new '"type":"dimension"' "a dimension asked for, its picks choosing its type"
 ui_expect_new "Drawing annotations drawn: 1 = 20" "drawn: the block is 20 high"
 no_refusal
 # The hover's question waits while a job computes the model (mitcad#753):
@@ -522,7 +534,7 @@ ui_mark
 ui_step "undo the dimension (Ctrl+Z)"      ui_key ctrl+z
 ui_expect_new "Drawing annotations drawn: none" "the dimension undone, the tool still on"
 ui_step "point at the empty sheet"         sheet_hover 200 75
-ui_expect_new "Drawing hover: nothing" "nothing under the pointer"
+hover_is nothing "nothing under the pointer"
 ui_mark
 ui_step "onto the bottom edge, then redo (Ctrl+Y)" hover_then_redo 95 100.5
 ui_expect_new "Drawing annotations drawn: 1 = 20" "the dimension redone" 10
@@ -785,7 +797,7 @@ ui_mark
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
 # Solid and Build back, Solid shown, as before the drawing (mitcad#1008).
-ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
+ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
 ui_mark
 ui_step "edit Extrude1 (double-click)"     ui_double_click_logged "Timeline Extrude1"
 ui_expect_new " with Extrude" "editing Extrude1"
@@ -837,7 +849,7 @@ echo "--- Saved and opened again"
 ui_mark
 ui_step "back to the model (Close Drawing)" ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "closed"
-ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown BUILD)" "back on the Build tab it was opened from"
+ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown BUILD)" "back on the Build tab it was opened from"
 ui_focus_main
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved"
@@ -1096,7 +1108,7 @@ settled "Drawing Close Drawing"
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
 # The model's tabs and the cards back (mitcad#1008).
-ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)" "Solid and Build back"
+ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)" "Solid and Build back"
 floating_cards with timelineDock
 ui_focus_main
 ui_mark

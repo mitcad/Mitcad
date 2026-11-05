@@ -169,8 +169,8 @@ expect-no-log '^Native chat card: no message field to focus$'
 mark
 native-click native.ribbon.drawing.close
 expect-log 'Drawing closed'
-expect-log 'Ribbon tabs: SOLID, BUILD, MAKE \(shown BUILD\)'
-expect-log 'Native workspaces: Solid, Build, Make \(shown Build\)'
+expect-log 'Ribbon tabs: START, SOLID, BUILD, MAKE \(shown BUILD\)'
+expect-log 'Native workspaces: Start, Solid, Build, Make \(shown Build\)'
 expect-log 'Native cards: all \(the drawing closed\)'
 expect-native-visible native.ribbon.group.timber true
 expect-native-visible native.historyCard true

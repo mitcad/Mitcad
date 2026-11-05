@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1268: New Design with the Projects dock hidden, in the Docked
+# layout, after tools/ui-scripts/projects-naming.mitcad-ui (the project Shop
+# at ${MITCAD_TEST_SHOP} has Design1 to Design4, Plate and Gear): the dock
+# is shown for the name, the proposed name is taken with Enter, and the
+# dock is hidden again. All designs are synthetic.
+wait-idle
+expect-ever '^Projects tree: Shop \(cloud' 30
+# The check at the opening fetches first: over before the steps.
+sleep 9000
+mark
+command view.projects
+wait-log '^Projects panel: hidden$' 10
+expect-widget-property projectsDock visible false
+mark
+command file.new_design
+wait-log '^Projects panel: shown for naming$' 10
+expect-widget-property projectsDock visible true
+wait-log '^Projects panel: naming a new design in Shop: Design5$' 30
+wait-log '^Projects panel: name editor on Shop \(new\): "Design5", focused, all selected, in sight$' 10
+key Return
+wait-log '^Projects panel: new design Design5\.mitcad in ' 10
+wait-log '^Projects panel: new_design recorded as ' 30
+wait-log '^New Design: made .*/Design5\.mitcad in ' 30
+wait-log '^Projects panel: hidden again after naming$' 30
+expect-widget-property projectsDock visible false
+expect-file '${MITCAD_TEST_SHOP}/Design5.mitcad'
+expect-never 'TestDriver: FAIL'

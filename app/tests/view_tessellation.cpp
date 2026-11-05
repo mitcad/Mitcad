@@ -21,7 +21,12 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRep_Tool.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <NCollection_Sequence.hxx>
+#include <Precision.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_Array2.hxx>
 #include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
 #include <StdPrs_DeflectionCurve.hxx>
@@ -81,8 +86,10 @@ void checkCylinder(const std::string& path, double radius, double height) {
       for (int n = 2; n <= polygon->NbNodes(); ++n) {
         const gp_Pnt a = mesh->Node(polygon->Node(n - 1)).Transformed(location.Transformation());
         const gp_Pnt b = mesh->Node(polygon->Node(n)).Transformed(location.Transformation());
-        // At a 1000-pixel radius the boundary deviates by at most half a
-        // pixel, including a small circle on a very long imported body.
+        // At a 500-pixel radius the boundary deviates by less than a
+        // pixel, including a small circle on a very long imported body
+        // (half a pixel at 1 000 pixels before mitcad#1275: the view's
+        // edges are cut in steps of 6 degrees now, 2.5 before).
         boundarySag = std::max(boundarySag, sag(a, b, curve.Circle()));
       }
       NCollection_Sequence<gp_Pnt> wire;
@@ -97,7 +104,7 @@ void checkCylinder(const std::string& path, double radius, double height) {
   CHECK(circles >= 2);
   std::printf("Cylinder radius %g, height %g: boundary deviation %g, wire deviation %g\n",
               radius, height, boundarySag, wireSag);
-  CHECK(boundarySag <= radius * 0.0005);
+  CHECK(boundarySag <= radius * 0.0015);
   CHECK(wireSag <= radius * 0.001);
 }
 
@@ -145,11 +152,12 @@ int sphereTriangles(const TopoDS_Shape& shape, int& spheres) {
 
 // The view's meshes of a building-scale dome (mitcad#398): at an absolute
 // 0.01 mm its sphere faces took millions of triangles on the UI thread;
-// the view's drawer now gives each about kViewFaceTriangles at most, keeps
-// the meshes made on the model's thread (mesh_in_place), and meshes a
-// dome of 3.6 cm exactly as an absolute 0.01 mm does (one of 9 cm, about
-// 23 000 triangles a sphere face at 0.01 mm, meshes at 0.011 mm). Counts,
-// not times.
+// the view's drawer now gives each kViewFaceTriangles at most (held within
+// it since mitcad#1275; about 1.5 times as many before), keeps the meshes
+// made on the model's thread (mesh_in_place), and meshes a dome of 3.6 cm
+// exactly as plain BRepMesh does at the dome's deviation by its size
+// (0.04 mm for its 55 mm diagonal, mitcad#1275; an absolute 0.01 mm
+// before). Counts, not times.
 void checkDome(const occ::handle<Prs3d_Drawer>& drawer) {
   const TopoDS_Shape big = dome(1.0);
   CHECK(StdPrs_ToolTriangulatedShape::Tessellate(big, drawer));
@@ -157,7 +165,7 @@ void checkDome(const occ::handle<Prs3d_Drawer>& drawer) {
   const int drawn = sphereTriangles(big, spheres);
   std::printf("Dome of 9 m in the view: %d triangles on the larger sphere face\n", drawn);
   CHECK(spheres == 2);
-  CHECK(drawn > 5000 && drawn <= static_cast<int>(mitcad::kViewFaceTriangles * 3 / 2));
+  CHECK(drawn > 5000 && drawn <= static_cast<int>(mitcad::kViewFaceTriangles));
 
   // Meshed on the model's thread first: the view keeps those meshes.
   const TopoDS_Shape shown = dome(1.0);
@@ -166,12 +174,20 @@ void checkDome(const occ::handle<Prs3d_Drawer>& drawer) {
   StdPrs_ToolTriangulatedShape::Tessellate(shown, drawer);
   CHECK(triangulations(shown) == before);
 
-  // A small dome (radii 17.8 and 18.2 mm): as with an absolute 0.01 mm and
-  // 5 degrees.
+  // A small dome (radii 17.8 and 18.2 mm): as plain BRepMesh with the
+  // view's deviation for its size and the view's angles.
   const TopoDS_Shape small = dome(0.004);
   const TopoDS_Shape plain = BRepBuilderAPI_Copy(small, false, false).Shape();
+  const double smallDeviation = mitcad::viewShapeDeviation(small);
+  std::printf("Dome of 3.6 cm: deviation %g mm\n", smallDeviation);
+  CHECK(std::abs(smallDeviation - 0.04) < 1e-9);
   CHECK(StdPrs_ToolTriangulatedShape::Tessellate(small, drawer));
-  BRepMesh_IncrementalMesh(plain, mitcad::kViewDeviation, false, mitcad::kViewAngle, true);
+  IMeshTools_Parameters plainParameters;
+  plainParameters.Deflection = smallDeviation;
+  plainParameters.Angle = mitcad::kViewAngle;
+  plainParameters.AngleInterior = mitcad::kViewInteriorAngle;
+  plainParameters.InParallel = true;
+  BRepMesh_IncrementalMesh(plain, plainParameters);
   std::vector<int> counts;
   std::vector<int> plainCounts;
   for (const auto& mesh : triangulations(small)) {
@@ -213,18 +229,21 @@ int circlePoints(const TopoDS_Shape& shape) {
   return most;
 }
 
-// A tank of 5 m radius in the view (mitcad#438): its circles at the
-// deviation of a turn in 500 pieces (2e-5 of the radius; about 700 points,
-// as BRepMesh cuts edges at half their deviation), not the 2 200 points of
-// an absolute 0.01 mm, for its side and its flat ends alike; meshed on the
-// model's thread first, the view keeps those meshes, the coarser edges
-// included.
+// A tank of 5 m radius in the view (mitcad#438): its circles at most as
+// fine as a turn in 500 pieces (2e-5 of the radius; about 700 points, as
+// BRepMesh cuts edges at half their deviation), not the 2 200 points of an
+// absolute 0.01 mm, for its side and its flat ends alike. Since mitcad#1275
+// the tank's deviation by its size (the most, 0.5 mm, for its 24 m
+// diagonal) is coarser still: about 310 points, a quarter of a millimetre
+// off the circle of 5 m. Meshed on the model's thread first, the view
+// keeps those meshes, the coarser edges included.
 void checkTank(const occ::handle<Prs3d_Drawer>& drawer) {
   const TopoDS_Shape drawn = BRepPrimAPI_MakeCylinder(5000.0, 20000.0).Shape();
+  CHECK(std::abs(mitcad::viewShapeDeviation(drawn) - mitcad::kViewDeviationMax) < 1e-9);
   CHECK(StdPrs_ToolTriangulatedShape::Tessellate(drawn, drawer));
   const int points = circlePoints(drawn);
   std::printf("Tank of 5 m radius in the view: %d points round its circles\n", points);
-  CHECK(points > 400 && points <= 1200);
+  CHECK(points > 250 && points <= 1200);
 
   const TopoDS_Shape shown = BRepPrimAPI_MakeCylinder(5000.0, 20000.0).Shape();
   CHECK(mitcad::io::mesh_in_place(shown, mitcad::viewMeshOptions()));
@@ -232,6 +251,53 @@ void checkTank(const occ::handle<Prs3d_Drawer>& drawer) {
   StdPrs_ToolTriangulatedShape::Tessellate(shown, drawer);
   CHECK(triangulations(shown) == before);
   CHECK(circlePoints(shown) == points);
+}
+
+// A wavy B-spline sheet `size` mm square: bicubic, poles x poles control
+// points up and down `height` mm in turn (as geometry/io's test of the
+// face bound).
+TopoDS_Shape wavySheet(double size, int poles, double height) {
+  NCollection_Array2<gp_Pnt> points(1, poles, 1, poles);
+  for (int i = 1; i <= poles; ++i) {
+    for (int j = 1; j <= poles; ++j) {
+      points.SetValue(i, j,
+                      gp_Pnt(size * (i - 1) / (poles - 1), size * (j - 1) / (poles - 1),
+                             (i + j) % 2 == 0 ? height : -height));
+    }
+  }
+  NCollection_Array1<double> knots(1, poles - 2);
+  NCollection_Array1<int> multiplicities(1, poles - 2);
+  for (int k = 1; k <= poles - 2; ++k) {
+    knots.SetValue(k, static_cast<double>(k - 1));
+    multiplicities.SetValue(k, k == 1 || k == poles - 2 ? 4 : 1);
+  }
+  const occ::handle<Geom_BSplineSurface> surface =
+      new Geom_BSplineSurface(points, knots, knots, multiplicities, multiplicities, 3, 3);
+  return BRepBuilderAPI_MakeFace(surface, Precision::Confusion()).Face();
+}
+
+// A face held within the face bound in the view (mitcad#1275): a wavy
+// B-spline sheet of 60 mm (0.08 mm by its size, and still too small for
+// the bound's floor), meshed by the view's drawer and on the model's thread,
+// has at most kViewFaceTriangles triangles, the same both ways; the drawer
+// keeps the model thread's, and finds them meshed finely enough (they
+// record the drawers' deviation).
+void checkHeldFace(const occ::handle<Prs3d_Drawer>& drawer) {
+  const TopoDS_Shape drawn = wavySheet(60.0, 34, 3.0);
+  CHECK(std::abs(mitcad::viewShapeDeviation(drawn) - 0.08) < 1e-9);
+  CHECK(StdPrs_ToolTriangulatedShape::Tessellate(drawn, drawer));
+  const std::vector<int> counts = triangleCounts(drawn);
+  std::printf("Wavy sheet of 60 mm in the view: %d triangles\n", counts.empty() ? -1 : counts.front());
+  CHECK(counts.size() == 1);
+  CHECK(!counts.empty() && counts.front() > 0 && counts.front() <= static_cast<int>(mitcad::kViewFaceTriangles));
+
+  const TopoDS_Shape shown = wavySheet(60.0, 34, 3.0);
+  CHECK(mitcad::io::mesh_in_place(shown, mitcad::viewMeshOptions()));
+  CHECK(triangleCounts(shown) == counts);
+  const auto before = triangulations(shown);
+  StdPrs_ToolTriangulatedShape::Tessellate(shown, drawer);
+  CHECK(triangulations(shown) == before);
+  CHECK(StdPrs_ToolTriangulatedShape::IsTessellated(shown, drawer));
 }
 
 // A face OCCT's mesher fails on (mitcad#589: meshing such a face again
@@ -300,6 +366,7 @@ int main(int argc, char** argv) {
     drawer->SetLink(defaults);
     checkDome(drawer);
     checkTank(drawer);
+    checkHeldFace(drawer);
     checkUnmeshable();
     checkJobMeshesKept(drawer);
   } catch (const Standard_Failure& error) {

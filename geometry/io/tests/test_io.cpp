@@ -48,11 +48,17 @@
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom_BSplineSurface.hxx>
 #include <Geom_Surface.hxx>
+#include <Precision.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_Array2.hxx>
+#include <gp_Ax1.hxx>
 #include <IMeshData_Edge.hxx>
 #include <IMeshData_Face.hxx>
 #include <IMeshData_Model.hxx>
@@ -79,6 +85,22 @@
 #include <gp_Pnt2d.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <vector>
+
+// STEP assemblies written with their structure (mitcad#1274).
+#include <Quantity_Color.hxx>
+#include <STEPCAFControl_Writer.hxx>
+#include <TCollection_ExtendedString.hxx>
+#include <TDF_Label.hxx>
+#include <TDataStd_Name.hxx>
+#include <TDocStd_Document.hxx>
+#include <UnitsMethods_LengthUnit.hxx>
+#include <XCAFApp_Application.hxx>
+#include <XCAFDoc_ColorTool.hxx>
+#include <XCAFDoc_ColorType.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_ShapeTool.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 
 // windows.h (which OCCT headers such as Message_ProgressIndicator.hxx may
 // bring in on Windows) defines near and far as empty macros, which would
@@ -244,6 +266,167 @@ void test_step(const std::string& dir) {
       CHECK(same_color(read[i].color, bodies[i].color, 1e-3));
       check_same_solid(bodies[i].shape, read[i].shape);
     }
+  }
+}
+
+bool box_near(const Box& a, const Box& b, double tolerance);
+
+// A placement as an OCCT transformation.
+gp_Trsf transformation(const mitcad::io::Placement& placement) {
+  gp_Trsf trsf;
+  const auto& r = placement.rotation;
+  const auto& t = placement.translation;
+  trsf.SetValues(r[0][0], r[0][1], r[0][2], t[0], r[1][0], r[1][1], r[1][2], t[1], r[2][0], r[2][1], r[2][2],
+                 t[2]);
+  return trsf;
+}
+
+// The structure of a STEP assembly (mitcad#1274): a plate placed four
+// times and an arm (a sub-assembly placing a pin twice) placed twice, the
+// second arm turned a quarter about z. Read with its structure, each part
+// and assembly is one node in its own coordinates; flattened, eight bodies.
+void test_step_assembly_structure(const std::string& dir) {
+  const occ::handle<TDocStd_Document> document = new TDocStd_Document("MDTV-XCAF");
+  XCAFApp_Application::GetApplication()->InitDocument(document);
+  XCAFDoc_DocumentTool::SetLengthUnit(document, 1.0, UnitsMethods_LengthUnit_Millimeter);
+  const occ::handle<XCAFDoc_ShapeTool> shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
+  const occ::handle<XCAFDoc_ColorTool> colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
+  const TopoDS_Shape plate_shape = BRepPrimAPI_MakeBox(100.0, 50.0, 2.0).Shape();
+  const TopoDS_Shape pin_shape = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape();
+  const TDF_Label plate = shapes->AddShape(plate_shape, false);
+  TDataStd_Name::Set(plate, TCollection_ExtendedString("Plate"));
+  colors->SetColor(plate, Quantity_Color(0.2, 0.4, 0.6, Quantity_TOC_sRGB), XCAFDoc_ColorSurf);
+  const TDF_Label pin = shapes->AddShape(pin_shape, false);
+  TDataStd_Name::Set(pin, TCollection_ExtendedString("Pin"));
+  const TDF_Label arm = shapes->NewShape();
+  TDataStd_Name::Set(arm, TCollection_ExtendedString("Arm"));
+  const auto moved = [](double x, double y, double turn) {
+    gp_Trsf rotation;
+    rotation.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), turn);
+    gp_Trsf translation;
+    translation.SetTranslation(gp_Vec(x, y, 0.0));
+    return TopLoc_Location(translation * rotation);
+  };
+  shapes->AddComponent(arm, pin, moved(0.0, 0.0, 0.0));
+  shapes->AddComponent(arm, pin, moved(0.0, 20.0, 0.0));
+  const TDF_Label top = shapes->NewShape();
+  TDataStd_Name::Set(top, TCollection_ExtendedString("Machine"));
+  for (int i = 0; i < 4; ++i) {
+    shapes->AddComponent(top, plate, moved(150.0 * static_cast<double>(i), 0.0, 0.0));
+  }
+  shapes->AddComponent(top, arm, moved(0.0, 100.0, 0.0));
+  shapes->AddComponent(top, arm, moved(300.0, 100.0, 3.14159265358979323846 / 2.0));
+  shapes->UpdateAssemblies();
+  const std::string path = dir + "/machine.step";
+  STEPCAFControl_Writer writer;
+  writer.SetNameMode(true);
+  writer.SetColorMode(true);
+  CHECK(writer.Perform(document, path.c_str()));
+
+  // Flattened as before: a body per placed copy.
+  const std::vector<Body> flat = mitcad::io::read_step(path);
+  CHECK(flat.size() == 8);
+  const mitcad::io::StepRead without = mitcad::io::read_step_structured(path, false);
+  CHECK(!without.assembly && without.bodies.size() == 8);
+
+  const mitcad::io::StepRead read = mitcad::io::read_step_structured(path, true);
+  CHECK(read.assembly.has_value() && read.bodies.empty());
+  if (!read.assembly) {
+    return;
+  }
+  const mitcad::io::StepAssembly& assembly = *read.assembly;
+  CHECK(assembly.nodes.size() == 3);
+  CHECK(assembly.roots.size() == 6);
+  const auto node_named = [&](const std::string& name) -> const mitcad::io::StepAssembly::Node* {
+    for (const mitcad::io::StepAssembly::Node& node : assembly.nodes) {
+      if (node.name == name) {
+        return &node;
+      }
+    }
+    return nullptr;
+  };
+  const mitcad::io::StepAssembly::Node* plate_node = node_named("Plate");
+  const mitcad::io::StepAssembly::Node* arm_node = node_named("Arm");
+  const mitcad::io::StepAssembly::Node* pin_node = node_named("Pin");
+  CHECK(plate_node != nullptr && arm_node != nullptr && pin_node != nullptr);
+  if (plate_node == nullptr || arm_node == nullptr || pin_node == nullptr) {
+    return;
+  }
+  // Each part's body once, where the part has it.
+  CHECK(plate_node->bodies.size() == 1 && plate_node->instances.empty());
+  CHECK(pin_node->bodies.size() == 1 && pin_node->instances.empty());
+  CHECK(arm_node->bodies.empty() && arm_node->instances.size() == 2);
+  if (plate_node->bodies.size() == 1 && pin_node->bodies.size() == 1) {
+    CHECK(box_near(bbox(plate_node->bodies.front().shape), bbox(plate_shape), 1e-6));
+    CHECK(box_near(bbox(pin_node->bodies.front().shape), bbox(pin_shape), 1e-6));
+    CHECK(same_color(plate_node->bodies.front().color, Color{0.2, 0.4, 0.6}, 1e-3));
+    CHECK(plate_node->bodies.front().name == "Plate");
+  }
+  std::size_t plates = 0;
+  std::size_t arms = 0;
+  for (const mitcad::io::StepAssembly::Instance& root : assembly.roots) {
+    const mitcad::io::StepAssembly::Node& node = assembly.nodes.at(root.node);
+    if (&node == plate_node) {
+      CHECK(near(root.placement.translation[0], 150.0 * static_cast<double>(plates), 1e-9));
+      ++plates;
+    } else if (&node == arm_node) {
+      ++arms;
+    }
+  }
+  CHECK(plates == 4 && arms == 2);
+  // The second pin of the turned arm: 20 mm along y in the arm, turned to
+  // -20 mm along x, then moved to (300, 100).
+  const mitcad::io::StepAssembly::Instance& turned = assembly.roots.back();
+  const mitcad::io::StepAssembly::Instance& second = arm_node->instances.back();
+  CHECK(&assembly.nodes.at(second.node) == pin_node);
+  if (pin_node->bodies.size() == 1) {
+    const TopoDS_Shape placed = pin_node->bodies.front().shape.Moved(
+        TopLoc_Location(transformation(turned.placement) * transformation(second.placement)));
+    CHECK(box_near(bbox(placed), Box{{270.0, 100.0, 0.0}, {280.0, 120.0, 5.0}}, 1e-6));
+  }
+  // The rotation is exact enough to be rigid.
+  const auto& r = turned.placement.rotation;
+  CHECK(near(r[0][0], 0.0, 1e-12) && near(r[0][1], -1.0, 1e-12) && near(r[1][0], 1.0, 1e-12));
+
+  // A file of parts without an assembly has no structure.
+  const std::string parts = dir + "/parts.step";
+  mitcad::io::write_step(parts, {Body{"Plate", plate_shape, std::nullopt, {}},
+                                 Body{"Pin", pin_shape, std::nullopt, {}}});
+  const mitcad::io::StepRead plain = mitcad::io::read_step_structured(parts, true);
+  CHECK(!plain.assembly && plain.bodies.size() == 2);
+
+  // Bodies written as compounds of one solid each (as base features keep
+  // imported bodies) are products placing their solid's product once:
+  // still no assembly, the bodies named as before.
+  std::vector<Body> wrapped;
+  for (int i = 0; i < 3; ++i) {
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    builder.Add(compound, BRepPrimAPI_MakeBox(gp_Pnt(30.0 * i, 0.0, 0.0), 10.0, 10.0, 10.0).Shape());
+    wrapped.push_back(Body{"Block " + std::to_string(i + 1), compound, std::nullopt, {}});
+  }
+  const std::string compounds = dir + "/compounds.step";
+  mitcad::io::write_step(compounds, wrapped);
+  const mitcad::io::StepRead flat_compounds = mitcad::io::read_step_structured(compounds, true);
+  CHECK(!flat_compounds.assembly && flat_compounds.bodies.size() == 3);
+  CHECK(mitcad::io::read_step(compounds).size() == 3);
+  // Placed twice, the same compound body is a part placed twice: the
+  // product that holds the solid is the part, named after the body.
+  mitcad::io::Placement there;
+  there.translation = {0.0, 50.0, 0.0};
+  wrapped.front().placements = {mitcad::io::Placement{}, there};
+  const std::string twice = dir + "/compound-twice.step";
+  mitcad::io::write_step(twice, {wrapped.front()});
+  const mitcad::io::StepRead placed_twice = mitcad::io::read_step_structured(twice, true);
+  CHECK(placed_twice.assembly.has_value());
+  if (placed_twice.assembly) {
+    const mitcad::io::StepAssembly& twice_assembly = *placed_twice.assembly;
+    CHECK(twice_assembly.roots.size() == 2);
+    CHECK(twice_assembly.roots.size() == 2 && twice_assembly.roots[0].node == twice_assembly.roots[1].node);
+    const mitcad::io::StepAssembly::Node& block = twice_assembly.nodes.at(twice_assembly.roots.at(0).node);
+    CHECK(block.instances.empty() && block.bodies.size() == 1);
+    CHECK(!block.bodies.empty() && block.bodies.front().name == "Block 1");
   }
 }
 
@@ -1757,6 +1940,171 @@ void test_building_scale_round_faces() {
   }
 }
 
+// A wavy B-spline sheet `size` mm square: bicubic, poles x poles control
+// points up and down `height` mm in turn (a chequer), so doubly curved all
+// over.
+TopoDS_Shape wavy_sheet(double size, int poles, double height) {
+  NCollection_Array2<gp_Pnt> points(1, poles, 1, poles);
+  for (int i = 1; i <= poles; ++i) {
+    for (int j = 1; j <= poles; ++j) {
+      points.SetValue(i, j,
+                      gp_Pnt(size * (i - 1) / (poles - 1), size * (j - 1) / (poles - 1),
+                             (i + j) % 2 == 0 ? height : -height));
+    }
+  }
+  NCollection_Array1<double> knots(1, poles - 2);
+  NCollection_Array1<int> multiplicities(1, poles - 2);
+  for (int k = 1; k <= poles - 2; ++k) {
+    knots.SetValue(k, static_cast<double>(k - 1));
+    multiplicities.SetValue(k, k == 1 || k == poles - 2 ? 4 : 1);
+  }
+  const occ::handle<Geom_BSplineSurface> surface =
+      new Geom_BSplineSurface(points, knots, knots, multiplicities, multiplicities, 3, 3);
+  return BRepBuilderAPI_MakeFace(surface, Precision::Confusion()).Face();
+}
+
+// The view's deviation by size (MeshOptions::size_deviation, mitcad#1275):
+// the deviation asked for up to a body of 10 mm across, then a thousandth
+// of the diagonal in steps of the square root of 2 at or below it, at most
+// the most; a copy moved and turned elsewhere the same; none without the
+// option. Meshed together, bodies of other sizes get the triangulations
+// each gets alone.
+void test_shape_deviation() {
+  using mitcad::io::MeshOptions;
+  using mitcad::io::shape_deviation;
+  MeshOptions view{0.01, 10.0 * std::atan(1.0) / 45.0, false, 20000, false, false};
+  view.size_deviation = 1e-3;
+  view.size_deviation_max = 0.5;
+  view.interior_angle = 15.0 * std::atan(1.0) / 45.0;
+  const TopoDS_Shape tiny = BRepPrimAPI_MakeBox(5.0, 5.0, 5.0).Shape();     // 8.7 mm across
+  const TopoDS_Shape plate = BRepPrimAPI_MakeBox(30.0, 40.0, 1.0).Shape();  // 50 mm
+  const TopoDS_Shape block = BRepPrimAPI_MakeBox(100.0, 100.0, 100.0).Shape(); // 173 mm
+  const TopoDS_Shape hall = BRepPrimAPI_MakeBox(10000.0, 8000.0, 6000.0).Shape();
+  CHECK(near(shape_deviation(tiny, view), 0.01, 1e-12));
+  CHECK(near(shape_deviation(plate, view), 0.04, 1e-12));
+  CHECK(near(shape_deviation(block, view), 0.16, 1e-12));
+  CHECK(near(shape_deviation(hall, view), 0.5, 1e-12));
+  gp_Trsf turn;
+  turn.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp::DZ()), 0.5);
+  gp_Trsf aside;
+  aside.SetTranslation(gp_Vec(500.0, -300.0, 20.0));
+  const TopoDS_Shape moved = block.Moved(TopLoc_Location(aside * turn));
+  CHECK(near(shape_deviation(moved, view), 0.16, 1e-12));
+  MeshOptions plain = view;
+  plain.size_deviation = 0.0;
+  CHECK(near(shape_deviation(hall, plain), 0.01, 1e-12));
+  // The exports' presets keep their own deviations (mitcad#1275: only the
+  // view's meshes go by size and hold their faces).
+  for (const auto refinement :
+       {mitcad::io::Refinement::Low, mitcad::io::Refinement::Medium, mitcad::io::Refinement::High}) {
+    const MeshOptions preset = MeshOptions::from(refinement);
+    CHECK(preset.size_deviation == 0.0 && preset.interior_angle == 0.0 && !preset.hold_face_triangles);
+    CHECK(near(shape_deviation(hall, preset), preset.linear_deflection, 1e-12));
+  }
+
+  const auto bodies = [] { return std::vector<TopoDS_Shape>{filleted_block(), dome(1.0), dome(0.01)}; };
+  const std::vector<TopoDS_Shape> alone = bodies();
+  for (const TopoDS_Shape& body : alone) {
+    CHECK(mitcad::io::mesh_in_place(body, view));
+  }
+  const std::vector<TopoDS_Shape> together = bodies();
+  mitcad::io::MeshReport report;
+  CHECK(mitcad::io::mesh_all_in_place(together, view, Message_ProgressRange(), &report) == together.size());
+  for (std::size_t i = 0; i < alone.size(); ++i) {
+    CHECK(face_triangles(together[i]) == face_triangles(alone[i]));
+  }
+  std::printf("Bodies of three sizes meshed together: %s\n", report.line().c_str());
+  CHECK(report.meshed == report.faces);
+  // The view's meshes again with the same options: every face kept.
+  mitcad::io::MeshReport again;
+  CHECK(mitcad::io::mesh_all_in_place(together, view, Message_ProgressRange(), &again) == together.size());
+  CHECK(again.kept == again.faces && again.meshed == 0);
+  // A face whose deviation the size alone raised records at most the
+  // deviation asked for (BRepMesh records the deviation it measured, which
+  // may be less): the filleted block's (0.057 mm, the step under its 75
+  // mm's thousandth) are all such.
+  CHECK(near(shape_deviation(together[0], view), 0.01 * std::pow(2.0, 2.5), 1e-12));
+  for (TopExp_Explorer it(together[0], TopAbs_FACE); it.More(); it.Next()) {
+    TopLoc_Location location;
+    const auto triangulation = BRep_Tool::Triangulation(TopoDS::Face(it.Current()), location);
+    if (!triangulation.IsNull() && triangulation->Deflection() > 0.01 + 1e-12) {
+      std::printf("Filleted block face records %g\n", triangulation->Deflection());
+    }
+    CHECK(!triangulation.IsNull() && triangulation->Deflection() <= 0.01 + 1e-12);
+  }
+}
+
+// The face bound held (MeshOptions::hold_face_triangles, mitcad#1275): a
+// wavy B-spline sheet of 24 mm is too small for the bound's floor (its
+// diagonal under 62.5 mm at 0.01 mm), and at 0.01 mm takes far more
+// triangles than the bound, as a small part's B-spline faces did; held, it
+// takes at most the bound. With a bound of 2 000 (below). Meshed in place
+// twice with the bound held, the triangulation is kept: it
+// records the deviation asked for. Counts, not times.
+void test_held_face_triangles() {
+  using mitcad::io::MeshOptions;
+  const MeshOptions plain{0.01, 5.0 * std::atan(1.0) / 45.0, false, 20000, false, false};
+  MeshOptions held = plain;
+  held.hold_face_triangles = true;
+  const TopoDS_Shape sheet = wavy_sheet(24.0, 14, 3.0);
+  CHECK(mitcad::io::face_deviation_floor(TopoDS::Face(TopExp_Explorer(sheet, TopAbs_FACE).Current()), 0.01,
+                                         20000) == 0.0);
+  const auto unbounded = face_triangles(mitcad::io::triangulate(sheet, plain));
+  const auto bounded = face_triangles(mitcad::io::triangulate(sheet, held));
+  CHECK(unbounded.size() == 1 && bounded.size() == 1);
+  if (unbounded.size() == 1 && bounded.size() == 1) {
+    std::printf("Wavy sheet: %d triangles, %d with the bound held\n", unbounded[0].second, bounded[0].second);
+    CHECK(unbounded[0].second > 20000);
+    CHECK(bounded[0].second > 0 && bounded[0].second <= 20000);
+  }
+
+  // A bound of 2 000: a sphere's and a filleted block's faces within it; a
+  // torus's and the sheet's fewer than without the hold, though their
+  // grids follow their edges' points (cut at 0.01 mm), which a face's
+  // meshing again cannot thin.
+  MeshOptions small = held;
+  small.face_triangles = 2000;
+  MeshOptions unheld = small;
+  unheld.hold_face_triangles = false;
+  const std::vector<std::pair<TopoDS_Shape, bool>> shapes{{wavy_sheet(24.0, 14, 3.0), false},
+                                                          {BRepPrimAPI_MakeSphere(20.0).Shape(), true},
+                                                          {BRepPrimAPI_MakeTorus(30.0, 5.0).Shape(), false},
+                                                          {filleted_block(), true}};
+  for (const auto& [shape, within] : shapes) {
+    const auto bound = face_triangles(mitcad::io::triangulate(shape, small));
+    const auto free = face_triangles(mitcad::io::triangulate(shape, unheld));
+    CHECK(bound.size() == free.size());
+    for (std::size_t i = 0; i < bound.size() && i < free.size(); ++i) {
+      const auto [type, triangles] = bound[i];
+      CHECK(triangles > 0);
+      if (type == GeomAbs_Plane) {
+        continue;
+      }
+      std::printf("Face of %s with a bound of 2000 held: %d triangles, %d without\n",
+                  mitcad::io::surface_name(type), triangles, free[i].second);
+      CHECK(triangles <= free[i].second);
+      if (within) {
+        CHECK(triangles <= 2000);
+      } else if (free[i].second > 2000) {
+        CHECK(triangles < free[i].second);
+      }
+    }
+  }
+
+  const TopoDS_Shape shown = wavy_sheet(24.0, 14, 3.0);
+  CHECK(mitcad::io::mesh_in_place(shown, held));
+  const auto first = triangulation_pointers(shown);
+  CHECK(face_triangles(shown) == bounded);
+  TopLoc_Location location;
+  const auto made = BRep_Tool::Triangulation(TopoDS::Face(TopExp_Explorer(shown, TopAbs_FACE).Current()), location);
+  if (!made.IsNull()) {
+    std::printf("Wavy sheet held records %g\n", made->Deflection());
+  }
+  CHECK(!made.IsNull() && made->Deflection() <= 0.01 + 1e-12);
+  CHECK(mitcad::io::mesh_in_place(shown, held));
+  CHECK(triangulation_pointers(shown) == first);
+}
+
 void test_stl(const std::string& dir) {
   const TopoDS_Shape block = filleted_block();
   const Box exact = bbox(block);
@@ -2063,6 +2411,25 @@ void test_placements(const std::string& dir) {
   }
   const Body* found = with_box(from_step, own, 1e-6);
   CHECK(found != nullptr && found->name == "Block");
+  // Read with its structure (mitcad#1274): the pin's part once, placed
+  // twice, the block once.
+  const mitcad::io::StepRead structured = mitcad::io::read_step_structured(step, true);
+  CHECK(structured.assembly.has_value() && structured.bodies.empty());
+  if (structured.assembly) {
+    const mitcad::io::StepAssembly& assembly = *structured.assembly;
+    CHECK(assembly.nodes.size() == 2 && assembly.roots.size() == 3);
+    std::size_t pins = 0;
+    for (const mitcad::io::StepAssembly::Instance& root : assembly.roots) {
+      const mitcad::io::StepAssembly::Node& node = assembly.nodes.at(root.node);
+      CHECK(node.bodies.size() == 1 && node.instances.empty());
+      if (node.name == "Pin") {
+        ++pins;
+        CHECK(box_near(bbox(node.bodies.front().shape), bbox(pin), 1e-6));
+        CHECK(same_color(node.bodies.front().color, bodies[0].color, 1e-3));
+      }
+    }
+    CHECK(pins == 2);
+  }
 
   // IGES and OBJ: a moved copy per placement, named with it.
   const std::string iges = dir + "/placed.igs";
@@ -2153,6 +2520,7 @@ int main(int argc, char** argv) {
     test_step_units(dir);
     test_step_multi_solid_part();
     test_step_name_code_pages(dir);
+    test_step_assembly_structure(dir);
     test_iges(dir);
     test_triangulate_keeps_original();
     test_building_scale_sphere(dir);
@@ -2169,6 +2537,8 @@ int main(int argc, char** argv) {
     test_nearly_cocircular_planes();
     test_face_checker_wire_boxes();
     test_building_scale_round_faces();
+    test_shape_deviation();
+    test_held_face_triangles();
     test_stl(dir);
     test_indexed_mesh(dir);
     test_face_meshes(dir);

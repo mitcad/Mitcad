@@ -506,10 +506,35 @@ fn face_boundary<K: Kernel>(
     Ok(curves)
 }
 
+/// The curves Project takes of a body element seen along `direction` (the
+/// sketch's normal in the shape's coordinates), with whether they are a
+/// face's outline: a face's outline (mitcad#1265, [`Kernel::face_outline`]:
+/// its boundary edges without the seams off the outline, and its
+/// silhouettes); an edge's or a vertex's curves, and a face's boundary
+/// edges from a kernel without outlines, as [`Kernel::curves_of`] lists
+/// them.
+pub(crate) fn projected_curves<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    name: &TopoName,
+    direction: [f64; 3],
+) -> Result<(Vec<Curve3>, bool), KernelError> {
+    if let TopoName::Face(face) = name {
+        match kernel.face_outline(shape, face, direction) {
+            Ok(curves) => return Ok((curves, true)),
+            Err(KernelError::Unsupported(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((kernel.curves_of(shape, name)?, false))
+}
+
 /// The model curves of a projection's source, in the sketch's component's
 /// coordinates (moved there from another component's by its link,
-/// mitcad#100): its curves, or for section curves where the sketch's plane
-/// (`frame`) cuts it (mitcad#389).
+/// mitcad#100): its curves (a face's outline seen along the sketch's
+/// normal for a projection with [`Projection::outline`], mitcad#1265), or
+/// for section curves where the sketch's plane (`frame`) cuts it
+/// (mitcad#389).
 fn source_curves<K: Kernel>(
     projection: &Projection,
     frame: &SketchFrame,
@@ -557,6 +582,13 @@ fn source_curves<K: Kernel>(
             None => plane,
         }
     });
+    // The sketch's normal where the source is: a face's outline as it is
+    // seen along it (mitcad#1265).
+    let direction = match &moved {
+        Some(t) => crate::assembly::inverse(t).apply_vector(frame.normal()),
+        None => frame.normal(),
+    };
+    let outline = projection.outline;
     let shapes = match (projection.body, projection.after) {
         // As an earlier feature left the body (mitcad#998).
         // A body no feature up to it set: a lost source.
@@ -582,6 +614,9 @@ fn source_curves<K: Kernel>(
                 "{what} {source}: a section's source is a face or an edge"
             )),
         },
+        None if outline => projected_curves(kernel, shape, name, direction)
+            .map(|(curves, _)| curves)
+            .map_err(|e| format!("{what} {source}: {e}")),
         None => kernel
             .curves_of(shape, name)
             .map_err(|e| format!("{what} {source}: {e}")),

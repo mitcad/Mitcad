@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1268: names typed in the Projects panel, in the Floating layout.
+# The runner (tools/ui-projects-naming-test.sh, the Windows
+# tools/ui-windows-projects-naming-test.ps1) made the Cloud project Shop
+# (${MITCAD_TEST_SHOP}) with Design1 and Design2 recorded and Design3.mitcad
+# only on disk; its git takes some seconds for a project's fetch; it writes
+# Design4.mitcad once the second New Design below is cancelled. All designs
+# are synthetic.
+wait-idle
+expect-ever '^Projects tree: Shop \(cloud' 30
+# The check at the opening fetches first: over before the steps.
+sleep 9000
+
+# 1. A design only on disk (not recorded): the next free name, selected in
+# an editor that has the focus.
+mark
+command file.new_design
+wait-log '^Projects panel: naming a new design in Shop: Design4$' 30
+wait-log '^Projects panel: name editor on Shop \(new\): "Design4", focused, all selected, in sight$' 10
+key Escape
+wait-log '^Projects panel: new design cancelled$' 10
+
+# 2. The same while a remote fetch of the project runs: the name is picked
+# after the fetch's read (Wanted 1), and the editor then stays open.
+mark
+command file.check_remote
+wait-log '^Remote task fetch started$' 10
+command file.new_design
+wait-log '^Projects panel: naming a new design in Shop: Design4$' 30
+wait-log '^Projects panel: name editor on Shop \(new\): "Design4", focused, all selected, in sight$' 10
+wait-log '^Remote task fetch done$' 30
+expect-no-log '^Projects panel: new design (cancelled|Design4)'
+key Escape
+wait-log '^Projects panel: new design cancelled$' 10
+
+# 3. A design written after the rows were read (by the runner): not
+# proposed, although the panel does not list it yet.
+expect-file '${MITCAD_TEST_SHOP}/Design4.mitcad' 60
+mark
+command file.new_design
+wait-log '^Projects panel: naming a new design in Shop: Design5$' 30
+wait-log '^Projects panel: name editor on Shop \(new\): "Design5", focused, all selected, in sight$' 10
+
+# 4. A name that is there already: no sheet; the editor stays on the row
+# with the name selected and the message below it. A free name then makes
+# the design.
+mark
+type Design1
+key Return
+wait-log '^Projects panel: new_design refused \(exists\): Design1\.mitcad is there already$' 30
+wait-log '^Projects panel: new design refused at Shop \(new\): Design1\.mitcad is there already$' 10
+wait-log '^Projects panel: name editor on Shop \(new\): "Design1", focused, all selected, in sight$' 10
+wait-log '^Projects row Shop \(new\) \(message\) at ' 10
+expect-dialog-gone '^New Design$'
+expect-no-log '^New Design: made '
+mark
+type Plate
+key Return
+wait-log '^Projects panel: new design Plate\.mitcad in ' 10
+wait-log '^Projects panel: new_design recorded as ' 30
+wait-log '^New Design: made .*/Plate\.mitcad in ' 30
+expect-file '${MITCAD_TEST_SHOP}/Plate.mitcad'
+
+# 5. The Projects card collapsed: New Design expands it, the editor has the
+# focus, the name typed and Enter make that design, and the card collapses
+# again.
+mark
+collapse-card projectsDock true
+wait-log '^Projects panel: card collapsed$' 10
+mark
+command file.new_design
+wait-log '^Projects panel: expanded for naming$' 10
+wait-log '^Projects panel: card expanded$' 10
+wait-log '^Projects panel: naming a new design in Shop: Design5$' 30
+wait-log '^Projects panel: name editor on Shop \(new\): "Design5", focused, all selected, in sight$' 10
+type Gear
+key Return
+wait-log '^Projects panel: new design Gear\.mitcad in ' 10
+wait-log '^Projects panel: new_design recorded as ' 30
+wait-log '^New Design: made .*/Gear\.mitcad in ' 30
+wait-log '^Projects panel: collapsed again after naming$' 30
+wait-log '^Projects panel: card collapsed$' 10
+expect-file '${MITCAD_TEST_SHOP}/Gear.mitcad'
+expect-never 'Projects panel: the name editor was not in sight'
+expect-never 'TestDriver: FAIL'

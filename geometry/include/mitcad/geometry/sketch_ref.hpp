@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <TopoDS_Edge.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
@@ -92,5 +93,9 @@ std::vector<SectionCurve> section_curves(const Shape& shape, const std::string& 
 // Empty when the plane misses them.
 std::vector<gp_Pnt> section_points(const Shape& shape, const std::string& name, const gp_Pnt& origin,
                                    const gp_Dir& normal);
+
+// One edge's curve as curves_of gives it (the outlines of faces,
+// face_outline.hpp, mitcad#1265).
+ModelCurve edge_curve(const TopoDS_Edge& edge);
 
 } // namespace mitcad::geometry

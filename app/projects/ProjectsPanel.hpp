@@ -81,10 +81,16 @@ public:
     // project indicator has it.
     std::function<QString()> currentRoot;
     std::function<ProjectIndicator::Remote()> currentRemote;
+    // Where a name is typed is in sight (mitcad#1268): true before New
+    // Design, New Folder or Rename opens its editor (the window expands the
+    // Projects card, or shows the panel or its dock), false once the naming
+    // has ended (the window puts the panel back as it was).
+    std::function<void(bool)> showForNaming;
   };
 
-  // The kinds of rows.
-  enum class RowType { Project = 1, Folder, Design, NewItem };
+  // The kinds of rows. Message: the refusal of a name typed, below the row
+  // whose editor is open again (mitcad#1268).
+  enum class RowType { Project = 1, Folder, Design, NewItem, Message };
 
   // The narrowest the Floating card can be dragged to (mitcad#529).
   static constexpr int kMinimumCardWidth = 180;
@@ -109,12 +115,23 @@ public:
   void revealDesign(const QString& root, const QString& path);
   // Names a new design or folder in place, in `folder` (relative, "" the
   // project's top) of the project at `root`; once named, newDesignRequested
-  // or newFolderRequested.
+  // or newFolderRequested. The name proposed (Design1, Folder1, ...) is
+  // free among the folder's rows and on disk, picked once a read under way
+  // has finished (mitcad#1268); the panel is shown for it (Host::
+  // showForNaming).
   void startNewDesign(const QString& root, const QString& folder);
   void startNewFolder(const QString& root, const QString& folder);
   // Closes an open name editor without taking the name (Esc); false when
   // none is open.
   bool cancelEditing();
+  // The window's command refused the name the panel's last request gave
+  // (it is there already, or not a valid name; mitcad#1268): the editor
+  // opens again on its row with the name selected and `message` shown
+  // below the row, so that another name can be typed. `path` is the
+  // request's (relative), `from` a rename's old path ("" a new design or
+  // folder). False when the request was not the panel's last one (the
+  // window tells the refusal itself then).
+  bool nameRefused(const QString& root, const QString& path, const QString& from, const QString& message);
 
   // An AppKit presentation of the panel (mitcad#816) gives its rows the
   // same keys, names and drags as the tree, through these. The tree's own
@@ -189,6 +206,9 @@ signals:
 
 protected:
   void showEvent(QShowEvent* event) override;
+  // A name editor that goes out of sight (the card collapsed, the dock
+  // hidden) is cancelled: what nobody sees is never taken (mitcad#1268).
+  void hideEvent(QHideEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -245,10 +265,31 @@ private:
   void startNew(bool folder, const QString& root, const QString& parent);
   void startRename(QTreeWidgetItem* item);
   // Opens the name editor on the row once the event loop is back, then
-  // logs `line`.
+  // logs `line` and the editor's state ("Projects panel: name editor on
+  // <key>: "<text>", focused, all selected, in sight").
   void openEditor(QTreeWidgetItem* item, const QString& line);
   // The editor closed: the name taken (`accepted`) or not.
   void editingClosed(bool accepted);
+  // The tree's editor closed, by any way (Return, Esc, the focus elsewhere,
+  // another row made current); `hidden`: it was not in sight then. Handled
+  // once the view is done with it.
+  void treeEditorClosed(bool accepted, bool hidden);
+
+  // Names typed in place (mitcad#1268): a free name for a new design or
+  // folder in `parent` of the project at `root`, among `host`'s rows and
+  // the folder's entries on disk.
+  QString freeName(bool folder, const QString& root, const QString& parent, const QTreeWidgetItem* host) const;
+  // A new design's or folder's row in `host`, named `name`.
+  QTreeWidgetItem* addNewRow(QTreeWidgetItem* host, bool folder, const QString& parent, const QString& name);
+  // The panel shown for naming (Host::showForNaming), and put back once no
+  // name is typed or waits for the rows (after the event loop is back, so
+  // that a refusal reopening the editor keeps it shown).
+  void revealForNaming();
+  void scheduleNamingEnd();
+  // A refusal below `item`, or none.
+  void showRefusal(QTreeWidgetItem* item, const QString& message);
+  void clearRefusal();
+  void logEditor(QTreeWidgetItem* item);
   // Rows read while a name was typed or a row dragged: shown now.
   void applyWaitingRows();
 
@@ -307,6 +348,19 @@ private:
   bool m_marksWaiting = false;   // marks changed under its editor
   // Rows read now wait (a name typed, a row dragged).
   bool rowsHeld() const;
+  // Names typed in place (mitcad#1268): each editor opened counts, so that
+  // an end that comes late is not taken for a later editor's.
+  int m_editSerial = 0;
+  bool m_namingShown = false;                 // the host showed the panel for it
+  QTreeWidgetItem* m_messageItem = nullptr;   // a refusal's row
+  struct Request {
+    QString root;
+    QString path;
+    QString from; // a rename's
+    bool folder = false;
+  };
+  Request m_request; // the panel's last name request, until it is answered
+  bool m_hasRequest = false;
 };
 
 } // namespace mitcad

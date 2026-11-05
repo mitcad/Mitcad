@@ -1,5 +1,5 @@
 [
-  {"comment": "mitcad#821: a 50 x 100 rectangle extruded 10 (Sketch1 F1, Extrude1 F2, Body1), both vertical edges of its 50 wide end (line c1) rounded with 25 in one fillet. The two roundings take the end face away and meet in its middle (a half round); the top and the bottom keep their names, and no face is a sliver. Each rounding removes 25 x 25 - pi 25^2 / 4 of the top's area."},
+  {"comment": "mitcad#821: a 50 x 100 rectangle extruded 10 (Sketch1 F1, Extrude1 F2, Body1), both vertical edges of its 50 wide end (line c1) rounded with 25 in one fillet. The two roundings take the end face away and meet in its middle: a half round, one face holding both roundings' names (mitcad#1261, the faces of one cylinder joined); the top and the bottom keep their names, and no face is a sliver. Each rounding removes 25 x 25 - pi 25^2 / 4 of the top's area."},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 50, "height": 100},
   {"cmd": "add_feature", "def": {"type": "extrude",
@@ -9,7 +9,7 @@
   {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
     "edges": ["E{F2:side(c1[c4,c2])|F2:side(c4[c3,c1])}", "E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"],
     "radius": 25}},
-  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 47317.477042468, "faces": 7,
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 47317.477042468, "faces": 6,
     "min_face_area": 1, "has_face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
   {"expect": {"body": "Body1", "has_face": "F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
   {"expect": {"body": "Body1", "has_face": "F3:fillet(E{F2:side(c1[c4,c2])|F2:side(c4[c3,c1])})"}},
@@ -25,7 +25,7 @@
     "edges": ["E{F5:side(c1[c4,c2])|F5:side(c4[c3,c1])}"], "radius": 25}},
   {"cmd": "add_feature", "def": {"type": "fillet", "body": "F5.b0",
     "edges": ["E{F5:side(c1[c4,c2])|F5:side(c2[c1,c3])}"], "radius": 25}},
-  {"expect": {"feature": "Fillet3", "status": "ok", "body": "Body2", "volume": 47317.477042468, "faces": 7,
+  {"expect": {"feature": "Fillet3", "status": "ok", "body": "Body2", "volume": 47317.477042468, "faces": 6,
     "min_face_area": 1, "has_face": "F5:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
   {"expect": {"body": "Body2", "has_face": "F5:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}}
 ]

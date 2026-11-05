@@ -42,3 +42,6 @@ mod shared_feature_names_tests;
 mod copy_allowed_values_tests;
 // Table references in bindings and rule expressions (mitcad#1131).
 mod table_reference_rename_tests;
+// The rolled-back features evaluated beside the document, adopted by it
+// (mitcad#1267).
+mod rolled_back_tests;

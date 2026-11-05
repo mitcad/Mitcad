@@ -1548,6 +1548,16 @@ pub struct Projection {
     /// element (`source` a face, an edge or a vertex) and `body`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<crate::ids::FeatureUid>,
+    /// The source face as it is seen along the sketch's normal
+    /// (mitcad#1265): its outline, the boundary edges without the seams
+    /// off the outline and its silhouettes, where a curved face turns away
+    /// from the view ([`mitcad_model_base::Kernel::face_outline`]). Faces
+    /// projected with Project since mitcad#1265 by a kernel that has
+    /// outlines. Without it (files of earlier versions, imports, edges and
+    /// vertices) the source's curves are its edges'
+    /// ([`mitcad_model_base::Kernel::curves_of`]), as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outline: bool,
 }
 
 /// A sketch text whose text is a text parameter's value (mitcad#664):

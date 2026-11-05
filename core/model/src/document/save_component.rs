@@ -243,6 +243,8 @@ impl<K: Kernel> Document<K> {
                 path: recorded.clone(),
                 digest: design_digest(&text),
                 feature: FeatureUid(0),
+                envelope: None,
+                frames: Vec::new(),
             };
             self.replace_with_link(component, link, bodies)?;
             saved.link = Some(recorded);
@@ -1804,6 +1806,8 @@ fn keep_links(
                 path: recorded_link_path(&resolved.to_string_lossy(), &resolved, to),
                 digest: l.digest.clone(),
                 feature: copy.features.get(&l.feature).copied().unwrap_or(l.feature),
+                envelope: l.envelope,
+                frames: Vec::new(),
             }
         });
         if let Some(c) = design.assembly.component_mut(target) {

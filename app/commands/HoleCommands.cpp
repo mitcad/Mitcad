@@ -567,7 +567,7 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
                                                 : standard->external + standard->internal);
           })
           .withVisible(tabled),
-      valueInput(kThreadMajor, QObject::tr("Major Diameter"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(kThreadMajor, QObject::tr("Major Diameter"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withTooltip(QObject::tr("The custom thread's major diameter, on the 60-degree profile"))
           .withOnChange([sized](CommandState& state, const CommandContext& model) {
@@ -577,7 +577,7 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
             }
           })
           .withVisible(custom),
-      valueInput(kThreadPitch, QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("1.5 mm"))
+      valueInput(kThreadPitch, QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("1.5 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withTooltip(QObject::tr("The distance from one tooth to the next along the axis"))
           .withVisible(custom),
@@ -855,7 +855,7 @@ CommandDef holeCommand(const CommandContext& context) {
           .withVisible(choiceIs(QStringLiteral("tap"), kClearance)),
       // A tapered taper pipe thread's hole keeps its diameter, the tap
       // drill (mitcad#733); another thread sets it.
-      sizedValueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("6 mm"))
+      sizedValueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("6 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The hole's diameter; a tapered pipe thread's tap drill; a clearance hole's "
                                    "from its screw"))
           .withVisible([tapped](const CommandState& s) { return !tapped(s) || tapers(s); }),
@@ -863,7 +863,7 @@ CommandDef holeCommand(const CommandContext& context) {
       valueInput(QStringLiteral("taper"), QObject::tr("Taper Angle"), ValueKind::Angle, QStringLiteral("0") + QChar(0x00B0))
           .withTooltip(QObject::tr("The wall's angle to the axis; positive narrows the hole as it goes deeper"))
           .withVisible([tapped](const CommandState& s) { return !tapped(s); }),
-      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(choiceIs(QStringLiteral("extent"), QStringLiteral("distance")))
           // Raised to fit a recess the size fills until typed (mitcad#980).
           .withOnChange(markDepthTyped)
@@ -884,29 +884,29 @@ CommandDef holeCommand(const CommandContext& context) {
           }),
       // The recesses' fields follow the size until typed (mitcad#980).
       sizedValueInput(QStringLiteral("cb_diameter"), QObject::tr("Counterbore Diameter"), ValueKind::Length,
-                      QStringLiteral("10 mm"))
+                      QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(type("counterbore")),
       sizedValueInput(QStringLiteral("cb_depth"), QObject::tr("Counterbore Depth"), ValueKind::Length,
-                      QStringLiteral("3 mm"))
+                      QStringLiteral("3 mm")).withStepMinimum(0.0, true)
           .withVisible(type("counterbore")),
       sizedValueInput(QStringLiteral("cs_diameter"), QObject::tr("Countersink Diameter"), ValueKind::Length,
-                      QStringLiteral("10 mm"))
+                      QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(type("countersink")),
       sizedValueInput(QStringLiteral("cs_angle"), QObject::tr("Countersink Angle"), ValueKind::Angle,
-                      QStringLiteral("90") + QChar(0x00B0))
+                      QStringLiteral("90") + QChar(0x00B0)).withStepMinimum(0.0, true)
           .withVisible(type("countersink")),
       sizedValueInput(QStringLiteral("cd_diameter"), QObject::tr("Counterdrill Diameter"), ValueKind::Length,
-                      QStringLiteral("10 mm"))
+                      QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(type("counterdrill")),
       sizedValueInput(QStringLiteral("cd_depth"), QObject::tr("Counterdrill Depth"), ValueKind::Length,
-                      QStringLiteral("3 mm"))
+                      QStringLiteral("3 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The depth of its cylinder; the cone narrowing to the hole is below it"))
           .withVisible(type("counterdrill")),
       sizedValueInput(QStringLiteral("cd_angle"), QObject::tr("Counterdrill Angle"), ValueKind::Angle,
-                      QStringLiteral("90") + QChar(0x00B0))
+                      QStringLiteral("90") + QChar(0x00B0)).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The full angle of the cone at its floor"))
           .withVisible(type("counterdrill")),
-      valueInput(QStringLiteral("tip_angle"), QObject::tr("Drill Point Angle"), ValueKind::Angle, QStringLiteral("118") + QChar(0x00B0))
+      valueInput(QStringLiteral("tip_angle"), QObject::tr("Drill Point Angle"), ValueKind::Angle, QStringLiteral("118") + QChar(0x00B0)).withStepMinimum(0.0, true)
           .withVisible(choiceIs(QStringLiteral("drill"), QStringLiteral("angle"))),
   };
   // A new size: a tapered pipe thread's tap drill, the recesses' values
@@ -1313,9 +1313,9 @@ CommandDef threadCommand(const CommandContext& context) {
   }
   def.inputs += {
       checkInput(QStringLiteral("full_length"), QObject::tr("Full Length"), true),
-      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(partial),
-      valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+      valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible(partial),
       // A tapered thread over the whole face starts at the end it names
       // where both ends or neither is free (mitcad#733).

@@ -66,7 +66,8 @@ void MainWindow::updateNavigationBar() {
     m_navigationCard->setVisible(wanted);
     m_floating->requestLayout();
   } else {
-    m_navigationBar->setVisible(wanted && !drawingOpen());
+    // Nor while the Start page covers the view (mitcad#1258).
+    m_navigationBar->setVisible(wanted && !drawingOpen() && !startPageShown());
   }
 }
 

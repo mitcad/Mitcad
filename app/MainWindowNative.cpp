@@ -1018,7 +1018,8 @@ void MainWindow::refreshNativeWindow() {
                                    row.node.type == BrowserNode::Type::ImageReference ||
                                    (row.node.type == BrowserNode::Type::NamedView && row.node.uid.startsWith(QStringLiteral("named:"))));
       item.hasVisibility = row.node.hasEye;
-      // Bodies, sketches, construction and components in every mode (mitcad#295).
+      // Bodies, sketches, construction and components in every mode (mitcad#295),
+      // kept analyses and image references too (mitcad#1263).
       item.canToggleVisibility =
           row.node.hasEye && (canToggleVisibility || BrowserController::visibilityInEveryMode(row.node));
       item.visible = row.node.visible;
@@ -1102,7 +1103,16 @@ void MainWindow::refreshNativeInspector() {
   } else {
     m_nativeIdleForm->refresh();
   }
-  m_nativeWindow->setInspectorView(m_nativeIdleForm ? m_nativeIdleForm->nativeView() : nullptr);
+  void* footer = nullptr;
+  if (m_mode == Mode::Sketch && m_nativeSketchFooter) {
+    if (!m_nativeSketchFooterForm) {
+      m_nativeSketchFooterForm = createNativeWidgetView(m_nativeSketchFooter);
+    } else {
+      m_nativeSketchFooterForm->refresh();
+    }
+    if (m_nativeSketchFooterForm) footer = m_nativeSketchFooterForm->nativeView();
+  }
+  m_nativeWindow->setInspectorView(m_nativeIdleForm ? m_nativeIdleForm->nativeView() : nullptr, footer);
 }
 
 bool MainWindow::requestNativeClose() {

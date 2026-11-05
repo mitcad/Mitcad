@@ -586,6 +586,11 @@ QString ChatPanel::cardText(const QJsonObject& entry) const {
   if (kind == QStringLiteral("model_export")) {
     return tr("%1 wants to export to %2.").arg(agent, path);
   }
+  if (kind == QStringLiteral("document_new")) {
+    // A new design beside this one (mitcad#1266).
+    return path.isEmpty() ? tr("%1 wants to make a new design beside this one.").arg(agent)
+                          : tr("%1 wants to make the new design %2 beside this one.").arg(agent, path);
+  }
   if (kind == QStringLiteral("screenshot_file")) {
     return tr("%1 wants to save a picture of the view as %2.").arg(agent, path);
   }

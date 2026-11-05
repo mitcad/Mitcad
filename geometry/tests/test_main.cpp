@@ -245,6 +245,9 @@ const Part kParts[] = {
     {"section_clip", test::section_clip_tests},
     // Shells of bodies with parts no thicker than the wall (mitcad#1233).
     {"shell_thin_parts", test::shell_thin_parts_tests},
+    // Outlines of faces seen along a direction: Project of a curved face
+    // (mitcad#1265).
+    {"face_outline", test::face_outline_tests},
 };
 
 bool is_part(const std::string& name) {

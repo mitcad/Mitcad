@@ -15,7 +15,8 @@
 //! mode. The kinds: `read`, `edit`, `document_save`, `document_open`,
 //! `model_export`, `screenshot_file`, `file_command` (a `file.*` command of
 //! `ui_command`), `undo_past_start` and `other` (a tool this policy does not
-//! know, which asks).
+//! know, which asks); and `document_new` (mitcad#1266), a new design beside
+//! the open ones, which is classed as a model edit.
 
 use serde_json::{Value, json};
 
@@ -96,6 +97,12 @@ fn classify(
                 (Class::Edit, "edit", None)
             }
         }
+        // Its listing of the commands only reads (mitcad#1269).
+        "ui_command"
+            if arguments.get("search").is_some() && text_field(arguments, "id").is_empty() =>
+        {
+            (Class::Read, "read", None)
+        }
         "ui_command" => {
             let id = text_field(arguments, "id");
             if id == "edit.undo" && past_start {
@@ -109,6 +116,20 @@ fn classify(
         "document_save" => (Class::Guarded, "document_save", path()),
         "document_open" => (Class::Guarded, "document_open", path()),
         "model_export" => (Class::Guarded, "model_export", path()),
+        // A new, empty design beside the open ones (mitcad#1266): it
+        // replaces and writes over nothing, so it runs as a model edit does.
+        "document_new" => {
+            let place = [
+                text_field(arguments, "folder"),
+                text_field(arguments, "name"),
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+            let place = (!place.is_empty()).then(|| super::cut(&place, 1000));
+            (Class::Edit, "document_new", place)
+        }
         _ => (Class::Guarded, "other", None),
     }
 }

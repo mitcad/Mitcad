@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include <QContextMenuEvent>
 #include <QEnterEvent>
@@ -489,13 +490,29 @@ void DrawingSheetView::setHoverMarks(const QJsonArray& items) {
   update();
 }
 
-void DrawingSheetView::setPlacingPreview(const QString& kind, const QVector<QPointF>& points) {
+void DrawingSheetView::setPlacingPreview(const QString& kind, const QVector<QPointF>& points,
+                                         const QPointF& direction) {
   m_previewKind = kind;
   m_previewPoints = points;
+  m_previewDirection = direction;
   if (!kind.isEmpty()) {
     logPreview(kind);
   }
   update();
+}
+
+void DrawingSheetView::setPicksWhilePlacing(bool on) { m_picksWhilePlacing = on; }
+
+void DrawingSheetView::setPointSnap(std::function<std::optional<QPointF>(int view, const QPointF& at)> snap) {
+  m_pointSnap = std::move(snap);
+}
+
+bool DrawingSheetView::asksHover() const {
+  // An annotation tool's picks (and, mitcad#1272, while one pick of the
+  // Dimension tool's Auto is placed); a line's or an arc's snapping
+  // clicks.
+  return (m_pick == SheetPick::Picks && (!m_placing || m_picksWhilePlacing)) || m_pick == SheetPick::Segment ||
+         m_pick == SheetPick::ArcPoints;
 }
 
 void DrawingSheetView::setPlacingSnap(bool snapped, const QPointF& at, const QString& hint) {
@@ -576,14 +593,23 @@ void DrawingSheetView::paintPreview(QPainter& painter) const {
   const QPointF pointer = snapped ? m_snapAt : m_pointer;
   const QPointF now = toWidget(pointer);
   if (m_placing && m_pick == SheetPick::Picks && !m_previewPoints.isEmpty()) {
-    if (m_previewKind == QStringLiteral("dimension") && m_previewPoints.size() >= 2) {
-      // As the model lays a linear dimension out: along the axis its picks
-      // lie further apart along, its line through the placing click.
+    if (m_previewKind.startsWith(QStringLiteral("dimension")) && m_previewPoints.size() >= 2) {
+      // As the model lays a linear dimension out: along the direction it
+      // measures along (the model's, mitcad#1272; else the axis its picks
+      // lie further apart along), its line through the placing click.
       const QPointF a = m_previewPoints[0];
       const QPointF b = m_previewPoints[1];
-      const bool horizontal = std::abs(a.x() - b.x()) >= std::abs(a.y() - b.y());
-      const QPointF a2 = horizontal ? QPointF(a.x(), pointer.y()) : QPointF(pointer.x(), a.y());
-      const QPointF b2 = horizontal ? QPointF(b.x(), pointer.y()) : QPointF(pointer.x(), b.y());
+      QPointF d = m_previewDirection;
+      if (d.isNull()) {
+        d = std::abs(a.x() - b.x()) >= std::abs(a.y() - b.y()) ? QPointF(1.0, 0.0) : QPointF(0.0, 1.0);
+      }
+      // A point's foot on the line through the pointer along `d`.
+      const auto foot = [&pointer, &d](const QPointF& p) {
+        const QPointF v = p - pointer;
+        return pointer + d * (v.x() * d.x() + v.y() * d.y());
+      };
+      const QPointF a2 = foot(a);
+      const QPointF b2 = foot(b);
       painter.drawLine(toWidget(a), toWidget(a2));
       painter.drawLine(toWidget(b), toWidget(b2));
       QPen line(kSelected, 1.5);
@@ -784,6 +810,8 @@ void DrawingSheetView::resetPicks() {
   m_hoverMarks = QJsonArray();
   m_previewKind.clear();
   m_previewPoints.clear();
+  m_previewDirection = QPointF();
+  m_picksWhilePlacing = false;
   m_loggedPreview.clear();
   m_snapped = false;
   m_snapHint.clear();
@@ -1258,7 +1286,7 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
     logPreview(QStringLiteral("view box"));
   }
   // What a click would pick: the workspace asks the model (mitcad#725).
-  if (m_pick == SheetPick::Picks && !m_placing) {
+  if (asksHover()) {
     emit hoverRequested(under, at);
   }
   // Where a dimension placed snaps (mitcad#1173).
@@ -1278,7 +1306,7 @@ void DrawingSheetView::enterEvent(QEnterEvent* event) {
   // The pointer over the sheet again without a move, as when a job's
   // progress dialog closes (its showing took the pointer away, leaveEvent):
   // what a click there would pick is asked again (mitcad#753).
-  if (m_pick == SheetPick::Picks && !m_placing && m_drag == Drag::None) {
+  if (asksHover() && m_drag == Drag::None) {
     const QPointF at = toSheet(event->position());
     emit hoverRequested(viewAt(at), at);
   }
@@ -1289,7 +1317,7 @@ void DrawingSheetView::leaveEvent(QEvent* event) {
   m_pointerIn = false;
   m_hovered = 0;
   m_hoveredAnnotation = 0;
-  if (m_pick == SheetPick::Picks) {
+  if (m_pick == SheetPick::Picks || m_pick == SheetPick::Segment || m_pick == SheetPick::ArcPoints) {
     emit hoverRequested(-1, QPointF());
   }
   update();
@@ -1497,11 +1525,23 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
     if (m_picks.points.isEmpty()) {
       m_picks.view = under;
     }
-    m_picks.points.append(at);
-    qDebug().noquote() << QStringLiteral("Drawing point %1 at %2,%3")
+    // On a view it snaps to an edge's end or middle or a centre near it
+    // (mitcad#1272); Alt: where it is clicked.
+    QPointF point = at;
+    bool snapped = false;
+    if (under != 0 && m_pointSnap && !m_releaseModifiers.testFlag(Qt::AltModifier)) {
+      if (const std::optional<QPointF> to = m_pointSnap(under, at)) {
+        point = *to;
+        snapped = true;
+      }
+    }
+    m_picks.points.append(point);
+    m_hoverMarks = QJsonArray();
+    qDebug().noquote() << QStringLiteral("Drawing point %1 at %2,%3%4")
                               .arg(m_picks.points.size())
-                              .arg(at.x(), 0, 'f', 1)
-                              .arg(at.y(), 0, 'f', 1);
+                              .arg(point.x(), 0, 'f', 1)
+                              .arg(point.y(), 0, 'f', 1)
+                              .arg(snapped ? QStringLiteral(" (snapped)") : QString());
     const qsizetype needed = m_pick == SheetPick::Segment ? 2 : 3;
     if (m_picks.points.size() >= needed) {
       const ToolPicks picks = m_picks;

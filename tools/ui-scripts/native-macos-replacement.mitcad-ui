@@ -36,7 +36,7 @@ expect-file '${MITCAD_TEST_REPLACEMENT}/Open-verified' 20
 # (mitcad#816); taking the name would then replace the open design.
 mark
 menu 'File/New Design'
-expect-log 'Projects panel: naming a new design in ada$' 30
+expect-log 'Projects panel: naming a new design in ada: Design1$' 30
 expect-native-focus projectsTree '^Design1$'
 key Return
 expect-log 'Projects panel: new design Design1\.mitcad in ' 10

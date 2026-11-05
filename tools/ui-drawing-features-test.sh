@@ -208,7 +208,7 @@ ui_expect_new "Drawing picked line (1)" "the left edge picked"
 ui_step "the right edge"                   sheet_click 179.5 125
 ui_expect_new "Drawing picked line (2)" "the right edge picked"
 ui_step "where the dimension goes"         sheet_click 150 100
-ui_expect_new '"type":"linear"' "a dimension asked for"
+ui_expect_new '"type":"dimension"' "a dimension asked for, its picks choosing its type"
 ui_expect_new "Drawing annotations drawn: 1 = 60.0" "written with the drawing's one decimal"
 no_refusal
 ui_step "end the tool (Esc)"               ui_key Escape

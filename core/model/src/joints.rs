@@ -711,6 +711,11 @@ pub fn referenced_occurrences(def: &FeatureDef) -> Vec<OccurrenceUid> {
             out.extend(c.positions.iter().map(|p| p.occurrence));
             Vec::new()
         }
+        // An Envelope's source (mitcad#1276), relative to its component.
+        FeatureDef::Envelope(e) => {
+            out.extend(&e.occurrence.0);
+            Vec::new()
+        }
         _ => Vec::new(),
     };
     for link in links {
@@ -791,6 +796,8 @@ pub(crate) fn remap_occurrences(
                 path(&mut origin.occurrence.0);
             }
         }
+        // An Envelope's source (mitcad#1276).
+        FeatureDef::Envelope(e) => path(&mut e.occurrence.0),
         _ => return false,
     }
     true
@@ -1029,6 +1036,112 @@ impl<K: Kernel> Resolver for StepResolver<'_, K> {
     }
 }
 
+// Joints to a linked design shown by its envelope (mitcad#1276).
+
+/// How an origin on a linked design's face, edge or vertex resolves while
+/// the design is shown by its envelope: the component that shows it
+/// holds the envelope instead of the design's bodies.
+pub(crate) enum EnvelopeSide {
+    /// The frame it had when the design was last shown in full
+    /// (`ExternalLink::frames`).
+    Kept(Transform),
+    /// In this component instead: another component linking the same
+    /// file, whose bodies the origin names, shows the design in full (an
+    /// occurrence shown by its envelope on its own is placed by a
+    /// component of its own, `document/envelope.rs`).
+    Full(ComponentUid),
+    /// It cannot be resolved: why.
+    Missing(String),
+}
+
+/// The body whose face, edge or vertex the geometry is.
+fn geometry_body(geometry: &GeomRef) -> Option<BodyUid> {
+    match geometry {
+        GeomRef::Face { body, .. } | GeomRef::Edge { body, .. } | GeomRef::Vertex { body, .. } => {
+            Some(*body)
+        }
+        _ => None,
+    }
+}
+
+/// See [`EnvelopeSide`]: None when the geometry resolves in `at` as
+/// usual (also an origin picked on the envelope itself, which has no kept
+/// frame).
+pub(crate) fn envelope_side(
+    state: &DocState,
+    at: ComponentUid,
+    geometry: &GeomRef,
+) -> Option<EnvelopeSide> {
+    let body = geometry_body(geometry)?;
+    let owner = state.entry(body.feature)?.component;
+    let assembly = &state.assembly;
+    let here = assembly.component(at)?.link.as_ref()?;
+    let link = assembly.component(owner)?.link.as_ref()?;
+    if link.feature != body.feature || here.path != link.path {
+        return None;
+    }
+    if link.envelope.is_none() {
+        return (owner != at).then_some(EnvelopeSide::Full(owner));
+    }
+    match link.frames.iter().find(|f| f.geometry == *geometry) {
+        Some(kept) => Some(EnvelopeSide::Kept(kept.frame)),
+        None if owner == at => None,
+        None => Some(EnvelopeSide::Missing(format!(
+            "{geometry} is on {}, which is shown by its envelope: show it in full to join to \
+             its faces",
+            assembly.name(owner)
+        ))),
+    }
+}
+
+/// The frames of the joint origins on `component`'s bodies (a linked
+/// design about to be shown by its envelope) where the last recompute
+/// `result` has them, for [`EnvelopeSide::Kept`]; origins that do not
+/// resolve there are left out.
+pub(crate) fn envelope_frames<K: Kernel>(
+    kernel: &K,
+    state: &DocState,
+    result: &Recomputed<K::Shape>,
+    component: ComponentUid,
+) -> Vec<crate::assembly::EnvelopeFrame> {
+    let mut frames: Vec<crate::assembly::EnvelopeFrame> = Vec::new();
+    for entry in &state.features {
+        let origins: Vec<&JointOrigin> = match &entry.def {
+            FeatureDef::Joint(j) => vec![&j.a, &j.b],
+            FeatureDef::AsBuiltJoint(j) => j.origin.iter().collect(),
+            _ => continue,
+        };
+        for origin in origins {
+            let Some(body) = geometry_body(&origin.geometry) else {
+                continue;
+            };
+            if state.entry(body.feature).map(|f| f.component) != Some(component)
+                || frames.iter().any(|f| f.geometry == origin.geometry)
+            {
+                continue;
+            }
+            let mut resolver = StepResolver {
+                kernel,
+                assembly: &state.assembly,
+                component,
+                bodies: Some(&*result.bodies),
+                datums: &result.datums,
+                sketches: &result.sketches,
+                features: &state.features,
+                history: &result.results,
+                renamed: Vec::new(),
+            };
+            if let Ok(frame) = origin_frame(&mut resolver, &origin.geometry) {
+                frames.push(crate::assembly::EnvelopeFrame {
+                    geometry: origin.geometry.clone(),
+                    frame,
+                });
+            }
+        }
+    }
+    frames
+}
+
 /// The value of an optional parameter, zero without one.
 fn value_or_zero(params: &Parameters, id: Option<&ParamId>) -> Result<f64, String> {
     match id {
@@ -1117,23 +1230,36 @@ pub(crate) fn apply<K: Kernel>(
     // What the geometry found under other names after a sketch change
     // (mitcad#272): the feature's warnings.
     let renamed = std::cell::RefCell::new(Vec::<String>::new());
-    // An origin's frame in the component its path ends in.
+    // An origin's frame in the component its path ends in; on a linked
+    // design shown by its envelope, as it is in full (mitcad#1276).
     let local = |origin: &JointOrigin| -> Result<Transform, String> {
-        let at = path_component(assembly, component, &origin.occurrence.0)?;
-        let mut resolver = StepResolver {
-            kernel,
-            assembly,
-            component: at,
-            bodies: components.get(&at).map(|b| &**b),
-            datums: &done.datums,
-            sketches: &done.sketches,
-            features: &state.features,
-            history: &done.results,
-            renamed: Vec::new(),
+        let mut at = path_component(assembly, component, &origin.occurrence.0)?;
+        let mut kept = None;
+        match envelope_side(state, at, &origin.geometry) {
+            None => {}
+            Some(EnvelopeSide::Kept(frame)) => kept = Some(frame),
+            Some(EnvelopeSide::Full(owner)) => at = owner,
+            Some(EnvelopeSide::Missing(why)) => return Err(why),
+        }
+        let mut local = match kept {
+            Some(frame) => frame,
+            None => {
+                let mut resolver = StepResolver {
+                    kernel,
+                    assembly,
+                    component: at,
+                    bodies: components.get(&at).map(|b| &**b),
+                    datums: &done.datums,
+                    sketches: &done.sketches,
+                    features: &state.features,
+                    history: &done.results,
+                    renamed: Vec::new(),
+                };
+                let frame = origin_frame(&mut resolver, &origin.geometry);
+                renamed.borrow_mut().append(&mut resolver.renamed);
+                frame?
+            }
         };
-        let frame = origin_frame(&mut resolver, &origin.geometry);
-        renamed.borrow_mut().append(&mut resolver.renamed);
-        let mut local = frame?;
         if let Some(o) = &origin.frame_override {
             local = apply_override(&local, o)?;
         }
@@ -1145,8 +1271,17 @@ pub(crate) fn apply<K: Kernel>(
         for (i, row) in set.rows.iter().enumerate() {
             let label = row_label(i, row.kind);
             let geo = |key: &str, origin: &JointOrigin| -> Result<Geo, String> {
-                let at = path_component(assembly, component, &origin.occurrence.0)
+                let mut at = path_component(assembly, component, &origin.occurrence.0)
                     .map_err(|e| format!("{label}: {key}: {e}"))?;
+                // A linked design's geometry where it is shown in full
+                // (mitcad#1276).
+                match envelope_side(state, at, &origin.geometry) {
+                    Some(EnvelopeSide::Full(owner)) => at = owner,
+                    Some(EnvelopeSide::Missing(why)) => {
+                        return Err(format!("{label}: {key}: {why}"));
+                    }
+                    _ => {}
+                }
                 let mut resolver = StepResolver {
                     kernel,
                     assembly,

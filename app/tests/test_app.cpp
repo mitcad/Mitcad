@@ -2789,6 +2789,9 @@ int printValueChoicesTests();
 int screenshotBudgetTests();
 int gridSpacingTests();
 int cameraTurnTests();
+int valueStepTests();
+int recentDesignsTests();
+int uiCommandListTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2925,6 +2928,9 @@ int main(int argc, char* argv[]) {
     failures += screenshotBudgetTests();
     failures += gridSpacingTests();
     failures += cameraTurnTests();
+    failures += valueStepTests();
+    failures += recentDesignsTests();
+    failures += uiCommandListTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

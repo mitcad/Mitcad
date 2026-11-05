@@ -125,7 +125,9 @@ for frontend in $frontends; do
       else
         echo "click-logged 'Browser Root/Bodies/Body1'"
       fi
-      field sets.0.distance '1 mm'
+      # A real change requests a new preview even when transient keystrokes
+      # are coalesced. Re-entering the default 1 mm may be deduplicated.
+      field sets.0.distance '2 mm'
       echo "expect-log 'Preview Chamfer: ok' 30"
       ok_enabled true
       cancel

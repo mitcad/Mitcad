@@ -91,19 +91,76 @@ void printerRows() {
   for (const ProfilePickerRow& row : rows) {
     listed << describe(row);
   }
+  // My library has a printer: the built-in one last, under Built-in by its
+  // whole name (mitcad#1270).
   const QStringList expected{
-      QStringLiteral("Acme Lab | P1S · 0.4 mm nozzle | Built-in | mitcad/acme-p1s"),
       QStringLiteral("Acme Lab | X1 Carbon · 0.4 mm nozzle | plate.3mf | design/acme-x1"),
       QStringLiteral("Acme Lab | X1 Carbon · 0.4 mm nozzle | My library | user/acme-x1"),
       QStringLiteral("Bench | Mini | This design | design/bench-mini"),
       QStringLiteral("Other | Printer 1 · 0.6 mm nozzle | This design | design/printer1"),
+      QStringLiteral("Built-in | Acme Lab P1S · 0.4 mm nozzle | Built-in | mitcad/acme-p1s"),
   };
   CHECK(listed == expected);
   if (listed != expected) {
     std::fprintf(stderr, "  got: %s\n", qPrintable(listed.join(QStringLiteral(" / "))));
   }
   // The whole name stays the drop-down's label and the tooltip.
-  CHECK(rows.size() == 5 && rows.at(1).name == QStringLiteral("Acme Lab X1 Carbon 0.4 nozzle"));
+  CHECK(rows.size() == 5 && rows.at(0).name == QStringLiteral("Acme Lab X1 Carbon 0.4 nozzle"));
+  CHECK(rows.size() == 5 && rows.at(4).builtIn && !rows.at(0).builtIn);
+}
+
+void builtInsApart() {
+  // Without a printer of My library or This project the built-ins keep
+  // their vendors' headings, among the design's (mitcad#1270).
+  const LibraryItem p1s =
+      item("printer", "mitcad", "acme-p1s", "Acme Lab P1S 0.4 nozzle", printerParts("Acme Lab P1S", 0.4, 0.4));
+  const LibraryItem x1 =
+      item("printer", "design", "acme-x1", "Acme Lab X1 0.4 nozzle", printerParts("Acme Lab X1", 0.4, 0.4));
+  QStringList listed;
+  for (const ProfilePickerRow& row : mitcad::profilePickerRows({p1s, x1}, QStringLiteral("printer"))) {
+    listed << describe(row);
+  }
+  const QStringList together{QStringLiteral("Acme Lab | P1S · 0.4 mm nozzle | Built-in | mitcad/acme-p1s"),
+                             QStringLiteral("Acme Lab | X1 · 0.4 mm nozzle | This design | design/acme-x1")};
+  CHECK(listed == together);
+  if (listed != together) {
+    std::fprintf(stderr, "  got: %s\n", qPrintable(listed.join(QStringLiteral(" / "))));
+  }
+  // A hidden built-in the design uses (its copy) is the design's own: with
+  // the user's, This design, not under Built-in.
+  LibraryItem used = item("printer", "mitcad", "acme-a1", "Acme Lab A1 0.4 nozzle", printerParts("Acme Lab A1", 0.4, 0.4));
+  used.hidden = true;
+  used.inDesign = QStringLiteral("acme-a1");
+  const LibraryItem own =
+      item("printer", "user", "bench-x", "Bench X 0.4 nozzle", printerParts("Bench X", 0.4, 0.4));
+  listed.clear();
+  for (const ProfilePickerRow& row : mitcad::profilePickerRows({p1s, used, own}, QStringLiteral("printer"))) {
+    listed << describe(row);
+  }
+  const QStringList apart{QStringLiteral("Acme Lab | A1 · 0.4 mm nozzle | This design | mitcad/acme-a1"),
+                          QStringLiteral("Bench | X · 0.4 mm nozzle | My library | user/bench-x"),
+                          QStringLiteral("Built-in | Acme Lab P1S · 0.4 mm nozzle | Built-in | mitcad/acme-p1s")};
+  CHECK(listed == apart);
+  if (listed != apart) {
+    std::fprintf(stderr, "  got: %s\n", qPrintable(listed.join(QStringLiteral(" / "))));
+  }
+  // A process of the project's: the built-in processes last by their
+  // whole names.
+  const QVector<LibraryItem> processes{
+      item("process", "mitcad", "standard", "0.20mm Standard @Acme X1C", processParts("0.20mm Standard", "Acme X1C")),
+      item("process", "project", "draft", "Draft", processParts("Draft", nullptr)),
+  };
+  listed.clear();
+  for (const ProfilePickerRow& row : mitcad::profilePickerRows(processes, QStringLiteral("process"))) {
+    listed << describe(row);
+  }
+  const QStringList byProject{
+      QStringLiteral("Any printer | Draft | This project | project/draft"),
+      QStringLiteral("Built-in | 0.20mm Standard @Acme X1C | Built-in | mitcad/standard")};
+  CHECK(listed == byProject);
+  if (listed != byProject) {
+    std::fprintf(stderr, "  got: %s\n", qPrintable(listed.join(QStringLiteral(" / "))));
+  }
 }
 
 void vendors() {
@@ -202,5 +259,6 @@ int profilePickerRowsTests() {
   vendors();
   processRows();
   processRowsByPrinter();
+  builtInsApart();
   return failures;
 }

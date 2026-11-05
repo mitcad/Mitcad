@@ -174,6 +174,15 @@ TransparentTargets transparentTargets(const Selection& items) {
 const QStringList kLengthUnits = {QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"),
                                   QStringLiteral("in"), QStringLiteral("ft")};
 
+// How many occurrences in the tree place the component.
+int occurrencesOf(const QVector<DocumentSnapshot::Occurrence>& level, const QString& component) {
+  int count = 0;
+  for (const DocumentSnapshot::Occurrence& o : level) {
+    count += (o.component == component ? 1 : 0) + occurrencesOf(o.children, component);
+  }
+  return count;
+}
+
 } // namespace
 
 template <typename Sender, typename... Args>
@@ -555,8 +564,10 @@ const DocumentSnapshot::Occurrence* BrowserController::occurrence(const QString&
 // The light bulbs of bodies, their folders, sketches, construction geometry,
 // components and the Origin folder work in every mode (mitcad#295): while
 // Create Sketch asks for a plane, while sketching and during commands, whose
-// undo range they stay out of. A Flat Pattern and an analysis change as the
-// rest of the model does: outside commands.
+// undo range they stay out of. So do a kept analysis's (a section turned on
+// cuts the open command's preview too) and an image reference's (mitcad#1263).
+// A Flat Pattern changes as the rest of the model does: outside commands, as
+// it replaces the folded body an open command works on.
 bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   switch (node.type) {
   case BrowserNode::Type::Origin:
@@ -568,6 +579,9 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   case BrowserNode::Type::Sketches:
   case BrowserNode::Type::Construction:
   case BrowserNode::Type::CenterOfMass: // mitcad#1094: display state, as Origin
+  // mitcad#1263: a kept analysis and an image reference.
+  case BrowserNode::Type::Analysis:
+  case BrowserNode::Type::ImageReference:
     return true;
   default:
     return false;
@@ -645,13 +659,14 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
                                                            {QStringLiteral("shown"), show}}));
     break;
   case BrowserNode::Type::Analysis:
-    // Showing it hides the others: one section at a time (mitcad#41).
-    done = m_host.runModelCommand(cmd("set_analysis_visible", {{QStringLiteral("name"), node.uid},
-                                                               {QStringLiteral("visible"), show}}));
+    // Showing it hides the others: one section at a time (mitcad#41). In
+    // every mode as the bodies' light bulbs (mitcad#1263).
+    commands.append(cmd("set_analysis_visible", {{QStringLiteral("name"), node.uid},
+                                                 {QStringLiteral("visible"), show}}));
     break;
-  case BrowserNode::Type::ImageReference: // mitcad#782
-    done = m_host.runModelCommand(cmd("set_image_reference_visible", {{QStringLiteral("name"), node.uid},
-                                                                      {QStringLiteral("visible"), show}}));
+  case BrowserNode::Type::ImageReference: // mitcad#782, in every mode since mitcad#1263
+    commands.append(cmd("set_image_reference_visible", {{QStringLiteral("name"), node.uid},
+                                                        {QStringLiteral("visible"), show}}));
     break;
   default:
     return;
@@ -1010,6 +1025,32 @@ void BrowserController::componentsFromBodies(const BrowserNode& node) {
                              &result)) {
     qDebug().noquote() << QStringLiteral("Component from %1").arg(node.name);
   }
+}
+
+// Find Repeated Parts on a body's base feature (mitcad#1277): the copies
+// among its bodies become occurrences of one component each, one undo
+// step; the status says how many.
+void BrowserController::findRepeatedParts(const QString& feature) {
+  if (!canChange()) {
+    return;
+  }
+  QJsonObject result;
+  if (!m_host.runModelCommand(cmd("find_repeated_parts", {{QStringLiteral("feature"), feature}}), &result)) {
+    return;
+  }
+  const QJsonArray components = result.value(QStringLiteral("components")).toArray();
+  int copies = 0;
+  for (const QJsonValue& component : components) {
+    copies += static_cast<int>(component.toObject().value(QStringLiteral("copies")).toArray().size());
+  }
+  qInfo().noquote() << QStringLiteral("Find Repeated Parts in %1: %2 components, %3 copies")
+                           .arg(feature)
+                           .arg(components.size())
+                           .arg(copies);
+  m_host.showStatus(components.isEmpty()
+                        ? tr("No repeated parts found.")
+                        : tr("%n component(s) made of repeated parts", nullptr, static_cast<int>(components.size())),
+                    NoticeLevel::Information);
 }
 
 void BrowserController::moveToComponent(const QJsonObject& selection) {
@@ -1383,6 +1424,26 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
                  [this, component, name] { editOptions(component, name); });
       }
     }
+    // A linked design shown by its envelope (mitcad#1271): one light body
+    // instead of the design's, in this occurrence (mitcad#1276) or, by
+    // Show All as Envelope…, in every occurrence of the component.
+    for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
+      if (!root && c.uid == node.uid && c.linked && !c.library) {
+        const QString path = node.occurrence;
+        const QString name = node.name;
+        const double detail = c.envelope;
+        menu.add(QStringLiteral("component"), tr("Show as Envelope…"),
+                 [this, path, name, detail] { showAsEnvelope(path, name, detail, false); });
+        if (occurrencesOf(m_snapshot.occurrences, c.uid) > 1) {
+          menu.add(QStringLiteral("component"), tr("Show All as Envelope…"),
+                   [this, path, name, detail] { showAsEnvelope(path, name, detail, true); });
+        }
+        if (detail > 0) {
+          menu.add(QStringLiteral("component"), tr("Show in Full"),
+                   [this, path, name] { showInFull(path, name); });
+        }
+      }
+    }
     // The whole design turned by quarter turns (mitcad#502).
     if (root) {
       menu.add(QStringLiteral("orientation-cube"), tr("Reorient Design…"), [this] { openReorient(); });
@@ -1414,6 +1475,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     isolate();
     menu.add(QStringLiteral("component"), tr("Create Components from Bodies"),
              [this, node] { componentsFromBodies(node); });
+    // The copies among an imported base feature's bodies as occurrences of
+    // one component each (mitcad#1277).
+    if (made != nullptr && made->type == QStringLiteral("base")) {
+      menu.add(QStringLiteral("component"), tr("Find Repeated Parts"),
+               [this, feature] { findRepeatedParts(feature); });
+    }
     // The body with the features that made it (mitcad#171).
     menu.add(QStringLiteral("component"), tr("Move to Component…"), [this, node] {
       moveToComponent({{QStringLiteral("component"), node.component},
@@ -2899,17 +2966,8 @@ void BrowserController::openProfiles(const QString& kind, const QString& key) {
   timer.start();
   // One manager per kind (mitcad#1135): the Printers manager for none.
   const bool processes = kind == QStringLiteral("process");
-  QPointer<ProfilesDialog>& manager = processes ? m_processes : m_printers;
-  const bool first = !manager;
-  if (!manager) {
-    manager = new ProfilesDialog(m_host, processes ? QStringLiteral("process") : QStringLiteral("printer"), m_window);
-    connect(manager, &ProfilesDialog::libraryChanged, this, &BrowserController::librariesChanged);
-  }
-  showDialog(manager);
-  if (!manager->testAttribute(Qt::WA_DontShowOnScreen)) {
-    manager->raise();
-    manager->activateWindow();
-  }
+  bool first = false;
+  ProfilesDialog* const manager = showProfilesManager(processes, &first);
   manager->open(key);
   const QString title = processes ? QStringLiteral("Processes") : QStringLiteral("Printers");
   qDebug().noquote() << QStringLiteral("%1 opened%2").arg(title, manager->onDesign() ? QString()
@@ -3123,7 +3181,18 @@ void BrowserController::openMaterial(const QStringList& bodies, const QString& c
   }
   QElapsedTimer timer;
   timer.start();
-  const bool first = !m_materials;
+  bool first = false;
+  MaterialsDialog* const manager = showMaterialsManager(&first);
+  manager->open();
+  qDebug().noquote() << QStringLiteral("Materials opened%1").arg(manager->onDesign() ? QString()
+                                                                                     : QStringLiteral(" without a design"));
+  qDebug().noquote() << QStringLiteral("Materials timing: total %1 ms%2")
+                            .arg(timer.elapsed())
+                            .arg(first ? QStringLiteral(", first opening") : QString());
+}
+
+MaterialsDialog* BrowserController::showMaterialsManager(bool* first) {
+  *first = !m_materials;
   if (!m_materials) {
     m_materials = new MaterialsDialog(m_host, m_window);
     m_materials->editAppearances = [this] { openAppearances({}); };
@@ -3134,12 +3203,49 @@ void BrowserController::openMaterial(const QStringList& bodies, const QString& c
     m_materials->raise();
     m_materials->activateWindow();
   }
-  m_materials->open();
-  qDebug().noquote() << QStringLiteral("Materials opened%1").arg(m_materials->onDesign() ? QString()
-                                                                                         : QStringLiteral(" without a design"));
-  qDebug().noquote() << QStringLiteral("Materials timing: total %1 ms%2")
-                            .arg(timer.elapsed())
-                            .arg(first ? QStringLiteral(", first opening") : QString());
+  return m_materials.data();
+}
+
+ProfilesDialog* BrowserController::showProfilesManager(bool processes, bool* first) {
+  QPointer<ProfilesDialog>& manager = processes ? m_processes : m_printers;
+  *first = !manager;
+  if (!manager) {
+    manager = new ProfilesDialog(m_host, processes ? QStringLiteral("process") : QStringLiteral("printer"), m_window);
+    connect(manager, &ProfilesDialog::libraryChanged, this, &BrowserController::librariesChanged);
+  }
+  showDialog(manager);
+  if (!manager->testAttribute(Qt::WA_DontShowOnScreen)) {
+    manager->raise();
+    manager->activateWindow();
+  }
+  return manager.data();
+}
+
+void BrowserController::openLibrary(const QString& kind, std::function<void()> closed) {
+  // My library's group in sight, New and Import into My library first
+  // (mitcad#1250); without a design the managers work on the libraries
+  // alone (ManagerHosts, mitcad#1135), so no design is needed and none is
+  // changed.
+  const QString place = QStringLiteral("user");
+  bool first = false;
+  QString title;
+  bool onDesign = true;
+  if (kind == QStringLiteral("material")) {
+    MaterialsDialog* const manager = showMaterialsManager(&first);
+    manager->whenClosed = std::move(closed);
+    manager->openPlace(place);
+    title = QStringLiteral("Materials");
+    onDesign = manager->onDesign();
+  } else {
+    const bool processes = kind == QStringLiteral("process");
+    ProfilesDialog* const manager = showProfilesManager(processes, &first);
+    manager->openPlace(place);
+    title = processes ? QStringLiteral("Processes") : QStringLiteral("Printers");
+    onDesign = manager->onDesign();
+  }
+  qDebug().noquote() << QStringLiteral("%1 opened%2").arg(title, onDesign ? QString() : QStringLiteral(" without a design"));
+  qDebug().noquote() << QStringLiteral("%1 library opened%2").arg(title, first ? QStringLiteral(", first opening")
+                                                                               : QString());
 }
 
 void BrowserController::openMaterialsOf(const QStringList& bodies, const QString& component) {
@@ -3305,6 +3411,58 @@ void BrowserController::showOccurrenceWhen(const QString& path) {
                                                : QStringLiteral("Show %1 when %2").arg(name, condition));
   } else {
     qDebug().noquote() << QStringLiteral("Show When of %1 refused: %2").arg(name, m_host.lastError());
+  }
+}
+
+void BrowserController::showAsEnvelope(const QString& occurrence, const QString& name, double current,
+                                       bool all) {
+  if (!canChange()) {
+    return;
+  }
+  bool accepted = false;
+  const QString text = dialogText(m_window, tr("Show as Envelope"), tr("Detail size in mm (empty: automatic):"),
+                                  current > 0 ? QString::number(current) : QString(), &accepted)
+                           .trimmed();
+  if (!accepted) {
+    return;
+  }
+  QJsonObject command = cmd("set_link_envelope", {{QStringLiteral("occurrence"), occurrence}});
+  if (all) {
+    command.insert(QStringLiteral("all"), true);
+  }
+  if (!text.isEmpty()) {
+    bool number = false;
+    const double detail = QString(text).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&number);
+    if (!number || !(detail > 0.0)) {
+      sheetWarning(m_window, tr("Show as Envelope"), tr("The detail size must be a number of millimeters above 0."));
+      return;
+    }
+    command.insert(QStringLiteral("detail"), detail);
+  }
+  QJsonObject result;
+  if (m_host.runModelCommand(command, &result)) {
+    qDebug().noquote() << QStringLiteral("Shown %1%2 as its envelope: detail size %3 mm, %4 body(ies)")
+                              .arg(name, all ? QStringLiteral(" and every occurrence of it") : QString())
+                              .arg(result.value(QStringLiteral("detail")).toDouble())
+                              .arg(result.value(QStringLiteral("bodies")).toArray().size());
+  } else {
+    qDebug().noquote() << QStringLiteral("Show as Envelope of %1 refused: %2").arg(name, m_host.lastError());
+  }
+}
+
+void BrowserController::showInFull(const QString& occurrence, const QString& name) {
+  if (!canChange()) {
+    return;
+  }
+  QJsonObject result;
+  if (m_host.runModelCommand(cmd("set_link_envelope", {{QStringLiteral("occurrence"), occurrence},
+                                                       {QStringLiteral("envelope"), false}}),
+                             &result)) {
+    qDebug().noquote() << QStringLiteral("Shown %1 in full: %2 body(ies)")
+                              .arg(name)
+                              .arg(result.value(QStringLiteral("bodies")).toArray().size());
+  } else {
+    qDebug().noquote() << QStringLiteral("Show in Full of %1 refused: %2").arg(name, m_host.lastError());
   }
 }
 

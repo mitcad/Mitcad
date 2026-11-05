@@ -1,0 +1,82 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+ShapeFix: the orientation of a shell's faces (ShapeFix_Shell::FixFaceOrientation,
+GetShells) builds a shell face by face; where the faces have edges that more
+than two of them share (multi-connex mode) it tested after every face added
+whether the shell had closed with BRep_Tool::IsClosed, which goes through
+every edge of the shell: quadratic in the faces of a large shell. The face
+merge after a boolean (ShapeUpgrade_UnifySameDomain::UnifyEdges) runs it on
+every shell whose faces it changed, and on the union of a machine's 257
+bodies, one shell of 8 800 faces, it took 12 of the merge's 14 s
+(mitcad#1273). The edges used an odd number of times are now kept as the
+faces are added (each face's edges toggled in a map, as IsClosed toggles
+them): the shell is closed when it has an edge that counts and none is left
+over, as before. The results are unchanged.
+diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx
+index 0a97fb36c..14e747ac5 100644
+--- a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx
++++ b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx
+@@ -324,6 +324,14 @@ static bool GetShells(
+   int                                aFaceIdx = 1, aFacesInShellCount = 1;
+   NCollection_Sequence<TopoDS_Shape> aSeqUnconnectFaces;
+ 
++  // The edges of the shell being built used an odd number of times, and
++  // whether it has an edge that counts, as BRep_Tool::IsClosed counts them,
++  // kept as faces are added: the shell is closed when it has such an edge
++  // and none is left. IsClosed went through every edge of the shell after
++  // each face added, quadratic in the faces of a large shell.
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aShellOpenEdges;
++  bool                                                   aShellHasBound = false;
++
+   // Using STL containers because number of faces or edges can be too high
+   // to keep them on flat basket OCCT map
+   using EdgeOrientedMap =
+@@ -551,11 +559,28 @@ static bool GetShells(
+       B.Add(nshell, F1);
+       theMapFaceShells.Bind(F1, nshell);
+       aProcessingFaces.Remove(aFaceIdx);
++      if (anIsMultiConnex)
++      {
++        for (TopExp_Explorer anExpE(F1, TopAbs_EDGE); anExpE.More(); anExpE.Next())
++        {
++          const TopoDS_Edge& anE = TopoDS::Edge(anExpE.Current());
++          if (BRep_Tool::Degenerated(anE) || anE.Orientation() == TopAbs_INTERNAL
++              || anE.Orientation() == TopAbs_EXTERNAL)
++          {
++            continue;
++          }
++          aShellHasBound = true;
++          if (!aShellOpenEdges.Add(anE))
++          {
++            aShellOpenEdges.Remove(anE);
++          }
++        }
++      }
+ 
+       // check if closed shell is obtained in multi connex mode and add to sequence of
+       // shells and new shell begin to construct.
+       // (check is n*2)
+-      if (anIsMultiConnex && BRep_Tool::IsClosed(nshell))
++      if (anIsMultiConnex && aShellHasBound && aShellOpenEdges.IsEmpty())
+       {
+         nshell.Closed(true);
+         theSeqShells.Append(nshell);
+@@ -563,6 +588,8 @@ static bool GetShells(
+         B.MakeShell(nshellnext);
+         nshell             = nshellnext;
+         aFacesInShellCount = 1;
++        aShellOpenEdges.Clear();
++        aShellHasBound = false;
+       }
+ 
+       aFaceIdx = 0;
+@@ -583,6 +610,8 @@ static bool GetShells(
+       nshell             = nshellnext;
+       aFaceIdx           = 0;
+       aFacesInShellCount = 1;
++      aShellOpenEdges.Clear();
++      aShellHasBound = false;
+     }
+   }
+   bool isContains = false;

@@ -692,12 +692,12 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
                    {QStringLiteral("side1"), QStringLiteral("Side 1")},
                    {QStringLiteral("side2"), QStringLiteral("Side 2")}},
                   QStringLiteral("symmetric")),
-      valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("2 mm")),
+      valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0, true),
       choiceInput(QStringLiteral("depth_type"), QObject::tr("Depth Type"),
                   {{QStringLiteral("to_next"), QStringLiteral("To Next")},
                    {QStringLiteral("depth"), QStringLiteral("Depth")}},
                   QStringLiteral("to_next")),
-      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(choiceIs(QStringLiteral("depth_type"), QStringLiteral("depth"))),
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
       selectionInput(QStringLiteral("objects"), QObject::tr("Objects"), SelectKind::Body, 0, 0)
@@ -794,14 +794,14 @@ CommandDef coilCommand(const CommandContext& context) {
                    {QStringLiteral("height_and_pitch"), QStringLiteral("Height and Pitch")},
                    {QStringLiteral("spiral"), QStringLiteral("Spiral")}},
                   QStringLiteral("revolutions_and_height")),
-      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("40 mm")),
+      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("40 mm")).withStepMinimum(0.0, true),
       choiceInput(QStringLiteral("rotation"), QObject::tr("Rotation"),
                   {{QStringLiteral("ccw"), QStringLiteral("Counterclockwise")},
                    {QStringLiteral("cw"), QStringLiteral("Clockwise")}},
                   QStringLiteral("ccw")),
-      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("3"))
+      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(0.0, true)
           .withVisible(typeHas("revolutions")),
-      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm"))
+      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm")).withStepMinimum(0.0, true)
           .withVisible(typeHas("height"))
           .withManipulator([place](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
             const auto frame = placeFrame(state, model, place);
@@ -813,7 +813,7 @@ CommandDef coilCommand(const CommandContext& context) {
             m.boxAtTip = true;
             return m;
           }),
-      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(typeHas("pitch")),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
           .withTooltip(QObject::tr("A cone: positive widens the coil as it rises"))
@@ -829,7 +829,7 @@ CommandDef coilCommand(const CommandContext& context) {
                    {QStringLiteral("on_center"), QStringLiteral("On Center")},
                    {QStringLiteral("outside"), QStringLiteral("Outside")}},
                   QStringLiteral("on_center")),
-      valueInput(QStringLiteral("size"), QObject::tr("Section Size"), ValueKind::Length, QStringLiteral("4 mm")),
+      valueInput(QStringLiteral("size"), QObject::tr("Section Size"), ValueKind::Length, QStringLiteral("4 mm")).withStepMinimum(0.0, true),
   };
   def.inputs += operationInputs();
   def.init = [place](CommandState& state, const CommandContext& model) { initPlace(state, model, place); };
@@ -919,9 +919,9 @@ CommandDef pipeCommand(const CommandContext& context) {
                    {QStringLiteral("square"), QStringLiteral("Square")},
                    {QStringLiteral("triangular"), QStringLiteral("Triangular")}},
                   QStringLiteral("circular")),
-      valueInput(QStringLiteral("size"), QObject::tr("Section Size"), ValueKind::Length, QStringLiteral("8 mm")),
+      valueInput(QStringLiteral("size"), QObject::tr("Section Size"), ValueKind::Length, QStringLiteral("8 mm")).withStepMinimum(0.0, true),
       checkInput(QStringLiteral("hollow"), QObject::tr("Hollow"), false),
-      valueInput(QStringLiteral("thickness"), QObject::tr("Section Thickness"), ValueKind::Length, QStringLiteral("1 mm"))
+      valueInput(QStringLiteral("thickness"), QObject::tr("Section Thickness"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("hollow")); }),
   };
   def.inputs += operationInputs();
@@ -1097,17 +1097,17 @@ CommandDef helixCommand(const CommandContext& context) {
                    {kRevolutionsAndPitch, QStringLiteral("Revolution and Pitch")},
                    {kHeightAndPitch, QStringLiteral("Height and Pitch")}},
                   kRevolutionsAndPitch),
-      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("3"))
+      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The turns; need not be whole"))
           .withVisible(typeHas("revolutions")),
-      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm"))
+      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("How far the profiles rise along the axis"))
           .withVisible(typeHas("height"))
           .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
             const auto rise = helixRise(state, model);
             return rise ? std::optional<Manipulator>(arrow(rise->first, rise->second)) : std::nullopt;
           }),
-      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The rise per turn"))
           .withVisible(typeHas("pitch"))
           .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {

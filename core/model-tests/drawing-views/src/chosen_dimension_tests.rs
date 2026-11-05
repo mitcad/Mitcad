@@ -1,0 +1,474 @@
+// SPDX-License-Identifier: MIT
+//! Dimensions whose picks choose their type (mitcad#1272) on the mock
+//! kernel: `"type": "dimension"` makes a diameter of one circle, a radius
+//! of one arc, the length of one straight edge, an angle of two edges that
+//! are not parallel and a linear dimension of any other two, horizontal,
+//! vertical or aligned as its placing click chooses; the same pick twice is
+//! one pick and never gives 0 mm; `drawing_snap` says what a placing click
+//! makes; a centerline of a curved slot's two sides is its centre arc; and
+//! a line or an arc drawn outside the model snaps to ends, middles and
+//! centres (`"want": "snap"`).
+
+use serde_json::{Value, json};
+
+use mitcad_model::Document;
+use mitcad_model::datum::CurveGeometry;
+use mitcad_model::ids::BodyUid;
+use mitcad_model::kernel::Kernel;
+use mitcad_model::testing::MockKernel;
+use mitcad_model_api::DocumentApi;
+
+const R: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
+
+fn command(doc: &mut Document<MockKernel>, command: Value) -> Value {
+    let result = doc
+        .command(&command.to_string())
+        .unwrap_or_else(|e| panic!("{command}: {e}"));
+    serde_json::from_str(&result).unwrap()
+}
+
+fn refused(doc: &mut Document<MockKernel>, command: Value) -> String {
+    match doc.command(&command.to_string()) {
+        Ok(result) => panic!("{command} was accepted: {result}"),
+        Err(e) => e.to_string(),
+    }
+}
+
+fn query(doc: &Document<MockKernel>, query: Value) -> Value {
+    let answer = doc
+        .query(&query.to_string())
+        .unwrap_or_else(|e| panic!("{query}: {e}"));
+    serde_json::from_str(&answer).unwrap()
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+fn point(value: &Value) -> [f64; 2] {
+    [value[0].as_f64().unwrap(), value[1].as_f64().unwrap()]
+}
+
+fn sheet(doc: &Document<MockKernel>) -> Value {
+    query(doc, json!({"query": "drawing", "drawing": "D1"}))["sheets"][0].clone()
+}
+
+fn annotation(doc: &Document<MockKernel>, id: &Value) -> Value {
+    sheet(doc)["annotations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == *id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no annotation {id}"))
+}
+
+/// The group `A<id>` of the sheet.
+fn group(doc: &Document<MockKernel>, id: &Value) -> Value {
+    sheet(doc)["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == format!("A{id}").as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("no group of annotation {id}"))
+}
+
+fn line(start: [f64; 2], end: [f64; 2]) -> CurveGeometry {
+    CurveGeometry::Line {
+        start: [start[0], start[1], 20.0],
+        end: [end[0], end[1], 20.0],
+    }
+}
+
+/// An arc on the block's top about `center`, counter-clockwise seen from
+/// above from `from` to `to` degrees; a whole circle when they are equal.
+fn arc(center: [f64; 2], radius: f64, from: f64, to: f64) -> CurveGeometry {
+    let at = |degrees: f64| {
+        let (s, c) = degrees.to_radians().sin_cos();
+        [center[0] + radius * c, center[1] + radius * s, 20.0]
+    };
+    CurveGeometry::Circle {
+        center: [center[0], center[1], 20.0],
+        normal: [0.0, 0.0, 1.0],
+        radius,
+        start: at(from),
+        end: at(to),
+    }
+}
+
+/// The curved slot's centre: its sides are arcs of radius 8 and 12 about
+/// it from 30 to 90 degrees, its ends' centres on the radius 10.
+const SLOT: [f64; 2] = [28.0, 10.0];
+
+/// A point at an angle (degrees) and a distance from the slot's centre.
+fn slot_at(degrees: f64, radius: f64) -> [f64; 2] {
+    let (s, c) = degrees.to_radians().sin_cos();
+    [SLOT[0] + radius * c, SLOT[1] + radius * s]
+}
+
+/// A plate like the report's on the top of a 40 x 30 x 20 block (F2.b0),
+/// seen in the top view (view 2: the model's x and y at 1:1) of a drawing
+/// whose front view is view 1. Its top's edges: 0 the front edge (y 0), 1
+/// the right edge (x 40), 2 a slanted edge from (0, 22) to (12, 30), 3 a
+/// hole of radius 3 at (10, 8), 4 and 5 the curved slot's outer and inner
+/// sides, 6 the back edge (y 30), 7 the slot's end cap at 30 degrees.
+fn plate() -> (Document<MockKernel>, Vec<String>) {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+        ]),
+    );
+    doc.kernel().lists_geometry.set(true);
+    let body: BodyUid = "F2.b0".parse().unwrap();
+    let names: Vec<String> = doc
+        .kernel()
+        .edges(doc.body_shape(body).unwrap())
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.name)
+        .collect();
+    assert!(names.len() >= 8, "{names:?}");
+    let end = slot_at(30.0, 10.0);
+    let curves = [
+        line([0.0, 0.0], [40.0, 0.0]),
+        line([40.0, 0.0], [40.0, 30.0]),
+        line([0.0, 22.0], [12.0, 30.0]),
+        arc([10.0, 8.0], 3.0, 0.0, 0.0),
+        arc(SLOT, 12.0, 30.0, 90.0),
+        arc(SLOT, 8.0, 30.0, 90.0),
+        line([0.0, 30.0], [40.0, 30.0]),
+        arc(end, 2.0, 210.0, 30.0),
+    ];
+    {
+        let mut edge_curves = doc.kernel().edge_curves.borrow_mut();
+        for (name, curve) in names.iter().zip(curves) {
+            edge_curves.insert(name.clone(), curve);
+        }
+    }
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [100, 120], "scale": "1:1"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "projected", "parent": 1,
+               "side": "above"}),
+    );
+    (doc, names)
+}
+
+/// Where a point of the plate's top (the top view's) is on the sheet.
+fn on_top(doc: &Document<MockKernel>, at: [f64; 2]) -> [f64; 2] {
+    let view = sheet(doc)["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == 2)
+        .cloned()
+        .expect("the top view");
+    let place = point(&view["place"]);
+    [place[0] + at[0], place[1] + at[1]]
+}
+
+/// A dimension whose picks choose its type, of clicks on the plate's top,
+/// placed at a point of it; its annotation.
+fn dimension(doc: &mut Document<MockKernel>, clicks: &[[f64; 2]], placed: [f64; 2]) -> Value {
+    let picks: Vec<[f64; 2]> = clicks.iter().map(|c| on_top(&*doc, *c)).collect();
+    let at = on_top(&*doc, placed);
+    let added = command(
+        doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2, "type": "dimension",
+               "picks": picks, "at": at}),
+    );
+    let entry = annotation(doc, &added["annotation"]);
+    assert_eq!(entry["broken"], false, "{entry}");
+    entry
+}
+
+fn value(entry: &Value) -> f64 {
+    entry["value"].as_f64().unwrap()
+}
+
+#[test]
+fn one_pick_makes_a_diameter_a_radius_or_an_edges_length() {
+    let (mut doc, names) = plate();
+    // The hole: its diameter.
+    let hole = dimension(&mut doc, &[[13.0, 8.0]], [20.0, 20.0]);
+    assert_eq!(hole["type"], "diameter", "{hole}");
+    assert!(near(value(&hole), 6.0), "{hole}");
+    assert_eq!(hole["label"], "Ø6");
+    // The slot's outer side: its radius.
+    let side = dimension(&mut doc, &[slot_at(60.0, 12.0)], [10.0, 28.0]);
+    assert_eq!(side["type"], "radius", "{side}");
+    assert!(near(value(&side), 12.0), "{side}");
+    // The right edge: its length from its start to its end, along it
+    // wherever it is placed.
+    let right = dimension(&mut doc, &[[40.0, 25.0]], [50.0, 15.0]);
+    assert_eq!(right["type"], "linear", "{right}");
+    assert_eq!(right["along"], "vertical", "{right}");
+    assert!(near(value(&right), 30.0), "{right}");
+    assert_eq!(right["picks"][0]["edge"], names[1].as_str());
+    assert_eq!(right["picks"][0]["point"], "start");
+    assert_eq!(right["picks"][1]["edge"], names[1].as_str());
+    assert_eq!(right["picks"][1]["point"], "end");
+    // The slanted edge, 12 along x and 8 along y: above it horizontal,
+    // beside it vertical, between or beyond its ends both ways aligned.
+    let slanted = (12.0f64).hypot(8.0);
+    for (placed, along, length) in [
+        ([6.0, 40.0], "horizontal", 12.0),
+        ([20.0, 26.0], "vertical", 8.0),
+        ([7.0, 25.0], "aligned", slanted),
+        ([20.0, 40.0], "aligned", slanted),
+    ] {
+        let edge = dimension(&mut doc, &[[6.0, 26.0]], placed);
+        assert_eq!(edge["along"], along, "placed at {placed:?}: {edge}");
+        assert!(near(value(&edge), length), "placed at {placed:?}: {edge}");
+    }
+    // A point alone measures nothing.
+    let centre = on_top(&doc, [10.0, 8.3]);
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2, "type": "dimension",
+               "picks": [centre], "at": centre}),
+    );
+    assert!(error.contains("a point alone"), "{error}");
+}
+
+#[test]
+fn two_picks_make_an_angle_or_a_distance_the_placing_click_directs() {
+    let (mut doc, _) = plate();
+    // The right and the slanted edge: the angle between them.
+    let angle = dimension(&mut doc, &[[40.0, 25.0], [6.0, 26.0]], [30.0, 35.0]);
+    assert_eq!(angle["type"], "angle", "{angle}");
+    assert!(near(value(&angle), (12.0f64).atan2(8.0)), "{angle}");
+    // The front and the back edge, parallel: the distance between them,
+    // their middles one above the other.
+    let across = dimension(&mut doc, &[[20.0, 0.0], [25.0, 30.0]], [45.0, 15.0]);
+    assert_eq!(across["type"], "linear", "{across}");
+    assert_eq!(across["along"], "vertical", "{across}");
+    assert!(near(value(&across), 30.0), "{across}");
+    // The hole and the right edge placed between them: aligned, square to
+    // the edge, the hole's centre's distance from it.
+    let to_edge = dimension(&mut doc, &[[13.0, 8.0], [40.0, 25.0]], [25.0, 12.0]);
+    assert_eq!(to_edge["along"], "aligned", "{to_edge}");
+    assert!(near(value(&to_edge), 30.0), "{to_edge}");
+    // The slot's centre, picked where it is, and the hole: the radial
+    // distance placed between them; above them horizontal, beside them
+    // vertical.
+    let radial = (18.0f64).hypot(2.0);
+    for (placed, along, length) in [
+        ([20.0, 9.0], "aligned", radial),
+        ([20.0, 25.0], "horizontal", 18.0),
+        ([35.0, 9.0], "vertical", 2.0),
+    ] {
+        let entry = dimension(&mut doc, &[[28.0, 10.3], [13.0, 8.0]], placed);
+        assert_eq!(entry["type"], "linear", "{entry}");
+        assert_eq!(entry["picks"][0]["point"], "center", "{entry}");
+        assert_eq!(entry["along"], along, "placed at {placed:?}: {entry}");
+        assert!(near(value(&entry), length), "placed at {placed:?}: {entry}");
+    }
+    // Three picks are a baseline's or a chain's.
+    let picks: Vec<[f64; 2]> = [[13.0, 8.0], [40.0, 25.0], [20.0, 0.0]]
+        .iter()
+        .map(|c| on_top(&doc, *c))
+        .collect();
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2, "type": "dimension",
+               "picks": picks}),
+    );
+    assert!(error.contains("one pick"), "{error}");
+}
+
+#[test]
+fn the_same_pick_twice_never_gives_zero() {
+    let (mut doc, names) = plate();
+    // The hole clicked twice: one pick, its diameter.
+    let hole = dimension(&mut doc, &[[13.0, 8.0], [10.0, 5.0]], [20.0, 20.0]);
+    assert_eq!(hole["type"], "diameter", "{hole}");
+    assert_eq!(hole["picks"].as_array().unwrap().len(), 1, "{hole}");
+    assert!(near(value(&hole), 6.0), "{hole}");
+    // The right edge clicked twice: its length.
+    let right = dimension(&mut doc, &[[40.0, 25.0], [40.0, 20.0]], [50.0, 15.0]);
+    assert!(near(value(&right), 30.0), "{right}");
+    // The hole and its own centre lie on one point: refused, not 0.
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2, "type": "dimension",
+               "picks": [{"body": "F2.b0", "edge": names[3]},
+                         {"body": "F2.b0", "edge": names[3], "point": "center"}]}),
+    );
+    assert!(error.contains("one point"), "{error}");
+    // Nothing of these was kept.
+    let kept = sheet(&doc)["annotations"].as_array().unwrap().len();
+    assert_eq!(kept, 2);
+}
+
+#[test]
+fn a_dimensions_placing_click_says_what_it_makes() {
+    let (doc, _) = plate();
+    let picks = [on_top(&doc, [28.0, 10.3]), on_top(&doc, [13.0, 8.0])];
+    let snap = |placed: [f64; 2]| {
+        query(
+            &doc,
+            json!({"query": "drawing_snap", "free": true,
+                   "command": {"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2,
+                               "type": "dimension", "picks": picks,
+                               "at": on_top(&doc, placed)}}),
+        )
+    };
+    // Between them: aligned, along the line from the slot's centre to the
+    // hole's, from those two points on the sheet.
+    let between = snap([20.0, 9.0]);
+    assert_eq!(between["type"], "linear", "{between}");
+    assert_eq!(between["along"], "aligned", "{between}");
+    let d = point(&between["direction"]);
+    let radial = (18.0f64).hypot(2.0);
+    assert!(
+        near(d[0].abs(), 18.0 / radial) && near(d[1].abs(), 2.0 / radial),
+        "{between}"
+    );
+    let ends = &between["ends"];
+    let (slot, hole) = (on_top(&doc, SLOT), on_top(&doc, [10.0, 8.0]));
+    assert!(
+        near(point(&ends[0])[0], slot[0]) && near(point(&ends[0])[1], slot[1]),
+        "{between}"
+    );
+    assert!(
+        near(point(&ends[1])[0], hole[0]) && near(point(&ends[1])[1], hole[1]),
+        "{between}"
+    );
+    // Above them: horizontal.
+    let above = snap([20.0, 25.0]);
+    assert_eq!(above["along"], "horizontal", "{above}");
+    assert_eq!(point(&above["direction"]), [1.0, 0.0], "{above}");
+    // One circle: a diameter, nothing to measure along.
+    let one = query(
+        &doc,
+        json!({"query": "drawing_snap", "free": true,
+               "command": {"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2,
+                           "type": "dimension", "picks": [on_top(&doc, [13.0, 8.0])],
+                           "at": on_top(&doc, [20.0, 20.0])}}),
+    );
+    assert_eq!(one["type"], "diameter", "{one}");
+    assert!(one.get("direction").is_none(), "{one}");
+}
+
+#[test]
+fn a_centerline_of_a_curved_slots_sides_is_its_centre_arc() {
+    let (mut doc, _) = plate();
+    let picks = [
+        on_top(&doc, slot_at(60.0, 12.0)),
+        on_top(&doc, slot_at(60.0, 8.0)),
+    ];
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2, "type": "centerline",
+               "picks": picks}),
+    );
+    let id = &added["annotation"];
+    assert_eq!(annotation(&doc, id)["broken"], false);
+    let line = group(&doc, id);
+    let items = line["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{line}");
+    assert_eq!(items[0]["pen"], "chain", "{line}");
+    let arc = &items[0]["arc"];
+    let (center, radius) = (point(&arc["center"]), arc["radius"].as_f64().unwrap());
+    let slot = on_top(&doc, SLOT);
+    assert!(
+        near(center[0], slot[0]) && near(center[1], slot[1]),
+        "{line}"
+    );
+    assert!(near(radius, 10.0), "{line}");
+    // From one end's centre to the other's, run on a little beyond each.
+    let (start, end) = (arc["start"].as_f64().unwrap(), arc["end"].as_f64().unwrap());
+    let (first, last) = (30f64.to_radians(), 90f64.to_radians());
+    assert!(start < first && start > first - 0.6, "{line}");
+    assert!(end > last && end < last + 0.6, "{line}");
+}
+
+#[test]
+fn lines_and_arcs_snap_to_ends_middles_and_centres() {
+    let (doc, _) = plate();
+    let snap = |at: [f64; 2]| {
+        query(
+            &doc,
+            json!({"query": "drawing_pick", "drawing": "D1", "view": 2,
+                   "at": on_top(&doc, at), "want": "snap"}),
+        )
+    };
+    let at = |answer: &Value| point(&answer["at"]);
+    // The right edge's middle.
+    let middle = snap([40.4, 15.6]);
+    assert_eq!(middle["pick"]["point"], "center", "{middle}");
+    let expected = on_top(&doc, [40.0, 15.0]);
+    assert!(near(at(&middle)[0], expected[0]) && near(at(&middle)[1], expected[1]));
+    // The slot's end's centre, and the centre of its sides.
+    let end = slot_at(30.0, 10.0);
+    let cap = snap([end[0] + 0.2, end[1] + 0.2]);
+    let expected = on_top(&doc, end);
+    assert!(
+        near(at(&cap)[0], expected[0]) && near(at(&cap)[1], expected[1]),
+        "{cap}"
+    );
+    // Both within reach, the nearer wins whatever its kind: 0.6 from the
+    // end's centre and 1.4 from the inner side's end the centre, the other
+    // way round the end.
+    let inner = slot_at(30.0, 8.0);
+    let toward = |share: f64| {
+        [
+            end[0] + (inner[0] - end[0]) * share,
+            end[1] + (inner[1] - end[1]) * share,
+        ]
+    };
+    let near_centre = snap(toward(0.3));
+    assert_eq!(near_centre["pick"]["point"], "center", "{near_centre}");
+    assert!(
+        near(at(&near_centre)[0], expected[0]) && near(at(&near_centre)[1], expected[1]),
+        "{near_centre}"
+    );
+    let near_end = snap(toward(0.7));
+    let side_end = on_top(&doc, inner);
+    assert!(
+        near(at(&near_end)[0], side_end[0]) && near(at(&near_end)[1], side_end[1]),
+        "{near_end}"
+    );
+    let centre = snap([SLOT[0] + 0.5, SLOT[1] - 0.5]);
+    let expected = on_top(&doc, SLOT);
+    assert!(
+        near(at(&centre)[0], expected[0]) && near(at(&centre)[1], expected[1]),
+        "{centre}"
+    );
+    // The front edge's end.
+    let corner = snap([39.0, 0.5]);
+    let expected = on_top(&doc, [40.0, 0.0]);
+    assert!(
+        near(at(&corner)[0], expected[0]) && near(at(&corner)[1], expected[1]),
+        "{corner}"
+    );
+    // Away from them all: nothing, though an edge is near.
+    let none = snap([32.0, 29.5]);
+    assert!(none["pick"].is_null(), "{none}");
+    // A circle hovered for a dimension shows its centre too.
+    let hole = query(
+        &doc,
+        json!({"query": "drawing_pick", "drawing": "D1", "view": 2,
+               "at": on_top(&doc, [13.0, 8.0]), "type": "diameter"}),
+    );
+    let items = hole["items"].as_array().unwrap();
+    let centre = on_top(&doc, [10.0, 8.0]);
+    assert!(
+        items.iter().any(|i| i
+            .get("point")
+            .is_some_and(|p| near(point(p)[0], centre[0]) && near(point(p)[1], centre[1]))),
+        "{hole}"
+    );
+}

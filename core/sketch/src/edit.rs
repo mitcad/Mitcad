@@ -135,11 +135,38 @@ impl<'a> SketchEdit<'a> {
                 }
                 Ok(self.add_point(at))
             }
-            PointInput::Existing(id) => match self.def.entity(id) {
-                Some(e) if e.is_point() => Ok(id),
-                Some(e) => Err(format!("{} is not a point", e.as_ref())),
-                None => Err(format!("point p{} does not exist", id.0)),
-            },
+            PointInput::Existing(id) => self.existing_point(id).map(|_| id),
+        }
+    }
+
+    /// Where an existing point is, or why `id` names none. Points, curves
+    /// and texts share one numbering (`p3`, `c4`, `t5`), so a point id
+    /// guessed ahead of a command's result may name a curve (mitcad#1269).
+    pub fn existing_point(&self, id: EntityUid) -> Result<[f64; 2], String> {
+        match self.def.entity(id) {
+            Some(e) if e.is_point() => self.at(id),
+            Some(e) => Err(format!(
+                "{} is not a point: points, curves and texts of a sketch share one numbering \
+                 (p{n} and c{n} are one entity), so use the point ids a result returns \
+                 (entities, made) or the sketch query lists",
+                e.as_ref(),
+                n = id.0
+            )),
+            None => Err(format!("point p{} does not exist", id.0)),
+        }
+    }
+
+    /// Where a point input is: the position given, or an existing point's
+    /// (mitcad#1269: a drawing tool's point inputs take either).
+    pub fn input_position(&self, input: PointInput) -> Result<[f64; 2], String> {
+        match input {
+            PointInput::At(at) => {
+                if !at.iter().all(|v| v.is_finite()) {
+                    return Err(format!("the point must be finite, got {at:?}"));
+                }
+                Ok(at)
+            }
+            PointInput::Existing(id) => self.existing_point(id),
         }
     }
 

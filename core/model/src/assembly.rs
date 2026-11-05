@@ -53,7 +53,7 @@ pub struct ComponentDef {
 
 /// A component linked from another design file: its bodies are the
 /// file's, read again when the source has changed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalLink {
     /// The file as given; a relative path is relative to the directory of
@@ -64,6 +64,30 @@ pub struct ExternalLink {
     pub digest: String,
     /// The base feature that holds the linked bodies.
     pub feature: FeatureUid,
+    /// Shown by its envelope (mitcad#1271, `document/envelope.rs`): the
+    /// detail size (mm) of the one body the base feature then holds
+    /// instead of the file's bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<f64>,
+    /// While shown by its envelope (mitcad#1276): the frames that joints
+    /// to faces, edges and vertices of the design's bodies had when it was
+    /// last shown in full, which they keep using.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<EnvelopeFrame>,
+}
+
+// The detail size is checked finite and positive before it is stored, and
+// the frames are rigid transforms of finite numbers.
+impl Eq for ExternalLink {}
+
+/// A joint origin's frame on a linked design's geometry, kept while the
+/// design is shown by its envelope (mitcad#1276): the geometry as the
+/// joint names it and its frame in the component's coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvelopeFrame {
+    pub geometry: crate::features::GeomRef,
+    pub frame: Transform,
 }
 
 /// One placement of a component in a parent component.

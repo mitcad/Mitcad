@@ -347,3 +347,7 @@ pub mod material_units;
 pub use document::{MaterialImport, NameConflict};
 // Auto Fix of references a warning found again (mitcad#1223).
 pub use document::{AutoFix, AutoFixLeft, Repair};
+// The rolled-back features evaluated in the background (mitcad#1267).
+pub use document::RolledBackRun;
+// Find Repeated Parts (mitcad#1277).
+pub use document::{REPEATED_PARTS_TOLERANCE, RepeatedPart, RepeatedParts};

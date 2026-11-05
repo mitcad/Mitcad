@@ -362,6 +362,11 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("import_materials", Model),
     // Auto Fix of references a warning found again (mitcad#1223).
     ("auto_fix", Model),
+    // Find Repeated Parts (mitcad#1277, `components.rs`).
+    ("find_repeated_parts", Model),
+    // A linked component shown by its envelope reads its file again
+    // (mitcad#1271).
+    ("set_link_envelope", FileIo),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -563,6 +568,9 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("material_units", Model),
     ("material_dataset", Model),
     ("export_materials", Model),
+    // Whether a STEP file has an assembly to keep, read by its path
+    // (mitcad#1274).
+    ("file_structure", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

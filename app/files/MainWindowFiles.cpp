@@ -25,6 +25,7 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QIcon>
 #include <QJsonArray>
 #include <QMenu>
 #include <QMenuBar>
@@ -54,13 +55,15 @@
 #include "F3dImport.hpp"
 #include "ImportDeviations.hpp"
 #include "Print3d.hpp"
+#include "RecentDesigns.hpp"
+#include "StartPage.hpp"
 #include "mitcad/io/mesh.hpp"
 
 namespace mitcad {
 namespace {
 
-const QString kRecentKey = QStringLiteral("recentFiles");
-constexpr int kRecentCount = 10;
+// File › Open Recent's list, the Start tab's too (files/RecentDesigns.hpp).
+const QString kRecentKey = recent::recentFilesKey();
 
 QJsonObject cmd(const char* name, QJsonObject fields = {}) {
   fields.insert(QStringLiteral("cmd"), QLatin1String(name));
@@ -140,6 +143,31 @@ QStringList resultWarnings(const QJsonObject& result) {
     }
   }
   return warnings;
+}
+
+// The log's line of an import_file: its base feature and bodies, and the
+// components and occurrences of a STEP assembly kept (mitcad#1274).
+QString importedLine(const QString& name, const QJsonObject& result) {
+  QString line = QStringLiteral("Imported %1 as %2: %3 body(ies)")
+                     .arg(name, result.value(QStringLiteral("name")).toString())
+                     .arg(result.value(QStringLiteral("bodies")).toArray().size());
+  if (result.contains(QStringLiteral("components"))) {
+    line += QStringLiteral(", %1 component(s), %2 occurrence(s)")
+                .arg(result.value(QStringLiteral("components")).toArray().size())
+                .arg(result.value(QStringLiteral("occurrences")).toInt());
+  }
+  // Find Repeated Parts at import (mitcad#1277): the components it made
+  // and the copies their occurrences stand for.
+  if (result.contains(QStringLiteral("repeated_parts"))) {
+    const QJsonArray repeated =
+        result.value(QStringLiteral("repeated_parts")).toObject().value(QStringLiteral("components")).toArray();
+    qsizetype copies = 0;
+    for (const QJsonValue& part : repeated) {
+      copies += part.toObject().value(QStringLiteral("copies")).toArray().size();
+    }
+    line += QStringLiteral(", repeated parts: %1 component(s), %2 copies").arg(repeated.size()).arg(copies);
+  }
+  return line;
 }
 
 // The status after an import_file (mitcad#1040: its warnings, whatever they
@@ -400,15 +428,9 @@ void MainWindow::createFileMenu() {
 }
 
 void MainWindow::addRecentFile(const QString& path) {
-  QSettings settings;
-  QStringList files = settings.value(kRecentKey).toStringList();
-  const QString absolute = QFileInfo(path).absoluteFilePath();
-  files.removeAll(absolute);
-  files.prepend(absolute);
-  while (files.size() > kRecentCount) {
-    files.removeLast();
-  }
-  settings.setValue(kRecentKey, files);
+  // First in the list, with when it was opened or saved (the Start tab's
+  // cards, mitcad#1258).
+  recent::noteOpened(path);
 }
 
 void MainWindow::updateRecentMenu() {
@@ -418,6 +440,7 @@ void MainWindow::updateRecentMenu() {
   m_recentMenu->clear();
   const QStringList files = QSettings().value(kRecentKey).toStringList();
   QStringList names;
+  int previews = 0;
   for (int i = 0; i < files.size(); ++i) {
     const QString path = files[i];
     // A design of a project with the project's name (mitcad#89).
@@ -427,13 +450,27 @@ void MainWindow::updateRecentMenu() {
     action->setMenuRole(QAction::NoRole); // a file name is no About or Settings
     action->setToolTip(QDir::toNativeSeparators(path));
     action->setStatusTip(QDir::toNativeSeparators(path));
+    // Its preview, as on the Start tab's card (mitcad#1258).
+    const QString preview = recent::designPreviewPath(path);
+    if (!preview.isEmpty() && QFileInfo(preview).isFile()) {
+      action->setIcon(QIcon(preview));
+      ++previews;
+    }
     names << QString(label).replace(QChar(0x2014), QLatin1Char('-'));
   }
   if (files.isEmpty()) {
     m_recentMenu->addAction(tr("No recent files"))->setEnabled(false);
   } else {
     m_recentMenu->addSeparator();
-    m_recentMenu->addAction(tr("Clear Recent Files"), this, [] { QSettings().remove(kRecentKey); });
+    m_recentMenu->addAction(tr("Clear Recent Files"), this, [this] {
+      recent::clearRecent(); // the pinned designs stay on the Start tab
+      if (startPageShown()) {
+        m_startPage->refresh();
+      }
+    });
+  }
+  if (!files.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Recent files previews: %1 of %2").arg(previews).arg(files.size());
   }
   if (m_recentMenu->isVisible() || !names.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Recent files: %1").arg(names.join(QStringLiteral(" | ")));
@@ -531,6 +568,17 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
   const QString name = QFileInfo(path).fileName();
   const QString file = QFileInfo(path).absoluteFilePath();
   const FileKind kind = fileKind(path);
+  // A STEP assembly's choice, asked when the user opens it (mitcad#1274).
+  QString structure;
+  bool repeatedParts = false;
+  if (kind == FileKind::Cad && m_askImportChoices) {
+    const std::optional<QString> chosen = askImportStructure(path, &repeatedParts);
+    if (!chosen) {
+      error.clear();
+      return false;
+    }
+    structure = *chosen;
+  }
   QJsonObject result;
   QString sketch;
   // Import into a document owned by the opening job. The active model,
@@ -564,6 +612,13 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
       if (kind == FileKind::Mesh) {
         command.insert(QStringLiteral("unit_mm"), 1.0);
       }
+      if (!structure.isEmpty()) {
+        command.insert(QStringLiteral("structure"), structure);
+      }
+      // Find Repeated Parts in the import's undo step (mitcad#1277).
+      if (repeatedParts) {
+        command.insert(QStringLiteral("repeated_parts"), true);
+      }
       result = run(command);
     }
     return document;
@@ -587,9 +642,7 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
                              .arg(result.value(QStringLiteral("warnings")).toArray().size());
     showHint(tr("Inserted %1. Extrude (E) a profile of it.").arg(name));
   } else {
-    qInfo().noquote() << QStringLiteral("Imported %1 as %2: %3 body(ies)")
-                             .arg(name, result.value(QStringLiteral("name")).toString())
-                             .arg(result.value(QStringLiteral("bodies")).toArray().size());
+    qInfo().noquote() << importedLine(name, result);
     showImported(*this, name, result);
   }
   return true;
@@ -641,12 +694,18 @@ void MainWindow::dropEvent(QDropEvent* event) {
   }
   event->acceptProposedAction();
   qDebug().noquote() << QStringLiteral("Dropped %1").arg(paths.join(QStringLiteral(", ")));
-  // Later, so that the drag ends first; a design opens, the rest come in.
+  openDropped(paths);
+}
+
+void MainWindow::openDropped(const QStringList& paths) {
+  // Later, so that the drag ends first; a design opens, the rest come in
+  // (from the Start page too, mitcad#1258, which the import leaves).
   afterEventWhenIdle(*this, this, [this, paths] {
     for (const QString& path : paths) {
       if (fileKind(path) == FileKind::Design) {
         openPath(path);
       } else if (m_mode == Mode::Idle || fileKind(path) == FileKind::Drawing) {
+        leaveStartPage();
         importPath(path, true);
       }
     }
@@ -660,6 +719,9 @@ void MainWindow::importFile() {
   const QString path = dialogOpenFileName(this, tr("Import"), dialogFolder(DialogGroup::Import), importFilter());
   if (!path.isEmpty()) {
     rememberDialogFolder(DialogGroup::Import, path);
+    // What comes in shows in the 3D view (from the Start tab's Import
+    // File…, mitcad#1258).
+    leaveStartPage();
     importPath(path, true);
   }
 }
@@ -685,9 +747,19 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   case FileKind::Design:
     insertComponent(path);
     return true;
-  case FileKind::Cad:
-    ok = importCad(path, 1.0, &reason);
+  case FileKind::Cad: {
+    QString structure;
+    bool repeatedParts = false;
+    if (interactive) {
+      const std::optional<QString> chosen = askImportStructure(path, &repeatedParts);
+      if (!chosen) {
+        return false;
+      }
+      structure = *chosen;
+    }
+    ok = importCad(path, 1.0, &reason, nullptr, structure, repeatedParts);
     break;
+  }
   case FileKind::Mesh: {
     MeshInsertChoice choice;
     if (interactive) {
@@ -725,7 +797,29 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   return ok;
 }
 
-bool MainWindow::importCad(const QString& path, double unitMillimetres, QString* error, QJsonObject* imported) {
+std::optional<QString> MainWindow::askImportStructure(const QString& path, bool* repeatedParts) {
+  const QString suffix = QFileInfo(path).suffix().toLower();
+  if (suffix != QStringLiteral("step") && suffix != QStringLiteral("stp")) {
+    return QString();
+  }
+  bool assembly = false;
+  try {
+    assembly = queryObject({{QStringLiteral("query"), QStringLiteral("file_structure")},
+                            {QStringLiteral("path"), QFileInfo(path).absoluteFilePath()}})
+                   .value(QStringLiteral("assembly"))
+                   .toBool();
+  } catch (const std::exception& e) {
+    // The import says what is wrong with the file.
+    qDebug().noquote() << QStringLiteral("file_structure of %1: %2").arg(path, errorText(e));
+  }
+  if (!assembly) {
+    return QString();
+  }
+  return askStepStructure(this, path, repeatedParts);
+}
+
+bool MainWindow::importCad(const QString& path, double unitMillimetres, QString* error, QJsonObject* imported,
+                           const QString& structure, bool repeatedParts) {
   if (!canChangeModel()) {
     *error = changeBlockedReason();
     return false;
@@ -733,6 +827,13 @@ bool MainWindow::importCad(const QString& path, double unitMillimetres, QString*
   QJsonObject command = cmd("import_file", {{QStringLiteral("path"), QFileInfo(path).absoluteFilePath()}});
   if (fileKind(path) == FileKind::Mesh) {
     command.insert(QStringLiteral("unit_mm"), unitMillimetres);
+  }
+  if (!structure.isEmpty()) {
+    command.insert(QStringLiteral("structure"), structure);
+  }
+  // Find Repeated Parts in the import's undo step (mitcad#1277).
+  if (repeatedParts) {
+    command.insert(QStringLiteral("repeated_parts"), true);
   }
   QJsonObject result;
   if (!runModelCommand(command, &result)) {
@@ -742,10 +843,7 @@ bool MainWindow::importCad(const QString& path, double unitMillimetres, QString*
   if (imported != nullptr) {
     *imported = result;
   }
-  const QJsonArray bodies = result.value(QStringLiteral("bodies")).toArray();
-  qInfo().noquote() << QStringLiteral("Imported %1 as %2: %3 body(ies)")
-                           .arg(QFileInfo(path).fileName(), result.value(QStringLiteral("name")).toString())
-                           .arg(bodies.size());
+  qInfo().noquote() << importedLine(QFileInfo(path).fileName(), result);
   showImported(*this, QFileInfo(path).fileName(), result);
   m_viewer->fitAll();
   return true;

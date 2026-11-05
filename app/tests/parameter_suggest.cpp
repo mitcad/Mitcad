@@ -6,10 +6,12 @@
 // the reference in without the field's own Enter, Esc only closes the
 // list), the fx browser searching comments, and `name = …`; Edit
 // Formula… keeping the `name =` (mitcad#755), and the context menu acting
-// on the field's caret and selection (mitcad#756).
+// on the field's caret and selection (mitcad#756); Up and Down stepping a
+// plain value with the list closed (mitcad#1254).
 #include "framework/FormulaEditor.hpp"
 #include "framework/ParameterField.hpp"
 #include "framework/ParameterSuggest.hpp"
+#include "framework/ValueStep.hpp"
 
 #include <cstdio>
 #include <functional>
@@ -31,10 +33,12 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPoint>
+#include <QPointF>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
 #include <QToolTip>
+#include <QWheelEvent>
 #include <QWidget>
 
 namespace {
@@ -771,6 +775,124 @@ void tableTests() {
 
 } // namespace
 
+// A key with modifiers, as press() sends one: whether the field took its
+// shortcut override.
+bool pressWith(QLineEdit& edit, int key, Qt::KeyboardModifiers modifiers) {
+  QKeyEvent override(QEvent::ShortcutOverride, key, modifiers);
+  override.ignore();
+  QApplication::sendEvent(&edit, &override);
+  const bool taken = override.isAccepted();
+  QKeyEvent down(QEvent::KeyPress, key, modifiers);
+  QApplication::sendEvent(&edit, &down);
+  QKeyEvent up(QEvent::KeyRelease, key, modifiers);
+  QApplication::sendEvent(&edit, &up);
+  return taken;
+}
+
+// Up and Down step a plain value with the list closed (mitcad#1254): the
+// new text as typed (textEdited), Shift by 10, the fine modifier by 0.1,
+// the minimum, an expression left alone, a field that does not step; the
+// wheel over a field without the keyboard is not the field's; the
+// tooltip's line.
+void stepTests() {
+#ifdef Q_OS_MACOS
+  const bool macKeys = true;
+  const Qt::KeyboardModifier fine = Qt::AltModifier;
+#else
+  const bool macKeys = false;
+  const Qt::KeyboardModifier fine = Qt::ControlModifier;
+#endif
+  QWidget window;
+  window.resize(640, 480);
+  setParameterSource(&window, {[] { return designParameters(); },
+                               [](const QJsonObject&, QString*) { return true; },
+                               [] { return QStringLiteral("mm"); }});
+  auto* edit = new QLineEdit(&window);
+  edit->setGeometry(20, 20, 200, 24);
+  ParameterFieldOptions options;
+  options.kind = ParameterKind::Unitless;
+  options.label = QStringLiteral("test quantity");
+  options.create = false;
+  options.steps = true;
+  options.stepLimit.minimum = 1.0;
+  ParameterField* field = ParameterField::attach(edit, options);
+  int edits = 0;
+  QString edited;
+  QObject::connect(edit, &QLineEdit::textEdited, [&edits, &edited](const QString& text) {
+    ++edits;
+    edited = text;
+  });
+  auto* other = new QLineEdit(&window);
+  other->setGeometry(20, 60, 200, 24);
+  window.show();
+
+  edit->setText(QStringLiteral("4"));
+  CHECK(pressWith(*edit, Qt::Key_Up, Qt::NoModifier)); // the field's key, not a shortcut
+  CHECK(edit->text() == QStringLiteral("5"));
+  CHECK(edits == 1 && edited == QStringLiteral("5"));
+  CHECK(!field->isOpen());
+  CHECK(pressWith(*edit, Qt::Key_Up, Qt::ShiftModifier));
+  CHECK(edit->text() == QStringLiteral("15"));
+  CHECK(pressWith(*edit, Qt::Key_Down, Qt::ShiftModifier));
+  CHECK(edit->text() == QStringLiteral("5"));
+  // Down stops at the minimum: 5 - 10 is 1, and 1 stays.
+  CHECK(pressWith(*edit, Qt::Key_Down, Qt::ShiftModifier));
+  CHECK(edit->text() == QStringLiteral("1"));
+  edits = 0;
+  CHECK(pressWith(*edit, Qt::Key_Down, Qt::NoModifier));
+  CHECK(edit->text() == QStringLiteral("1") && edits == 0);
+  CHECK(pressWith(*edit, Qt::Key_Up, fine));
+  CHECK(edit->text() == QStringLiteral("1.1"));
+  // A modifier that does not step leaves the value as it is.
+  pressWith(*edit, Qt::Key_Up, Qt::MetaModifier);
+  CHECK(edit->text() == QStringLiteral("1.1"));
+  // An expression is not stepped; the keys do nothing.
+  edit->setText(QStringLiteral("d1*2"));
+  edits = 0;
+  CHECK(pressWith(*edit, Qt::Key_Up, Qt::NoModifier));
+  CHECK(edit->text() == QStringLiteral("d1*2") && edits == 0);
+
+  // A length in the unit it shows.
+  auto* length = new QLineEdit(&window);
+  length->setGeometry(20, 100, 200, 24);
+  ParameterFieldOptions lengthOptions;
+  lengthOptions.label = QStringLiteral("test distance");
+  lengthOptions.create = false;
+  lengthOptions.steps = true;
+  ParameterField::attach(length, lengthOptions);
+  length->setText(QStringLiteral("10 mm"));
+  CHECK(pressWith(*length, Qt::Key_Up, Qt::ShiftModifier));
+  CHECK(length->text() == QStringLiteral("20 mm"));
+
+  // A field that does not step (a table's cell): Up leaves its value.
+  ParameterFieldOptions plainOptions;
+  plainOptions.label = QStringLiteral("test cell");
+  plainOptions.create = false;
+  ParameterField::attach(other, plainOptions);
+  other->setText(QStringLiteral("4"));
+  pressWith(*other, Qt::Key_Up, Qt::NoModifier);
+  CHECK(other->text() == QStringLiteral("4"));
+
+  // The wheel over a field without the keyboard changes nothing.
+  edit->setText(QStringLiteral("4"));
+  edits = 0;
+  if (!edit->hasFocus()) {
+    const QPointF at(5, 12);
+    QWheelEvent wheel(at, edit->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QApplication::sendEvent(edit, &wheel);
+    CHECK(edit->text() == QStringLiteral("4") && edits == 0);
+  }
+
+  // The tooltip: the field's own, and how the value steps.
+  edit->setToolTip(QStringLiteral("own tip"));
+  const QPoint at(5, edit->height() / 2);
+  QHelpEvent help(QEvent::ToolTip, at, edit->mapToGlobal(at));
+  QApplication::sendEvent(edit, &help);
+  CHECK(QToolTip::text() == QStringLiteral("own tip\n") + valueStepHint(macKeys));
+  QToolTip::hideText();
+}
+
 int parameterSuggestTests() {
   failures = 0;
   fragmentTests();
@@ -782,5 +904,6 @@ int parameterSuggestTests() {
   fieldMenuTests();
   tooltipTests();
   tableTests();
+  stepTests();
   return failures;
 }

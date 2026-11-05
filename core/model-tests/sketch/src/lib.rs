@@ -53,3 +53,6 @@ mod sketch_offset_outlines_1244_tests;
 // closed notch, tapered waists whose walls' offsets cross, and lobes too
 // small for the distance (mitcad#1246).
 mod sketch_offset_open_parts_1246_tests;
+// Existing points as the drawing tools' point inputs, how ids are numbered,
+// and the profiles of one sketch (mitcad#1269).
+mod sketch_point_ids_1269_tests;

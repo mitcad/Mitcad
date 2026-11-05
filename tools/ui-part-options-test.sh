@@ -98,15 +98,15 @@ ui_start_display
 ui_start_app --open "$SCENE"
 ui_step "fit (F6)"                         ui_key F6
 
-echo "--- 0. Libraries: the configurable parts' library only"
+echo "--- 0. Library Sources: the configurable parts' library only"
 ui_mark
-ui_step "Libraries (command search)"       ui_command "Libraries..."
-ui_focus_dialog '^Libraries$'
+ui_step "Library Sources (command search)" ui_command "Library Sources"
+ui_focus_dialog '^Library Sources$'
 ui_step "remove the defaults (Alt+R twice)" eval 'ui_key alt+r; ui_sync; ui_key alt+r'
 ui_step "Add URL (Alt+A)"                  ui_key alt+a
 ui_focus_dialog '^Add Library$'
 ui_step "the folder"                       eval 'ui_type_text "$LIB"; ui_key Return'
-ui_focus_dialog '^Libraries$'
+ui_focus_dialog '^Library Sources$'
 ui_expect_new "Library source added: $LIB" "the source added"
 ui_step "Fetch All (Alt+F)"                ui_key alt+f
 ui_expect_new "Library fetched: library Test options (test-options) from $LIB" "fetched" 30

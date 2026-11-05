@@ -162,6 +162,7 @@ const StepSpec kSpecs[] = {
     {"expect-pick-offset", 4, 4, kInputOfMain},
     {"click-pick-offset", 4, 4, kInputOfMain},
     {"click-visible-face", 0, 0, kInputOfMain},
+    {"click-edge-release", 2, 2, kInputOfMain},
     {"drag-logged", 2, 3, kInputOfMain},
     {"drag-from", 3, 3, kInputOfMain},
     {"sketch-click", 2, 4, kInputOfMain},
@@ -240,6 +241,7 @@ const StepSpec kSpecs[] = {
     {"expect-view-buttons", 1, 1, kIdle},
     {"expect-selection", 2, 2, kIdle},
     {"expect-navigation-runtime", 0, 0, kIdle},
+    {"expect-navigation-release", 0, 0, kIdle},
     {"expect-assistant-setup", 1, 1, kIdle},
     {"expect-formula-builder", 0, 0, kIdle},
     {"open-formula-field", 1, 1, kInputOfTarget},
@@ -264,6 +266,7 @@ const StepSpec kSpecs[] = {
     {"native-history-drag-now", 1, 2, kPlain},
     {"expect-model-busy", 1, 1, kPlain},
     {"hold-model-preview", 1, 1, kPlain},
+    {"hold-model-edit", 1, 1, kPlain},
     {"test-manipulator-feedback", 0, 0, kInputOfMain},
     {"test-body-highlights", 1, 1, kInputOfMain},
     {"capture-undo-depth", 1, 1, kIdle},
@@ -377,6 +380,8 @@ const StepSpec kSpecs[] = {
     {"observe-document-frame-close-all", 0, 0, kIdle},
     // The colour a widget shows as drawn in its window (mitcad#1245).
     {"expect-widget-background", 3, 3, kIdle},
+    // The wheel over a logged place, a panel's value field (mitcad#1254).
+    {"wheel-logged", 2, 3, kInputOfMain},
 };
 
 const StepSpec* findSpec(const QString& name) {
@@ -964,6 +969,14 @@ void TestDriver::fail(int line, const QString& reason) {
 }
 
 void TestDriver::leave(int code) {
+  if (auto* window = qobject_cast<MainWindow*>(m_main.data())) {
+    auto& session = window->documentSession();
+    if (session.m_testHoldPreview->load() || session.m_testHoldEdit->load()) {
+      session.cancelJob();
+      session.m_testHoldPreview->store(false);
+      session.m_testHoldEdit->store(false);
+    }
+  }
   QObject::disconnect(m_jobPickConnection);
   m_jobPickLabel.clear();
   QObject::disconnect(m_nativeJobClickConnection);
@@ -995,8 +1008,11 @@ void TestDriver::finish() {
   }
   if (auto* window = qobject_cast<MainWindow*>(m_main.data())) {
     if (window->documentSession().m_testHoldPreview->load()) {
-      window->documentSession().m_testHoldPreview->store(false);
       fail(m_line, QStringLiteral("the preview worker gate was not released"));
+      return;
+    }
+    if (window->documentSession().m_testHoldEdit->load()) {
+      fail(m_line, QStringLiteral("the feature edit worker gate was not released"));
       return;
     }
     if (!window->documentSession().m_testFailCommand.isEmpty()) {
@@ -2137,12 +2153,14 @@ void TestDriver::run(const Step& step) {
     });
   } else if (name == QLatin1String("test-manipulator-feedback")) {
     testManipulatorFeedback();
-  } else if (name == QLatin1String("hold-model-preview")) {
+  } else if (name == QLatin1String("hold-model-preview") || name == QLatin1String("hold-model-edit")) {
     auto* window = qobject_cast<MainWindow*>(mainWindow);
     if (!window || (a.at(0) != QStringLiteral("true") && a.at(0) != QStringLiteral("false"))) {
-      fail(line, QStringLiteral("hold-model-preview true|false requires a document window")); return;
+      fail(line, QStringLiteral("%1 true|false requires a document window").arg(name)); return;
     }
-    window->documentSession().m_testHoldPreview->store(a.at(0) == QStringLiteral("true"));
+    auto& session = window->documentSession();
+    const auto gate = name == QLatin1String("hold-model-preview") ? session.m_testHoldPreview : session.m_testHoldEdit;
+    gate->store(a.at(0) == QStringLiteral("true"));
   } else if (name == QLatin1String("expect-model-busy")) {
     auto* window = qobject_cast<MainWindow*>(mainWindow);
     if (!window || (a.at(0) != QStringLiteral("true") && a.at(0) != QStringLiteral("false"))) {
@@ -2227,6 +2245,8 @@ void TestDriver::run(const Step& step) {
     }, 6, QStringLiteral("hidden feature framebuffer indication"));
   } else if (name == QLatin1String("expect-navigation-runtime")) {
     testNavigationRuntime();
+  } else if (name == QLatin1String("expect-navigation-release")) {
+    testNavigationRelease();
   } else if (name == QLatin1String("expect-assistant-setup")) {
     testAssistantSetup(a.at(0));
   } else if (name == QLatin1String("expect-formula-builder")) {
@@ -3528,6 +3548,25 @@ void TestDriver::run(const Step& step) {
                         modifiers, momentum ? Qt::ScrollMomentum : Qt::ScrollUpdate, false);
       QCoreApplication::sendEvent(view, &event);
     });
+  } else if (name == QLatin1String("wheel-logged")) {
+    // Over a logged place (a panel's value field, mitcad#1254): the widget
+    // there gets the wheel, as the one under the mouse does.
+    QRegularExpression re;
+    if (!regex(a.at(0), re)) {
+      return;
+    }
+    double notches = 0;
+    Qt::KeyboardModifiers modifiers;
+    if (!toNumber(a.at(1), notches) || (a.size() > 2 && !parseModifiers(a.at(2), modifiers))) {
+      fail(line, QStringLiteral("wheel-logged <regex> <notches> [mods]"));
+      return;
+    }
+    const auto point = std::make_shared<QPoint>();
+    whenReady([this, re, point] { return loggedPoint(re, 0, *point); }, 6,
+              QStringLiteral("no place logged for '%1'").arg(a.at(0)), [this, point, notches, modifiers] {
+      sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      sendWheel(*point, qRound(notches), modifiers);
+    }, mainWindow);
   } else if (name == QLatin1String("wheel")) {
     double x = 0;
     double y = 0;
@@ -3567,6 +3606,45 @@ void TestDriver::run(const Step& step) {
     }
 
     // --- The mouse where the application logged a place
+  } else if (name == QLatin1String("click-edge-release")) {
+    bool ok = false;
+    const int index = a.at(0).toInt(&ok);
+    const bool modifierFirst = a.at(1) == QLatin1String("modifier-first");
+    if (!ok || index < 1 || (!modifierFirst && a.at(1) != QLatin1String("button-first"))) {
+      fail(line, QStringLiteral("click-edge-release <positive index> modifier-first|button-first"));
+      return;
+    }
+    const auto point = std::make_shared<QPoint>();
+    whenReady([this, index, point] {
+      auto* view = qobject_cast<OcctViewer*>(viewer());
+      if (!view || !view->isValid()) return false;
+      Selection seen;
+      for (const auto& candidate : view->pickPoints(SelectKind::Edge)) {
+        const auto actual = view->itemAt(candidate.second);
+        if (!actual || actual->kind != SelectKind::Edge || *actual != candidate.first || seen.contains(*actual)) continue;
+        seen.append(*actual);
+        if (seen.size() != index) continue;
+        *point = view->mapTo(topWindow(), candidate.second);
+        qInfo().noquote() << QStringLiteral("Release-order edge %1: %2").arg(index).arg(actual->describe());
+        return true;
+      }
+      m_waitDetail = QStringLiteral("only %1 clean visible edges for index %2").arg(seen.size()).arg(index);
+      return false;
+    }, 6, QStringLiteral("no fresh visible edge for the release-order click"),
+        [this, point, modifierFirst] {
+      queue([this, point] { sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::ControlModifier); });
+      queue([this, point] { sendMouse(QEvent::MouseButtonPress, *point, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier); });
+      queue([this, point, modifierFirst] {
+        const auto releaseKey = [this] {
+          QKeyEvent event(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+          if (auto* view = viewer()) QCoreApplication::sendEvent(view, &event);
+        };
+        if (modifierFirst) releaseKey();
+        sendMouse(QEvent::MouseButtonRelease, *point, Qt::LeftButton, Qt::NoButton,
+                  modifierFirst ? Qt::NoModifier : Qt::ControlModifier);
+        if (!modifierFirst) releaseKey();
+      });
+    }, mainWindow);
   } else if (name == QLatin1String("click-visible-face")) {
     const auto point = std::make_shared<QPoint>();
     const auto expected = std::make_shared<SelectionItem>();

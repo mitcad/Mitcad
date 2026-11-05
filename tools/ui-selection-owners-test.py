@@ -38,7 +38,7 @@ def run(app, cli, out, qt_bin):
                                 ("MITCAD_PROJECTS_DIR", "projects"), ("MITCAD_THUMBNAIL_DIR", "thumbnails"),
                                 ("MITCAD_CRASH_DIR", "crashes"), ("MITCAD_MCP_DISCOVERY_DIR", "discovery")):
                 env[key] = str(work / folder)
-            env.update(MITCAD_RESULT_STORE="off", MITCAD_NO_UPDATE_CHECK="1",
+            env.update(MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1",
                        QT_FORCE_STDERR_LOGGING="1", MITCAD_SELECTION_WORK=str(work))
             if qt_bin:
                 env["PATH"] = qt_bin + os.pathsep + env.get("PATH", "")

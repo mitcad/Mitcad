@@ -228,7 +228,7 @@ pub(crate) fn live_tools() -> Vec<Value> {
     tools
 }
 
-const LIVE_DOCUMENT: &str = "Optional live document handle from document_list; omitted uses the active document (chat agents remain bound to their own document)";
+const LIVE_DOCUMENT: &str = "Optional live document handle from document_list; omitted uses the active document (chat agents remain bound to their own document, or to the last one they made with document_new)";
 
 /// The application's own state and actions on the open document
 /// (mitcad#265); the application executes them.
@@ -344,13 +344,15 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_command",
-            "Run a command of the application's command registry by its id (as app/COMMANDS.md lists them: sketch.clean_up_stale_projections, sketch.project, sketch.finish, ...) with input values, then OK or Cancel; or with edit, open a feature for editing (a sketch in sketch mode) as a double-click in the timeline does; or with only finish, end the open command panel, or with cancel a sketch being edited (its changes taken back). The result carries the panel's validation, preview and warnings. Commands that open a file dialog or another modal dialog are refused.",
+            "Run a command of the application's command registry by its id (as app/COMMANDS.md lists them: sketch.clean_up_stale_projections, sketch.project, sketch.finish, ...) with input values, then OK or Cancel; or with edit, open a feature for editing (a sketch in sketch mode) as a double-click in the timeline does; or with only finish, end the open command panel, or with cancel a sketch being edited (its changes taken back). The result carries the panel's validation, preview and warnings. Commands that open a file dialog or another modal dialog are refused, and so is file.new_design (it waits for the user to name the design): document_new makes a new design.",
             json!({
                 "document": document,
-                "id": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A command id of the registry"},
+                "id": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A command id of the registry; search lists them (an unknown id is refused with the nearest ids)"},
                 "edit": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A feature uid to edit instead of running a command"},
                 "inputs": {"type": "object", "description": "Input values by the panel's input keys: text for values and texts, a choice's value, true or false for checks, an array of entities (as ui_select's items) for selections"},
-                "finish": {"type": "string", "enum": ["ok", "cancel", "keep_open"], "default": "ok", "description": "What ends a command panel"}
+                "finish": {"type": "string", "enum": ["ok", "cancel", "keep_open"], "default": "ok", "description": "What ends a command panel"},
+                // The commands an agent may run (mitcad#1269).
+                "search": {"type": "string", "maxLength": NAME_CHARS, "description": "List the registry's commands instead of running one: each id, name, kind, whether an agent may run it (agents, with why not) and whether it is available now; the words given (all of them, any case) filter by id, name and keywords, \"\" lists all. Without id, edit or search and with nothing open to finish, the call lists them too"}
             }),
             &["document"],
             false,
@@ -376,6 +378,20 @@ fn ui_tools() -> Vec<Value> {
                 "frame": {"type": "string", "enum": ["none", "shown", "selection"], "default": "none", "description": "shown: the shown bodies (the isolated ones when some are isolated); selection: the selected entities"},
                 "comment": comment,
                 "aspect": {"type": "number", "minimum": 0.1, "maximum": 10, "description": "Frame box or frame for a picture of this width / height (ui_screenshot's aspect, or its width and height) instead of the view's own shape"}
+            }),
+            &[],
+            false,
+            false,
+        ),
+        // A new design beside the open ones (mitcad#1266), as File > New
+        // Design makes it.
+        tool(
+            "document_new",
+            "Make an empty design and open it in a window (a tab) of its own beside the open designs, as File > New Design does; it never replaces a design, and every open design keeps its handle. Returns the new design's handle; your calls without a document handle go to it from now on (a chat agent too), and the design you came from stays readable by its handle (previous in the result). Where: in folder (a folder the user allows agents to use, document_list lists them); without folder in the current project's top folder when agents may use it, else with a name in the first allowed folder, else an untitled design (save it later with document_save and a path). name is the file's name (.mitcad added), by default the first free DesignN. In a project with versions the design is recorded as New Design records it. A name that exists is refused. Wait for editable in document_list (or retry a busy result) before the first command.",
+            json!({
+                "document": document,
+                "name": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "The design's file name, e.g. \"nipple\" (.mitcad is added); default the first free DesignN"},
+                "folder": {"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "A folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder), or one below it; a relative path is relative to the first allowed folder; '..' is refused. Default: the current project's top folder"}
             }),
             &[],
             false,
@@ -424,6 +440,10 @@ pub(crate) fn check(name: &str, arguments: &Value) -> Result<(), String> {
         {
             Err("ui_camera's comment frames that comment: give no box or frame with it".to_owned())
         }
+        // A listing runs nothing (mitcad#1269).
+        "ui_command" if has("search") && (has("id") || has("edit") || has("inputs")) => Err(
+            "ui_command's search lists the commands: give no id, edit or inputs with it".to_owned(),
+        ),
         _ => Ok(()),
     }
 }

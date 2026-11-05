@@ -286,10 +286,15 @@ if(BUILD_TESTING)
             --bodies Bracket,F4.b0 --schema ap242 --unit in)
   set_tests_properties(cli.export PROPERTIES FIXTURES_REQUIRED cli_exchange
     FIXTURES_SETUP cli_exported PASS_REGULAR_EXPRESSION "\"bodies\":\\[\"F2\\.b0\",\"F4\\.b0\"\\]")
-  add_test(NAME cli.import COMMAND mitcad-cli import "${exchange}/out.step"
+  add_test(NAME cli.import COMMAND mitcad-cli import "${exchange}/out.step" --structure base
                                    --save "${exchange}/imported.mitcad")
   set_tests_properties(cli.import PROPERTIES FIXTURES_REQUIRED cli_exported PASS_REGULAR_EXPRESSION
     "Bracket \\(F1\\.b0\\): volume 23946\\.350 mm3.*Bracket \\(2\\) \\(F1\\.b1\\): volume 47892\\.699 mm3")
+  # The same file, an assembly that places both bodies' parts (one moved),
+  # with its structure kept (mitcad#1274): a component per part.
+  add_test(NAME cli.import_components COMMAND mitcad-cli import "${exchange}/out.step")
+  set_tests_properties(cli.import_components PROPERTIES FIXTURES_REQUIRED cli_exported PASS_REGULAR_EXPRESSION
+    "C1 Bracket: 1 features, 1 occurrences.*C2 Bracket \\(2\\): 1 features, 1 occurrences.*Bracket:1/Bracket \\(F1\\.b0\\): volume 23946\\.350 mm3, center of mass \\[79\\.958")
   # Paths with letters outside ASCII, which failed on Windows before the
   # UTF-8 code page (cmake/Utf8CodePage.cmake).
   add_test(NAME cli.non_ascii_paths
@@ -1414,7 +1419,7 @@ if(BUILD_TESTING)
   add_test(NAME cli.mesh_compare_meeting_roundings COMMAND mitcad-cli mesh-compare
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fillet_meeting_roundings.json")
   set_tests_properties(cli.mesh_compare_meeting_roundings PROPERTIES PASS_REGULAR_EXPRESSION
-    "2 bodies, 14 faces \\([0-9]+ planes\\), without a triangulation a 0 b 0")
+    "2 bodies, 12 faces \\([0-9]+ planes\\), without a triangulation a 0 b 0")
   if(WIN32)
     set_property(TEST cli.mesh_compare_meeting_roundings APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -1476,6 +1481,42 @@ if(BUILD_TESTING)
   add_test(NAME cli.units_inch COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/units_inch.json")
   if(WIN32)
     set_property(TEST cli.units_inch APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Emboss wrap offsets (mitcad#1259): a rectangle wrapped onto a rod moved
+# along the axis by a parameter, around it and turned on the face, its
+# volume kept and its centre of mass where the offsets put it; refused on
+# a planar face.
+if(BUILD_TESTING)
+  add_test(NAME cli.emboss_wrap_offsets COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/emboss_wrap_offsets.json")
+  if(WIN32)
+    set_property(TEST cli.emboss_wrap_offsets APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A thread's fit to its face (mitcad#1262): M80x2 modelled on a Ø87.1 ring
+# with a Ø80.1 bore warns of the size and of the 3.5 mm wall it cut
+# through, the thread made all the same; on a Ø80 cup with a Ø70 bore it
+# does not warn.
+if(BUILD_TESTING)
+  add_test(NAME cli.thread_fit COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/thread_fit.json")
+  if(WIN32)
+    set_property(TEST cli.thread_fit APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Envelopes (mitcad#1271): a U frame's envelope keeps its tunnel open and
+# closes its 5 mm holes with few triangles and follows the frame, a hollow
+# box's has no cavity, an occurrence's lies where it is placed, through the
+# OCCT kernel.
+if(BUILD_TESTING)
+  add_test(NAME cli.envelope COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/envelope.json")
+  if(WIN32)
+    set_property(TEST cli.envelope APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

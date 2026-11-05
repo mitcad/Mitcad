@@ -917,14 +917,21 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
             let d = ctx.param(*distance)?;
             let raise = (d > 0.0) != self.flip;
             let participants = participant_bodies(ctx, self.operation, &self.participants)?;
-            let tool =
-                super::emboss::wrapped_tool(ctx, sketch.frame, &regions, face, d.abs(), raise)?
-                    .ok_or_else(|| {
-                        format!(
-                            "to wrap the profiles onto face {}, it must be cylindrical or conical",
-                            face.face
-                        )
-                    })?;
+            let tool = super::emboss::wrapped_tool(
+                ctx,
+                sketch.frame,
+                &regions,
+                face,
+                d.abs(),
+                raise,
+                super::emboss::WrapOffsets::default(),
+            )?
+            .ok_or_else(|| {
+                format!(
+                    "to wrap the profiles onto face {}, it must be cylindrical or conical",
+                    face.face
+                )
+            })?;
             return apply_operation(ctx, self.operation, participants, tool, "extrusion");
         }
         let discovery = self

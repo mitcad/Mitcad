@@ -288,6 +288,10 @@ pub use dogbone::{DogboneDef, DogboneKind};
 // Mortise and Tenon: a tenon on one body and its mortise in another (mitcad#1012).
 pub mod mortise_tenon;
 pub use mortise_tenon::MortiseTenonDef;
+// Envelope: a light outer skin of bodies, gaps and holes smaller than a
+// detail size closed over (mitcad#1271).
+pub mod envelope;
+pub use envelope::EnvelopeDef;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -458,6 +462,8 @@ feature_types! {
     Dogbone(DogboneDef),
     // Mortise and Tenon (mitcad#1012).
     MortiseTenon(MortiseTenonDef),
+    // Envelope (mitcad#1271).
+    Envelope(EnvelopeDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is

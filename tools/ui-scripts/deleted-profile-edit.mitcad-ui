@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1264: editing an extrusion whose profile was deleted from its
+# sketch leaves the missing profile out, so that the new circle's profile
+# can be picked and the edit builds. All geometry is synthetic.
+wait-idle
+window-resize 1400 990
+command view.top
+command view.fit
+expect-model-bodies 0 0
+mark
+dblclick-logged '^Timeline Extrude1 at '
+expect-log 'Editing F2 with Extrude'
+wait-log '^Panel Extrude left out 1 profile\(s\) deleted from Sketch1$'
+mark
+# Pick places are logged for the active Profiles input.
+click-pick 'profile F1/r\{c[0-9]+\}'
+wait-log '^Extrude Profiles: 1 profile '
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/deleted-profile-edit.png'
+mark
+button '^OK$'
+expect-log 'Edited F2' 30
+expect-model-bodies 1 3141.59
+expect-never 'TestDriver: FAIL'

@@ -88,16 +88,18 @@ named_enum! {
         "sketch.rectangle" => Rectangle {
             sketch: FeatureUid,
             mode: String,
+            // Corners and the centre: point inputs (mitcad#1269); `c` of
+            // three points is a position.
             #[serde(default)]
-            a: Option<[f64; 2]>,
+            a: Option<Value>,
             #[serde(default)]
-            b: Option<[f64; 2]>,
+            b: Option<Value>,
             #[serde(default)]
             c: Option<[f64; 2]>,
             #[serde(default)]
-            center: Option<[f64; 2]>,
+            center: Option<Value>,
             #[serde(default)]
-            corner: Option<[f64; 2]>,
+            corner: Option<Value>,
             #[serde(default)]
             construction: bool,
             /// Rounded corners of this radius (mitcad#867).
@@ -111,12 +113,13 @@ named_enum! {
             center: Option<Value>,
             #[serde(default)]
             radius: Option<f64>,
+            // Points the circle passes through: point inputs (mitcad#1269).
             #[serde(default)]
-            a: Option<[f64; 2]>,
+            a: Option<Value>,
             #[serde(default)]
-            b: Option<[f64; 2]>,
+            b: Option<Value>,
             #[serde(default)]
-            c: Option<[f64; 2]>,
+            c: Option<Value>,
             #[serde(default, with = "curves_opt")]
             lines: Option<Vec<EntityUid>>,
             #[serde(default)]
@@ -130,7 +133,7 @@ named_enum! {
             #[serde(default)]
             start: Option<Value>,
             #[serde(default)]
-            through: Option<[f64; 2]>,
+            through: Option<Value>,
             #[serde(default)]
             end: Option<Value>,
             #[serde(default)]
@@ -144,8 +147,10 @@ named_enum! {
         },
         "sketch.polygon" => Polygon {
             sketch: FeatureUid,
-            center: [f64; 2],
-            vertex: [f64; 2],
+            // Point inputs (mitcad#1269): an existing centre point is the
+            // polygon's centre.
+            center: Value,
+            vertex: Value,
             sides: usize,
             #[serde(default = "yes")]
             inscribed: bool,
@@ -156,21 +161,23 @@ named_enum! {
             sketch: FeatureUid,
             mode: String,
             width: f64,
+            // The centres: point inputs (mitcad#1269); an arc slot's `end`
+            // is a direction.
             #[serde(default)]
-            a: Option<[f64; 2]>,
+            a: Option<Value>,
             #[serde(default)]
-            b: Option<[f64; 2]>,
+            b: Option<Value>,
             #[serde(default)]
-            center: Option<[f64; 2]>,
+            center: Option<Value>,
             #[serde(default)]
-            start: Option<[f64; 2]>,
+            start: Option<Value>,
             #[serde(default)]
-            end: Option<[f64; 2]>,
+            end: Option<Value>,
         },
         "sketch.ellipse" => Ellipse {
             sketch: FeatureUid,
             center: Value,
-            major: [f64; 2],
+            major: Value,
             minor_radius: f64,
             #[serde(default)]
             start: Option<Value>,
@@ -2041,17 +2048,17 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let m = mode.as_str();
                     let mode = match m {
                         "two_point" => RectangleMode::TwoPoint {
-                            a: need(a, "a", m)?,
-                            b: need(b, "b", m)?,
+                            a: point(&need(a, "a", m)?)?,
+                            b: point(&need(b, "b", m)?)?,
                         },
                         "three_point" => RectangleMode::ThreePoint {
-                            a: need(a, "a", m)?,
-                            b: need(b, "b", m)?,
+                            a: point(&need(a, "a", m)?)?,
+                            b: point(&need(b, "b", m)?)?,
                             c: need(c, "c", m)?,
                         },
                         "center" => RectangleMode::Center {
-                            center: need(center, "center", m)?,
-                            corner: need(corner, "corner", m)?,
+                            center: point(&need(center, "center", m)?)?,
+                            corner: point(&need(corner, "corner", m)?)?,
                         },
                         other => {
                             return Err(format!(
@@ -2094,13 +2101,13 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             radius: need(radius, "radius", m)?,
                         },
                         "two_point" => CircleMode::TwoPoint {
-                            a: need(a, "a", m)?,
-                            b: need(b, "b", m)?,
+                            a: point(&need(a, "a", m)?)?,
+                            b: point(&need(b, "b", m)?)?,
                         },
                         "three_point" => CircleMode::ThreePoint {
-                            a: need(a, "a", m)?,
-                            b: need(b, "b", m)?,
-                            c: need(c, "c", m)?,
+                            a: point(&need(a, "a", m)?)?,
+                            b: point(&need(b, "b", m)?)?,
+                            c: point(&need(c, "c", m)?)?,
                         },
                         "two_tangent" => CircleMode::TwoTangent {
                             a: line(0)?,
@@ -2138,7 +2145,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let mode = match m {
                         "three_point" => ArcMode::ThreePoint {
                             start: point(&need(start, "start", m)?)?,
-                            through: need(through, "through", m)?,
+                            through: point(&need(through, "through", m)?)?,
                             end: point(&need(end, "end", m)?)?,
                         },
                         "center" => {
@@ -2176,8 +2183,13 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     construction,
                     ..
                 } => {
-                    *made_ref =
-                        curve_list(edit.polygon(center, vertex, sides, inscribed, construction)?);
+                    *made_ref = curve_list(edit.polygon(
+                        point(&center)?,
+                        point(&vertex)?,
+                        sides,
+                        inscribed,
+                        construction,
+                    )?);
                 }
                 C::Slot {
                     mode,
@@ -2192,17 +2204,19 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let m = mode.as_str();
                     let mode = match m {
                         "center_to_center" => SlotMode::CenterToCenter {
-                            a: need(a, "a", m)?,
-                            b: need(b, "b", m)?,
+                            a: point(&need(a, "a", m)?)?,
+                            b: point(&need(b, "b", m)?)?,
                         },
                         "center_point" => SlotMode::CenterPoint {
-                            center: need(center, "center", m)?,
-                            end: need(end, "end", m)?,
+                            center: point(&need(center, "center", m)?)?,
+                            end: point(&need(end, "end", m)?)?,
                         },
                         "arc" => SlotMode::Arc {
-                            center: need(center, "center", m)?,
-                            start: need(start, "start", m)?,
-                            end: need(end, "end", m)?,
+                            center: point(&need(center, "center", m)?)?,
+                            start: point(&need(start, "start", m)?)?,
+                            end: serde_json::from_value(need(end, "end", m)?).map_err(|_| {
+                                "\"end\" of an arc slot is a direction point [x, y]".to_owned()
+                            })?,
                         },
                         other => {
                             return Err(format!(
@@ -2226,8 +2240,13 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         (None, None) => None,
                         _ => return Err("an elliptical arc needs \"start\" and \"end\"".to_owned()),
                     };
-                    let id =
-                        edit.ellipse(point(&center)?, major, minor_radius, arc, construction)?;
+                    let id = edit.ellipse(
+                        point(&center)?,
+                        point(&major)?,
+                        minor_radius,
+                        arc,
+                        construction,
+                    )?;
                     made_ref.push(Ref::Curve(id).to_string());
                 }
                 C::Spline {

@@ -240,6 +240,8 @@ vcpkg_from_github(
         1210-brepfilletapi-rounding-over-slot-mouths-touching-the-top-along-a-crest.patch
         1220-chfi3d-ball-pivots-about-a-crease-at-the-end.patch
         1230-chfi3d-rolls-before-a-blend-curving-away-as-fast-as-the-ball.patch
+        1240-chfi3d-short-end-walked-on-until-both-contacts-leave.patch
+        1270-shapefix-shell-closed-shell-found-as-faces-are-added.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

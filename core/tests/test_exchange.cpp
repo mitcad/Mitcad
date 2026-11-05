@@ -324,6 +324,90 @@ void test_base_features_from_shapes(const fs::path& dir) {
   CHECK(throws_with([&] { imported->import_f3d(f3d.string(), R"({"timeline": true})"); }, "unknown field"));
 }
 
+// How often `part` occurs in `text`.
+std::size_t occurrences_in(const std::string& text, const std::string& part) {
+  std::size_t n = 0;
+  for (std::size_t at = text.find(part); at != std::string::npos; at = text.find(part, at + 1)) {
+    ++n;
+  }
+  return n;
+}
+
+// A STEP assembly written by MitCad's own export (mitcad#1274): a plate
+// component placed four times and an arm (a sub-assembly placing a pin
+// component twice) placed twice. Imported with its structure, each part is
+// one component holding its body once, placed by an occurrence per
+// instance, and the design file holds each part's B-rep once; as one base
+// feature, a body per placed copy.
+void test_step_assembly_import(const fs::path& dir) {
+  auto source = mitcad::new_document();
+  run(*source, R"({"cmd": "create_component", "name": "Plate"})");
+  run(*source, R"({"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+                    "length": 100, "width": 50, "height": 2, "operation": "new_body"}})");
+  run(*source, R"({"cmd": "rename_body", "uid": "F1.b0", "name": "Plate"})");
+  run(*source, R"({"cmd": "activate_component", "component": "C0"})");
+  for (int i = 1; i < 4; ++i) {
+    run(*source, R"({"cmd": "copy_occurrence", "occurrence": "Plate:1", "transform": {"translation": [)" +
+                     std::to_string(150 * i) + R"(, 0, 0]}})");
+  }
+  run(*source, R"({"cmd": "create_component", "name": "Arm",
+                   "transform": {"translation": [0, 100, 0]}})");
+  run(*source, R"({"cmd": "create_component", "name": "Pin"})");
+  run(*source, R"({"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+                    "diameter": 10, "height": 30, "operation": "new_body"}})");
+  run(*source, R"({"cmd": "rename_body", "uid": "F2.b0", "name": "Pin"})");
+  run(*source, R"({"cmd": "activate_component", "component": "Arm"})");
+  run(*source, R"({"cmd": "copy_occurrence", "occurrence": "Arm:1/Pin:1",
+                   "transform": {"translation": [0, 20, 0]}})");
+  run(*source, R"({"cmd": "activate_component", "component": "C0"})");
+  run(*source, R"({"cmd": "copy_occurrence", "occurrence": "Arm:1",
+                   "transform": {"translation": [300, 100, 0],
+                                 "rotation": {"axis": [0, 0, 1], "angle": 1.5707963267948966}}})");
+  const fs::path step = dir / "machine.step";
+  run(*source, R"({"cmd": "export", "path": )" + json_path(step) + "}");
+
+  auto document = mitcad::new_document();
+  const std::string imported = run(*document, R"({"cmd": "import_file", "path": )" + json_path(step) + "}");
+  CHECK(contains(imported, R"("structure":"components")"));
+  CHECK(contains(imported, R"("occurrences":8)"));
+  const std::string components(document->query(R"({"query": "components"})"));
+  CHECK(contains(components, R"("name":"Plate","occurrences":4)"));
+  CHECK(contains(components, R"("name":"Pin","occurrences":4)"));
+  // Two body definitions, eight placed instances.
+  const std::string bodies(document->query(R"({"query": "bodies"})"));
+  CHECK(occurrences_in(bodies, R"("uid":")") == 2);
+  const std::string instances(document->query(R"({"query": "instances", "properties": true})"));
+  CHECK(occurrences_in(instances, R"("body":")") == 8);
+  double total = 0.0;
+  for (const char* uid : {"F1.b0", "F2.b0"}) {
+    total += volume(*document, uid) * 4.0;
+  }
+  CHECK(near(total, 4.0 * 100.0 * 50.0 * 2.0 + 4.0 * kPi * 25.0 * 30.0, 1e-6));
+  // The design file holds each part's B-rep once.
+  const std::string saved(document->to_json());
+  CHECK(occurrences_in(saved, "\"occt\"") == 2);
+  auto reloaded = mitcad::load_document(saved);
+  run(*reloaded, R"({"cmd": "recompute"})");
+  CHECK(occurrences_in(std::string(reloaded->query(R"({"query": "instances"})")), R"("body":")") == 8);
+
+  // As one base feature: a body per placed copy, each stored again.
+  auto flat = mitcad::new_document();
+  const std::string base =
+      run(*flat, R"({"cmd": "import_file", "path": )" + json_path(step) + R"(, "structure": "base"})");
+  CHECK(!contains(base, "structure"));
+  CHECK(occurrences_in(std::string(flat->query(R"({"query": "bodies"})")), R"("uid":")") == 8);
+  CHECK(occurrences_in(std::string(flat->to_json()), "\"occt\"") == 8);
+  // A STEP file of one part keeps importing as one base feature.
+  const fs::path single = dir / "plate.step";
+  run(*document, R"({"cmd": "export", "path": )" + json_path(single) + R"(, "coordinates": "component",
+                     "bodies": ["F1.b0"]})");
+  CHECK(!contains(run(*flat, R"({"cmd": "import_file", "path": )" + json_path(single) + "}"), "structure"));
+  CHECK(contains(std::string(flat->query(R"({"query": "file_structure", "path": )" + json_path(step) + "}")),
+                 R"("assembly":true)"));
+  CHECK(contains(std::string(flat->query(R"({"query": "file_structure", "path": )" + json_path(single) + "}")),
+                 R"("assembly":false)"));
+}
+
 // The bodies stored in an .ipt part file (mitcad#60): Mitcad's own test
 // part (a cube and a cylinder in B-rep records of their own, inches,
 // aluminium), compared with a STEP file of its bodies, and files that are
@@ -911,6 +995,7 @@ int main(int argc, char** argv) {
     const fs::path dir = args[0];
     fs::create_directories(dir);
     test_brep_round_trips(dir);
+    test_step_assembly_import(dir);
     test_mesh_round_trips(dir);
     test_base_features_from_shapes(dir);
     test_sketch_export(dir);

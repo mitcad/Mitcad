@@ -216,13 +216,13 @@ def selection(s):
     s.capture("extrude", dialog=False)
     s.add("key Escape", "expect-log 'Command Extrude cancelled'", "focus-main", "command tools.search")
     if s.native:
-        s.add("native-type native.commandSearch Libraries",
+        s.add("native-type native.commandSearch 'Library Sources'",
               "expect-native-visible native.commandSearch true",
-              "expect-native-text native.commandSearch '^Libraries$'",
+              "expect-native-text native.commandSearch '^Library Sources$'",
               "expect-native-style native.command.tools.libraries row-selected,in-view")
     else:
-        s.add("focus-widget commandSearchInput", "type Libraries",
-              "expect-command-search Libraries tools.libraries")
+        s.add("focus-widget commandSearchInput", "type 'Library Sources'",
+              "expect-command-search 'Library Sources' tools.libraries")
     s.capture("command-search", dialog=False)
     s.add("key Escape", "focus-main", "expect-model-bodies 1 48000")
 
@@ -234,7 +234,7 @@ def make_scenario(group, frontend, theme, directory):
         "community": ("tools.community_library", "^Community Library$"),
         "feedback": ("help.send_feedback", "^Send Feedback$"),
         "insert": ("insert.library_component", "^Insert from Library$"),
-        "libraries": ("tools.libraries", "^Libraries$"),
+        "libraries": ("tools.libraries", "^Library Sources$"),
         "new-project": ("file.new_project", "^New Project$"),
         "publish": ("tools.publish_library", "^Publish to Library$"),
         "render": ("file.render_image", "^Render Image$"),
@@ -297,9 +297,9 @@ def make_scenario(group, frontend, theme, directory):
     elif group == "parameters":
         parameter_states(s)
     elif group == "parts-fixture":
-        s.add("show-dialog-style-fixture parts", "focus-dialog '^Library Components$'")
+        s.add("show-dialog-style-fixture parts", "focus-dialog '^Components in This Design$'")
         s.capture("parts-fixture")
-        s.close("^Library Components$")
+        s.close("^Components in This Design$")
     elif group == "picker-fixture":
         build_picker(s)
     elif group == "project-settings":
@@ -326,9 +326,9 @@ def make_scenario(group, frontend, theme, directory):
                   "expect-ever '^Library browser selected mitcad-parts/iso4762:'",
                   "key Return")
         s.add("expect-log 'Inserted component .* from mitcad-parts'", "wait-idle", "focus-main")
-        s.open("tools.library_parts", "^Library Components$")
+        s.open("tools.library_parts", "^Components in This Design$")
         s.capture(group)
-        s.close("^Library Components$")
+        s.close("^Components in This Design$")
     else:
         raise ValueError(group)
     # Brackets prevent the command's own log echo matching whole-log checks.

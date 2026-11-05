@@ -628,6 +628,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-print-managers" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-print-managers PROPERTIES TIMEOUT 300)
 
+    # Tools › Libraries (mitcad#1250): the menu in its groups; Material and
+    # Printer Library… on My library with no design open, an item edited
+    # in its file; Process Library…; the Material tool's Material
+    # Library…, whose new material the tool offers, its bodies kept.
+    add_test(NAME app.ui-windows-libraries-menu
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-libraries-menu-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-libraries-menu" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-libraries-menu PROPERTIES TIMEOUT 300)
+
     # One filament, its variants per printer and nozzle (mitcad#1054): 3D
     # Print's Materials row, Import Presets grouped by filament, the
     # Materials window's Variants tab (the driver script shared with the
@@ -967,13 +978,15 @@ if(MITCAD_MESA_DIR)
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-paper-print PROPERTIES TIMEOUT 300)
     # Emboss by projection (mitcad#1091): two letters of a text projected
-    # onto a ball and raised, previewed and made.
+    # onto a ball and raised, previewed and made; a rectangle wrapped onto a
+    # rod moved by its Along Axis arrow and by Along Axis, Around and
+    # Rotation typed (mitcad#1259).
     add_test(NAME app.ui-windows-emboss
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
               -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-emboss-test.ps1"
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-emboss"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
-    set_tests_properties(app.ui-windows-emboss PROPERTIES TIMEOUT 300)
+    set_tests_properties(app.ui-windows-emboss PROPERTIES TIMEOUT 420)
     # The Center of Mass marker (mitcad#1094): drawn at the properties
     # query's total, moved with a component, hidden by its row's light bulb,
     # kept hidden in the saved design, deleted from the row's menu.
@@ -1344,6 +1357,124 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-docked-toolbar-colors"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-docked-toolbar-colors PROPERTIES TIMEOUT 180)
+    # Up, Down and the mouse wheel step a value field's number (GitHub
+    # mitcad/Mitcad#129, mitcad#1254): an expression left alone, Shift+Up
+    # by 10 mm, Circular Pattern's Quantity 4 to 5 previewed, the wheel only
+    # over the field with the keyboard; the Linux test's shared input script.
+    add_test(NAME app.ui-windows-value-field-step
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-value-field-step-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-value-field-step"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-value-field-step PROPERTIES TIMEOUT 240)
+    # The Start tab (GitHub mitcad/Mitcad#125, mitcad#1258): three saved
+    # designs with their previews on the Start page at launch, a card that
+    # opens its design, the star and Pinned, the search, New Design in the
+    # default units, and a start without the page once Show start page at
+    # launch is off; the Linux test's shared input scripts.
+    add_test(NAME app.ui-windows-start-page
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-start-page-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-start-page"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-start-page PROPERTIES TIMEOUT 300)
+    # Editing an extrusion whose profile was deleted from its sketch: the
+    # missing profile is left out and a new one picked (mitcad#1264).
+    add_test(NAME app.ui-windows-deleted-profile-edit
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-deleted-profile-edit-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-deleted-profile-edit"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-deleted-profile-edit PROPERTIES TIMEOUT 300)
+    # Browser eyes while a command is open (mitcad#1263): Section1's eye
+    # during a modelled Thread clips its preview and OK adds the thread (the
+    # eye an undo step of its own before it); Esc after the eye keeps the
+    # section; the bodies' eyes during Fillet keep its selection; the Linux
+    # test's shared input script.
+    add_test(NAME app.ui-windows-browser-eyes-mid-command
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-browser-eyes-mid-command-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-browser-eyes-mid-command"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-browser-eyes-mid-command PROPERTIES TIMEOUT 600)
+    # The rolled-back features evaluated in the background after an edit
+    # before the marker, so that the marker dragged to the end evaluates
+    # nothing; an edit that opens cancels a run at once (mitcad#1267); the
+    # Linux test's shared input script.
+    add_test(NAME app.ui-windows-background-evaluation
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-background-evaluation-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-background-evaluation"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-background-evaluation PROPERTIES TIMEOUT 300)
+    # A linked component shown by its envelope (mitcad#1271): Show as
+    # Envelope... at 20 mm in a linked machine's browser menu, one body
+    # shown instead of three; Show in Full, the three again; undo.
+    add_test(NAME app.ui-windows-envelope
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-envelope-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-envelope"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-envelope PROPERTIES TIMEOUT 300)
+    # The Dimension tool's picks choosing the dimension, the Centerline of
+    # a curved slot and the Arc tool's snap on a plate like the report's
+    # (mitcad#1272).
+    add_test(NAME app.ui-windows-drawing-dimension-picks
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-dimension-picks-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-dimension-picks"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-dimension-picks PROPERTIES TIMEOUT 300)
+    # Names typed in the Projects panel (mitcad#1268): the proposed name free
+    # on disk, also while a remote fetch runs; a refused name keeps the
+    # editor with its message; the collapsed card expanded and the hidden
+    # dock shown for the name, then put back; the Linux test's shared input
+    # scripts.
+    add_test(NAME app.ui-windows-projects-naming
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-projects-naming-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-projects-naming"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-projects-naming PROPERTIES TIMEOUT 420)
+    # The Envelope command (mitcad#1276): Envelope of a component at 20 mm
+    # in the Docked layout, edited and undone, and in the Floating layout;
+    # Show as Envelope... on one of two occurrences of a linked machine
+    # leaves the other in full.
+    add_test(NAME app.ui-windows-envelope-command
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-envelope-command-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-envelope-command"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-envelope-command PROPERTIES TIMEOUT 420)
+    # Hidden built-ins (mitcad#1270): a built-in printer hidden in the
+    # Printers manager is gone from it and from Send to Slicer's Printer
+    # box, comes back grayed with Show hidden and Unhide restores it; a
+    # design that uses it keeps it; with a printer in My library Built-in
+    # starts folded. The Linux test is tools/ui-hide-built-ins-test.sh.
+    add_test(NAME app.ui-windows-hide-built-ins
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-hide-built-ins-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-hide-built-ins"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-hide-built-ins PROPERTIES TIMEOUT 300)
+    # A pattern of bodies drawn from its body's meshes, and window
+    # selections over many bodies decided by their boxes first
+    # (mitcad#1275).
+    add_test(NAME app.ui-windows-window-bodies
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-window-bodies-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-window-bodies"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-window-bodies PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

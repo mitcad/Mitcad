@@ -4,10 +4,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <map>
 #include <optional>
 #include <utility>
 
 #include <BRep_Builder.hxx>
+#include <TCollection_AsciiString.hxx>
+#include <TDF_Tool.hxx>
+#include <gp_Mat.hxx>
+#include <gp_XYZ.hxx>
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <Message_PrinterOStream.hxx>
@@ -249,11 +254,12 @@ struct Collector {
         ->first;
   }
 
-  void add(std::optional<std::string> name, const TopoDS_Shape& shape, std::optional<Color> color) {
+  static void add(std::vector<Body>& out, std::optional<std::string> name, const TopoDS_Shape& shape,
+                  std::optional<Color> color) {
     if (!name) {
-      name = "Body" + std::to_string(bodies.size() + 1);
+      name = "Body" + std::to_string(out.size() + 1);
     }
-    bodies.push_back(Body{*name, shape, color, {}});
+    out.push_back(Body{*name, shape, color, {}});
   }
 
   // A part, an assembly or an instance's referred shape, placed at `location`.
@@ -280,6 +286,13 @@ struct Collector {
       }
       return;
     }
+    add_part(bodies, label, location, instance_name, instance_color);
+  }
+
+  // The bodies of a part (a label that is no assembly) placed at
+  // `location`, appended to `out`.
+  void add_part(std::vector<Body>& out, const TDF_Label& label, const TopLoc_Location& location,
+                const std::optional<std::string>& instance_name, const std::optional<Color>& instance_color) {
     const TopoDS_Shape shape = XCAFDoc_ShapeTool::GetShape(label);
     if (shape.IsNull()) {
       return;
@@ -299,7 +312,7 @@ struct Collector {
       std::optional<Color> color = instance_color ? instance_color
                                    : part_color   ? part_color
                                                   : face_color(shape);
-      add(name, shape.Moved(location), color);
+      add(out, name, shape.Moved(location), color);
       return;
     }
     for (std::size_t i = 0; i < solids.size(); ++i) {
@@ -319,7 +332,208 @@ struct Collector {
       std::optional<Color> color = instance_color ? instance_color
                                    : solid_color  ? solid_color
                                                   : part_color;
-      add(solid_name, solids[i].Moved(location), color);
+      add(out, solid_name, solids[i].Moved(location), color);
+    }
+  }
+};
+
+// A location as a placement, or nothing when it is not a rotation and a
+// translation (a mirror or a scale).
+std::optional<Placement> rigid_placement(const TopLoc_Location& location) {
+  const gp_Trsf trsf = location.Transformation();
+  if (std::abs(trsf.ScaleFactor() - 1.0) > 1e-9) {
+    return std::nullopt;
+  }
+  const gp_Mat matrix = trsf.VectorialPart();
+  if (matrix.Determinant() <= 0.0) {
+    return std::nullopt;
+  }
+  Placement placement;
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      placement.rotation[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] = matrix.Value(r + 1, c + 1);
+    }
+  }
+  const gp_XYZ translation = trsf.TranslationPart();
+  placement.translation = {translation.X(), translation.Y(), translation.Z()};
+  return placement;
+}
+
+// Builds the structure of a document (document_assembly): each label once
+// as a node, the instances of assemblies, and the colours each part's
+// instances give it along every path from the top.
+struct StructureBuilder {
+  Collector collector;
+  StepAssembly assembly;
+  std::map<std::string, std::size_t> nodes_by_label;
+  // Per node: the colour each of its instances sets itself (none for one
+  // without), and the colours the paths from the top give a part.
+  std::vector<std::vector<std::optional<Color>>> own_colors;
+  std::vector<std::vector<std::optional<Color>>> path_colors;
+  std::vector<std::optional<Color>> root_colors;
+
+  static std::string entry(const TDF_Label& label) {
+    TCollection_AsciiString text;
+    TDF_Tool::Entry(label, text);
+    return text.ToCString();
+  }
+
+  std::size_t new_node(std::string name) {
+    assembly.nodes.push_back(StepAssembly::Node{std::move(name), {}, {}});
+    own_colors.emplace_back();
+    path_colors.emplace_back();
+    return assembly.nodes.size() - 1;
+  }
+
+  // The node of a label, made (with the nodes below it) the first time.
+  std::size_t node(const TDF_Label& label, const std::optional<std::string>& instance_name, int depth) {
+    const std::string key = entry(label);
+    if (const auto found = nodes_by_label.find(key); found != nodes_by_label.end()) {
+      return found->second;
+    }
+    std::optional<std::string> name = name_of(label);
+    if (!name) {
+      name = instance_name;
+    }
+    const std::size_t index = new_node(name.value_or(std::string()));
+    nodes_by_label.emplace(key, index);
+    if (!XCAFDoc_ShapeTool::IsAssembly(label)) {
+      std::vector<Body> bodies;
+      collector.add_part(bodies, label, TopLoc_Location(), instance_name, std::nullopt);
+      assembly.nodes[index].bodies = std::move(bodies);
+      return index;
+    }
+    std::vector<StepAssembly::Instance> instances;
+    std::vector<std::optional<Color>> colors;
+    components(label, depth, instances, colors);
+    assembly.nodes[index].instances = std::move(instances);
+    own_colors[index] = std::move(colors);
+    return index;
+  }
+
+  // The instances of an assembly's components, with the colours they set.
+  void components(const TDF_Label& label, int depth, std::vector<StepAssembly::Instance>& instances,
+                  std::vector<std::optional<Color>>& colors) {
+    if (depth > 64) {
+      return;
+    }
+    NCollection_Sequence<TDF_Label> parts;
+    XCAFDoc_ShapeTool::GetComponents(label, parts);
+    for (const TDF_Label& component : parts) {
+      TDF_Label referred;
+      if (!XCAFDoc_ShapeTool::GetReferredShape(component, referred)) {
+        continue;
+      }
+      const std::optional<Color> color = color_of(component);
+      instances.push_back(
+          instance(referred, XCAFDoc_ShapeTool::GetLocation(component), name_of(component), color, depth + 1));
+      colors.push_back(color);
+    }
+  }
+
+  // An instance of `referred` at `location`: a node of its own, holding
+  // the bodies moved there as document_bodies moves them, when the
+  // location is not rigid.
+  StepAssembly::Instance instance(const TDF_Label& referred, const TopLoc_Location& location,
+                                  const std::optional<std::string>& instance_name,
+                                  const std::optional<Color>& own_color, int depth) {
+    StepAssembly::Instance made;
+    if (const std::optional<Placement> rigid = rigid_placement(location)) {
+      made.node = node(referred, instance_name, depth);
+      made.placement = *rigid;
+    } else {
+      std::vector<Body> placed;
+      std::swap(placed, collector.bodies);
+      collector.visit(referred, location, instance_name, own_color, depth);
+      std::swap(placed, collector.bodies);
+      const std::optional<std::string> name = name_of(referred);
+      made.node = new_node(name ? *name : instance_name.value_or(std::string()));
+      assembly.nodes[made.node].bodies = std::move(placed);
+    }
+    made.placement.name = instance_name.value_or(std::string());
+    return made;
+  }
+
+  // The colours that the instances along every path from the top give the
+  // parts below `index` (`inherited`: the path's colour so far), as
+  // document_bodies colours them; at most `budget` paths are walked.
+  void gather_colors(std::size_t index, const std::optional<Color>& inherited, int depth, std::size_t& budget) {
+    if (depth > 64 || budget == 0) {
+      return;
+    }
+    --budget;
+    const std::vector<StepAssembly::Instance>& instances = assembly.nodes[index].instances;
+    if (instances.empty()) {
+      path_colors[index].push_back(inherited);
+      return;
+    }
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+      const std::optional<Color>& own = own_colors[index][i];
+      gather_colors(instances[i].node, own ? own : inherited, depth + 1, budget);
+    }
+  }
+
+  // An assembly that only places one part once is that part (a body
+  // written as a compound comes back as a product holding one solid's
+  // product): its node takes the part's bodies, moved where the instance
+  // puts them, named after the assembly when there is one body.
+  void collapse_single_parts() {
+    for (std::size_t n = 0; n < assembly.nodes.size(); ++n) {
+      StepAssembly::Node& node_ref = assembly.nodes[n];
+      if (!node_ref.bodies.empty() || node_ref.instances.size() != 1) {
+        continue;
+      }
+      const StepAssembly::Instance only = node_ref.instances.front();
+      if (only.node == n || !assembly.nodes[only.node].instances.empty()) {
+        continue;
+      }
+      const std::vector<Body>& part_bodies = assembly.nodes[only.node].bodies;
+      const TopLoc_Location moved = location(only.placement);
+      std::vector<Body> bodies;
+      for (const Body& body : part_bodies) {
+        Body copy = body;
+        copy.shape = body.shape.Moved(moved);
+        if (!copy.color) {
+          copy.color = own_colors[n].front();
+        }
+        if (part_bodies.size() == 1 && !node_ref.name.empty()) {
+          copy.name = node_ref.name;
+        }
+        bodies.push_back(std::move(copy));
+      }
+      node_ref.bodies = std::move(bodies);
+      node_ref.instances.clear();
+      own_colors[n].clear();
+    }
+  }
+
+  // A part's bodies take the colour its instances give it where they all
+  // give the same one (an instance's colour comes first in
+  // document_bodies); otherwise a body without a colour takes the first
+  // one an instance gives.
+  void apply_colors() {
+    for (std::size_t n = 0; n < assembly.nodes.size(); ++n) {
+      const std::vector<std::optional<Color>>& colors = path_colors[n];
+      if (colors.empty()) {
+        continue;
+      }
+      const bool same = std::all_of(colors.begin(), colors.end(), [&](const std::optional<Color>& c) {
+        return c && colors.front() && *c == *colors.front();
+      });
+      std::optional<Color> first;
+      for (const std::optional<Color>& c : colors) {
+        if (c) {
+          first = c;
+          break;
+        }
+      }
+      for (Body& body : assembly.nodes[n].bodies) {
+        if (same) {
+          body.color = colors.front();
+        } else if (!body.color) {
+          body.color = first;
+        }
+      }
     }
   }
 };
@@ -336,6 +550,61 @@ std::vector<Body> document_bodies(const occ::handle<TDocStd_Document>& document)
     collector.visit(root, TopLoc_Location(), std::nullopt, std::nullopt, 0);
   }
   return std::move(collector.bodies);
+}
+
+std::optional<StepAssembly> document_assembly(const occ::handle<TDocStd_Document>& document) {
+  StructureBuilder builder;
+  builder.collector.shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
+  builder.collector.colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
+  NCollection_Sequence<TDF_Label> roots;
+  builder.collector.shapes->GetFreeShapes(roots);
+  bool any_assembly = false;
+  for (const TDF_Label& root : roots) {
+    any_assembly = any_assembly || XCAFDoc_ShapeTool::IsAssembly(root);
+  }
+  if (!any_assembly) {
+    return std::nullopt;
+  }
+  StepAssembly& assembly = builder.assembly;
+  const bool top_assembly = roots.Size() == 1;
+  if (top_assembly) {
+    // The top assembly is the design itself.
+    builder.components(roots.First(), 0, assembly.roots, builder.root_colors);
+  } else {
+    for (const TDF_Label& root : roots) {
+      assembly.roots.push_back(builder.instance(root, TopLoc_Location(), std::nullopt, std::nullopt, 0));
+      builder.root_colors.emplace_back();
+    }
+  }
+  builder.collapse_single_parts();
+  std::size_t budget = 1000000;
+  for (std::size_t i = 0; i < assembly.roots.size(); ++i) {
+    builder.gather_colors(assembly.roots[i].node, builder.root_colors[i], 0, budget);
+  }
+  // A file that places one part once has no structure worth keeping.
+  std::size_t placed = 0;
+  for (const std::vector<std::optional<Color>>& paths : builder.path_colors) {
+    placed += paths.size();
+  }
+  if (placed < 2) {
+    return std::nullopt;
+  }
+  // Top shapes that are each one part placed once (bodies written as
+  // compounds, each a product holding its solid) are no assembly: the
+  // structure is kept for a top assembly, a sub-assembly or a part placed
+  // more than once.
+  bool kept = top_assembly;
+  for (const StepAssembly::Instance& root : assembly.roots) {
+    kept = kept || !assembly.nodes[root.node].instances.empty();
+  }
+  for (const std::vector<std::optional<Color>>& paths : builder.path_colors) {
+    kept = kept || paths.size() > 1;
+  }
+  if (!kept) {
+    return std::nullopt;
+  }
+  builder.apply_colors();
+  return std::move(builder.assembly);
 }
 
 } // namespace detail

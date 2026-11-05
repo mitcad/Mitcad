@@ -9,8 +9,8 @@ screenshot '${MITCAD_TEST_SHOTS}/initial.png'
 screenshot-screen '${MITCAD_TEST_SHOTS}/initial-native.png'
 command tools.search
 focus-widget commandSearchInput
-type 'Libraries...'
-expect-command-search 'Libraries...' tools.libraries
+type 'Library Sources...'
+expect-command-search 'Library Sources...' tools.libraries
 expect-macos-tool-buttons
 screenshot-screen '${MITCAD_TEST_SHOTS}/command-search-native.png'
 key Escape

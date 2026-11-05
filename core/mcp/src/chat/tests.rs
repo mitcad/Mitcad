@@ -372,6 +372,32 @@ fn undo_asks_only_past_the_message_start() {
 }
 
 #[test]
+fn ui_command_listing_only_reads() {
+    // ui_command's search lists the commands (mitcad#1269): it runs in every
+    // mode, a command it names still asks or runs as before.
+    for mode in ["ask", "model", "all"] {
+        for arguments in [
+            json!({"document": "d", "search": ""}),
+            json!({"document": "d", "search": "new"}),
+        ] {
+            let decided = approval("ui_command", arguments, mode, json!([]));
+            assert_eq!(decided["verdict"], "run", "{mode}");
+            assert_eq!(decided["kind"], "read", "{mode}");
+        }
+    }
+    let file = approval(
+        "ui_command",
+        json!({"document": "d", "id": "file.save", "search": "x"}),
+        "model",
+        json!([]),
+    );
+    assert_eq!(file["kind"], "file_command");
+    let edit = approval("ui_command", json!({"id": "view.fit"}), "ask", json!([]));
+    assert_eq!(edit["verdict"], "ask");
+    assert_eq!(edit["kind"], "edit");
+}
+
+#[test]
 fn undo_merges_a_turn_into_one_named_step() {
     let merge = |fields: Value| {
         let mut asked = json!({"op": "undo_merge", "start_depth": 3, "end_depth": 6,
@@ -562,4 +588,20 @@ fn history_tool_calls_group_the_same_way() {
         "2 calls (2 failed) · model_command · add_feature box — failed"
     );
     assert_eq!(groups[1]["state"], "failed");
+}
+
+#[test]
+fn a_new_design_runs_as_a_model_edit() {
+    // document_new (mitcad#1266) makes an empty design beside the open ones
+    // and writes over nothing: it runs unless every edit asks.
+    let arguments = json!({"name": "nipple", "folder": "parts"});
+    for (mode, verdict) in [("ask", "ask"), ("model", "run"), ("all", "run")] {
+        let decided = approval("document_new", arguments.clone(), mode, json!([]));
+        assert_eq!(decided["verdict"], verdict, "{mode}");
+        assert_eq!(decided["kind"], "document_new");
+        assert_eq!(decided["path"], "parts/nipple");
+    }
+    let untitled = approval("document_new", json!({}), "ask", json!(["document_new"]));
+    assert_eq!(untitled["verdict"], "run");
+    assert_eq!(untitled["path"], Value::Null);
 }

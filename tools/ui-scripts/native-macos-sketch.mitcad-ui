@@ -21,8 +21,9 @@ expect-native-visible native.ribbon.sketch.rectangle true
 expect-native-visible native.ribbon.sketch.constraint.horizontal_vertical true
 expect-native-visible palette_sketch.constraint.horizontal_vertical true
 expect-native-layout
-expect-native-style paletteFinish caption
+expect-native-bounds paletteFinish 1
 screenshot '${MITCAD_TEST_WORK}/native-macos-sketch-palette.png'
+expect-native-style paletteFinish caption
 
 # Native inline fx uses the same parameter source and shared editors as a
 # command field. Its independent user parameter is undone before the

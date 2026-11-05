@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+
 #include <QObject>
 #include <QPoint>
 #include <QPointer>
@@ -103,6 +105,13 @@ public:
   // options chosen or bound to the design's parameters; OK keeps them as
   // one undo step (`set_component_parameters`).
   void editOptions(const QString& component, const QString& name);
+  // Show as Envelope… (mitcad#1271) of a linked design's occurrence (its
+  // path): the detail size asked (empty: automatic; `current` the one it
+  // is shown at, 0 for none), then `set_link_envelope` for this occurrence
+  // (mitcad#1276) or, with `all`, every occurrence of its component; Show
+  // in Full takes the design's bodies back in this occurrence.
+  void showAsEnvelope(const QString& occurrence, const QString& name, double current, bool all);
+  void showInFull(const QString& occurrence, const QString& name);
   // Property Sets (mitcad#496) of a body, an occurrence and its component
   // (the window follows the model; another target replaces the shown one).
   void openPropertySets(const PropertyTarget& target);
@@ -136,6 +145,12 @@ public:
   // With no design open it works on the libraries (ManagerHosts). The
   // window follows the model.
   void openProfiles(const QString& kind, const QString& key);
+  // Tools › Libraries › Material, Printer and Process Library… (mitcad#1250)
+  // and the Material tool's Material Library…: the manager of `kind`
+  // (material, printer or process) on My library (openPlace), with or
+  // without a design. `closed` is called once when the manager closes next
+  // (the Materials manager only).
+  void openLibrary(const QString& kind, std::function<void()> closed = {});
   // A body's, an occurrence's or a component's own process settings in
   // the settings form (mitcad#655): `owner` its uid, `name` as the design
   // shows it (3D Print's own-settings links, Property Sets' Edit… of
@@ -216,6 +231,11 @@ protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+  // The Materials manager and the Printers or Processes manager, made the
+  // first time and shown (openMaterial, openProfiles, openLibrary); `first`
+  // whether it was made now.
+  MaterialsDialog* showMaterialsManager(bool* first);
+  ProfilesDialog* showProfilesManager(bool processes, bool* first);
   // What the window's buttons do with its targets (selected results, or all).
   void findVisibility(bool show);
   void findShow();
@@ -322,6 +342,8 @@ private:
   // in a root with modelled bodies, and Move to Component.
   HybridModel hybridModel();
   void componentsFromBodies(const BrowserNode& node);
+  // Find Repeated Parts on a base feature (mitcad#1277).
+  void findRepeatedParts(const QString& feature);
   void moveToComponent(const QJsonObject& selection);
   // Move to... on an occurrence: another parent for it (mitcad#219).
   void moveOccurrence(const BrowserNode& node);

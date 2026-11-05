@@ -1,0 +1,43 @@
+[
+  {"comment": "Emboss wrap offsets (mitcad#1259) on OCCT. A rod: a circle of diameter 20 (Sketch1 F1) extruded 30 up the Z axis (F2): 100 pi 30. A 4 x 8 rectangle (32 mm^2) wrapped onto it (radius 10) and raised 1 adds 32 * 21 / 20 = 33.6 wherever it goes: Along Axis, Around and Rotation move it and keep its volume. The centre of mass of the body tells where it went: an annular sector of half angle a between radii 10 and 11 has its centroid at 2 (11^3 - 10^3) sin a / (3 (11^2 - 10^2) a) from the axis."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 30}, "operation": "new_body"}},
+  {"expect": {"body": "F2.b0", "volume": 9424.77796076938}},
+  {"cmd": "add_parameter", "name": "lift", "expression": "10 mm", "unit": "mm"},
+
+  {"comment": "Sketch2 (F3) on XZ (normal +Y, sketch y along -Z), through the axis: a 4 x 8 rectangle from x = -2 to 2 and z = 2 to 10, its middle at z = 6. Emboss1 (F4) with zero offsets is the sketch's wrap: on the +Y side, 4 across (half angle 0.2 rad), 8 along."},
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [-2, -10], "width": 4, "height": 8},
+  {"cmd": "add_feature", "def": {"type": "emboss",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "face": {"body": "F2.b0", "face": "F2:side(c1)"}, "depth": 1,
+    "along_axis": 0, "around_angle": 0, "rotation_angle": 0}},
+  {"expect": {"feature": "Emboss1", "status": "ok", "body": "F2.b0", "volume": 9458.37796076938,
+    "has_face": "F4:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"expect": {"body": "F2.b0", "min": [-10, -10, 0], "max": [10, 11, 30]}},
+  {"expect": {"body": "F2.b0", "center": [0, 0.037080099084454365, 14.968028344685077], "tolerance": 1e-4}},
+
+  {"comment": "Along Axis counts towards +Z and Around turns about +Z, although the rod's cylinder has its axis down, against the extrusion (OCCT's prism). Moved Along Axis by the parameter lift (10 mm), Around a quarter turn (from +Y to -X about +Z) and turned a quarter turn on the face about its middle: 8 across (half angle 0.4 rad) and 4 along, from z = 14 to 18 on the -X side. The same volume."},
+  {"cmd": "edit_feature", "uid": "F4", "def": {"type": "emboss",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "face": {"body": "F2.b0", "face": "F2:side(c1)"}, "depth": 1,
+    "along_axis": "lift", "around_angle": "90 deg", "rotation_angle": "90 deg"}},
+  {"expect": {"feature": "Emboss1", "status": "ok", "body": "F2.b0", "volume": 9458.37796076938,
+    "has_face": "F4:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"expect": {"body": "F2.b0", "min": [-11, -10, 0], "max": [10, 10, 30]}},
+  {"expect": {"body": "F2.b0", "center": [-0.03634096581571535, 0, 15.003552406146104], "tolerance": 1e-4}},
+
+  {"comment": "lift 5: the rectangle from z = 9 to 13, its middle at 11."},
+  {"cmd": "set_parameter", "name": "lift", "value": 5},
+  {"expect": {"feature": "Emboss1", "status": "ok", "body": "F2.b0", "volume": 9458.37796076938}},
+  {"expect": {"body": "F2.b0", "center": [-0.03634096581571535, 0, 14.98579037541559], "tolerance": 1e-4}},
+
+  {"comment": "The offsets move only wrapped profiles: on the rod's planar end (Emboss2, F5, from Sketch2) they are refused."},
+  {"cmd": "add_feature", "def": {"type": "emboss",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "face": {"body": "F2.b0", "face": "F2:end(r{c1})"}, "depth": 1, "along_axis": 5}},
+  {"expect": {"feature": "Emboss2", "status": "error",
+    "error_contains": "Along Axis, Around and Rotation move only profiles wrapped"}}
+]

@@ -4,6 +4,7 @@
 // Internal helpers shared by the XCAF based translators (STEP, IGES, OBJ).
 
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include <TopLoc_Location.hxx>
 
 #include "mitcad/io/body.hpp"
+#include "mitcad/io/step.hpp"
 
 namespace mitcad::io::detail {
 
@@ -45,6 +47,11 @@ void add_assembly(const occ::handle<TDocStd_Document>& document, const std::vect
 // placements and parts made of several solids are split into solids (see
 // read_step). Unnamed bodies are called Body1, Body2, ...
 std::vector<Body> document_bodies(const occ::handle<TDocStd_Document>& document);
+
+// The assembly structure of a document (see read_step_structured), or
+// nothing when its top shapes hold no assembly or place fewer than two
+// parts in all.
+std::optional<StepAssembly> document_assembly(const occ::handle<TDocStd_Document>& document);
 
 std::string utf8(const TCollection_ExtendedString& text);
 TCollection_ExtendedString extended(const std::string& utf8_text);

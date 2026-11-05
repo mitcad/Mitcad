@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Application events only: physical trackpad acceptance is separate.
+wait-idle
+expect-viewport
+expect-navigation-release
+key Escape
+capture-view-orientation selection_orientation
+click-edge-release 1 modifier-first
+expect-selection 1 0
+click-edge-release 2 button-first
+expect-selection 2 0
+expect-view-buttons none
+expect-view-orientation ${selection_orientation} unchanged
+command solid.fillet
+expect-log 'Fillet Edges: 2 edges'
+key Escape
+key Escape
+command solid.chamfer
+click-edge-release 1 modifier-first
+expect-log 'Chamfer Edges: 1 edge'
+click-edge-release 2 button-first
+expect-log 'Chamfer Edges: 2 edges'
+expect-view-buttons none
+expect-view-orientation ${selection_orientation} unchanged
+key Escape
+key Escape
+command solid.fillet
+click-edge-release 1 button-first
+expect-log 'Fillet Edges: 1 edge'
+click-edge-release 2 modifier-first
+expect-log 'Fillet Edges: 2 edges'
+expect-view-buttons none
+expect-view-orientation ${selection_orientation} unchanged
+key Escape
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'

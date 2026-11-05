@@ -13,6 +13,14 @@
 //! projected region). Spheres, tori and free-form faces always take it; a
 //! planar, cylindrical or conical face takes it with `projection` or a
 //! `direction`.
+//!
+//! Wrap offsets (mitcad#1259): profiles wrapped onto a cylinder or a cone
+//! can be moved from where the sketch places them, `along_axis` (a length
+//! along the face's axis), `around_angle` (about the axis) and
+//! `rotation_angle` (turned on the face about their middle). Absent, they
+//! are 0 and the wrap is the sketch's.
+
+use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +34,7 @@ use super::reference::FaceRef;
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse, is_false,
 };
+use crate::datum::rotate;
 use crate::ids::BodyUid;
 use crate::kernel::{
     Axis, Bound, EmbossProjectSpec, EmbossWrapSpec, ExtrudeFeatureSpec, ExtrudeSide, ExtrudeStart,
@@ -33,7 +42,7 @@ use crate::kernel::{
 };
 use crate::parameters::ParamId;
 use crate::profile::{ProfileRegion, SketchFrame};
-use mitcad_vec3::{dot, unit};
+use mitcad_vec3::{add, dot, scale, sub, unit};
 
 /// Whether the profiles stand up from the face or go down into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -62,6 +71,7 @@ impl EmbossMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(bound(deserialize = "P: Deserialize<'de>"))]
 pub struct EmbossDef<P = ParamId> {
     /// Regions of one sketch, a set (as an extrusion's): the glyphs of its
     /// texts bound regions too.
@@ -90,6 +100,18 @@ pub struct EmbossDef<P = ParamId> {
     /// (its normal). Implies the projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<GeomRef>,
+    /// A wrap's profiles moved along the face's axis (mitcad#1259), in its
+    /// direction; absent: 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub along_axis: Option<P>,
+    /// A wrap's profiles turned about the face's axis, right-handed about
+    /// its direction (radians); absent: 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub around_angle: Option<P>,
+    /// A wrap's profiles turned on the face about the middle of their
+    /// bounds, counter-clockwise in the sketch (radians); absent: 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_angle: Option<P>,
 }
 
 impl<P> EmbossDef<P> {
@@ -105,6 +127,9 @@ impl<P> EmbossDef<P> {
             participants: clone,
             projection: copy,
             direction: clone,
+            along_axis: option,
+            around_angle: option,
+            rotation_angle: option,
         }
     }
 
@@ -160,13 +185,23 @@ impl FeatureInfo for EmbossDef {
 
     fn check_values(&self, value: &dyn Fn(ParamId) -> f64) -> Result<(), String> {
         let depth = value(self.depth);
-        if depth > 0.0 && depth.is_finite() {
-            Ok(())
-        } else {
-            Err(format!(
+        if !(depth > 0.0 && depth.is_finite()) {
+            return Err(format!(
                 "the emboss depth must be greater than zero, got {depth}"
-            ))
+            ));
         }
+        for (slot, name) in [
+            (self.along_axis, "along the axis"),
+            (self.around_angle, "around the axis"),
+            (self.rotation_angle, "rotation"),
+        ] {
+            if let Some(id) = slot
+                && !value(id).is_finite()
+            {
+                return Err(format!("the wrap's offset {name} is not a number"));
+            }
+        }
+        Ok(())
     }
 
     fn creates_bodies(&self) -> bool {
@@ -189,11 +224,23 @@ impl FeatureInfo for EmbossDef {
 impl<K: Kernel> Evaluate<K> for EmbossDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let depth = ctx.param(self.depth)?;
-        self.check_values(&|_| depth)?;
+        let offsets = WrapOffsets {
+            along: optional_param(ctx, self.along_axis)?,
+            around: optional_param(ctx, self.around_angle)?,
+            rotation: optional_param(ctx, self.rotation_angle)?,
+        };
+        if !(depth > 0.0 && depth.is_finite()) {
+            return Err(format!(
+                "the emboss depth must be greater than zero, got {depth}"
+            ));
+        }
+        if !offsets.is_finite() {
+            return Err("the wrap's offsets must be numbers".to_owned());
+        }
         let (sketch, regions) = profile_regions(ctx, &self.profiles)?;
         let operation = self.mode.operation();
         let participants = participant_bodies(ctx, operation, &self.default_participants())?;
-        let tool = self.tool(ctx, sketch.frame, &regions, depth)?;
+        let tool = self.tool(ctx, sketch.frame, &regions, depth, offsets)?;
         apply_operation(ctx, operation, participants, tool, "emboss")
     }
 }
@@ -203,10 +250,119 @@ impl<K: Kernel> Evaluate<K> for EmbossDef {
 const PARALLEL: f64 = 1e-9;
 const ALONG_AXIS: f64 = 1e-6;
 
+/// The value of an optional slot, 0 without one.
+fn optional_param<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    slot: Option<ParamId>,
+) -> Result<f64, String> {
+    slot.map_or(Ok(0.0), |id| ctx.param(id))
+}
+
+/// The direction Along Axis counts along and Around turns about
+/// (mitcad#1259): the face's axis as a unit vector, pointing towards +Z of
+/// the component, else (an axis across Z) towards +Y, else +X. The face's
+/// own axis may point either way (an extruded rod's cylinder has its axis
+/// against the extrusion), so a positive Along Axis moves up a rod however
+/// it was made.
+fn counted(direction: [f64; 3]) -> [f64; 3] {
+    let d = unit(direction).unwrap_or(direction);
+    let flip = if d[2].abs() > 1e-9 {
+        d[2] < 0.0
+    } else if d[1].abs() > 1e-9 {
+        d[1] < 0.0
+    } else {
+        d[0] < 0.0
+    };
+    if flip { d.map(|v| -v) } else { d }
+}
+
+/// Where wrapped profiles go beyond where the sketch places them
+/// (mitcad#1259): `along` the face's axis (mm, in the [`counted`]
+/// direction), `around` it (radians, right-handed about that direction) and
+/// turned by `rotation` on the face about the middle of their bounds
+/// (radians, counter-clockwise in the sketch). All 0: the sketch's wrap.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct WrapOffsets {
+    pub along: f64,
+    pub around: f64,
+    pub rotation: f64,
+}
+
+impl WrapOffsets {
+    fn is_zero(&self) -> bool {
+        self.along == 0.0 && self.around == 0.0 && self.rotation == 0.0
+    }
+
+    fn is_finite(&self) -> bool {
+        self.along.is_finite() && self.around.is_finite() && self.rotation.is_finite()
+    }
+
+    /// The sketch frame and regions that wrap where the offsets put them,
+    /// about and along `axis`. The rotation turns the regions in the sketch
+    /// (on the face's development, so the profiles keep their shape on the
+    /// face); Along Axis and Around move the sketch's frame, as moving the
+    /// sketch would: along the axis and about it, which on a cylinder moves
+    /// the wrapped profiles rigidly and on a cone lays them against it at
+    /// the new height (the frame's origin is where the development is laid
+    /// against the cone). The inputs are not changed.
+    pub(crate) fn placed<'r>(
+        &self,
+        frame: SketchFrame,
+        regions: &'r [ProfileRegion],
+        axis: &Axis,
+    ) -> (SketchFrame, Cow<'r, [ProfileRegion]>) {
+        if self.is_zero() {
+            return (frame, Cow::Borrowed(regions));
+        }
+        let regions = if self.rotation == 0.0 {
+            Cow::Borrowed(regions)
+        } else {
+            let centre = middle(regions);
+            Cow::Owned(
+                regions
+                    .iter()
+                    .map(|r| r.rotated(centre, self.rotation))
+                    .collect(),
+            )
+        };
+        let direction = counted(axis.direction);
+        let turn = |v: [f64; 3]| rotate(v, direction, self.around);
+        let from_axis = sub(frame.origin, axis.origin);
+        let origin = add(
+            add(axis.origin, turn(from_axis)),
+            scale(direction, self.along),
+        );
+        let frame = SketchFrame {
+            origin,
+            x_axis: turn(frame.x_axis),
+            y_axis: turn(frame.y_axis),
+        };
+        (frame, regions)
+    }
+}
+
+/// The middle of the regions' bounds, in sketch coordinates.
+fn middle(regions: &[ProfileRegion]) -> [f64; 2] {
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for region in regions {
+        let (low, high) = region.bounds();
+        for i in 0..2 {
+            min[i] = min[i].min(low[i]);
+            max[i] = max[i].max(high[i]);
+        }
+    }
+    if min[0] > max[0] || min[1] > max[1] {
+        return [0.0, 0.0];
+    }
+    [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0]
+}
+
 /// The tool of profiles wrapped onto a cylindrical face by arc length, or
 /// onto a conical one by its development (mitcad#473), raised out of the
 /// material by `depth` or sunk into it; None for a face of another kind.
-/// Emboss and Extrude's `wrap` build it alike.
+/// Emboss and Extrude's `wrap` build it alike; Emboss moves the profiles
+/// by its `offsets` (mitcad#1259; Extrude passes none).
 pub(crate) fn wrapped_tool<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     frame: SketchFrame,
@@ -214,6 +370,7 @@ pub(crate) fn wrapped_tool<K: Kernel>(
     face: &FaceRef,
     depth: f64,
     raise: bool,
+    offsets: WrapOffsets,
 ) -> Result<Option<K::Shape>, String> {
     let normal = frame.normal();
     let shape = ctx.surface_body(face.body)?;
@@ -238,10 +395,11 @@ pub(crate) fn wrapped_tool<K: Kernel>(
                 face.face, cylinder.radius
             ));
         }
+        let (frame, regions) = offsets.placed(frame, regions, &axis);
         let spec = EmbossWrapSpec {
             feature: ctx.uid,
             frame,
-            regions,
+            regions: &regions,
             axis,
             radius: cylinder.radius,
             to_radius,
@@ -260,6 +418,11 @@ pub(crate) fn wrapped_tool<K: Kernel>(
                 face.face
             ));
         }
+        let axis = Axis {
+            origin: cone.apex,
+            direction: cone.axis,
+        };
+        let (frame, regions) = offsets.placed(frame, regions, &axis);
         // The cone's radius at the height of the sketch's origin.
         let from: [f64; 3] = std::array::from_fn(|i| frame.origin[i] - cone.apex[i]);
         let height = dot(from, cone.axis);
@@ -282,11 +445,8 @@ pub(crate) fn wrapped_tool<K: Kernel>(
         let spec = EmbossWrapSpec {
             feature: ctx.uid,
             frame,
-            regions,
-            axis: Axis {
-                origin: cone.apex,
-                direction: cone.axis,
-            },
+            regions: &regions,
+            axis,
             radius,
             to_radius: radius + offset,
             half_angle: cone.half_angle,
@@ -310,10 +470,24 @@ impl EmbossDef {
         frame: SketchFrame,
         regions: &[ProfileRegion],
         depth: f64,
+        offsets: WrapOffsets,
     ) -> Result<K::Shape, String> {
         let normal = frame.normal();
         let raise = self.mode == EmbossMode::Raise;
+        // Along Axis, Around and Rotation move wrapped profiles only.
+        let unwrapped = || {
+            if offsets.is_zero() {
+                Ok(())
+            } else {
+                Err(
+                    "Along Axis, Around and Rotation move only profiles wrapped onto a \
+                     cylindrical or conical face"
+                        .to_owned(),
+                )
+            }
+        };
         let Some(face) = &self.face else {
+            unwrapped()?;
             // From the sketch plane, raised along its normal.
             let direction = if raise { normal } else { normal.map(|v| -v) };
             return self.extrude(
@@ -326,11 +500,13 @@ impl EmbossDef {
             );
         };
         if self.projects() {
+            unwrapped()?;
             return self.projected(ctx, frame, regions, face, depth, raise);
         }
-        if let Some(tool) = wrapped_tool(ctx, frame, regions, face, depth, raise)? {
+        if let Some(tool) = wrapped_tool(ctx, frame, regions, face, depth, raise, offsets)? {
             return Ok(tool);
         }
+        unwrapped()?;
         let shape = ctx.surface_body(face.body)?;
         let found = ctx.face_on(face.body, &shape, &face.face)?;
         let Ok(plane) = ctx.kernel.face_plane(&shape, &found) else {
@@ -446,4 +622,132 @@ fn direction_of<K: Kernel>(
         },
     };
     unit(along).ok_or_else(|| "the projection direction has no length".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::{ProfileLoop, ProfileSegment, SegmentGeometry};
+
+    /// A rectangle from `min` to `max` in sketch coordinates.
+    fn rectangle(min: [f64; 2], max: [f64; 2]) -> ProfileRegion {
+        let corners = [min, [max[0], min[1]], max, [min[0], max[1]]];
+        let keys = ["c1[c4,c2]", "c2[c1,c3]", "c3[c2,c4]", "c4[c3,c1]"];
+        ProfileRegion {
+            key: "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"
+                .parse()
+                .unwrap(),
+            loops: vec![ProfileLoop {
+                segments: (0..4)
+                    .map(|i| ProfileSegment {
+                        key: keys[i].parse().unwrap(),
+                        geometry: SegmentGeometry::Line {
+                            start: corners[i],
+                            end: corners[(i + 1) % 4],
+                        },
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    fn near(a: [f64; 3], b: [f64; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9)
+    }
+
+    /// The XZ plane (sketch y along -Z, normal +Y) through the Z axis, as a
+    /// sketch beside a rod along Z.
+    const XZ: SketchFrame = SketchFrame {
+        origin: [0.0, 0.0, 0.0],
+        x_axis: [1.0, 0.0, 0.0],
+        y_axis: [0.0, 0.0, -1.0],
+    };
+    const Z: Axis = Axis {
+        origin: [0.0, 0.0, 0.0],
+        direction: [0.0, 0.0, 1.0],
+    };
+
+    /// mitcad#1259: no offsets leave the sketch's frame and regions as
+    /// they are (borrowed, not copied).
+    #[test]
+    fn zero_offsets_are_the_sketchs_wrap() {
+        let regions = [rectangle([-2.0, -10.0], [2.0, -2.0])];
+        let (frame, placed) = WrapOffsets::default().placed(XZ, &regions, &Z);
+        assert_eq!(frame, XZ);
+        assert!(matches!(placed, Cow::Borrowed(_)));
+        assert_eq!(&*placed, &regions[..]);
+    }
+
+    /// A 4 x 8 rectangle from z = 2 to 10 on the +Y side of the Z axis,
+    /// moved 10 along the axis, a quarter turn around it and a quarter turn
+    /// on the face: 8 across and 4 along about its middle, which is at z =
+    /// 16 on the -X side (the sketch normal there), where it wraps.
+    #[test]
+    fn offsets_move_the_frame_and_turn_the_regions() {
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let regions = [rectangle([-2.0, -10.0], [2.0, -2.0])];
+        let offsets = WrapOffsets {
+            along: 10.0,
+            around: quarter,
+            rotation: quarter,
+        };
+        let (frame, placed) = offsets.placed(XZ, &regions, &Z);
+        assert!(near(frame.origin, [0.0, 0.0, 10.0]), "{frame:?}");
+        assert!(near(frame.x_axis, [0.0, 1.0, 0.0]), "{frame:?}");
+        assert!(near(frame.y_axis, [0.0, 0.0, -1.0]), "{frame:?}");
+        assert!(near(frame.normal(), [-1.0, 0.0, 0.0]), "{frame:?}");
+        let (min, max) = placed[0].bounds();
+        assert!(
+            near([min[0], min[1], 0.0], [-4.0, -8.0, 0.0])
+                && near([max[0], max[1], 0.0], [4.0, -4.0, 0.0]),
+            "{min:?} {max:?}"
+        );
+        assert_eq!(placed[0].key, regions[0].key);
+        // The middle on the axis at z = 16, the sketch turned to face -X.
+        assert!(near(frame.point([0.0, -6.0]), [0.0, 0.0, 16.0]));
+        // The input regions are not changed.
+        assert_eq!(regions[0], rectangle([-2.0, -10.0], [2.0, -2.0]));
+    }
+
+    /// A sketch plane beside the axis (y = 5) turned half a turn about it
+    /// lies at y = -5, facing the other way. Along Axis counts towards +Z
+    /// whichever way the face's axis points (an extruded rod's points down):
+    /// the frame moves up along a reversed axis too, and Around turns
+    /// right-handed about +Z.
+    #[test]
+    fn around_turns_a_plane_beside_the_axis_and_along_counts_up() {
+        let beside = SketchFrame {
+            origin: [3.0, 5.0, 1.0],
+            ..XZ
+        };
+        let regions = [rectangle([0.0, 0.0], [1.0, 1.0])];
+        let half = WrapOffsets {
+            around: std::f64::consts::PI,
+            ..WrapOffsets::default()
+        };
+        let (frame, _) = half.placed(beside, &regions, &Z);
+        assert!(near(frame.origin, [-3.0, -5.0, 1.0]), "{frame:?}");
+        assert!(near(frame.normal(), [0.0, -1.0, 0.0]), "{frame:?}");
+        let down = Axis {
+            origin: [0.0, 0.0, 7.0],
+            direction: [0.0, 0.0, -2.0],
+        };
+        let along = WrapOffsets {
+            along: 4.0,
+            ..WrapOffsets::default()
+        };
+        let (frame, placed) = along.placed(beside, &regions, &down);
+        assert!(near(frame.origin, [3.0, 5.0, 5.0]), "{frame:?}");
+        assert!(matches!(placed, Cow::Borrowed(_)));
+        let quarter = WrapOffsets {
+            around: std::f64::consts::FRAC_PI_2,
+            ..WrapOffsets::default()
+        };
+        let (frame, _) = quarter.placed(beside, &regions, &down);
+        assert!(near(frame.origin, [-5.0, 3.0, 1.0]), "{frame:?}");
+        // An axis across Z counts towards +Y, else +X.
+        assert!(near(counted([0.0, -3.0, 0.0]), [0.0, 1.0, 0.0]));
+        assert!(near(counted([-1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]));
+        assert!(near(counted([0.0, 0.0, -1.0]), [0.0, 0.0, 1.0]));
+    }
 }

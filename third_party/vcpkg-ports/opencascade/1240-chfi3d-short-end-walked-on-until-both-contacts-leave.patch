@@ -1,0 +1,189 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding of a short edge whose contact meets the edge of its
+face past the vertex farther than the spine's extension reaches is walked
+again over a longer extension, so that the corner cuts it with the face at
+the end (mitcad#1256).
+
+The case: the reported part of GitHub mitcad/Mitcad#130, imported from
+STEP (every face a B-spline surface, so the blend is walked). A thin wall
+(a plane) meets an overhanging end band (a plane leaning 29 degrees) along
+a slanted edge of 0.84, whose top vertex lies on an earlier rounding of
+radius 2 (between the part's slope and its vertical end wall) that cuts
+both: three convex edges, an AllSame end. The edge rounded with 0.75 or 1:
+past the top vertex the contact on the wall meets the rounding's edge
+0.16 on, but the contact on the band meets it only 0.49 on at 0.75 and
+0.63 at 1 (that edge leaves the vertex at 55 degrees to the spine and
+curves), and ExtentOneCorner prolongs the
+spine by half the edge's length (0.42) whatever the radius. The walk
+stopped at the extension's end with that contact still inside the band,
+FindFace found no face holding both points, and PerformIntersectionAtEnd
+built a corner face folded back on itself, 0.035 out of the body at 0.75
+(accepted by the checker) and a self-intersecting wire at 1. At the bottom
+vertex at 1 the contact on the wall stopped short of the floor in the same
+way. The same edge after the part's floor was rounded with 1 (a sliver of
+0.25 left) gave spikes reaching 0.16 and 0.77 out of the body at 1.
+
+ChFi3d_Builder::PerformSetOfSurf: after a rounding's walk, an end at an
+AllSame or OnDiff vertex whose last piece reaches the end of the spine's
+extension with a contact still inside its face (the other on an edge of the
+vertex, or both inside, ChFi3d_EndStoppedShort) is walked again with that
+end's extension longer by twice the largest radius; the walk still stops
+where both contacts have left their faces. The new walk is kept where both
+contacts of each such end then lie on edges; otherwise (a face at the end
+that pokes through the blend, which other ends join over) the first walk
+is made again, as before. The corner then cuts the blend with the face at
+the end between the two points, as for any end whose contacts reach that
+face's edges within the extension. Every other fillet is as before.
+
+On the reported part: the corner and its mirror at the wall's other end
+build with one blend face, valid, at 0.5, 0.75, 0.9 and 1, removing 0.053,
+0.133, 0.202 and 0.256 mm3 (0.75 and 1 before: the folded face, and an
+invalid shape); after the floor's rounding the sliver builds at 0.5 to 1,
+valid, no made face out of the body by more than 0.003. Synthetic: the same
+corner made of planes and a rounding cylinder, its faces converted to
+B-splines, rounded with 0.75 and 1: one blend face, valid, the volume
+removed within 1e-5 mm3 of the analytic cylinder's that OCCT builds for the
+same body with its planes (before: a folded corner face 0.32 out of the
+body, and at 1 both ends folded and an invalid shape).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 401360c0..bbb12d78 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -21096,6 +21096,57 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
+ //=================================================================================================
+ 
+ 
++//=======================================================================
++// function : ChFi3d_EndStoppedShort
++// purpose  : Whether a stripe's end at a vertex where the face at the end
++//            cuts it (AllSame, OnDiff) stopped at the end of the spine's
++//            extension with a contact still inside its face: the other on
++//            an edge of the vertex, or both inside (mitcad#1256).
++//=======================================================================
++static bool ChFi3d_EndStoppedShort(const occ::handle<ChFiDS_Stripe>& theStripe,
++                                   const bool                        isFirst,
++                                   const double                      theTol)
++{
++  const occ::handle<ChFiDS_Spine>& aSp    = theStripe->Spine();
++  const ChFiDS_State               aState = isFirst ? aSp->FirstStatus() : aSp->LastStatus();
++  if ((aState != ChFiDS_AllSame && aState != ChFiDS_OnDiff) || theStripe->SetOfSurfData().IsNull()
++      || theStripe->SetOfSurfData()->IsEmpty())
++  {
++    return false;
++  }
++  // (The spine prolonged at that end, the walk up to the prolongation's end.)
++  const double aW0 = isFirst ? 0. : aSp->LastParameter(aSp->NbEdges());
++  const double aW1 = isFirst ? aSp->FirstParameter() : aSp->LastParameter();
++  const occ::handle<ChFiDS_SurfData>& SD =
++    isFirst ? theStripe->SetOfSurfData()->First() : theStripe->SetOfSurfData()->Last();
++  const double aWs = isFirst ? SD->FirstSpineParam() : SD->LastSpineParam();
++  if (std::abs(aW1 - aW0) <= theTol || (isFirst ? aWs > aW1 + theTol : aWs < aW1 - theTol))
++  {
++    return false;
++  }
++  const TopoDS_Vertex&      aV  = isFirst ? aSp->FirstVertex() : aSp->LastVertex();
++  const ChFiDS_CommonPoint& CP1 = SD->Vertex(isFirst, 1);
++  const ChFiDS_CommonPoint& CP2 = SD->Vertex(isFirst, 2);
++  if (CP1.IsOnArc() && CP2.IsOnArc())
++  {
++    return false;
++  }
++  if (!CP1.IsOnArc() && !CP2.IsOnArc())
++  {
++    // (Both still inside their faces.)
++    return true;
++  }
++  const ChFiDS_CommonPoint& aOn = CP1.IsOnArc() ? CP1 : CP2;
++  for (TopExp_Explorer anEx(aOn.Arc(), TopAbs_VERTEX); anEx.More(); anEx.Next())
++  {
++    if (anEx.Current().IsSame(aV))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
+ {
+   TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
+@@ -21257,6 +21308,74 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+       }
+     }
+   }
++  const occ::handle<ChFiDS_FilSpine> aFilSp = occ::down_cast<ChFiDS_FilSpine>(sp);
++  if (!aCaught && !Simul && !aCutToPoints && !aNarrowCut && !aFilSp.IsNull() && !sp->IsPeriodic())
++  {
++    // A rounding ending at a vertex of three edges where the face at the end
++    // cuts it (AllSame, OnDiff) is walked past the vertex over the spine's
++    // extension until both contacts have left their faces across that
++    // face's edges; the corner then cuts it with the face between the two
++    // points (PerformOneCorner). The extension (ExtentOneCorner) is half the
++    // edge's length, whatever the radius: on a short edge with a larger
++    // radius a contact meets the edge of its face leaving the vertex only
++    // farther past the vertex, and the walk stopped at the extension's end
++    // with that contact still inside its face. The corner then found no
++    // face at the end holding both points and was built as an intersection
++    // with several faces, folded back on itself or invalid (mitcad#1256).
++    // Such an end is walked again over an extension longer by twice the
++    // largest radius (the walk still stops where both contacts have left),
++    // and the new walk is kept where both contacts then end on edges; else
++    // the first one is made again.
++    const double aRad = aFilSp->IsConstant() ? aFilSp->Radius() : aFilSp->MaxRadFromSeqAndLaws();
++    const double aFirst0 = sp->FirstParameter(), aLast0 = sp->LastParameter();
++    bool         isShort[2] = {false, false};
++    for (int k = 0; k < 2; k++)
++    {
++      isShort[k] = ChFi3d_EndStoppedShort(Stripe, k == 0, tolesp);
++    }
++    if ((isShort[0] || isShort[1]) && aRad > 0.)
++    {
++      // (Only the short ends' extensions change.)
++      const auto aWalk = [&](const double theMore) {
++        Stripe->Reset();
++        sp->SetErrorStatus(ChFiDS_Ok);
++        if (isShort[0])
++        {
++          sp->SetFirstParameter(aFirst0 - theMore);
++        }
++        if (isShort[1])
++        {
++          sp->SetLastParameter(aLast0 + theMore);
++        }
++        PerformSetOfKPart(Stripe, Simul);
++        PerformSetOfKGen(Stripe, Simul);
++      };
++      bool isBetter = false;
++      try
++      {
++        OCC_CATCH_SIGNALS
++        aWalk(2. * aRad);
++        isBetter = !Stripe->SetOfSurfData().IsNull() && !Stripe->SetOfSurfData()->IsEmpty();
++        for (int k = 0; k < 2 && isBetter; k++)
++        {
++          if (isShort[k])
++          {
++            const occ::handle<ChFiDS_SurfData>& SD =
++              k == 0 ? Stripe->SetOfSurfData()->First() : Stripe->SetOfSurfData()->Last();
++            isBetter = SD->Vertex(k == 0, 1).IsOnArc() && SD->Vertex(k == 0, 2).IsOnArc();
++          }
++        }
++      }
++      catch (Standard_Failure const&)
++      {
++        isBetter = false;
++      }
++      if (!isBetter)
++      {
++        aWalk(0.);
++      }
++    }
++  }
+   if (!Simul)
+   {
+     // Chamfers stopped where their edges turn, run on past the vertex.

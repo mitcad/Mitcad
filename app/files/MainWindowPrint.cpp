@@ -384,13 +384,27 @@ bool MainWindow::designOpen() const {
   return !m_filePath.isEmpty() || isModified();
 }
 
+void MainWindow::openMaterialLibrary(std::function<void()> closed) {
+  if (m_controller != nullptr) {
+    m_controller->openLibrary(QStringLiteral("material"), std::move(closed));
+  }
+}
+
 bool MainWindow::canChangePrintSettings() const {
   // 3D Print has no preview: the print windows its Edit… opens change the
   // design while its panel is open (mitcad#655); so do Plates…' own
-  // changes and its plate settings (mitcad#1050).
-  return canChangeModel() ||
-         (!windowReadOnly() && m_mode == Mode::Command && m_session &&
-          (m_session->def().id == QStringLiteral("make.print3d") || m_session->def().id == QStringLiteral("make.plates")));
+  // changes and its plate settings (mitcad#1050), and the Materials
+  // manager the Material tool's Material Library… opens (mitcad#1250; the
+  // tool previews nothing, its commands run on OK).
+  if (canChangeModel()) {
+    return true;
+  }
+  if (windowReadOnly() || m_mode != Mode::Command || !m_session) {
+    return false;
+  }
+  const QString id = m_session->def().id;
+  return id == QStringLiteral("make.print3d") || id == QStringLiteral("make.plates") ||
+         id == QStringLiteral("solid.material");
 }
 
 void MainWindow::importPrintSettings(const std::shared_ptr<PrintImport>& target) {

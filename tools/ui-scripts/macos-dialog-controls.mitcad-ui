@@ -2,25 +2,25 @@
 wait-idle
 show-dialog-style-fixture setup
 command tools.libraries
-focus-dialog '^Libraries$'
+focus-dialog '^Library Sources$'
 button '.*' libraryAddSource
 key Escape
-focus-dialog '^Libraries$'
+focus-dialog '^Library Sources$'
 button '.*' libraryAddSource
 popup 'Add URL…'
 focus-dialog '^Add Library$'
 key Escape
-focus-dialog '^Libraries$'
+focus-dialog '^Library Sources$'
 key Return
-expect-dialog-gone '^Libraries$'
+expect-dialog-gone '^Library Sources$'
 focus-main
 show-dialog-style-fixture parts
-focus-dialog '^Library Components$'
+focus-dialog '^Components in This Design$'
 show-dialog-style-fixture bom
 test-dialog-controls bom
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/bom-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Return
-expect-dialog-gone '^Library Components$'
+expect-dialog-gone '^Components in This Design$'
 focus-main
 show-dialog-style-fixture picker
 focus-dialog '^Component Picker'
@@ -59,11 +59,11 @@ expect-model-bodies 1 48000
 # Old scripts and typed captions may still use the three-dot spelling.
 command tools.search
 focus-widget commandSearchInput
-type 'Libraries...'
-expect-command-search 'Libraries...' tools.libraries
+type 'Library Sources...'
+expect-command-search 'Library Sources...' tools.libraries
 key ctrl+a
-type 'Libraries…'
-expect-command-search 'Libraries…' tools.libraries
+type 'Library Sources…'
+expect-command-search 'Library Sources…' tools.libraries
 key Escape
 focus-main
 

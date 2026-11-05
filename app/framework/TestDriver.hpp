@@ -103,6 +103,7 @@
 //   expect-view-pixel <regex> <#rrggbb> <tolerance>  wait until that
 //                           colour there is within the tolerance (the sum
 //                           of the channels' differences)
+//   expect-navigation-release       synthetic modifier/button/scroll release ordering
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
 //   expect-formula-builder          the open expression editor's real controls
@@ -115,6 +116,10 @@
 //   dblclick <x%> <y%> [button] [mods]
 //   drag <x1%> <y1%> <x2%> <y2%> [button] [mods]     with moves between
 //   wheel <x%> <y%> <notches> [mods]                 positive: away from you
+//   wheel-logged <regex> <notches> [mods]  the wheel over the last place a
+//                           log line matching regex has ("Panel <command>
+//                           input <id> at ..."), to the widget there, as
+//                           the one under the mouse (mitcad#1254)
 //   wheel-burst <x%> <y%> <notches> <count> [mods]   <count> wheel events of
 //                           <notches>, one per tick (a quick burst)
 //   trackpad-scroll <x%> <y%> <dx> <dy> <mods> [momentum]
@@ -143,6 +148,9 @@
 //   expect-pick-offset <regex> <dx> <dy> <item-regex>
 //                           probe fresh viewport picks plus logical pixels
 //   click-pick-offset <regex> <dx> <dy> <item-regex>   probe, then click there
+//   click-edge-release <index> modifier-first|button-first
+//                           Cmd/Ctrl-click a fresh visible edge, releasing the
+//                           modifier before or after the button (synthetic)
 //   click-visible-face      probe fresh visible OCCT face points, click one
 //                           through the viewport input path, then verify the
 //                           actual shared selection contains that exact face
@@ -636,6 +644,7 @@ private:
   void testSketchFinishLayout();
   void testRibbonLabels(const QStringList& expected);
   void testNavigationRuntime();
+  void testNavigationRelease();
   void testNavigationControls(const QString& mode);
   void testAssistantSetup(const QString& mode);
   void testFormulaBuilder();

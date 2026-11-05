@@ -29,6 +29,7 @@ search: type the start of a command's name and press Enter.
   - [macOS](#macos)
 - [Quick start](#quick-start)
 - [The window](#the-window)
+  - [The Start tab](#the-start-tab)
   - [Layouts](#layouts)
   - [Messages and their history](#messages-and-their-history)
   - [Quick access](#quick-access)
@@ -136,6 +137,7 @@ search: type the start of a command's name and press Enter.
   - [Printable bearings](#printable-bearings)
   - [Boundary Fill](#boundary-fill)
   - [Bounding Solid](#bounding-solid)
+  - [Envelope](#envelope)
   - [Convert Mesh](#convert-mesh)
   - [Sheet metal](#sheet-metal)
   - [Mortise and Tenon](#mortise-and-tenon)
@@ -294,6 +296,12 @@ ChatGPT**) starts its own sign-in.
 - Each message is one undo step, **AI: *its first words***: one **Undo**
   takes it back. If you change the design yourself meanwhile, the
   agent's changes stay separate steps.
+- The agent can start a new design from the open one ("make a nipple
+  with this thread at both ends"): it makes an empty design as **File ›
+  New Design** does, in a tab of its own beside the open design (in the
+  current project's top folder as **Design*N***, in a folder for designs
+  under a name, or untitled), and builds in it; the open design stays as
+  it is, and the conversation stays in its tab.
 - The conversation is kept with the design in your own data folder (not
   in the design file) and shown again when you open the design.
 - Without an agent program, the chat can use the **Anthropic API** with
@@ -536,6 +544,51 @@ view** in Preferences › General; the window title keeps the version.
 On macOS, the keys that say Ctrl in this guide are Cmd keys (Cmd+N,
 Cmd+S, Cmd+Z and so on). Refer to [Shortcuts](#shortcuts) for the
 other keys that differ on macOS.
+
+### The Start tab
+
+**Start** is the first tab of the toolbar, before Solid, Build and Make.
+MitCad starts on it, and you can go back to it at any time. Its page
+covers the view:
+
+- **New Design** makes an empty design in the units for new designs
+  (Preferences › General). **Open Design…**, **Open Project…** and
+  **Import File…** do what the File menu's Open, Open Project and Import
+  do. Each card shows its keyboard shortcut.
+- **Recent designs** shows the files of File › Open Recent as cards: a
+  preview of the design, its file name, its type, its folder and when you
+  last opened or saved it. Click a card to open the design. The star at
+  the top right of a card pins the design; **Pinned** shows only the
+  pinned designs, **All** all of them. A pinned design stays on the list
+  when ten newer files have pushed it out of Open Recent. Type in **Find
+  a recent design** to show only the designs whose name or folder holds
+  the text. The two buttons beside the field show the designs as cards
+  or as a compact list. A file that is no longer where it was shows as
+  missing: **Remove** takes it off the list. Right-click a card to open,
+  pin or remove it.
+- Drop a CAD file anywhere on the page to open it, or to import it into
+  the design, as on the window.
+- **Resources**: **Component Libraries** opens the component picker,
+  **User Guide** this guide, **Keyboard Shortcuts** the Keyboard and
+  Mouse Overview and **Connect AI Assistant** the assistant's setup
+  ([Connect an AI assistant](#connect-an-ai-assistant)).
+- **What's New in** and the version, at the top right, opens the release
+  notes of your version in the web browser. **Report an Issue** at the
+  bottom opens MitCad's issue list, **Preferences…** the Preferences.
+- Clear **Show start page at launch** at the bottom to start on an
+  empty design instead. The Start tab stays in the toolbar.
+
+A save makes the preview: a picture of the view as it is when you save.
+MitCad keeps the previews in its own data folder, not in your designs or
+their folders. A design that was never saved since this version, or a
+file you only imported, shows the icon of its type instead.
+
+When you open a design, create a new one, import a file or start a
+command of the view (a key such as E for Extrude, a button of another
+tab), MitCad goes to the Solid tab. When MitCad starts with a file (a
+double-click on a design, `--open`), it opens on the Solid tab. If MitCad
+ended without closing, the question about the unsaved designs comes
+first, over the Start page ([Saving and recovery](#saving-and-recovery)).
 
 ### Layouts
 
@@ -960,6 +1013,22 @@ separates the arguments of a function, and `;` always does. Thus
 There are no thousands separators: `1,000` is 1, and `1 000` is an
 error.
 
+**Stepping a value.** In a value field of a panel, and in the value
+fields of a sketch, Up and Down change a number by 1 in the unit that
+the field shows: `10 mm` becomes `11 mm`, `0.5 in` becomes `1.5 in`,
+`360 deg` becomes `361 deg` and a quantity of `4` becomes `5`. Hold
+Shift for steps of 10, or Ctrl for steps of 0.1. On macOS, hold
+Option for steps of 0.1. The mouse wheel does the same while the field
+has the keyboard. Over a field that you are not editing, the wheel
+scrolls the panel and does not change a value. The preview follows each
+step, as it does when you type. A step down stops at the smallest value
+that the field takes: a quantity stops at 1, and a size that must be
+more than zero, such as a diameter or a thickness, stays above 0. A
+signed value, such as an Extrude distance, can go below 0. A field that
+holds an
+expression or a parameter name, such as `d1 * 2`, is not stepped. The
+field's tooltip shows these keys.
+
 ### Long computations
 
 To open a large design, or to change it, can take a while. The window
@@ -1119,6 +1188,7 @@ submenus.
   - Pattern › Rectangular Pattern, Circular Pattern, Pattern on Path,
     Pattern at Points
   - Mirror
+- Envelope ([Envelope](#envelope))
 - Machine Elements ›
   - Gear ([Gears](#gears))
   - Pulley ([Pulleys](#pulleys))
@@ -1483,6 +1553,16 @@ onto the development of the cone. Thus lengths, angles and areas on the
 cone are those of the sketch. Emboss raises the profiles along the
 normals of the cone.
 
+When Emboss wraps the profiles, you can move them on the face without
+moving the sketch. **Along Axis** moves them along the axis of the
+face. A positive value moves them towards +Z, or towards +Y or +X when
+the axis lies flat. **Around** turns them about the axis. **Rotation** turns them on
+the face about their center. Each value is 0 at first, which keeps the
+profiles where the sketch puts them. Each value takes a parameter or an
+expression, as other values do. Each value also has a handle in the
+view: an arrow along the axis, a ring about the axis, and a ring at the
+profiles. Drag a handle to change its value. The preview follows.
+
 On any other face (a sphere, a torus, a free-form face), Emboss projects
 the profiles onto the face. It moves each point of a profile along the
 normal of the sketch until it meets the face. Then it raises the
@@ -1726,6 +1806,24 @@ says the largest value that fits.
 Clearances on both mating bodies add up. MitCad does not change the
 other body.
 
+MitCad makes the thread even when it does not suit its face, and the
+panel's message (and the thread's warning in the timeline) says what
+happened:
+
+- The size is far from the face. A shaft should be about as wide as the
+  thread's major diameter, and a hole about as wide as its minor
+  diameter, within the class's tolerance and 0.5 mm. For
+  example, "M80x2 (Ø80 mm) on face F45:side(c21) (Ø87.1 mm): the face's
+  diameter is 7.1 mm larger than the thread's major diameter". Pick a
+  size near the face, or change the face.
+- A modeled thread cut through the wall behind its face. A thread cuts
+  from the face down to its root. If the material behind the face is
+  thinner than that, for example a ring whose bore lies inside the
+  thread's root, the thread takes the wall with it, and the threaded
+  part of the ring is gone: "… the thread cut through the 3.5 mm wall
+  behind the face". A hole's wall to the outside is checked the same
+  way.
+
 ### Patterns
 
 The pattern commands are Rectangular Pattern, Circular Pattern, Pattern
@@ -1861,6 +1959,17 @@ MitCad makes it 0.1 % smaller and removes the narrow strip that this
 leaves. The panel and the feature's details then show this as
 information, not as a warning.
 
+At a difficult corner, the geometry kernel can build a fillet or chamfer
+whose corner folds back on itself or ends in a spike. A rounding of
+convex edges only takes material away, so MitCad looks at the faces that
+the fillet or chamfer made. If one of them reaches out of the body (or,
+for concave edges, into it), the feature keeps its result and shows a
+warning that names the corner or edge and how far it reaches, for
+example "the corner of the fillet at vertex V{…} reaches 0.035 mm out of
+the body". Check the result there; a smaller radius often gives a clean
+corner. If the result is not a valid solid at all, the error says which
+corner or face is at fault.
+
 In Fillet and Chamfer, click a selected face or edge again to remove it,
 including while the preview is visible. The Edges input's ✕ clears that
 input; a list item's ✕ removes only that item. Near a selected face's
@@ -1905,7 +2014,13 @@ past the narrow face (also past a curved one, such as a flange below a
 cylinder's band), the bevel ends at the narrow face's edge and the wall's
 faces continue down to it along their own surfaces, a thread's flanks
 too. Where such a chamfer meets other chamfers at a corner, the corner is
-built as without the overflow. A chamfer is never made smaller than you
+built as without the overflow. A chamfer of an inside corner, such as the
+foot of an octagon standing on a disc, adds material: where it runs past
+the narrow face beside it and the face beyond falls away, the face beyond
+cuts it, so it never hangs out past the body's edge. Where the chamfer is
+exactly as wide as the narrow face at one place, so that the face would
+end in a point there, the chamfer fails and the error says where; a
+slightly smaller distance builds. A chamfer is never made smaller than you
 asked: where it cannot be built, the error names the edge, the narrow
 face and the face beyond it, and at a corner the corner types that would
 build it.
@@ -3210,6 +3325,14 @@ Projected geometry obeys these rules:
   chain for Offset. A face beside a face that you projected keeps its
   own line on the edge that they share, so that each outline stays one
   chain.
+- A face is projected as you see it along the sketch normal. A curved
+  face gets its outline: the side of a cylinder on a plane parallel to
+  its axis becomes a rectangle, a cone becomes a trapezoid, and a sphere
+  becomes a circle. The seam of a round face, where its surface closes,
+  is not projected when it is not on the outline. A cylinder seen along
+  its axis gives only its circles. With *Projection Link* on, the outline
+  follows the face, for example when you change the radius of the
+  cylinder.
 - **Convert to Sketch Geometry** makes projected geometry ordinary
   sketch geometry (refer to [Sketch curve tools](#sketch-curve-tools)).
 - Project has selection rows of its own while it runs (refer to
@@ -3525,6 +3648,21 @@ a change of the eye. A sketch hides by itself when a feature first uses
 it. The sketch shows again when you delete the last feature that uses
 it. The eye has priority over this automatic behavior.
 
+The eyes also work while a command's panel or a sketch is open: the eyes
+of bodies, components, sketches, construction geometry, a section
+analysis in the Analysis folder and an image reference. The command does
+not end. Its inputs, its selection and its preview stay, and the preview
+is drawn again for what the view now shows. For example, open Thread on
+the inside of a hole and turn on the eye of a section analysis: the
+preview of the thread is cut open at the plane of the section. You can
+also hide the body that the command works on; what you selected on it
+stays selected. Each click of an eye is an undo step of its own, never
+part of the step of the command: Cancel (Esc) keeps what you showed or
+hid, and after OK the first Undo takes back the command and the next
+Undo the eye. The eye of a flat pattern and the eyes of the Analysis
+folder while the panel of Section Analysis, Print Analysis, Measure or
+Interference is open still wait until the command ends.
+
 The eye of the Origin folder shows the design's origin in the view: its
 point, its X, Y and Z axes and the XY, XZ and YZ planes. The design
 saves the eye. A new design starts with it off. You do not need the
@@ -3620,6 +3758,7 @@ these entries:
   go with it.
 - Ground
 - Create Components from Bodies
+- Find Repeated Parts (for bodies of an imported file)
 - Move to Component (for bodies and sketches)
 - Create Sketch
 - Look At
@@ -5061,6 +5200,10 @@ appears (and names the bodies): on, they keep it; off, they get the
 material's appearance. One the material offers stays the body's. **fx** beside the
 picker button makes the material follow a parameter ([Values that
 follow parameters](#values-that-follow-parameters)).
+**Material Library…** under the picker button opens the Materials
+manager on My library while the panel stays open: make or change a
+material there, close the manager, and the picker offers it, with the
+bodies you picked still picked.
 
 **Edit Materials** (Make › Materials) opens the **Materials** manager,
 which manages the materials and assigns none. Its list groups the
@@ -5547,6 +5690,29 @@ asked once, as for a change in another design: **Use the changes** or
 **Keep this design's settings**. Built-in items are read only: select
 one and click **Duplicate**.
 
+**Hiding built-ins you do not use.** The built-in printers, processes
+and library materials (the filaments) cannot be deleted, but they can be
+hidden: select one and click **Hide** beside Delete, or right-click it
+and choose **Hide**. A hidden item is no longer listed in the managers
+or offered in any picker (the printer and process of Send to Slicer,
+the Make tab and Property Sets, the Material tool and the Material
+menus). It
+is hidden on this computer only, for all your designs; designs and
+projects do not change. A design that already uses a hidden item keeps
+it, and lists it as its own, under **This design**. To bring one back,
+tick **Show hidden** under the list (it shows while something is
+hidden): the hidden items come back grayed; select one and click
+**Unhide** (or right-click it and choose **Unhide**). MitCad's own
+materials such as Steel cannot be hidden, and your own and the project's
+items keep **Delete** instead.
+
+**Your own first.** Once My library or This project has a printer of
+yours, the Printers manager opens with the **Built-in** group folded
+(click its arrow to open it; a search finds in it too), and the printer
+pickers list your printers first and the built-in ones last, under a
+**Built-in** heading. The Processes manager and the process pickers do
+the same once you have a process of your own.
+
 **New, Duplicate and Copy to.** New and Duplicate ask where to make the
 item, the default first: **This design** when a design is open, else
 **My library**. **Copy to ▾** beside the name copies the selected item
@@ -5556,16 +5722,17 @@ of it, and an item of the design copied into a library becomes that
 library's item, with the design's item as its copy. An item copied from
 one library into the other keeps its name and no link.
 
-**Without a design.** With no design open (the empty *Untitled* window
-MitCad starts with), the managers list **My library** (and **This
-project**, when a project is open) and **Built-in**, and work on them
-alone: the window's design does not change. The managers have one place,
-the Make tab (Make › Materials › Edit Materials…, Make › 3D Print ›
-Printers… and Processes…), with or without a design: they are the same
-windows either way, so a second entry under Tools would only repeat
-them. Type "My library" in the command search to find them. (MitCad
-before had a separate My Library window under Tools; the managers took
-its place.)
+**Your own library.** **Tools › Libraries › Material Library…**,
+**Printer Library…** and **Process Library…** open the same managers on
+**My library**: its group at the top of the list with its first item
+selected, and My library the place New, Duplicate and Import offer
+first. They work with or without a design open. With no design open
+(the empty *Untitled* window MitCad starts with), the managers list **My
+library** (and **This project**, when a project is open) and
+**Built-in**, and work on them alone: the window's design does not
+change. The Make tab's Edit Materials…, Printers… and Processes… open
+the same managers with This design first. Type "My library" in the
+command search to find them all.
 
 **Import from Slicer…** at the top of each manager reads a slicer's 3MF
 project or preset, as Import from slicer… in Send to Slicer does, into the
@@ -5869,9 +6036,20 @@ These commands make a component:
 - New Component
 - The New Component operation of an extrude or a primitive
 - Create Components from Bodies
+- Find Repeated Parts
 
 Paste makes an occurrence. Paste New makes a new component. Activate a
 component with its radio button. Then new features go into it.
+
+**Find Repeated Parts** is in the browser's menu of a body of an imported
+file. Some files hold every copy of a part as a body of its own, already
+moved into its place. Find Repeated Parts finds the bodies that are the
+same part, only moved or turned. Each such part becomes one component,
+with an occurrence where each copy was. The first copy keeps its name,
+color and appearance, and the component is named after it. A mirror
+image is not the same part. A body with another color stays apart too.
+Bodies that copy nothing stay as they were. Undo takes it all back in
+one step.
 
 Ground fixes an occurrence: joints and drags do not move it. Move/Copy
 moves components as a timeline feature, a grounded one too, which stays
@@ -5897,6 +6075,42 @@ Saving uses the source design's normal Save or Save As workflow. The destination
 cannot select itself. Insertion and Undo affect the destination only.
 MitCad reads a linked design again when you open the design that
 holds it.
+
+**Show a linked design by its envelope.** A linked design of many parts,
+such as a machine in a production-line layout, can be heavy. Right-click
+its row in the browser and choose **Show as Envelope…**. Type a detail
+size in millimeters, or leave the field empty for 1 % of the design's
+diagonal (at least 5 mm), and click **OK**. The component then holds only
+the [envelope](#envelope) of the design's bodies: one light body in the
+shape of its outside, with openings larger than the detail size kept
+open. MitCad does not keep the design's bodies in memory or in this
+design's file while the component shows its envelope. When the linked
+design changes, MitCad makes the envelope again. **Show in Full** on the
+same row brings the design's bodies back. Both are one step of Undo. A
+library part and a design linked with options cannot show an envelope.
+
+Each occurrence chooses for itself. If a linked design is placed more
+than once, **Show as Envelope…** changes only the occurrence whose row
+you right-clicked: for example, the machine in front of a production line
+in full and the others as envelopes. Such an occurrence goes into a
+component of its own that links the same file, such as **Machine
+Envelope**, so its row is then **Machine Envelope:2**. It stays where it
+is, with its joints. If you leave the detail size empty, the occurrence
+takes the detail size that the other occurrences of the design are shown
+at. **Show All as Envelope…** changes every occurrence of the component
+at once. **Show in Full** brings that one occurrence back to the design's
+bodies.
+
+Joints to faces, edges and vertices of the linked design keep their
+places while the design is shown by its envelope. MitCad finds the faces
+where another occurrence shows the design in full, or uses the places
+that the joints had when the design was last shown in full. Joints that
+you make while the envelope is shown use the faces of the envelope.
+
+A design that shows a linked design by its envelope needs this version
+of MitCad or a later one: an earlier version does not open it. To open
+the design in an earlier version, choose **Show in Full** for every
+envelope first, and save.
 
 **Save a component as a design.** Save Component as Design… on a
 component's row in the browser writes the component as a design file
@@ -7517,6 +7731,56 @@ commands: scripts, `mitcad-cli run` or MCP
 ([`bounding_solid`](../core/model-api/src/commands.md#bounding_solid)).
 The `.solidcraft` import also makes it.
 
+### Envelope
+
+An **Envelope** is a new body: a light outer skin of bodies. Use it as a
+placeholder in a layout: a machine of many parts becomes one body of
+flat faces in the shape of its outside, not a box.
+
+The **detail size** says what the skin keeps. Gaps, holes and features
+smaller than it are closed over. Openings larger than it stay open, for
+example a tunnel through a machine where the product goes, or the space
+under a table. Spaces that are closed in on every side are filled. If
+you give no detail size, MitCad uses 1 % of the diagonal of the bodies,
+but at least 5 mm.
+
+Name what the envelope wraps:
+
+- nothing: every body of the component at that point of the timeline,
+  with the bodies of the components that are placed in it;
+- an occurrence: the bodies of its component (also of a linked design),
+  with the components placed in it, where the occurrence puts them;
+- bodies: only these bodies (of the component or of the occurrence's
+  component).
+
+The skin is made of flat faces that are square to the axes of the
+component. It is outside the bodies, at most about half the detail size
+from them. Slanted and round faces become steps. The new body has the
+appearance of the first body of the source that has one, and its name is
+the name of the feature (Envelope1). The bodies query marks it as an
+envelope.
+
+An Envelope is a feature like any other. If you change the bodies, the
+occurrence or the detail size, the envelope follows. The bodies
+themselves stay as they are.
+
+To make an Envelope, choose **Envelope** in the SOLID tab's CREATE menu,
+after Mirror. In **Source**, pick a component in the browser, or pick
+bodies of one occurrence. If you pick nothing, the envelope wraps the
+active component with the components placed in it. Leave **Automatic
+Detail Size** on for the automatic size, or turn it off and type a
+**Detail Size**. The view shows the envelope as you change the inputs.
+Click **OK**. To change an envelope, double-click it in the timeline: the
+same panel opens. Scripts, `mitcad-cli run` and MCP make it too
+([`envelope`](../core/model-api/src/commands.md#envelope)). To show a
+linked design by its envelope, use **Show as Envelope…** in the browser
+([Components](#components)).
+
+If you copy a component that has an Envelope of an occurrence in it, the
+copy's Envelope wraps the copy's occurrence. If you move an occurrence to
+another component (Move to…), an Envelope of it follows. MitCad does not
+move an occurrence out of the component that has its Envelope.
+
 ### Convert Mesh
 
 **Convert Mesh** changes a mesh body from an STL or OBJ file into a solid
@@ -8019,6 +8283,19 @@ MitCad records the design as a version (`Add parts/bracket.mitcad`) and
 opens it. **New Folder** adds a folder the same way (`Add folder
 parts`).
 
+The panel proposes a free name, such as `Design4`, and selects it, so
+that what you type replaces it. The proposed name is not used in the
+folder, also not by a file that the panel does not list yet. If the
+Projects panel is hidden or its card is collapsed, New Design shows it
+while you type the name. After Enter or Esc, the panel is hidden or
+collapsed again. If you hide the panel or collapse its card while the
+name editor is open, MitCad does not take the name.
+
+If a name is not possible, for example because a design or a folder of
+that name is there already, the name editor stays open. A message below
+the row says why. Type another name and press Enter, or press Esc to
+stop. Rename works the same way.
+
 **Rename and move.** **Rename** (F2, or the context menu of a design or
 a folder) renames a design or a folder in its project. A **drag** onto
 another folder or onto the project moves a design or a folder in its
@@ -8046,8 +8323,8 @@ the panel too.
 folder that is selected in the panel.
 
 You cannot move or delete a design that someone else locked. MitCad
-refuses a name that is taken. MitCad sends each change as it sends a
-saved version.
+refuses a name that is taken, and you can then type another one. MitCad
+sends each change as it sends a saved version.
 
 ### Sharing a project
 
@@ -8389,6 +8666,19 @@ Fasteners and other standard components come from component libraries. A
 component library is a git repository of designs. Each design has a
 table of its sizes.
 
+**Tools › Libraries** has four groups:
+
+- **Insert from Library…** and **Community Library…** place a component
+  or a shared design.
+- **Components in This Design…** shows the library components of the
+  open design; **Publish to Library…** adds the design to a library of
+  your own.
+- **Material Library…**, **Printer Library…** and **Process Library…**
+  open the Materials, Printers and Processes managers on My library,
+  also with no design open (refer to [Where print items live](#where-print-items-live)).
+- **Library Sources…** sets which component libraries and community
+  indexes MitCad uses, and fetches them.
+
 MitCad's component library has these components:
 
 - ISO metric screws (ISO 4762, ISO 4017, ISO 10642)
@@ -8407,9 +8697,10 @@ have to install git. A library in a folder or at an SSH address
 library that asks you to sign in. For components that are already in a
 design, nothing has to be fetched.
 
-**Tools › Libraries › Libraries…** lists the libraries and the
+**Tools › Libraries › Library Sources…** lists the libraries and the
 community indexes that MitCad uses. At the start, the list has MitCad's
-component library and the community index. In **Libraries…** you can:
+component library and the community index. In **Library Sources…** you
+can:
 
 - Add a library by its URL or by a folder
 - Disable a library
@@ -8498,7 +8789,7 @@ names its standards. When a library gives them, two filters show above
   **Length** then list only the sizes that the supplier sells.
 
 The filters change no component and are not saved in the design. They
-are in **Insert from Library**, **Library Components**, **Edit Options…**
+are in **Insert from Library**, **Components in This Design**, **Edit Options…**
 and the Build tab's component picker.
 
 The name of the component follows the standard: with **DIN 912**, the
@@ -8509,7 +8800,7 @@ list.
 
 Under the size, **Insert from Library** shows the designation of the
 size. When the suppliers sell the size, **Insert from Library**,
-**Library Components** and **Edit Options…** show a button
+**Components in This Design** and **Edit Options…** show a button
 **Supplier Articles (n)…** (Alt+A), where n is the number of articles.
 It opens a table with one line per article: the supplier (a link to its
 site), the part number, the material, the finish, the date the article
@@ -8583,7 +8874,7 @@ you place has these options.
 
 On a new installation, the list of components is empty until you press
 **Update**. **Update** fetches all enabled libraries and searches again.
-This is the same as **Fetch All** in **Libraries…**. Press **Update**
+This is the same as **Fetch All** in **Library Sources…**. Press **Update**
 later to get newer versions to select from. Components that are already in a
 design keep their versions.
 
@@ -8592,8 +8883,8 @@ When you open the design, MitCad reads that version, also when the
 library has newer versions. Thus the design always rebuilds in the same
 way.
 
-**Library Components…** shows the library components with their versions and
-sizes. To change a component:
+**Tools › Libraries › Components in This Design…** shows the library
+components of this design with their versions and sizes. To change a component:
 
 1. Select another version or size.
 2. Select **Show Changes** to list what changes
@@ -8603,14 +8894,14 @@ sizes. To change a component:
 **Check for Newer Versions** first fetches the libraries.
 
 Library components carry their standard designation (`ISO 4762 M5x16`). The
-**Bill of Materials** tab of **Library Components** lists every component with its
+**Bill of Materials** tab of **Components in This Design** lists every component with its
 quantity, library, version and license. It copies the list as CSV. MitCad
 records the license, the library, its URL and the version with each component
 in the design, also with a copied component.
 
 A design from another computer can use libraries that are not on this
 computer. Then the design keeps the saved bodies of its components and says
-so. **Get Missing Libraries** in **Library Components** shows the addresses of
+so. **Get Missing Libraries** in **Components in This Design** shows the addresses of
 the libraries, then fetches them.
 
 MitCad and `mitcad-cli` share one default cache of fetched libraries:
@@ -8631,9 +8922,9 @@ updates the clones (itself for `https://` addresses, with the git program
 for folders, SSH addresses and when **Use the installed git program** is
 on), and only when you ask with one of these commands:
 
-- **Fetch** in **Libraries…**
+- **Fetch** in **Library Sources…**
 - **Update** in **Insert from Library**
-- **Check for Newer Versions** in **Library Components**
+- **Check for Newer Versions** in **Components in This Design**
 - **Get Library** in **Community Library…**
 
 An update adds branches and tags. It removes nothing. Git's automatic
@@ -8783,7 +9074,7 @@ file's history.
 | `.rvt` (projects) | Open. Levels become components, elements become bodies and meshes | None | Walls, floors, roofs, ceilings, columns, beams and stair runs as features |
 | SolidCraft (`.solidcraft`) | Open, Import (every file format version) | None | Features, sketches, parameters, components and joints. Sheet metal |
 | DWG (`.dwg`, R13 to R2018) | Open, Import. 3D solids become bodies, 3D faces and meshes become mesh bodies, blocks become components with their occurrences | A drawing (R2000) | None. A drawing keeps no history |
-| STEP (`.step`, `.stp`) | Bodies | Bodies (AP214 or AP242) | None |
+| STEP (`.step`, `.stp`) | Bodies. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242). Components as an assembly | None |
 | IGES (`.iges`, `.igs`) | Bodies | Bodies | None |
 | BRep (`.brep`, `.brp`) | Bodies | Bodies | None |
 | STL | Meshes | Meshes | None |
@@ -8809,7 +9100,8 @@ history.
 Each format is imported in its own way:
 
 - STEP, IGES and BRep are imported as a base feature ([Base
-  features](#base-features)).
+  features](#base-features)). A STEP assembly can keep its structure
+  instead ([STEP assemblies](#step-assemblies)).
 - STL and OBJ are imported as mesh bodies. Insert Mesh asks for the
   unit, and whether to convert the mesh to a solid ([Convert
   Mesh](#convert-mesh)).
@@ -8862,7 +9154,8 @@ There are other ways to open or import a file:
 - Open opens any of these file types as a new design.
 - On macOS, a double-click in Finder, Open With, a drop on the Dock
   icon and `open -a Mitcad file` do the same as Open.
-- Open Recent remembers the ten latest files.
+- Open Recent remembers the ten latest files, each with the preview its
+  last save made. The [Start tab](#the-start-tab) shows them as cards.
 
 On macOS, the title bar shows the file's proxy icon. The close button
 shows a dot while the design has unsaved changes.
@@ -8879,6 +9172,44 @@ it, also after a restart. These are the kinds:
 If a remembered folder no longer exists, the dialog starts in the
 design's folder, the project or Documents. Save Copy As of a version
 starts in the design's own folder.
+
+#### STEP assemblies
+
+A STEP file can be an assembly: its products (parts and
+sub-assemblies) are placed by instances, and a part that is used four
+times is stored once. When you import or open such a file, MitCad asks
+how it comes in:
+
+- **Components (keep the assembly)**, the default: each distinct part
+  becomes a component that holds its bodies once, in the part's own
+  coordinates, and each instance becomes an occurrence of that
+  component, placed as the file places it. A sub-assembly becomes a
+  component whose occurrences are placed in it. The components take the
+  names of the products. The bodies of a repeated part are one body:
+  the design keeps its data once, in memory and in the design file, and
+  the view meshes it once. Thus a machine with many repeated parts
+  opens, saves and draws faster.
+- **One base feature**: every placed part becomes a body of its own,
+  where the file places it, as for a file without an assembly.
+
+The question has a check box, **Find repeated parts**, off by default.
+Turn it on to find the bodies that are the same part, only moved or
+turned, and make each such part one component with an occurrence per
+copy ([Find Repeated Parts](#components)). With One base feature it
+looks at all the bodies; with Components, at the bodies inside each
+part. For a file without an assembly, use Find Repeated Parts in the
+browser after the import.
+
+A file without an assembly, or with only one placed part, comes in as
+one base feature without the question. IGES and BRep files always come
+in as one base feature. MitCad's own STEP export writes components as
+an assembly ([Export](#export)), so a design that you export and import
+again keeps its repeated parts shared. The export writes the placed
+parts in one assembly, so sub-assemblies come back as their parts
+placed in the design.
+
+The whole import is one undo step. The components go into the active
+component.
 
 ### Image references
 
@@ -10122,13 +10453,13 @@ tools, as icons:
 
 | Tool | What it makes |
 |---|---|
-| Dimension | A dimension: Linear (horizontal or vertical, after the picks), Aligned, Angle, Radius or Diameter. Click two edges or corners (a circle for a radius or a diameter), then where the dimension goes. |
+| Dimension | A dimension; what you click chooses which (*Type: Auto*). Click one circle for its diameter, one arc for its radius, or one straight edge for its length, then where the dimension goes. Click two edges, circles or corners for the distance between them: where you place it chooses horizontal, vertical or aligned. Two edges that are not parallel give their angle. *Type* can force Linear (horizontal or vertical, after the picks), Aligned, Angle, Radius or Diameter. |
 | Ordinate | A point's distance from an origin along the view's x or y. Click the origin, the point, then where the value goes. |
 | Baseline | Several dimensions at once: from the first point to each of the others (Baseline) or from each to the next (Chain). Click the points, then a free place. |
 | Center Mark | Center lines across a circle, or the centerline of a hole or a shaft seen from the side. Click the circle or the round face. |
-| Centerline | A centerline through two circles, or between two edges. |
-| Line | A line drawn by hand, outside the design. Click its two ends. *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Line* chooses thin, thick, dashed or a center line. |
-| Arc | An arc drawn by hand: click its center, its start, then its end, counter-clockwise. In a view or on the sheet, as a line. |
+| Centerline | A centerline through two circles, or between two edges. Click the two sides of a curved slot for its center arc, through the centers of its ends. |
+| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Line* chooses thin, thick, dashed or a center line. |
+| Arc | An arc drawn by hand: click its center, its start, then its end, counter-clockwise. Its clicks snap as a line's do, so an arc can run from one center to another. In a view or on the sheet, as a line. |
 | Center Pattern | Center marks on every hole of a pattern in one step. Click one hole seen end on: MitCad finds the holes of the same size of that body the view shows. On a bolt circle it draws the circle through their centers (an arc when they stand on a part of it) and a line through each; in a row, the line through them; else a center mark on each. |
 | Edge Extension | Thin lines that run straight edges on: two edges to where their lines meet (a corner rounded or chamfered away), or one edge beyond both its ends (*Edges: One, Both Ways*; how far, in millimeters of paper, is its *Length* in the panel: 10 unless set). |
 | Text | Text on the sheet, or in the view clicked (*Drawn*). Click where it goes. |
@@ -10140,9 +10471,23 @@ tools, as icons:
 A click picks an edge, a circle, a corner or a round face of the design
 as the view shows it; before you click, what the click would pick shows
 light orange under the pointer, and what it picked turns orange. While
-you place a dimension, its lines follow the pointer; a note, a symbol
-or a balloon shows its leader. A corner or a
-circle's center near the click wins over an edge. The annotation keeps
+you place a dimension, its lines follow the pointer as it will be made;
+a note, a symbol or a balloon shows its leader. A corner or a
+circle's center near the click wins over an edge: a circle or an arc
+shows its center when you point at it, and a click there picks the
+center, also of an arc whose center lies in the open, such as a curved
+slot's. So the distance from a slot's center to a hole is a dimension
+between that center and the hole.
+
+**Placing a dimension.** After one circle, arc or straight edge, the
+dimension follows the pointer at once; a click on another edge, circle
+or corner instead makes it a dimension between the two, and a click
+elsewhere places it (hold **Alt** to place it anywhere). Between two
+picks, place the dimension above or below them for the horizontal
+distance, beside them for the vertical one, and between them, or
+diagonally beyond them, for the distance straight from one to the
+other (from an edge: square to it). Clicking the same edge or circle
+twice counts once: it never makes a dimension of 0. The annotation keeps
 what it picked, not a place on the paper: when you change the design, the
 dimension changes with it. A tool stays on for the next annotation; Esc
 drops the picks so far, then ends the tool.
@@ -10953,8 +11298,10 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   "Body1", "volume": 48000}}`. A failed expectation gives exit code 1.
   Examples: [tools/cli/tests](../tools/cli/tests). Commands:
   [commands.md](../core/model-api/src/commands.md).
-- `import part.step [--unit-mm N] [--save result.mitcad]`: imports
-  STEP, IGES, BRep, STL or OBJ as a base feature.
+- `import part.step [--unit-mm N] [--structure components|base] [--save result.mitcad]`:
+  imports STEP, IGES, BRep, STL or OBJ as a base feature, a STEP
+  assembly as components unless `--structure base` ([STEP
+  assemblies](#step-assemblies)).
 - `import-f3d part.f3d --save part.mitcad [--report report.json]`:
   imports an `.f3d` design with its history. Its options:
   - `--design` selects a document of an `.f3z`

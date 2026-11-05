@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QPushButton>
 #include <QSlider>
 #include <QWheelEvent>
@@ -241,6 +242,155 @@ void TestDriver::testNavigationRuntime() {
     }
     qInfo() << "Navigation runtime: actual pan, orbit, wheel zoom and trackpad camera motion follows speed";
     qInfo() << "Navigation runtime: drag zoom and a custom binding change the actual camera";
+  });
+}
+
+// These are application-event regressions, not physical-trackpad acceptance.
+void TestDriver::testNavigationRelease() {
+  auto* window = qobject_cast<MainWindow*>(m_main.data());
+  if (!window || window->modelBusy()) {
+    fail(m_line, QStringLiteral("navigation release requires an idle document"));
+    return;
+  }
+  struct State {
+    QPointer<OcctViewer> view;
+    NavigationSettings original;
+    CameraState camera;
+    CameraState before;
+    QPointF at;
+  };
+  auto state = std::make_shared<State>();
+  state->view = &window->viewer();
+  state->view->settleCamera();
+  state->original = state->view->navigation();
+  state->camera = state->view->camera();
+  const auto mouse = [state](QEvent::Type type, QPointF offset, Qt::MouseButtons buttons,
+                             Qt::KeyboardModifiers modifiers) {
+    const QPointF point = state->at + offset;
+    QMouseEvent event(type, point, QPointF(state->view->mapToGlobal(point.toPoint())),
+                      type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, modifiers);
+    QCoreApplication::sendEvent(state->view, &event);
+  };
+  const auto key = [state](QEvent::Type type, int code, Qt::KeyboardModifiers modifiers) {
+    QKeyEvent event(type, code, modifiers);
+    QCoreApplication::sendEvent(state->view, &event);
+  };
+  const auto sameCamera = [](const CameraState& a, const CameraState& b) {
+    return a.eye.Distance(b.eye) < 1e-6 && a.target.Distance(b.target) < 1e-6 &&
+           a.up.Angle(b.up) < 1e-9 && std::abs(a.height - b.height) < 1e-6;
+  };
+  for (const auto scheme : {NavigationScheme::Trackpad, NavigationScheme::TrackpadShift,
+                            NavigationScheme::Custom}) {
+    for (bool keyFirst : {false, true}) {
+      queue([state, scheme] {
+        auto settings = state->original;
+        settings.scheme = scheme;
+        if (scheme == NavigationScheme::Custom) settings.customBindings = navigationBindings(NavigationScheme::Trackpad);
+        settings.animate = false;
+        state->view->setNavigation(settings);
+        state->view->setCamera(state->camera);
+        state->view->settleCamera();
+        state->at = QPointF(state->view->width() * 0.48, state->view->height() * 0.50);
+        state->before = state->view->camera();
+      });
+      queue([mouse] { mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, Qt::AltModifier); });
+      queue([mouse] { mouse(QEvent::MouseMove, {24, 12}, Qt::LeftButton, Qt::AltModifier); });
+      queue([key, mouse, keyFirst] {
+        if (keyFirst) key(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+        mouse(QEvent::MouseButtonRelease, {24, 12}, Qt::NoButton, keyFirst ? Qt::NoModifier : Qt::AltModifier);
+        if (!keyFirst) key(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+      });
+      queue([] {});
+      queue([this, state, sameCamera] {
+        state->view->settleCamera();
+        if (sameCamera(state->before, state->view->camera())) {
+          fail(m_line, QStringLiteral("intentional Alt orbit did not move the camera"));
+          return;
+        }
+        state->before = state->view->camera();
+      });
+      queue([key, mouse, keyFirst] {
+        key(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier); // Cmd in Qt on macOS
+        mouse(QEvent::MouseButtonPress, {24, 12}, Qt::LeftButton, Qt::ControlModifier);
+        if (keyFirst) key(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+        mouse(QEvent::MouseButtonRelease, {24, 12}, Qt::NoButton,
+              keyFirst ? Qt::NoModifier : Qt::ControlModifier);
+        if (!keyFirst) key(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+      });
+      queue([mouse] { mouse(QEvent::MouseMove, {60, 30}, Qt::NoButton, Qt::NoModifier); });
+      queue([] {});
+      queue([this, state, sameCamera] {
+        state->view->settleCamera();
+        if (state->view->PressedMouseButtons() != Aspect_VKeyMouse_NONE ||
+            !sameCamera(state->before, state->view->camera())) {
+          fail(m_line, QStringLiteral("Cmd click or button-free hover continued an earlier orbit"));
+        }
+      });
+      // A phase-only end carries no displacement. It must still release
+      // the synthetic left button before any subsequent selection click.
+      queue([this, state, scheme] {
+        const auto scroll = [state, scheme](Qt::ScrollPhase phase, QPoint delta) {
+          QWheelEvent event(state->at, QPointF(state->view->mapToGlobal(state->at.toPoint())),
+                            delta, {}, Qt::NoButton, scheme == NavigationScheme::TrackpadShift ? Qt::ShiftModifier : Qt::AltModifier,
+                            phase, false);
+          QCoreApplication::sendEvent(state->view, &event);
+        };
+        scroll(Qt::ScrollBegin, {});
+        scroll(Qt::ScrollUpdate, {18, 9});
+        if (state->view->PressedMouseButtons() != Aspect_VKeyMouse_LeftButton) {
+          fail(m_line, QStringLiteral("pixel-scroll regression did not start a synthetic drag"));
+          return;
+        }
+        scroll(Qt::ScrollEnd, {});
+        if (state->view->PressedMouseButtons() != Aspect_VKeyMouse_NONE) {
+          fail(m_line, QStringLiteral("zero-delta ScrollEnd left the synthetic trackpad button held"));
+        }
+      });
+    }
+    queue([this, state, scheme] {
+      auto settings = state->original;
+      settings.scheme = scheme;
+      if (scheme == NavigationScheme::Custom) settings.customBindings = navigationBindings(NavigationScheme::Trackpad);
+      settings.animate = false;
+      state->view->setNavigation(settings);
+      state->view->setCamera(state->camera);
+      state->view->settleCamera();
+      const auto scroll = [state](Qt::ScrollPhase phase, QPoint delta, Qt::KeyboardModifiers modifiers) {
+        QWheelEvent event(state->at, QPointF(state->view->mapToGlobal(state->at.toPoint())),
+                          delta, {}, Qt::NoButton, modifiers, phase, false);
+        QCoreApplication::sendEvent(state->view, &event);
+      };
+      const auto orbitKey = scheme == NavigationScheme::TrackpadShift ? Qt::ShiftModifier : Qt::AltModifier;
+      scroll(Qt::ScrollBegin, {}, orbitKey);
+      scroll(Qt::ScrollUpdate, {18, 9}, orbitKey);
+      // Consume real viewport input while keeping this event sequence in
+      // one turn: software-rendered frames can outlast the 150 ms quiet
+      // fallback, which is not an intentional pause in this gesture.
+      state->view->repaint();
+      for (const auto keys : {Qt::NoModifier, Qt::ControlModifier}) {
+        const CameraState before = state->view->camera();
+        scroll(Qt::ScrollMomentum, {18, 9}, keys);
+        state->view->repaint();
+        const CameraState after = state->view->camera();
+        const double angle = gp_Vec(before.eye, before.target).Angle(gp_Vec(after.eye, after.target));
+        if (angle < 1e-8 || std::abs(before.height - after.height) > 1e-6 ||
+            state->view->PressedMouseButtons() != Aspect_VKeyMouse_LeftButton) {
+          fail(m_line, QStringLiteral("trackpad momentum changed the original orbit after its modifier changed"));
+          return;
+        }
+      }
+      scroll(Qt::ScrollEnd, {}, Qt::NoModifier);
+      if (state->view->PressedMouseButtons() != Aspect_VKeyMouse_NONE) {
+        fail(m_line, QStringLiteral("phase-only end left the momentum orbit button held"));
+      }
+    });
+  }
+  queue([state] {
+    state->view->setNavigation(state->original);
+    state->view->setCamera(state->camera);
+    state->view->settleCamera();
+    qInfo() << "Navigation release: both modifier/button orders, Cmd after orbit, hover and phase-only scroll end passed";
+    qInfo() << "Navigation momentum: orbit retained with no modifier and Cmd, phase-only end released the button";
   });
 }
 

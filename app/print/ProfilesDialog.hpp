@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
 #include <utility>
 
 #include <QDialog>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -15,6 +17,7 @@
 #include "PrintKeys.hpp"
 #include "PrintLibrary.hpp"
 
+class QCheckBox;
 class QHBoxLayout;
 class QLabel;
 class QLineEdit;
@@ -63,6 +66,17 @@ class SlicerImportBar;
 // Delete (always asked, naming what uses it and the outcome); Use in this
 // design for an item the design does not use.
 //
+// Hidden built-ins (mitcad#1270): a base library item has Hide beside
+// Delete and in its row's context menu (Duplicate, Hide; the user's own
+// Duplicate, Delete); a hidden one is listed only with Show hidden (the
+// box under the list, shown while one is hidden), grayed, with Unhide.
+// While My library or This project has one of the kind, the Built-in
+// group is folded at each opening (unless its item is the one shown); a
+// search shows every group's matches. Logged "Printers hidden: <name>",
+// "Printers unhidden: <name>", "Printers show hidden: on", "Printers
+// grayed: <names>", "Printers folded: Built-in" ("none"), and rows of
+// hidden items end ", hidden".
+//
 // Without a design (ManagerHosts) the panel works through a model of its
 // own: This design is no group and no place to ask for.
 class ProfilesPanel : public QWidget {
@@ -83,6 +97,14 @@ public:
   // library item the design has a copy of stands for that copy, what the
   // design prints with (the pickers' keys).
   void showItem(const QString& key);
+  // The group of `place` ("user": My library; mitcad#1250) at the top of
+  // the list, its first item selected (none when it has none), logged as
+  // "Printers on My library: <name>" ("nothing selected").
+  void showPlace(const QString& place);
+  // The place New and Duplicate offer first while it is one of places()
+  // (mitcad#1250: My library from Tools › Libraries); empty: This design
+  // with a design open, else My library.
+  void setHomePlace(const QString& place) { m_homePlace = place; }
   // Shows the items and the selected one as the model has them now.
   void refresh();
   // A button of the window at the end of the row under the list (Close),
@@ -118,6 +140,13 @@ private:
   // Use in this design: the selected one the design's printer or process.
   void useInDesign();
   void remove();
+  // Hide or Unhide of the selected base item (mitcad#1270).
+  void toggleHidden();
+  // A row's context menu (itemContextMenu): Duplicate, Hide or Delete.
+  void itemMenu(const QPoint& at);
+  // Whether the list shows `item` now: the search, and a hidden one only
+  // with Show hidden.
+  bool listed(const LibraryItem& item) const;
   // Asks once about the selected copy when another design changed its
   // library item.
   void askChanges();
@@ -131,6 +160,7 @@ private:
   PrintItemsHost* m_host = nullptr;
   QString m_kind; // printer or process
   QString m_log;  // "Printers"
+  QString m_homePlace; // setHomePlace's
   PrintKeyTable m_keys;
   QString m_dialect; // the design's slicer (designDialectOf)
   QVector<LibraryItem> m_items; // by place
@@ -158,6 +188,10 @@ private:
   QPushButton* m_duplicate = nullptr;
   QPushButton* m_use = nullptr;
   QPushButton* m_delete = nullptr;
+  QPushButton* m_hide = nullptr;      // Hide or Unhide of a base item (mitcad#1270)
+  QCheckBox* m_showHidden = nullptr;  // Show hidden, under the list
+  QSet<QString> m_folded;             // the places whose groups are folded
+  bool m_startFold = false;           // an opening: Built-in folded when the user has their own
   QVector<std::pair<QString, QPushButton*>> m_windowButtons; // addButton's
   QString m_loggedRows;
   QString m_loggedValues;
@@ -187,6 +221,11 @@ public:
   // `key` selected (ProfilesPanel::showItem).
   using QDialog::open;
   void open(const QString& key);
+  // An opening on the group of `place` (mitcad#1250: "user", My library,
+  // from Tools › Libraries › Printer and Process Library…):
+  // ProfilesPanel::showPlace, and `place` the one New, Duplicate and Import
+  // offer first until it is opened otherwise.
+  void openPlace(const QString& place);
   void refresh();
   // Whether it works on the open design.
   bool onDesign() const { return m_hosts.onDesign(); }
@@ -200,8 +239,16 @@ protected:
   void hideEvent(QHideEvent* event) override;
 
 private:
+  // An opening that shows the panel with `show` once the model's items
+  // can be read (at once with a design, else after readAhead).
+  void openWith(const std::function<void()>& show);
+  // The place the import offers first: the home place while writable,
+  // else This design with a design open, else My library.
+  QString homePlace() const;
+
   ManagerHosts m_hosts;
   QString m_kind;
+  QString m_homePlace; // openPlace's
   QString m_log;
   SlicerImportBar* m_import = nullptr;
   ProfilesPanel* m_panel = nullptr;

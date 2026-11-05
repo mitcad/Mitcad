@@ -13,3 +13,5 @@ mod model_follow_tests;
 mod pick_tests;
 // Dimension spacing (mitcad#1173).
 mod spacing_tests;
+// Dimensions whose picks choose their type (mitcad#1272).
+mod chosen_dimension_tests;

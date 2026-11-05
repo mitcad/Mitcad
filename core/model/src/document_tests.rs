@@ -1135,3 +1135,42 @@ fn split_named_keeps_comparisons_in_the_expression() {
     );
     assert_eq!(crate::document::split_named("if(a = 1; 2; 3)"), None);
 }
+
+#[test]
+fn a_profile_deleted_from_its_sketch_is_told_and_replaced() {
+    // mitcad#1264: a circle extruded, another drawn and the first deleted
+    // (in this order: deleted first, the new circle would take its free
+    // number and so its profile); the extrusion's old profile is missing, and
+    // an edit to the new one is not refused beside it.
+    let mut doc = Document::new(MockKernel::default());
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let old = doc
+        .add_circle(sketch, [0.0, 0.0], &num(10.0))
+        .unwrap()
+        .region;
+    let uid = doc
+        .add_feature(&extrude(sketch, &[&old], 5.0, "new_body", &[]), None)
+        .unwrap()
+        .uid;
+    assert!(doc.missing_profiles(uid).is_empty());
+    let new = doc
+        .add_circle(sketch, [20.0, 0.0], &num(8.0))
+        .unwrap()
+        .region;
+    let first: EntityUid = old.segments().find_map(|s| s.curve.entity()).unwrap();
+    doc.edit_sketch(sketch, "Delete", |edit| {
+        edit.remove(&[format!("c{}", first.0).parse().unwrap()])
+    })
+    .unwrap();
+    assert!(matches!(doc.status(uid), Some(FeatureStatus::Failed(_))));
+    let missing = doc.missing_profiles(uid);
+    assert_eq!(missing.len(), 1);
+    assert_eq!((missing[0].sketch, &missing[0].region), (sketch, &old));
+    // Beside the missing one the new pick is refused; alone it builds.
+    let both = extrude(sketch, &[&old, &new], 5.0, "new_body", &[]);
+    assert!(doc.edit_feature(uid, &both).is_err());
+    doc.edit_feature(uid, &extrude(sketch, &[&new], 5.0, "new_body", &[]))
+        .unwrap();
+    assert!(doc.missing_profiles(uid).is_empty());
+    assert_eq!(doc.bodies().len(), 1);
+}

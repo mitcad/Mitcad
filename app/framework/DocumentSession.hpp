@@ -2,6 +2,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -176,6 +177,17 @@ public:
   void setMode(Mode mode);
   // Publish mutations made by the compatibility host after a workflow.
   void notifyChanged();
+  // The rolled-back features evaluated in the background (mitcad#1267,
+  // docs/architecture.md "Background evaluation"): at the idle point after
+  // a job, with no command or sketch open and the marker before the end of
+  // the timeline, a fork of the document evaluates the features after the
+  // marker on a thread of its own at a low priority, and the document
+  // adopts its results when it ends. A job stops it first (cancelled and
+  // waited for, what it evaluated by then adopted); a command or a sketch
+  // that opens cancels it at once through this, `reason` naming it in the
+  // log line ("Background evaluation cancelled by <reason> after ...").
+  void cancelBackgroundEvaluation(const QString& reason);
+  bool backgroundEvaluationRunning() const { return m_background != nullptr; }
 
 signals:
   void changed();
@@ -191,6 +203,9 @@ private:
   // The UI driver can hold an asynchronous preview before model work starts,
   // so input races depend on the worker's state rather than the host's speed.
   std::shared_ptr<std::atomic<bool>> m_testHoldPreview = std::make_shared<std::atomic<bool>>(false);
+  // Keep a synchronous feature edit alive until the driver presses its
+  // actual progress Cancel, independently of window-server/paint speed.
+  std::shared_ptr<std::atomic<bool>> m_testHoldEdit = std::make_shared<std::atomic<bool>>(false);
   struct IdleCall {
     QPointer<QObject> context;
     std::function<void()> call;
@@ -206,6 +221,15 @@ private:
   void scheduleIdleCalls();
   void finishJob(const QString& label, bool cancelled, const QString& error);
   void waitWithoutPresentation(ModelJob& job);
+  // The background evaluation (mitcad#1267): started at an idle point,
+  // stopped (cancelled and waited for) before a job, ended on the
+  // session's thread, where the document adopts what it evaluated when
+  // `adopt` and no job runs.
+  struct BackgroundEvaluation;
+  void scheduleBackgroundEvaluation();
+  void startBackgroundEvaluation();
+  void stopBackgroundEvaluation(const QString& reason, bool adopt);
+  void finishBackgroundEvaluation(bool adopt);
 
   State m_state;
   std::unique_ptr<ModelWorker> m_worker;
@@ -221,6 +245,17 @@ private:
   bool m_cacheBudgetPending = false;
   QTimer m_progressTimer;
   QJsonObject m_documentInfo;
+  // The background evaluation's thread and its run (mitcad#1267); whether
+  // an idle call to start one is queued; whether the last job was asked to
+  // stop (its meshing may have left bodies the view meshes itself, so no
+  // run starts after it); the document and revision of the last run that
+  // went to the end (no new run for the same state).
+  std::unique_ptr<ModelWorker> m_backgroundWorker;
+  std::unique_ptr<BackgroundEvaluation> m_background;
+  bool m_backgroundPending = false;
+  bool m_lastJobCancelRequested = false;
+  const Document* m_backgroundDoneDocument = nullptr;
+  std::uint64_t m_backgroundDoneRevision = 0;
 };
 
 } // namespace mitcad

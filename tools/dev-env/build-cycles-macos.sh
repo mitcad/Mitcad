@@ -201,17 +201,63 @@ fi
 # in macOS 13. The existing Read usage covers sampling at our 14.4 minimum.
 # The diagnostics accessor lets the worker report the actual selected denoiser.
 # Failed/cancelled Metal pipelines must stop waiting and report a device error.
-# Check both directions so rerunning is safe, without trusting a stale marker.
-for cycles_patch in "$CYCLES_PATCH" "$CYCLES_DIAGNOSTICS_PATCH" "$CYCLES_PIPELINE_PATCH" \
-                    "$CYCLES_CANCELLATION_PATCH" "$CYCLES_PREVIEW_BATCH_PATCH" "$CYCLES_EXTERNAL_BUFFER_PATCH" \
-                    "$CYCLES_NATIVE_DISPLAY_PATCH"; do
-  if git -C "$CYCLES_SRC" apply --check "$cycles_patch" >/dev/null 2>&1; then
-    git -C "$CYCLES_SRC" apply "$cycles_patch"
-  elif ! git -C "$CYCLES_SRC" apply --reverse --check "$cycles_patch" >/dev/null 2>&1; then
-    echo "Cycles patch $(basename "$cycles_patch") does not match the pinned source." >&2
+# Later patches can change an earlier patch's context, so an individual
+# reverse check cannot recognize a valid complete stack. Build the expected
+# source from the pinned revision, then compare actual bytes and modes.
+cycles_patches=("$CYCLES_PATCH" "$CYCLES_DIAGNOSTICS_PATCH" "$CYCLES_PIPELINE_PATCH"
+                "$CYCLES_CANCELLATION_PATCH" "$CYCLES_PREVIEW_BATCH_PATCH"
+                "$CYCLES_EXTERNAL_BUFFER_PATCH" "$CYCLES_NATIVE_DISPLAY_PATCH")
+cycles_expected=$(mktemp -d "$SRC/cycles-patch-check.XXXXXX")
+if ! git -c advice.detachedHead=false clone --quiet --no-hardlinks "$CYCLES_SRC" "$cycles_expected"; then
+  rm -rf "${cycles_expected:?}"
+  exit 1
+fi
+for cycles_patch in "${cycles_patches[@]}"; do
+  if ! git -C "$cycles_expected" apply --check "$cycles_patch" ||
+     ! git -C "$cycles_expected" apply "$cycles_patch"; then
+    rm -rf "${cycles_expected:?}"
     exit 1
   fi
 done
+if python3 - "$CYCLES_SRC" "$cycles_expected" <<'PY'
+import filecmp, os, pathlib, stat, subprocess, sys
+source, expected = map(pathlib.Path, sys.argv[1:])
+for directory, dirs, files in os.walk(expected):
+    dirs[:] = [name for name in dirs if name != ".git"]
+    for name in dirs + files:
+        target = pathlib.Path(directory, name)
+        actual = source / target.relative_to(expected)
+        if target.is_symlink():
+            if not actual.is_symlink() or os.readlink(actual) != os.readlink(target):
+                sys.exit(1)
+        elif target.is_file():
+            if (not actual.is_file() or actual.is_symlink()
+                    or not filecmp.cmp(actual, target, shallow=False)
+                    or bool(actual.stat().st_mode & stat.S_IXUSR) != bool(target.stat().st_mode & stat.S_IXUSR)):
+                sys.exit(1)
+# A file removed by the stack must also be absent from the working source.
+tracked = subprocess.check_output(["git", "-C", str(source), "ls-files", "-z"]).decode().split("\0")
+for name in filter(None, tracked):
+    target, actual = expected / name, source / name
+    if not (target.exists() or target.is_symlink()) and (actual.exists() or actual.is_symlink()):
+        sys.exit(1)
+PY
+then
+  echo "   complete patch stack verified"
+elif git -C "$CYCLES_SRC" diff --quiet HEAD --; then
+  for cycles_patch in "${cycles_patches[@]}"; do
+    if ! git -C "$CYCLES_SRC" apply --check "$cycles_patch" ||
+       ! git -C "$CYCLES_SRC" apply "$cycles_patch"; then
+      rm -rf "${cycles_expected:?}"
+      exit 1
+    fi
+  done
+else
+  echo "Cycles source does not match the pinned revision with the current patch stack; use a fresh prefix." >&2
+  rm -rf "${cycles_expected:?}"
+  exit 1
+fi
+rm -rf "${cycles_expected:?}"
 CYCLES_DONE=$INSTALL/cycles/.done-$CYCLES_VERSION-arm64-macos14.4-cpu-metal-$RENDER_BUILD_KEY
 if [ ! -f "$CYCLES_DONE" ]; then
   # vcpkg nests this header under include/sse2neon; Cycles' find module

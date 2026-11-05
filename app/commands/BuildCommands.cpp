@@ -5796,7 +5796,7 @@ CommandDef connectorCommand(const SharedPtr& shared, DocumentHost& host, const C
           .withTooltip(QObject::tr("The connector chosen; a click (or Enter) opens the component picker")),
       // A timber junction (mitcad#478): a wood fastener's count and size, a
       // joint's depth; the nuts and the end machining are the slots'.
-      valueInput(QStringLiteral("count"), QObject::tr("Count"), ValueKind::Unitless, QStringLiteral("2"))
+      valueInput(QStringLiteral("count"), QObject::tr("Count"), ValueKind::Unitless, QStringLiteral("2")).withStepMinimum(1)
           .withVisible([shared](const CommandState& state) { return woodFastenerChosen(*shared, state); })
           .withTooltip(QObject::tr("How many screws or nails, in a row along the contact")),
       choiceInput(QStringLiteral("size"), QObject::tr("Size"), {{kAuto, QStringLiteral("Auto: from the members")}}, kAuto)

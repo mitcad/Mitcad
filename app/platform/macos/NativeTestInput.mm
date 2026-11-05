@@ -30,6 +30,8 @@
 #include <QTimer>
 #include <QRegularExpression>
 #include <QImage>
+#include <QIcon>
+#include <QPixmap>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QItemSelectionModel>
@@ -2243,10 +2245,17 @@ bool widgetRefreshContract(QString& error) {
   named(combo, QStringLiteral("refresh.combo"));
   named(table, QStringLiteral("refresh.table"));
   named(tree, QStringLiteral("refresh.tree"));
-  const auto tool = [&named](const QString& name, Qt::ToolButtonStyle style) {
+  const auto denseIcon = [](const QColor& color) {
+    QPixmap pixels(48, 48);
+    pixels.setDevicePixelRatio(2.0);
+    pixels.fill(color);
+    return QIcon(pixels);
+  };
+  const auto tool = [&named, &denseIcon](const QString& name, Qt::ToolButtonStyle style) {
     auto* result = new QToolButton;
     result->setText(QStringLiteral("Refresh action"));
-    result->setIcon(swatchIcon(Qt::red));
+    result->setIcon(denseIcon(Qt::red));
+    result->setIconSize(QSize(24, 24));
     result->setToolButtonStyle(style);
     named(result, name);
     return result;
@@ -2283,6 +2292,12 @@ bool widgetRefreshContract(QString& error) {
         return fail(QStringLiteral("native tool button '%1' lost its caption/icon mode after an image update")
                         .arg(source->objectName()));
       }
+      const int points = position == NSImageAbove ? 24 : 18;
+      if (std::abs(native.image.size.width - points) > 0.01 ||
+          std::abs(native.image.size.height - points) > 0.01) {
+        return fail(QStringLiteral("native tool button '%1' has image %2x%3 instead of %4 points")
+                        .arg(source->objectName()).arg(native.image.size.width).arg(native.image.size.height).arg(points));
+      }
     }
     return true;
   };
@@ -2291,7 +2306,7 @@ bool widgetRefreshContract(QString& error) {
   // image position even when the source presentation cache already matches.
   for (const auto& [source, position] : toolModes) {
     (void)position;
-    source->setIcon(swatchIcon(Qt::blue));
+    source->setIcon(denseIcon(Qt::blue));
   }
   view->refresh();
   if (!toolPresentation() || !unchanged()) { return false; }
@@ -3574,10 +3589,11 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
         glyphs.width <= NSWidth(titleFrame) + 0.5 && glyphs.height <= NSHeight(titleFrame) + 0.5 &&
         NSContainsRect(NSInsetRect(button.visibleRect, -0.5, -0.5), titleFrame);
     detail = QStringLiteral("button '%1': image position %2, image %3, displayed caption %4, "
-                            "title area %5, glyphs %6x%7, visible %8, fits %9")
+                            "title area %5, glyphs %6x%7, visible %8, fits %9, bounds %10, visible rect %11")
         .arg(qt(button.title)).arg(button.imagePosition).arg(button.image != nil).arg(displayed)
         .arg(qt(NSStringFromRect(titleFrame))).arg(glyphs.width).arg(glyphs.height)
-        .arg(viewVisible(button)).arg(fits);
+        .arg(viewVisible(button)).arg(fits)
+        .arg(qt(NSStringFromRect(button.bounds)), qt(NSStringFromRect(button.visibleRect)));
     return displayed && viewVisible(button) && fits;
   }
   if (states == QStringList{QStringLiteral("image")}) {

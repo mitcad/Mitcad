@@ -48,12 +48,12 @@ CommandDef mortiseTenonCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("mortise_body"), QObject::tr("Mortise Body"), SelectKind::Body, 1, 1)
           .withTooltip(QObject::tr("The body the mortise is cut into"))
           .withoutMeshes(),
-      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("20 mm"))
+      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("20 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("Along the end face's longest edge")),
-      valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("6 mm")),
+      valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("6 mm")).withStepMinimum(0.0, true),
       checkInput(QStringLiteral("through"), QObject::tr("Through"), false)
           .withTooltip(QObject::tr("The tenon reaches the mortise body's far face")),
-      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("20 mm"))
+      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("20 mm")).withStepMinimum(0.0, true)
           .withVisible(blind),
       valueInput(QStringLiteral("offset_width"), QObject::tr("Offset Along Width"), ValueKind::Length,
                  QStringLiteral("0 mm"))
@@ -62,22 +62,22 @@ CommandDef mortiseTenonCommand(const CommandContext& context) {
       valueInput(QStringLiteral("offset_thickness"), QObject::tr("Offset Along Thickness"), ValueKind::Length,
                  QStringLiteral("0 mm"))
           .withVisible(alongThicknessShown),
-      valueInput(QStringLiteral("count"), QObject::tr("Count"), ValueKind::Unitless, QStringLiteral("1"))
+      valueInput(QStringLiteral("count"), QObject::tr("Count"), ValueKind::Unitless, QStringLiteral("1")).withStepMinimum(1)
           .withTooltip(QObject::tr("How many tenons along the end face's longest edge, each with its mortise")),
       valueInput(QStringLiteral("start_offset"), QObject::tr("Start Offset"), ValueKind::Length,
-                 QStringLiteral("10 mm"))
+                 QStringLiteral("10 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("From the end face's start to the first tenon"))
           .withVisible(several),
-      valueInput(QStringLiteral("end_offset"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("10 mm"))
+      valueInput(QStringLiteral("end_offset"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("From the last tenon to the end face's other end"))
           .withVisible(several),
       checkInput(QStringLiteral("turned"), QObject::tr("Turned"), false)
           .withTooltip(QObject::tr("The width across the end face's longest edge")),
-      valueInput(QStringLiteral("clearance"), QObject::tr("Clearance"), ValueKind::Length, QStringLiteral("0.1 mm"))
+      valueInput(QStringLiteral("clearance"), QObject::tr("Clearance"), ValueKind::Length, QStringLiteral("0.1 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("How much larger the mortise is on each side")),
       choiceInput(QStringLiteral("corners"), QObject::tr("Corners"), kCorners, QStringLiteral("square")),
       valueInput(QStringLiteral("tool_diameter"), QObject::tr("Tool Diameter"), ValueKind::Length,
-                 QStringLiteral("6 mm"))
+                 QStringLiteral("6 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The cutter that rounds the mortise's corners"))
           .withVisible(rounded),
   };

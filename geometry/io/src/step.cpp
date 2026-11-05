@@ -133,8 +133,11 @@ void write_step(const std::string& path, const std::vector<Body>& bodies,
   }
 }
 
-std::vector<Body> read_step(const std::string& path) {
-  const auto lock = detail::exchange_lock();
+namespace {
+
+// A STEP file read into a new document (the caller holds the exchange
+// lock).
+occ::handle<TDocStd_Document> read_step_document(const std::string& path) {
   const occ::handle<TDocStd_Document> document = detail::new_document();
 
   DESTEP_Parameters parameters;
@@ -171,11 +174,35 @@ std::vector<Body> read_step(const std::string& path) {
   if (!done) {
     throw Error("cannot read STEP file " + path);
   }
-  std::vector<Body> bodies = detail::document_bodies(document);
+  return document;
+}
+
+} // namespace
+
+std::vector<Body> read_step(const std::string& path) {
+  const auto lock = detail::exchange_lock();
+  std::vector<Body> bodies = detail::document_bodies(read_step_document(path));
   if (bodies.empty()) {
     throw Error("STEP file " + path + " has no shapes");
   }
   return bodies;
+}
+
+StepRead read_step_structured(const std::string& path, bool keep_assembly) {
+  const auto lock = detail::exchange_lock();
+  const occ::handle<TDocStd_Document> document = read_step_document(path);
+  StepRead read;
+  if (keep_assembly) {
+    read.assembly = detail::document_assembly(document);
+    if (read.assembly) {
+      return read;
+    }
+  }
+  read.bodies = detail::document_bodies(document);
+  if (read.bodies.empty()) {
+    throw Error("STEP file " + path + " has no shapes");
+  }
+  return read;
 }
 
 } // namespace mitcad::io

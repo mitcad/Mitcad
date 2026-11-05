@@ -86,7 +86,7 @@ Three fields tell who sells the component:
 A configuration row can have its own `part_number` and `supplier_url`.
 The row's values come first. For example, a sheet sold in widths has a
 number and a page for each width. MitCad shows these fields where you
-select and list the component: Insert from Library, Library Components, the parts
+select and list the component: Insert from Library, Components in This Design, the parts
 list and the Build tab's cut list. `build` makes the component a part of
 the Build tab ([Build components](#build-components)).
 
@@ -159,7 +159,7 @@ without `standards` takes the component's `standard`, as before. The
 part records the standard it is named by and its row's articles
 (commands.md, [Standards and suppliers of library rows](../core/model-api/src/commands.md#standards-and-suppliers-of-library-rows)).
 
-**Filters.** Insert from Library, Library Components, Edit Options and the
+**Filters.** Insert from Library, Components in This Design, Edit Options and the
 Build tab's component picker show a Standard and a Supplier filter above the
 size choosers when the rows name standards or articles. They narrow the
 sizes to the rows that match. The part grid's Supplier filter hides the
@@ -863,7 +863,7 @@ branch's tip as "latest, unreleased".
 
 A design records, for each component, the commit of the version that you
 selected. When you open the design, MitCad reads that commit, also after
-the library has moved on. Only Library Components › Update changes it. Keep
+the library has moved on. Only Components in This Design › Update changes it. Keep
 old tags. Designs refer to their commits.
 
 ## A community index
@@ -918,7 +918,7 @@ is not legal advice.
 | CERN-OHL-P-2.0, -W-2.0, -S-2.0 | Permissive, weakly and strongly reciprocal hardware licences |
 
 MitCad records the licence, the library, its URL and the version with
-each component in the design, also for a copied component. Library Components › Components
+each component in the design, also for a copied component. Components in This Design › Components
 List shows them.
 
 ## Making and publishing a library
@@ -1098,7 +1098,7 @@ Designs made with `mitcad-fasteners` continue to work. MitCad reads a
 component at the commit that its design recorded. It reads it from any clone
 that has that commit, with the recorded id in its manifest there. Thus
 a clone of the components repository reads them under their old id and
-address. Library Components › Update moves such a component to the components
+address. Components in This Design › Update moves such a component to the components
 library's versions.
 
 Three generators make the library with `mitcad-cli`:
@@ -1650,7 +1650,7 @@ of its output. The run fails only on a broken group file:
 - An id used twice
 - A frame without a name, kind or numbers
 
-MitCad lists the library among its default libraries (Libraries…), as
+MitCad lists the library among its default libraries (Library Sources…), as
 MitCad's one library of components. MitCad fetches it when you ask.
 
 **Tests:**
@@ -1833,7 +1833,7 @@ Libraries). These commands ask for it:
 
 - Libraries › Fetch
 - Update in the library browser
-- Library Components › Check for Newer Versions
+- Components in This Design › Check for Newer Versions
 - Get Library
 
 A source with Auto-update is fetched in the background when MitCad
@@ -1892,5 +1892,5 @@ the clone has the versions it had before, and the next fetch (also an
 Auto-update at start-up) tries again.
 
 A design whose library is not on the computer keeps the bodies saved
-with it, and says so. Library Components › Get Missing Libraries shows their
+with it, and says so. Components in This Design › Get Missing Libraries shows their
 addresses and then fetches them.

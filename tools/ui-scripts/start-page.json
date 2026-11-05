@@ -1,0 +1,10 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The Start tab's recent designs (mitcad#1258), tools/ui-start-page-test.sh and tools/ui-windows-start-page-test.ps1: a 40 x 30 x 20 mm block (sketch F1, its body F2.b0), saved three times as start-a, start-b and start-c."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[-20,-15],"width":40,"height":30},
+  {"cmd":"add_feature","def":{"type":"extrude",
+    "profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}}
+]

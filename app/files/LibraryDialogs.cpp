@@ -141,7 +141,7 @@ bool fetchAndReport(QWidget* parent, const QStringList& urls, const std::functio
 // LibrariesDialog
 
 LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
-  setWindowTitle(tr("Libraries"));
+  setWindowTitle(tr("Library Sources")); // as its command (mitcad#1250)
   resize(820, 420);
   auto* layout = new QVBoxLayout(this);
   auto* intro = new QLabel(tr("Component libraries and community indexes are git repositories. The components a design "
@@ -927,7 +927,7 @@ void LibraryBrowser::insert() {
 
 LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray& list, QWidget* parent)
     : QDialog(parent) {
-  setWindowTitle(tr("Library Components"));
+  setWindowTitle(tr("Components in This Design")); // as its command (mitcad#1250)
   resize(900, 560);
   auto* layout = new QVBoxLayout(this);
   auto* tabs = new QTabWidget;

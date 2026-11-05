@@ -2,7 +2,8 @@
 // Live MCP operates on the window's document, through its ordinary command
 // workflow. It never owns another model or accesses the worker's document.
 // The application's own state and actions (ui_state, ui_select, ui_command,
-// ...) are in MainWindowMcpUi.cpp (mitcad#265).
+// ...) are in MainWindowMcpUi.cpp (mitcad#265). document_new is the one
+// tool that makes another window's document (mitcad#1266).
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
 #include "framework/CommandRegistry.hpp"
@@ -13,6 +14,8 @@
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -20,13 +23,17 @@
 #include <QJsonValue>
 #include <QLabel>
 #include <QList>
+#include <QPointer>
 #include <QScopedValueRollback>
 #include <QString>
 #include <QStringList>
 #include <QThread>
+#include <QTimer>
 
 #include "browser/BrowserController.hpp"
 #include "files/LockController.hpp"
+#include "files/Projects.hpp"
+#include "framework/AppSettings.hpp"
 #include "framework/Json.hpp"
 #include "mcp/AgentFolders.hpp"
 #include "mcp/AgentIndicator.hpp"
@@ -533,6 +540,153 @@ QJsonObject MainWindow::mcpOpen(const QJsonObject& arguments) {
   return result;
 }
 
+QJsonObject MainWindow::mcpNew(const QJsonObject& arguments) {
+  mcpRefuseBusy();
+  // As File > New Design makes it (mitcad#1266), without its naming row or
+  // dialog: in a window of its own beside this one, never in place of a
+  // design, so every open design and its handle stay as they are.
+  if (m_windowManager == nullptr) {
+    refuse(tr("This window cannot open another design beside it."));
+  }
+  if (m_closePending || QApplication::activeModalWidget() != nullptr) {
+    refuse(tr("The design is closing or waiting for a dialog."));
+  }
+#ifdef MITCAD_MACOS_NATIVE_UI
+  if (nativeDialogModalActive()) {
+    refuse(tr("The design is waiting for a native dialog."));
+  }
+#endif
+  // Where: the folder given; else the current project's top folder when the
+  // user allows agents to use it, as New Design's; else, for a name, the
+  // first folder for designs; else an untitled design.
+  const QString name = arguments.value(QStringLiteral("name")).toString().trimmed();
+  QString reason;
+  QString folder;
+  QString note;
+  if (arguments.contains(QStringLiteral("folder"))) {
+    folder = mcp::agentDesignFolder(arguments.value(QStringLiteral("folder")).toString(), reason);
+    if (folder.isEmpty()) {
+      refuse(reason);
+    }
+  } else {
+    if (m_project.hasHistory()) {
+      folder = mcp::agentDesignFolder(m_project.root, reason);
+      if (folder.isEmpty()) {
+        note = tr("The current project's folder is not one an agent may use (%1)").arg(reason);
+      }
+    }
+    if (folder.isEmpty() && !name.isEmpty()) {
+      folder = mcp::agentDesignFolder(mcp::agentFolders().value(0), reason);
+      if (folder.isEmpty()) {
+        refuse(reason);
+      }
+    }
+  }
+  QString file;
+  if (!folder.isEmpty()) {
+    file = mcp::agentNewDesignPath(folder, name, reason);
+    if (file.isEmpty()) {
+      refuse(reason);
+    }
+  } else if (!note.isEmpty()) {
+    note += tr(": the new design is untitled; save it with document_save and a path.");
+  }
+  // In a project with versions it is made and recorded as New Design does
+  // (the project's new_design); elsewhere the empty design is saved there.
+  const ProjectState project = file.isEmpty() ? ProjectState() : projectOfFile(file);
+  QString root = project.hasHistory() ? QFileInfo(project.root).canonicalFilePath() : QString();
+  if (root.isEmpty()) {
+    root = project.root;
+  }
+  const QString relative = project.hasHistory() ? QDir(root).relativeFilePath(file) : QString();
+  if (project.hasHistory() && (relative.isEmpty() || relative.startsWith(QStringLiteral("..")))) {
+    refuse(tr("%1 is not inside its project %2.").arg(QDir::toNativeSeparators(file), QDir::toNativeSeparators(root)));
+  }
+  const QString before = m_mcpDocumentId;
+  const QScopedValueRollback<bool> active(m_mcpRequestActive, true);
+  QPointer<MainWindow> target;
+  QString error;
+  QString dialog;
+  bool made = true;
+  {
+    mcp::ModalGuard guard;
+    if (project.hasHistory()) {
+      QJsonObject refused;
+      const std::optional<QJsonObject> answer =
+          projectWrite(root,
+                       {{QStringLiteral("cmd"), QStringLiteral("new_design")},
+                        {QStringLiteral("path"), relative},
+                        {QStringLiteral("units"), GeneralSettings::load().newDesignUnits}},
+                       tr("New Design"), &refused);
+      refreshProjectsPanel();
+      if (!answer) {
+        made = false;
+        error = errorMessageOf(refused);
+      }
+    }
+    if (made && guard.opened().isEmpty()) {
+      target = m_windowManager->createWindow(false, this, false);
+      if (!file.isEmpty()) {
+        if (project.hasHistory()) {
+          // With its Component1 active, as the file stores it (mitcad#844).
+          target->m_openingNewDesign = true;
+          made = target->openFile(file, error);
+          if (target) {
+            target->m_openingNewDesign = false;
+          }
+        } else {
+          // The window's empty design, in the default units for new designs
+          // (mitcad#1036), saved as the file.
+          made = target->writeFile(file);
+        }
+        made = made && !target.isNull();
+      }
+    }
+    dialog = guard.opened();
+  }
+  if (!made || !dialog.isEmpty()) {
+    if (target) {
+      m_windowManager->windowClosed(target.data());
+    }
+    if (!dialog.isEmpty()) {
+      refuse(tr("Making the design asked a question (%1), which an agent cannot answer: make it in the application "
+                "(File › New Design); ui_log has the details.")
+                 .arg(dialog));
+    }
+    refuse(error.isEmpty() ? tr("%1 was not made.").arg(QDir::toNativeSeparators(file))
+                           : tr("Could not make %1: %2").arg(QDir::toNativeSeparators(file), error));
+  }
+  m_windowManager->present(target.data());
+  // Ready for the agent's first command: the open's computation ends here
+  // (at most a minute; document_list's editable tells the rest).
+  QElapsedTimer clock;
+  clock.start();
+  while (target && target->modelBusy() && clock.elapsed() < 60000) {
+    QEventLoop loop;
+    QTimer::singleShot(10, &loop, &QEventLoop::quit);
+    loop.exec();
+  }
+  if (!target) {
+    refuse(tr("The new design's window closed."));
+  }
+  if (project.hasHistory()) {
+    target->showHint(tr("%1 is a new design of %2: every save records a version.")
+                         .arg(QFileInfo(file).fileName(), QFileInfo(root).fileName()));
+  }
+  qInfo().noquote() << QStringLiteral("MCP: an agent made a new design %1 in %2 (beside %3)")
+                           .arg(file.isEmpty() ? QStringLiteral("(untitled)") : file,
+                                m_windowManager->handle(target.data()), m_windowManager->handle(this));
+  QJsonObject result = target->mcpDocumentInfo();
+  result.insert(QStringLiteral("created"), true);
+  // The design the call came from: still open, its handle still valid.
+  result.insert(QStringLiteral("previous"), before);
+  result.insert(QStringLiteral("recorded"), project.hasHistory());
+  if (!note.isEmpty()) {
+    result.insert(QStringLiteral("note"), note);
+  }
+  return result;
+}
+
 void MainWindow::setMcpAgents(const QList<mcp::ConnectedAgent>& agents,
                               std::function<void(const QStringList& ids)> disconnect) {
   m_mcpDisconnect = std::move(disconnect);
@@ -637,6 +791,10 @@ QJsonObject MainWindow::mcpTool(const QString& name, const QJsonObject& argument
   }
   if (name == QStringLiteral("ui_command")) {
     return mcpUiCommand(arguments);
+  }
+  // A new design beside this one (mitcad#1266).
+  if (name == QStringLiteral("document_new")) {
+    return mcpNew(arguments);
   }
   throw std::runtime_error("Unknown live document tool");
 }

@@ -1034,6 +1034,8 @@ fn follow_references(
             FeatureDef::Pulley(_) | FeatureDef::Gear(_) | FeatureDef::PrintableBearing(_) => {
                 f.def.seat_link().is_some()
             }
+            // An Envelope of chosen bodies (mitcad#1276).
+            FeatureDef::Envelope(e) => !e.bodies.is_empty(),
             def => has_origins(def),
         };
         if !changes {
@@ -1161,6 +1163,15 @@ fn follow_references(
                         follow_origin(origin, component, &ends_in_source, moved, occurrence);
                     }
                 }
+            }
+            // An Envelope of bodies that went (mitcad#1276): it reads them
+            // where the new occurrence places them.
+            FeatureDef::Envelope(envelope)
+                if !own
+                    && envelope.bodies.iter().any(|b| moved.contains(&b.feature))
+                    && ends_in_source(component, &envelope.occurrence.0) =>
+            {
+                envelope.occurrence.0.push(occurrence);
             }
             _ => {}
         }

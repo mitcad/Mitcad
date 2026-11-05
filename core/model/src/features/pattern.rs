@@ -1046,6 +1046,53 @@ pub(super) fn placed_copy<K: Kernel>(
         .map_err(|e| e.to_string())
 }
 
+/// A body's copy moved by `transform` for a pattern of bodies
+/// (mitcad#1275): a rotation and a translation move it as a location on
+/// the same shape ([`Kernel::move_shape`], as a Move's copy, mitcad#838),
+/// so the copy's faces are the body's and the view draws every copy from
+/// the meshes the body has, none meshed again; a scale or a mirror makes a
+/// copy of its own ([`Kernel::transform_shape`]), and so does a copy that
+/// `joins` the bodies it touches (a boolean's input beside the body it
+/// was copied from, which then shares none of its sub-shapes). The same
+/// geometry and names either way.
+fn body_copy<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    shape: &K::Shape,
+    transform: &Transform,
+    instance: Instance,
+    joins: bool,
+) -> Result<K::Shape, String> {
+    if transform.is_rigid() && !joins {
+        ctx.kernel.move_shape(shape, transform, Some(instance))
+    } else {
+        ctx.kernel.transform_shape(shape, transform, Some(instance))
+    }
+    .map_err(|e| e.to_string())
+}
+
+/// [`placed_copy`] of a body: each step and `transform` by [`body_copy`].
+fn placed_body_copy<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    body: &K::Shape,
+    steps: &[(Transform, Instance)],
+    transform: &Transform,
+    instance: Instance,
+    joins: bool,
+) -> Result<K::Shape, String> {
+    let mut copy: Option<K::Shape> = None;
+    for (t, inner) in steps {
+        let from = copy.as_ref().unwrap_or(body);
+        copy = Some(body_copy(ctx, from, t, *inner, joins)?);
+    }
+    body_copy(
+        ctx,
+        copy.as_ref().unwrap_or(body),
+        transform,
+        instance,
+        joins,
+    )
+}
+
 /// The bodies a pattern of bodies repeats; None for other features (a
 /// place's feature is such a pattern where a pattern of patterns of bodies
 /// places them, mitcad#547).
@@ -1110,13 +1157,13 @@ fn repeat_body_places<K: Kernel>(
                     feature: ctx.uid,
                     index: element.index,
                 };
-                let copy = placed_copy(
+                let copy = placed_body_copy(
                     ctx,
                     &source,
                     &place.steps,
                     &element.transform,
                     instance,
-                    false,
+                    combine,
                 )?;
                 if combine {
                     let target = match merged.iter().find(|(b, _)| *b == body) {
@@ -1188,13 +1235,13 @@ fn repeat_body_places_joining_any<K: Kernel>(
                     feature: ctx.uid,
                     index: element.index,
                 };
-                let copy = placed_copy(
+                let copy = placed_body_copy(
                     ctx,
                     &source,
                     &place.steps,
                     &element.transform,
                     instance,
-                    false,
+                    true,
                 )?;
                 let pieces = match join_any(ctx, &mut joining, &copy)? {
                     Some(strays) => strays,
@@ -1783,14 +1830,13 @@ pub(crate) fn repeat<K: Kernel>(
                 // Skipped copies (mitcad#547): their numbers are the
                 // elements'.
                 for element in elements.iter().filter(|e| !skipped.contains(&e.index)) {
-                    let copy = ctx
-                        .kernel
-                        .transform_shape(
-                            &shape,
-                            &element.transform,
-                            Some(instance(ctx.uid, element)),
-                        )
-                        .map_err(|e| e.to_string())?;
+                    let copy = body_copy(
+                        ctx,
+                        &shape,
+                        &element.transform,
+                        instance(ctx.uid, element),
+                        combine,
+                    )?;
                     let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);
                     if combine {
                         let target = merged.as_ref().unwrap_or(&shape);
@@ -3098,10 +3144,7 @@ fn repeat_bodies_joining_any<K: Kernel>(
                 feature: ctx.uid,
                 index: element.index,
             };
-            let copy = ctx
-                .kernel
-                .transform_shape(shape, &element.transform, Some(instance))
-                .map_err(|e| e.to_string())?;
+            let copy = body_copy(ctx, shape, &element.transform, instance, true)?;
             match join_any(ctx, &mut joining, &copy)? {
                 None => {
                     let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);

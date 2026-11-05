@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Light bulbs in every mode (mitcad#295) and Create Sketch's plane pick
+// Light bulbs in every mode (mitcad#295; kept analyses and image references
+// too since mitcad#1263) and Create Sketch's plane pick
 // (mitcad#474: its banner and the picks it refuses; mitcad#844: the origin
 // planes behind the model) in the main window.
 #include "MainWindow.hpp"
@@ -11,6 +12,19 @@
 #include "view/ModeBanner.hpp"
 
 namespace mitcad {
+namespace {
+
+// Whether the commands show or hide a kept analysis (mitcad#1263).
+bool showsOrHidesAnalysis(const QJsonArray& commands) {
+  for (const QJsonValue& command : commands) {
+    if (command.toObject().value(QStringLiteral("cmd")).toString() == QStringLiteral("set_analysis_visible")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
 
 // The browser's light bulbs while Create Sketch asks for a plane, while
 // sketching and during commands: a command's session runs them outside its
@@ -20,6 +34,15 @@ bool MainWindow::runVisibilityCommands(const QJsonArray& commands, const QString
     return true;
   }
   if (m_mode == Mode::Command && m_session) {
+    // An inspection's panel shows its own section or print analysis until
+    // it closes (followAnalyses): a kept analysis's light bulb waits for it,
+    // as before mitcad#1263.
+    if (m_session->def().inspect && showsOrHidesAnalysis(commands)) {
+      const QString reason = changeBlockedReason();
+      showStatus(reason, NoticeLevel::Error);
+      qDebug().noquote() << QStringLiteral("Visibility during %1 refused: %2").arg(m_session->def().name, reason);
+      return false;
+    }
     return m_session->runVisibility(commands, label);
   }
   const bool done =

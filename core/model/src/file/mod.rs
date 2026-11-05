@@ -93,7 +93,10 @@
 //!
 //! Components and occurrences (F6, `crate::assembly`), when the design has
 //! any: `components` (`uid`, `name`, the feature that made it as
-//! `created_by`, a linked file as `link` {`path`, `digest`, `feature`}),
+//! `created_by`, a linked file as `link` {`path`, `digest`, `feature`, and
+//! `envelope`, the detail size, while it is shown by its envelope, with
+//! `frames`, the joints' frames on the design's geometry (mitcad#1276);
+//! a build before these fields refuses a design that has them}),
 //! `occurrences` (`uid`, `component`, `parent`, `number`, `transform` as
 //! rows of a rotation and a translation unless the identity, `grounded`,
 //! `"visible": false`), `active_component`, `root_component` (the root's

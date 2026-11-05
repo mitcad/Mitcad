@@ -37,9 +37,13 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <TopoDS_Shape.hxx>
+#include <TopoDS_TShape.hxx>
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -279,6 +283,11 @@ private:
   qint64 m_milliseconds = 0;
   qint64 m_afterMilliseconds = 0;
   QStringList m_trace;
+  // The thread's: the shapes (their TShapes, held) of the bodies taken, so
+  // that another place of one (a pattern's copy, mitcad#1275) is not
+  // meshed again.
+  std::set<const TopoDS_TShape*> m_taken;
+  std::vector<TopoDS_Shape> m_takenShapes;
   std::thread m_thread;
 };
 

@@ -26,6 +26,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QToolButton>
 #include <QUrl>
 #include <QtLogging>
 
@@ -46,6 +47,7 @@
 #include "../framework/FloatingLayout.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Json.hpp"
+#include "../framework/PlaceWatcher.hpp"
 #include "../framework/TestSync.hpp"
 #include "../report/ReportCenter.hpp"
 #include "ProjectsPanel.hpp"
@@ -114,6 +116,7 @@ void MainWindow::createProjectsPanel() {
   host.openDesign = [this] { return m_filePath; };
   host.currentRoot = [this] { return m_project.isProject() ? m_project.root : QString(); };
   host.currentRemote = [this] { return m_remote != nullptr ? m_remote->indicatorState() : ProjectIndicator::Remote(); };
+  host.showForNaming = [this](bool on) { showProjectsForNaming(on); };
   m_projectsPanel = new ProjectsPanel(std::move(host));
   ProjectsPanel* panel = m_projectsPanel;
   // Queued: the panel's menus, editors and drags end before a dialog shows.
@@ -252,6 +255,30 @@ void MainWindow::addProjectsCard() {
                       {remembered > 0 ? std::max(remembered, ProjectsPanel::kMinimumCardWidth) : 260,
                        [panel = m_projectsPanel] { return panel->contentHeight(); }, 1.0, shown});
   connect(m_projectsPanel, &ProjectsPanel::contentHeightChanged, m_floating, &FloatingLayout::requestLayout);
+  // Folded and unfolded by its chevron or for a name typed in it
+  // (mitcad#1268); where the chevron is, for UI tests: "Projects panel
+  // chevron at x,y" (main window coordinates) when it moved.
+  connect(card, &GlassCard::collapsedChanged, this, [card](bool now) {
+    // Also emitted when the header changes: only a change is logged.
+    if (card->property("loggedCollapsed").toBool() != now) {
+      card->setProperty("loggedCollapsed", now);
+      qInfo().noquote() << (now ? QStringLiteral("Projects panel: card collapsed")
+                                : QStringLiteral("Projects panel: card expanded"));
+    }
+  });
+  if (auto* chevron = card->findChild<QToolButton*>(QStringLiteral("cardChevron"))) {
+    new PlaceWatcher(chevron, [chevron, logged = QString()]() mutable {
+      if (!chevron->isVisible()) {
+        return;
+      }
+      const QPoint at = GlassCard::mapToHost(chevron, chevron->rect().center());
+      const QString line = QStringLiteral("Projects panel chevron at %1,%2").arg(at.x()).arg(at.y());
+      if (line != logged) {
+        logged = line;
+        qDebug().noquote() << line;
+      }
+    });
+  }
   m_projectsContainer = card;
   m_projectsPanel->watchContainer(card);
   if (QAction* action = m_registry->action(QStringLiteral("view.projects"))) {
@@ -405,8 +432,8 @@ void MainWindow::newDesign() {
   qInfo().noquote() << QStringLiteral("New Design: in %1%2")
                            .arg(root, folder.isEmpty() ? QString() : QStringLiteral(", folder %1").arg(folder));
   if (m_projectsPanel != nullptr) {
-    // Named in place in the panel.
-    setProjectsPanelShown(true, true);
+    // Named in place in the panel, which is shown for it and put back
+    // afterwards (showProjectsForNaming, mitcad#1268).
     m_projectsPanel->startNewDesign(root, folder);
     return;
   }
@@ -524,16 +551,19 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
   // In the default units for new designs (Preferences > General,
   // mitcad#1036): the file is made in them, and opens in them.
   const QString units = GeneralSettings::load().newDesignUnits;
+  QJsonObject refused;
   const std::optional<QJsonObject> answer =
       projectWrite(root,
                    {{QStringLiteral("cmd"), QStringLiteral("new_design")},
                     {QStringLiteral("path"), path},
                     {QStringLiteral("units"), units}},
-                   tr("New Design"));
+                   tr("New Design"), &refused);
   refreshProjectsPanel();
   if (!answer) {
-    // Refused: the open design stays, and takes its lock again.
+    // Refused: the open design stays, and takes its lock again; a name
+    // that is there already is typed again in the panel (mitcad#1268).
     if (replacing) m_locks->designOpened(m_filePath, wasReadOnly);
+    projectNameRefused(root, path, QString(), tr("New Design"), refused);
     return;
   }
   qInfo().noquote() << QStringLiteral("New Design: made %1 in %2").arg(file, units);
@@ -556,12 +586,15 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
 }
 
 void MainWindow::createFolderInProject(const QString& root, const QString& path) {
+  QJsonObject refused;
   const std::optional<QJsonObject> answer = projectWrite(
       root, {{QStringLiteral("cmd"), QStringLiteral("create_folder")}, {QStringLiteral("path"), path}},
-      tr("New Folder"));
+      tr("New Folder"), &refused);
   refreshProjectsPanel();
   if (answer) {
     showHint(tr("The folder %1 is in %2.").arg(path, QFileInfo(root).fileName()));
+  } else {
+    projectNameRefused(root, path, QString(), tr("New Folder"), refused);
   }
 }
 
@@ -595,11 +628,21 @@ void MainWindow::moveInProject(const QString& root, const QString& from, const Q
       modifiedDesigns.append(window->m_filePath);
     }
   }
+  QJsonObject refused;
   const std::optional<QJsonObject> answer = projectWrite(
       root,
       {{QStringLiteral("cmd"), QStringLiteral("move")}, {QStringLiteral("from"), from}, {QStringLiteral("to"), to},
        {QStringLiteral("open_designs"), openDesigns}, {QStringLiteral("modified_designs"), modifiedDesigns}},
-      rename ? tr("Rename") : tr("Move"));
+      rename ? tr("Rename") : tr("Move"), &refused);
+  if (!answer) {
+    // A rename's name typed again in the panel (mitcad#1268); a drag's
+    // refusal is told.
+    if (rename) {
+      projectNameRefused(root, to, from, tr("Rename"), refused);
+    } else if (!errorClassOf(refused).isEmpty()) {
+      sheetWarning(this, tr("Move"), errorMessageOf(refused));
+    }
+  }
   if (answer) {
     // Every window follows a moved design, so a later Save cannot
     // recreate the old filename from another window's stale path.
@@ -620,6 +663,62 @@ void MainWindow::moveInProject(const QString& root, const QString& from, const Q
   }
   Q_UNUSED(folder);
   refreshProjectsPanel();
+}
+
+void MainWindow::showProjectsForNaming(bool on) {
+  if (m_projectsContainer == nullptr) {
+    return;
+  }
+  auto* card = qobject_cast<GlassCard*>(m_projectsContainer);
+  if (on) {
+    if (!m_projectsNaming.active) {
+      m_projectsNaming.active = true;
+      m_projectsNaming.hidden = !projectsPanelShown();
+      m_projectsNaming.collapsed = card != nullptr && card->isCollapsed();
+    }
+    if (!projectsPanelShown()) {
+      // Not the user's choice for the next start.
+      setProjectsPanelShown(true, false);
+      qInfo().noquote() << QStringLiteral("Projects panel: shown for naming");
+    }
+    if (card != nullptr && card->isCollapsed()) {
+      card->setCollapsed(false);
+      qInfo().noquote() << QStringLiteral("Projects panel: expanded for naming");
+    }
+    if (auto* dock = qobject_cast<QDockWidget*>(m_projectsContainer)) {
+      dock->raise(); // in front of a dock it shares tabs with
+    }
+    return;
+  }
+  if (!m_projectsNaming.active) {
+    return;
+  }
+  const ProjectsNamingState was = m_projectsNaming;
+  m_projectsNaming = ProjectsNamingState();
+  if (card != nullptr && was.collapsed && !card->isCollapsed()) {
+    card->setCollapsed(true);
+    qInfo().noquote() << QStringLiteral("Projects panel: collapsed again after naming");
+  }
+  if (was.hidden && projectsPanelShown()) {
+    setProjectsPanelShown(false, false);
+    qInfo().noquote() << QStringLiteral("Projects panel: hidden again after naming");
+  }
+}
+
+void MainWindow::projectNameRefused(const QString& root, const QString& path, const QString& from,
+                                    const QString& title, const QJsonObject& refused) {
+  const QString cls = errorClassOf(refused);
+  if (cls.isEmpty()) {
+    return; // cancelled, or failed and told already
+  }
+  const QString message = errorMessageOf(refused);
+  const bool aboutTheName = cls == QLatin1String("exists") || cls == QLatin1String("invalid_path");
+  if (aboutTheName && m_projectsPanel != nullptr && m_projectsPanel->nameRefused(root, path, from, message)) {
+    // No sheet: the name is typed again where it was (mitcad#1268).
+    showError(message);
+    return;
+  }
+  sheetWarning(this, title, message);
 }
 
 void MainWindow::openDesignMoved(const QString& path) {

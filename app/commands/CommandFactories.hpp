@@ -115,5 +115,8 @@ CommandDef mortiseTenonCommand(const CommandContext& context);
 // ConvertMeshCommands.cpp (mitcad#1082): a mesh body made a solid, faceted
 // or analytic.
 CommandDef convertMeshCommand(const CommandContext& context);
+// EnvelopeCommands.cpp (mitcad#1276): a light outer skin of a component,
+// an occurrence or bodies.
+CommandDef envelopeCommand(const CommandContext& context);
 
 } // namespace mitcad::cmd

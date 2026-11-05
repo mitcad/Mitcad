@@ -100,6 +100,9 @@ struct DocumentSnapshot {
     // Inserted from a library (its record, mitcad#64): it may have options
     // of its own (Edit Options…, mitcad#810).
     bool library = false;
+    // A linked design shown by its envelope (mitcad#1271): its detail size
+    // in mm; 0 when shown in full.
+    double envelope = 0;
   };
   struct Body {
     QString uid;

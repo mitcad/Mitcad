@@ -139,7 +139,7 @@ expect-model-bodies 1 60000
 # elided where the column is narrower, at normal and narrow sizes.
 mark
 command tools.libraries
-focus-dialog '^Libraries$'
+focus-dialog '^Library Sources$'
 expect-log 'Library source .*: Synthetic fasteners with a deliberately long library name for elision checks \(mitcad-parts\)'
 expect-native-style librarySources/0/2 single-line,truncated,readonly
 expect-native-style librarySources/0/3 single-line,readonly
@@ -153,5 +153,5 @@ expect-native-style librarySources/0/2 single-line
 expect-native-style librarySources/0/3 single-line
 screenshot-dialog '${MITCAD_TEST_WORK}/libraries-narrow-${MITCAD_TABLES_SCHEME}.png'
 button '^Close$'
-expect-native-dialog-gone '^Libraries$'
+expect-native-dialog-gone '^Library Sources$'
 focus-main

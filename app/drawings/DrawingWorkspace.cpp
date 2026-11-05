@@ -161,8 +161,16 @@ std::optional<RevisionFields> askRevision(QWidget* parent, const QString& title,
 // The annotations that snap to the spacing of the one before (mitcad#1173):
 // the dimensions.
 bool spacedType(const QString& type) {
+  // "dimension": the type its picks choose (mitcad#1272).
   return type == QStringLiteral("linear") || type == QStringLiteral("ordinate") || type == QStringLiteral("angle") ||
-         type == QStringLiteral("radius") || type == QStringLiteral("diameter");
+         type == QStringLiteral("radius") || type == QStringLiteral("diameter") ||
+         type == QStringLiteral("dimension");
+}
+
+// A line or an arc drawn outside the model (mitcad#729), whose clicks snap
+// to a view's points (mitcad#1272).
+bool sketchTool(const DrawingToolDef* tool) {
+  return tool != nullptr && (tool->pick == SheetPick::Segment || tool->pick == SheetPick::ArcPoints);
 }
 
 QString millimetres(double value) { return QString::number(value, 'f', 2); }
@@ -443,9 +451,17 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   connect(m_sheetView, &DrawingSheetView::toolCancelled, this, [this] { escape(); });
   connect(m_sheetView, &DrawingSheetView::placing, this, [this] {
     if (m_tool != nullptr) {
-      m_sheetView->setHint(m_tool->placeHint);
+      // One pick of the Dimension tool's Auto (mitcad#1272): a second
+      // pick still comes.
+      m_sheetView->setHint(picksWhilePlacing()
+                               ? tr("Click where the dimension goes, or a second edge, circle or corner "
+                                    "(Alt: no snap)")
+                               : m_tool->placeHint);
     }
   });
+  // The clicks of a line or an arc drawn outside the model snap to the
+  // view's points (mitcad#1272).
+  m_sheetView->setPointSnap([this](int view, const QPointF& at) { return snapPoint(view, at); });
   // mitcad#725: hover, several selected, the sheet's menu, a note's text.
   connect(m_sheetView, &DrawingSheetView::hoverRequested, this, &DrawingWorkspace::hoverRequested);
   connect(m_sheetView, &DrawingSheetView::selectionChanged, this, [this] { fillPanel(); });
@@ -1280,6 +1296,11 @@ void DrawingWorkspace::picked(ToolPicks picks) {
   // outside the model (mitcad#729) keeps its tool for the next one too.
   const bool annotating = m_tool->pick == SheetPick::Picks || m_tool->pick == SheetPick::Segment ||
                           m_tool->pick == SheetPick::ArcPoints || m_tool->id == QStringLiteral("drawing.text");
+  // One pick of the Dimension tool's Auto placed (mitcad#1272): a click on
+  // another edge, circle or corner is its second pick, not its place.
+  if (m_tool->pick == SheetPick::Picks && !picks.points.isEmpty() && secondPick(picks.points.last())) {
+    return;
+  }
   if (m_tool->pick == SheetPick::Picks) {
     picks.view = m_pickView;
     picks.picks = m_toolPicks;
@@ -1361,10 +1382,37 @@ void DrawingWorkspace::showPlacingPreview() {
   }
   // A linear dimension's lines from its two picks; any other placed
   // annotation (a radius, a note, a symbol, a balloon) on a leader.
+  // Until the model says what the placing click makes (mitcad#1272,
+  // `previewMade`), two picks of a dimension whose picks choose its type
+  // show lines too.
   const QString type =
       m_tool->annotationType != nullptr ? m_tool->annotationType(m_options.value(m_tool->id)) : QString();
-  const bool lines = type == QStringLiteral("linear") && m_pickPoints.size() >= 2;
+  const bool lines = (type == QStringLiteral("linear") || type == QStringLiteral("dimension")) &&
+                     m_pickPoints.size() >= 2;
   m_sheetView->setPlacingPreview(lines ? QStringLiteral("dimension") : QStringLiteral("leader"), m_pickPoints);
+}
+
+void DrawingWorkspace::previewMade(const QJsonObject& answer) {
+  const QString type = answer.value(QStringLiteral("type")).toString();
+  if (type.isEmpty() || !m_sheetView->isPlacing()) {
+    return;
+  }
+  const QJsonArray ends = answer.value(QStringLiteral("ends")).toArray();
+  const QJsonArray direction = answer.value(QStringLiteral("direction")).toArray();
+  if (type == QStringLiteral("linear") && ends.size() == 2 && direction.size() == 2) {
+    // Its lines from where its extension lines start, along what it
+    // measures along: "dimension horizontal", "dimension aligned".
+    const auto at = [](const QJsonValue& p) {
+      const QJsonArray xy = p.toArray();
+      return QPointF(xy.at(0).toDouble(), xy.at(1).toDouble());
+    };
+    const QString along = answer.value(QStringLiteral("along")).toString();
+    m_sheetView->setPlacingPreview(QStringLiteral("dimension %1").arg(along), {at(ends.at(0)), at(ends.at(1))},
+                                   at(direction));
+    return;
+  }
+  // A radius, a diameter, an angle: on a leader from the last pick.
+  m_sheetView->setPlacingPreview(QStringLiteral("leader %1").arg(type), m_pickPoints);
 }
 
 QJsonObject DrawingWorkspace::placingCommand(QPointF at) const {
@@ -1430,6 +1478,8 @@ void DrawingWorkspace::snapNow() {
   } else {
     if (m_sheetView->isPlacing() && askSnap(placingCommand(m_snapPoint), m_snapFree, &answer)) {
       snapped = answer.value(QStringLiteral("snapped")).toBool();
+      // What the click there makes, as the model says (mitcad#1272).
+      previewMade(answer);
     }
     const QJsonArray at = answer.value(QStringLiteral("at")).toArray();
     m_sheetView->setPlacingSnap(snapped && at.size() == 2, QPointF(at.at(0).toDouble(), at.at(1).toDouble()),
@@ -1463,10 +1513,14 @@ void DrawingWorkspace::hoverRequested(int view, QPointF at) {
 void DrawingWorkspace::hoverPick() {
   QString seen = QStringLiteral("nothing");
   QJsonArray items;
-  const int on = m_pickView != 0 ? m_pickView : m_hoverView;
-  // Nothing while what was picked is placed (mitcad#725).
-  if (m_hoverView >= 0 && on > 0 && m_tool != nullptr && m_tool->pick == SheetPick::Picks && isOpen() &&
-      !m_sheetView->isPlacing()) {
+  // A line's or an arc's clicks snap on the view under each (mitcad#1272).
+  const bool snaps = sketchTool(m_tool);
+  const int on = m_pickView != 0 && !snaps ? m_pickView : m_hoverView;
+  // Nothing while what was picked is placed (mitcad#725), unless a click
+  // there may still pick (the Dimension tool's Auto, mitcad#1272).
+  const bool picks = m_tool != nullptr && m_tool->pick == SheetPick::Picks &&
+                     (!m_sheetView->isPlacing() || picksWhilePlacing());
+  if (m_hoverView >= 0 && on > 0 && (picks || snaps) && isOpen()) {
     if (m_host.modelBusy()) {
       // A job computes the model (its timers still fire while it is
       // waited for): asked once it is done (mitcad#753), the marks kept
@@ -1485,9 +1539,7 @@ void DrawingWorkspace::hoverPick() {
                       {QStringLiteral("sheet"), m_sheet},
                       {QStringLiteral("view"), on},
                       {QStringLiteral("at"), QJsonArray{m_hoverAt.x(), m_hoverAt.y()}}};
-    if (m_tool->annotationType != nullptr) {
-      query.insert(QStringLiteral("type"), m_tool->annotationType(m_options.value(m_tool->id)));
-    }
+    addWanted(query, m_options.value(m_tool->id));
     try {
       const QJsonObject answer = m_host.model().queryObject(query);
       if (answer.value(QStringLiteral("pick")).isObject()) {
@@ -1501,8 +1553,113 @@ void DrawingWorkspace::hoverPick() {
   m_sheetView->setHoverMarks(items);
   if (seen != m_loggedHover) {
     m_loggedHover = seen;
-    qDebug().noquote() << QStringLiteral("Drawing hover: %1").arg(seen);
+    // Where it was asked (sheet mm, the view under it; mitcad#1272: what
+    // a test's pointer found).
+    qDebug().noquote() << QStringLiteral("Drawing hover: %1 at %2,%3 on view %4")
+                              .arg(seen)
+                              .arg(m_hoverAt.x(), 0, 'f', 1)
+                              .arg(m_hoverAt.y(), 0, 'f', 1)
+                              .arg(m_hoverView);
   }
+}
+
+void DrawingWorkspace::addWanted(QJsonObject& query, const QHash<QString, QString>& options) const {
+  if (sketchTool(m_tool)) {
+    // A line's or an arc's click snaps to a point (mitcad#1272).
+    query.insert(QStringLiteral("want"), QStringLiteral("snap"));
+    return;
+  }
+  if (m_tool == nullptr || m_tool->annotationType == nullptr) {
+    return;
+  }
+  const QString type = m_tool->annotationType(options);
+  // A dimension whose picks choose its type picks anything (mitcad#1272).
+  if (type != QStringLiteral("dimension")) {
+    query.insert(QStringLiteral("type"), type);
+  }
+}
+
+bool DrawingWorkspace::picksWhilePlacing() const {
+  return m_tool != nullptr && m_tool->pick == SheetPick::Picks && m_tool->pickCount != nullptr &&
+         m_tool->pickCount(m_options.value(m_tool->id)) == kAutoPicks && m_toolPicks.size() == 1;
+}
+
+std::optional<QJsonObject> DrawingWorkspace::askPick(int view, QPointF at) {
+  QJsonObject query{{QStringLiteral("query"), QStringLiteral("drawing_pick")},
+                    {QStringLiteral("drawing"), m_drawing},
+                    {QStringLiteral("sheet"), m_sheet},
+                    {QStringLiteral("view"), view},
+                    {QStringLiteral("at"), QJsonArray{at.x(), at.y()}}};
+  addWanted(query, m_options.value(m_tool->id));
+  try {
+    return m_host.model().queryObject(query);
+  } catch (const std::exception& e) {
+    setStatus(QString::fromUtf8(e.what()), true);
+    return std::nullopt;
+  }
+}
+
+void DrawingWorkspace::addPick(const QJsonObject& answer, int view, QPointF at) {
+  const QJsonValue pick = answer.value(QStringLiteral("pick"));
+  m_pickView = view;
+  m_toolPicks.append(pick);
+  for (const QJsonValue& item : answer.value(QStringLiteral("items")).toArray()) {
+    m_pickItems.append(item);
+  }
+  // Where it is on the sheet, for the preview while it is placed.
+  const QJsonArray point = answer.value(QStringLiteral("at")).toArray();
+  m_pickPoints.append(point.size() == 2 ? QPointF(point.at(0).toDouble(), point.at(1).toDouble()) : at);
+  m_sheetView->setHoverMarks(QJsonArray());
+  m_sheetView->setPickMarks(m_pickItems);
+  qDebug().noquote() << QStringLiteral("Drawing picked %1 (%2): %3")
+                            .arg(answer.value(QStringLiteral("seen")).toString())
+                            .arg(m_toolPicks.size())
+                            .arg(compact(pick.toObject()));
+}
+
+void DrawingWorkspace::placePicks() {
+  // One pick of the Dimension tool's Auto (mitcad#1272) may get a second
+  // while it is placed.
+  m_sheetView->startPlacing(); // its hint comes with `placing`
+  m_sheetView->setPicksWhilePlacing(picksWhilePlacing());
+  showPlacingPreview();
+}
+
+bool DrawingWorkspace::secondPick(QPointF at) {
+  if (!picksWhilePlacing() || m_sheetView->releaseModifiers().testFlag(Qt::AltModifier)) {
+    return false;
+  }
+  const std::optional<QJsonObject> answer = askPick(m_pickView, at);
+  if (!answer) {
+    return false;
+  }
+  const QJsonValue pick = answer->value(QStringLiteral("pick"));
+  // Nothing there, or the same again: the click places it.
+  if (!pick.isObject() || m_toolPicks.contains(pick)) {
+    return false;
+  }
+  addPick(*answer, m_pickView, at);
+  placePicks();
+  return true;
+}
+
+std::optional<QPointF> DrawingWorkspace::snapPoint(int view, const QPointF& at) {
+  // Not while a job computes the model (mitcad#753): as clicked.
+  if (!sketchTool(m_tool) || view <= 0 || !isOpen() || m_host.modelBusy()) {
+    return std::nullopt;
+  }
+  const std::optional<QJsonObject> answer = askPick(view, at);
+  if (!answer || !answer->value(QStringLiteral("pick")).isObject()) {
+    return std::nullopt;
+  }
+  const QJsonArray point = answer->value(QStringLiteral("at")).toArray();
+  if (point.size() != 2) {
+    return std::nullopt;
+  }
+  const QJsonObject pick = answer->value(QStringLiteral("pick")).toObject();
+  qDebug().noquote() << QStringLiteral("Drawing point snapped to %1").arg(compact(pick));
+  m_sheetView->setHoverMarks(QJsonArray());
+  return QPointF(point.at(0).toDouble(), point.at(1).toDouble());
 }
 
 void DrawingWorkspace::pickRequested(int view, QPointF at) {
@@ -1522,22 +1679,11 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
     m_host.showStatus(tr("Click on a view."), NoticeLevel::Hint);
     return;
   }
-  QJsonObject query{{QStringLiteral("query"), QStringLiteral("drawing_pick")},
-                    {QStringLiteral("drawing"), m_drawing},
-                    {QStringLiteral("sheet"), m_sheet},
-                    {QStringLiteral("view"), on},
-                    {QStringLiteral("at"), QJsonArray{at.x(), at.y()}}};
-  if (m_tool->annotationType != nullptr) {
-    query.insert(QStringLiteral("type"), m_tool->annotationType(options));
-  }
-  QJsonObject answer;
-  try {
-    answer = m_host.model().queryObject(query);
-  } catch (const std::exception& e) {
-    setStatus(QString::fromUtf8(e.what()), true);
+  const std::optional<QJsonObject> answer = askPick(on, at);
+  if (!answer) {
     return;
   }
-  const QJsonValue pick = answer.value(QStringLiteral("pick"));
+  const QJsonValue pick = answer->value(QStringLiteral("pick"));
   if (!pick.isObject()) {
     if (needed == kOpenPicks && m_toolPicks.size() >= 2) {
       // A free click places a series where it is.
@@ -1552,24 +1698,28 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
                       NoticeLevel::Hint);
     return;
   }
-  m_pickView = on;
-  m_toolPicks.append(pick);
-  for (const QJsonValue& item : answer.value(QStringLiteral("items")).toArray()) {
-    m_pickItems.append(item);
+  // The Dimension tool's same pick twice measures nothing (mitcad#1272: 0
+  // mm was made); an ordinate of its origin itself is 0 by right.
+  if (m_tool->id == QStringLiteral("drawing.dimension") && m_toolPicks.contains(pick)) {
+    qDebug().noquote() << QStringLiteral("Drawing pick: picked already at %1,%2")
+                              .arg(at.x(), 0, 'f', 1)
+                              .arg(at.y(), 0, 'f', 1);
+    m_host.showStatus(tr("Picked already: click another edge, circle or corner."), NoticeLevel::Hint);
+    return;
   }
-  // Where it is on the sheet, for the preview while it is placed.
-  const QJsonArray point = answer.value(QStringLiteral("at")).toArray();
-  m_pickPoints.append(point.size() == 2 ? QPointF(point.at(0).toDouble(), point.at(1).toDouble()) : at);
-  m_sheetView->setHoverMarks(QJsonArray());
-  m_sheetView->setPickMarks(m_pickItems);
-  qDebug().noquote() << QStringLiteral("Drawing picked %1 (%2): %3")
-                            .arg(answer.value(QStringLiteral("seen")).toString())
-                            .arg(m_toolPicks.size())
-                            .arg(compact(pick.toObject()));
+  addPick(*answer, on, at);
+  if (needed == kAutoPicks) {
+    // The picks choose (mitcad#1272): a circle, an arc or a straight edge
+    // is placed at once, a corner waits for a second pick.
+    const bool point = answer->value(QStringLiteral("seen")).toString() == QStringLiteral("point");
+    if (m_toolPicks.size() >= 2 || !point) {
+      placePicks();
+    }
+    return;
+  }
   if (needed != kOpenPicks && m_toolPicks.size() >= needed) {
     if (m_tool->place) {
-      m_sheetView->startPlacing(); // its hint comes with `placing`
-      showPlacingPreview();
+      placePicks();
     } else {
       picked(ToolPicks());
     }

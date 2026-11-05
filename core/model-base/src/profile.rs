@@ -190,6 +190,110 @@ impl ProfileRegion {
         }
         (min, max)
     }
+
+    /// The region turned by `angle` (radians, counter-clockwise) about
+    /// `centre` in sketch coordinates (mitcad#1259: an emboss's Rotation);
+    /// its keys unchanged.
+    pub fn rotated(&self, centre: [f64; 2], angle: f64) -> ProfileRegion {
+        ProfileRegion {
+            key: self.key.clone(),
+            loops: self
+                .loops
+                .iter()
+                .map(|l| ProfileLoop {
+                    segments: l
+                        .segments
+                        .iter()
+                        .map(|s| ProfileSegment {
+                            key: s.key.clone(),
+                            geometry: s.geometry.rotated(centre, angle),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl SegmentGeometry {
+    /// The curve turned by `angle` (radians, counter-clockwise) about
+    /// `centre`: points rotated, angles from the sketch x axis grown by
+    /// `angle`; ellipse parameter angles (from the major axis) and B-spline
+    /// weights and knots stay.
+    pub fn rotated(&self, centre: [f64; 2], angle: f64) -> SegmentGeometry {
+        let (sin, cos) = angle.sin_cos();
+        let turn = |p: [f64; 2]| {
+            let (x, y) = (p[0] - centre[0], p[1] - centre[1]);
+            [centre[0] + x * cos - y * sin, centre[1] + x * sin + y * cos]
+        };
+        match self {
+            Self::Line { start, end } => Self::Line {
+                start: turn(*start),
+                end: turn(*end),
+            },
+            Self::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+            } => Self::Arc {
+                center: turn(*center),
+                radius: *radius,
+                start_angle: start_angle + angle,
+                end_angle: end_angle + angle,
+            },
+            Self::Circle {
+                center,
+                radius,
+                start,
+            } => Self::Circle {
+                center: turn(*center),
+                radius: *radius,
+                start: start + angle,
+            },
+            Self::Ellipse {
+                center,
+                major_radius,
+                minor_radius,
+                rotation,
+            } => Self::Ellipse {
+                center: turn(*center),
+                major_radius: *major_radius,
+                minor_radius: *minor_radius,
+                rotation: rotation + angle,
+            },
+            Self::EllipseArc {
+                center,
+                major_radius,
+                minor_radius,
+                rotation,
+                start_angle,
+                end_angle,
+            } => Self::EllipseArc {
+                center: turn(*center),
+                major_radius: *major_radius,
+                minor_radius: *minor_radius,
+                rotation: rotation + angle,
+                start_angle: *start_angle,
+                end_angle: *end_angle,
+            },
+            Self::BSpline {
+                degree,
+                poles,
+                weights,
+                knots,
+                multiplicities,
+                periodic,
+            } => Self::BSpline {
+                degree: *degree,
+                poles: poles.iter().map(|p| turn(*p)).collect(),
+                weights: weights.clone(),
+                knots: knots.clone(),
+                multiplicities: multiplicities.clone(),
+                periodic: *periodic,
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -228,5 +332,55 @@ mod tests {
         let (min, max) = region.bounds();
         assert!((min[0] + 10.0).abs() < 1e-9 && max[0].abs() < 1e-9);
         assert!((min[1] + 10.0).abs() < 1e-9 && (max[1] - 10.0).abs() < 1e-9);
+    }
+
+    /// mitcad#1259: a region turned about a point keeps its keys and its
+    /// shape; a quarter turn of the left half circle about (5, 0) puts it
+    /// below that point.
+    #[test]
+    fn regions_turn_about_a_point() {
+        let half = std::f64::consts::FRAC_PI_2;
+        let region = ProfileRegion {
+            key: "r{c1[c2,c2],c2[c1,c1]}".parse().unwrap(),
+            loops: vec![ProfileLoop {
+                segments: vec![
+                    ProfileSegment {
+                        key: "c2[c1,c1]".parse().unwrap(),
+                        geometry: SegmentGeometry::Arc {
+                            center: [0.0, 0.0],
+                            radius: 10.0,
+                            start_angle: half,
+                            end_angle: 3.0 * half,
+                        },
+                    },
+                    ProfileSegment {
+                        key: "c1[c2,c2]".parse().unwrap(),
+                        geometry: SegmentGeometry::Line {
+                            start: [0.0, -10.0],
+                            end: [0.0, 10.0],
+                        },
+                    },
+                ],
+            }],
+        };
+        let turned = region.rotated([5.0, 0.0], half);
+        assert_eq!(turned.key, region.key);
+        let (min, max) = turned.bounds();
+        let near =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        // The arc's centre (0, 0) goes to (5, -5), its span to y below it.
+        assert!(near(min, [-5.0, -15.0]), "{min:?}");
+        assert!(near(max, [15.0, -5.0]), "{max:?}");
+        let SegmentGeometry::Arc {
+            start_angle,
+            end_angle,
+            ..
+        } = turned.loops[0].segments[0].geometry
+        else {
+            panic!("an arc");
+        };
+        assert!((start_angle - 2.0 * half).abs() < 1e-12 && (end_angle - 4.0 * half).abs() < 1e-12);
+        // No turn: the same region.
+        assert_eq!(region.rotated([5.0, 0.0], 0.0), region);
     }
 }

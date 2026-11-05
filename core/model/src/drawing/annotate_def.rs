@@ -177,6 +177,10 @@ pub enum Want {
     Line,
     /// A circle or a round face.
     Circle,
+    /// A point a line or an arc drawn outside the model snaps to
+    /// (mitcad#1272): an edge's end, a straight edge's middle, or a
+    /// circle's or an arc's centre.
+    Snap,
 }
 
 /// The direction a linear or an ordinate dimension measures along: the

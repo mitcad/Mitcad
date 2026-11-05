@@ -19,6 +19,7 @@
 #include "PrintLibrary.hpp"
 
 class QAction;
+class QCheckBox;
 class QComboBox;
 class QHBoxLayout;
 class QLabel;
@@ -83,6 +84,14 @@ class SlicerImportBar;
 // shows under its field, others on the message line. Read only is
 // disabled, never hidden.
 //
+// Hidden built-ins (mitcad#1270): a material of the base library (not
+// MitCad's own built-in materials) has Hide beside Delete and in its
+// row's context menu (Duplicate, Hide; others Duplicate, Delete); a
+// hidden one is listed only with Show hidden (under the list, shown while
+// one is hidden), grayed, with Unhide. Logged as the Printers manager's
+// ("Materials hidden: <name>", "Materials grayed: <names>", rows ending
+// ", hidden").
+//
 // Material properties (mitcad#1213, MaterialProperties.hpp): General shows
 // Density and the mechanical, thermal and, for an FDM plastic, printing
 // values in the design's units (the `material_units` query; temperatures
@@ -119,6 +128,14 @@ public:
   // (<place>)". A library item the design has a copy of stands for that
   // copy, what the design uses.
   void showItem(const QString& key);
+  // The group of `place` ("user": My library; mitcad#1250) at the top of
+  // the list, its first item selected (none when it has none), logged as
+  // "Materials on My library: <name>" ("nothing selected").
+  void showPlace(const QString& place);
+  // The place New, Duplicate and Import offer first while it is one of
+  // places() (mitcad#1250: My library from Tools › Libraries); empty: This
+  // design with a design open, else My library.
+  void setHomePlace(const QString& place) { m_homePlace = place; }
   // A button of the window at the end of the row under the list (Close),
   // its place logged as "<logName> <name> at x,y".
   void addButton(QPushButton* button, const QString& name);
@@ -163,6 +180,13 @@ private:
   void duplicate(QPushButton* anchor);
   void remove();
   void copyTo();
+  // Hide or Unhide of the selected base material (mitcad#1270).
+  void toggleHidden();
+  // A row's context menu (itemContextMenu): Duplicate, Hide or Delete.
+  void itemMenu(const QPoint& at);
+  // Whether the list shows `item` now: the search, and a hidden one only
+  // with Show hidden.
+  bool listed(const LibraryItem& item) const;
   // Asks once about the selected item when another design changed it.
   void askChanges();
   // One of the material's appearances made its default (mitcad#1055).
@@ -203,6 +227,7 @@ private:
 
   PrintItemsHost* m_host = nullptr;
   QString m_log; // "Materials"
+  QString m_homePlace; // setHomePlace's
   PrintKeyTable m_keys;
   QString m_dialect; // the design's slicer (designDialectOf)
   QVector<LibraryItem> m_items; // by place
@@ -251,6 +276,8 @@ private:
   QPushButton* m_new = nullptr;
   QPushButton* m_duplicate = nullptr;
   QPushButton* m_delete = nullptr;
+  QPushButton* m_hide = nullptr;     // Hide or Unhide of a base material (mitcad#1270)
+  QCheckBox* m_showHidden = nullptr; // Show hidden, under the list
   QPushButton* m_import = nullptr; // Import… of materials files (mitcad#1213)
   QPushButton* m_export = nullptr;
   QVector<std::pair<QString, QPushButton*>> m_windowButtons; // addButton's
@@ -298,6 +325,11 @@ public:
   // `key` selected, none for an empty key.
   void open() override { open(QString()); }
   void open(const QString& key);
+  // An opening on the group of `place` (mitcad#1250: "user", My library,
+  // from Tools › Libraries › Material Library… and the Material tool's
+  // Material Library…): MaterialsPanel::showPlace, and `place` the one New,
+  // Duplicate and Import offer first until it is opened otherwise.
+  void openPlace(const QString& place);
   void refresh();
   // The item `key` selected and in sight (MaterialsPanel::showItem).
   void showItem(const QString& key);
@@ -305,6 +337,9 @@ public:
   bool onDesign() const { return m_hosts.onDesign(); }
   // Edit Appearances… of the Appearance box (the controller's window).
   std::function<void()> editAppearances;
+  // Called once when the window closes next, after libraryChanged
+  // (mitcad#1250: the Material tool reads its materials again).
+  std::function<void()> whenClosed;
 
 signals:
   // Closed after it changed a library without a design: the other
@@ -315,7 +350,15 @@ protected:
   void hideEvent(QHideEvent* event) override;
 
 private:
+  // An opening that shows the panel with `show` once the model's items
+  // can be read (at once with a design, else after readAhead).
+  void openWith(const std::function<void()>& show);
+  // The place the import offers first: the home place while writable,
+  // else This design with a design open, else My library.
+  QString homePlace() const;
+
   ManagerHosts m_hosts;
+  QString m_homePlace; // openPlace's
   SlicerImportBar* m_import = nullptr;
   MaterialsPanel* m_panel = nullptr;
   int m_reads = 0;        // openings read ahead: only the latest one's answers are shown

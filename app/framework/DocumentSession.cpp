@@ -21,11 +21,26 @@
 #include "DisplayMeshes.hpp"
 #include "Json.hpp"
 #include "ResultCache.hpp"
+#include "platform/MacChrome.hpp"
 
 namespace mitcad {
 namespace {
 
 constexpr std::chrono::milliseconds kBlockFor(50);
+
+// The background evaluation's label for the tests' delays
+// (MITCAD_TEST_RECOMPUTE_DELAY_MS="background evaluation=…").
+const QString& backgroundLabel() {
+  static const QString label = QStringLiteral("background evaluation");
+  return label;
+}
+
+// MITCAD_BACKGROUND_EVALUATION=0 turns the background evaluation off
+// (mitcad#1267); computing inline (MITCAD_COMPUTE_INLINE) does too.
+bool backgroundEvaluationEnabled() {
+  static const bool enabled = qEnvironmentVariable("MITCAD_BACKGROUND_EVALUATION") != QLatin1String("0");
+  return enabled && !computeInline();
+}
 
 // Sessions belong to the application thread; models in flight stay on
 // their worker until whenIdle delivers the current share.
@@ -54,6 +69,17 @@ struct DocumentSession::AsyncJob {
   // A job in the background that gives way to the UI thread's own work
   // (commandTaskAsync, yieldBackgroundJob; mitcad#1121).
   bool yields = false;
+};
+
+// A run of the rolled-back features (mitcad#1267): its control (the run's
+// own monitor, cancelled from the session's thread), the run, made from the
+// idle document on the session's thread, and what the log line says.
+struct DocumentSession::BackgroundEvaluation {
+  explicit BackgroundEvaluation(const Document& document) : run(document.background_run(job.control())) {}
+  ModelJob job;
+  rust::Box<BackgroundRun> run;
+  QElapsedTimer clock;
+  QString cancelledBy;
 };
 
 rust::Box<Document> newDesignDocument() {
@@ -86,11 +112,26 @@ DocumentSession::DocumentSession(bool demo, QObject* parent)
     m_state.lastError = startupError;
     qWarning().noquote() << startupError;
   }
+  // The background evaluation's thread (mitcad#1267), started with its
+  // first run at the lowest priority, so that it takes only what the
+  // processors have left.
+  m_backgroundWorker = std::make_unique<ModelWorker>(nullptr, [](QThread& thread) {
+    thread.start(QThread::IdlePriority);
+  });
+  m_backgroundWorker->setObjectName(QStringLiteral("background evaluation"));
+  connect(m_backgroundWorker.get(), &ModelWorker::jobDone, this, [this] {
+    // (A job that started meanwhile ended the run already.)
+    if (m_background && m_backgroundWorker->waitFor(std::chrono::milliseconds(0))) {
+      finishBackgroundEvaluation(true);
+    }
+  }, Qt::QueuedConnection);
   notifyChanged();
 }
 
 DocumentSession::~DocumentSession() {
   m_progressTimer.stop();
+  // The run holds a fork of the document: it stops before the document goes.
+  stopBackgroundEvaluation(QStringLiteral("closing"), false);
   cancelJob();
   // The worker must release the document before the owned job and model
   // are destroyed. Queued completions cannot run during this destruction.
@@ -188,6 +229,10 @@ bool DocumentSession::runJob(const QString& label, const QString& stage, const J
     notifyChanged();
     throw std::runtime_error(startupError.toStdString());
   }
+  // The background evaluation reads the bodies the job may write into (the
+  // meshes of new bodies that share their faces): it stops first, and the
+  // document takes what it evaluated by now (mitcad#1267).
+  stopBackgroundEvaluation(QStringLiteral("job %1").arg(label), true);
   if (m_beforeJob) {
     m_beforeJob();
   }
@@ -215,7 +260,11 @@ bool DocumentSession::runJob(const QString& label, const QString& stage, const J
   } else {
     // For tests, a job made longer after its work (MITCAD_TEST_JOB_SLEEP_MS).
     const int extraMs = testJobSleep(label);
-    m_worker->post([&job, &state, extraMs] {
+    const auto hold = label == QStringLiteral("edit_feature") ? m_testHoldEdit : nullptr;
+    m_worker->post([&job, &state, hold, extraMs] {
+      while (hold && hold->load() && !state.control().is_cancelled()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
       job(state);
       if (extraMs > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(extraMs));
@@ -232,11 +281,14 @@ bool DocumentSession::runJob(const QString& label, const QString& stage, const J
     } catch (...) {
       state.control().cancel();
       m_worker->take();
+      m_lastJobCancelRequested = true;
       finishJob(label, true, QString());
       throw;
     }
     error = m_worker->take();
   }
+  // Also a cancel that stopped only the job's meshing (mitcad#1267).
+  m_lastJobCancelRequested = state.control().is_cancelled();
   const bool cancelled = error && state.control().is_cancelled();
   QString failure;
   if (error && !cancelled) {
@@ -497,6 +549,8 @@ bool DocumentSession::startAsync(const QString& label, const QString& stage, Job
         }, Qt::QueuedConnection);
     return true;
   }
+  // As runJob (mitcad#1267).
+  stopBackgroundEvaluation(QStringLiteral("job %1").arg(label), true);
   if (m_beforeJob) {
     m_beforeJob();
   }
@@ -542,6 +596,7 @@ void DocumentSession::finishAsync(bool queueCompletion) {
   const std::exception_ptr error = m_worker->take();
   std::unique_ptr<AsyncJob> finished = std::move(m_async);
   m_progressTimer.stop();
+  m_lastJobCancelRequested = finished->job.control().is_cancelled();
   finished->result->cancelled = error && finished->job.control().is_cancelled();
   if (error && !finished->result->cancelled) {
     try {
@@ -587,7 +642,121 @@ void DocumentSession::finishJob(const QString& label, bool cancelled, const QStr
   emit busyChanged(false);
   notifyChanged();
   emit jobFinished(label, cancelled, error);
+  scheduleBackgroundEvaluation();
   scheduleIdleCalls();
+}
+
+// The background evaluation (mitcad#1267).
+
+void DocumentSession::scheduleBackgroundEvaluation() {
+  if (m_backgroundPending || !backgroundEvaluationEnabled()) {
+    return;
+  }
+  m_backgroundPending = true;
+  // After what else waited for the idle point: the session's idle point.
+  whenIdle(this, [this] {
+    m_backgroundPending = false;
+    startBackgroundEvaluation();
+  });
+}
+
+void DocumentSession::startBackgroundEvaluation() {
+  if (busy() || m_background || m_lastJobCancelRequested || m_state.mode != Mode::Idle || m_state.activeCommand) {
+    return;
+  }
+  // The document query of the state now (notifyChanged after the job): the
+  // marker before the end, and a state no run went through to the end.
+  const qint64 features = m_documentInfo.value(QStringLiteral("features")).toInteger();
+  const qint64 marker = m_documentInfo.value(QStringLiteral("marker")).toInteger();
+  const auto revision = static_cast<std::uint64_t>(m_documentInfo.value(QStringLiteral("revision")).toInteger());
+  const Document* document = &*m_state.document;
+  if (marker >= features || (document == m_backgroundDoneDocument && revision == m_backgroundDoneRevision)) {
+    return;
+  }
+  auto background = std::make_unique<BackgroundEvaluation>(*m_state.document);
+  if (background->run->is_empty()) {
+    return; // only suppressed features after the marker
+  }
+  QString startupError;
+  if (!m_backgroundWorker->ensureStarted(startupError)) {
+    qWarning().noquote() << QStringLiteral("Background evaluation: %1").arg(startupError);
+    return;
+  }
+  if (const int delay = testRecomputeDelay(backgroundLabel()); delay > 0) {
+    background->job.control().set_test_delay(static_cast<std::uint32_t>(delay));
+  }
+  const auto rolledBack = static_cast<qulonglong>(background->run->rolled_back());
+  BackgroundRun* run = &*background->run;
+  background->clock.start();
+  m_background = std::move(background);
+  m_backgroundWorker->post([run] {
+    // Below the user's work on macOS too (the worker's own quality is the
+    // model worker's).
+    const mac::ThreadQualityScope quality(mac::ThreadQuality::Utility);
+    run->run();
+  });
+  qDebug().noquote() << QStringLiteral("Background evaluation started: %1 features after the marker").arg(rolledBack);
+}
+
+void DocumentSession::cancelBackgroundEvaluation(const QString& reason) {
+  if (!m_background || m_background->job.control().is_cancelled()) {
+    return;
+  }
+  m_background->cancelledBy = reason;
+  m_background->job.control().cancel();
+}
+
+void DocumentSession::stopBackgroundEvaluation(const QString& reason, bool adopt) {
+  if (!m_background) {
+    return;
+  }
+  cancelBackgroundEvaluation(reason);
+  // The run stops at the cancel, inside the kernel's long operations too
+  // (P7e); finishBackgroundEvaluation waits for it.
+  finishBackgroundEvaluation(adopt);
+}
+
+void DocumentSession::finishBackgroundEvaluation(bool adopt) {
+  if (!m_background) {
+    return;
+  }
+  // Waits for the run to end (it has, unless a job or the session's end
+  // stopped it).
+  const std::exception_ptr error = m_backgroundWorker->take();
+  const std::unique_ptr<BackgroundEvaluation> finished = std::move(m_background);
+  const bool cancelled = finished->job.control().is_cancelled();
+  const auto evaluated = static_cast<qulonglong>(finished->run->evaluated());
+  const qint64 milliseconds = finished->clock.elapsed();
+  if (!cancelled && !error) {
+    m_backgroundDoneDocument = &*m_state.document;
+    m_backgroundDoneRevision = finished->run->base_revision();
+  }
+  std::size_t adopted = 0;
+  // Only while no job has the document (a job stops the run before it
+  // starts); the document adopts nothing of another state.
+  if (adopt && !error && !busy()) {
+    adopted = m_state.document->adopt_background_run(std::move(finished->run));
+  }
+  if (error) {
+    try {
+      std::rethrow_exception(error);
+    } catch (const std::exception& exception) {
+      qWarning().noquote() << QStringLiteral("Background evaluation failed: %1").arg(errorText(exception));
+    } catch (...) {
+      qWarning().noquote() << QStringLiteral("Background evaluation failed");
+    }
+  } else if (cancelled) {
+    qDebug().noquote() << QStringLiteral("Background evaluation cancelled by %1 after %2 ms: %3 features, adopted %4")
+                              .arg(finished->cancelledBy.isEmpty() ? QStringLiteral("a stop") : finished->cancelledBy)
+                              .arg(milliseconds)
+                              .arg(evaluated)
+                              .arg(static_cast<qulonglong>(adopted));
+  } else {
+    qDebug().noquote() << QStringLiteral("Background evaluation: %1 features in %2 ms, adopted %3")
+                              .arg(evaluated)
+                              .arg(milliseconds)
+                              .arg(static_cast<qulonglong>(adopted));
+  }
 }
 
 void DocumentSession::clearPreview() {
@@ -648,6 +817,9 @@ void DocumentSession::setSelection(const Selection& selection) {
 
 void DocumentSession::setMode(Mode mode) {
   if (m_state.mode != mode) {
+    if (mode != Mode::Idle) {
+      cancelBackgroundEvaluation(mode == Mode::Command ? QStringLiteral("a command") : QStringLiteral("a sketch"));
+    }
     m_state.mode = mode;
     emit changed();
   }

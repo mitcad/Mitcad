@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QHash>
 #include <QJsonObject>
+#include <QList>
 #include <QPointer>
 #include <QSettings>
 #include <QStringList>
@@ -80,7 +81,18 @@ struct LiveServer::State {
     // The comments this session was last given (mitcad#1119).
     QByteArray commentsGiven;
     QString commentsDocument;
+    // The designs a chat agent made with document_new (mitcad#1266): it
+    // may use them beside its own design.
+    QList<QPointer<MainWindow>> made;
   };
+
+  // A chat agent's designs: its own and those it made (mitcad#1266).
+  static bool chatMayUse(const Client& client, const MainWindow* target) {
+    if (target == nullptr) return false;
+    if (target == client.chatWindow.data()) return true;
+    return std::any_of(client.made.begin(), client.made.end(),
+                       [target](const QPointer<MainWindow>& window) { return window.data() == target; });
+  }
 
   LiveServer* owner;
   QPointer<WindowManager> manager;
@@ -106,8 +118,11 @@ struct LiveServer::State {
   MainWindow* documentWindow(const Client& client, const QJsonObject& arguments = {}) const {
     const QString id = arguments.value(QStringLiteral("document")).toString();
     if (!id.isEmpty()) return manager ? manager->windowForDocument(id) : nullptr;
-    if (!client.chat.isEmpty())
-      return client.chatWindow && client.chatWindow->mcpDocumentId() == client.document ? client.chatWindow.data() : nullptr;
+    if (!client.chat.isEmpty()) {
+      // Its own design, or the last one it made (mitcad#1266).
+      MainWindow* bound = manager ? manager->windowForDocument(client.document) : nullptr;
+      return chatMayUse(client, bound) ? bound : nullptr;
+    }
     return window();
   }
 
@@ -299,15 +314,27 @@ struct LiveServer::State {
       // The live catalog (mitcad#265): MainWindowMcp.cpp, MainWindowMcpUi.cpp.
       // An applied model command is an error only when a feature it
       // added or edited fails; finish_mcp decides (mitcad#401).
-      if (!client.chat.isEmpty() && target != client.chatWindow)
-        throw std::runtime_error("A chat agent can only access its own document");
+      if (!client.chat.isEmpty() && !chatMayUse(client, target.data()))
+        throw std::runtime_error("A chat agent can only access its own document and the documents it made");
       const QString document = target->mcpDocumentId();
       value = target->mcpTool(tool, arguments);
       if (!target) {
         client.document = document;
         throw std::runtime_error("The application document window closed during the request");
       }
-      client.document = target->mcpDocumentId();
+      if (tool == QLatin1String("document_new")) {
+        // The agent goes on in the design it made (mitcad#1266): an omitted
+        // handle goes there; the design it came from keeps its handle.
+        const QString made = value.value(QStringLiteral("document")).toString();
+        if (MainWindow* created = manager ? manager->windowForDocument(made) : nullptr) {
+          client.document = made;
+          if (!client.chat.isEmpty()) client.made.append(created);
+        }
+      } else if (client.chat.isEmpty() || document == client.document) {
+        // A chat agent's binding moves only with the design it is bound to
+        // (document_open replaces it), not with a read of another one.
+        client.document = target->mcpDocumentId();
+      }
       scheduleComments(0);
     } catch (const Refusal& refusal) {
       // Busy (when to retry), a panel's state.

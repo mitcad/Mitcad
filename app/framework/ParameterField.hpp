@@ -11,6 +11,7 @@
 #include <QString>
 
 #include "ParameterSuggest.hpp"
+#include "ValueStep.hpp"
 
 class QAction;
 class QEvent;
@@ -73,6 +74,15 @@ struct ParameterFieldOptions {
   // The list offers Create User Parameter... (not where a dialog would end
   // the editing, as in a table's cell).
   bool create = true;
+  // Up and Down, and the mouse wheel while the field has the keyboard, step
+  // a plain value with the list closed (mitcad#1254, ValueStep.hpp): the
+  // command panel's value fields and the sketch's value fields. The new
+  // text goes in as typed (textEdited: the preview follows); an expression
+  // is left as it is. Not in the parameter table's cells, whose Up and Down
+  // move between the rows.
+  bool steps = false;
+  // The smallest value a step goes to (a pattern's quantity: 1).
+  ValueStepLimit stepLimit;
 };
 
 // The parameter suggestions of an expression field (mitcad#567): typing
@@ -84,7 +94,9 @@ struct ParameterFieldOptions {
 // never the value, and does not confirm the command; Esc closes the list
 // and only the list. A choice the field cannot take (a parameter of
 // another kind as the whole expression, one that would make a cycle)
-// says why instead. With the list closed the field's keys are its own.
+// says why instead. With the list closed the field's keys are its own;
+// in a field that steps (ParameterFieldOptions::steps, mitcad#1254) Up and
+// Down then step a plain value, and the tooltip says how.
 //
 // The list also offers what mitcad#568 asks for: `name = …` names the
 // field's own parameter (a hint and an action that writes the form), and
@@ -164,6 +176,9 @@ private:
   void insert(const QString& name, const QString& how, const Anchor& where);
   void showMenu(const QPoint& at);
   void updateIcon();
+  // The value stepped by `by` in the unit it shows (mitcad#1254), logged
+  // with what stepped it ("Up", "Shift+Up", "wheel").
+  void stepValue(double by, const QString& how);
   void logFx();
   void updateAssistance();
   SuggestContext context() const;
@@ -198,6 +213,7 @@ private:
   QString m_columnsOf;
   bool fillColumns();
   bool m_inserting = false;
+  int m_wheel = 0; // the wheel's turn not yet a step (1/8 degree units)
   QString m_logged;
   QString m_loggedPlaces;
   QString m_loggedFx;

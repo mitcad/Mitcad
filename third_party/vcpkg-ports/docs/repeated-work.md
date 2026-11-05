@@ -1,4 +1,4 @@
-# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050
+# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270
 
 These patches change no result. Each removes repeated work that made an
 OCCT algorithm quadratic (or worse) in the edges or wires of a face or a
@@ -21,6 +21,10 @@ The same kind of bound for booleans on faces that run many turns is in
   intersecting edges of one wire instead of by number from the wire's
   sequence for every pair, which made healing a body with long wires grow
   with the cube of their edges (mitcad#642).
+- **1270** keeps the open edges of a shell ShapeFix builds face by face
+  instead of going through all of its edges after every face added, which
+  made the face merge after a boolean quadratic in the faces of a large
+  shell (mitcad#1273).
 
 ## 0006 to 0009: booleans and the checker
 
@@ -107,6 +111,22 @@ from it; the fixes change the wire only for a pair whose edges intersect,
 and the array is read again after such a pair, so the fixes see the same
 edges as before.
 
+## 1270: ShapeFix's orientation of a large shell's faces
+
+### 1270-shapefix-shell-closed-shell-found-as-faces-are-added
+
+`ShapeFix_Shell::FixFaceOrientation` (its `GetShells`) builds a shell
+face by face. Where more than two faces share an edge (its multi-connex
+mode) it tested after every face added whether the shell had closed, with
+`BRep_Tool::IsClosed`, which goes through every edge of the shell. The face
+merge after a boolean (`ShapeUpgrade_UnifySameDomain::UnifyEdges`) runs it
+on each shell whose faces it changed: on the union of a machine's 257
+bodies, one shell of 8 800 faces, 22 of 25 stack samples of the 14 s merge
+stood in those tests. The edges used an odd number of times (as `IsClosed`
+toggles them) are kept in a map as the faces are added; the shell is closed
+when it has an edge that counts and none is left over, the same test, and
+the map is emptied with each new shell.
+
 ## Reports and tests
 
 - 0006 to 0009: the reports mitcad#84 (0006), mitcad#90 (0007), mitcad#91
@@ -115,3 +135,6 @@ edges as before.
   results are OCCT's without the patch.
 - 0120 and 0121: mitcad#119 and `geometry/tests/test_large_bodies.cpp`,
   whose statuses are OCCT's without them.
+- 1270: mitcad#1273, the union of the reported design of GitHub #133 in
+  `geometry/tests/test_join_many_bodies.cpp` (its results are the same
+  without the patch; only its time changes).

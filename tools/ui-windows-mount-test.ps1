@@ -185,11 +185,11 @@ function Add-Source([string]$Path) {
   Ui-Step 'Add URL (Alt+A)'                { Ui-Key 'alt+a' }
   Ui-FocusDialog '^Add Library$'
   Ui-Step 'the folder'                     { Ui-Type $Path; Ui-Key 'Return' }
-  Ui-FocusDialog '^Libraries$'
+  Ui-FocusDialog '^Library Sources$'
   Ui-ExpectNew "Library source added: $Path" 'the source added'
 }
 
-# Close-Libraries: Close (Alt+C) in the Libraries dialog, which has the
+# Close-Libraries: Close (Alt+C) in the Library Sources dialog, which has the
 # keys. Its button clicks a moment after the key (Qt's animateClick) and
 # nothing is logged for it: the main window takes keys again once the
 # dialog's window is gone.
@@ -198,7 +198,7 @@ function Close-Libraries {
   Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
   # Looked for every 20 ms (200 ms before, mitcad#870), up to 10 s.
   Ui-WaitGone $dialog 10000
-  if ((Ui-Windows '^Libraries$') -contains $dialog) { Ui-Fail 'the Libraries dialog did not close' }
+  if ((Ui-Windows '^Library Sources$') -contains $dialog) { Ui-Fail 'the Library Sources dialog did not close' }
   Ui-FocusMain
 }
 
@@ -286,10 +286,10 @@ function Number([double]$Value) { return $Value.ToString('R', [Globalization.Cul
 Ui-StartApp 'mount' @('--open', $scene)
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 
-Write-Host '--- 0. Libraries: the synthetic parts'' library only'
+Write-Host '--- 0. Library Sources: the synthetic parts'' library only'
 Ui-Mark
-Ui-Step 'Libraries (F8)'                   { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'             { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Ui-Step 'remove a default (Alt+R)'         { Ui-Key 'alt+r' }
 Ui-Step 'and the other (Alt+R)'            { Ui-Key 'alt+r' }
 Add-Source $library
@@ -365,8 +365,8 @@ if ($env:MITCAD_GRIDFINITY_LIBRARY -and (Test-Path (Join-Path $env:MITCAD_GRIDFI
   $footPart = $manifest.components | Where-Object { $_.mounts | Where-Object { $_.kind -eq 'foot' } } | Select-Object -First 1
   if (-not $gridPart -or -not $footPart) { Ui-Fail 'the test files'' library has no grid part or no foot part' }
   Ui-Mark
-  Ui-Step 'Libraries (F8)'                 { Ui-Key 'F8' }
-  Ui-FocusDialog '^Libraries$'
+  Ui-Step 'Library Sources (F8)'           { Ui-Key 'F8' }
+  Ui-FocusDialog '^Library Sources$'
   Add-Source $env:MITCAD_GRIDFINITY_LIBRARY
   Ui-Step 'Fetch All (Alt+F)'              { Ui-Key 'alt+f' }
   Ui-ExpectNew "Library fetched: library $($manifest.name) ($($manifest.id))" "the model's library fetched" 60
@@ -476,8 +476,8 @@ Write-Host 'ok   the published screw lists its frame'
 Ui-StartApp 'mount-place' @('--open', $scene)
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Ui-Mark
-Ui-Step 'Libraries (F8)'                   { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'             { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Add-Source $mine
 Ui-Step 'Fetch All (Alt+F)'                { Ui-Key 'alt+f' }
 Ui-ExpectNew "Library fetched: library My screws (my-screws) from $mine" 'the own library fetched' 30
@@ -549,8 +549,8 @@ Write-Host '--- 5. A hole''s rim selected before Insert from Library: ISO 4762 p
 Ui-StartApp 'mount-selected' @('--open', $holed)
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Ui-Mark
-Ui-Step 'Libraries (F8)'                   { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'             { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Add-Source $parts
 Ui-Step 'Fetch All (Alt+F)'                { Ui-Key 'alt+f' }
 Ui-ExpectNew "Library fetched: library Test ISO parts (test-iso) from $parts" 'the ISO parts fetched' 30

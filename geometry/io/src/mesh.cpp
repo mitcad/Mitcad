@@ -683,6 +683,164 @@ private:
   MeshSharedPtr m_shared;
 };
 
+// How a face over the bound is triangulated again (HeldFaceAlgo): at most
+// this many times, each with the deviation raised by the excess times the
+// margin and the angles by its square root, the angles to at most the
+// largest; one that ends with barely fewer triangles (its boundary's
+// points) is not tried again.
+constexpr int kHoldAttempts = 3;
+constexpr double kHoldMargin = 1.25;
+constexpr double kHoldLargestAngle = 30.0 * kDegree;
+constexpr double kHoldBarelyFewer = 0.9;
+// The bound of a small face (HeldFaceAlgo): this many triangles per square
+// of the face's deviation in its area, at least kHoldLeast.
+constexpr double kHoldPerDeviationArea = 0.25;
+constexpr double kHoldLeast = 200.0;
+
+// A face's triangles on its triangulation, -1 for none.
+int triangles_of(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  const occ::handle<Poly_Triangulation>& triangulation = BRep_Tool::Triangulation(face, location);
+  return triangulation.IsNull() ? -1 : triangulation->NbTriangles();
+}
+
+// The area (mm²) of a face's triangulation, from its nodes (0 for none).
+double triangulated_area(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  const occ::handle<Poly_Triangulation>& triangulation = BRep_Tool::Triangulation(face, location);
+  if (triangulation.IsNull()) {
+    return 0.0;
+  }
+  double twice = 0.0;
+  for (int t = 1; t <= triangulation->NbTriangles(); ++t) {
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    triangulation->Triangle(t).Get(a, b, c);
+    const gp_Pnt pa = triangulation->Node(a);
+    twice += gp_Vec(pa, triangulation->Node(b)).Crossed(gp_Vec(pa, triangulation->Node(c))).Magnitude();
+  }
+  return 0.5 * twice;
+}
+
+// A face's triangulation held within the face bound
+// (MeshOptions::hold_face_triangles, mitcad#1275): made by `first`, and
+// when it has more than `limit` triangles made again by a fresh algorithm
+// of `again` with the face's deviation and the angles raised (kHold...),
+// until it is within the bound or an attempt barely helps. The last
+// triangulation made is the one kept (the face's model, its parameter
+// curves' nodes, is the last meshing's); a later attempt that fails is
+// followed by the one before it made again, as it was. The face's
+// deviation is set back to what it was asked for, and so is the
+// triangulation's, so that a meshing with the same options keeps it.
+class HeldFaceAlgo : public IMeshTools_MeshAlgo {
+public:
+  HeldFaceAlgo(occ::handle<IMeshTools_MeshAlgo> first, occ::handle<IMeshTools_MeshAlgoFactory> again,
+               std::size_t limit)
+      : m_first(std::move(first)), m_again(std::move(again)), m_limit(static_cast<double>(limit)) {}
+
+  void Perform(const IMeshData::IFaceHandle& face, const IMeshTools_Parameters& parameters,
+               const Message_ProgressRange& range) override {
+    // (Taken before: BRepMesh's deviation control sets the face's
+    // deviation to what it measured on the triangulation.)
+    const double asked = face->GetDeflection();
+    m_first->Perform(face, parameters, range);
+    int last = triangles_of(face->GetFace());
+    if (last < 0 || face->IsSet(IMeshData_Failure)) {
+      return;
+    }
+    // The bound, and for a small face fewer: a triangle of the face's area
+    // per square of its deviation (a B-spline face of 5 mm² got 17 000
+    // triangles from its knots, deviation or not), at least kHoldLeast.
+    double limit = m_limit;
+    if (asked > 0.0) {
+      limit = std::min(limit, std::max(kHoldLeast, kHoldPerDeviationArea * triangulated_area(face->GetFace()) /
+                                                       (asked * asked)));
+    }
+    const auto over = [limit](int triangles) { return triangles >= 0 && static_cast<double>(triangles) > limit; };
+    if (!over(last)) {
+      if (mesh_tracing() && last > 5000) {
+        std::fprintf(stderr, "mesh-trace: within %s face of %.3g mm2 within %.0f: %d triangles, deviation %.3g\n",
+                     surface_name(face->GetSurface()->GetType()), triangulated_area(face->GetFace()), limit, last,
+                     asked);
+      }
+      return;
+    }
+    const int first = last;
+    double deviation = asked;
+    IMeshTools_Parameters coarser = parameters;
+    double lastDeviation = asked;
+    IMeshTools_Parameters lastParameters = parameters;
+    for (int attempt = 0; attempt < kHoldAttempts && over(last) && !range.UserBreak(); ++attempt) {
+      const double excess = static_cast<double>(last) / limit * kHoldMargin;
+      deviation *= excess;
+      const auto wider = [excess](double angle) {
+        return std::max(angle, std::min(kHoldLargestAngle, angle * std::sqrt(excess)));
+      };
+      coarser.Angle = wider(coarser.Angle);
+      coarser.AngleInterior = wider(coarser.AngleInterior);
+      // The parameters a B-spline's knots give are kept apart by at least
+      // this (BRepMesh's NURBS splitter): raised with the deviation, as the
+      // deviations some of its range splitters take from the parameters
+      // instead of the face (the edges are cut already).
+      coarser.MinSize *= excess;
+      coarser.Deflection = std::max(coarser.Deflection, deviation);
+      coarser.DeflectionInterior = std::max(coarser.DeflectionInterior, deviation);
+      const int made = triangulate(face, coarser, deviation, range);
+      if (made < 0) {
+        if (!range.UserBreak()) {
+          triangulate(face, lastParameters, lastDeviation, range);
+        }
+        break;
+      }
+      const bool barely = static_cast<double>(made) > kHoldBarelyFewer * static_cast<double>(last);
+      last = made;
+      lastDeviation = deviation;
+      lastParameters = coarser;
+      if (barely) {
+        break;
+      }
+    }
+    face->SetDeflection(asked);
+    TopLoc_Location location;
+    const occ::handle<Poly_Triangulation>& made = BRep_Tool::Triangulation(face->GetFace(), location);
+    if (!made.IsNull()) {
+      made->Deflection(asked);
+    }
+    if (mesh_tracing()) {
+      std::fprintf(stderr, "mesh-trace: held %s face of %.3g mm2 within %.0f: %d -> %d triangles, deviation %.3g -> %.3g\n",
+                   surface_name(face->GetSurface()->GetType()), triangulated_area(face->GetFace()), limit, first, last,
+                   asked, lastDeviation);
+    }
+  }
+
+private:
+  // The face triangulated again from no triangulation at `deviation`: its
+  // triangles, -1 when it failed.
+  int triangulate(const IMeshData::IFaceHandle& face, const IMeshTools_Parameters& parameters, double deviation,
+                  const Message_ProgressRange& range) const {
+    BRepMesh_ShapeTool::NullifyFace(face->GetFace());
+    face->UnsetStatus(IMeshData_Failure);
+    face->SetDeflection(deviation);
+    try {
+      const occ::handle<IMeshTools_MeshAlgo> algorithm = m_again->GetAlgo(face->GetSurface()->GetType(), parameters);
+      if (algorithm.IsNull()) {
+        face->SetStatus(IMeshData_Failure);
+        return -1;
+      }
+      algorithm->Perform(face, parameters, range);
+    } catch (const Standard_Failure&) {
+      face->SetStatus(IMeshData_Failure);
+      return -1;
+    }
+    return face->IsSet(IMeshData_Failure) ? -1 : triangles_of(face->GetFace());
+  }
+
+  occ::handle<IMeshTools_MeshAlgo> m_first;
+  occ::handle<IMeshTools_MeshAlgoFactory> m_again;
+  double m_limit;
+};
+
 // use_fast_plane_algorithms_for_tests: null for Delabella's.
 std::mutex g_fastPlanesMutex;
 occ::handle<IMeshTools_MeshAlgoFactory> g_fastPlanesForTests;
@@ -716,12 +874,14 @@ occ::handle<IMeshTools_MeshAlgoFactory> default_algorithms() {
 // planes through Delabella's base triangulation when `fast_planes`
 // (MeshOptions::fast_planes), checked and made again by the default when
 // `check_planes` too (CheckedPlaneAlgo, counted in the shared `redone`),
-// each on a private copy of its face (PrivateFaceAlgo), each timed when
-// the meshing is.
+// the other faces held within `held` triangles when that is not 0
+// (HeldFaceAlgo, MeshOptions::hold_face_triangles), each on a private copy
+// of its face (PrivateFaceAlgo), each timed when the meshing is.
 class FaceAlgoFactory : public IMeshTools_MeshAlgoFactory {
 public:
-  FaceAlgoFactory(bool fast_planes, bool check_planes, MeshSharedPtr shared)
-      : m_default(default_algorithms()), m_check(fast_planes && check_planes), m_shared(std::move(shared)) {
+  FaceAlgoFactory(bool fast_planes, bool check_planes, std::size_t held, MeshSharedPtr shared)
+      : m_default(default_algorithms()), m_check(fast_planes && check_planes), m_held(held),
+        m_shared(std::move(shared)) {
     m_planes = fast_planes ? fast_plane_algorithms() : m_default;
   }
 
@@ -735,6 +895,9 @@ public:
     if (m_check && type == GeomAbs_Plane) {
       algorithm = new CheckedPlaneAlgo(algorithm, m_default, m_shared);
     }
+    if (m_held > 0 && type != GeomAbs_Plane) {
+      algorithm = new HeldFaceAlgo(algorithm, m_default, m_held);
+    }
     algorithm = new PrivateFaceAlgo(algorithm, m_shared);
     if (m_shared->timed) {
       algorithm = new TimedAlgo(algorithm, m_shared);
@@ -746,6 +909,7 @@ private:
   occ::handle<IMeshTools_MeshAlgoFactory> m_default;
   occ::handle<IMeshTools_MeshAlgoFactory> m_planes;
   bool m_check;
+  std::size_t m_held;
   MeshSharedPtr m_shared;
 };
 
@@ -972,15 +1136,23 @@ private:
 // parallel when the meshing is (each task only reads its own face and sets
 // its own deviation); a face whose floor cannot be computed keeps
 // BRepMesh's deviation. Planes through Delabella with `fast_planes`,
-// checked with `check_planes` (MeshOptions). With a report, each phase is
-// timed and so is each face (MeshReport).
+// checked with `check_planes`, other faces held within the bound with
+// `hold_face_triangles` (MeshOptions). A meshing whose deviation is the
+// shape's by its size (the parameters' above `linear_deflection`,
+// MeshOptions::size_deviation) records `linear_deflection` in the
+// triangulations of the faces it made at that deviation (not those a floor
+// or their edges made coarser). With a report, each phase is timed and so
+// is each face (MeshReport).
 class BoundedContext : public BRepMesh_Context {
 public:
-  BoundedContext(std::size_t face_triangles, bool fast_planes, bool check_planes, MeshReport* report)
-      : m_faceTriangles(face_triangles), m_report(report), m_shared(std::make_shared<MeshShared>()) {
+  BoundedContext(const MeshOptions& options, MeshReport* report)
+      : m_faceTriangles(options.face_triangles), m_asked(options.linear_deflection),
+        m_record(options.size_deviation > 0.0 || options.hold_face_triangles), m_report(report),
+        m_shared(std::make_shared<MeshShared>()) {
     m_shared->timed = m_report != nullptr;
-    SetFaceDiscret(
-        new StoppableFaceDiscret(new FaceAlgoFactory(fast_planes, check_planes, m_shared), m_shared));
+    const std::size_t held = options.hold_face_triangles ? options.face_triangles : 0;
+    SetFaceDiscret(new StoppableFaceDiscret(
+        new FaceAlgoFactory(options.fast_planes, options.check_planes, held, m_shared), m_shared));
   }
 
   bool BuildModel() override {
@@ -1006,19 +1178,22 @@ public:
       return false;
     }
     const occ::handle<IMeshData_Model>& model = GetModel();
+    m_floored.assign(model.IsNull() ? 0 : static_cast<std::size_t>(model->FacesNb()), 0);
     if (m_faceTriangles == 0 || model.IsNull()) {
       add(&MeshReport::heal, start);
       return true;
     }
     const std::size_t limit = m_faceTriangles;
+    std::vector<char>& floored = m_floored;
     OSD_Parallel::For(
         0, model->FacesNb(),
-        [&model, limit](int i) {
+        [&model, &floored, limit](int i) {
           const IMeshData::IFaceHandle& face = model->GetFace(i);
           try {
             const double floor = face_deviation_floor(face->GetFace(), face->GetDeflection(), limit);
             if (floor > face->GetDeflection()) {
               face->SetDeflection(floor);
+              floored[static_cast<std::size_t>(i)] = 1;
             }
           } catch (const Standard_Failure&) {
             // BRepMesh's own deviation.
@@ -1052,6 +1227,7 @@ public:
   bool PostProcessModel() override {
     const Clock::time_point start = Clock::now();
     const bool done = BRepMesh_Context::PostProcessModel();
+    recordAsked();
     add(&MeshReport::write, start);
     count();
     return done;
@@ -1067,7 +1243,35 @@ private:
     }
   }
 
-  // The faces kept, meshed and failed, by surface kind, and the slowest.
+  // The deviation asked for (MeshOptions::linear_deflection) in the
+  // triangulations this meshing made with the view's options (by size or
+  // held), except those of the faces a floor raised: the shape's deviation
+  // by its size, the hold and BRepMesh's own raises (tolerances) are the
+  // view's meshing of what was asked. Their edges' polygons keep the
+  // deviation they were cut at.
+  void recordAsked() {
+    const occ::handle<IMeshData_Model>& model = GetModel();
+    if (!m_record || model.IsNull() || GetParameters().Relative) {
+      return;
+    }
+    for (int i = 0; i < model->FacesNb(); ++i) {
+      const IMeshData::IFaceHandle& face = model->GetFace(i);
+      const auto index = static_cast<std::size_t>(i);
+      if (face->IsSet(IMeshData_Reused) || face->IsSet(IMeshData_Failure) ||
+          (index < m_floored.size() && m_floored[index] != 0)) {
+        continue;
+      }
+      TopLoc_Location location;
+      const occ::handle<Poly_Triangulation>& made = BRep_Tool::Triangulation(face->GetFace(), location);
+      if (!made.IsNull() && made->Deflection() > m_asked) {
+        made->Deflection(m_asked);
+      }
+    }
+  }
+
+  // The faces kept, meshed and failed, by surface kind, and the slowest
+  // (added to what the report has: one meshing per deviation,
+  // mesh_all_in_place).
   void count() {
     const occ::handle<IMeshData_Model>& model = GetModel();
     if (m_report == nullptr || model.IsNull()) {
@@ -1088,7 +1292,16 @@ private:
       }
     }
     for (const auto& [surface, count] : surfaces) {
-      m_report->meshed_by_surface.emplace_back(surface, count);
+      bool known = false;
+      for (std::pair<std::string, std::size_t>& entry : m_report->meshed_by_surface) {
+        if (entry.first == surface) {
+          entry.second += count;
+          known = true;
+        }
+      }
+      if (!known) {
+        m_report->meshed_by_surface.emplace_back(surface, count);
+      }
     }
     m_report->planes_redone += m_shared->redone.load();
     const std::lock_guard<std::mutex> lock(m_shared->mutex);
@@ -1107,6 +1320,11 @@ private:
   }
 
   std::size_t m_faceTriangles;
+  double m_asked; // MeshOptions::linear_deflection
+  // Whether the faces made record m_asked (recordAsked: the view's options),
+  // and which faces a floor raised (HealModel), which do not.
+  bool m_record;
+  std::vector<char> m_floored;
   MeshReport* m_report;
   MeshSharedPtr m_shared; // with the faces' workers and algorithms
 };
@@ -1124,16 +1342,14 @@ std::atomic<std::size_t> g_presentationFaces{0};
 class BoundedMesh : public BRepMesh_IncrementalMesh {
 public:
   explicit BoundedMesh(const MeshOptions& options, MeshReport* report = nullptr, bool presentation = false)
-      : m_faceTriangles(options.face_triangles), m_fastPlanes(options.fast_planes),
-        m_checkPlanes(options.check_planes), m_report(report),
-        m_presentation(presentation) {}
+      : m_options(options), m_report(report), m_presentation(presentation) {}
 
   using BRepMesh_IncrementalMesh::Perform;
   void Perform(const Message_ProgressRange& range = Message_ProgressRange()) override {
     MeshReport own;
     MeshReport* report = m_presentation ? &own : m_report;
     const Clock::time_point start = Clock::now();
-    BoundedContext* context = new BoundedContext(m_faceTriangles, m_fastPlanes, m_checkPlanes, report);
+    BoundedContext* context = new BoundedContext(m_options, report);
     const occ::handle<IMeshTools_Context> held = context;
     BRepMesh_IncrementalMesh::Perform(held, range);
     if (report != nullptr) {
@@ -1152,47 +1368,61 @@ public:
   }
 
 private:
-  std::size_t m_faceTriangles;
-  bool m_fastPlanes;
-  bool m_checkPlanes;
+  MeshOptions m_options;
   MeshReport* m_report;
   bool m_presentation;
 };
 
-// The presentations' meshing algorithm (use_bounded_presentation_meshes).
+// A meshing's parameters for `options` at `deviation` (the shape's,
+// shape_deviation).
+IMeshTools_Parameters parameters_of(const MeshOptions& options, double deviation) {
+  if (!(options.linear_deflection > 0.0) || !(options.angular_deflection > 0.0)) {
+    throw Error("mesh deflections must be greater than zero");
+  }
+  IMeshTools_Parameters parameters;
+  parameters.Deflection = std::max(deviation, options.linear_deflection);
+  parameters.Angle = options.angular_deflection;
+  if (options.interior_angle > 0.0) {
+    parameters.AngleInterior = options.interior_angle;
+  }
+  parameters.Relative = options.relative;
+  parameters.InParallel = true;
+  return parameters;
+}
+
+// The presentations' meshing algorithm (use_bounded_presentation_meshes):
+// the drawer's deviation as the options' linear_deflection, its angle not
+// taken (its curves'), planes by the default insertion.
 class BoundedFactory : public BRepMesh_DiscretAlgoFactory {
 public:
   static constexpr const char* kName = "MitcadBounded";
 
-  explicit BoundedFactory(std::size_t face_triangles)
-      : BRepMesh_DiscretAlgoFactory(kName), m_faceTriangles(face_triangles) {}
+  explicit BoundedFactory(const MeshOptions& options) : BRepMesh_DiscretAlgoFactory(kName), m_options(options) {
+    m_options.fast_planes = false;
+    m_options.check_planes = false;
+  }
 
   occ::handle<BRepMesh_DiscretRoot> CreateAlgorithm(const TopoDS_Shape& shape, double deviation,
-                                                    double angle) override {
-    const MeshOptions options{deviation, angle, false, m_faceTriangles, false, false};
+                                                    double /*angle*/) override {
+    MeshOptions options = m_options;
+    if (deviation > 0.0) {
+      options.linear_deflection = deviation;
+    }
     occ::handle<BoundedMesh> mesher = new BoundedMesh(options, nullptr, true);
-    mesher->ChangeParameters().Deflection = deviation;
-    mesher->ChangeParameters().Angle = angle;
+    try {
+      mesher->ChangeParameters() = parameters_of(options, shape_deviation(shape, options));
+    } catch (const Error&) {
+      mesher->ChangeParameters().Deflection = deviation;
+      mesher->ChangeParameters().Angle = options.angular_deflection;
+    }
     mesher->ChangeParameters().InParallel = BRepMesh_IncrementalMesh::IsParallelDefault();
     mesher->SetShape(shape);
     return mesher;
   }
 
 private:
-  std::size_t m_faceTriangles;
+  MeshOptions m_options;
 };
-
-IMeshTools_Parameters parameters_of(const MeshOptions& options) {
-  if (!(options.linear_deflection > 0.0) || !(options.angular_deflection > 0.0)) {
-    throw Error("mesh deflections must be greater than zero");
-  }
-  IMeshTools_Parameters parameters;
-  parameters.Deflection = options.linear_deflection;
-  parameters.Angle = options.angular_deflection;
-  parameters.Relative = options.relative;
-  parameters.InParallel = true;
-  return parameters;
-}
 
 } // namespace
 
@@ -1331,6 +1561,34 @@ double face_deviation_floor(const TopoDS_Face& face, double deviation, std::size
     return 0.0;
   }
   return kTrianglesPerCurvature * curvature_integral(face) / limit;
+}
+
+double shape_deviation(const TopoDS_Shape& shape, const MeshOptions& options) {
+  const double asked = options.linear_deflection;
+  if (!(options.size_deviation > 0.0) || options.relative || !(asked > 0.0) || shape.IsNull()) {
+    return asked;
+  }
+  Bnd_Box box;
+  try {
+    // From the geometry, not the triangulations: the same before and after
+    // the shape is meshed.
+    BRepBndLib::Add(shape.Located(TopLoc_Location()), box, false);
+  } catch (const Standard_Failure&) {
+    return asked;
+  }
+  if (box.IsVoid() || box.IsOpen()) {
+    return asked;
+  }
+  const double sized = options.size_deviation * std::sqrt(box.SquareExtent());
+  if (!std::isfinite(sized) || !(sized > asked)) {
+    return asked;
+  }
+  if (options.size_deviation_max > 0.0 && sized >= options.size_deviation_max) {
+    return std::max(asked, options.size_deviation_max);
+  }
+  // Steps of the square root of 2 up from the deviation asked for.
+  const double steps = std::floor(2.0 * std::log2(sized / asked) + 1e-9);
+  return asked * std::pow(2.0, steps / 2.0);
 }
 
 bool has_triangulation(const TopoDS_Shape& shape) {
@@ -1690,9 +1948,9 @@ bool triangulation_on_face(const TopoDS_Face& face) {
   return !triangulation.IsNull() && triangulation_lies_on(face, *triangulation);
 }
 
-void use_bounded_presentation_meshes(std::size_t face_triangles) {
+void use_bounded_presentation_meshes(const MeshOptions& options) {
   BRepMesh_DiscretAlgoFactory::UnregisterFactory(BoundedFactory::kName);
-  BRepMesh_DiscretAlgoFactory::RegisterFactory(new BoundedFactory(face_triangles), true);
+  BRepMesh_DiscretAlgoFactory::RegisterFactory(new BoundedFactory(options), true);
   BRepMesh_DiscretFactory::Get().SetDefaultName(BoundedFactory::kName);
 }
 
@@ -1726,10 +1984,11 @@ TopoDS_Shape triangulate(const TopoDS_Shape& shape, const MeshOptions& options) 
   if (shape.IsNull()) {
     throw Error("cannot triangulate a null shape");
   }
-  const IMeshTools_Parameters parameters = parameters_of(options);
+  IMeshTools_Parameters parameters = parameters_of(options, options.linear_deflection);
   if (has_surfaceless_face(shape)) {
     return shape;
   }
+  parameters = parameters_of(options, shape_deviation(shape, options));
   // A topology copy without triangulations: the original keeps its own.
   const TopoDS_Shape copy = BRepBuilderAPI_Copy(shape, false, false).Shape();
   BoundedMesh mesher(options);
@@ -1747,10 +2006,11 @@ bool mesh_in_place(const TopoDS_Shape& shape, const MeshOptions& options, const 
   if (shape.IsNull()) {
     throw Error("cannot triangulate a null shape");
   }
-  const IMeshTools_Parameters parameters = parameters_of(options);
+  IMeshTools_Parameters parameters = parameters_of(options, options.linear_deflection);
   if (has_surfaceless_face(shape)) {
     return true;
   }
+  parameters = parameters_of(options, shape_deviation(shape, options));
   BoundedMesh mesher(options, report);
   mesher.SetShape(shape);
   mesher.ChangeParameters() = parameters;
@@ -1760,16 +2020,17 @@ bool mesh_in_place(const TopoDS_Shape& shape, const MeshOptions& options, const 
 
 std::size_t mesh_all_in_place(const std::vector<TopoDS_Shape>& shapes, const MeshOptions& options,
                               const Message_ProgressRange& range, MeshReport* report) {
-  const IMeshTools_Parameters parameters = parameters_of(options);
+  parameters_of(options, options.linear_deflection); // throws for options that mesh nothing
   std::size_t meshed = 0;
-  // The shapes in one compound: it holds their own sub-shapes (TShapes), so
-  // BRepMesh triangulates the shapes' faces themselves, each face once
-  // (BRepMesh_ShapeExplorer skips a face met again in another placement,
-  // and commits the edges' polygons on one thread).
+  // The shapes by the deviation they mesh with (shape_deviation,
+  // mitcad#1275), the finest first, each deviation's in one compound: it
+  // holds their own sub-shapes (TShapes), so BRepMesh triangulates the
+  // shapes' faces themselves, each face once (BRepMesh_ShapeExplorer skips
+  // a face met again in another placement, and commits the edges' polygons
+  // on one thread); a face shared with a shape of a coarser deviation keeps
+  // the finer triangulation it has by then.
   std::vector<const TopoDS_Shape*> joined;
-  BRep_Builder builder;
-  TopoDS_Compound all;
-  builder.MakeCompound(all);
+  std::map<double, std::vector<const TopoDS_Shape*>> groups;
   for (const TopoDS_Shape& shape : shapes) {
     if (shape.IsNull()) {
       continue;
@@ -1778,38 +2039,56 @@ std::size_t mesh_all_in_place(const std::vector<TopoDS_Shape>& shapes, const Mes
       ++meshed; // left as it is, as mesh_in_place leaves it
       continue;
     }
-    builder.Add(all, shape);
     joined.push_back(&shape);
+    groups[shape_deviation(shape, options)].push_back(&shape);
   }
   if (joined.empty()) {
     return meshed;
   }
-  Message_ProgressScope scope(range, nullptr, 2);
-  bool failed = false;
-  try {
-    BoundedMesh mesher(options, report);
-    mesher.SetShape(all);
-    mesher.ChangeParameters() = parameters;
-    mesher.Perform(scope.Next());
-    if ((mesher.GetStatusFlags() & IMeshData_UserBreak) == 0 && !scope.UserBreak()) {
-      return meshed + joined.size();
+  Message_ProgressScope scope(range, nullptr, static_cast<double>(groups.size() + 1));
+  std::vector<const TopoDS_Shape*> left; // of the meshings that threw
+  bool stopped = false;
+  BRep_Builder builder;
+  for (const auto& [deviation, members] : groups) {
+    if (scope.UserBreak()) {
+      stopped = true;
+      break;
     }
-  } catch (const Standard_Failure&) {
-    failed = true;
-  } catch (const std::exception&) {
-    failed = true;
+    TopoDS_Compound all;
+    builder.MakeCompound(all);
+    for (const TopoDS_Shape* shape : members) {
+      builder.Add(all, *shape);
+    }
+    try {
+      BoundedMesh mesher(options, report);
+      mesher.SetShape(all);
+      mesher.ChangeParameters() = parameters_of(options, deviation);
+      mesher.Perform(scope.Next());
+      if ((mesher.GetStatusFlags() & IMeshData_UserBreak) != 0 || scope.UserBreak()) {
+        stopped = true;
+        break;
+      }
+    } catch (const Standard_Failure&) {
+      left.insert(left.end(), members.begin(), members.end());
+    } catch (const std::exception&) {
+      left.insert(left.end(), members.begin(), members.end());
+    }
   }
-  if (!failed) {
-    // Stopped: the shapes whose faces were all meshed by then.
+  if (stopped) {
+    // The shapes whose faces were all meshed by then.
     for (const TopoDS_Shape* shape : joined) {
       meshed += has_triangulation(*shape) ? 1 : 0;
     }
     return meshed;
   }
-  // The joint meshing threw: the shapes it did not finish one by one, so
-  // that one shape OCCT fails on leaves only itself without triangulations.
-  Message_ProgressScope each(scope.Next(), nullptr, static_cast<double>(joined.size()));
-  for (const TopoDS_Shape* shape : joined) {
+  meshed += joined.size() - left.size();
+  if (left.empty()) {
+    return meshed;
+  }
+  // A joint meshing threw: the shapes it did not finish one by one, so that
+  // one shape OCCT fails on leaves only itself without triangulations.
+  Message_ProgressScope each(scope.Next(), nullptr, static_cast<double>(left.size()));
+  for (const TopoDS_Shape* shape : left) {
     if (each.UserBreak()) {
       break;
     }

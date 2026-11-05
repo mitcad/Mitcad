@@ -806,6 +806,81 @@ impl<S> Cache<S> {
     }
 }
 
+// Rolled-back features evaluated in the background (mitcad#1267,
+// `document/rolled_back.rs`).
+impl<S> Cache<S> {
+    /// The memory the cached results that `held` hold take (each result
+    /// once), estimated: what the cache cannot drop for its budget.
+    pub(crate) fn held_bytes<'a>(&self, held: impl IntoIterator<Item = &'a FeatureResult<S>>) -> u64
+    where
+        S: 'a,
+    {
+        let mut seen = HashSet::new();
+        held.into_iter()
+            .filter_map(|r| {
+                let output = r.output.as_ref()?;
+                if !seen.insert(Arc::as_ptr(output)) {
+                    return None;
+                }
+                self.entries
+                    .get(&r.uid)?
+                    .iter()
+                    .find(|e| Arc::ptr_eq(&e.output, output))
+                    .map(|e| e.bytes)
+            })
+            .sum()
+    }
+
+    /// Takes the newest result of each of `uids` from `other` (a fork's)
+    /// that this cache does not have, in the order of `uids`, as if
+    /// evaluated here; the results this cache has stay as they are. With
+    /// `room`, it stops before the results taken would take more memory
+    /// than that. Does not trim: the caller does once the fork is gone.
+    /// Returns how many were taken.
+    pub(crate) fn adopt_new(
+        &mut self,
+        other: &Cache<S>,
+        uids: &[FeatureUid],
+        room: Option<u64>,
+    ) -> usize {
+        let mut adopted = 0;
+        let mut taken = 0u64;
+        for uid in uids {
+            let Some(theirs) = other.entries.get(uid).and_then(|l| l.front()) else {
+                continue;
+            };
+            let known = self
+                .entries
+                .get(uid)
+                .is_some_and(|l| l.iter().any(|e| Arc::ptr_eq(&e.output, &theirs.output)));
+            if known {
+                continue;
+            }
+            if room.is_some_and(|room| taken + theirs.bytes > room) {
+                break;
+            }
+            taken += theirs.bytes;
+            let used = self.tick();
+            let entries = self.entries.entry(*uid).or_default();
+            entries.push_front(CacheEntry {
+                def: theirs.def.clone(),
+                output: theirs.output.clone(),
+                bytes: theirs.bytes,
+                used,
+            });
+            self.bytes += theirs.bytes;
+            while entries.len() > ENTRIES_PER_FEATURE {
+                let dropped = entries.pop_back().expect("more than the limit");
+                self.bytes -= dropped.bytes;
+                self.stats.evicted += 1;
+                self.stats.evicted_bytes += dropped.bytes;
+            }
+            adopted += 1;
+        }
+        adopted
+    }
+}
+
 impl<S: Clone> Recomputed<S> {
     /// A copy for a forked document ([`crate::Document::fork`]); the
     /// results are shared.

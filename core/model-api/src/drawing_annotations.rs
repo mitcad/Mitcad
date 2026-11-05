@@ -827,6 +827,55 @@ fn noun(kind: AnnotationType) -> &'static str {
     }
 }
 
+/// The `type` of a dimension whose picks choose its type (mitcad#1272).
+pub(super) const CHOSEN: &str = "dimension";
+
+/// What `add_drawing_annotation` is asked for: an annotation of a type, or
+/// a dimension whose picks choose its type ([`CHOSEN`], mitcad#1272).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Asked {
+    Type(AnnotationType),
+    Dimension,
+}
+
+impl Asked {
+    /// The type of a command's `type`; None for an unknown one (and for
+    /// a text, a line or an arc, which are no annotation types).
+    pub(super) fn of(key: &str) -> Option<Self> {
+        if key == CHOSEN {
+            return Some(Self::Dimension);
+        }
+        serde_json::from_value(json!(key)).ok().map(Self::Type)
+    }
+
+    /// Its type before its picks choose one: a dimension's checks and
+    /// words are a linear one's.
+    pub(super) fn kind(self) -> AnnotationType {
+        match self {
+            Self::Type(kind) => kind,
+            Self::Dimension => AnnotationType::Linear,
+        }
+    }
+
+    /// What a click for it picks: anything for a dimension.
+    pub(super) fn wants(self) -> Want {
+        match self {
+            Self::Type(kind) => kind.wants(),
+            Self::Dimension => Want::Any,
+        }
+    }
+}
+
+/// A dimension whose picks chose its type (mitcad#1272): the type, the
+/// picks it keeps (a straight edge alone: its two ends) with how the view
+/// sees them, and the direction a linear one measures along.
+struct Chosen {
+    kind: AnnotationType,
+    picks: Vec<ViewPick>,
+    found: Vec<Found>,
+    along: Option<Along>,
+}
+
 /// Whether a view looks along none of its component's axes and is no
 /// section: seen from an angle unless it looks square at a face.
 fn angled(spec: &ViewSpec) -> bool {
@@ -953,14 +1002,15 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
 
     // Dimension spacing (mitcad#1173, `drawing_spacing.rs`).
 
-    /// The annotation an `add_drawing_annotation` of `kind` would make
-    /// first (the first of a series), not yet placed, and how its view
-    /// sees its picks.
+    /// The annotation an `add_drawing_annotation` asked for `asked` would
+    /// make first (the first of a series; of a dimension whose picks
+    /// choose its type, the type they and the placing click choose,
+    /// mitcad#1272), not yet placed, and how its view sees its picks.
     fn placing_annotation(
         &self,
         view: &ViewAt<'_>,
         c: &AddAnnotationCommand,
-        kind: AnnotationType,
+        asked: Asked,
         id: u32,
     ) -> Result<(ViewAnnotation, Vec<Seen>), ApiError>;
 
@@ -1200,13 +1250,14 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         if c.kind == "text" {
             return self.add_text_note(old, c, first);
         }
-        let kind: AnnotationType = serde_json::from_value(json!(c.kind)).map_err(|_| {
+        let asked = Asked::of(&c.kind).ok_or_else(|| {
             ApiError(format!(
-                "unknown annotation type {}: {}, text, line or arc",
+                "unknown annotation type {}: {}, {CHOSEN}, text, line or arc",
                 c.kind,
                 AnnotationType::ALL.map(AnnotationType::key).join(", ")
             ))
         })?;
+        let kind = asked.kind();
         if !c.points.is_empty() || c.pen.is_some() {
             return Err(ApiError(format!(
                 "a {} is drawn from its picks: it takes no points or pen",
@@ -1229,17 +1280,30 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let view = self
             .view_at(&old, si, &evaluated, view_id)
             .map_err(ApiError)?;
-        let (mut picks, clicked) = self.picks_of(&view, &c.picks, kind.wants())?;
+        let (mut picks, clicked) = self.picks_of(&view, &c.picks, asked.wants())?;
         // A centre pattern of one circle: every circle of its pattern
         // (mitcad#729).
         if kind == AnnotationType::CenterPattern && picks.len() == 1 {
             picks = self.pattern_of(&view, &picks[0]).map_err(ApiError)?;
         }
-        let found: Vec<Found> = picks
+        let mut found: Vec<Found> = picks
             .iter()
             .map(|p| self.resolve_found(&view, p))
             .collect::<Result<_, _>>()
             .map_err(ApiError)?;
+        // A dimension whose picks choose its type (mitcad#1272); a series
+        // is of linear ones.
+        let (kind, given) = match asked {
+            Asked::Dimension if c.series.is_none() => {
+                let chosen = self
+                    .chosen_dimension(&view, picks, found, c.at)
+                    .map_err(ApiError)?;
+                picks = chosen.picks;
+                found = chosen.found;
+                (chosen.kind, c.along.or(chosen.along))
+            }
+            _ => (kind, c.along),
+        };
         let frame = view.frame();
         let mut template = ViewAnnotation::new(first, kind, Vec::new());
         template.height = c.height;
@@ -1319,7 +1383,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         };
         // On a pictorial view, aligned unless given: its picks' true
         // distance.
-        let along = along_of(kind, c.along, &view, &picks, &found);
+        let along = along_of(kind, given, &view, &picks, &found);
         if view.pictorial_for(&picks)
             && let Some(why) = pictorial_refusal(kind, along)
         {
@@ -1718,11 +1782,17 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 ..
             } => (
                 "circle",
-                vec![match arc {
-                    Some((start, end)) => json!({"arc": {"center": map.at(center),
-                        "radius": radius * scale, "start": start, "end": end}}),
-                    None => json!({"circle": {"center": map.at(center), "radius": radius * scale}}),
-                }],
+                vec![
+                    match arc {
+                        Some((start, end)) => json!({"arc": {"center": map.at(center),
+                            "radius": radius * scale, "start": start, "end": end}}),
+                        None => {
+                            json!({"circle": {"center": map.at(center), "radius": radius * scale}})
+                        }
+                    },
+                    // Its centre, which a click there picks (mitcad#1272).
+                    json!({"point": map.at(center)}),
+                ],
             ),
             Seen::Circle {
                 center,
@@ -2023,18 +2093,29 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         &self,
         view: &ViewAt<'_>,
         c: &AddAnnotationCommand,
-        kind: AnnotationType,
+        asked: Asked,
         id: u32,
     ) -> Result<(ViewAnnotation, Vec<Seen>), ApiError> {
-        let (picks, _) = self.picks_of(view, &c.picks, kind.wants())?;
-        let found: Vec<Found> = picks
+        let (mut picks, _) = self.picks_of(view, &c.picks, asked.wants())?;
+        let mut found: Vec<Found> = picks
             .iter()
             .map(|p| self.resolve_found(view, p))
             .collect::<Result<_, _>>()
             .map_err(ApiError)?;
+        let (kind, given) = match asked {
+            Asked::Dimension if c.series.is_none() => {
+                let chosen = self
+                    .chosen_dimension(view, picks, found, c.at)
+                    .map_err(ApiError)?;
+                picks = chosen.picks;
+                found = chosen.found;
+                (chosen.kind, c.along.or(chosen.along))
+            }
+            _ => (asked.kind(), c.along),
+        };
         // As add_drawing_annotation makes it: its direction from all the
         // picks, a series' first of its first two.
-        let along = along_of(kind, c.along, view, &picks, &found);
+        let along = along_of(kind, given, view, &picks, &found);
         let count = if c.series.is_some() {
             picks.len().min(2)
         } else {
@@ -2116,6 +2197,24 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// How a view sees a pick now, found again by its name; why not, when
     /// it is gone (or, on a section, in front of its plane).
     fn resolve_found(&self, view: &ViewAt<'_>, pick: &ViewPick) -> Result<Found, String>;
+
+    /// The dimension picks choose (`"type": "dimension"`, mitcad#1272),
+    /// `at` its placing click on the sheet: the same pick twice is one;
+    /// one circle a diameter, one arc a radius, one round face seen from
+    /// the side a diameter, one straight edge its length (from its start
+    /// to its end); two straight edges that are not parallel an angle,
+    /// any other two a linear dimension, horizontal, vertical or aligned
+    /// as the placing click chooses ([`annotate::placed_along`]; aligned
+    /// on a pictorial view, where an angle is a linear one too). Refused
+    /// when the picks lie on one point (never 0 mm), for a point alone,
+    /// and for more than two picks.
+    fn chosen_dimension(
+        &self,
+        view: &ViewAt<'_>,
+        picks: Vec<ViewPick>,
+        found: Vec<Found>,
+        at: Option<P2>,
+    ) -> Result<Chosen, String>;
 
     /// Why a datum label of this letter cannot go on a drawing, if it
     /// cannot: the model or another drawing has one (mitcad#717).
@@ -2314,9 +2413,31 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let q = map.view_point(at);
         let reach = annotate::PICK_REACH / map.scale;
         let point_reach = annotate::POINT_REACH / map.scale;
-        let tie = PICK_TIE / map.scale;
+        // A snap (mitcad#1272) goes to the nearest point, whatever its kind
+        // and however it is drawn: points as near as one another are one
+        // place there (the ends of edges seen on one another).
+        let tie = if want == Want::Snap {
+            1e-9
+        } else {
+            PICK_TIE / map.scale
+        };
         let eye = view.placed.spec.toward_eye;
-        let candidates = self.candidates(view);
+        let mut candidates = self.candidates(view);
+        if want == Want::Snap {
+            // A line or an arc drawn outside the model snaps to straight
+            // edges' middles too (mitcad#1272).
+            let middles: Vec<Candidate> = candidates
+                .iter()
+                .filter(|c| c.pick.point.is_none() && matches!(c.found.seen, Seen::Line(..)))
+                .map(|c| {
+                    let mut middle = c.clone();
+                    middle.pick.point = Some(PickPoint::Center);
+                    middle.found.seen = Seen::Point(c.found.seen.point());
+                    middle
+                })
+                .collect();
+            candidates.extend(middles);
+        }
         let nearest = |keep: &dyn Fn(&Candidate) -> bool, within: f64| {
             let mut found: Vec<(f64, &Candidate)> = candidates
                 .iter()
@@ -2362,6 +2483,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             }),
             Want::Line => nearest(&is_line, reach),
             Want::Circle => nearest(&is_round, reach),
+            Want::Snap => nearest(&is_point, point_reach.max(reach)),
         }
     }
 
@@ -2446,6 +2568,119 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             },
             _ => found,
         })
+    }
+
+    fn chosen_dimension(
+        &self,
+        view: &ViewAt<'_>,
+        picks: Vec<ViewPick>,
+        found: Vec<Found>,
+        at: Option<P2>,
+    ) -> Result<Chosen, String> {
+        // The same pick twice is one pick.
+        let mut kept: Vec<ViewPick> = Vec::new();
+        let mut seen: Vec<Found> = Vec::new();
+        for (pick, f) in picks.into_iter().zip(found) {
+            if !kept.contains(&pick) {
+                kept.push(pick);
+                seen.push(f);
+            }
+        }
+        let pictorial = view.pictorial_for(&kept);
+        let clicked = at.map(|a| view.placed.map.view_point(a));
+        // Between two picks: horizontal, vertical or aligned as the click
+        // chooses; never between two picks on one point.
+        let linear = |picks: Vec<ViewPick>, found: Vec<Found>| -> Result<Chosen, String> {
+            let (a, b) = (found[0].seen.point(), found[1].seen.point());
+            let apart = if pictorial {
+                mitcad_vec3::distance(found[0].at, found[1].at)
+            } else {
+                (b[0] - a[0]).hypot(b[1] - a[1])
+            };
+            if apart < 1e-9 {
+                return Err(
+                    "the picks lie on one point: nothing to measure between them".to_owned(),
+                );
+            }
+            let along = if pictorial {
+                Along::Aligned
+            } else {
+                annotate::placed_along(a, b, clicked)
+            };
+            Ok(Chosen {
+                kind: AnnotationType::Linear,
+                picks,
+                found,
+                along: Some(along),
+            })
+        };
+        let alone = |kind: AnnotationType, picks: Vec<ViewPick>, found: Vec<Found>| Chosen {
+            kind,
+            picks,
+            found,
+            along: None,
+        };
+        match kept.len() {
+            1 => {
+                let pick = kept[0].clone();
+                let first = seen[0].seen;
+                match first {
+                    Seen::Circle { arc: Some(_), .. } => {
+                        Ok(alone(AnnotationType::Radius, kept, seen))
+                    }
+                    Seen::Circle { .. } | Seen::Axis { .. } => {
+                        Ok(alone(AnnotationType::Diameter, kept, seen))
+                    }
+                    Seen::Line(..) if pick.edge.is_some() && pick.point.is_none() => {
+                        // Its length: from its start to its end.
+                        let ends: Vec<ViewPick> = [PickPoint::Start, PickPoint::End]
+                            .into_iter()
+                            .map(|point| ViewPick {
+                                point: Some(point),
+                                ..pick.clone()
+                            })
+                            .collect();
+                        let found = ends
+                            .iter()
+                            .map(|p| self.resolve_found(view, p))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        linear(ends, found)
+                    }
+                    Seen::Line(..) => Err(
+                        "a cut face has no length of its own: pick a second edge or point to \
+                         dimension it from"
+                            .to_owned(),
+                    ),
+                    Seen::Point(_) => Err(
+                        "a point alone measures nothing: pick a second edge, circle or point"
+                            .to_owned(),
+                    ),
+                }
+            }
+            2 => {
+                let lines = kept.iter().all(|p| p.point.is_none());
+                let crossing = match (seen[0].seen, seen[1].seen) {
+                    (Seen::Line(a1, b1), Seen::Line(a2, b2)) => {
+                        let d1 = [b1[0] - a1[0], b1[1] - a1[1]];
+                        let d2 = [b2[0] - a2[0], b2[1] - a2[1]];
+                        let cross = d1[0] * d2[1] - d1[1] * d2[0];
+                        cross.abs() > 1e-6 * d1[0].hypot(d1[1]) * d2[0].hypot(d2[1])
+                    }
+                    _ => false,
+                };
+                if lines && crossing && !pictorial {
+                    Ok(alone(AnnotationType::Angle, kept, seen))
+                } else {
+                    linear(kept, seen)
+                }
+            }
+            0 => Err("a dimension takes one pick or two".to_owned()),
+            _ => Err(
+                "a dimension takes one pick (a circle, an arc or a straight edge) or two; a \
+                 baseline or a chain takes more"
+                    .to_owned(),
+            ),
+        }
     }
 
     fn datum_taken(&self, letter: &str, drawing: DrawingUid) -> Option<String> {

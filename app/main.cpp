@@ -480,6 +480,29 @@ int runApplication(int argc, char* argv[]) {
       return 2;
     }
   }
+  // The Start tab at launch (mitcad#1258): by Preferences' choice (the
+  // page's Show start page at launch, on by default), unless the start
+  // opens a file, the demo block or a screenshot, sets parameters, or is a
+  // test's: MITCAD_START_PAGE=0 (the UI test libraries set it), or a UI
+  // test script's run unless MITCAD_START_PAGE=1.
+  {
+    const QByteArray startPage = qgetenv("MITCAD_START_PAGE");
+    QString skip;
+    if (hasStartFile) {
+      skip = QStringLiteral("a file opens");
+    } else if (parser.isSet(demoOption)) {
+      skip = QStringLiteral("--demo");
+    } else if (parser.isSet(screenshotOption)) {
+      skip = QStringLiteral("--screenshot");
+    } else if (!parser.values(setOption).isEmpty()) {
+      skip = QStringLiteral("--set");
+    } else if (startPage == "0") {
+      skip = QStringLiteral("MITCAD_START_PAGE=0");
+    } else if (startPage != "1" && testDriver.active()) {
+      skip = QStringLiteral("a UI test script");
+    }
+    window.showStartPageAtLaunch(skip);
+  }
   manager.present(&window);
   // The window's layout once it shows, which tools/check-all.sh compares
   // to decide whether the UI tests must run (tools/ui-layout.sh, mitcad#412).

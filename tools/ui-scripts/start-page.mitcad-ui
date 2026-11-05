@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# The Start tab (mitcad#1258, GitHub mitcad/Mitcad#125) with Show start page
+# at launch on (its default) and the fixture's three saved designs
+# (start-page-fixture.mitcad-ui) in the recent list:
+#   1. MitCad starts on the Start tab: the page shows the three designs,
+#      newest first, each with its preview, and New Design in the default
+#      units for new designs (inches, set by the fixture).
+#   2. The star pins start-b; Pinned shows it alone, All the three again.
+#   3. The search finds start-a alone; cleared, the three again.
+#   4. Show start page at launch is turned off (for start-page-off).
+#   5. start-c's card opens it: the Solid tab, the page gone.
+#   6. The Start tab again: New Design gives an empty design in inches.
+# Run with MITCAD_START_PAGE=1 by tools/ui-start-page-test.sh (Linux) and
+# tools/ui-windows-start-page-test.ps1 (Windows).
+expect-ever '^Start page at launch: shown$' 30
+expect-ever '^Start page shown$' 30
+wait-idle
+sleep 500
+
+# 1. The three designs with their previews.
+expect-ever '^Ribbon tab shown: START$'
+expect-ever '^Start page recent designs \(all\): start-c\.mitcad \(preview\) \| start-b\.mitcad \(preview\) \| start-a\.mitcad \(preview\)$' 10
+expect-ever '^Start page new design units: in$'
+expect-ever '^Start page action New Design at ' 10
+expect-ever '^Ribbon tab START at ' 10
+
+# 2. Pinned.
+mark
+click-logged '^Start page star start-b\.mitcad at '
+expect-log '^Start page pinned: start-b\.mitcad$'
+wait-idle
+mark
+click-logged '^Start page filter Pinned at '
+expect-log '^Start page filter: pinned$'
+expect-log '^Start page recent designs \(pinned\): start-b\.mitcad \(preview\)$'
+# The shorter list moves the header's controls: their new places are
+# logged before the next click reads them.
+wait-idle
+sleep 300
+mark
+click-logged '^Start page filter All at '
+expect-log '^Start page filter: all$'
+expect-log '^Start page recent designs \(all\): start-c\.mitcad \(preview\) \| start-b\.mitcad \(preview\) \| start-a\.mitcad \(preview\)$'
+
+# 3. The search.
+wait-idle
+sleep 300
+mark
+click-logged '^Start page search at '
+type start-a
+expect-log '^Start page recent designs \(all, "start-a"\): start-a\.mitcad \(preview\)$'
+mark
+key ctrl+a
+key Backspace
+expect-log '^Start page recent designs \(all\): start-c\.mitcad \(preview\) \| start-b\.mitcad \(preview\) \| start-a\.mitcad \(preview\)$'
+wait-idle
+
+# 4. Show start page at launch off.
+sleep 300
+mark
+click-logged '^Start page show at launch at '
+expect-log '^Start page at launch: off$'
+expect-setting start/showAtLaunch false
+
+# 5. A card opens its design.
+sleep 300
+mark
+click-logged '^Start page card start-c\.mitcad at '
+expect-log '^Start page chosen: open start-c\.mitcad$'
+wait-log '^Opened .*start-c\.mitcad$' 60
+wait-log '^Ribbon tab shown: SOLID$' 10
+expect-log '^Start page hidden$'
+wait-idle
+
+# 6. New Design from the page: an empty design in inches.
+mark
+click-logged '^Ribbon tab START at '
+expect-log '^Ribbon tab shown: START$'
+expect-log '^Start page shown$'
+wait-log '^Start page action New Design at ' 10
+mark
+click-logged '^Start page action New Design at '
+expect-log '^Start page chosen: New Design$'
+wait-log '^New design in in$' 30
+wait-log '^Ribbon tab shown: SOLID$' 10
+wait-idle
+expect-never 'TestDriver: FAIL'

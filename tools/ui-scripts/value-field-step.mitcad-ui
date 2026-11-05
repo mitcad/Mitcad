@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# Up, Down and the mouse wheel step a value field's number (mitcad#1254,
+# GitHub mitcad/Mitcad#129), on value-field-step.json (a 10 mm cube F2.b0
+# and a sketch F3 with a square):
+#   1. Extrude F3's square: its Distance holding `d1*2` is not stepped by
+#      Up (the expression stays); 10 mm and Shift+Up is 20 mm, previewed at
+#      once as a typed value.
+#   2. Circular Pattern of the cube about one of its top edges: Quantity 4
+#      and Up is 5, previewed; the wheel over Total Angle, a field without
+#      the keyboard, changes nothing; the wheel over Quantity, which has
+#      it, steps it to 6; OK is one undo step.
+# Run by tools/ui-value-field-step-test.sh (Linux) and
+# tools/ui-windows-value-field-step-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Extrude: an expression is left alone, Shift+Up steps by 10 mm.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+# Extrude may preselect a profile: cleared, so that the click adds F3's.
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F3/r' 20
+click-pick 'profile F3/r'
+wait-log '^Extrude Profiles: 1 profile'
+type-in '^Panel Extrude input distance at ' 'd1*2'
+expect-input-text distance '^d1[*]2$'
+mark
+key Up
+expect-log '^Value field Extrude Distance: Up not stepped: d1[*]2 is not a plain value$'
+expect-input-text distance '^d1[*]2$'
+type-in '^Panel Extrude input distance at ' '10 mm'
+wait-log '^Extrude Distance: 10 mm = 10 mm'
+wait-idle
+mark
+key shift+Up
+expect-log '^Value field Extrude Distance: Shift[+]Up stepped 10 mm to 20 mm$'
+expect-input-text distance '^20 mm$'
+wait-log '^Extrude Distance: 20 mm = 20 mm'
+wait-log '^Preview Extrude: ok' 30
+mark
+button '^OK$'
+wait-log '^Added Extrude' 30
+wait-idle
+
+# 2. Circular Pattern: Quantity 4, Up, 5 previewed; the wheel.
+capture-undo-depth before_pattern
+mark
+command solid.circular_pattern
+expect-log '^Command Circular Pattern started'
+wait-idle
+click-logged '^Body F2[.]b0 at '
+wait-log '^Circular Pattern Objects: 1 body'
+mark
+click-logged '^Panel Circular Pattern input axis at '
+wait-log '^Pick edge F2[.]b0/E[{].*F2:end' 20
+click-pick 'edge F2[.]b0/E[{].*F2:end'
+wait-log '^Circular Pattern Axis: 1 edge'
+wait-log '^Preview Circular Pattern: ok' 30
+wait-idle
+expect-input-text quantity '^4$'
+click-logged '^Panel Circular Pattern input quantity at '
+wait-idle
+mark
+key Up
+expect-log '^Value field Circular Pattern Quantity: Up stepped 4 to 5$'
+expect-input-text quantity '^5$'
+wait-log '^Circular Pattern Quantity: 5 = '
+wait-log '^Preview Circular Pattern: ok' 30
+wait-idle
+# The wheel over a field without the keyboard is the panel's: no value
+# changes (Quantity keeps the keyboard).
+mark
+wheel-logged '^Panel Circular Pattern input angle at ' 1
+wheel-logged '^Panel Circular Pattern input angle at ' -1
+wait-idle
+expect-input-text angle '^360 deg$'
+expect-input-text quantity '^5$'
+expect-no-log '^Value field Circular Pattern Total Angle'
+# The wheel over the field with the keyboard steps it.
+mark
+wheel-logged '^Panel Circular Pattern input quantity at ' 1
+expect-log '^Value field Circular Pattern Quantity: wheel stepped 5 to 6$'
+expect-input-text quantity '^6$'
+wait-log '^Preview Circular Pattern: ok' 30
+mark
+button '^OK$'
+wait-log '^Added Circular Pattern' 30
+wait-idle
+expect-undo-depth ${before_pattern} 1
+expect-never 'Recompute failed|TestDriver: FAIL'

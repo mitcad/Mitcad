@@ -56,6 +56,7 @@ ParameterPicker shared the parameter labels over the 3D view
 PillTabBar replaced setRibbon: the AppKit ribbon's workspace tabs
 ProjectIndicator replaced setProjectStatus: the toolbar's project status
 ProfilesPanel native renderWidget: separate Printers and Processes managers, place groups and search, own-place editing and full settings, destination menus, read-only built-ins and no-design libraries (mitcad#1158)
+RecentCard shared a recent design's card on the Start page over the embedded 3D view (mitcad#1258)
 RenderFrameOverlay shared the render frame over the 3D view
 RenderLightsOverlay shared the lights over the 3D view
 Ribbon replaced setRibbon: the AppKit ribbon
@@ -66,6 +67,11 @@ SectionTitle replaced renderWidget: the Docked Command panel's section titles; t
 SegmentedTabBar replaced setRibbon: the AppKit ribbon's workspace tabs
 SelectionCreatePanel native renderWidget: a QGroupBox; its painting only drops the frame under a section title
 SketchOverlay shared the sketch over the 3D view
+StartDropArea shared the Start page's drop area over the embedded 3D view (mitcad#1258)
+StartLink shared the Start page's links (What's New, Preferences, Report an Issue) over the embedded 3D view (mitcad#1258)
+StartPage shared the Start page over the embedded 3D view, the Start tab's content; the AppKit ribbon shows the retained ribbon's START tab and setStartPageShown hides the cards (mitcad#1258)
+StartPanel shared the Start page's panels over the embedded 3D view (mitcad#1258)
+StartTile shared the Start page's quick actions and resources over the embedded 3D view (mitcad#1258)
 TimelineStrip replaced MITCADHistoryStrip: the history card, with its hover preview and tooltips (mitcad#1076) and its groups' bands and folded cells (MITCADHistoryGroupView, mitcad#1077)
 TitleBar replaced MITCADNativeWindowDelegate: the Qt title row; the AppKit toolbar
 TitleButton replaced MITCADNativeWindowDelegate: the Qt title row's buttons and a Docked panel's float and close buttons; the AppKit toolbar and cards

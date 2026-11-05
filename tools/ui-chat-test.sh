@@ -3,6 +3,7 @@
 # check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp
 # check-all sources: app/mcp/ConnectAssistantDialog.cpp app/framework/FloatingLayout.cpp app/framework/TitleBar.cpp
 # check-all sources: app/tests/chat_test_agent.cpp core/mcp/src/chat core/ffi/src/chat.rs tools/cli tools/ui-chat-test.py
+# check-all sources: app/MainWindowMcp.cpp app/mcp/AgentFolders.cpp core/mcp/src/catalog.rs
 # The chat panel (mitcad#947) on a hidden Xvfb display: tools/ui-chat-test.py
 # runs the application with the scripted test agent (app/tests/
 # chat_test_agent.cpp) in place of Claude Code and Codex, through the real
@@ -17,7 +18,8 @@
 # localhost: the Anthropic API with its key typed in the panel, its
 # conversation resumed, and a local model's server found once it answers;
 # a custom command over the Agent Client Protocol (mitcad#1198): one that
-# does not answer the handshake, then the scripted agent's.
+# does not answer the handshake, then the scripted agent's; a design made
+# from the open one with document_new and built in (mitcad#1266).
 # Windows runs the same script as app.ui-windows-chat, macOS as
 # app.ui-macos-chat (cmake/SelectionUiTests.cmake).
 #

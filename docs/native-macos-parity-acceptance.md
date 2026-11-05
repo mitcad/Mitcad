@@ -111,7 +111,7 @@ preserves its evidence and all unrun inventory. Never overwrite a failed run.
 | 5 | `libraries` | Libraries: production entry; source rows, checkboxes and actions |
 | 6 | `new-project` | New Project: production entry; compact form, labels and normal/narrow fields |
 | 7 | `parameters` | Parameters: production entry; hierarchy, invalid Return/Tab, refusal and correction |
-| 8 | `parts-fixture` | Library Components fixture: separate synthetic presenter and versions/bill of materials |
+| 8 | `parts-fixture` | Components in This Design fixture: separate synthetic presenter and versions/bill of materials |
 | 9 | `picker-fixture` | Component Picker fixture, then actual BUILD Profile picker and configuration options |
 | 10 | `project-settings` | Project Settings: shared entry adapter with synthetic data; fields and storage choices |
 | 11 | `projects` | Actual selected Projects design + Return, then Open a Project fixture |
@@ -131,7 +131,7 @@ preserves its evidence and all unrun inventory. Never overwrite a failed run.
 | 25 | `export` | Export: production entry; format choices and action order; no file exported |
 | 26 | `find` | Find in Design: production entry; fields, results and document ownership |
 | 27 | `overview` | Keyboard and Mouse Overview: production entry; text hierarchy and scrolling |
-| 28 | `parts-production` | Library Components production entry after actual synthetic fastener insertion |
+| 28 | `parts-production` | Components in This Design production entry after actual synthetic fastener insertion |
 
 The JSON report distinguishes `planned`, `running`, `captured`, `failed` and
 `not-selected` scenarios. A completed diagnostic subset remains `incomplete`.

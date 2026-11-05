@@ -147,7 +147,8 @@ QString printerVendor(const QString& bareName, const QStringList& bareNames) {
 
 QString profileSource(const LibraryItem& item) {
   if (item.place == QStringLiteral("mitcad")) {
-    return QObject::tr("Built-in");
+    // A hidden one the design uses is its own (mitcad#1270).
+    return item.hidden ? QObject::tr("This design") : QObject::tr("Built-in");
   }
   if (item.place == QStringLiteral("user")) {
     return QObject::tr("My library");
@@ -174,6 +175,11 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
   for (const LibraryItem& item : items) {
     bareNames << bareName(item);
   }
+  // The built-ins out of the way once My library or This project has one
+  // of the kind (mitcad#1270): last, under one heading.
+  const bool ownItems = std::any_of(items.begin(), items.end(), [](const LibraryItem& item) {
+    return item.place == QStringLiteral("user") || item.place == QStringLiteral("project");
+  });
   QVector<ProfilePickerRow> rows;
   bool grouped = false;
   for (const LibraryItem& item : items) {
@@ -182,6 +188,22 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
     row.name = item.name;
     row.source = profileSource(item);
     const QString bare = bareName(item);
+    if (ownItems && item.place == QStringLiteral("mitcad") && !item.hidden) {
+      // By its whole name, a printer's with its nozzle.
+      row.builtIn = true;
+      row.group = QObject::tr("Built-in");
+      row.shortName = printers ? bare : item.name;
+      double nozzle = printers ? numberOf(item.row, "nozzle") : 0.0;
+      if (printers && nozzle <= 0.0) {
+        nozzle = numberOf(item.row, "name_nozzle");
+      }
+      if (nozzle > 0.0) {
+        row.shortName += QStringLiteral(" · ") + QObject::tr("%1 mm nozzle").arg(QString::number(nozzle));
+      }
+      grouped = true;
+      rows.append(row);
+      continue;
+    }
     if (printers) {
       // The vendor's heading over the model and the nozzle: the profile's
       // nozzle, else the one its name says.
@@ -209,7 +231,7 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
   if (!printers) {
     QStringList spellings;
     for (ProfilePickerRow& row : rows) {
-      if (row.group.isEmpty()) {
+      if (row.group.isEmpty() || row.builtIn) {
         continue;
       }
       const QString group = row.group;
@@ -222,9 +244,13 @@ QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, c
       }
     }
   }
-  // The chosen printer's processes first, then by group, the rows without
-  // one last; then by name, the same names by key.
+  // The built-ins apart last (mitcad#1270); the chosen printer's processes
+  // first, then by group, the rows without one last; then by name, the
+  // same names by key.
   std::stable_sort(rows.begin(), rows.end(), [](const ProfilePickerRow& a, const ProfilePickerRow& b) {
+    if (a.builtIn != b.builtIn) {
+      return b.builtIn;
+    }
     if (a.forChosen != b.forChosen) {
       return a.forChosen;
     }

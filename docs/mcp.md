@@ -398,6 +398,7 @@ The live catalogue has these tools:
 - `document_open`
 - The application's own tools `ui_state`, `ui_log`, `ui_screenshot`,
   `ui_select`, `ui_command` and `ui_camera`
+- `document_new` (a new design beside the open ones, mitcad#1266)
 
 The rule of thumb: what the user can see and do in the window, an AI assistant
 can read and do through these tools. The assistant gets the same undo and
@@ -426,7 +427,9 @@ Omitting it targets the active document at the start of the call. An
 explicit handle keeps the target independent of focus. A request waiting
 for approval retains its original target. Chat agents are bound to their
 own document, including when another window becomes active; they cannot
-use a different document's handle. `model_reference` is process-wide and
+use a different document's handle, except the handles of the designs they
+made with `document_new`. After `document_new` an omitted handle goes to
+the design made, for chat agents and other clients alike. `model_reference` is process-wide and
 `document_list` always lists all documents. `ui_log` reads the process log.
 
 Closing or replacing a document invalidates only that document's handle.
@@ -437,7 +440,11 @@ window preference instead. List documents again before editing a
 replacement. `ui_command` with `id: "window.new"` creates an empty document
 window without a file dialog; use `document_list` to obtain its new handle.
 The request's result still describes its original target. Existing file
-and interactive-dialog commands remain refused through `ui_command`.
+and interactive-dialog commands remain refused through `ui_command`;
+`file.new_design` is refused too, because New Design waits for the user
+to name the design (in place in the Projects panel, or in a dialog
+without it), and its refusal points to `document_new`, which makes the
+design without either.
 The headless server's explicit-handle contract is unchanged.
 
 The `mitcad://comments` resource follows the last tool's selected document
@@ -638,11 +645,12 @@ A new bridge can connect again to the same document. `--workspace` and
 | `model_reference` | As in headless mode: none, or one of `section`, `query`, `command`, `feature`, `search`; optional `offset`. | As in headless mode ([Look up the reference](#look-up-the-reference)). The protocol answers it, without the document. |
 | `document_save` | `document`. Optional `path`. Optional `overwrite` (default false). | `document`, `path`, `saved`, `status`, `state`. `status` is the text of the status bar, with the recorded version. Refer to the text below the table. |
 | `document_open` | `path`. Optional `discard` (default false). | `document` (the new handle), `path`, `name`, `state`, `busy`, `editable`, `opened`, `replaced` (the old handle). Refer to the text below the table. |
+| `document_new` | Optional `name`, `folder`. | `document` (the new design's handle), `path` (null for an untitled design), `name`, `state`, `busy`, `editable`, `created`, `previous` (the calling design's handle, still valid), `recorded` (true when a project recorded it), `note` when the current project's folder could not be used. Refer to the text below the table. |
 | `ui_state` | `{}` | `document`, `name`, `path`, `modified`, `read_only`, `read_only_reason`, `mode`, `busy`, `editable`, `active_component`, `undo`, `redo`, `undo_depth`, `selection`, `hint`, `hint_is_error`, `status_line`, `status_line_is_error`, `agents`, `sketch`, `command`, `comments` (`open`: the number of open comments), `app`. Refer to the text below the table. |
 | `ui_log` | `since` (a sequence number). `limit` (default 200, at most 2000). | `lines`, `next`, `dropped`. Refer to the text below the table. |
 | `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `max_bytes` (the encoded image's bytes, 4096 to 5 MiB; default 5 MiB inline, none for a file). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`, `downscaled_for_bytes`, `max_bytes`. With `path`, also `path` and no image. Refer to the text below the table. |
 | `ui_select` | `document`. `items` (entities) or `comment` (a comment's id). `reveal` (`none`, `pan` default, `fit`). | `document`, `selected`, `selection`, `view` (`none`, `pan`, `zoom`), `camera`. With a command panel open, also `picked`, `into_command` and `command`. With `comment`, also `comment`. Refer to the text below the table. |
-| `ui_command` | `document`. `id` or `edit`. `inputs`. `finish` (`ok` default, `cancel`, `keep_open`). | `document`, `command`, `panel`, `committed`, `open`, `mode`, `sketch`, `undo`, `previews`, `log`, `hint`. For a `view.*` command, also `camera`. Refer to the text below the table. |
+| `ui_command` | `document`. `id` or `edit`. `inputs`. `finish` (`ok` default, `cancel`, `keep_open`). Or `search` alone (words, `""` for all) to list the commands. | `document`, `command`, `panel`, `committed`, `open`, `mode`, `sketch`, `undo`, `previews`, `log`, `hint`. For a `view.*` command, also `camera`. A listing: `document`, `mode`, `search`, `commands` (`id`, `name`, `kind`, `agents`, `why`, `available`), `count`, `total`, and `note` when there was nothing to finish. Refer to the text below the table. |
 | `ui_camera` | `eye`, `target`, `up`, `height`, `fov`, `projection`. `box`, `frame` (`none` default, `shown`, `selection`) or `comment` (a comment's id), optional `aspect` with them. | `camera`, `framed` (`none`, `box`, `shown`, `selection`, `comment`), `changed`, `aspect` when given, `comment` with it. Refer to the text below the table. |
 
 **`document_save`** without `path` saves to the document's own path, as
@@ -674,6 +682,36 @@ is refused in these cases:
 
 If `discard` is true, MitCad discards the unsaved changes and their
 recovery data.
+
+**`document_new`** (mitcad#1266) makes an empty design, as File › New
+Design does, and opens it in a window (a tab) of its own beside the open
+designs. It never replaces a design: every open design, with its unsaved
+changes, stays open and keeps its handle. The new design becomes the
+active one, and the caller's later calls without a `document` handle go
+to it; a chat agent moves to it too and can still read the design it
+came from by that handle (`previous`). Where it is made:
+
+- With `folder`: in that folder, which must be a folder for designs or
+  below one (a relative path is relative to the first folder; `..` is
+  refused).
+- Without `folder`: in the current project's top folder, the place New
+  Design uses, when that folder is a folder for designs. Otherwise, with
+  a `name`, in the first folder for designs; without a `name`, the design
+  is untitled (save it later with `document_save` and a `path`), and
+  `note` says why the project's folder was not used.
+
+`name` is the file's name; `.mitcad` is added when it lacks it. Without
+`name` the design is the first free `DesignN.mitcad` of the folder, as
+New Design names it. A name that exists in the folder is refused, and the
+refusal names the file; a name with a folder in it is refused. In a
+project with versions the design is made and recorded as New Design
+records it (the project's `new_design`, a version `Add DesignN.mitcad`);
+outside projects the empty design is saved to the file. The design is in
+the default units for new designs. The tool is refused while a dialog is
+open, and when making the design would ask the user something (for
+example the author of a project's versions): MitCad closes that dialog
+and names it. The result waits until the new design has been computed;
+`editable` in the result or in `document_list` says when commands run.
 
 **`ui_state`** reads the window. `read_only` comes with
 `read_only_reason`. `mode` is `idle`, `sketch`, `command` or
@@ -787,7 +825,8 @@ in the input goes out again. Then the result holds `picked`,
 `into_command` and `command` (the state of the panel).
 
 **`ui_command`** runs a command of the registry
-([app/COMMANDS.md](../app/COMMANDS.md)) by `id`, or opens a feature by
+([app/COMMANDS.md](../app/COMMANDS.md); an agent lists it with `search`,
+below) by `id`, or opens a feature by
 `edit` (the uid of the feature). `inputs` is by the input keys of the
 panel. Each input takes a value of its type:
 
@@ -811,10 +850,24 @@ Without `id` and `edit`, `finish` ends the open panel or the open
 sketch. `ok` finishes it. `cancel` takes back every change made since
 it was opened, and leaves it.
 
+`search` (mitcad#1269) lists the registry's commands instead of running
+one, since an agent reads no file of the repository: each with its `id`,
+`name`, `kind` (`feature`: a panel with inputs; `action`: runs at once;
+`tool`: an interactive tool of the view), `agents` (false, with `why`,
+for a command that `ui_command` refuses) and `available` (whether it can
+run now, in this mode and window). Its words, all of them in any case,
+filter by the id, the name and the command search's keywords; `""`
+lists every command. It runs nothing, also while the model computes, and
+takes no `id`, `edit` or `inputs`; the chat's approvals count it as a
+read. A call without `id`, `edit` and `search` while nothing is open to
+finish lists them too, with a `note`. An unknown `id` is refused with
+the five nearest ids and their names (those that share the most words
+with it, then the fewest edits), never with a path to a file.
+
 Commands that open a file dialog or another window are refused:
 `file.*`, `insert.*`, `tools.*`, `help.*`, 3D Print, DXF import and
 export, and others. `document_save` with a path and `document_open` do
-Save As and Open. If a command opens any other modal dialog, MitCad
+Save As and Open, and `document_new` does New Design. If a command opens any other modal dialog, MitCad
 closes the dialog at once and refuses the call with the name of the
 dialog.
 
@@ -1384,6 +1437,17 @@ computations can still use much time and memory.
   refused, the document unchanged), `ui_camera`'s `aspect`, a JPEG
   screenshot of an asked size written into the folder, an image block
   and the `print_thickness` summary.
+- [tools/ui-mcp-document-new-test.sh](../tools/ui-mcp-document-new-test.sh)
+  (Xvfb, the same shell client) covers `document_new` (mitcad#1266):
+  `ui_command` `file.new_design` refused with a pointer to it, a folder
+  outside the folders, `..`, a name with a folder and an existing name
+  refused, a new `Design1.mitcad` in the current project recorded as a
+  version and opened beside the project's design (both listed, the old
+  handle still valid), model commands with and without the new handle
+  changing only the new design, and outside projects a named file, an
+  untitled design and a name in the first folder. The chat UI test
+  (`tools/ui-chat-test.py`, run `new-design`) runs a chat agent's "read
+  the open design, `document_new`, build in it" without the user's hand.
 - The unit tests of the folder rules are in `app.unit`.
 - The unit tests of the classification are in `core.model`, and those of
   the live catalogue are in `core.mcp`.

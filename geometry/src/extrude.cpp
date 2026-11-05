@@ -23,6 +23,7 @@
 #include <gp_XYZ.hxx>
 
 #include "canonical.hpp"
+#include "face_join.hpp"
 #include "history.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -227,7 +228,10 @@ ShapePtr oblique_side(const std::string& feature, const detail::SweepFace& face,
 // then the parts stay apart, as those of profiles apart from each other do.
 ShapePtr joined(const std::vector<ShapePtr>& parts) {
   try {
-    return detail::finished(*detail::fused(parts, "the extrusion"), "the extrusion");
+    // (The sides of touching profiles on one surface joined, which the
+    // fuse's exact merge leaves apart when their curves lie a few 1e-7 mm
+    // apart: arcs of one circle, mitcad#1261.)
+    return detail::join_same_surfaces(detail::finished(*detail::fused(parts, "the extrusion"), "the extrusion"));
   } catch (const std::runtime_error& error) {
     if (parts.size() < 2 || std::string(error.what()).find("produced an invalid shape") == std::string::npos) {
       throw;

@@ -278,6 +278,8 @@ impl<K: Kernel> Document<K> {
                         path: source.path.clone(),
                         digest,
                         feature: added.uid,
+                        envelope: None,
+                        frames: Vec::new(),
                     });
                     frames
                 }

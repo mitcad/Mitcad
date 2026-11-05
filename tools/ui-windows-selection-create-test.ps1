@@ -3,6 +3,7 @@
 # check-all sources: app/framework/SelectionCreate.hpp app/framework/WindowStyle.cpp app/MainWindow.cpp
 # check-all sources: app/framework/Command.cpp app/framework/CommandSession.cpp app/commands tools/cli
 # check-all sources: app/MainWindowMake.cpp app/print/MakeBodyCard.cpp
+# check-all sources: core/model/src/features/thread.rs
 # Input-driven Windows UI test of the selection card's Create row
 # (mitcad#619) in the build VM (tools/ui-windows-lib.ps1 says how the
 # input is posted), in the Docked layout, as tools/ui-selection-create-test.sh
@@ -22,6 +23,11 @@
 #      section wider than the card). Back on the Solid tab the row is
 #      Thread's again, inside the card too.
 #   4. The selection cleared (Esc): "Selection card create: none".
+#   4b. Thread on the round face with a size far from it (mitcad#1262):
+#      two sizes down from the suggested M20x2.5, M24x3, previews with the
+#      diameter warning in its log line and the panel's message
+#      (tools/ui-create-test.sh checks the same of a hole on Linux).
+#      Cancelled.
 #   5. A custom thread (mitcad#893) on the round face: Thread Type Custom
 #      with a typed major diameter (20) and pitch (3, which no ISO metric
 #      thread of 20 mm has), Starts 2, modelled, without the printed-fit
@@ -170,6 +176,34 @@ Ui-Mark
 Ui-Step 'clear the selection (Esc)'        { Ui-Key 'Escape' }
 Ui-ExpectNew 'Selected: nothing' 'nothing selected'
 Expect-Create 'none' 'the row: none'
+
+Write-Host '--- 4b. A size far from the face (mitcad#1262)'
+# The face suggests M20x2.5; two wheel steps down the sizes, M24x3, whose
+# major diameter is 4 mm larger than the face's: the preview and the
+# panel's message warn, the thread previewed all the same. Cancelled.
+Ui-Mark
+Ui-Step 'thread (F7)'                      { Ui-Key 'F7' }
+Ui-ExpectNew 'Command Thread started' 'Thread started'
+Ui-Step 'pick the round face'              { Ui-ClickPick "face F2.b0/$side" }
+Ui-ExpectNew "Thread Faces: 1 face [face $side of F2.b0" 'the round face picked'
+Ui-ExpectNew 'Preview Thread: ok' 'the suggested size previewed' 30
+Ui-Mark
+Ui-Step 'Size: two down (24)'              {
+  for ($i = 0; $i -lt 2; $i++) {
+    Ui-WheelLogged 'Panel Thread input size' -1
+    Ui-Sync
+  }
+}
+Ui-ExpectNew 'Thread: Size = 24' 'size 24 chosen'
+# (The diameter sign by its code: the script is read in the system's code
+# page.)
+$dia = [string][char]0x00D8
+$m24 = "M24x3 (${dia}24 mm) on face $side (${dia}20 mm): the face's diameter is 4 mm smaller than the thread's major diameter"
+Ui-ExpectNew "Preview Thread: ok, warning: $m24" 'the preview warns of the size' 30
+Ui-ExpectNew "Panel Thread message box: warning: $m24" 'the panel''s message shows the warning'
+Ui-Mark
+Ui-Step 'cancel (Esc)'                     { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Thread cancelled' 'cancelled'
 
 Write-Host '--- 5. A custom thread on two starts (mitcad#893)'
 Ui-Mark

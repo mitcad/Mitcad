@@ -105,6 +105,35 @@ int agentFolderTests() {
   CHECK(agentOutputPath(outside + QStringLiteral("/part.stl"), false, reason).isEmpty());
   CHECK(reason.contains(QStringLiteral("not in a folder for designs")));
   CHECK(agentOutputPath(QStringLiteral("../outside/part.stl"), false, reason).isEmpty());
+  // document_new's folder and file (mitcad#1266): an allowed folder or
+  // below it, a plain name with .mitcad added, the first free DesignN, an
+  // existing name refused with the name.
+  {
+    using mitcad::mcp::agentDesignFolder;
+    using mitcad::mcp::agentNewDesignPath;
+    CHECK(agentDesignFolder(QStringLiteral("sub"), reason) == allowed + QStringLiteral("/sub"));
+    CHECK(reason.isEmpty());
+    CHECK(agentDesignFolder(allowed, reason) == allowed);
+    CHECK(agentDesignFolder(outside, reason).isEmpty());
+    CHECK(reason.contains(QStringLiteral("not in a folder for designs")));
+    CHECK(agentDesignFolder(QStringLiteral("../outside"), reason).isEmpty());
+    CHECK(reason.contains(QStringLiteral("..")));
+    CHECK(agentDesignFolder(QStringLiteral("missing"), reason).isEmpty());
+    CHECK(reason.contains(QStringLiteral("does not exist")));
+    CHECK(agentDesignFolder(allowed + QStringLiteral("-not"), reason).isEmpty());
+    CHECK(agentNewDesignPath(allowed, QStringLiteral("nipple"), reason) == allowed + QStringLiteral("/nipple.mitcad"));
+    CHECK(agentNewDesignPath(allowed, QStringLiteral("Nut.MITCAD"), reason) == allowed + QStringLiteral("/Nut.MITCAD"));
+    CHECK(agentNewDesignPath(allowed, QStringLiteral("kept"), reason).isEmpty());
+    CHECK(reason.contains(QStringLiteral("kept.mitcad")) && reason.contains(QStringLiteral("already exists")));
+    CHECK(agentNewDesignPath(allowed, QStringLiteral("KEPT.mitcad"), reason).isEmpty());
+    CHECK(agentNewDesignPath(allowed, QStringLiteral("sub/x"), reason).isEmpty());
+    CHECK(reason.contains(QStringLiteral("not a design's name")));
+    CHECK(agentNewDesignPath(allowed, QStringLiteral(".."), reason).isEmpty());
+    CHECK(agentNewDesignPath(allowed, QStringLiteral(".mitcad"), reason).isEmpty());
+    CHECK(agentNewDesignPath(allowed, QString(), reason) == allowed + QStringLiteral("/Design1.mitcad"));
+    CHECK(touch(allowed + QStringLiteral("/design1.mitcad")));
+    CHECK(agentNewDesignPath(allowed, QString(), reason) == allowed + QStringLiteral("/Design2.mitcad"));
+  }
   mitcad::mcp::setRunAgentFolders({});
   // No folder (mitcad#732): the reason names the window as the platform
   // does, and no command-line option.

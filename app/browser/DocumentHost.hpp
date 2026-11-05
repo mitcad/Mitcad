@@ -162,6 +162,10 @@ public:
   // the empty Untitled design a window starts with: the print managers
   // then work on My library (and This project) without a design.
   virtual bool designOpen() const { return true; }
+  // The Materials manager on My library (mitcad#1250: Material Library… of
+  // the Material tool, which opens it while its panel is open); `closed`
+  // is called once when the manager closes.
+  virtual void openMaterialLibrary(std::function<void()> /*closed*/) {}
 
   // Sheet metal (mitcad#210): the Flat Pattern of a sheet-metal body to a
   // DXF file the user chooses.

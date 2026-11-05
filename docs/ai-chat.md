@@ -269,8 +269,8 @@ Assistants › Chat**, under **Approvals**:
 
 | Approvals | Without asking | Asks first |
 |---|---|---|
-| **Ask every time** | reading the design and the window | every change of the design, saving, opening, exporting, saving pictures, undoing what was there before the message |
-| **Model edits allowed** (the default) | reading, changing the design | saving (**Save As** too), opening another design, exporting, saving a picture to a file, a File command, undoing what was there before the message |
+| **Ask every time** | reading the design and the window | every change of the design, a new design, saving, opening, exporting, saving pictures, undoing what was there before the message |
+| **Model edits allowed** (the default) | reading, changing the design, a new design beside it | saving (**Save As** too), opening another design, exporting, saving a picture to a file, a File command, undoing what was there before the message |
 | **Allow everything** | everything | nothing |
 
 A call that asks shows a card in the conversation, and the agent waits
@@ -288,6 +288,13 @@ tries.
 
 Saving and opening go only to and from the folders for designs
 (**Preferences › AI Assistants**, as for every assistant).
+
+A new design (the tool `document_new`, mitcad#1266) is an empty design
+in a tab of its own beside the open ones, made as **File › New Design**
+makes it: it replaces nothing and writes over no file, so it runs as a
+change of the design does. The agent then works in the new design (and
+can still read the one the conversation started in); the conversation
+stays in the tab where it started.
 
 ## History
 

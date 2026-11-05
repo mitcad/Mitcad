@@ -3918,6 +3918,157 @@ bool OcctViewer::accepts(const occ::handle<SelectMgr_EntityOwner>& owner) const 
   return true;
 }
 
+const Bnd_Box& OcctViewer::placedBox(const BodyEntry& entry) const {
+  if (!entry.occluder) {
+    entry.occluder = std::make_shared<Occluder>();
+    if (entry.shape) {
+      entry.occluder->placed = entry.shape->occt().Moved(entry.placement);
+      // From the shown body's mesh, with room for the faces between its
+      // nodes.
+      Bnd_Box& box = entry.occluder->box;
+      BRepBndLib::Add(entry.occluder->placed, box, true);
+      if (!box.IsVoid()) {
+        box.Enlarge(kOcclusionTolerance + 0.01 * std::sqrt(box.SquareExtent()));
+      }
+    }
+  }
+  return entry.occluder->box;
+}
+
+namespace {
+
+// Where a box lies against a window of the view (decideWindowByBounds).
+enum class WindowSide { Inside, Outside, Crossing };
+
+} // namespace
+
+void OcctViewer::decideWindowByBounds() {
+  restoreWindowDecided();
+  if (!m_windowSelecting || m_pickingSuspended || activeKinds() != SelectFilter(SelectKind::Body) ||
+      m_view->Window().IsNull()) {
+    return;
+  }
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  const bool perspective = !camera->IsOrthographic();
+  const gp_Pnt eye = camera->Eye();
+  const gp_Dir sight = camera->Direction();
+  const QRectF area = m_windowRect;
+  // The box's corners in the widget: all inside the window, or their own
+  // rectangle apart from it. A corner behind the eye (a perspective view)
+  // leaves the box to OCCT.
+  const auto side = [&](const Bnd_Box& box) {
+    if (box.IsVoid() || box.IsOpen()) {
+      return WindowSide::Crossing;
+    }
+    double x1 = 0.0;
+    double y1 = 0.0;
+    double z1 = 0.0;
+    double x2 = 0.0;
+    double y2 = 0.0;
+    double z2 = 0.0;
+    box.Get(x1, y1, z1, x2, y2, z2);
+    bool allInside = true;
+    double left = std::numeric_limits<double>::infinity();
+    double right = -std::numeric_limits<double>::infinity();
+    double top = std::numeric_limits<double>::infinity();
+    double bottom = -std::numeric_limits<double>::infinity();
+    for (int corner = 0; corner < 8; ++corner) {
+      const gp_Pnt point((corner & 1) != 0 ? x2 : x1, (corner & 2) != 0 ? y2 : y1, (corner & 4) != 0 ? z2 : z1);
+      if (perspective && gp_Vec(eye, point).Dot(gp_Vec(sight)) <= 0.0) {
+        return WindowSide::Crossing;
+      }
+      const QPointF at = toWidgetF(point);
+      if (!std::isfinite(at.x()) || !std::isfinite(at.y())) {
+        return WindowSide::Crossing;
+      }
+      allInside = allInside && area.contains(at);
+      left = std::min(left, at.x());
+      right = std::max(right, at.x());
+      top = std::min(top, at.y());
+      bottom = std::max(bottom, at.y());
+    }
+    if (allInside) {
+      return WindowSide::Inside;
+    }
+    const bool apart =
+        right < area.left() || left > area.right() || bottom < area.top() || top > area.bottom();
+    return apart ? WindowSide::Outside : WindowSide::Crossing;
+  };
+  int inside = 0;
+  int outside = 0;
+  int crossing = 0;
+  const auto decide = [&](const occ::handle<AIS_Shape>& object, const Bnd_Box& box) {
+    if (!m_context->IsDisplayed(object)) {
+      return; // OCCT picks nothing of it either
+    }
+    const WindowSide where = side(box);
+    if (where == WindowSide::Crossing) {
+      ++crossing;
+      return;
+    }
+    if (where == WindowSide::Inside) {
+      // The owner of the whole body (selection mode 0), as OCCT would have
+      // reported it; the filter decides it as it decides OCCT's.
+      const occ::handle<SelectMgr_Selection>& selection = object->Selection(0);
+      if (selection.IsNull() || selection->Entities().IsEmpty()) {
+        ++crossing;
+        return;
+      }
+      const occ::handle<SelectMgr_EntityOwner> owner =
+          selection->Entities().First()->BaseSensitive()->OwnerId();
+      if (owner.IsNull()) {
+        ++crossing;
+        return;
+      }
+      m_windowInside.push_back(owner);
+      ++inside;
+    } else {
+      ++outside;
+    }
+    m_context->Deactivate(object);
+    m_windowDecided.push_back(object);
+  };
+  // The bodies picked as bodies (activatePicking: selection mode 0).
+  for (const auto& [key, entry] : m_bodies) {
+    const auto info = entry.object.IsNull() ? m_pickInfo.end() : m_pickInfo.find(entry.object.get());
+    if (info == m_pickInfo.end() || !info->second.body) {
+      continue;
+    }
+    decide(entry.object, placedBox(entry));
+  }
+  // The selected bodies' highlights, which stay pickable over them (not
+  // over a ghost, activatePicking).
+  for (const occ::handle<AIS_Shape>& highlight : m_highlights) {
+    const auto info = m_pickInfo.find(highlight.get());
+    if (info == m_pickInfo.end() || info->second.body || info->second.item.kind != SelectKind::Body ||
+        isGhosted(info->second.item.occurrence) || highlight->Shape().IsNull()) {
+      continue;
+    }
+    Bnd_Box box;
+    const TopoDS_Shape placed = highlight->HasTransformation()
+                                    ? highlight->Shape().Moved(TopLoc_Location(highlight->LocalTransformation()))
+                                    : highlight->Shape();
+    BRepBndLib::Add(placed, box, false);
+    if (!box.IsVoid()) {
+      box.Enlarge(kOcclusionTolerance + 0.01 * std::sqrt(box.SquareExtent()));
+    }
+    decide(highlight, box);
+  }
+  qDebug().noquote() << QStringLiteral("Window pick by bounds: %1 inside, %2 outside, %3 crossing")
+                            .arg(inside)
+                            .arg(outside)
+                            .arg(crossing);
+}
+
+void OcctViewer::restoreWindowDecided() {
+  const std::vector<occ::handle<AIS_Shape>> decided = std::move(m_windowDecided);
+  m_windowDecided.clear();
+  m_windowInside.clear();
+  for (const occ::handle<AIS_Shape>& object : decided) {
+    activatePicking(object);
+  }
+}
+
 bool OcctViewer::occluded(const gp_Pnt& point) const {
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   // From the point towards the eye: along the view in an orthographic
@@ -3940,17 +4091,7 @@ bool OcctViewer::occluded(const gp_Pnt& point) const {
     if (entry.style != BodyDisplay::Style::Normal || entry.inactive || entry.transparent || !entry.shape) {
       continue;
     }
-    if (!entry.occluder) {
-      entry.occluder = std::make_shared<Occluder>();
-      entry.occluder->placed = entry.shape->occt().Moved(entry.placement);
-      // From the shown body's mesh, with room for the faces between its
-      // nodes.
-      Bnd_Box& box = entry.occluder->box;
-      BRepBndLib::Add(entry.occluder->placed, box, true);
-      if (!box.IsVoid()) {
-        box.Enlarge(kOcclusionTolerance + 0.01 * std::sqrt(box.SquareExtent()));
-      }
-    }
+    placedBox(entry);
     Occluder& occluder = *entry.occluder;
     if (occluder.box.IsVoid() || occluder.box.IsOut(ray)) {
       continue;
@@ -4119,6 +4260,7 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
   if (m_cubeClick) {
     m_cubeClick = false;
     m_context->ClearSelected(false);
+    restoreWindowDecided();
     return;
   }
   Selection items;
@@ -4133,6 +4275,19 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
     }
   }
   m_context->ClearSelected(false);
+  // The bodies the window held by their boxes (decideWindowByBounds), as
+  // OCCT's pick would have taken them: through the view's filter.
+  if (m_windowPick) {
+    for (const occ::handle<SelectMgr_EntityOwner>& owner : m_windowInside) {
+      if (!accepts(owner)) {
+        continue;
+      }
+      if (const auto item = itemFor(owner); item && !items.contains(*item)) {
+        items.append(*item);
+      }
+    }
+  }
+  restoreWindowDecided();
   // A click that took the active component's item before a nearer one of
   // another component (mitcad#420).
   if (!m_windowPick && items.size() == 1 && mitcad::pickPrioritized(m_context) && !outsideActive(items.first())) {
@@ -6348,6 +6503,7 @@ void OcctViewer::cancelPointerInteraction() {
   m_cubeClick = false;
   m_windowPick = false;
   m_windowSelecting = false;
+  restoreWindowDecided();
   m_orbitKey = false;
   m_navigationState.setButtons(false);
   m_pointerInputPending = false;
@@ -6428,6 +6584,7 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
   setShiftHeld(event->modifiers().testFlag(Qt::ShiftModifier), false);
   if (event->button() == Qt::LeftButton) {
     m_windowSelecting = false;
+    restoreWindowDecided(); // a window not reported yet: OCCT picks them all
     const bool onCube = isOnOrientationCube(event->position());
     m_f4Press = !onCube && m_orbitKey &&
                 navigationAction(m_navigation, NavigationInput::LeftButton, event->modifiers(), true) !=
@@ -6583,6 +6740,9 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
         m_windowClock.start();
         m_windowShowPending = false;
       }
+      // Whole bodies by their boxes where they decide (mitcad#1275), before
+      // OCCT's pick on the next frame.
+      decideWindowByBounds();
     } else {
       setShiftHeld(event->modifiers().testFlag(Qt::ShiftModifier), false);
       m_clickPosition = event->position();
@@ -6726,6 +6886,11 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   }
   const QPointF delta = scrollPixels(event) * m_navigation.trackpadSpeed;
   if (delta.isNull()) {
+    // A trackpad ends with a phase-only event: its synthetic button must
+    // go up now, rather than waiting for the quiet-time fallback.
+    if (event->phase() == Qt::ScrollEnd) {
+      endScrollDrag();
+    }
     return;
   }
   const Qt::KeyboardModifiers keys = event->modifiers();

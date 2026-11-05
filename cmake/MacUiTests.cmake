@@ -415,11 +415,14 @@ set_tests_properties(app.ui-macos-native-familiar PROPERTIES TIMEOUT 300 SKIP_RE
           TIMEOUT 1920 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
       endif()
     endif()
-    add_test(NAME app.ui-macos-command-cancel
-      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-command-cancel-test.sh"
-              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-command-cancel")
-    set_tests_properties(app.ui-macos-command-cancel PROPERTIES
-      TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+    foreach(cancel_case previews cancel quit)
+      add_test(NAME app.ui-macos-command-cancel-${cancel_case}
+        COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-command-cancel-test.sh"
+                "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-command-cancel-${cancel_case}")
+      set_tests_properties(app.ui-macos-command-cancel-${cancel_case} PROPERTIES
+        TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop
+        ENVIRONMENT "MITCAD_TEST_CANCEL_CASE=${cancel_case}")
+    endforeach()
     if(MITCAD_MACOS_NATIVE_UI)
       add_test(NAME app.ui-macos-native-physical
         COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-physical-test.sh"
@@ -468,11 +471,14 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
 endif()
 
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_EXECUTABLE)
-  add_test(NAME app.ui-macos-command-cancel-docked
-    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-command-cancel-test.sh"
-            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-command-cancel-docked")
-  set_tests_properties(app.ui-macos-command-cancel-docked PROPERTIES
-    TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop ENVIRONMENT "MITCAD_TEST_CHROME=docked")
+  foreach(cancel_case previews cancel quit)
+    add_test(NAME app.ui-macos-command-cancel-docked-${cancel_case}
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-command-cancel-test.sh"
+              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-command-cancel-docked-${cancel_case}")
+    set_tests_properties(app.ui-macos-command-cancel-docked-${cancel_case} PROPERTIES
+      TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop
+      ENVIRONMENT "MITCAD_TEST_CHROME=docked;MITCAD_TEST_CANCEL_CASE=${cancel_case}")
+  endforeach()
 endif()
 
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_EXECUTABLE)
@@ -507,12 +513,31 @@ endif()
 # Projects/Browser stacking uses the native cards' actual bounds (mitcad#681).
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
    AND BASH_EXECUTABLE)
-  add_test(NAME app.ui-macos-projects-cards
-    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-projects-cards-test.sh"
-            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
-            "${CMAKE_BINARY_DIR}/ui-macos-projects-cards")
-  set_tests_properties(app.ui-macos-projects-cards PROPERTIES
-    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  # Each layout variant gets its own desktop turn and deadline. Audited
+  # harnesses may otherwise take Aqua between all sixteen app launches and
+  # exhaust one matrix-wide CTest deadline while its assertions keep passing.
+  foreach(mitcad_project_count IN ITEMS 0 1 24)
+    set(mitcad_project_schemes light)
+    if(mitcad_project_count EQUAL 1)
+      list(APPEND mitcad_project_schemes dark)
+    endif()
+    foreach(mitcad_project_chrome IN ITEMS floating docked)
+      foreach(mitcad_project_scale IN ITEMS 1 2)
+        foreach(mitcad_project_scheme IN LISTS mitcad_project_schemes)
+          set(mitcad_project_case
+            "${mitcad_project_count}-${mitcad_project_chrome}-${mitcad_project_scale}x-${mitcad_project_scheme}")
+          add_test(NAME "app.ui-macos-projects-cards-${mitcad_project_case}"
+            COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-projects-cards-test.sh"
+                    "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+                    "${CMAKE_BINARY_DIR}/ui-macos-projects-cards/${mitcad_project_case}"
+                    "${mitcad_project_count}" "${mitcad_project_chrome}"
+                    "${mitcad_project_scale}" "${mitcad_project_scheme}")
+          set_tests_properties("app.ui-macos-projects-cards-${mitcad_project_case}" PROPERTIES
+            TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+        endforeach()
+      endforeach()
+    endforeach()
+  endforeach()
 endif()
 
 # Selection shortcuts use the shared macOS tool-button style (mitcad#683).
@@ -577,6 +602,13 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_
             "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-navigation")
   set_tests_properties(app.ui-macos-navigation PROPERTIES
     TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-navigation-release
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-navigation-test.sh"
+              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-native-navigation-release" native)
+    set_tests_properties(app.ui-macos-native-navigation-release PROPERTIES
+      TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
 endif()
 
 # Renamed controls retain their command and stored policy identifiers (mitcad#684).
@@ -887,3 +919,20 @@ endif()
 # tests keep their CTest lock (and timed Metal checks keep RUN_SERIAL).
 include("${CMAKE_CURRENT_LIST_DIR}/MacTestScheduling.cmake")
 mitcad_macos_gui_harnesses()
+
+# Parameter labels must follow camera commands while their value field keeps
+# the keyboard, also through native menu actions and pixel-scroll input (#1179).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE AND TARGET mitcad AND TARGET mitcad-cli)
+  add_test(NAME app.ui-macos-dimension-names
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-dimension-names-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-dimension-names" qt)
+  set_tests_properties(app.ui-macos-dimension-names PROPERTIES
+    TIMEOUT 210 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-dimension-names
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-dimension-names-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-dimension-names" native)
+    set_tests_properties(app.ui-macos-native-dimension-names PROPERTIES
+      TIMEOUT 210 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+  endif()
+endif()

@@ -5,7 +5,7 @@
 # is posted); the Linux test is tools/ui-library-test.sh (parts 2b and 6).
 # Local git repositories only, no network; skipped where git is not
 # installed (fetching needs it):
-#   1. Libraries...: the default sources removed, a library of one block
+#   1. Library Sources...: the default sources removed, a library of one block
 #      (mitcad-cli library init/add, one git commit) added, not fetched.
 #   2. Insert from Library: empty, its text says to press Update; Update
 #      fetches the source and lists the block.
@@ -95,21 +95,21 @@ function Type-Ahead([string]$Text) {
   Ui-Type $Text
 }
 
-# Add-Source path: Add URL in Libraries... (open), then back to it.
+# Add-Source path: Add URL in Library Sources... (open), then back to it.
 function Add-Source([string]$Path) {
   Ui-Step 'Add URL (Alt+A)'              { Ui-Key 'alt+a' }
   Ui-FocusDialog '^Add Library$'
   Ui-Step 'the URL'                      { Ui-Type $Path; Ui-Key 'Return' }
-  Ui-FocusDialog '^Libraries$'
+  Ui-FocusDialog '^Library Sources$'
   Ui-ExpectNew "Library source added: $Path" 'the source added'
 }
 
 Ui-StartApp 'library' @('--open', $block)
 
-Write-Host '--- 1. Libraries: only the block library, not fetched'
+Write-Host '--- 1. Library Sources: only the block library, not fetched'
 Ui-Mark
-Ui-Step 'Libraries (F8)'                 { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'           { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Ui-ExpectNew 'Library source https://github.com/mitcad/parts.git (on): not fetched' 'the default sources listed'
 Ui-Step 'remove a default (Alt+R)'       { Ui-Key 'alt+r' }
 Ui-Step 'and the other (Alt+R)'          { Ui-Key 'alt+r' }
@@ -136,8 +136,8 @@ Ui-FocusMain
 
 Write-Host '--- 3. A broken source: one warning, the selection kept'
 Ui-Mark
-Ui-Step 'Libraries (F8)'                 { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'           { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Add-Source $broken
 Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
@@ -231,8 +231,8 @@ foreach ($folder in @($wood, $sheets)) {
   }
 }
 Ui-Mark
-Ui-Step 'Libraries (F8)'                 { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'           { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Add-Source $wood
 Add-Source $sheets
 Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
@@ -352,8 +352,8 @@ foreach ($arguments in @(@('init', '-q'), @('add', '-A'), @('commit', '-q', '-m'
   if ($LASTEXITCODE -ne 0) { Ui-Fail "git $($arguments -join ' '): $($output -join ' / ')" }
 }
 Ui-Mark
-Ui-Step 'Libraries (F8)'                 { Ui-Key 'F8' }
-Ui-FocusDialog '^Libraries$'
+Ui-Step 'Library Sources (F8)'           { Ui-Key 'F8' }
+Ui-FocusDialog '^Library Sources$'
 Add-Source $screws
 Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain

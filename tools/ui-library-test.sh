@@ -6,7 +6,7 @@
 #   1. Publish to Library: the demo block added to a new library of one's
 #      own (made, recorded as a version), pushed to a bare repository, and
 #      its entry for a community index.
-#   2. Libraries: the default sources removed (they are not fetched), a
+#   2. Library Sources: the default sources removed (they are not fetched), a
 #      parts library's fasteners made by the generator (v1.0.0, then v1.1.0 with
 #      wider M5 heads) and a community index added by URL, not fetched;
 #      Auto-update is off and the start-up fetches nothing (mitcad#576).
@@ -17,14 +17,14 @@
 #      several articles, the columns they fill, Copy as TSV, Copy Part
 #      Number, Open Link), the older version v1.0.0, linked: its volume;
 #      a nut copied.
-#   4. Library Components: the screw still at v1.0.0 with a newer version
+#   4. Components in This Design: the screw still at v1.0.0 with a newer version
 #      fetched, its articles' table (mitcad#979); v1.1.0 chosen, Show Changes names the wider head, Update:
 #      the new volume; then another size (M6x20): renamed, its volume; the
 #      parts list with the designations and licences.
 #   5. Community Library: the index's library without a licence hidden
 #      until asked for; Get Library fetches it after a question; its
 #      component inserted with no licence named.
-#   6. A source that is no library: Fetch All in Libraries... and Update in
+#   6. A source that is no library: Fetch All in Library Sources... and Update in
 #      the browser fetch the others and report it in one warning; Update
 #      searches again and keeps the selected part.
 #   7. The part picker's grid in Insert from Library (mitcad#418): In this
@@ -43,7 +43,7 @@
 #      head cap screw narrows its lengths (M6x8 offered, the non-standard
 #      M6x6 not), and the part inserted is named DIN 912 M6x8. The fields
 #      of Version, Standard, Supplier, Size and Length start at one x (one
-#      label column, mitcad#1007; Library Components' too, in part 4).
+#      label column, mitcad#1007; Components in This Design's too, in part 4).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-test.sh
@@ -170,10 +170,10 @@ ui_focus_main
 git -C "$BARE" log --oneline main | grep -q "Add demo-block" || ui_fail "the version was not pushed"
 echo "ok   the library checks, has a preview, and its version is in the remote"
 
-echo "--- 2. Libraries"
+echo "--- 2. Library Sources"
 ui_mark
-ui_step "Libraries (command search)"       ui_command "Libraries..."
-ui_focus_dialog '^Libraries$'
+ui_step "Library Sources (command search)" ui_command "Library Sources"
+ui_focus_dialog '^Library Sources$'
 ui_expect_new "Library source https://github.com/mitcad/parts.git (on): not fetched" "the default sources listed"
 ui_expect_new "Library source https://github.com/mitcad/parts.git (on): not fetched; versions ; auto-update off" \
   "Auto-update is off for the defaults (mitcad#576)"
@@ -183,7 +183,7 @@ for url in "$LIB" "$INDEX"; do
   ui_step "Add URL (Alt+A)"                ui_key alt+a
   ui_focus_dialog '^Add Library$'
   ui_step "the URL"                        eval 'ui_type_text "$url"; ui_key Return'
-  ui_focus_dialog '^Libraries$'
+  ui_focus_dialog '^Library Sources$'
 done
 ui_expect_new "Library source added: $INDEX" "the sources added"
 ui_step "close (Alt+C)"                    ui_key alt+c
@@ -260,10 +260,10 @@ drop_in
 ui_expect_new "Inserted component ISO 4032 M5 (copy) from mitcad-parts v1.1.0 (" "the nut copied"
 closed
 
-echo "--- 4. Library Components"
+echo "--- 4. Components in This Design"
 ui_mark
-ui_step "Library Components (command search)"   ui_command "Library Components"
-ui_focus_dialog '^Library Components$'
+ui_step "Components in This Design (search)"   ui_command "Components in This Design"
+ui_focus_dialog '^Components in This Design$'
 ui_expect_new "Library part ISO 4762 M5x16: mitcad-parts v1.0.0 (" "the screw's recorded version"
 ui_expect_new "size M5x16, a newer version is fetched" "a newer version is there, not taken"
 ui_expect_new "Library part ISO 4032 M5: mitcad-parts v1.1.0 (" "the nut"
@@ -273,9 +273,9 @@ ui_mark
 ui_step "Supplier Articles (Alt+A)"        ui_key alt+a
 ui_focus_dialog '^Supplier Articles - '
 ui_expect_new "Supplier parts of M5x16: $COUNT articles, columns Supplier, Supplier Part Number, Material, Finish, Checked" \
-  "the screw's articles in Library Components"
+  "the screw's articles in Components in This Design"
 ui_step "close (Escape)"                   ui_key Escape
-ui_focus_dialog '^Library Components$'
+ui_focus_dialog '^Components in This Design$'
 ui_step "v1.1.0 (Alt+V, Up)"               eval 'ui_key alt+v; ui_sync; ui_key Up'
 ui_expect_new "size M5x16, to update" "the change waits"
 ui_step "Show Changes (Alt+S)"             ui_key alt+s
@@ -286,11 +286,11 @@ ui_focus_main
 ui_expect_new "Updated library parts: ISO 4762 M5x16: version v1.0.0 (" "updated"
 ui_expect_volume "Body ISO 4762 M5x16 ([^)]*): volume 560.146 -> \([0-9.]*\) mm3" 573.55034687 "the screw at v1.1.0"
 ui_mark
-ui_step "Library Components again"              ui_command "Library Components"
-ui_focus_dialog '^Library Components$'
-ui_expect_new "Library fields at x: Version " "Library Components logs where its fields start"
+ui_step "Components in This Design again"      ui_command "Components in This Design"
+ui_focus_dialog '^Components in This Design$'
+ui_expect_new "Library fields at x: Version " "Components in This Design logs where its fields start"
 check_field_edges "Version, Standard, Supplier, Size, Length" \
-  "Library Components: Version, the filters and the size's fields line up (mitcad#1007)"
+  "Components in This Design: Version, the filters and the size's fields line up (mitcad#1007)"
 ui_step "size M6 x 20"                     eval 'ui_key alt+v; ui_sync; ui_key Tab; xdotool type --delay 80 "M6";
   ui_sync; ui_key Tab; xdotool type --delay 80 "20"'
 ui_expect_new "Library size M6x20" "the size chosen"
@@ -299,8 +299,8 @@ ui_focus_main
 ui_expect_new "Updated library parts: ISO 4762 M5x16: size M5x16 -> M6x20" "another size"
 ui_expect_volume "ISO 4762 M6x20 ([^)]*): volume [0-9.]* -> \([0-9.]*\) mm3" 966.3332369294 "the M6x20 screw"
 ui_mark
-ui_step "Library Components: the parts list"    ui_command "Library Components"
-ui_focus_dialog '^Library Components$'
+ui_step "Components in This Design: the list"   ui_command "Components in This Design"
+ui_focus_dialog '^Components in This Design$'
 ui_expect_new "Parts list row: 1 x ISO 4762 M6x20 (mitcad-parts v1.1.0 (" "the parts list's screw"
 ui_expect_new "Parts list row: 1 x ISO 4032 M5 (mitcad-parts v1.1.0 (" "the parts list's nut"
 ui_step "close (Escape)"                   ui_key Escape
@@ -331,12 +331,12 @@ ui_expect_new "licence none" "no licence recorded"
 echo "--- 6. A broken source: one warning (Fetch All and Update, mitcad#317)"
 BROKEN=$WORK/no-such-library
 ui_mark
-ui_step "Libraries (command search)"       ui_command "Libraries..."
-ui_focus_dialog '^Libraries$'
+ui_step "Library Sources (command search)" ui_command "Library Sources"
+ui_focus_dialog '^Library Sources$'
 ui_step "Add URL (Alt+A)"                  ui_key alt+a
 ui_focus_dialog '^Add Library$'
 ui_step "a folder that is no library"      eval 'ui_type_text "$BROKEN"; ui_key Return'
-ui_focus_dialog '^Libraries$'
+ui_focus_dialog '^Library Sources$'
 ui_expect_new "Library source added: $BROKEN" "the broken source added"
 ui_step "Fetch All (Alt+F)"                ui_key alt+f
 ui_expect_new "Library fetch failed: $BROKEN: " "its fetch fails" 30
@@ -345,7 +345,7 @@ ui_expect_new "Library source $LIB (on): Mitcad parts (mitcad-parts); versions v
   "the sources shown again"
 ui_focus_dialog '^Fetch Libraries$'
 ui_step "close the warning (Return)"       ui_key Return
-ui_focus_dialog '^Libraries$'
+ui_focus_dialog '^Library Sources$'
 ui_step "close (Alt+C)"                    ui_key alt+c
 ui_focus_main
 ui_mark
@@ -449,13 +449,13 @@ for TREE_LIB in "$WOOD" "$SHEETS"; do
   g "$TREE_LIB" commit -q -m "Parts"
 done
 ui_mark
-ui_step "Libraries (command search)"       ui_command "Libraries..."
-ui_focus_dialog '^Libraries$'
+ui_step "Library Sources (command search)" ui_command "Library Sources"
+ui_focus_dialog '^Library Sources$'
 for url in "$WOOD" "$SHEETS"; do
   ui_step "Add URL (Alt+A)"                ui_key alt+a
   ui_focus_dialog '^Add Library$'
   ui_step "the URL"                        eval 'ui_type_text "$url"; ui_key Return'
-  ui_focus_dialog '^Libraries$'
+  ui_focus_dialog '^Library Sources$'
 done
 ui_expect_new "Library source added: $SHEETS" "the two sources added"
 ui_step "close (Alt+C)"                    ui_key alt+c

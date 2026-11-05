@@ -9,7 +9,7 @@ content is its tests (`#![cfg(test)]`); its ctest is `core.model.<area>`.
 
 | Crate folder | ctest | What it tests |
 |---|---|---|
-| `api` | `core.model.api` | Commands and queries in general: the document query, the browser, named views and DXF insert, small UI gaps and metric defaults, failed features, inserting at a timeline position, autoselected profiles, faces and edges, text parameters, parameter limits, the result caches and store, cancelling recomputes, preview placement, tables |
+| `api` | `core.model.api` | Commands and queries in general: the document query, the browser, named views and DXF insert, small UI gaps and metric defaults, failed features, inserting at a timeline position, autoselected profiles, faces and edges, text parameters, parameter limits, the result caches and store, cancelling recomputes, preview placement, tables, the rolled-back features evaluated beside the document (mitcad#1267) |
 | `appearance` | `core.model.appearance` | Appearances, texture maps, render settings, mesh export, typed properties, materials |
 | `analysis` | `core.model.analysis` | Section analyses, Measure, plane geometry, measurement objects and annotations, image references |
 | `sketch` | `core.model.sketch` | The general sketch: entities, constraints, dimensions, patterns, offsets, text, the sketch's axes, inactive constraints, one solve per edit, copy and paste |

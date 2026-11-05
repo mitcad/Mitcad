@@ -456,6 +456,8 @@ impl<'b, 'a> Builder<'b, 'a> {
                     color: None,
                     mesh: p.mesh,
                     brep: Brep::new(p.data.clone()),
+                    number: None,
+                    first_face: None,
                 }]);
                 if let Op::With(o, participants) = &op {
                     def.operation = match *o {

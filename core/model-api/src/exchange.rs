@@ -13,6 +13,7 @@ use mitcad_model::exchange::{
     BedChoice, Coordinates, ExportFormat, ExportOptions, ExportPlacement, Imported, LengthUnit,
     OnBed, PlateFiles, ReadOptions, Refinement, Settle, StepSchema,
 };
+use mitcad_model::exchange::{ImportStructure, ImportedComponent, ImportedFile};
 use mitcad_model::features::FeatureDef;
 use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::kernel::Kernel;
@@ -28,6 +29,14 @@ pub(super) struct ImportFileCommand {
     /// STL and OBJ: millimetres per file unit.
     #[serde(default)]
     unit_mm: Option<f64>,
+    /// A STEP assembly as components (the default) or one base feature
+    /// (mitcad#1274).
+    #[serde(default)]
+    structure: ImportStructure,
+    /// Find Repeated Parts on the imported base features in the same undo
+    /// step (mitcad#1277).
+    #[serde(default)]
+    repeated_parts: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,6 +172,43 @@ pub(super) fn imported_json(imported: &Imported) -> Value {
     out
 }
 
+/// The reply of an `import_file` that kept a STEP assembly (mitcad#1274):
+/// the first base feature's `uid` and `name` and every body it and the
+/// others made, as for one base feature, and the components.
+fn components_json(components: &[ImportedComponent], warnings: &[String]) -> Value {
+    let first = components.iter().find_map(|c| c.feature.as_ref());
+    let bodies: Vec<Value> = components
+        .iter()
+        .filter_map(|c| c.feature.as_ref())
+        .flat_map(|f| &f.bodies)
+        .map(|b| json!({"uid": b.uid, "name": b.name, "kind": b.kind.as_str()}))
+        .collect();
+    let list: Vec<Value> = components
+        .iter()
+        .map(|c| {
+            json!({
+                "uid": c.component.to_string(),
+                "name": c.name,
+                "occurrences": c.occurrences.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "feature": c.feature.as_ref().map(|f| f.feature.uid.to_string()),
+                "bodies": c.feature.as_ref().map_or(0, |f| f.bodies.len()),
+            })
+        })
+        .collect();
+    let mut out = json!({
+        "uid": first.map(|f| f.feature.uid.to_string()),
+        "name": first.map(|f| f.feature.name.clone()),
+        "bodies": bodies,
+        "structure": "components",
+        "components": list,
+        "occurrences": components.iter().map(|c| c.occurrences.len()).sum::<usize>(),
+    });
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    out
+}
+
 /// The document's methods of this module used across the api, as an
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.
@@ -187,8 +233,57 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         let options = ReadOptions {
             unit_mm: command.unit_mm.unwrap_or(1.0),
         };
-        let imported = self.import_file(&command.path, &options, command.name.as_deref())?;
-        Ok(imported_json(&imported))
+        let depth = self.undo_depth();
+        let imported = self.import_file_structured(
+            &command.path,
+            &options,
+            command.name.as_deref(),
+            command.structure,
+        )?;
+        // The base features Find Repeated Parts runs on (mitcad#1277): the
+        // one base feature, or each part's of the components.
+        let bases: Vec<FeatureUid> = match &imported {
+            ImportedFile::Base(imported) => vec![imported.feature.uid],
+            ImportedFile::Components { components, .. } => components
+                .iter()
+                .filter_map(|c| c.feature.as_ref().map(|f| f.feature.uid))
+                .collect(),
+        };
+        let mut out = match &imported {
+            ImportedFile::Base(imported) => imported_json(imported),
+            ImportedFile::Components {
+                components,
+                warnings,
+            } => components_json(components, warnings),
+        };
+        // Repeated parts (mitcad#1277): the copies among the imported
+        // bodies made occurrences of one component, in the import's undo
+        // step; a failure takes the import back.
+        if command.repeated_parts {
+            let label = self.undo_label().unwrap_or("Import").to_owned();
+            let mut found = mitcad_model::RepeatedParts {
+                parts: Vec::new(),
+                kept: Vec::new(),
+                combines: Vec::new(),
+            };
+            for base in bases {
+                match self.find_repeated_parts(base, None) {
+                    Ok(mut one) => {
+                        found.parts.append(&mut one.parts);
+                        found.kept.append(&mut one.kept);
+                        found.combines.append(&mut one.combines);
+                    }
+                    Err(error) => {
+                        self.merge_undo(depth, &label);
+                        self.undo();
+                        return Err(error.into());
+                    }
+                }
+            }
+            self.merge_undo(depth, &label);
+            out["repeated_parts"] = super::components::repeated_parts_json(&found);
+        }
+        Ok(out)
     }
 
     fn export_command(&self, command: ExportCommand) -> Result<Value, ApiError> {

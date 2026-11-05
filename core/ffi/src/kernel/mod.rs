@@ -88,6 +88,13 @@ pub mod input_edges;
 pub mod dogbone;
 // Topology counts for Physical Properties (mitcad#1095).
 pub mod topology;
+// Outlines of faces seen along a direction: Project of a curved face
+// (mitcad#1265).
+pub mod face_outline;
+// The assembly structure of STEP files (mitcad#1274).
+pub mod file_structure;
+// Repeated parts: bodies equal up to a rigid motion (mitcad#1277).
+pub mod repeated_parts;
 
 use std::sync::Arc;
 
@@ -2636,6 +2643,104 @@ impl Kernel for OcctKernel {
 
     fn infos(&self, shape: &Self::Shape) -> Vec<String> {
         occt(shape).map_or_else(|_| Vec::new(), dressup::ffi::shape_infos)
+    }
+
+    // Outlines of faces seen along a direction: Project of a curved face
+    // (mitcad#1265; face_outline.rs).
+
+    fn face_outline(
+        &self,
+        shape: &Self::Shape,
+        face: &FaceName,
+        direction: [f64; 3],
+    ) -> Result<Vec<mitcad_model::Curve3>, KernelError> {
+        let curves = face_outline::ffi::face_outline(occt(shape)?, &face.to_string(), direction)
+            .map_err(failed)?;
+        Ok(curves.iter().map(face_outline::curve).collect())
+    }
+
+    // The assembly structure of STEP files (mitcad#1274; file_structure.rs).
+
+    fn read_file_structure(
+        &self,
+        path: &str,
+        options: &ReadOptions,
+        keep_assembly: bool,
+    ) -> Result<mitcad_model::exchange::FileRead<Self::Shape>, KernelError> {
+        use mitcad_model::exchange::{FileRead, ImportAssembly, ImportInstance, ImportPart};
+        let step = ExportFormat::of_path(path) == Some(ExportFormat::Step);
+        if !step {
+            return self.read_file(path, options).map(FileRead::Bodies);
+        }
+        let mut list = shape::ffi::new_shape_list();
+        let read = file_structure::ffi::read_step_structure(path, keep_assembly, list.pin_mut())
+            .map_err(failed)?;
+        let named = |name: String| (!name.is_empty()).then_some(name);
+        let mut bodies: Vec<ImportBody<Self::Shape>> = read
+            .bodies
+            .into_iter()
+            .zip(shapes(&list))
+            .map(|(info, shape)| ImportBody {
+                name: named(info.name),
+                color: info.has_color.then_some(info.color),
+                shape,
+            })
+            .collect();
+        if !read.assembly {
+            return Ok(FileRead::Bodies(bodies));
+        }
+        let instance = |i: &file_structure::ffi::StructureInstance| ImportInstance {
+            part: i.node,
+            name: named(i.name.clone()),
+            transform: Transform {
+                linear: std::array::from_fn(|r| std::array::from_fn(|c| i.rotation[3 * r + c])),
+                translation: i.translation,
+            },
+        };
+        let mut parts = Vec::with_capacity(read.nodes.len());
+        // The nodes take their bodies in order, each a run of the list.
+        let mut rest = bodies.drain(..);
+        for node in &read.nodes {
+            parts.push(ImportPart {
+                name: named(node.name.clone()),
+                bodies: rest.by_ref().take(node.body_count).collect(),
+                instances: read.instances
+                    [node.first_instance..node.first_instance + node.instance_count]
+                    .iter()
+                    .map(instance)
+                    .collect(),
+            });
+        }
+        Ok(FileRead::Assembly(ImportAssembly {
+            parts,
+            roots: read.roots.iter().map(instance).collect(),
+        }))
+    }
+
+    // Repeated parts: bodies equal up to a rigid motion (mitcad#1277;
+    // repeated_parts.rs).
+
+    fn rigid_copies(
+        &self,
+        bodies: &[&Self::Shape],
+        tolerance: f64,
+    ) -> Result<Vec<mitcad_model::kernel::RigidCopy>, KernelError> {
+        let list = shape_list(bodies)?;
+        let copies = repeated_parts::ffi::rigid_copies(&list, tolerance).map_err(failed)?;
+        Ok(copies
+            .into_iter()
+            .map(|copy| mitcad_model::kernel::RigidCopy {
+                of: copy.of,
+                transform: Transform {
+                    linear: [
+                        [copy.linear[0], copy.linear[1], copy.linear[2]],
+                        [copy.linear[3], copy.linear[4], copy.linear[5]],
+                        [copy.linear[6], copy.linear[7], copy.linear[8]],
+                    ],
+                    translation: copy.translation,
+                },
+            })
+            .collect())
     }
 }
 

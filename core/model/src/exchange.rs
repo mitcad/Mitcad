@@ -43,10 +43,15 @@ pub mod orient;
 // Meshes with a longest edge (mitcad#734, `MeshTolerance::max_edge`).
 mod edges;
 
+// STEP assemblies as components and occurrences (mitcad#1274).
+mod assembly_import;
+pub use assembly_import::{ImportStructure, ImportedComponent, ImportedFile, file_has_assembly};
+
 // The data the kernel reads and writes, below the model (mitcad#777).
 pub use mitcad_model_base::exchange::{
-    BodyKind, BodyPlacement, ExportBody, ExportFormat, ExportOptions, FaceMeshes, ImportBody,
-    LengthUnit, MeshTolerance, ReadOptions, Refinement, RefinementPreset, StepSchema, TriangleMesh,
+    BodyKind, BodyPlacement, ExportBody, ExportFormat, ExportOptions, FaceMeshes, FileRead,
+    ImportAssembly, ImportBody, ImportInstance, ImportPart, LengthUnit, MeshTolerance, ReadOptions,
+    Refinement, RefinementPreset, StepSchema, TriangleMesh,
 };
 
 /// Where exported bodies are (mitcad#17, mitcad#19).
@@ -253,8 +258,20 @@ fn three_mf(unit: LengthUnit) -> mitcad_3mf::Unit {
     }
 }
 
+/// Refuses a file unit that is not a positive length.
+pub(crate) fn check_unit(options: &ReadOptions) -> Result<(), ModelError> {
+    if options.unit_mm > 0.0 && options.unit_mm.is_finite() {
+        Ok(())
+    } else {
+        Err(invalid(format!(
+            "the file unit must be greater than zero, got {} mm",
+            options.unit_mm
+        )))
+    }
+}
+
 /// The file name without directories, for the `source` of a base feature.
-fn file_name(path: &str) -> String {
+pub(crate) fn file_name(path: &str) -> String {
     Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -293,6 +310,8 @@ impl<K: Kernel> Document<K> {
                 color: body.color,
                 mesh: kind == BodyKind::Mesh,
                 brep: Brep::new(data),
+                number: None,
+                first_face: None,
             });
         }
         Ok(out)
@@ -398,16 +417,22 @@ impl<K: Kernel> Document<K> {
         options: &ReadOptions,
         name: Option<&str>,
     ) -> Result<Imported, ModelError> {
-        if !(options.unit_mm > 0.0 && options.unit_mm.is_finite()) {
-            return Err(invalid(format!(
-                "the file unit must be greater than zero, got {} mm",
-                options.unit_mm
-            )));
-        }
+        check_unit(options)?;
         let bodies = self
             .kernel()
             .read_file(path, options)
             .map_err(kernel_error)?;
+        self.import_read_bodies(path, bodies, name)
+    }
+
+    /// The bodies read from the file at `path` as one base feature
+    /// ([`Document::import_file`]).
+    pub(crate) fn import_read_bodies(
+        &mut self,
+        path: &str,
+        bodies: Vec<ImportBody<K::Shape>>,
+        name: Option<&str>,
+    ) -> Result<Imported, ModelError> {
         if bodies.is_empty() {
             return Err(invalid(format!("{path} has no bodies")));
         }
@@ -1431,7 +1456,7 @@ impl<K: Kernel> Document<K> {
     fn imported_color(&self, body: BodyUid) -> Option<[f64; 3]> {
         match &self.feature(body.feature)?.def {
             FeatureDef::Base(base) if base.operation == Operation::NewBody => {
-                base.bodies.get(body.index as usize)?.color
+                base.body_numbered(body.index)?.color
             }
             _ => None,
         }

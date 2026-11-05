@@ -292,6 +292,15 @@ DisplayMeshing meshForDisplay(const DisplayShapes& shapes, ModelJob& job, Displa
   for (const std::shared_ptr<geometry::Shape>& shape : shapes) {
     const TopoDS_Shape& occt = shape->occt();
     if (io::has_triangulation(occt) || io::is_mesh(occt) || shape->display_meshed()) {
+      // A body whose every face has the final tier's triangulation already
+      // (a pattern's copy or a moved body sharing the faces of one shown,
+      // mitcad#838, mitcad#1275) is meshed to the end as one meshed here:
+      // the view draws it as it is (drawerMeshes, mitcad#878), its drawers
+      // never run the mesher over it again on the UI thread.
+      if (tier == DisplayTier::Final && !shape->display_meshed() && !shape->display_interactive() &&
+          !io::is_mesh(occt) && io::has_triangulation(occt)) {
+        shape->set_display_meshed();
+      }
       ++meshing.ready;
       continue;
     }
@@ -374,13 +383,20 @@ DisplayMeshing meshForDisplay(const DisplayShapes& shapes, ModelJob& job, Displa
 QByteArray displayMeshStoreOptions() {
   const io::MeshOptions options = viewMeshOptions();
   return QStringLiteral("final deviation=%1 angle=%2 relative=%3 face_triangles=%4 fast_planes=%5 check_planes=%6")
-      .arg(options.linear_deflection, 0, 'g', 17)
-      .arg(options.angular_deflection, 0, 'g', 17)
-      .arg(options.relative ? 1 : 0)
-      .arg(static_cast<qulonglong>(options.face_triangles))
-      .arg(options.fast_planes ? 1 : 0)
-      .arg(options.check_planes ? 1 : 0)
-      .toUtf8();
+             .arg(options.linear_deflection, 0, 'g', 17)
+             .arg(options.angular_deflection, 0, 'g', 17)
+             .arg(options.relative ? 1 : 0)
+             .arg(static_cast<qulonglong>(options.face_triangles))
+             .arg(options.fast_planes ? 1 : 0)
+             .arg(options.check_planes ? 1 : 0)
+             .toUtf8() +
+         // The deviation by size, the faces' angle and the hold (mitcad#1275).
+         QStringLiteral(" size_deviation=%1 size_deviation_max=%2 interior_angle=%3 hold=%4")
+             .arg(options.size_deviation, 0, 'g', 17)
+             .arg(options.size_deviation_max, 0, 'g', 17)
+             .arg(options.interior_angle, 0, 'g', 17)
+             .arg(options.hold_face_triangles ? 1 : 0)
+             .toUtf8();
 }
 
 DisplayMeshing meshOpenedForDisplay(Document& document, ModelJob& job, bool store, DisplayMeshWrites* writes,
@@ -819,6 +835,14 @@ void RecomputeMeshing::run() {
         if (!shape || shape->occt().IsNull() || io::is_mesh(shape->occt()) || shape->display_meshed()) {
           continue;
         }
+        // A body whose shape is one taken before in another place (a
+        // pattern's copy, the body moved as a location, mitcad#1275): its
+        // faces are that one's, and get their meshes with it; the open
+        // then finds it meshed (or meshes the faces once for both).
+        if (!m_taken.insert(shape->occt().TShape().get()).second) {
+          continue;
+        }
+        m_takenShapes.push_back(shape->occt());
         // A copy that shares no sub-shape with the body: meshing it writes
         // nothing the recompute may read (the class comment).
         try {

@@ -69,7 +69,7 @@ CommandDef shellCommand(const CommandContext& context) {
                    {QStringLiteral("outside"), QStringLiteral("Outside")},
                    {QStringLiteral("both"), QStringLiteral("Both")}},
                   QStringLiteral("inside")),
-      valueInput(QStringLiteral("inside"), QObject::tr("Inside Thickness"), ValueKind::Length, QStringLiteral("2 mm"))
+      valueInput(QStringLiteral("inside"), QObject::tr("Inside Thickness"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0)
           .withVisible(inside)
           .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
             auto handle = faceArrow(state, model, QStringLiteral("faces"));
@@ -78,7 +78,7 @@ CommandDef shellCommand(const CommandContext& context) {
             }
             return handle;
           }),
-      valueInput(QStringLiteral("outside"), QObject::tr("Outside Thickness"), ValueKind::Length, QStringLiteral("2 mm"))
+      valueInput(QStringLiteral("outside"), QObject::tr("Outside Thickness"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0)
           .withVisible(outside),
       choiceInput(QStringLiteral("shell_type"), QObject::tr("Shell Type"),
                   {{QStringLiteral("sharp"), QStringLiteral("Sharp")}, {QStringLiteral("rounded"), QStringLiteral("Rounded")}},

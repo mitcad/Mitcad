@@ -68,6 +68,12 @@ impl JobControl {
     pub fn answer(&self, answer: &str) {
         self.0.answer(answer);
     }
+
+    /// The monitor, for work that reports to the control beside a document
+    /// (the background evaluation, mitcad#1267, `background.rs`).
+    pub(crate) fn monitor(&self) -> Arc<RecomputeMonitor> {
+        Arc::clone(&self.0)
+    }
 }
 
 impl Document {

@@ -185,7 +185,16 @@
        };
  
        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
-@@ -974,10 +982,12 @@
+@@ -969,4 +977,7 @@
+-  if (!scene->params.background) {
++  /* Lower-family devices can reject the generic surface pipeline. Keep full
++   * scene specialization available in the viewport as well as background renders,
++   * so a usable specialized shade pipeline can replace that failed generic one. */
++  if (!scene->params.background && [mtlDevice supportsFamily:MTLGPUFamilyApple6]) {
+     /* In live viewport, don't specialize beyond intersection kernels for responsiveness. */
+     specialization_level = (MetalPipelineType)min(specialization_level, PSO_SPECIALIZED_INTERSECT);
+   }
+@@ -974,10 +985,12 @@
    /* For responsive rendering, specialize the kernels in the background, and only if there isn't an
     * existing "optimize_for_scene" request in flight. */
    int this_device_id = this->device_id;
@@ -198,7 +207,7 @@
    };
  
    /* In normal use, we always compile the specialized kernels in the background. */
-@@ -995,6 +1005,7 @@
+@@ -995,6 +1008,7 @@
  
    if (specialize_in_background) {
      if (MetalDeviceKernels::num_incomplete_specialization_requests() == 0) {
@@ -206,7 +215,7 @@
        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
                       specialize_kernels_fn);
      }
-@@ -1003,6 +1014,7 @@
+@@ -1003,6 +1017,7 @@
      }
    }
    else {

@@ -460,6 +460,8 @@ impl<K: Kernel> Document<K> {
                 path,
                 digest,
                 feature: added.uid,
+                envelope: None,
+                frames: Vec::new(),
             });
             component.library = reference;
             let joint = match &plan {

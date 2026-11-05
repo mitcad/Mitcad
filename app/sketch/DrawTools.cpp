@@ -1232,7 +1232,7 @@ public:
       }
       m_c.hint(prompt(0));
       if (!pickingLines()) {
-        m_c.setFields({{QStringLiteral("diameter"), QObject::tr("Diameter"), FieldSpec::Kind::Length}});
+        m_c.setFields({{QStringLiteral("diameter"), QObject::tr("Diameter"), FieldSpec::Kind::Length, 0.0, true}});
       }
       return;
     }
@@ -1323,7 +1323,7 @@ protected:
     if (m_mode == QStringLiteral("three_point") || clicked == 0) {
       return {};
     }
-    return {{QStringLiteral("diameter"), QObject::tr("Diameter"), FieldSpec::Kind::Length}};
+    return {{QStringLiteral("diameter"), QObject::tr("Diameter"), FieldSpec::Kind::Length, 0.0, true}};
   }
 
   V2 cursor() const override {
@@ -2166,7 +2166,7 @@ protected:
 
   QVector<FieldSpec> fields(int clicked) const override {
     if (clicked == clicks() - 1) {
-      return {{QStringLiteral("width"), QObject::tr("Width"), FieldSpec::Kind::Length}};
+      return {{QStringLiteral("width"), QObject::tr("Width"), FieldSpec::Kind::Length, 0.0, true}};
     }
     if (!arcSlot() && clicked == 1) {
       return {{QStringLiteral("length"), QObject::tr("Length"), FieldSpec::Kind::Length}};
@@ -2438,7 +2438,7 @@ protected:
     if (clicked == 1) {
       return {{QStringLiteral("major"), QObject::tr("Major radius"), FieldSpec::Kind::Length}};
     }
-    return {{QStringLiteral("minor"), QObject::tr("Minor radius"), FieldSpec::Kind::Length}};
+    return {{QStringLiteral("minor"), QObject::tr("Minor radius"), FieldSpec::Kind::Length, 0.0, true}};
   }
 
   V2 cursor() const override {

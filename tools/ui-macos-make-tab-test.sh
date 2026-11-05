@@ -72,7 +72,7 @@ for frontend in $frontends; do
     else
       echo 'window-resize 1280 820'
     fi
-    echo 'expect-ribbon-labels Solid Build Make'
+    echo 'expect-ribbon-labels Start Solid Build Make'
     if [ "$frontend" = qt ]; then
       echo 'mark'
       echo "click-logged '^Ribbon tab MAKE at '"

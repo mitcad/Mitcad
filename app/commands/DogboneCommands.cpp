@@ -77,8 +77,8 @@ CommandDef dogboneCommand(const CommandContext& context) {
                                    "or a body for all of them"))
           .withAccepts([](const SelectionItem& item) { return item.kind != SelectKind::Edge || isLine(item); }),
       valueInput(QStringLiteral("diameter"), QObject::tr("Tool Diameter"), ValueKind::Length,
-                 QStringLiteral("6.35 mm")),
-      valueInput(QStringLiteral("extra"), QObject::tr("Extra"), ValueKind::Length, QStringLiteral("0.1 mm"))
+                 QStringLiteral("6.35 mm")).withStepMinimum(0.0, true),
+      valueInput(QStringLiteral("extra"), QObject::tr("Extra"), ValueKind::Length, QStringLiteral("0.1 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("How far the relief reaches beyond the sharp corner")),
       choiceInput(QStringLiteral("dogbone_type"), QObject::tr("Type"), kDogboneTypes, QStringLiteral("diagonal"))
           .withTooltip(QObject::tr("Diagonal: along the corner's bisector. Along a Side: along the longer face "

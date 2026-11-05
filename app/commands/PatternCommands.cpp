@@ -267,7 +267,7 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
       distanceTypeInput(),
       lineInput(QStringLiteral("direction1"), QObject::tr("Direction 1"), 1),
       directionTypeInput(QStringLiteral("direction_type1"), QObject::tr("Direction Type")),
-      valueInput(QStringLiteral("quantity1"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")),
+      valueInput(QStringLiteral("quantity1"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
       lengthInput(QStringLiteral("distance1"), QString())
           .withManipulator(alongAxis(QStringLiteral("direction1"), QStringLiteral("flip1"),
                                      QStringLiteral("direction_type1"))),
@@ -277,7 +277,7 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
       lineInput(QStringLiteral("direction2"), QObject::tr("Direction 2"), 0)
           .withTooltip(QObject::tr("A second direction; none: one row")),
       directionTypeInput(QStringLiteral("direction_type2"), QObject::tr("Direction Type 2")).withVisible(second),
-      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("2"))
+      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("2")).withStepMinimum(1)
           .withVisible(second),
       lengthInput(QStringLiteral("distance2"), QStringLiteral("2"))
           .withVisible(second)
@@ -383,7 +383,7 @@ CommandDef circularPatternCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("An axis, a straight or circular edge, a sketch line or a "
                                    "cylindrical face"))
           .withAccepts(isAxial),
-      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("4")),
+      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("4")).withStepMinimum(1),
       valueInput(QStringLiteral("angle"), QObject::tr("Total Angle"), ValueKind::Angle, QStringLiteral("360 deg"))
           .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
             const Selection& axis = state.items(QStringLiteral("axis"));
@@ -474,7 +474,7 @@ CommandDef pathPatternCommand(const CommandContext& context) {
           .withAccepts([](const SelectionItem& item) { return isLine(item) || isCircular(item); }),
       distanceTypeInput(),
       directionTypeInput(QStringLiteral("direction_type"), QObject::tr("Direction Type")),
-      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")),
+      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
       lengthInput(QStringLiteral("distance"), QString()),
       valueInput(QStringLiteral("start"), QObject::tr("Start Point"), ValueKind::Unitless, QStringLiteral("0"))
           .withTooltip(QObject::tr("Where the original is on the path, 0 at its start and 1 at its end")),

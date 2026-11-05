@@ -138,6 +138,10 @@ pub struct MockKernel {
     pub written: RefCell<Vec<(String, ExportFormat, Vec<(String, Option<[f64; 3]>)>)>>,
     /// The placements of each body of each `write_file` (mitcad#19).
     pub written_placements: RefCell<Vec<Vec<Vec<mitcad_model_base::exchange::BodyPlacement>>>>,
+    /// The assembly structure `read_file_structure` returns by path
+    /// (mitcad#1274); a path not listed reads as `files` has it.
+    pub assemblies:
+        RefCell<BTreeMap<String, mitcad_model_base::exchange::ImportAssembly<MockShape>>>,
     /// The STEP and IGES unit of each `write_file` and the millimetres per
     /// unit of each `read_file` (P11: metric defaults).
     pub write_units: RefCell<Vec<mitcad_model_base::exchange::LengthUnit>>,
@@ -191,7 +195,9 @@ pub struct MockKernel {
     pub piece_boxes: RefCell<Option<Vec<BoundingBox>>>,
     /// The radius of each hole wall `hole_tool` made, by face name, which
     /// `face_cylinder` gives such a wall (half the bounds' width otherwise;
-    /// mitcad#436).
+    /// mitcad#436), and a pattern's copies of it (mitcad#1262). A test may
+    /// give another cylindrical face its radius here: a cut circle's side
+    /// is otherwise as wide as the body's bounds.
     pub hole_radii: RefCell<BTreeMap<String, f64>>,
     /// What a modelled thread leaves of each face it threads, by the
     /// threaded shape's history and the face's name: the span (from, to)
@@ -299,6 +305,145 @@ pub struct MockKernel {
     /// and a face or edge name finds the face by them too. Shared with the
     /// kernel's forks, which may compute the thread.
     pub face_aliases: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
+    /// The material behind threaded faces (mitcad#1262): with a radius,
+    /// every shape with bounds is a tube about the vertical axis through
+    /// the middle of its bounds, from this bore out to half the bounds'
+    /// width, and `segment_crossings` gives where a segment crosses its
+    /// round walls (its ends and its faces' names left as they are; before
+    /// `box_faces`).
+    pub tube_bore: Cell<Option<f64>>,
+    /// Outlines of faces seen along a direction (mitcad#1265): faces on a
+    /// cylinder or a cone by name, whose boundary edges `curves_of` gives
+    /// (the end circles and the seam) and whose outline `face_outline`
+    /// works out ([`RoundFace`]); `face_outline` of another face is
+    /// unsupported.
+    pub round_faces: RefCell<BTreeMap<String, RoundFace>>,
+    /// Operations whose results come out empty, as a broken union does
+    /// (mitcad#1273): "unite", "join", "cut", "intersect". The result's
+    /// history is `empty(<history>)`, without faces, edges or bounds, and
+    /// `solid_count` gives it no solid (other shapes are not counted).
+    pub empty_results: RefCell<BTreeSet<&'static str>>,
+}
+
+/// A whole round face of a mock body ([`MockKernel::round_faces`],
+/// mitcad#1265): a cylinder (`top_radius == radius`) or a cone between two
+/// circles about `axis`, the seam a line on it from the low circle's point
+/// in the direction `seam` to the high one's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoundFace {
+    /// The centre of the low circle.
+    pub base: [f64; 3],
+    /// A unit vector from the low circle to the high one.
+    pub axis: [f64; 3],
+    /// A unit vector at right angles to `axis`: where the seam is.
+    pub seam: [f64; 3],
+    pub radius: f64,
+    pub top_radius: f64,
+    pub height: f64,
+}
+
+impl RoundFace {
+    /// A cylinder of `radius` and `height` standing on `base` along +Z, its
+    /// seam toward `seam`.
+    pub fn cylinder(base: [f64; 3], radius: f64, height: f64, seam: [f64; 3]) -> Self {
+        RoundFace {
+            base,
+            axis: [0.0, 0.0, 1.0],
+            seam,
+            radius,
+            top_radius: radius,
+            height,
+        }
+    }
+
+    fn at(&self, angle: f64, high: bool) -> [f64; 3] {
+        let side = mitcad_vec3::cross(self.axis, self.seam);
+        let (r, h) = if high {
+            (self.top_radius, self.height)
+        } else {
+            (self.radius, 0.0)
+        };
+        std::array::from_fn(|k| {
+            self.base[k]
+                + r * (angle.cos() * self.seam[k] + angle.sin() * side[k])
+                + h * self.axis[k]
+        })
+    }
+
+    /// The generator line at `angle` from the seam.
+    fn generator(&self, angle: f64) -> mitcad_model_base::kernel::Curve3 {
+        mitcad_model_base::kernel::Curve3::Line {
+            start: self.at(angle, false),
+            end: self.at(angle, true),
+        }
+    }
+
+    /// Its edges as the OCCT facade lists them: the low circle, the high
+    /// one, the seam.
+    pub fn boundary(&self) -> Vec<mitcad_model_base::kernel::Curve3> {
+        let circle = |radius: f64, height: f64| mitcad_model_base::kernel::Curve3::Conic {
+            center: std::array::from_fn(|k| self.base[k] + height * self.axis[k]),
+            normal: self.axis,
+            x_axis: self.seam,
+            major: radius,
+            minor: radius,
+            start: 0.0,
+            end: std::f64::consts::TAU,
+            closed: true,
+        };
+        vec![
+            circle(self.radius, 0.0),
+            circle(self.top_radius, self.height),
+            self.generator(0.0),
+        ]
+    }
+
+    /// Seen along `direction`: its circles, the generators along which its
+    /// normal `h e(u) - (top_radius - radius) axis` (`e(u)` the unit vector
+    /// at the angle u from the seam) is at right angles to `direction`,
+    /// and the seam only when it is one of them and not seen end on.
+    pub fn outline(&self, direction: [f64; 3]) -> Vec<mitcad_model_base::kernel::Curve3> {
+        use mitcad_vec3::{cross, dot, norm};
+        let side = cross(self.axis, self.seam);
+        let (dx, dy, dz) = (
+            dot(direction, self.seam),
+            dot(direction, side),
+            dot(direction, self.axis),
+        );
+        let rho = dx.hypot(dy);
+        let slope = (self.top_radius - self.radius) / self.height;
+        let mut out = self.boundary();
+        let seam = out.pop();
+        let mut angles = Vec::new();
+        if rho > 1e-12 {
+            let k = slope * dz / rho;
+            if k.abs() <= 1.0 {
+                let phi = dy.atan2(dx);
+                let turn = k.acos();
+                angles.push(phi - turn);
+                angles.push(phi + turn);
+            }
+        }
+        // The seam (angle 0) on the outline and seen as a line.
+        let seam_on = angles.iter().any(|a| a.sin().abs() < 1e-9 && a.cos() > 0.0);
+        let along: [f64; 3] = std::array::from_fn(|k| {
+            (self.top_radius - self.radius) * self.seam[k] + self.height * self.axis[k]
+        });
+        let end_on = norm(cross(along, direction)) <= 1e-9 * norm(along);
+        if seam_on && !end_on {
+            out.extend(seam);
+        }
+        for angle in angles {
+            let line = self.generator(angle);
+            if let mitcad_model_base::kernel::Curve3::Line { start, end } = &line {
+                let d: [f64; 3] = std::array::from_fn(|k| end[k] - start[k]);
+                if norm(cross(d, direction)) > 1e-9 * norm(d) {
+                    out.push(line);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// What a mock kernel and its forks did, and on which threads (the
@@ -388,6 +533,18 @@ impl WorkerLog {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(feature);
         }
+    }
+}
+
+/// An operation's result made empty ([`MockKernel::empty_results`],
+/// mitcad#1273).
+fn emptied(shape: &MockShape) -> MockShape {
+    MockShape {
+        history: format!("empty({})", shape.history),
+        faces: Vec::new(),
+        edges: Vec::new(),
+        bounds: None,
+        parts: Vec::new(),
     }
 }
 
@@ -1118,6 +1275,11 @@ impl Kernel for MockKernel {
                 }
             }
         }
+        if self.empty_results.borrow().contains(name) {
+            for piece in &mut pieces {
+                piece.shape = emptied(&piece.shape);
+            }
+        }
         Ok(BooleanOutput { pieces, touched })
     }
 
@@ -1539,6 +1701,16 @@ impl Kernel for MockKernel {
         if let Some(curve) = self.named_curves.borrow().get(&name.to_string()) {
             return Ok(vec![curve.clone()]);
         }
+        // A round face's circles and seam (mitcad#1265).
+        if let mitcad_model_base::topo::TopoName::Face(face) = name
+            && let Some(round) = self.round_faces.borrow().get(&face.to_string())
+        {
+            return Ok(if shape.has_face(face) {
+                round.boundary()
+            } else {
+                Vec::new()
+            });
+        }
         Ok(if shape.faces.is_empty() {
             Vec::new()
         } else {
@@ -1705,6 +1877,9 @@ impl Kernel for MockKernel {
         // The shapes stay separate solids, as if they did not touch.
         if shapes.len() > 1 {
             united.parts = shapes.iter().map(|s| (*s).clone()).collect();
+        }
+        if self.empty_results.borrow().contains("unite") {
+            return Ok(emptied(&united));
         }
         Ok(united)
     }
@@ -2195,6 +2370,12 @@ impl Kernel for MockKernel {
         from: [f64; 3],
         to: [f64; 3],
     ) -> Result<Vec<(f64, bool)>, KernelError> {
+        if let Some(bore) = self.tube_bore.get() {
+            return Ok(shape
+                .bounds
+                .map(|b| tube_crossings(&b, bore, from, to))
+                .unwrap_or_default());
+        }
         if !self.box_faces.get() {
             return Err(KernelError::Unsupported("segment crossings"));
         }
@@ -2281,12 +2462,15 @@ impl Kernel for MockKernel {
                 ],
                 direction: [0.0, 0.0, 1.0],
             },
-            radius: self
-                .hole_radii
-                .borrow()
-                .get(&face.to_string())
-                .copied()
-                .unwrap_or((bounds.max[0] - bounds.min[0]) / 2.0),
+            // (A pattern's copy has its original's radius, mitcad#1262.)
+            radius: {
+                let radii = self.hole_radii.borrow();
+                radii
+                    .get(&face.to_string())
+                    .or_else(|| radii.get(&plain.to_string()))
+                    .copied()
+                    .unwrap_or((bounds.max[0] - bounds.min[0]) / 2.0)
+            },
             length: to - from,
             internal,
         })
@@ -3050,6 +3234,9 @@ impl Kernel for MockKernel {
             lists_geometry: self.lists_geometry.clone(),
             thread_pieces: self.thread_pieces.clone(),
             face_aliases: Arc::clone(&self.face_aliases),
+            tube_bore: self.tube_bore.clone(),
+            round_faces: self.round_faces.clone(),
+            empty_results: self.empty_results.clone(),
             ..MockKernel::default()
         })
     }
@@ -5231,6 +5418,111 @@ impl Kernel for MockKernel {
             vertices: (edges + 2 * solids).saturating_sub(faces),
         })
     }
+
+    // Outlines of faces seen along a direction (mitcad#1265).
+
+    /// A face of `round_faces` seen along the direction
+    /// ([`RoundFace::outline`]); other faces have no outline here.
+    fn face_outline(
+        &self,
+        shape: &MockShape,
+        face: &FaceName,
+        direction: [f64; 3],
+    ) -> Result<Vec<mitcad_model_base::kernel::Curve3>, KernelError> {
+        self.call("face_outline")?;
+        let Some(round) = self.round_faces.borrow().get(&face.to_string()).copied() else {
+            return Err(KernelError::Unsupported("face outlines"));
+        };
+        Ok(if shape.has_face(face) {
+            round.outline(direction)
+        } else {
+            Vec::new()
+        })
+    }
+
+    /// The structure in `assemblies` for the path when asked for it, else
+    /// the bodies of `read_file` (mitcad#1274).
+    fn read_file_structure(
+        &self,
+        path: &str,
+        options: &ReadOptions,
+        keep_assembly: bool,
+    ) -> Result<mitcad_model_base::exchange::FileRead<MockShape>, KernelError> {
+        use mitcad_model_base::exchange::FileRead;
+        if keep_assembly && let Some(assembly) = self.assemblies.borrow().get(path) {
+            self.read_units.borrow_mut().push(options.unit_mm);
+            return Ok(FileRead::Assembly(assembly.clone()));
+        }
+        self.read_file(path, options).map(FileRead::Bodies)
+    }
+
+    // Empty results of booleans (mitcad#1273).
+
+    /// No solid for an [`MockKernel::empty_results`] result; other shapes
+    /// are not counted (as a kernel that cannot tell).
+    fn solid_count(&self, shape: &MockShape) -> Result<usize, KernelError> {
+        if shape.history.starts_with("empty(") {
+            Ok(0)
+        } else {
+            Err(KernelError::Unsupported("solid counts"))
+        }
+    }
+
+    /// Repeated parts (mitcad#1277): a shape whose history holds
+    /// `part(<kind>;<x>,<y>,<z>)` is the part `<kind>` moved to (x, y, z),
+    /// a copy of the first shape of its kind moved by the difference;
+    /// other shapes copy none.
+    fn rigid_copies(
+        &self,
+        bodies: &[&MockShape],
+        _tolerance: f64,
+    ) -> Result<Vec<mitcad_model_base::kernel::RigidCopy>, KernelError> {
+        self.call("rigid_copies")?;
+        let parts: Vec<Option<(String, [f64; 3])>> =
+            bodies.iter().map(|b| mock_part(&b.history)).collect();
+        Ok(parts
+            .iter()
+            .enumerate()
+            .map(|(i, part)| {
+                let first = part.as_ref().and_then(|(kind, at)| {
+                    parts[..i]
+                        .iter()
+                        .position(|p| p.as_ref().is_some_and(|(k, _)| k == kind))
+                        .map(|first| (first, *at))
+                });
+                match first {
+                    Some((of, at)) => {
+                        let from = parts[of].as_ref().expect("a part").1;
+                        mitcad_model_base::kernel::RigidCopy {
+                            of,
+                            transform: Transform::translation(std::array::from_fn(|k| {
+                                at[k] - from[k]
+                            })),
+                        }
+                    }
+                    None => mitcad_model_base::kernel::RigidCopy {
+                        of: i,
+                        transform: Transform::IDENTITY,
+                    },
+                }
+            })
+            .collect())
+    }
+}
+
+/// The part and place `part(<kind>;<x>,<y>,<z>)` in a mock shape's history
+/// gives (repeated parts, mitcad#1277).
+fn mock_part(history: &str) -> Option<(String, [f64; 3])> {
+    let start = history.find("part(")? + "part(".len();
+    let rest = &history[start..];
+    let (kind, rest) = rest.split_once(';')?;
+    let (place, _) = rest.split_once(')')?;
+    let mut at = [0.0; 3];
+    let mut values = place.split(',');
+    for value in &mut at {
+        *value = values.next()?.trim().parse().ok()?;
+    }
+    Some((kind.to_owned(), at))
 }
 
 /// A chain of a body's edges as `3 edges, 1 openings` (the named edges
@@ -5426,6 +5718,43 @@ fn box_side(role: &str) -> Option<(usize, bool)> {
         "side3" => Some((0, false)),
         _ => None,
     }
+}
+
+/// Where a segment from `from` to `to` crosses the round walls of the tube
+/// `MockKernel::tube_bore` makes of bounds (mitcad#1262): the fraction of
+/// the way and whether it enters the material there, in order along it,
+/// between the bounds' bottom and top.
+fn tube_crossings(b: &BoundingBox, bore: f64, from: [f64; 3], to: [f64; 3]) -> Vec<(f64, bool)> {
+    let centre = [(b.min[0] + b.max[0]) / 2.0, (b.min[1] + b.max[1]) / 2.0];
+    let outer = (b.max[0] - b.min[0]) / 2.0;
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let p = [from[0] - centre[0], from[1] - centre[1]];
+    // |p + t d|^2 = r^2 in the plane across the axis.
+    let a = d[0] * d[0] + d[1] * d[1];
+    if a < 1e-24 {
+        return Vec::new();
+    }
+    let half_b = p[0] * d[0] + p[1] * d[1];
+    let c0 = p[0] * p[0] + p[1] * p[1];
+    let mut out = Vec::new();
+    for (radius, outside) in [(bore, false), (outer, true)] {
+        let disc = half_b * half_b - a * (c0 - radius * radius);
+        if radius <= 0.0 || disc <= 0.0 {
+            continue;
+        }
+        for t in [(-half_b - disc.sqrt()) / a, (-half_b + disc.sqrt()) / a] {
+            let z = from[2] + t * d[2];
+            if t <= 0.0 || t >= 1.0 || z < b.min[2] || z > b.max[2] {
+                continue;
+            }
+            // Moving out (the squared radius growing) enters at the bore
+            // and leaves at the outside.
+            let growing = half_b + t * a > 0.0;
+            out.push((t, growing != outside));
+        }
+    }
+    out.sort_by(|x, y| x.0.total_cmp(&y.0));
+    out
 }
 
 fn plain_role(face: &FaceName) -> &str {

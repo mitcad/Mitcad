@@ -38,6 +38,7 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <ChFi3d.hxx>
 #include <ElSLib.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
@@ -937,6 +938,48 @@ TopoDS_Shape continued_into(const TopoDS_Shape& wall, const TopoDS_Face& face, c
   return boolean(wall, under_foot, fuse);
 }
 
+// The space an overflowing chamfer of concave edges would hang out into
+// past face `n`'s far edges (mitcad#1260), added to `recut`: next to the
+// space filled past them (`filled`), for each far edge among `rims` that
+// it meets, where the narrow face and the face beyond meet convexly, the
+// region outside the body within `box` on the outer side of the face
+// beyond (its surface continued) that meets that edge and not the selected
+// edges (`spine`). The chamfer of the filled body is cut by it as by the
+// face beyond, which grows out to meet the chamfer. `done` holds the faces
+// beyond taken for `n` already.
+void add_overhang(const Shape& body, int n, const TopoDS_Shape& filled, const TopoDS_Shape& rims,
+                  const TopoDS_Shape& spine, const Box& box, double tolerance, double body_volume,
+                  std::vector<int>& done, TopoDS_Compound& recut) {
+  const EdgeFaces edge_faces(body);
+  BRep_Builder builder;
+  for (TopExp_Explorer rx(rims, TopAbs_EDGE); rx.More(); rx.Next()) {
+    const TopoDS_Edge& rim = TopoDS::Edge(rx.Current());
+    const int r = body.edge_index(rim);
+    if (r < 0 || distance(filled, rim) > tolerance) {
+      continue;
+    }
+    for (const int b : edge_faces.at(r)) {
+      if (b == n || std::find(done.begin(), done.end(), b) != done.end() ||
+          ChFi3d::DefineConnectType(rim, body.face(n), body.face(b), 1.0e-4, false) != ChFiDS_Convex) {
+        continue;
+      }
+      const std::optional<TopoDS_Shape> side = side_of(body.face(b), true, box);
+      if (!side) {
+        continue;
+      }
+      done.push_back(b);
+      const TopoDS_Shape beyond = boolean<BRepAlgoAPI_Cut>(*side, body.occt());
+      for (TopExp_Explorer px(beyond, TopAbs_SOLID); px.More(); px.Next()) {
+        if (distance(px.Current(), rim) > tolerance || distance(px.Current(), spine) <= tolerance ||
+            absolute_volume_of(px.Current()) <= 1.0e-9 * std::max(1.0, body_volume)) {
+          continue;
+        }
+        builder.Add(recut, BRepBuilderAPI_Copy(px.Current()).Shape());
+      }
+    }
+  }
+}
+
 } // namespace
 
 std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& owner, double contact,
@@ -1078,6 +1121,17 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
       if (!any_rim || distance(rims, own) > contact + tolerance) {
         continue;
       }
+      // A chamfer of concave edges adds material (mitcad#1260): past a
+      // convex far edge of the narrow face it would hang out over the face
+      // beyond, which cuts it instead.
+      bool concave = true;
+      for (TopExp_Explorer ex(own, TopAbs_EDGE); ex.More() && concave; ex.Next()) {
+        const int e = body.edge_index(ex.Current());
+        const std::vector<int> pair = e < 0 ? std::vector<int>() : edge_faces.at(e);
+        concave = pair.size() == 2 && ChFi3d::DefineConnectType(TopoDS::Edge(ex.Current()), body.face(pair[0]),
+                                                                 body.face(pair[1]), 1.0e-4, false) == ChFiDS_Concave;
+      }
+      std::vector<int> trimmed_by;
       for (const bool protrusion : {false, true}) {
         if (protrusion && !walls_too) {
           continue;
@@ -1169,6 +1223,10 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
               } else {
                 fills.Append(found);
                 builder.Add(recut, found);
+                if (concave) {
+                  add_overhang(body, n, found, rims, single.IsNull() ? TopoDS_Shape(edges) : single, near,
+                               tolerance, body_volume, trimmed_by, recut);
+                }
               }
               any = true;
               // Its walls: the body's faces it meets.
@@ -1349,6 +1407,182 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
       first += " (and " + std::to_string(more) + " more such " + (more == 1 ? "face" : "faces") + ")";
     }
     return first;
+  } catch (const Standard_Failure&) {
+    return {};
+  }
+}
+
+std::string overflow_tangent(const Shape& body, const std::vector<int>& owner,
+                             const std::function<double(int, int)>& reach) {
+  try {
+    OCC_CATCH_SIGNALS
+    const double tolerance = std::max(1.0e-6, 2.0 * BRep_Tool::MaxTolerance(body.occt(), TopAbs_VERTEX));
+    // How near the contact may come to the far edge's extreme and count as
+    // touching it: a tenth of a micrometre at least (a narrower strip of the
+    // face would be left, mitcad#1106).
+    const double touching = std::max(1.0e-4, 10.0 * tolerance);
+    ShapeSet selected;
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] >= 0) {
+        selected.Add(body.edge(e));
+      }
+    }
+    const EdgeFaces edge_faces(body);
+    std::vector<int> spine;
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] < 0) {
+        continue;
+      }
+      for (const int f : edge_faces.at(e)) {
+        if (std::find(spine.begin(), spine.end(), f) == spine.end()) {
+          spine.push_back(f);
+        }
+      }
+    }
+    for (const int n : spine) {
+      // The face's selected edges with their reach along it, their
+      // vertices, and its far edges: its other edges but those meeting them.
+      std::vector<std::pair<int, double>> own;
+      ShapeSet ends;
+      double farthest = 0.0;
+      for (TopExp_Explorer ex(body.face(n), TopAbs_EDGE); ex.More(); ex.Next()) {
+        const int e = body.edge_index(ex.Current());
+        if (e < 0 || !selected.Contains(ex.Current()) ||
+            std::any_of(own.begin(), own.end(), [&](const std::pair<int, double>& o) { return o.first == e; })) {
+          continue;
+        }
+        const double along = reach(e, n);
+        if (!(along > 0.0)) {
+          continue;
+        }
+        own.emplace_back(e, along);
+        farthest = std::max(farthest, along);
+        for (TopExp_Explorer vx(ex.Current(), TopAbs_VERTEX); vx.More(); vx.Next()) {
+          ends.Add(vx.Current());
+        }
+      }
+      if (own.empty()) {
+        continue;
+      }
+      // How far past the contact a point lies (negative: short of it): the
+      // least of its distances from the edges less their reach, and the
+      // edge that gives it.
+      const auto past = [&](const gp_Pnt& p, int* edge) {
+        const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(p).Vertex();
+        double least = Precision::Infinite();
+        for (const auto& [e, along] : own) {
+          const double gap = distance(vertex, body.edge(e)) - along;
+          if (gap < least) {
+            least = gap;
+            if (edge != nullptr) {
+              *edge = e;
+            }
+          }
+        }
+        return least;
+      };
+      for (TopExp_Explorer ex(body.face(n), TopAbs_EDGE); ex.More(); ex.Next()) {
+        const TopoDS_Edge& rim = TopoDS::Edge(ex.Current());
+        const int r = body.edge_index(rim);
+        if (r < 0 || selected.Contains(rim) || BRep_Tool::Degenerated(rim)) {
+          continue;
+        }
+        bool meets = false;
+        for (TopExp_Explorer vx(rim, TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
+          meets = ends.Contains(vx.Current());
+        }
+        if (meets || distance(rim, body.face(n)) > tolerance) {
+          continue;
+        }
+        double nearest = Precision::Infinite();
+        for (const auto& [e, along] : own) {
+          nearest = std::min(nearest, distance(rim, body.edge(e)) - along);
+        }
+        // (Wholly past the contact: no tangent.)
+        if (nearest > touching) {
+          continue;
+        }
+        // The gap along the far edge, sampled; at each of its extremes (a
+        // closed edge's ends joined), the extreme found by golden sections
+        // and compared with nothing.
+        const BRepAdaptor_Curve curve(rim);
+        const double t0 = curve.FirstParameter();
+        const double t1 = curve.LastParameter();
+        const bool closed = TopExp::FirstVertex(rim).IsSame(TopExp::LastVertex(rim));
+        constexpr int kSamples = 64;
+        std::vector<double> gaps(kSamples + 1);
+        for (int k = 0; k <= kSamples; ++k) {
+          gaps[static_cast<std::size_t>(k)] = past(curve.Value(t0 + (t1 - t0) * k / kSamples), nullptr);
+        }
+        const double step = (t1 - t0) / kSamples;
+        for (int k = closed ? 0 : 1; k < kSamples; ++k) {
+          const double before = gaps[static_cast<std::size_t>(k == 0 ? kSamples - 1 : k - 1)];
+          const double here = gaps[static_cast<std::size_t>(k)];
+          const double after = gaps[static_cast<std::size_t>(k + 1)];
+          const bool highest = here >= before && here >= after;
+          const bool lowest = here <= before && here <= after;
+          // (Neither, or level along the edge: an edge parallel to the
+          // contact, which a contact meets along its length or not at all.)
+          if ((!highest && !lowest) || (here == before && here == after) || std::abs(here) > 0.25 * farthest) {
+            continue;
+          }
+          // (A parameter of a closed edge's span before its start taken
+          // round.)
+          const auto at = [&](double t) {
+            if (closed && t < t0) {
+              t += t1 - t0;
+            }
+            return curve.Value(t);
+          };
+          const double sign = highest ? 1.0 : -1.0;
+          double a = t0 + (k - 1) * step;
+          double b = t0 + (k + 1) * step;
+          constexpr double kGolden = 0.6180339887498949;
+          double c = b - kGolden * (b - a);
+          double d = a + kGolden * (b - a);
+          double fc = sign * past(at(c), nullptr);
+          double fd = sign * past(at(d), nullptr);
+          for (int i = 0; i < 60 && b - a > 1.0e-12 * std::max(1.0, std::abs(t1 - t0)); ++i) {
+            if (fc > fd) {
+              b = d;
+              d = c;
+              fd = fc;
+              c = b - kGolden * (b - a);
+              fc = sign * past(at(c), nullptr);
+            } else {
+              a = c;
+              c = d;
+              fc = fd;
+              d = a + kGolden * (b - a);
+              fd = sign * past(at(d), nullptr);
+            }
+          }
+          const gp_Pnt p = at(0.5 * (a + b));
+          int edge = -1;
+          const double extreme = past(p, &edge);
+          if (std::abs(extreme) > touching || edge < 0) {
+            continue;
+          }
+          std::vector<std::string> beyond;
+          for (const int f : edge_faces.at(r)) {
+            if (f != n && !body.face_names(f).empty()) {
+              beyond.push_back(body.face_names(f).front());
+            }
+          }
+          const std::string& name = body.edge_name(edge);
+          char point[96];
+          std::snprintf(point, sizeof point, "(%.4g, %.4g, %.4g)", std::abs(p.X()) < 5.0e-5 ? 0.0 : p.X(),
+                        std::abs(p.Y()) < 5.0e-5 ? 0.0 : p.Y(), std::abs(p.Z()) < 5.0e-5 ? 0.0 : p.Z());
+          return "the chamfer of " + (name.empty() ? std::string("an unnamed edge") : "edge " + name) +
+                 " reaches exactly to the far edge of face " +
+                 (body.face_names(n).empty() ? std::string("?") : body.face_names(n).front()) +
+                 (beyond.empty() ? std::string() : " where face " + beyond.front() + " lies beyond it") + ", at " +
+                 point + ": its contact touches that edge there, so that the face would end in a point; it "
+                 "cannot be built at this size";
+        }
+      }
+    }
+    return {};
   } catch (const Standard_Failure&) {
     return {};
   }

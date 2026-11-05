@@ -1089,6 +1089,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables, read only by a build with `MITCAD_UPDATE_TEST_HOOKS`: [updates.md](updates.md#the-test-hooks). |
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
 | `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
+| `MITCAD_START_PAGE=0`, `MITCAD_START_PAGE=1` | `0`: MitCad never starts on the Start tab (mitcad#1258, [app/COMMANDS.md](../app/COMMANDS.md#the-start-tab)); the UI test libraries set it, so that every test starts on an empty design. `1`: the Start tab at launch by its *Show start page at launch*, also in a UI test script's run (`MITCAD_TEST_INPUT`), which without the variable starts without it. |
 | `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
 | `MITCAD_LOG_TYPED_TEXT=1` | Text fields are logged as they change: `File dialog <title>: <text>` (Qt's file dialog's file name), `Dialog field <title>: <text>` and `Panel field <input>: <text>` (typed into another dialog's field or a command panel's input; never a password); the UI test libraries set it (`app/framework/TypedTextLog.hpp`). |
 | `MITCAD_TEST_CRASH=app\|app-exception\|model-worker\|import-worker\|render-worker` | That process (or the model's worker thread) crashes as an access violation would (`app-exception`: the application throws an exception nothing catches, mitcad#773), for the crash reports' tests ([app/COMMANDS.md](../app/COMMANDS.md#feedback-and-error-reports)). |
@@ -1440,6 +1441,29 @@ in the distro only:
   volume, mitcad#964), and `test_chamfer_kernel.cpp` reads
   `chamfer-open-shell/body.brep` (a chamfer that healing made an open
   shell, mitcad#1182); skipped with a message without the variable.
+- `MITCAD_STEP_REPORTED` (a folder): STEP files of parts from issue
+  reports, never committed, named after their report
+  (`github-<issue>-…`). `geometry/tests/test_fillet_step_corner.cpp`
+  (ctest `geometry.fillet_step_corner`) reads the first body of
+  `github-130-…` and checks the fillets of its corner edge and of what is
+  left of it after the floor is rounded: one clean blend face at every
+  radius, without a warning (mitcad#1253, port patch 1240 of mitcad#1256);
+  skipped with a message without it. A synthetic body with the same corner
+  in the same test covers patch 1240 without the file.
+- `MITCAD_MITCAD_REPORTED` (a folder): MitCad designs from issue reports,
+  never committed, named after their report (`github-<issue>-…`).
+  `geometry/tests/test_join_many_bodies.cpp` (ctest
+  `geometry.join_many_bodies`) reads bodies of the base feature of
+  `github-133-…` (their B-rep data from the design file) and checks the
+  union of a nut lying inside a threaded carriage, which OCCT's exact
+  union gave without a solid: one valid solid of the expected volume
+  (mitcad#1273); skipped with a message without it. Its synthetic test of
+  unions in groups runs without the file. It also joins all 257 bodies,
+  logs the union's time, and checks its solids, shells, volume and points
+  sampled in every body's box, and checks Cut and Intersect of the design's
+  two back plates against their union, also by sampled points
+  (mitcad#1278); a synthetic row of blocks with a near miss runs without
+  the file.
 
 ### SolidCraft designs
 
@@ -2100,6 +2124,8 @@ through `mitcad-cli.exe mcp --connect` in the Windows VM's session 0.
 The Linux UI test `ui-mcp-files-camera` (`tools/ui-mcp-files-camera-test.sh`)
 drives the bridge from the shell (jq, two FIFOs) for Save As and Open into
 the folders for designs and for the camera (mitcad#402, mitcad#405).
+The Linux UI test `ui-mcp-document-new` (`tools/ui-mcp-document-new-test.sh`)
+drives it the same way for `document_new` (mitcad#1266).
 
 Follow the focused checks with `tools/check-all.sh` in the Linux isolated
 environment and the documented Windows and macOS builds with CTest.

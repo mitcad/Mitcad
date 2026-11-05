@@ -10,6 +10,7 @@
 #include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QAction>
+#include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
 #include <QDir>
@@ -172,7 +173,7 @@ MaterialsDialog::MaterialsDialog(DocumentHost& host, QWidget* parent) : QDialog(
   // Import from Slicer… (mitcad#829, mitcad#1135): a slicer's filaments
   // into the place chosen in the box before it, the default as New's.
   m_import = new SlicerImportBar(m_hosts.current(), QStringLiteral("Materials"));
-  m_import->target = [this] { return defaultPlace(m_hosts.onDesign()); };
+  m_import->target = [this] { return homePlace(); };
   layout->addWidget(m_import);
   m_panel = new MaterialsPanel(m_hosts.current(), QStringLiteral("Materials"));
   layout->addWidget(m_panel, 1);
@@ -222,39 +223,54 @@ MaterialsDialog::~MaterialsDialog() {
 }
 
 void MaterialsDialog::open(const QString& key) {
-  if (m_hosts.choose()) {
-    m_panel->setHost(m_hosts.current(), false);
-    m_import->setHost(m_hosts.current());
-  }
-  m_import->setPlaces(m_panel->places(), defaultPlace(m_hosts.onDesign()));
-  if (m_hosts.onDesign()) {
+  // Its own command's opening: This design first again (mitcad#1250).
+  m_homePlace.clear();
+  m_panel->setHomePlace(QString());
+  openWith([this, key] {
     if (key.isEmpty()) {
       m_panel->refresh();
     } else {
       m_panel->showItem(key);
     }
+  });
+}
+
+void MaterialsDialog::openPlace(const QString& place) {
+  m_homePlace = place;
+  m_panel->setHomePlace(place);
+  openWith([this, place] { m_panel->showPlace(place); });
+}
+
+void MaterialsDialog::openWith(const std::function<void()>& show) {
+  if (m_hosts.choose()) {
+    m_panel->setHost(m_hosts.current(), false);
+    m_import->setHost(m_hosts.current());
+  }
+  m_import->setPlaces(m_panel->places(), homePlace());
+  if (m_hosts.onDesign()) {
+    show();
     return;
   }
   // Without a design (mitcad#1135): the libraries are read off the UI
   // thread (mitcad#1018), the list fills when they came.
   const int reading = ++m_reads;
   readAhead(this, managerRequests(QStringLiteral("material"), m_hosts.library().projectFolder()),
-            [this, reading, key](const QueryAnswers& answers, qint64 readMs) {
+            [this, reading, show](const QueryAnswers& answers, qint64 readMs) {
               if (reading != m_reads || m_hosts.onDesign()) {
                 return;
               }
               m_hosts.library().setAnswers(answers);
               QElapsedTimer timer;
               timer.start();
-              if (key.isEmpty()) {
-                m_panel->refresh();
-              } else {
-                m_panel->showItem(key);
-              }
+              show();
               qDebug().noquote() << QStringLiteral("Materials loaded: read %1 ms, list %2 ms")
                                         .arg(readMs)
                                         .arg(timer.elapsed());
             });
+}
+
+QString MaterialsDialog::homePlace() const {
+  return m_panel->places().contains(m_homePlace) ? m_homePlace : defaultPlace(m_hosts.onDesign());
 }
 
 void MaterialsDialog::refresh() {
@@ -263,7 +279,7 @@ void MaterialsDialog::refresh() {
     m_panel->setHost(m_hosts.current(), false);
     m_import->setHost(m_hosts.current());
   }
-  m_import->setPlaces(m_panel->places(), defaultPlace(m_hosts.onDesign()));
+  m_import->setPlaces(m_panel->places(), homePlace());
   ++m_reads; // read now: a reading under way shows nothing older
   m_panel->refresh();
 }
@@ -277,6 +293,12 @@ void MaterialsDialog::hideEvent(QHideEvent* event) {
   if (m_changed) {
     m_changed = false;
     emit libraryChanged();
+  }
+  // Once (mitcad#1250): taken first, so that what it calls may set another.
+  std::function<void()> closed;
+  closed.swap(whenClosed);
+  if (closed) {
+    closed();
   }
 }
 
@@ -322,7 +344,14 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_list->setRootIsDecorated(false);
   m_list->setItemsExpandable(false);
   panel::setCompactIndentation(m_list, panel::Indent::GroupedList);
+  // A row's Duplicate, Hide or Delete (mitcad#1270).
+  m_list->setContextMenuPolicy(Qt::CustomContextMenu);
   sideBox->addWidget(m_list, 1);
+  // The hidden built-ins listed, grayed, with Unhide (mitcad#1270).
+  // At its own width: a check box takes clicks on its box and label only,
+  // never on the empty rest of a stretched row.
+  m_showHidden = makeShowHiddenBox();
+  sideBox->addWidget(m_showHidden, 0, Qt::AlignLeft);
   splitter->addWidget(side);
 
   // The editor of the selected one: the header the managers share (its
@@ -485,9 +514,12 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_duplicate->setObjectName(QStringLiteral("printManagerDuplicate"));
   m_delete = new QPushButton(tr("Delete"));
   m_delete->setObjectName(QStringLiteral("printManagerDelete"));
+  // A base material's Hide beside Delete (mitcad#1270).
+  m_hide = makeHideButton();
   m_buttons->addWidget(m_new);
   m_buttons->addWidget(m_duplicate);
   m_buttons->addWidget(m_delete);
+  m_buttons->addWidget(m_hide);
   // Materials as JSON or CSV files (mitcad#1213).
   m_import = new QPushButton(tr("Import…"));
   m_import->setObjectName(QStringLiteral("materialsImport"));
@@ -500,7 +532,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_buttons->addStretch(1);
   layout->addLayout(m_buttons);
   // Enter in a field saves it: no button takes Enter.
-  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_import, m_export,
+  for (QPushButton* button : {m_headerDuplicate, m_copyTo, m_new, m_duplicate, m_delete, m_hide, m_import, m_export,
                               m_addAppearance, m_removeAppearance, m_defaultAppearance}) {
     mac::auxiliaryButton(button);
   }
@@ -509,7 +541,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
     rebuildList();
     int shown = 0;
     for (const LibraryItem& item : std::as_const(m_items)) {
-      shown += matchesSearch(item, wanted) && m_places.contains(item.place) ? 1 : 0;
+      shown += listed(item) && m_places.contains(item.place) ? 1 : 0;
     }
     qDebug().noquote() << QStringLiteral("%1 search: %2, %3 shown").arg(m_log, wanted).arg(shown);
     logRows();
@@ -620,6 +652,21 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   connect(m_duplicate, &QPushButton::clicked, this, [this] { duplicate(m_duplicate); });
   connect(m_headerDuplicate, &QPushButton::clicked, this, [this] { duplicate(m_headerDuplicate); });
   connect(m_delete, &QPushButton::clicked, this, &MaterialsPanel::remove);
+  // Hidden built-ins (mitcad#1270).
+  connect(m_hide, &QPushButton::clicked, this, &MaterialsPanel::toggleHidden);
+  connect(m_list, &QWidget::customContextMenuRequested, this, &MaterialsPanel::itemMenu);
+  connect(m_showHidden, &QCheckBox::toggled, this, [this](bool on) {
+    qDebug().noquote() << QStringLiteral("%1 show hidden: %2")
+                              .arg(m_log, on ? QStringLiteral("on") : QStringLiteral("off"));
+    // A hidden one selected goes out of sight with the others.
+    const LibraryItem* item = current();
+    if (!on && item != nullptr && item->hidden) {
+      m_currentKey.clear();
+    }
+    rebuildList();
+    showCurrent();
+    logRows();
+  });
   connect(m_import, &QPushButton::clicked, this, &MaterialsPanel::importMaterials);
   connect(m_export, &QPushButton::clicked, this, &MaterialsPanel::exportMaterials);
   connect(m_properties, &MaterialPropertiesBox::changeRequested, this,
@@ -678,6 +725,52 @@ void MaterialsPanel::showItem(const QString& key) {
     }
     qDebug().noquote() << QStringLiteral("Material selected: %1 (%2)").arg(item->name, item->place);
   }
+}
+
+void MaterialsPanel::showPlace(const QString& place) {
+  m_currentKey.clear();
+  refresh();
+  // The place's first material in the list's order (mitcad#1250).
+  const auto headingOf = [this, &place]() -> QTreeWidgetItem* {
+    for (int index = 0; index < m_list->topLevelItemCount(); ++index) {
+      QTreeWidgetItem* row = m_list->topLevelItem(index);
+      if (row->data(1, kKeyRole).toString() == place) {
+        return row;
+      }
+    }
+    return nullptr;
+  };
+  QTreeWidgetItem* heading = headingOf();
+  if (heading == nullptr) {
+    qDebug().noquote() << QStringLiteral("%1 has no group %2").arg(m_log, placeName(place));
+    return;
+  }
+  for (QTreeWidgetItemIterator it(heading); *it != nullptr; ++it) {
+    if (*it != heading && (*it)->parent() == nullptr) {
+      break; // the next place's heading
+    }
+    const QString key = (*it)->data(0, kKeyRole).toString();
+    if (!key.isEmpty()) {
+      m_currentKey = key;
+      break;
+    }
+  }
+  if (!m_currentKey.isEmpty()) {
+    rebuildList();
+    showCurrent();
+    heading = headingOf();
+  }
+  if (heading != nullptr) {
+    m_list->scrollToItem(heading, QAbstractItemView::PositionAtTop);
+  }
+  const LibraryItem* item = current();
+  if (item != nullptr) {
+    qDebug().noquote() << QStringLiteral("Material selected: %1 (%2)").arg(item->name, item->place);
+  }
+  qDebug().noquote() << QStringLiteral("%1 on %2: %3")
+                            .arg(m_log, placeName(place),
+                                 item != nullptr ? item->name : QStringLiteral("nothing selected"));
+  scheduleLogPlaces();
 }
 
 void MaterialsPanel::refresh() {
@@ -798,6 +891,9 @@ void MaterialsPanel::rebuildList() {
     markInDesign(row, inUse, tr("Used in this design"));
     // The full name, also when the list is narrowed and elides it.
     row->setToolTip(0, inUse ? tr("%1, used in this design").arg(item.name) : item.name);
+    if (item.hidden) {
+      markHiddenRow(row, m_list->palette()); // listed by Show hidden (mitcad#1270)
+    }
     if (item.key() == m_currentKey) {
       selected = row;
     }
@@ -805,11 +901,10 @@ void MaterialsPanel::rebuildList() {
   // By place (mitcad#1135), each a heading with its count, then in each
   // place by class in the query's order (the built-in ones first, then by
   // name, mitcad#655); the search across the places.
-  const QString wanted = m_search->text();
   for (const QString& place : std::as_const(m_places)) {
     int count = 0;
     for (const LibraryItem& item : std::as_const(m_items)) {
-      count += item.place == place && matchesSearch(item, wanted) ? 1 : 0;
+      count += item.place == place && listed(item) ? 1 : 0;
     }
     QTreeWidgetItem* placeRow = heading(placeHeading(place, count), place);
     placeRow->setData(0, NativeControlIdentifierRole, QStringLiteral("printManager.group.") + place);
@@ -817,7 +912,7 @@ void MaterialsPanel::rebuildList() {
       QTreeWidgetItem* groupRow = nullptr;
       for (const LibraryItem& item : std::as_const(m_items)) {
         const QString itemGroup = groupOrder().contains(item.group) ? item.group : QStringLiteral("other");
-        if (item.place != place || itemGroup != group || !matchesSearch(item, wanted)) {
+        if (item.place != place || itemGroup != group || !listed(item)) {
           continue;
         }
         if (groupRow == nullptr) {
@@ -835,9 +930,56 @@ void MaterialsPanel::rebuildList() {
   }
   m_list->expandAll();
   m_list->setCurrentItem(selected);
+  // Show hidden while one is hidden, or while it is on (mitcad#1270).
+  const bool anyHidden = std::any_of(m_items.cbegin(), m_items.cend(), [](const LibraryItem& item) {
+    return item.hidden;
+  });
+  m_showHidden->setVisible(anyHidden || m_showHidden->isChecked());
   m_building = false;
   fitListWidth();
   scheduleLogPlaces();
+}
+
+bool MaterialsPanel::listed(const LibraryItem& item) const {
+  return matchesSearch(item, m_search->text()) && (!item.hidden || m_showHidden->isChecked());
+}
+
+void MaterialsPanel::toggleHidden() {
+  const LibraryItem* item = current();
+  if (item == nullptr || !canHide(*item)) {
+    return;
+  }
+  const LibraryItem target = *item;
+  // A user setting, no undo step (mitcad#1270).
+  setItemHidden(target, !target.hidden, m_log);
+  if (!target.hidden && !m_showHidden->isChecked()) {
+    m_currentKey.clear(); // out of the list: nothing selected
+  }
+  refresh();
+  // The pickers of an open command panel without it, or with it again.
+  m_host->commandInputsChanged();
+  emit changed();
+}
+
+void MaterialsPanel::itemMenu(const QPoint& at) {
+  QTreeWidgetItem* row = m_list->itemAt(at);
+  if (row == nullptr || row->data(0, kKeyRole).toString().isEmpty()) {
+    return; // a heading
+  }
+  m_list->setCurrentItem(row);
+  const LibraryItem* item = current();
+  if (item == nullptr) {
+    return;
+  }
+  const LibraryItem target = *item;
+  const ItemMenuChoice choice = itemContextMenu(this, target, m_list->viewport()->mapToGlobal(at));
+  if (choice == ItemMenuChoice::Duplicate) {
+    duplicate(m_duplicate);
+  } else if (choice == ItemMenuChoice::Hide) {
+    toggleHidden();
+  } else if (choice == ItemMenuChoice::Delete) {
+    remove();
+  }
 }
 
 int MaterialsPanel::listWidthNeeded() const {
@@ -899,6 +1041,8 @@ void MaterialsPanel::showCurrent() {
   const LibraryItem* item = current();
   m_duplicate->setEnabled(item != nullptr);
   m_delete->setEnabled(item != nullptr && !item->readOnly);
+  // A base material's Hide or Unhide (mitcad#1270); the user's own keep Delete.
+  showHideButton(m_hide, item);
   // Never a blank side (mitcad#655): nothing selected a quiet line; an item
   // its editor.
   m_emptyState->setVisible(item == nullptr);
@@ -1629,7 +1773,10 @@ void MaterialsPanel::exportMaterials() {
 }
 
 QString MaterialsPanel::askWhere(QPushButton* anchor, const QString& what) {
-  return choosePlaceAmong(anchor, QStringLiteral("%1 %2").arg(m_log, what), places(), defaultPlace(hasDesign()));
+  // The home place first while it is one (mitcad#1250), else the default.
+  const QStringList where = places();
+  const QString first = where.contains(m_homePlace) ? m_homePlace : defaultPlace(hasDesign());
+  return choosePlaceAmong(anchor, QStringLiteral("%1 %2").arg(m_log, what), where, first);
 }
 
 void MaterialsPanel::inPlace(QJsonObject& command, const QString& place) const {
@@ -1827,9 +1974,18 @@ void MaterialsPanel::logRows() {
   }
   QStringList rows;
   for (const LibraryItem& item : std::as_const(m_items)) {
-    rows << QStringLiteral("%1/%2 %3 (%4)%5")
+    rows << QStringLiteral("%1/%2 %3 (%4)%5%6")
                 .arg(item.group.isEmpty() ? QStringLiteral("other") : item.group, item.id, item.name, item.place,
-                     item.changed ? QStringLiteral(" changed") : QString());
+                     item.changed ? QStringLiteral(" changed") : QString(),
+                     item.hidden ? QStringLiteral(", hidden") : QString());
+  }
+  // The hidden ones the list shows, grayed (mitcad#1270).
+  QStringList grayed;
+  for (QTreeWidgetItemIterator it(m_list); *it != nullptr; ++it) {
+    const LibraryItem* item = findItem(m_items, (*it)->data(0, kKeyRole).toString());
+    if (item != nullptr && item->hidden && !grayed.contains(item->name)) {
+      grayed << item->name;
+    }
   }
   // The places as the list shows them (mitcad#1135), "This design 1 | ...".
   QStringList groups;
@@ -1841,13 +1997,16 @@ void MaterialsPanel::logRows() {
     }
     groups << QStringLiteral("%1 %2").arg(placeName(heading->data(1, kKeyRole).toString())).arg(count);
   }
-  const QString logged = rows.join(QLatin1Char('\n')) + QLatin1Char('|') + groups.join(QLatin1Char('|'));
+  const QString logged = rows.join(QLatin1Char('\n')) + QLatin1Char('|') + groups.join(QLatin1Char('|')) +
+                         QLatin1Char('|') + grayed.join(QLatin1Char('\n'));
   if (logged == m_loggedRows) {
     return;
   }
   m_loggedRows = logged;
   qDebug().noquote() << QStringLiteral("%1: %2 items").arg(m_log).arg(rows.size());
   qDebug().noquote() << QStringLiteral("%1 groups: %2").arg(m_log, groups.join(QStringLiteral(" | ")));
+  qDebug().noquote() << QStringLiteral("%1 grayed: %2")
+                            .arg(m_log, grayed.isEmpty() ? QStringLiteral("none") : grayed.join(QStringLiteral(", ")));
   for (const QString& row : std::as_const(rows)) {
     qDebug().noquote() << QStringLiteral("%1 row: %2").arg(m_log).arg(row);
   }
@@ -1946,6 +2105,8 @@ void MaterialsPanel::logPlaces() {
       {QStringLiteral("new"), m_new},
       {QStringLiteral("duplicate"), m_duplicate},
       {QStringLiteral("delete"), m_delete},
+      {QStringLiteral("hide"), m_hide},
+      {QStringLiteral("show_hidden"), m_showHidden},
       {QStringLiteral("import_materials"), m_import},
       {QStringLiteral("export_materials"), m_export}};
   // The window's buttons (Close).

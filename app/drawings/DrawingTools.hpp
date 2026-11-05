@@ -70,6 +70,12 @@ struct ToolPicks {
 // An annotation's tool that picks until a click finds nothing (a baseline
 // or chain of dimensions): its pickCount.
 constexpr int kOpenPicks = -1;
+// An annotation's tool whose picks choose what it makes (the Dimension
+// tool's Type Auto, mitcad#1272): its pickCount. One circle, arc or
+// straight edge is placed at once (a click on another edge, circle or
+// corner while it is placed picks that too); a corner waits for a second
+// pick; two picks are placed.
+constexpr int kAutoPicks = -2;
 
 struct DrawingToolDef {
   QString id;      // "drawing.section_view"
@@ -107,7 +113,15 @@ struct DrawingToolDef {
 //
 // Line and Arc (mitcad#729) draw outside the model, on the sheet or in the
 // view under their first click (their Drawn option), which they then move,
-// scale and turn with; Text does too (on the sheet unless chosen).
+// scale and turn with; Text does too (on the sheet unless chosen). Their
+// clicks on a view snap to its edges' ends, straight edges' middles and
+// circles' and arcs' centres (mitcad#1272; Alt: as clicked).
+//
+// Dimension's Type is Auto unless chosen (mitcad#1272): its picks choose
+// the model's `"type": "dimension"` (a diameter, a radius, an edge's
+// length, an angle, or a distance whose placing click chooses horizontal,
+// vertical or aligned); Linear, Aligned, Angle, Radius and Diameter
+// override it.
 const QVector<DrawingToolDef>& drawingTools();
 const DrawingToolDef* drawingTool(const QString& id);
 

@@ -90,6 +90,7 @@ class ReportCenter;
 class SectionWorker;
 class ViewController;
 class SpaceMouseController;
+class StartPage;
 #ifdef MITCAD_MACOS_NATIVE_UI
 namespace mac {
 class NativeMacWindow;
@@ -206,6 +207,13 @@ public:
   // in the recovery folder (P8c), if there is any; an .f3d design opened at
   // start-up comes in first.
   void recoverAtStart();
+
+  // The Start tab when MitCad starts (mitcad#1258; MainWindowStart.cpp):
+  // shown unless `skip` says why not (a file opens, a test's run) or the
+  // page's Show start page at launch is off. Logs "Start page at launch:
+  // shown" or "Start page at launch: off (<why>)". Called by main() before
+  // the window shows; the recovery question comes after it, over the page.
+  void showStartPageAtLaunch(const QString& skip);
 
   // Fetches the library sources with Auto-update in the background, one
   // after another, without a dialog (mitcad#576; MainWindowLibraries.cpp):
@@ -340,6 +348,8 @@ public:
   QString projectFolder() const override { return m_project.isProject() ? m_project.root : QString(); }
   // A design opened, saved or changed (mitcad#1135; files/MainWindowPrint.cpp).
   bool designOpen() const override;
+  // Material Library… of the Material tool (mitcad#1250; files/MainWindowPrint.cpp).
+  void openMaterialLibrary(std::function<void()> closed) override;
   void exportFlatPattern(const QString& body) override;
   // Save As Mesh (mitcad#734; files/MainWindowSaveAsMesh.cpp).
   void saveAsMesh(const Selection& items) override;
@@ -400,6 +410,8 @@ private:
   std::unique_ptr<NativeMacWindow> m_nativeWindow;
   std::unique_ptr<NativeCommandForm> m_nativeForm;
   std::unique_ptr<NativeWidgetView> m_nativeIdleForm;
+  std::unique_ptr<NativeWidgetView> m_nativeSketchFooterForm;
+  QPointer<QWidget> m_nativeSketchFooter;
   std::unique_ptr<NativeWidgetView> m_nativeProjectsForm;
   std::unique_ptr<NativeWidgetView> m_nativeConfigurationForm;
   bool m_nativeProjectsShown = false;
@@ -445,6 +457,10 @@ private:
   // Open into the window from an allowed folder, and the view's camera
   // (mitcad#402, mitcad#405).
   QJsonObject mcpOpen(const QJsonObject& arguments);
+  // document_new (mitcad#1266): an empty design in a window of its own
+  // beside this one, made in a folder for designs (a project's as New
+  // Design makes it) or untitled.
+  QJsonObject mcpNew(const QJsonObject& arguments);
   QJsonObject mcpCamera(const QJsonObject& arguments);
   QJsonObject mcpCameraJson() const;
   // The corners of the boxes of entities as the view shows them; false with
@@ -1065,6 +1081,15 @@ private:
   // Where Save puts an untitled design: the panel's selected folder of the
   // current project, or "".
   QString projectsPanelFolder() const;
+  // Names typed in the Projects panel (mitcad#1268): `on` shows where the
+  // name is typed (the card expanded, the panel or its dock shown, not
+  // remembered for the next start), off puts the panel back as it was. A
+  // refusal of the panel's name (it is there already, not a valid name)
+  // opens its editor again with the message at the row; other refusals,
+  // and names given elsewhere, are told in a sheet.
+  void showProjectsForNaming(bool on);
+  void projectNameRefused(const QString& root, const QString& path, const QString& from, const QString& title,
+                          const QJsonObject& refused);
   // Before Save writes over its file in a project with history: true to
   // write (unchanged outside Mitcad, or Save as New Version chosen, which
   // records a change made outside first), false for Save As, none to
@@ -1197,7 +1222,13 @@ private:
   void importFile();
   bool importPath(const QString& path, bool interactive, QString* error = nullptr);
   bool importCad(const QString& path, double unitMillimetres, QString* error,
-                 QJsonObject* imported = nullptr);
+                 QJsonObject* imported = nullptr, const QString& structure = QString(),
+                 bool repeatedParts = false);
+  // A STEP file with an assembly asks how it comes in (mitcad#1274): the
+  // import_file `structure` chosen, empty when nothing was asked (another
+  // file, no assembly), nothing when cancelled; `repeatedParts` its Find
+  // repeated parts box (mitcad#1277).
+  std::optional<QString> askImportStructure(const QString& path, bool* repeatedParts = nullptr);
   // Insert Mesh's Convert to solid (mitcad#1082): each mesh body of the
   // import result made a faceted solid; one undo step with the import
   // (`depth`: the undo depth before it) when any converts, and a refused
@@ -1435,6 +1466,13 @@ private:
   // The Projects panel (mitcad#145) and its dock or card.
   ProjectsPanel* m_projectsPanel = nullptr;
   QWidget* m_projectsContainer = nullptr;
+  // How the panel was before a name was typed in it (mitcad#1268).
+  struct ProjectsNamingState {
+    bool active = false;
+    bool hidden = false;
+    bool collapsed = false;
+  };
+  ProjectsNamingState m_projectsNaming;
   // The Configuration panel's card or dock (mitcad#1020).
   QWidget* m_configurationContainer = nullptr;
   // Open Read-Only is opening a design: the lock controller takes no edit
@@ -1975,6 +2013,25 @@ private:
   QString m_commentRetarget;       // the comment Retarget Comment pins again
   QString m_loggedComments;
   QString m_loggedCommentsError;
+
+  // The Start tab (mitcad#1258; MainWindowStart.cpp, files/StartPage.hpp):
+  // the page over the view while the ribbon's START tab is shown, made when
+  // first needed; while it shows, the Floating layout's cards (and the
+  // Docked layout's docks and navigation bar, the AppKit frontend's cards)
+  // are hidden and come back as they were. A design that opens (or a new
+  // one), a command of the 3D view (trigger) and an import leave it for
+  // SOLID. A save writes the design's preview (recent::designPreviewPath),
+  // which the page's cards and File › Open Recent show.
+  void createStartPage();
+  void updateStartPage(const QString& tab);
+  bool startPageShown() const;
+  void leaveStartPage();
+  void saveDesignPreview(const QString& path);
+  // Dropped files, on the window or the Start page: a design opens, the
+  // other files come in (an import while no command runs).
+  void openDropped(const QStringList& paths);
+  StartPage* m_startPage = nullptr;
+  QStringList m_startHiddenDocks; // the Docked layout's docks it hid
 };
 
 } // namespace mitcad

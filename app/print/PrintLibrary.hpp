@@ -8,8 +8,10 @@
 #include <QStringList>
 #include <QVector>
 
+class QCheckBox;
 class QComboBox;
 class QHBoxLayout;
+class QPalette;
 class QLabel;
 class QLineEdit;
 class QPoint;
@@ -50,6 +52,8 @@ struct LibraryItem {
   bool copyUsed = false;
   QString sourcePlace;
   QString sourceName;
+  // A base library item the user hid (mitcad#1270, hiddenItemIds).
+  bool hidden = false;
   QJsonObject row;     // as the query gave it
 
   // Its key in the windows and the panel: "<place>/<id>".
@@ -64,13 +68,16 @@ struct LibraryItem {
 };
 
 // The `library_items` query of a kind (`project` the design's project, if
-// any): the rows in the query's order. Sets `error` when it was refused.
+// any): the rows in the query's order, less the base library items the
+// user hid that the design does not use (mitcad#1270, withoutHidden): the
+// pickers' list. Sets `error` when it was refused.
 QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QString& kind, const QString& project,
                                        QString* error = nullptr);
 // The same by place (`by_place`, mitcad#1135: the managers' list model):
 // every item of the design, then each library's own items, the project's,
 // the user's and the built-in ones; `places` (when given) gets the places
-// in that order (design, project in a project, user, mitcad).
+// in that order (design, project in a project, user, mitcad). Hidden base
+// items are listed too, marked `hidden` (the managers' Show hidden).
 QVector<LibraryItem> queryPlaceItems(const CommandContext& model, const QString& kind, const QString& project,
                                      QStringList* places = nullptr, QString* error = nullptr);
 // By key; null when it is not there.
@@ -199,5 +206,44 @@ QString designDialectOf(const CommandContext& model);
 // ids.
 QString plainModelError(const QString& error, const PrintKeyTable& keys, const QJsonObject& command,
                         const QString& name = QString());
+
+// Hidden built-ins (mitcad#1270): the base library's printers, processes
+// and materials the user does not use, out of the managers' lists (unless
+// Show hidden) and every picker. The ids are a user setting
+// (QSettings `printLibrary/hidden_<kind>`), never in a design or a
+// project; a design that uses a hidden item keeps it as its own.
+//
+// Whether `item` can be hidden: an item of the base library (not the
+// built-in materials MitCad itself has, nor the user's or the project's,
+// which keep Delete).
+bool canHide(const LibraryItem& item);
+// The hidden ids of a kind (material, printer or process).
+QStringList hiddenItemIds(const QString& kind);
+// Hides or shows `item` again (canHide's only), logged "<logName> hidden:
+// <name>" or "<logName> unhidden: <name>".
+void setItemHidden(const LibraryItem& item, bool hidden, const QString& logName);
+// The pickers' list: `items` less the hidden ones the design neither has a
+// copy of nor uses.
+QVector<LibraryItem> withoutHidden(const QVector<LibraryItem>& items);
+// Whether My library or This project has one of `items` (the pickers' or
+// the managers' rows of a kind): the built-ins then go out of the way, the
+// managers' Built-in group folded at the opening and the pickers' built-ins
+// last under a Built-in heading.
+bool hasOwnLibraryItems(const QVector<LibraryItem>& items);
+// The managers' Hide button (`printManagerHide`) and Show hidden box
+// (`printManagerShowHidden`), and the button for `item`: shown for an item
+// canHide allows, Unhide for a hidden one.
+QPushButton* makeHideButton();
+QCheckBox* makeShowHiddenBox();
+void showHideButton(QPushButton* hide, const LibraryItem* item);
+// A hidden item's row while Show hidden lists it: grayed, its tooltip
+// saying so.
+void markHiddenRow(QTreeWidgetItem* row, const QPalette& palette);
+// A row's context menu in the managers (mitcad#1270) at `global`:
+// Duplicate, then Hide or Unhide for a base item, else Delete (disabled
+// when read only); logged "Context menu: Duplicate | Hide". What was
+// chosen.
+enum class ItemMenuChoice { None, Duplicate, Hide, Delete };
+ItemMenuChoice itemContextMenu(QWidget* parent, const LibraryItem& item, const QPoint& global);
 
 } // namespace mitcad

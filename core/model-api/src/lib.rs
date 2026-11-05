@@ -703,6 +703,9 @@ named_enum! {
             // application keeps the faces it built while it stays the same).
             #[serde(default)]
             hashes: bool,
+            // Only this sketch's regions, by uid or name (mitcad#1269).
+            #[serde(default)]
+            sketch: Option<String>,
         },
         "autoselect_profiles" => AutoselectProfiles,
         "sheet_state" => SheetState {
@@ -1032,6 +1035,11 @@ named_enum! {
         "material_units" => MaterialUnits(materials::MaterialUnitsQuery),
         "material_dataset" => MaterialDataset(materials::MaterialDatasetQuery),
         "export_materials" => ExportMaterials(materials::ExportMaterialsQuery),
+        // Whether a STEP file has an assembly that import_file keeps as
+        // components (mitcad#1274).
+        "file_structure" => FileStructure {
+            path: String,
+        },
     }
 }
 
@@ -1213,26 +1221,50 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 }
                 bodies
             }
-            Query::Profiles { hashes } => Value::Array(
-                self.profiles()
-                    .into_iter()
-                    .map(|p| {
-                        let sketch_name = self.feature(p.sketch).map(|f| f.name.clone());
-                        let mut value = json!({"sketch": p.sketch, "sketch_name": sketch_name,
+            Query::Profiles { hashes, sketch } => {
+                // One sketch's regions (mitcad#1269): by uid or name, as
+                // other fields that take a sketch read it (mitcad#1107).
+                let is_sketch = |def: &FeatureDef| matches!(def, FeatureDef::Sketch(_));
+                let only = match sketch.as_deref() {
+                    Some(text) => match self.feature_by_text(text, Some(&is_sketch))? {
+                        Some(entry) if is_sketch(&entry.def) => Some(entry.uid),
+                        Some(entry) => {
+                            return Err(ApiError(format!(
+                                "{text} is not a sketch: {} is a {}",
+                                entry.uid,
+                                entry.def.type_name()
+                            )));
+                        }
+                        None => {
+                            return Err(ApiError(format!(
+                                "no sketch {text}: give a sketch's uid or name"
+                            )));
+                        }
+                    },
+                    None => None,
+                };
+                Value::Array(
+                    self.profiles()
+                        .into_iter()
+                        .filter(|p| only.is_none_or(|uid| p.sketch == uid))
+                        .map(|p| {
+                            let sketch_name = self.feature(p.sketch).map(|f| f.name.clone());
+                            let mut value = json!({"sketch": p.sketch, "sketch_name": sketch_name,
                                                "region": p.region, "consumed": p.consumed});
-                        if p.face_bounded {
-                            value["face_bounded"] = json!(true);
-                        }
-                        if hashes {
-                            let hash = self
-                                .profile_region(p.sketch, &p.region)
-                                .map(|(frame, region)| profile_hash(&frame, region));
-                            value["hash"] = json!(hash);
-                        }
-                        value
-                    })
-                    .collect(),
-            ),
+                            if p.face_bounded {
+                                value["face_bounded"] = json!(true);
+                            }
+                            if hashes {
+                                let hash = self
+                                    .profile_region(p.sketch, &p.region)
+                                    .map(|(frame, region)| profile_hash(&frame, region));
+                                value["hash"] = json!(hash);
+                            }
+                            value
+                        })
+                        .collect(),
+                )
+            }
             Query::AutoselectProfiles => json!(self.autoselect_profiles()),
             Query::SheetState { body } => self.sheet_state_json(body),
             Query::SheetRules { feature } => self.sheet_rules_json(feature),
@@ -1266,6 +1298,12 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 }
                 if !infos.is_empty() {
                     value["infos"] = json!(infos);
+                }
+                // Profiles deleted from their sketch, which an edit panel
+                // leaves out (mitcad#1264).
+                let missing = self.missing_profiles(uid);
+                if !missing.is_empty() {
+                    value["missing_profiles"] = json!(missing);
                 }
                 // What the importer said about it (mitcad#170).
                 if let Some(note) = note {
@@ -1552,6 +1590,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::MaterialUnits(query) => self.material_units_json(&query)?,
             Query::MaterialDataset(query) => materials::material_dataset_json(&query),
             Query::ExportMaterials(query) => self.export_materials_json(&query)?,
+            Query::FileStructure { path } => {
+                json!({"assembly": mitcad_model::exchange::file_has_assembly(&path)?})
+            }
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2434,6 +2475,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             // (mitcad#399).
             if mitcad_model::internal::features::is_mesh(self.kernel(), body.shape) {
                 value["mesh"] = json!(true);
+            }
+            // An Envelope's body (mitcad#1271).
+            if self
+                .feature(body.uid.feature)
+                .is_some_and(|f| matches!(f.def, FeatureDef::Envelope(_)))
+            {
+                value["envelope"] = json!(true);
             }
             if volumes && !properties {
                 let mass = self

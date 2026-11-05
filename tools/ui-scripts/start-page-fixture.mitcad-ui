@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# The Start tab's fixture (mitcad#1258): three saved designs with their
+# previews in the recent list. MitCad starts with start-a.mitcad (--open:
+# no Start page at launch); each design is changed (a parameter added) and
+# saved, which writes its preview, and the next one is opened in the same
+# window: start-a, start-b, then start-c, so that the list is c, b, a.
+# Also sets the units of new designs to inches for the Start page's New
+# Design (start-page.mitcad-ui). Run by tools/ui-start-page-test.sh (Linux)
+# and tools/ui-windows-start-page-test.ps1 (Windows) before
+# start-page.mitcad-ui and start-page-off.mitcad-ui.
+expect-ever '^Start page at launch: off \(a file opens\)$' 30
+expect-ever 'View area' 30
+wait-idle
+set-setting documents/openInCurrentWindow true
+set-setting units/newDesigns in
+
+mark
+model-command '{"cmd":"add_parameter","name":"Note","value":1}'
+wait-idle
+command file.save
+wait-log '^Saved .*start-a\.mitcad$' 30
+wait-log '^Design preview saved: start-a\.mitcad \([0-9]+ x [0-9]+\)$' 30
+
+mark
+open-file ${MITCAD_TEST_WORK}/start-b.mitcad
+wait-log '^Opened .*start-b\.mitcad$' 60
+wait-idle
+model-command '{"cmd":"add_parameter","name":"Note","value":1}'
+wait-idle
+command file.save
+wait-log '^Saved .*start-b\.mitcad$' 30
+wait-log '^Design preview saved: start-b\.mitcad \([0-9]+ x [0-9]+\)$' 30
+
+mark
+open-file ${MITCAD_TEST_WORK}/start-c.mitcad
+wait-log '^Opened .*start-c\.mitcad$' 60
+wait-idle
+model-command '{"cmd":"add_parameter","name":"Note","value":1}'
+wait-idle
+command file.save
+wait-log '^Saved .*start-c\.mitcad$' 30
+wait-log '^Design preview saved: start-c\.mitcad \([0-9]+ x [0-9]+\)$' 30
+expect-never 'TestDriver: FAIL'

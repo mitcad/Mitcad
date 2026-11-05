@@ -34,7 +34,9 @@ def choice(label, keys):
 def finish_caption():
     if native:
         # Inspect what AppKit actually draws, not a cached button title.
-        add('expect-native-style paletteFinish caption')
+        add('expect-native-bounds paletteFinish 1',
+            "screenshot '${MITCAD_TEST_WORK}/finish-caption.png'",
+            'expect-native-style paletteFinish caption')
 
 
 if scenario == 'measure':

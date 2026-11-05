@@ -2,7 +2,9 @@
 
 A manual test of the view's trackpad navigation (`NavigationScheme::Trackpad`,
 `OcctViewer::trackpadScroll` and `OcctViewer::nativeGesture`) on a Mac. Run
-first with the default native frontend, then repeat with `--ui=qt`. Open a
+first with the default Qt frontend (`--ui=qt`), then repeat with the opt-in
+native frontend (`--ui=native`). Record the effective frontend and Navigation
+preset for each run. Open a
 design with a few bodies and a zoom level where you can see the model's edges
 (Fit first). Preferences > Navigation: "Trackpad ..." (the default on macOS;
 delete the `view/navigationScheme` setting to see the default again). Try it
@@ -54,6 +56,26 @@ off.
       drawing.
 - [ ] The Keyboard and Mouse Overview (Help) lists the Trackpad rows with
       the Option and Command glyphs.
+
+## Command-click release ordering
+
+Use two distinct visible edges on a simple solid. These checks require an
+actual trackpad: the synthetic release-order tests exercise application
+events and do not establish physical-input acceptance.
+
+- [ ] Command-click the two edges before starting Fillet, then open Fillet:
+      both edges are retained. Cancel and repeat with Chamfer.
+- [ ] Start Fillet with no selection and Command-click both edges. Repeat
+      with Chamfer. Release Command before the trackpad click in one run,
+      and release the click before Command in another.
+- [ ] Repeat immediately after an intentional orbit (Option-drag and the
+      preset's two-finger orbit), both after an ordinary stop and after
+      momentum. Lifting the fingers ends the gesture; after both the click
+      and Command are released, pointer motion leaves the camera still and
+      the next click selects normally.
+- [ ] Repeat with Trackpad, Shift orbit, and a saved Custom navigation table.
+      Intentional orbit and the saved bindings keep working. Record any
+      failing modifier/button/scroll sequence separately from a screenshot.
 
 ## MacBook trackpad, Shift orbit scheme
 

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Projection of model geometry into a sketch (Project): the
 //! kernel lists the curves of an edge, a face's boundary or a vertex
-//! ([`mitcad_model_base::Kernel::curves_of`]); they are projected along the sketch
+//! ([`mitcad_model_base::Kernel::curves_of`]); a face is its outline seen
+//! along the sketch normal instead ([`mitcad_model_base::Kernel::face_outline`],
+//! mitcad#1265: its boundary edges without the seams off the outline, and
+//! its silhouettes, so that a cylinder seen from the side is a rectangle).
+//! They are projected along the sketch
 //! normal onto the plane and become fixed reference entities. Lines stay
 //! lines, circles in parallel planes stay circles, other circles and
 //! ellipses become ellipses (or lines seen edge on), B-splines keep their
@@ -754,6 +758,8 @@ pub struct SourceCurves {
     pub source: Option<super::ProjectionSource>,
     pub chain: Vec<TopoName>,
     pub curves: Vec<Curve3>,
+    /// The curves are a face's outline (mitcad#1265, [`Projection::outline`]).
+    pub outline: bool,
 }
 
 /// A whole body's section (Intersect of a body, mitcad#736) as the
@@ -782,6 +788,7 @@ pub fn section_groups(found: Vec<crate::kernel::SectionCurve>) -> Vec<SourceCurv
                 source,
                 chain,
                 curves: vec![piece.curve],
+                outline: false,
             }),
         }
     }

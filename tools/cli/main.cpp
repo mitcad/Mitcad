@@ -90,11 +90,14 @@ const char* const kUsage = R"(usage:
       file (all, or one): volumes, volume differences, surface deviation
       and bounding boxes. Exits with 1 when a given limit is exceeded.
       <part> is a design (.mitcad) or a script (.json) that builds one.
-  mitcad-cli import <file> [--unit-mm N] [--open <file.mitcad>] [--save <out.mitcad>] [--json]
+  mitcad-cli import <file> [--unit-mm N] [--structure components|base] [--open <file.mitcad>]
+                    [--save <out.mitcad>] [--json]
       Imports a STEP, IGES, BRep, STL or OBJ file as a base feature (bodies
       without history; STL and OBJ give mesh bodies) into a new or opened
       design and prints the report. --unit-mm is the length of one STL or
-      OBJ unit in millimetres (default 1).
+      OBJ unit in millimetres (default 1). A STEP assembly comes in as a
+      component per distinct part with an occurrence per instance, unless
+      --structure base asks for one base feature.
   mitcad-cli import-f3d <file.f3d> [--save <out.mitcad>] [--report <report.json>] [--json]
                         [--design <name>] [--dump <dump.json>] [--no-verify] [--no-fallback]
                         [--no-compare] [--time-limit <seconds>] [--hang-limit <seconds>]

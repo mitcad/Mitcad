@@ -245,6 +245,8 @@ function Invoke-Mitcad([string]$Name, [string[]]$Arguments, [hashtable]$Environm
   $info.EnvironmentVariables['MITCAD_NO_UPDATE_CHECK'] = '1'
   # Panels start from their defaults, not remembered values (mitcad#1028).
   $info.EnvironmentVariables['MITCAD_REMEMBER_PANEL_VALUES'] = '0'
+  # An empty design at the start, not the Start tab (mitcad#1258).
+  $info.EnvironmentVariables['MITCAD_START_PAGE'] = '0'
   foreach ($variable in $Environment.GetEnumerator()) {
     $info.EnvironmentVariables[$variable.Key] = $variable.Value
   }

@@ -399,8 +399,13 @@ NSImage* image(const QPixmap& pixmap) {
   QBuffer buffer(&data);
   buffer.open(QIODevice::WriteOnly);
   pixmap.save(&buffer, "PNG");
-  return [[NSImage alloc] initWithData:[NSData dataWithBytes:data.constData()
-                                                    length:static_cast<NSUInteger>(data.size())]];
+  NSImage* result = [[NSImage alloc] initWithData:[NSData dataWithBytes:data.constData()
+                                                             length:static_cast<NSUInteger>(data.size())]];
+  // PNG stores backing pixels; AppKit sizes a control's image in points.
+  // Preserve Qt's logical size instead of doubling Retina button artwork.
+  const QSizeF logical = pixmap.deviceIndependentSize();
+  result.size = NSMakeSize(logical.width(), logical.height());
+  return result;
 }
 // A Settings pane's icon at the shared header's 24 points, drawn at twice
 // that for Retina screens. The header paints these icons as masks in its

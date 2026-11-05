@@ -87,7 +87,7 @@ not a level of its own, and MitCad has no separate assembly file.
 
 - **Part** does not mean component. Write *component* for the thing in
   the hierarchy, also for one that comes from a library, that the Build
-  tab places or that a cut sheet lays out: **Library Components**,
+  tab places or that a cut sheet lays out: **Components in This Design**,
   **Component Picker**, **Linear Component**, **Derived Component**, the
   **Component** column of the bill of materials and of the cut list. The
   one place *part* stays is **Part Number**, the identifier field of a
@@ -97,7 +97,7 @@ not a level of its own, and MitCad has no separate assembly file.
   not user-facing.
 - **Bill of Materials (BOM)** is the list of a design's components with
   their quantities, part numbers and suppliers: the Build tab's *Bill of
-  Materials*, the tab of Library Components and the drawing's table. It
+  Materials*, the tab of Components in This Design and the drawing's table. It
   is not called a *parts list*.
 - **Instance** is not used in user-facing text; it is an occurrence, or
   for a pattern a **copy**. Internal code may speak of instances where it
@@ -288,7 +288,7 @@ not a name for it.
   the same spelling and capitals: *New Component*, *Insert from
   Library*, *Create Components from Bodies*.
 - **Menus.** The path as the menu bar shows it, with `›` between the
-  levels: *Tools › Preferences*, *Tools › Libraries › Libraries…*.
+  levels: *Tools › Preferences*, *Tools › Libraries › Library Sources…*.
 - **Dialogs, panels, inputs and settings.** Their title or label as
   shown: *the Projects panel*, *the Display page of Tools › Preferences*,
   *Ghost inactive components*.

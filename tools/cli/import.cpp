@@ -170,7 +170,7 @@ void save_document(const mitcad::Document& document, const std::string& path) {
 int import(const std::vector<std::string>& args) {
   Arguments a;
   std::string problem;
-  if (!parse_arguments(args, {"--unit-mm", "--open", "--save"}, {"--json"}, a, problem)) {
+  if (!parse_arguments(args, {"--unit-mm", "--open", "--save", "--structure"}, {"--json"}, a, problem)) {
     return usage(problem);
   }
   if (a.positional.size() != 1) {
@@ -182,6 +182,14 @@ int import(const std::vector<std::string>& args) {
       return usage("--unit-mm needs a number");
     }
     command += R"(, "unit_mm": )" + *unit;
+  }
+  // A STEP assembly as components (the default) or one base feature
+  // (mitcad#1274).
+  if (const std::string* structure = a.option("--structure")) {
+    if (*structure != "components" && *structure != "base") {
+      return usage("--structure is components or base");
+    }
+    command += R"(, "structure": )" + json_string(*structure);
   }
   command += "}";
   rust::Box<mitcad::Document> document =

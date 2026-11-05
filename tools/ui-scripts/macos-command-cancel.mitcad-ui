@@ -56,6 +56,7 @@ capture-undo-depth committed_depth
 # after an interrupted preview computes the actual edit_feature; its real
 # progress dialog still offers Cancel. Interactive previews have no modal
 # progress UI. Volume and undo depth must remain at the 12 mm edit.
+# Hold the edit worker until Cancel instead of racing a fixed delay.
 mark
 dblclick-logged '^Timeline Box1 at'
 expect-log 'Editing F1 with Box'
@@ -70,9 +71,11 @@ wait-log 'Computing preview cancelled after ' 30
 expect-log 'Preview Box: cancelled' 30
 focus-main
 mark
+hold-model-edit true
 button '^OK$'
 qt-cancel-progress edit_feature
 wait-log 'Computing edit_feature cancelled after ' 30
+hold-model-edit false
 expect-log 'Box: OK cancelled' 30
 focus-main
 key Escape

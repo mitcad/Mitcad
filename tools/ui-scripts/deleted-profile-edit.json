@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1264: a circle extruded, then deleted from its sketch beside a new circle; Extrude1 fails on its missing profile r{c1}."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [40, 0], "diameter": 20},
+  {"cmd": "sketch.remove", "sketch": "F1", "items": ["c1"]}
+]

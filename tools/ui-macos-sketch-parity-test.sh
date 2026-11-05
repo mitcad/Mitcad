@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/sketch app/commands/SketchCommands app/framework/TestDriver app/MainWindow
+# check-all sources: app/sketch app/commands/SketchCommands app/framework/TestDriver app/MainWindow app/view/ViewController
 # Shared canvas operations through actual Qt/AppKit viewport input.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "PrintLibrary.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <utility>
 
 #include <QAction>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFont>
 #include <QHBoxLayout>
@@ -20,6 +22,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSettings>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QTreeWidget>
@@ -109,7 +112,8 @@ QJsonArray itemRows(const CommandContext& model, const QString& kind, const QStr
 
 QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QString& kind, const QString& project,
                                        QString* error) {
-  return itemsOfRows(itemRows(model, kind, project, false, nullptr, error), kind);
+  // The pickers': no hidden built-in the design does not use (mitcad#1270).
+  return withoutHidden(itemsOfRows(itemRows(model, kind, project, false, nullptr, error), kind));
 }
 
 QVector<LibraryItem> queryPlaceItems(const CommandContext& model, const QString& kind, const QString& project,
@@ -121,6 +125,8 @@ namespace {
 
 QVector<LibraryItem> itemsOfRows(const QJsonArray& rows, const QString& kind) {
   QVector<LibraryItem> items;
+  // The base library items the user hid (mitcad#1270), read once.
+  const QStringList hiddenIds = hiddenItemIds(kind);
   for (const QJsonValue& value : std::as_const(rows)) {
     const QJsonObject row = value.toObject();
     LibraryItem item;
@@ -171,6 +177,7 @@ QVector<LibraryItem> itemsOfRows(const QJsonArray& rows, const QString& kind) {
     const QJsonObject source = row.value(QStringLiteral("source")).toObject();
     item.sourcePlace = text(source, "place");
     item.sourceName = text(source, "name");
+    item.hidden = canHide(item) && hiddenIds.contains(item.id);
     if (!item.id.isEmpty()) {
       items.append(item);
     }
@@ -674,6 +681,124 @@ QString plainModelError(const QString& error, const PrintKeyTable& keys, const Q
   }
   text[0] = text[0].toUpper();
   return text;
+}
+
+// Hidden built-ins (mitcad#1270).
+namespace {
+
+// The setting of a kind's hidden ids: a group of its own, never
+// `general` (docs/development.md).
+QString hiddenKey(const QString& kind) { return QStringLiteral("printLibrary/hidden_") + kind; }
+
+} // namespace
+
+bool canHide(const LibraryItem& item) {
+  return item.place == QStringLiteral("mitcad") && item.library == QStringLiteral("base");
+}
+
+QStringList hiddenItemIds(const QString& kind) {
+  const QSettings settings;
+  return settings.value(hiddenKey(kind)).toStringList();
+}
+
+void setItemHidden(const LibraryItem& item, bool hidden, const QString& logName) {
+  if (!canHide(item)) {
+    return;
+  }
+  QSettings settings;
+  const QString key = hiddenKey(item.kind);
+  QStringList ids = settings.value(key).toStringList();
+  ids.removeAll(item.id);
+  if (hidden) {
+    ids.append(item.id);
+  }
+  ids.sort();
+  if (ids.isEmpty()) {
+    settings.remove(key);
+  } else {
+    settings.setValue(key, ids);
+  }
+  settings.sync();
+  qDebug().noquote() << QStringLiteral("%1 %2: %3")
+                            .arg(logName, hidden ? QStringLiteral("hidden") : QStringLiteral("unhidden"), item.name);
+}
+
+QVector<LibraryItem> withoutHidden(const QVector<LibraryItem>& items) {
+  QVector<LibraryItem> shown;
+  for (const LibraryItem& item : items) {
+    // A design that uses a hidden item keeps it as its own.
+    if (!item.hidden || !item.inDesign.isEmpty() || item.copyUsed || usedByDesign(item)) {
+      shown.append(item);
+    }
+  }
+  return shown;
+}
+
+bool hasOwnLibraryItems(const QVector<LibraryItem>& items) {
+  return std::any_of(items.cbegin(), items.cend(), [](const LibraryItem& item) {
+    return item.place == QStringLiteral("user") || item.place == QStringLiteral("project");
+  });
+}
+
+QPushButton* makeHideButton() {
+  auto* hide = new QPushButton(QObject::tr("Hide"));
+  hide->setObjectName(QStringLiteral("printManagerHide"));
+  hide->hide();
+  return hide;
+}
+
+QCheckBox* makeShowHiddenBox() {
+  auto* box = new QCheckBox(QObject::tr("Show hidden"));
+  box->setObjectName(QStringLiteral("printManagerShowHidden"));
+  box->setToolTip(QObject::tr("Lists the built-in items you hid, grayed"));
+  box->hide();
+  return box;
+}
+
+void showHideButton(QPushButton* hide, const LibraryItem* item) {
+  const bool offered = item != nullptr && canHide(*item);
+  hide->setVisible(offered);
+  if (!offered) {
+    return;
+  }
+  hide->setText(item->hidden ? QObject::tr("Unhide") : QObject::tr("Hide"));
+  hide->setToolTip(item->hidden ? QObject::tr("Lists the built-in item in the managers and pickers again")
+                                : QObject::tr("Leaves the built-in item out of the managers and pickers"));
+}
+
+void markHiddenRow(QTreeWidgetItem* row, const QPalette& palette) {
+  row->setForeground(0, themeColor(ColorRole::TextHidden, palette));
+  row->setToolTip(0, QObject::tr("%1, hidden: not offered in the pickers").arg(row->text(0)));
+}
+
+ItemMenuChoice itemContextMenu(QWidget* parent, const LibraryItem& item, const QPoint& global) {
+  QMenu menu(parent);
+  QStringList entries;
+  QAction* duplicate = menu.addAction(QObject::tr("Duplicate"));
+  entries << duplicate->text();
+  QAction* hide = nullptr;
+  QAction* remove = nullptr;
+  // A base item is hidden, the user's and the project's own deleted.
+  if (canHide(item)) {
+    hide = menu.addAction(item.hidden ? QObject::tr("Unhide") : QObject::tr("Hide"));
+    entries << hide->text();
+  } else {
+    remove = menu.addAction(QObject::tr("Delete"));
+    remove->setEnabled(!item.readOnly);
+    entries << remove->text();
+  }
+  qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
+  QAction* chosen = execMenu(&menu, global);
+  if (chosen == nullptr) {
+    return ItemMenuChoice::None;
+  }
+  if (chosen == duplicate) {
+    return ItemMenuChoice::Duplicate;
+  }
+  if (chosen == hide) {
+    return ItemMenuChoice::Hide;
+  }
+  return chosen == remove ? ItemMenuChoice::Delete : ItemMenuChoice::None;
 }
 
 } // namespace mitcad

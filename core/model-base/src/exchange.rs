@@ -45,6 +45,41 @@ pub struct ImportBody<S> {
     pub shape: S,
 }
 
+/// What [`Kernel::read_file_structure`] read (mitcad#1274): a file's
+/// assembly structure, or its bodies as [`Kernel::read_file`] reads them.
+#[derive(Debug, Clone)]
+pub enum FileRead<S> {
+    Bodies(Vec<ImportBody<S>>),
+    Assembly(ImportAssembly<S>),
+}
+
+/// The assembly structure of a file (mitcad#1274): each distinct part and
+/// assembly once, and the instances that place them.
+#[derive(Debug, Clone)]
+pub struct ImportAssembly<S> {
+    pub parts: Vec<ImportPart<S>>,
+    /// The instances placed in the design.
+    pub roots: Vec<ImportInstance>,
+}
+
+/// A part (bodies in its own coordinates) or an assembly (instances of
+/// other parts and assemblies) of a file, with its product name.
+#[derive(Debug, Clone)]
+pub struct ImportPart<S> {
+    pub name: Option<String>,
+    pub bodies: Vec<ImportBody<S>>,
+    pub instances: Vec<ImportInstance>,
+}
+
+/// An instance of [`ImportAssembly::parts`]`[part]`: a rigid placement in
+/// its parent, and its name in the file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportInstance {
+    pub part: usize,
+    pub name: Option<String>,
+    pub transform: Transform,
+}
+
 /// Options of [`Kernel::read_file`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReadOptions {

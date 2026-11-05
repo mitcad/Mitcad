@@ -119,7 +119,7 @@ picture() {
   if [ "$theme" = light ]; then
     ui_mark
     ui_step "Close Drawing"                 ui_click_logged "Drawing Close Drawing"
-    ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)" "Solid and Build back"
+    ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)" "Solid and Build back"
     shot "$name-closed"
     open_drawing CutSheet1
     ui_expect_new "Ribbon tabs: CUT SHEET (shown CUT SHEET)" "the Cut Sheet tab"

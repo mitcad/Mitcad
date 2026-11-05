@@ -80,6 +80,10 @@ export MITCAD_ASK_ACTIVATE_COMPONENT=0
 # step's Fillet starts. A test of the remembered values sets it to 1 before
 # ui_start_app.
 export MITCAD_REMEMBER_PANEL_VALUES=0
+# MitCad starts on an empty design, not on the Start tab (mitcad#1258), as
+# the tests were written for. A test of the Start page sets it to 1 before
+# ui_start_app (the page then shows by its Show start page at launch).
+export MITCAD_START_PAGE=0
 # No browser either: an address the app would open (a report's issue form,
 # mitcad#61) is logged instead ("Open URL (test, not opened): <url>").
 export MITCAD_TEST_LOG_URLS=1

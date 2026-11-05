@@ -23,6 +23,7 @@
 #include <QObject>
 #include <QPainter>
 #include <QPen>
+#include <QPointer>
 #include <QRectF>
 #include <QStringList>
 #include <QWidget>
@@ -930,9 +931,57 @@ CommandDef materialCommand(const CommandContext& context) {
         }
       });
 
+  // Material Library… under the picker (mitcad#1250, GitHub #132): the
+  // Materials manager on My library while the panel stays open; when it
+  // closes, the materials are read again so that one made there is
+  // offered, the picked bodies kept.
+  InputDef library = noteInput(
+      QStringLiteral("library"),
+      [](const CommandState&) { return InputNote{QString(), {QObject::tr("Material Library…")}, {}}; },
+      [cache](int, const CommandState&, const CommandContext& model) {
+        DocumentHost* host = chooserOf(model);
+        QWidget* window = windowOf(model);
+        if (host == nullptr || window == nullptr) {
+          return;
+        }
+        qDebug().noquote() << QStringLiteral("Material tool: Material Library opened");
+        const QPointer<QWidget> guard(window);
+        host->openMaterialLibrary([cache, guard, host, &model] {
+          if (guard.isNull()) {
+            return;
+          }
+          // Read when no job computes the model: a query refused then
+          // would leave the picker empty.
+          host->whenIdle(guard.data(), [cache, host, &model] {
+            QStringList before;
+            for (const LibraryItem& item : std::as_const(cache->items)) {
+              before << item.key();
+            }
+            readCache(*cache, model, true);
+            QStringList added;
+            for (const LibraryItem& item : std::as_const(cache->items)) {
+              if (!before.contains(item.key())) {
+                added << item.name;
+              }
+            }
+            const QString news =
+                added.isEmpty() ? QString() : QStringLiteral(", new: %1").arg(added.join(QStringLiteral(", ")));
+            qDebug().noquote()
+                << QStringLiteral("Material tool: materials read again, %1 offered%2").arg(cache->items.size()).arg(news);
+            // The panel shows them (CommandSession::refreshInputs); its
+            // inputs, the picked bodies among them, stay as they were.
+            host->commandInputsChanged();
+          });
+        });
+      });
+  library.withFieldColumn();
+
   def.inputs.clear();
   def.inputs << material;
-  def.inputs << bindingInputs(kind, cache);
+  // The fx stays beside the picker; Material Library… under them.
+  const QVector<InputDef> binding = bindingInputs(kind, cache);
+  def.inputs << binding.first() << library;
+  def.inputs << binding.mid(1);
   def.inputs << appearance << bodies;
   // A body's appearance set by hand (a paint) stays when this is on;
   // offered only while a picked body has one the material would replace.

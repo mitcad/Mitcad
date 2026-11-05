@@ -729,6 +729,10 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       suggest.own = scope.parameterName(input.id);
       suggest.label = QStringLiteral("%1 %2").arg(m_def.name, input.label);
       suggest.naming = true;
+      // Up, Down and the wheel step a plain value (mitcad#1254).
+      suggest.steps = true;
+      suggest.stepLimit.minimum = input.stepMinimum;
+      suggest.stepLimit.above = input.stepAboveMinimum;
       ParameterField::attach(row.edit, suggest);
     } else {
       row.edit->installEventFilter(this); // Tab to the next field (mitcad#1181)

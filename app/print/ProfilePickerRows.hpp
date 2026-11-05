@@ -24,11 +24,13 @@ struct ProfilePickerRow {
   QString source;
   // A process listed under the chosen printer (mitcad#1216).
   bool forChosen = false;
+  // A built-in listed apart, last under "Built-in" (mitcad#1270).
+  bool builtIn = false;
 
   // The Make card shows rows again only when they changed (mitcad#1239).
   bool operator==(const ProfilePickerRow& other) const {
     return key == other.key && name == other.name && group == other.group && shortName == other.shortName &&
-           source == other.source && forChosen == other.forChosen;
+           source == other.source && forChosen == other.forChosen && builtIn == other.builtIn;
   }
 };
 
@@ -40,7 +42,11 @@ struct ProfilePickerRow {
 // processPickerGroup): the processes of the chosen printer
 // (`chosenPrinter`, the names printerNames gives; empty: none chosen)
 // first, then the others under their printers, those for any printer
-// last under "Any printer".
+// last under "Any printer". While My library or This project has one of
+// the kind (mitcad#1270, as hasOwnLibraryItems), the built-ins come after
+// the user's own, under one "Built-in" heading, each by its whole name
+// (a printer with its nozzle); a hidden built-in the design uses stays
+// with the user's own, as This design's.
 QVector<ProfilePickerRow> profilePickerRows(const QVector<LibraryItem>& items, const QString& kind,
                                             const QStringList& chosenPrinter = QStringList());
 
@@ -72,7 +78,7 @@ QString printerVendor(const QString& bareName, const QStringList& bareNames);
 
 // Where an item comes from, as its picker row's tag: Built-in, My
 // library, This project; the design's own the 3MF it was imported from, else
-// This design.
+// This design; a hidden built-in the design uses This design (mitcad#1270).
 QString profileSource(const LibraryItem& item);
 
 } // namespace mitcad

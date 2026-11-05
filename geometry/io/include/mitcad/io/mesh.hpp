@@ -72,9 +72,62 @@ struct MeshOptions {
   // kept as it comes, a face it fails on left undrawn. The check is one
   // area sum per plane. The view's final tier (ViewTessellation.hpp).
   bool check_planes = false;
+  // The view's deviation by size (mitcad#1275): above 0, a shape meshes
+  // with this fraction of its bounding box's diagonal where that is more
+  // than `linear_deflection` (shape_deviation), its edges and its faces'
+  // insides alike, so that a small precise part keeps the fine deviation
+  // and a large one is not meshed finer than a pixel of it at a zoom that
+  // shows it whole. The shape is each of mesh_all_in_place's shapes, the
+  // shape of mesh_in_place and triangulate, and the shape a presentation
+  // draws (use_bounded_presentation_meshes). Faces whose deviation the
+  // size alone raised record `linear_deflection` as their triangulation's
+  // deviation: the edges' polygons keep the deviation they were cut at,
+  // so a meshing that asks for a finer one meshes their faces again all
+  // the same (their edges are outdated), and the view's drawers, which ask
+  // for `linear_deflection`, find them meshed finely enough. 0: none.
+  double size_deviation = 0.0;
+  // The most the size gives (0: no most).
+  double size_deviation_max = 0.0;
+  // The largest angle between the normals of neighbouring facets inside a
+  // face, in radians (BRepMesh's interior angle); 0 for BRepMesh's own,
+  // twice angular_deflection. Edges keep angular_deflection, which BRepMesh
+  // cuts them at half of.
+  double interior_angle = 0.0;
+  // With face_triangles: a face whose triangulation came out with more
+  // triangles than face_triangles, or a small one with more than a quarter
+  // of a triangle per square of its deviation in its area (at least 200;
+  // a B-spline face of 5 mm² got 17 000 from its knots, its deviation or
+  // not), is triangulated again with a larger
+  // deviation and angle inside it, in proportion to the excess, until it
+  // is within (at most three times; the edges stay as they are, so a face
+  // whose boundary alone has more points keeps what it gets). The floors
+  // above are an estimate from the surface's curvature and leave small
+  // faces alone; a small part's B-spline faces got 56 000 triangles each at
+  // the view's 0.01 mm (mitcad#1275). Planes, whose triangles are their
+  // boundary's, are left as they are. Such a face records the deviation it
+  // was asked for, so that the same options keep it.
+  bool hold_face_triangles = false;
+
+  MeshOptions() = default;
+  // The first six, as an aggregate of them before mitcad#1275; the others
+  // as by default.
+  MeshOptions(double linear, double angular, bool relative_to_edges, std::size_t triangles, bool fast,
+              bool checked)
+      : linear_deflection(linear), angular_deflection(angular), relative(relative_to_edges),
+        face_triangles(triangles), fast_planes(fast), check_planes(checked) {}
 
   static MeshOptions from(Refinement refinement);
 };
+
+// The deviation (mm) a shape meshes with (MeshOptions::size_deviation,
+// mitcad#1275): `linear_deflection`, or size_deviation times the diagonal
+// of the shape's bounding box (from its geometry, as the shape is without
+// its own location, so that a body and its copies moved elsewhere agree)
+// where that is more, at most size_deviation_max. Between the two it is
+// taken in steps of the square root of 2 from linear_deflection, the step
+// at or below the size's, so that a body that changes a little keeps its
+// deviation (and the faces a change left as they were their meshes).
+double shape_deviation(const TopoDS_Shape& shape, const MeshOptions& options);
 
 // The area (mm²) a plane's triangulation covers, and the area its edges'
 // polygons on it enclose (the outer wire's less the holes'), both in the
@@ -236,7 +289,10 @@ bool mesh_in_place(const TopoDS_Shape& shape, const MeshOptions& options,
 // spreads over every core, where mesh_in_place spreads only one shape's
 // faces (a design of many small bodies used a core or two). Each face gets
 // the triangulation mesh_in_place gives it; a face that several shapes
-// share (a body's copy in another placement) is meshed once. Null shapes
+// share (a body's copy in another placement) is meshed once. With
+// MeshOptions::size_deviation the shapes are meshed in one such meshing
+// per deviation they mesh with (shape_deviation, whose steps are few), the
+// finest first. Null shapes
 // are skipped; a shape with a face without a surface is left as it is.
 // When the joint meshing throws, the shapes it did not finish are meshed
 // one by one and a shape OCCT fails on is left as it is. Returns how many
@@ -283,10 +339,13 @@ bool triangulation_on_face(const TopoDS_Face& face);
 bool has_triangulation(const TopoDS_Shape& shape);
 
 // Makes OCCT's presentations (StdPrs, AIS) mesh shapes with mesh_in_place's
-// algorithm: the drawer's deviation and angle, and each face's deviation
-// raised to its floor for `face_triangles` (BRepMesh_DiscretFactory's
-// default algorithm, for the whole process).
-void use_bounded_presentation_meshes(std::size_t face_triangles);
+// algorithm and `options` (BRepMesh_DiscretFactory's default algorithm, for
+// the whole process): the drawer's deviation as linear_deflection (the
+// shape's deviation by its size over it), the options' angles (not the
+// drawer's, which draws its curves with it), each face's deviation raised
+// to its floor for face_triangles and held within it as the options say;
+// planes by the default insertion.
+void use_bounded_presentation_meshes(const MeshOptions& options);
 
 // Triangle and node count over the faces' triangulations.
 struct MeshStats {

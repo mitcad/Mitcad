@@ -58,7 +58,9 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -304,7 +306,7 @@ int compare(bool holes, int samples) {
   const double degree = 3.14159265358979323846 / 180.0;
   const std::size_t bound = mitcad::kViewFaceTriangles;
   const Candidate candidates[] = {
-      {"default planes: 0.01 mm, 5 deg", mitcad::defaultPlaneMeshOptions()},
+      {"default planes (the view's)", mitcad::defaultPlaneMeshOptions()},
       {"final, checked planes (mitcad#644)", mitcad::viewMeshOptions()},
       {"fast planes: 0.01 mm, 5 deg", mitcad::io::MeshOptions{0.01, 5 * degree, false, bound, true, false}},
       {"0.02 mm, 10 deg", mitcad::io::MeshOptions{0.02, 10 * degree, false, bound, false, false}},
@@ -1287,6 +1289,100 @@ void testMeshDuringRecompute() {
     CHECK(mitcad::shownBodyShapes(*document).size() == 2);
   }
 }
+
+// A pattern of bodies in the view (mitcad#1275): its copies are the body
+// moved as a location (Kernel::move_shape), so their faces are the body's
+// own. The command's display meshing meshes at most the body's faces, once
+// (none when the body was meshed before), and every copy is drawn from
+// the body's triangulations where it lies: each copy's faces have the
+// body's very triangulations, the copy elsewhere by its location, marked
+// meshed to the end (its drawers mesh nothing). A body shown with a
+// pattern of 3 x 2 cubes with a hole.
+void testPatternSharesMeshes() {
+  rust::Box<Document> document = mitcad::new_document();
+  const QString sketch = run(*document, QJsonObject{{"cmd", "sketch.create"}}).value("uid").toString();
+  run(*document, rectangle(sketch, 0, 0, 10, 10));
+  run(*document, QJsonObject{{"cmd", "add_feature"},
+                             {"def", QJsonObject{{"type", "extrude"},
+                                                 {"profiles", QJsonArray{profile(sketch, kRectangle)}},
+                                                 {"extent", QJsonObject{{"type", "distance"}, {"distance", 10}}},
+                                                 {"operation", "new_body"}}}});
+  const QString drill = run(*document, QJsonObject{{"cmd", "sketch.create"}}).value("uid").toString();
+  const QJsonObject circle = run(*document, QJsonObject{{"cmd", "sketch.add_circle"},
+                                                        {"sketch", drill},
+                                                        {"center", QJsonArray{5, 5}},
+                                                        {"diameter", 4}});
+  run(*document, QJsonObject{{"cmd", "add_feature"},
+                             {"def", QJsonObject{{"type", "extrude"},
+                                                 {"profiles", QJsonArray{profile(drill, circle.value("region").toString())}},
+                                                 {"start", QJsonObject{{"type", "offset"}, {"offset", -5}}},
+                                                 {"extent", QJsonObject{{"type", "distance"}, {"distance", 30}}},
+                                                 {"operation", "cut"}}}});
+  meshShown(*document);
+  std::vector<std::string> uids;
+  const mitcad::DisplayShapes before = mitcad::shownBodyShapes(*document, &uids);
+  CHECK(before.size() == 1);
+  if (before.size() != 1) {
+    return;
+  }
+  const std::string source = uids.front();
+  const int faces = countOf(before.front()->occt(), TopAbs_FACE);
+
+  const QJsonObject pattern{
+      {"cmd", "add_feature"},
+      {"def", QJsonObject{{"type", "rectangular_pattern"},
+                          {"objects", QJsonObject{{"type", "bodies"},
+                                                  {"bodies", QJsonArray{QString::fromStdString(source)}}}},
+                          {"direction1", QJsonObject{{"axis", QJsonObject{{"type", "origin"}, {"axis", "x"}}},
+                                                     {"quantity", 3},
+                                                     {"distance", 20}}},
+                          {"direction2", QJsonObject{{"axis", QJsonObject{{"type", "origin"}, {"axis", "y"}}},
+                                                     {"quantity", 2},
+                                                     {"distance", 20}}},
+                          {"distance_type", "spacing"}}}};
+  mitcad::DisplayMeshing meshing;
+  command(*document, pattern, &meshing);
+  uids.clear();
+  const mitcad::DisplayShapes shown = mitcad::shownBodyShapes(*document, &uids);
+  std::printf("Pattern of bodies: %zu bodies shown, %zu ready, %zu meshed, %zu faces meshed (the body has %d)\n",
+              shown.size(), meshing.ready, meshing.bodies, meshing.report.meshed, faces);
+  CHECK(shown.size() == 6);
+  CHECK(meshing.report.meshed <= static_cast<std::size_t>(faces));
+  ShapePtr body;
+  for (std::size_t i = 0; i < shown.size() && i < uids.size(); ++i) {
+    if (uids[i] == source) {
+      body = shown[i];
+    }
+  }
+  CHECK(body != nullptr);
+  if (!body) {
+    return;
+  }
+  CHECK(finalTier(body));
+  const std::vector<const Poly_Triangulation*> meshes = triangulations(body->occt());
+  std::vector<gp_Pnt> places;
+  for (std::size_t i = 0; i < shown.size() && i < uids.size(); ++i) {
+    if (uids[i] == source) {
+      continue;
+    }
+    const ShapePtr& copy = shown[i];
+    CHECK(triangulations(copy->occt()) == meshes);
+    CHECK(!copy->occt().Location().IsIdentity());
+    CHECK(copy->display_meshed());
+    CHECK(!mitcad::drawerMeshes(*copy));
+    Bnd_Box box;
+    BRepBndLib::Add(copy->occt(), box, false);
+    CHECK(!box.IsVoid());
+    if (!box.IsVoid()) {
+      const gp_Pnt middle((box.CornerMin().XYZ() + box.CornerMax().XYZ()) / 2.0);
+      for (const gp_Pnt& other : places) {
+        CHECK(middle.Distance(other) > 10.0); // each copy in a place of its own
+      }
+      places.push_back(middle);
+    }
+  }
+  CHECK(places.size() == 5);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1333,6 +1429,7 @@ int main(int argc, char** argv) {
   testWarmOpen();
   testDeferredWrite();
   testMeshDuringRecompute();
+  testPatternSharesMeshes();
   if (failures > 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

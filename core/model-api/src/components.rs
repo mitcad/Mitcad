@@ -14,7 +14,7 @@ use super::prelude::*;
 use mitcad_model::assembly::{from_rows, matrix_rows, matrix4};
 use mitcad_model::features::OccurrencePath;
 use mitcad_model::features::ValueInput;
-use mitcad_model::ids::{BodyUid, ComponentUid, OccurrenceUid};
+use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::transform::Transform;
 use mitcad_model::{Document, InsertOptions};
@@ -190,7 +190,49 @@ named_enum! {
             occurrence: String,
             transparent: bool,
         },
+        // A linked component shown by its envelope (mitcad#1271).
+        "set_link_envelope" => SetLinkEnvelope {
+            occurrence: String,
+            /// The envelope, or the linked design's bodies again.
+            #[serde(default = "yes")]
+            envelope: bool,
+            /// mm; left out: the size it, or another component of the
+            /// file, is shown at, else 1 % of the design's diagonal, at
+            /// least 5 mm.
+            #[serde(default)]
+            detail: Option<f64>,
+            /// The folder of relative link paths; left out: the design
+            /// file's.
+            #[serde(default)]
+            base: Option<String>,
+            /// Every occurrence of its component (mitcad#1271); left out: only
+            /// this occurrence (mitcad#1276).
+            #[serde(default)]
+            all: bool,
+        },
+        // Find Repeated Parts (mitcad#1277): a base feature's copies of one
+        // body as occurrences of one component.
+        "find_repeated_parts" => FindRepeatedParts {
+            feature: FeatureUid,
+            /// mm; the design's join tolerance, else 0.01 mm.
+            #[serde(default)]
+            tolerance: Option<f64>,
+        },
     }
+}
+
+/// What Find Repeated Parts made (mitcad#1277), as `find_repeated_parts`
+/// and `import_file`'s `repeated_parts` answer it.
+pub(crate) fn repeated_parts_json(found: &mitcad_model::RepeatedParts) -> Value {
+    let parts: Vec<Value> = found
+        .parts
+        .iter()
+        .map(|p| {
+            json!({"component": p.component, "name": p.name, "feature": p.feature,
+                   "body": p.body, "occurrences": p.occurrences, "copies": p.copies})
+        })
+        .collect();
+    json!({"components": parts, "kept": found.kept, "combines": found.combines})
 }
 
 fn yes() -> bool {
@@ -536,6 +578,31 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 self.set_occurrence_transparent(uid, transparent)?;
                 json!({})
             }
+            ComponentCommand::SetLinkEnvelope {
+                occurrence,
+                envelope,
+                detail,
+                base,
+                all,
+            } => {
+                let uid = self.occurrence_ref(&occurrence)?;
+                let base = base.map(PathBuf::from);
+                let switched =
+                    self.set_link_envelope(uid, envelope, detail, base.as_deref(), all)?;
+                let bodies: Vec<BodyUid> = self
+                    .bodies()
+                    .iter()
+                    .filter(|b| self.body_component(b.uid) == Some(switched.component))
+                    .map(|b| b.uid)
+                    .collect();
+                json!({"component": switched.component, "envelope": switched.detail.is_some(),
+                       "detail": switched.detail, "changed": switched.changed,
+                       "bodies": bodies})
+            }
+            ComponentCommand::FindRepeatedParts { feature, tolerance } => {
+                let found = self.find_repeated_parts(feature, tolerance)?;
+                repeated_parts_json(&found)
+            }
         })
     }
 
@@ -653,7 +720,7 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 .map(|f| f.uid)
                 .collect();
             let bodies = self.component_bodies(uid);
-            json!({
+            let mut value = json!({
                 "uid": uid,
                 "name": a.name(uid),
                 "created_by": def.and_then(|d| d.created_by),
@@ -664,7 +731,13 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 "occurrences": a.occurrences_of(uid).filter(|o| self.placement(o.uid).is_some()).count(),
                 // Design policy (mitcad#220).
                 "policy": super::policy::policy_json(&a.policy(uid)),
-            })
+            });
+            // A linked component shown by its envelope: its detail size
+            // (mitcad#1271).
+            if let Some(detail) = def.and_then(|d| d.link.as_ref()).and_then(|l| l.envelope) {
+                value["envelope"] = json!(detail);
+            }
+            value
         };
         let mut components = vec![component(ComponentUid::ROOT)];
         components.extend(a.components.iter().map(|c| component(c.uid)));

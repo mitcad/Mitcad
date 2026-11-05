@@ -1230,6 +1230,8 @@ impl<K: Kernel> Document<K> {
                         path: recorded_link_path(path, &resolved, options.base.as_deref()),
                         digest: digest(&text),
                         feature: added.uid,
+                        envelope: None,
+                        frames: Vec::new(),
                     });
                     frames
                 }
@@ -1491,7 +1493,14 @@ impl<K: Kernel> Document<K> {
                 continue;
             }
             let parts = match crate::file::load_state_at(&text, &resolved) {
-                Ok((source, _)) => self.design_parts(&source, &link.path),
+                // A link shown by its envelope takes the file's envelope
+                // again (mitcad#1271).
+                Ok((source, _)) => match link.envelope {
+                    Some(detail) => self
+                        .design_envelope(&source, &link.path, Some(detail))
+                        .map(|(bodies, mounts, _)| (bodies, mounts)),
+                    None => self.design_parts(&source, &link.path),
+                },
                 Err(e) => Err(invalid(e.to_string())),
             };
             match parts {
@@ -1662,7 +1671,7 @@ pub(super) fn design_digest(text: &str) -> String {
     digest(text)
 }
 
-fn digest(text: &str) -> String {
+pub(super) fn digest(text: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {
         hash ^= u64::from(byte);

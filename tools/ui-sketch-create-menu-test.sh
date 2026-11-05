@@ -60,7 +60,7 @@ SOLID_PATTERNS="Rectangular Pattern | Circular Pattern | Pattern on Path | Patte
 SOLID_CREATE="Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web | Emboss"
 SOLID_CREATE="$SOLID_CREATE | - | Hole | Thread | Plastic Feature"
 SOLID_CREATE="$SOLID_CREATE | - | Box | Cylinder | Sphere | Torus | Coil | Helix | Pipe"
-SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror"
+SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror | - | Envelope"
 SOLID_CREATE="$SOLID_CREATE | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing"
 
 # last_line "prefix": the last log line starting with the prefix, without it.

@@ -24,3 +24,6 @@ mod face_bounded_profiles_tests;
 mod sketch_projection_tests;
 // Driven dimensions used by their own sketch's dimensions (mitcad#1116).
 mod sketch_driven_uses_tests;
+// Project of a curved face: its outline seen along the sketch's normal
+// (mitcad#1265).
+mod face_outline_tests;

@@ -987,9 +987,11 @@ void test_end_rounded_to_a_half_round_in_one_fillet() {
     CHECK_NEAR_TOL(volume(*rounded), cap * 10.0, 1e-6);
   }
   CHECK_NEAR_TOL(named_face_area(*apart, end_cap("F1", 1)), 50.0 * 100.0 - 2.0 * fillet_loss(24.9), 1e-6);
-  // No end face left: four sides less the end, two caps, two roundings; the
-  // two fillets give the same faces, 24.9 the strip besides.
-  CHECK(one->face_count() == 7);
+  // No end face left: four sides less the end, two caps, and the two
+  // roundings, on one cylinder (a half round), one face holding both names
+  // (mitcad#1261); the two fillets give the same faces, 24.9 two roundings
+  // and the strip besides.
+  CHECK(one->face_count() == 6);
   CHECK(two->face_count() == one->face_count());
   CHECK(apart->face_count() == 8);
   CHECK(faces_named(*one, "F3:fillet(" + left + ")") == 1);

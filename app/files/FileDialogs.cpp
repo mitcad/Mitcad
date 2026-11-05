@@ -742,6 +742,44 @@ std::optional<bool> askLinked(QWidget* parent, const QString& file) {
   return std::nullopt;
 }
 
+std::optional<QString> askStepStructure(QWidget* parent, const QString& file, bool* repeatedParts) {
+  QMessageBox box(QMessageBox::Question, QObject::tr("Import STEP Assembly"),
+                  QObject::tr("%1 is an assembly. Import each part once as a component with an occurrence per "
+                              "instance, or every placed part as a body of one base feature?")
+                      .arg(QFileInfo(file).fileName()),
+                  QMessageBox::Cancel, parent);
+  box.setObjectName(QStringLiteral("importStepStructure"));
+  QPushButton* components = box.addButton(QObject::tr("&Components (keep the assembly)"), QMessageBox::AcceptRole);
+  components->setToolTip(QObject::tr("Repeated parts share one body: lighter in memory, in the file and in the view"));
+  QPushButton* base = box.addButton(QObject::tr("&One base feature"), QMessageBox::AcceptRole);
+  base->setToolTip(QObject::tr("Every placed part a body of its own, where the file places it"));
+  box.setDefaultButton(components);
+  // Find Repeated Parts after the import (mitcad#1277), off by default.
+  auto* repeated = new QCheckBox(QObject::tr("Find &repeated parts"), &box);
+  repeated->setObjectName(QStringLiteral("importRepeatedParts"));
+  repeated->setToolTip(QObject::tr("Bodies that are copies of one another, moved or turned, become occurrences of "
+                                   "one component"));
+  repeated->setChecked(false);
+  box.setCheckBox(repeated);
+  qDebug().noquote() << QStringLiteral("Import STEP Assembly dialog opened: %1").arg(QFileInfo(file).fileName());
+  prepareModal(&box);
+  execDialog(&box);
+  std::optional<QString> chosen;
+  if (box.clickedButton() == components) {
+    chosen = QStringLiteral("components");
+  } else if (box.clickedButton() == base) {
+    chosen = QStringLiteral("base");
+  }
+  const bool find = chosen && repeated->isChecked();
+  if (repeatedParts != nullptr) {
+    *repeatedParts = find;
+  }
+  qDebug().noquote() << QStringLiteral("Import STEP Assembly: %1%2")
+                            .arg(chosen ? *chosen : QStringLiteral("cancelled"),
+                                 find ? QStringLiteral(", repeated parts") : QString());
+  return chosen;
+}
+
 std::optional<bool> askIamImport(QWidget* parent, const QString& file) {
   QDialog dialog(parent);
   dialog.setObjectName(QStringLiteral("importAssembly"));

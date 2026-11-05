@@ -330,14 +330,14 @@ CommandDef extrudeCommand(const CommandContext& context) {
                         .withTooltip(QObject::tr("Side 1 lies away from the profile's material, or right of an open curve"))
                         .withVisible(thin));
   def.inputs.append(valueInput(QStringLiteral("thickness"), QObject::tr("Wall Thickness"),
-                               ValueKind::Length, QStringLiteral("1 mm"))
+                               ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
                         .withVisible(thin));
   const auto thinTwo = [thin, twoSides](const CommandState& s) { return thin(s) && twoSides(s); };
   def.inputs.append(choiceInput(QStringLiteral("wall2"), QObject::tr("Wall Location 2"), kWalls,
                                 QStringLiteral("side1"))
                         .withVisible(thinTwo));
   def.inputs.append(valueInput(QStringLiteral("thickness2"), QObject::tr("Wall Thickness 2"),
-                               ValueKind::Length, QStringLiteral("1 mm"))
+                               ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
                         .withVisible(thinTwo));
   auto operations = operationInputs();
   operations[0].onChange = [](CommandState& state, const CommandContext& model) {

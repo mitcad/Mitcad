@@ -679,6 +679,10 @@ private:
   bool m_failed = false; // the model could not compute the preview
   QByteArray m_shownKey; // the command whose preview is shown
   QString m_shownNote;   // the command's note shown with it
+  // The edited feature's profiles that were deleted from their sketch and
+  // left out of the selection, and those sketches' names (mitcad#1264).
+  int m_missingProfiles = 0;
+  QString m_missingSketches;
   QHash<QString, QString> m_rowNotes; // the row notes shown, by input key
   QHash<QString, QString> m_marks;    // the marks' tooltips logged, by input key
   QHash<QString, QString> m_valueHints; // the value hints logged, by input key (mitcad#994)

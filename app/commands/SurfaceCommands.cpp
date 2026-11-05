@@ -529,7 +529,7 @@ CommandDef stitchCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 1, 0)
           .withTooltip(QObject::tr("The first keeps its name and becomes the sewn body"))
           .withoutMeshes(),
-      valueInput(QStringLiteral("tolerance"), QObject::tr("Tolerance"), ValueKind::Length, QStringLiteral("0.01 mm"))
+      valueInput(QStringLiteral("tolerance"), QObject::tr("Tolerance"), ValueKind::Length, QStringLiteral("0.01 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("Edges this close are sewn; 0 for the kernel's own precision")),
   };
   def.enabled = [&context] { return hasBodies(context); };
@@ -734,7 +734,7 @@ CommandDef ruledSurfaceCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("face"), QObject::tr("Face Beside"), SelectKind::Face, 0, 1)
           .withTooltip(QObject::tr("For edges between two faces: the face the strip leaves"))
           .withoutMeshes(),
-      valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("5 mm")),
+      valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("5 mm")).withStepMinimum(0.0, true),
       choiceInput(QStringLiteral("mode"), QObject::tr("Direction"),
                   {{QStringLiteral("normal"), QStringLiteral("Normal")},
                    {QStringLiteral("tangent"), QStringLiteral("Tangent")},
@@ -814,7 +814,7 @@ CommandDef extendSurfaceCommand(const CommandContext& context) {
   def.keywords << QStringLiteral("extend surface") << QStringLiteral("lengthen");
   def.inputs = sheetEdgeInputs();
   def.inputs += {
-      valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("5 mm"))
+      valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("5 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("Along the surface, past the edges")),
       choiceInput(QStringLiteral("mode"), QObject::tr("Extension"),
                   {{QStringLiteral("natural"), QStringLiteral("Natural")},
@@ -1437,7 +1437,7 @@ CommandDef fairSurfaceCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("faces"), QObject::tr("Faces/Body"), SelectKind::Face | SelectKind::Body, 1, 0)
           .withTooltip(QObject::tr("Faces of one surface body, or a body for all of its faces"))
           .withoutMeshes(),
-      valueInput(QStringLiteral("tolerance"), QObject::tr("Tolerance"), ValueKind::Length, QStringLiteral("0.1 mm"))
+      valueInput(QStringLiteral("tolerance"), QObject::tr("Tolerance"), ValueKind::Length, QStringLiteral("0.1 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The farthest a control point moves")),
       valueInput(QStringLiteral("strength"), QObject::tr("Strength"), ValueKind::Unitless, QStringLiteral("1"))
           .withTooltip(QObject::tr("The share of a full smoothing step each iteration takes, up to 1")),

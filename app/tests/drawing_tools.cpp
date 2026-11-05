@@ -332,15 +332,35 @@ int drawingToolsTests() {
     }
     return out;
   };
-  CHECK(dimension->pickCount(none) == 2 && dimension->annotationType(none) == QStringLiteral("linear"));
+  // Type Auto by default (mitcad#1272): the picks choose, one or two.
+  CHECK(dimension->pickCount(none) == kAutoPicks && dimension->annotationType(none) == QStringLiteral("dimension"));
+  const QHash<QString, QString> linear{{QStringLiteral("type"), QStringLiteral("linear")}};
+  CHECK(dimension->pickCount(linear) == 2 && dimension->annotationType(linear) == QStringLiteral("linear"));
   const QHash<QString, QString> diameter{{QStringLiteral("type"), QStringLiteral("diameter")}};
   CHECK(dimension->pickCount(diameter) == 1 && dimension->annotationType(diameter) == QStringLiteral("diameter"));
   const QHash<QString, QString> aligned{{QStringLiteral("type"), QStringLiteral("aligned")}};
   CHECK(dimension->annotationType(aligned) == QStringLiteral("linear"));
-  // Not without its picks and its place.
-  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(1, 2)}), none).isEmpty());
-  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(2, {}), none).isEmpty());
+  for (const ToolOption& option : dimension->options) {
+    if (option.id == QStringLiteral("type")) {
+      CHECK(option.defaultValue == QStringLiteral("auto") && option.choices.first().first == QStringLiteral("auto"));
+      // Diameter stays last (the Linux UI test chooses it with End).
+      CHECK(option.choices.last().first == QStringLiteral("diameter"));
+    }
+  }
+  // Auto: one pick or two, placed; none, three or no place make nothing.
+  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(0, {QPointF(1, 2)}), none).isEmpty());
+  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(1, {}), none).isEmpty());
+  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(3, {QPointF(1, 2)}), none).isEmpty());
+  command = dimension->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(150, 90)}), none);
+  CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("dimension"));
+  CHECK(command.value(QStringLiteral("picks")).toArray().size() == 1);
+  CHECK(!command.contains(QStringLiteral("along")));
   command = dimension->command(QStringLiteral("D1"), 0, annotationPicks(2, {QPointF(150, 90)}), none);
+  CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("dimension"));
+  // Linear: not without its picks and its place.
+  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(1, 2)}), linear).isEmpty());
+  CHECK(dimension->command(QStringLiteral("D1"), 0, annotationPicks(2, {}), linear).isEmpty());
+  command = dimension->command(QStringLiteral("D1"), 0, annotationPicks(2, {QPointF(150, 90)}), linear);
   CHECK(command.value(QStringLiteral("cmd")).toString() == QStringLiteral("add_drawing_annotation"));
   CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("linear"));
   CHECK(command.value(QStringLiteral("view")).toInt() == 1);

@@ -900,10 +900,23 @@ fn patterns_and_mirrors_repeat_threads_on_the_copies() {
     let mut b = block();
     let (cut, _) = hole(&mut b.doc);
     let side = format!("{cut}:side(c1)");
+    // The mock gives a cut circle's side half the block's width (Ø60),
+    // which the thread's fit check (mitcad#1262) rightly warns of for
+    // M10x1.5: the wall gets the size's diameter, as its copies do.
+    b.doc
+        .kernel()
+        .hole_radii
+        .borrow_mut()
+        .insert(side.clone(), 5.0);
     let thread = add(
         &mut b.doc,
         json!({"type": "thread", "faces": [{"body": "F2.b0", "face": side}],
                "thread": {"designation": "M10x1.5"}, "modeled": true}),
+    );
+    assert!(
+        b.doc.warnings(thread).is_empty(),
+        "{:?}",
+        b.doc.warnings(thread)
     );
     assert_eq!(status(&b.doc, thread), FeatureStatus::Ok);
     let threads = |doc: &Document<MockKernel>| -> Vec<String> {
@@ -3056,4 +3069,69 @@ fn a_pattern_of_join_features_apart_from_each_other_joins_once() {
             }
         }
     }
+}
+
+#[test]
+fn combine_with_an_empty_result_fails_and_keeps_its_bodies() {
+    // (mitcad#1273) A boolean of bodies with material whose result holds no
+    // solid is broken: the combine fails with a message and stores nothing,
+    // so the target keeps its shape and the tools stay, as for any failed
+    // feature (a union that came out empty once replaced the target with
+    // nothing and removed its 256 tools).
+    let mut b = block();
+    second_block(&mut b.doc);
+    second_block(&mut b.doc);
+    let before = uids(&b.doc);
+    assert_eq!(before, ["F2.b0", "F4.b0", "F6.b0"]);
+    let target = shape(&b.doc, "F2.b0").history;
+    let combine = |operation: &str, tools: [&str; 2]| json!({"type": "combine", "target": "F2.b0", "tools": tools, "operation": operation});
+    let failed_with = |doc: &Document<MockKernel>, uid: FeatureUid, message: &str| {
+        let status = status(doc, uid);
+        assert!(
+            matches!(&status, FeatureStatus::Failed(m) if m.contains(message)),
+            "{message}: {status:?}"
+        );
+        assert_eq!(uids(doc), ["F2.b0", "F4.b0", "F6.b0"], "{message}");
+        assert_eq!(shape(doc, "F2.b0").history, target, "{message}");
+    };
+    b.doc.kernel().empty_results.borrow_mut().insert("unite");
+    let uid = add(&mut b.doc, combine("join", ["F4.b0", "F6.b0"]));
+    failed_with(&b.doc, uid, "the join of 3 bodies gave an empty result");
+    // A cut's and an intersection's tools are joined first.
+    b.doc
+        .edit_feature(uid, &def(combine("cut", ["F4.b0", "F6.b0"])))
+        .unwrap();
+    failed_with(
+        &b.doc,
+        uid,
+        "the union of the 2 tool bodies gave an empty result",
+    );
+    // A piece of the operation itself without material.
+    b.doc.kernel().empty_results.borrow_mut().clear();
+    b.doc.kernel().empty_results.borrow_mut().insert("cut");
+    b.doc
+        .edit_feature(uid, &def(combine("cut", ["F6.b0", "F4.b0"])))
+        .unwrap();
+    failed_with(&b.doc, uid, "the cut of 3 bodies gave an empty result");
+    b.doc.kernel().empty_results.borrow_mut().clear();
+    b.doc
+        .kernel()
+        .empty_results
+        .borrow_mut()
+        .insert("intersect");
+    b.doc
+        .edit_feature(uid, &def(combine("intersect", ["F6.b0", "F4.b0"])))
+        .unwrap();
+    failed_with(
+        &b.doc,
+        uid,
+        "the intersection of 3 bodies gave an empty result",
+    );
+    // A union that gives a solid is the combine's result.
+    b.doc.kernel().empty_results.borrow_mut().clear();
+    b.doc
+        .edit_feature(uid, &def(combine("join", ["F6.b0", "F4.b0"])))
+        .unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(uids(&b.doc), ["F2.b0"]);
 }

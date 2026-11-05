@@ -24,10 +24,13 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepLib.hxx>
 #include <BRepTools.hxx>
+#include <BRepTools_History.hxx>
 #include <BRepTools_ReShape.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <ElSLib.hxx>
+#include <GeomAbs_SurfaceType.hxx>
 #include <Geom2dAPI_InterCurveCurve.hxx>
 #include <Geom2dConvert.hxx>
 #include <Geom2d_BSplineCurve.hxx>
@@ -46,8 +49,16 @@
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_HSequence.hxx>
 #include <NCollection_List.hxx>
+#include <NCollection_Map.hxx>
 #include <Precision.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <ShapeBuild_ReShape.hxx>
+#include <ShapeFix_Face.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <Standard_ErrorHandler.hxx>
+#include <TopAbs.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -60,6 +71,14 @@
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Ax3.hxx>
+#include <gp_Cone.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Lin.hxx>
+#include <gp_Pln.hxx>
+#include <gp_Sphere.hxx>
+#include <gp_Torus.hxx>
+#include <gp_Trsf2d.hxx>
+#include <gp.hxx>
 #include <gp_Vec2d.hxx>
 
 #include "history.hpp"
@@ -1313,5 +1332,847 @@ ShapePtr split_joined_pieces(const Shape& result, const Shape& body, const std::
   }
   return namer.shape();
 }
+
+namespace {
+
+bool elementary(GeomAbs_SurfaceType type) {
+  return type == GeomAbs_Plane || type == GeomAbs_Cylinder || type == GeomAbs_Cone || type == GeomAbs_Sphere ||
+         type == GeomAbs_Torus;
+}
+
+// Whether two elementary surfaces (in place) are one within kOneSurface
+// and kOneSurfaceAngle, whatever their frames: their axes and centres, and
+// their radii and angles, as the same set of points takes them.
+bool one_elementary_surface(const BRepAdaptor_Surface& a, const BRepAdaptor_Surface& b) {
+  if (a.GetType() != b.GetType()) {
+    return false;
+  }
+  const auto one_axis = [](const gp_Ax1& x, const gp_Ax1& y) {
+    return x.Direction().IsParallel(y.Direction(), kOneSurfaceAngle) &&
+           gp_Lin(x).Distance(y.Location()) < kOneSurface;
+  };
+  switch (a.GetType()) {
+  case GeomAbs_Plane: {
+    const gp_Pln pa = a.Plane();
+    const gp_Pln pb = b.Plane();
+    return pa.Axis().Direction().IsParallel(pb.Axis().Direction(), kOneSurfaceAngle) &&
+           pa.Distance(pb.Location()) < kOneSurface;
+  }
+  case GeomAbs_Cylinder: {
+    const gp_Cylinder ca = a.Cylinder();
+    const gp_Cylinder cb = b.Cylinder();
+    return one_axis(ca.Axis(), cb.Axis()) && std::abs(ca.Radius() - cb.Radius()) < kOneSurface;
+  }
+  case GeomAbs_Cone: {
+    // (Both nappes through the apex: the angle's sign follows the axis.)
+    const gp_Cone ca = a.Cone();
+    const gp_Cone cb = b.Cone();
+    return one_axis(ca.Axis(), cb.Axis()) && ca.Apex().Distance(cb.Apex()) < kOneSurface &&
+           std::abs(std::abs(ca.SemiAngle()) - std::abs(cb.SemiAngle())) < kOneSurfaceAngle;
+  }
+  case GeomAbs_Sphere: {
+    const gp_Sphere sa = a.Sphere();
+    const gp_Sphere sb = b.Sphere();
+    return sa.Location().Distance(sb.Location()) < kOneSurface && std::abs(sa.Radius() - sb.Radius()) < kOneSurface;
+  }
+  case GeomAbs_Torus: {
+    const gp_Torus ta = a.Torus();
+    const gp_Torus tb = b.Torus();
+    return one_axis(ta.Axis(), tb.Axis()) && ta.Location().Distance(tb.Location()) < kOneSurface &&
+           std::abs(ta.MajorRadius() - tb.MajorRadius()) < kOneSurface &&
+           std::abs(ta.MinorRadius() - tb.MinorRadius()) < kOneSurface;
+  }
+  default:
+    return false;
+  }
+}
+
+// The parameters on an elementary surface (in place) of a point on it.
+gp_Pnt2d parameters_on(const BRepAdaptor_Surface& surface, const gp_Pnt& point) {
+  double u = 0.0;
+  double v = 0.0;
+  switch (surface.GetType()) {
+  case GeomAbs_Plane:
+    ElSLib::Parameters(surface.Plane(), point, u, v);
+    break;
+  case GeomAbs_Cylinder:
+    ElSLib::Parameters(surface.Cylinder(), point, u, v);
+    break;
+  case GeomAbs_Cone:
+    ElSLib::Parameters(surface.Cone(), point, u, v);
+    break;
+  case GeomAbs_Sphere:
+    ElSLib::Parameters(surface.Sphere(), point, u, v);
+    break;
+  case GeomAbs_Torus:
+    ElSLib::Parameters(surface.Torus(), point, u, v);
+    break;
+  default:
+    break;
+  }
+  return gp_Pnt2d(u, v);
+}
+
+// The face's normal (out of its material) at a point on its elementary
+// surface; none where the surface has none (a cone's apex, a pole).
+std::optional<gp_Dir> normal_at(const TopoDS_Face& face, const BRepAdaptor_Surface& surface, const gp_Pnt& point) {
+  if (!elementary(surface.GetType())) {
+    return std::nullopt;
+  }
+  const gp_Pnt2d uv = parameters_on(surface, point);
+  gp_Pnt at;
+  gp_Vec du;
+  gp_Vec dv;
+  surface.D1(uv.X(), uv.Y(), at, du, dv);
+  gp_Vec normal = du.Crossed(dv);
+  if (normal.Magnitude() < 1.0e-12) {
+    return std::nullopt;
+  }
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  return gp_Dir(normal);
+}
+
+// The faces of a body on one elementary surface that meet along edges:
+// each group's faces and the edges between them (indices).
+struct SurfaceGroup {
+  std::vector<int> faces;
+  std::vector<int> inside;
+};
+
+// How far round its surface's period a face on a cylinder, cone, sphere
+// or torus runs (radians), and whether it is closed there (has a seam).
+std::pair<double, bool> turn_of(const TopoDS_Face& face) {
+  double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  bool seam = false;
+  for (TopExp_Explorer x(face, TopAbs_EDGE); x.More() && !seam; x.Next()) {
+    seam = BRep_Tool::IsClosed(TopoDS::Edge(x.Current()), face);
+  }
+  return {u1 - u0, seam};
+}
+
+constexpr double kTurn = 6.28318530717958647692;
+
+// Whether a face winds round its surface's axis: a whole turn or more
+// without being closed round it, as a turn of a thread's root or crest (a
+// face each, which the thread keeps so: detail::split_joined_pieces). A
+// face closed round it (its seam) may span more than a turn of parameters
+// (a rim and the wall above it joined, their seams at other angles), but
+// not two.
+
+bool winds_round(const TopoDS_Face& face) {
+  const GeomAbs_SurfaceType type = BRepAdaptor_Surface(face, false).GetType();
+  if (type != GeomAbs_Cylinder && type != GeomAbs_Cone && type != GeomAbs_Sphere && type != GeomAbs_Torus) {
+    return false;
+  }
+  const auto [turn, seam] = turn_of(face);
+  return turn > (seam ? 2.0 * kTurn : kTurn) - kOneSurfaceAngle;
+}
+
+std::vector<SurfaceGroup> same_surface_groups(const Shape& body) {
+  AncestorMap edge_faces;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, edge_faces);
+  const auto count = static_cast<std::size_t>(body.face_count());
+  std::vector<occ::handle<BRepAdaptor_Surface>> surfaces(count);
+  const auto surface_of = [&](int f) -> const BRepAdaptor_Surface& {
+    occ::handle<BRepAdaptor_Surface>& s = surfaces[static_cast<std::size_t>(f)];
+    if (s.IsNull()) {
+      s = new BRepAdaptor_Surface(body.face(f), false);
+    }
+    return *s;
+  };
+  std::vector<int> parent(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    parent[i] = static_cast<int>(i);
+  }
+  const auto root = [&parent](int f) {
+    while (parent[static_cast<std::size_t>(f)] != f) {
+      parent[static_cast<std::size_t>(f)] = parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(f)])];
+      f = parent[static_cast<std::size_t>(f)];
+    }
+    return f;
+  };
+  std::vector<std::pair<int, int>> joints; // edge, one of its faces
+  for (int i = 1; i <= edge_faces.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(edge_faces.FindKey(i));
+    const NCollection_List<TopoDS_Shape>& faces = edge_faces.FindFromIndex(i);
+    if (faces.Extent() != 2 || BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    const TopoDS_Face& fa = TopoDS::Face(faces.First());
+    const TopoDS_Face& fb = TopoDS::Face(faces.Last());
+    const int a = body.face_index(fa);
+    const int b = body.face_index(fb);
+    const int e = body.edge_index(edge);
+    if (a < 0 || b < 0 || a == b || e < 0 || !elementary(surface_of(a).GetType()) ||
+        !one_elementary_surface(surface_of(a), surface_of(b))) {
+      continue;
+    }
+    // (Facing the same way where they meet: not a fin folded back.)
+    const BRepAdaptor_Curve curve(edge);
+    const gp_Pnt middle = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()));
+    const std::optional<gp_Dir> na = normal_at(fa, surface_of(a), middle);
+    const std::optional<gp_Dir> nb = normal_at(fb, surface_of(b), middle);
+    if (!na || !nb || na->Dot(*nb) < 0.5) {
+      continue;
+    }
+    parent[static_cast<std::size_t>(root(a))] = root(b);
+    joints.emplace_back(e, a);
+  }
+  std::map<int, SurfaceGroup> by_root;
+  for (std::size_t f = 0; f < count; ++f) {
+    by_root[root(static_cast<int>(f))].faces.push_back(static_cast<int>(f));
+  }
+  for (const auto& [e, a] : joints) {
+    by_root[root(a)].inside.push_back(e);
+  }
+  std::vector<SurfaceGroup> groups;
+  for (auto& entry : by_root) {
+    const std::vector<int>& faces = entry.second.faces;
+    if (faces.size() > 1 && !entry.second.inside.empty() &&
+        std::none_of(faces.begin(), faces.end(), [&body](int f) { return winds_round(body.face(f)); })) {
+      groups.push_back(std::move(entry.second));
+    }
+  }
+  return groups;
+}
+
+// The parameters of one cylinder, cone, sphere or torus as those of another
+// of the same points (one_elementary_surface): u' = a u + b, v' = c v + d,
+// a and c each 1 or -1 (an axis or a frame the other way round).
+struct ParameterMap {
+  double a = 1.0;
+  double b = 0.0;
+  double c = 1.0;
+  double d = 0.0;
+
+  gp_Pnt2d operator()(const gp_Pnt2d& p) const { return gp_Pnt2d(a * p.X() + b, c * p.Y() + d); }
+
+  // A curve on the first surface as the same curve on the second.
+  occ::handle<Geom2d_Curve> moved(const occ::handle<Geom2d_Curve>& curve) const {
+    const occ::handle<Geom2d_Curve> copy = occ::down_cast<Geom2d_Curve>(curve->Copy());
+    gp_Trsf2d turn;
+    if (a < 0.0 && c < 0.0) {
+      turn.SetRotation(gp::Origin2d(), kTurn / 2.0);
+    } else if (a < 0.0) {
+      turn.SetMirror(gp::OY2d());
+    } else if (c < 0.0) {
+      turn.SetMirror(gp::OX2d());
+    }
+    copy->Transform(turn);
+    copy->Translate(gp_Vec2d(b, d));
+    return copy;
+  }
+};
+
+// The map of `from`'s parameters onto `to`'s, measured about the
+// parameters `at` on `from`; none where the surfaces' parameters do not
+// run along each other there.
+std::optional<ParameterMap> parameter_map(const BRepAdaptor_Surface& from, const BRepAdaptor_Surface& to,
+                                          const gp_Pnt2d& at) {
+  constexpr double kStep = 1.0e-3;
+  const auto wrapped = [](double delta, bool periodic) {
+    if (periodic) {
+      delta -= kTurn * std::round(delta / kTurn);
+    }
+    return delta;
+  };
+  const bool u_periodic = to.IsUPeriodic();
+  const bool v_periodic = to.IsVPeriodic();
+  const gp_Pnt2d p0 = parameters_on(to, from.Value(at.X(), at.Y()));
+  const gp_Pnt2d pu = parameters_on(to, from.Value(at.X() + kStep, at.Y()));
+  const gp_Pnt2d pv = parameters_on(to, from.Value(at.X(), at.Y() + kStep));
+  const double uu = wrapped(pu.X() - p0.X(), u_periodic) / kStep;
+  const double vu = wrapped(pu.Y() - p0.Y(), v_periodic) / kStep;
+  const double uv = wrapped(pv.X() - p0.X(), u_periodic) / kStep;
+  const double vv = wrapped(pv.Y() - p0.Y(), v_periodic) / kStep;
+  if (std::abs(std::abs(uu) - 1.0) > 1.0e-4 || std::abs(std::abs(vv) - 1.0) > 1.0e-4 || std::abs(vu) > 1.0e-4 ||
+      std::abs(uv) > 1.0e-4) {
+    return std::nullopt;
+  }
+  ParameterMap map;
+  map.a = uu > 0.0 ? 1.0 : -1.0;
+  map.c = vv > 0.0 ? 1.0 : -1.0;
+  map.b = p0.X() - map.a * at.X();
+  map.d = p0.Y() - map.c * at.Y();
+  return map;
+}
+
+// `piece` (a face of a group, on a cylinder, cone, sphere or torus of the
+// reference's, one_elementary_surface) on the reference's own surface: its
+// edges' curves on it moved onto that surface (the edges it shares with a
+// face already there, `reference` or a piece moved before, keep the curve
+// they have there, and set its periods), the face facing as it did. OCCT's
+// merge then takes the pieces as faces of one surface; its own move of a
+// face's curves onto another frame's surface knows only cylinders (the
+// periods of a torus's other parameter, the length along a cone's side).
+// Null where the piece cannot be moved.
+TopoDS_Face on_reference_surface(const TopoDS_Face& piece, const TopoDS_Face& reference) {
+  const TopoDS_Face forward = TopoDS::Face(piece.Oriented(TopAbs_FORWARD));
+  TopLoc_Location location;
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(reference, location);
+  const BRepAdaptor_Surface from(forward, false);
+  const BRepAdaptor_Surface to(reference, false);
+  double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+  BRepTools::UVBounds(forward, u0, u1, v0, v1);
+  gp_Pnt2d at(0.5 * (u0 + u1), 0.5 * (v0 + v1));
+  if (from.GetType() == GeomAbs_Sphere) {
+    at.SetY(0.5 * at.Y()); // (away from a pole)
+  }
+  std::optional<ParameterMap> map = parameter_map(from, to, at);
+  if (!map) {
+    return TopoDS_Face();
+  }
+  // (The periods from an edge already on the reference's surface.)
+  bool aligned = false;
+  for (TopExp_Explorer x(forward, TopAbs_EDGE); x.More() && !aligned; x.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(x.Current());
+    double f = 0.0, l = 0.0, g = 0.0, h = 0.0;
+    if (BRep_Tool::Degenerated(edge) || BRep_Tool::IsClosed(edge, forward)) {
+      continue;
+    }
+    const occ::handle<Geom2d_Curve> there = BRep_Tool::CurveOnSurface(edge, reference, f, l);
+    const occ::handle<Geom2d_Curve> here = BRep_Tool::CurveOnSurface(edge, forward, g, h);
+    if (there.IsNull() || here.IsNull()) {
+      continue;
+    }
+    const gp_Pnt2d want = there->Value(0.5 * (f + l));
+    const gp_Pnt2d got = (*map)(here->Value(0.5 * (g + h)));
+    double du = want.X() - got.X();
+    double dv = want.Y() - got.Y();
+    if (to.IsUPeriodic()) {
+      const double shift = kTurn * std::round(du / kTurn);
+      map->b += shift;
+      du -= shift;
+    }
+    if (to.IsVPeriodic()) {
+      const double shift = kTurn * std::round(dv / kTurn);
+      map->d += shift;
+      dv -= shift;
+    }
+    if (std::abs(du) > 1.0e-5 || std::abs(dv) > 1.0e-5) {
+      return TopoDS_Face();
+    }
+    aligned = true;
+  }
+  if (!aligned) {
+    return TopoDS_Face();
+  }
+  // Facing as it did: where the reference's surface faces the other way,
+  // the face holds its wires the other way round.
+  gp_Pnt point;
+  gp_Vec du, dv, tu, tv;
+  from.D1(at.X(), at.Y(), point, du, dv);
+  const gp_Pnt2d mapped = (*map)(at);
+  to.D1(mapped.X(), mapped.Y(), point, tu, tv);
+  const bool flip = du.Crossed(dv).Dot(tu.Crossed(tv)) < 0.0;
+  BRep_Builder builder;
+  TopoDS_Face moved;
+  builder.MakeFace(moved, surface, location, BRep_Tool::Tolerance(forward));
+  ShapeMap done;
+  for (TopExp_Explorer x(forward, TopAbs_EDGE); x.More(); x.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(x.Current().Oriented(TopAbs_FORWARD));
+    const int known = done.Extent();
+    if (done.Add(edge) <= known) {
+      continue;
+    }
+    double f = 0.0, l = 0.0;
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    if (BRep_Tool::IsClosed(edge, forward)) {
+      const occ::handle<Geom2d_Curve> c1 = BRep_Tool::CurveOnSurface(edge, forward, f, l);
+      const occ::handle<Geom2d_Curve> c2 =
+          BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Reversed()), forward, f, l);
+      if (c1.IsNull() || c2.IsNull()) {
+        return TopoDS_Face();
+      }
+      const occ::handle<Geom2d_Curve> m1 = map->moved(c1);
+      const occ::handle<Geom2d_Curve> m2 = map->moved(c2);
+      if (flip) {
+        builder.UpdateEdge(edge, m2, m1, moved, tolerance);
+      } else {
+        builder.UpdateEdge(edge, m1, m2, moved, tolerance);
+      }
+    } else {
+      const occ::handle<Geom2d_Curve> c = BRep_Tool::CurveOnSurface(edge, forward, f, l);
+      if (c.IsNull()) {
+        return TopoDS_Face();
+      }
+      const occ::handle<Geom2d_Curve> m = map->moved(c);
+      double g = 0.0, h = 0.0;
+      const occ::handle<Geom2d_Curve> there = BRep_Tool::CurveOnSurface(edge, reference, g, h);
+      if (!there.IsNull()) {
+        // On the reference's surface already: the same curve, or a period
+        // away where the pieces close round the surface, which makes the
+        // edge a seam (its curve there for the way the face it came with
+        // takes it, the new one for the way this one does).
+        if (there->Value(0.5 * (g + h)).Distance(m->Value(0.5 * (f + l))) < 1.0e-5) {
+          continue;
+        }
+        TopAbs_Orientation here = TopAbs_FORWARD;
+        for (TopExp_Explorer y(forward, TopAbs_EDGE); y.More(); y.Next()) {
+          if (y.Current().IsSame(edge)) {
+            here = y.Current().Orientation();
+          }
+        }
+        if (flip) {
+          here = TopAbs::Reverse(here);
+        }
+        if (here == TopAbs_FORWARD) {
+          builder.UpdateEdge(edge, m, there, moved, tolerance);
+        } else {
+          builder.UpdateEdge(edge, there, m, moved, tolerance);
+        }
+      } else {
+        builder.UpdateEdge(edge, m, moved, tolerance);
+      }
+    }
+    builder.Range(edge, moved, f, l);
+    if (!BRep_Tool::Degenerated(edge)) {
+      // (Its tolerance to the curve's distance from the reference's
+      // surface: within kOneSurface.)
+      builder.SameParameter(edge, false);
+      BRepLib::SameParameter(edge, tolerance);
+    }
+  }
+  for (TopoDS_Iterator w(forward); w.More(); w.Next()) {
+    builder.Add(moved, flip ? w.Value().Reversed() : w.Value());
+  }
+  // (Its vertices within their edges' new tolerances.)
+  BRepLib::UpdateTolerances(moved, false);
+  const TopAbs_Orientation orientation = piece.Orientation();
+  moved.Orientation(flip ? TopAbs::Reverse(orientation) : orientation);
+  return moved;
+}
+
+// The pieces of the groups `chosen` of `body` (a copy) on their group's
+// first piece's surface (on_reference_surface), each moved after a piece
+// it shares an edge with; planes as they are (OCCT's merge puts coplanar
+// faces on one plane itself), and a piece that cannot be moved.
+TopoDS_Shape on_reference_surfaces(const Shape& body, const std::vector<SurfaceGroup>& groups,
+                                   const std::vector<std::size_t>& chosen,
+                                   const occ::handle<BRepTools_ReShape>& reshape) {
+  for (const std::size_t g : chosen) {
+    const SurfaceGroup& group = groups[g];
+    const TopoDS_Face& reference = body.face(group.faces.front());
+    if (BRepAdaptor_Surface(reference, false).GetType() == GeomAbs_Plane) {
+      continue;
+    }
+    TopLoc_Location lr;
+    const occ::handle<Geom_Surface> sr = BRep_Tool::Surface(reference, lr);
+    std::vector<int> placed{group.faces.front()};
+    std::vector<int> left(group.faces.begin() + 1, group.faces.end());
+    // Next to a placed piece across an edge between them.
+    const auto touches = [&](int f) {
+      for (const int e : group.inside) {
+        const TopoDS_Shape& edge = body.edge(e);
+        const auto has = [&](int face) {
+          for (TopExp_Explorer x(body.face(face), TopAbs_EDGE); x.More(); x.Next()) {
+            if (x.Current().IsSame(edge)) {
+              return true;
+            }
+          }
+          return false;
+        };
+        if (has(f) && std::any_of(placed.begin(), placed.end(), has)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    bool progress = true;
+    while (!left.empty() && progress) {
+      progress = false;
+      for (auto it = left.begin(); it != left.end(); ++it) {
+        if (!touches(*it)) {
+          continue;
+        }
+        const TopoDS_Face& piece = body.face(*it);
+        TopLoc_Location lp;
+        if (BRep_Tool::Surface(piece, lp) != sr || !lp.IsEqual(lr)) {
+          const TopoDS_Face moved = on_reference_surface(piece, reference);
+          if (!moved.IsNull()) {
+            reshape->Replace(piece, moved);
+          }
+        }
+        placed.push_back(*it);
+        left.erase(it);
+        progress = true;
+        break;
+      }
+    }
+  }
+  return reshape->Apply(body.occt());
+}
+
+// The body with the groups `chosen` joined, on a copy of it: null where
+// the merge joined none of them or the faces it changed are not valid
+// (`invalid` then set) or a group joined into a face winding round its
+// axis (winds_round: `winding` gets those, to be joined again without
+// them); `unjoined` gets the chosen groups the merge left in pieces.
+ShapePtr joined_groups(const Shape& body, const std::vector<SurfaceGroup>& groups,
+                       const std::vector<std::size_t>& chosen, std::vector<std::size_t>& unjoined,
+                       std::vector<std::size_t>& winding, bool& invalid) {
+  winding.clear();
+  unjoined.clear();
+  invalid = false;
+  const ShapePtr own = working_copy(body);
+  own_pcurves(own->occt());
+  // Only the edges between the faces of a group can go, and only the edges
+  // along those faces' boundaries join.
+  std::vector<char> free_edge(static_cast<std::size_t>(own->edge_count()), 0);
+  ShapeMap free_vertices;
+  for (const std::size_t g : chosen) {
+    for (const int e : groups[g].inside) {
+      free_edge[static_cast<std::size_t>(e)] = 1;
+    }
+    for (const int f : groups[g].faces) {
+      TopExp::MapShapes(own->face(f), TopAbs_VERTEX, free_vertices);
+      // (A piece's seam too: the merge keeps the edges it is to keep
+      // inside the faces it joins, which a seam is.)
+      for (TopExp_Explorer x(own->face(f), TopAbs_EDGE); x.More(); x.Next()) {
+        if (BRep_Tool::IsClosed(TopoDS::Edge(x.Current()), own->face(f))) {
+          free_edge[static_cast<std::size_t>(own->edge_index(x.Current()))] = 1;
+        }
+      }
+    }
+  }
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> keep;
+  for (int e = 0; e < own->edge_count(); ++e) {
+    if (free_edge[static_cast<std::size_t>(e)] == 0) {
+      keep.Add(own->edge(e));
+    }
+  }
+  for (int v = 0; v < own->vertex_count(); ++v) {
+    if (!free_vertices.Contains(own->vertex(v))) {
+      keep.Add(own->vertex(v));
+    }
+  }
+  const occ::handle<BRepTools_ReShape> reshape = new BRepTools_ReShape();
+  const TopoDS_Shape input = on_reference_surfaces(*own, groups, chosen, reshape);
+  ShapeUpgrade_UnifySameDomain unify(input, true, true, false);
+  unify.KeepShapes(keep);
+  unify.SetLinearTolerance(kOneSurface);
+  unify.SetAngularTolerance(kOneSurfaceAngle);
+  unify.SetSafeInputMode(true);
+  unify.AllowInternalEdges(false);
+  unify.Build();
+  const TopoDS_Shape result = unify.Shape();
+  if (result.IsNull() || unify.History().IsNull()) {
+    invalid = true;
+    return nullptr;
+  }
+  const occ::handle<BRepTools_History> history = reshape->History();
+  history->Merge(unify.History());
+  ShapeMap result_faces;
+  TopExp::MapShapes(result, TopAbs_FACE, result_faces);
+  for (const std::size_t g : chosen) {
+    ShapeMap images;
+    for (const int f : groups[g].faces) {
+      const TopoDS_Shape& piece = own->face(f);
+      if (history->IsRemoved(piece)) {
+        continue;
+      }
+      const NCollection_List<TopoDS_Shape>& modified = history->Modified(piece);
+      if (modified.IsEmpty()) {
+        images.Add(piece);
+      }
+      for (const TopoDS_Shape& image : modified) {
+        if (result_faces.Contains(image)) {
+          images.Add(image);
+        }
+      }
+    }
+    if (images.Extent() != 1) {
+      unjoined.push_back(g);
+    } else if (winds_round(TopoDS::Face(images(1)))) {
+      winding.push_back(g);
+    }
+  }
+  if (!winding.empty() || unjoined.size() == chosen.size()) {
+    return nullptr;
+  }
+  // (The faces the merge left as they were are the body's: valid as it
+  // was found.)
+  ShapeMap kept;
+  TopExp::MapShapes(own->occt(), TopAbs_FACE, kept);
+  if (!is_valid_where_changed(result, kept)) {
+    invalid = true;
+    return nullptr;
+  }
+  FaceNamer namer(result);
+  namer.carry(*history, *own);
+  namer.set_unified(body.unified());
+  const ShapePtr joined = namer.shape();
+  joined->copy_notes(body);
+  if (body.checked_valid().value_or(false)) {
+    joined->set_checked_valid(true);
+  }
+  return joined;
+}
+
+// The first names of a group's faces, for a message.
+std::string group_names(const Shape& body, const SurfaceGroup& group) {
+  std::string names;
+  for (const int f : group.faces) {
+    if (!body.face_names(f).empty()) {
+      names += (names.empty() ? "" : ", ") + body.face_names(f).front();
+    }
+  }
+  return names;
+}
+
+// Whether a face closed round its surface's axis (a cylinder, cone, sphere
+// or torus) has its seam at more than one angle, or holds on both of its
+// sides an edge that is no seam line: pieces with their seams at other
+// angles joined (OCCT's merge keeps each piece's seam), the rim between the
+// seams left between them as an edge.
+bool seam_in_pieces(const TopoDS_Face& face) {
+  const GeomAbs_SurfaceType type = BRepAdaptor_Surface(face, false).GetType();
+  if (type != GeomAbs_Cylinder && type != GeomAbs_Cone && type != GeomAbs_Sphere && type != GeomAbs_Torus) {
+    return false;
+  }
+  const TopoDS_Face forward = TopoDS::Face(face.Oriented(TopAbs_FORWARD));
+  std::optional<double> angle;
+  for (TopExp_Explorer x(forward, TopAbs_EDGE); x.More(); x.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(x.Current());
+    if (BRep_Tool::Degenerated(edge) || !BRep_Tool::IsClosed(edge, forward)) {
+      continue;
+    }
+    double f = 0.0, l = 0.0;
+    const occ::handle<Geom2d_Curve> curve = BRep_Tool::CurveOnSurface(edge, forward, f, l);
+    if (curve.IsNull()) {
+      continue;
+    }
+    const gp_Pnt2d a = curve->Value(f);
+    const gp_Pnt2d b = curve->Value(l);
+    const gp_Pnt2d m = curve->Value(0.5 * (f + l));
+    // (A seam runs along v at one u.)
+    if (std::abs(a.X() - b.X()) > 1.0e-9 || std::abs(a.X() - m.X()) > 1.0e-9) {
+      return true;
+    }
+    const double u = a.X() - kTurn * std::floor(a.X() / kTurn);
+    if (angle) {
+      const double apart = std::abs(u - *angle);
+      if (std::min(apart, kTurn - apart) > 1.0e-9) {
+        return true;
+      }
+    }
+    angle = u;
+  }
+  return false;
+}
+
+// `body` with each face whose seam is in pieces (seam_in_pieces) made anew
+// from its other edges with one seam (OCCT's shape healing, its missing
+// seam put in: the edges of the rims it crosses split there, in the
+// neighbouring faces too). Faces it cannot make so stay as they are.
+ShapePtr with_single_seams(const ShapePtr& body) {
+  std::vector<int> faces;
+  for (int i = 0; i < body->face_count(); ++i) {
+    if (seam_in_pieces(body->face(i))) {
+      faces.push_back(i);
+    }
+  }
+  if (faces.empty()) {
+    return body;
+  }
+  const ShapePtr own = working_copy(*body);
+  own_pcurves(own->occt());
+  const occ::handle<ShapeBuild_ReShape> context = new ShapeBuild_ReShape();
+  bool any = false;
+  for (const int i : faces) {
+    try {
+      OCC_CATCH_SIGNALS
+      const TopoDS_Face forward = TopoDS::Face(own->face(i).Oriented(TopAbs_FORWARD));
+      const occ::handle<NCollection_HSequence<TopoDS_Shape>> edges = new NCollection_HSequence<TopoDS_Shape>();
+      for (TopExp_Explorer x(forward, TopAbs_EDGE); x.More(); x.Next()) {
+        if (!BRep_Tool::IsClosed(TopoDS::Edge(x.Current()), forward)) {
+          edges->Append(x.Current());
+        }
+      }
+      const occ::handle<NCollection_HSequence<TopoDS_Shape>> wires =
+          ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, Precision::Confusion(), true);
+      TopLoc_Location location;
+      BRep_Builder builder;
+      TopoDS_Face bare;
+      builder.MakeFace(bare, BRep_Tool::Surface(forward, location), location, BRep_Tool::Tolerance(forward));
+      for (const TopoDS_Shape& wire : *wires) {
+        builder.Add(bare, wire);
+      }
+      ShapeFix_Face fix(bare);
+      fix.SetContext(context);
+      fix.Perform();
+      const TopoDS_Face fixed = fix.Face();
+      // (The rims' edges the healing split, their ranges and parameters
+      // as their curves have them.)
+      for (TopExp_Explorer y(fixed, TopAbs_EDGE); y.More(); y.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(y.Current());
+        if (!BRep_Tool::Degenerated(edge) && (!BRep_Tool::SameRange(edge) || !BRep_Tool::SameParameter(edge))) {
+          BRepLib::SameRange(edge);
+          builder.SameParameter(edge, false);
+          BRepLib::SameParameter(edge, BRep_Tool::Tolerance(edge));
+        }
+      }
+      int count = 0;
+      for (TopExp_Explorer x(fixed, TopAbs_FACE); x.More(); x.Next()) {
+        ++count;
+      }
+      if (fixed.IsNull() || count != 1 || seam_in_pieces(fixed)) {
+        continue;
+      }
+      context->Replace(forward, fixed);
+      any = true;
+    } catch (const Standard_Failure&) {
+    }
+  }
+  if (!any) {
+    return body;
+  }
+  const TopoDS_Shape applied = context->Apply(own->occt());
+  ShapeMap kept;
+  TopExp::MapShapes(own->occt(), TopAbs_FACE, kept);
+  // The faces it changed (the seamed ones, the neighbours whose rims it
+  // split) healed again: their edges' curves on them and parameters.
+  const occ::handle<ShapeBuild_ReShape> healing = new ShapeBuild_ReShape();
+  for (TopExp_Explorer y(applied, TopAbs_FACE); y.More(); y.Next()) {
+    if (kept.Contains(y.Current())) {
+      continue;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      ShapeFix_Face fix(TopoDS::Face(y.Current()));
+      fix.SetContext(healing);
+      fix.Perform();
+      if (!fix.Face().IsSame(y.Current())) {
+        healing->Replace(y.Current(), fix.Face());
+      }
+    } catch (const Standard_Failure&) {
+    }
+  }
+  const TopoDS_Shape healed = healing->Apply(applied);
+  const occ::handle<BRepTools_History> history = context->History();
+  history->Merge(healing->History());
+  // (The rims' edges joined again where their old seams met them: OCCT's
+  // merge on edges, at the vertices of the faces changed only.)
+  ShapeMap free_vertices;
+  for (TopExp_Explorer y(healed, TopAbs_FACE); y.More(); y.Next()) {
+    if (!kept.Contains(y.Current())) {
+      TopExp::MapShapes(y.Current(), TopAbs_VERTEX, free_vertices);
+    }
+  }
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> keep;
+  for (TopExp_Explorer y(healed, TopAbs_VERTEX); y.More(); y.Next()) {
+    if (!free_vertices.Contains(y.Current())) {
+      keep.Add(y.Current());
+    }
+  }
+  ShapeUpgrade_UnifySameDomain rims(healed, true, false, false);
+  rims.KeepShapes(keep);
+  rims.SetSafeInputMode(true);
+  rims.Build();
+  const TopoDS_Shape result = rims.Shape();
+  if (!rims.History().IsNull()) {
+    history->Merge(rims.History());
+  }
+  if (result.IsNull() || !is_valid_where_changed(result, kept)) {
+    return body;
+  }
+  FaceNamer namer(result);
+  namer.carry(*history, *own);
+  namer.set_unified(body->unified());
+  const ShapePtr seamed = namer.shape();
+  seamed->copy_notes(*body);
+  if (body->checked_valid().value_or(false)) {
+    seamed->set_checked_valid(true);
+  }
+  return seamed;
+}
+
+ShapePtr joined_on_surfaces(const ShapePtr& body);
+
+} // namespace
+
+ShapePtr join_same_surfaces(const ShapePtr& body) {
+  if (!body || body->face_count() < 2) {
+    return body;
+  }
+  return with_single_seams(joined_on_surfaces(body));
+}
+
+namespace {
+
+ShapePtr joined_on_surfaces(const ShapePtr& body) {
+  if (!body || body->face_count() < 2) {
+    return body;
+  }
+  const std::vector<SurfaceGroup> groups = same_surface_groups(*body);
+  if (groups.empty()) {
+    return body;
+  }
+  std::vector<std::size_t> all(groups.size());
+  for (std::size_t g = 0; g < groups.size(); ++g) {
+    all[g] = g;
+  }
+  // (A group the merge itself does not join, or that it would join into a
+  // face winding round its axis, stays apart without a word: nothing is
+  // wrong with it.)
+  std::vector<std::size_t> winding;
+  const auto attempt = [&](const std::vector<std::size_t>& chosen, std::vector<std::size_t>& left,
+                           bool& bad) -> ShapePtr {
+    try {
+      return joined_groups(*body, groups, chosen, left, winding, bad);
+    } catch (const Standard_Failure&) {
+      bad = true;
+      return nullptr;
+    }
+  };
+  std::vector<std::size_t> unjoined;
+  bool invalid = false;
+  ShapePtr joined = attempt(all, unjoined, invalid);
+  while (!joined && !invalid && !winding.empty()) {
+    for (const std::size_t g : winding) {
+      all.erase(std::remove(all.begin(), all.end(), g), all.end());
+    }
+    if (all.empty()) {
+      return body;
+    }
+    joined = attempt(all, unjoined, invalid);
+  }
+  std::vector<std::size_t> refused;
+  if (!joined && invalid) {
+    // Group by group: each joined where the result stays valid with the
+    // groups joined before it.
+    std::vector<std::size_t> accepted;
+    for (const std::size_t g : all) {
+      std::vector<std::size_t> trial = accepted;
+      trial.push_back(g);
+      ShapePtr step = attempt(trial, unjoined, invalid);
+      if (step && std::find(unjoined.begin(), unjoined.end(), g) == unjoined.end()) {
+        accepted = trial;
+        joined = step;
+      } else if (invalid) {
+        refused.push_back(g);
+      }
+    }
+  }
+  if (refused.empty()) {
+    return joined ? joined : body;
+  }
+  if (!joined) {
+    joined = std::make_shared<Shape>(*body);
+  }
+  for (const std::size_t g : refused) {
+    const std::string names = group_names(*body, groups[g]);
+    if (!names.empty()) {
+      joined->add_info("the faces " + names +
+                       " lie on one surface but stay apart: joined, the body would not be valid");
+    }
+  }
+  return joined;
+}
+
+} // namespace
 
 } // namespace mitcad::geometry::detail

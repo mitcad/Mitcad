@@ -33,6 +33,9 @@
 // sheet's menu of what is under the pointer, a double-click on a note for
 // its text.
 
+#include <functional>
+#include <optional>
+
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLineF>
@@ -147,8 +150,22 @@ public:
   // What follows the pointer while an annotation is placed (mitcad#725):
   // "dimension" (lines from the two points, sheet mm, to a dimension line
   // through the pointer), "leader" (a line from the point to the pointer
-  // and a box there), empty for none.
-  void setPlacingPreview(const QString& kind, const QVector<QPointF>& points);
+  // and a box there), empty for none; a word after it says more for the
+  // log ("dimension aligned", "leader diameter"). A dimension's
+  // `direction` (a unit vector on the sheet, mitcad#1272) is what it
+  // measures along, as the model says; null: horizontal or vertical,
+  // whichever its points lie further apart along.
+  void setPlacingPreview(const QString& kind, const QVector<QPointF>& points,
+                         const QPointF& direction = QPointF());
+  // While a placing click is awaited a click may still pick (the
+  // Dimension tool's Auto with one pick, mitcad#1272): the pointer asks
+  // what a click there would pick (`hoverRequested`) meanwhile.
+  void setPicksWhilePlacing(bool on);
+  // Where the clicks of a line or an arc drawn outside the model go
+  // (mitcad#1272): the view under the click (0: none) and the click give
+  // the point it snaps to (sheet mm), none for the click itself. Alt: as
+  // clicked.
+  void setPointSnap(std::function<std::optional<QPointF>(int view, const QPointF& at)> snap);
   // Where a dimension placed goes when it snaps to the spacing of the one
   // before (mitcad#1173): its preview there (sheet mm) instead of at the
   // pointer, with a short hint beside it ("12 mm × 2"); `snapped` false:
@@ -204,9 +221,11 @@ signals:
   void toolCancelled();
   // A tool's line or circle is drawn: the next click places its view.
   void placing();
-  // The pointer moved while an annotation tool waits for a pick: the view
-  // under it (0: none) and where it is; the workspace asks the model what
-  // a click there would pick. A view of -1: the pointer left the sheet.
+  // The pointer moved while an annotation tool waits for a pick (or a
+  // line or an arc drawn outside the model for a click that snaps,
+  // mitcad#1272): the view under it (0: none) and where it is; the
+  // workspace asks the model what a click there would pick. A view of -1:
+  // the pointer left the sheet.
   void hoverRequested(int view, QPointF at);
   // The selection changed by Ctrl+click (several items, or one again).
   void selectionChanged();
@@ -228,6 +247,9 @@ signals:
   void annotationDragged(int id, QPointF delta, bool freely);
 
 protected:
+  // Whether the pointer asks what a click would pick (`hoverRequested`):
+  // an annotation tool's picks, a line's or an arc's snapping clicks.
+  bool asksHover() const;
   bool event(QEvent* event) override;
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
@@ -320,6 +342,9 @@ private:
   QJsonArray m_hoverMarks;
   QString m_previewKind;
   QVector<QPointF> m_previewPoints;
+  QPointF m_previewDirection; // a dimension's, mitcad#1272; null: H or V
+  bool m_picksWhilePlacing = false;
+  std::function<std::optional<QPointF>(int, const QPointF&)> m_pointSnap;
   QString m_loggedPreview;
   int m_parentView = 0;
   int m_hovered = 0;

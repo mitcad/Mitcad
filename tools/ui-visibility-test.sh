@@ -21,8 +21,9 @@
 #   - Edit of Extrude2 (the timeline rolled back), Body1 hidden meanwhile,
 #     Cancel: Body1 stays hidden, as the last undo step (no marker move
 #     left behind).
-#   - A Flat Pattern's or an analysis's light bulb and the other browser
-#     actions still wait for the command: Rename says so.
+#   - A Flat Pattern's light bulb and the other browser actions still wait
+#     for the command (an analysis's works since mitcad#1263,
+#     tools/ui-browser-eyes-mid-command-test.sh).
 #   - The Origin folder's light bulb off: Offset Plane's plane input and
 #     Extrude's Start Object leave the origin hidden (mitcad#1030), and XY
 #     picked from the browser's Origin folder goes to the input. With the

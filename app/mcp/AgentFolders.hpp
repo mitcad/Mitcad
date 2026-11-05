@@ -39,6 +39,16 @@ QString agentDesignPath(const QString& given, bool forWriting, bool overwrite, Q
 // a new file, or with `overwrite` an existing regular one; with one of
 // `suffixes` (any when empty). Empty with the reason when it is not one.
 QString agentOutputPath(const QString& given, bool overwrite, QString& reason, const QStringList& suffixes = {});
+// Where document_new makes a design (mitcad#1266). agentDesignFolder: an
+// existing folder that is an allowed one or below one (a relative `given`
+// relative to the first; '..' refused), with its links resolved; empty with
+// the reason when it is not one. agentNewDesignPath: the design's file in
+// such a folder, `name` with .mitcad added when it lacks it, or with an
+// empty `name` the first free DesignN.mitcad (names compared without case);
+// empty with the reason, which names the file, when the name is not a plain
+// file name or that file exists.
+QString agentDesignFolder(const QString& given, QString& reason);
+QString agentNewDesignPath(const QString& folder, const QString& name, QString& reason);
 
 // A group with a frame and a title, except on macOS, where the settings
 // window's panes have none: a plain widget.

@@ -285,7 +285,7 @@ Ui-ExpectNew 'Drawing picked line (1)' 'the bottom edge picked'
 Ui-Step 'the top edge'                    { Sheet-Click 95 139.5 }
 Ui-ExpectNew 'Drawing placing view' 'its place is clicked next'
 Ui-Step 'where it goes'                   { Sheet-Click 172 120 }
-Ui-ExpectNew '"type":"linear"' 'a linear dimension asked for'
+Ui-ExpectNew '"type":"dimension"' 'a dimension asked for, its picks choosing its type'
 Ui-ExpectNew 'Drawing annotations drawn: 1 = 20' 'drawn: the block is 20 high'
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
@@ -295,7 +295,7 @@ $before = View-Y 1
 Ui-Mark
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
-Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
+Ui-ExpectNew 'Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
 Ui-Mark
 Ui-Step 'edit Extrude1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Extrude1' }
 Ui-ExpectNew ' with Extrude' 'editing Extrude1'
@@ -322,7 +322,7 @@ Write-Host '--- 4. Saved and opened again'
 Ui-Mark
 Ui-Step 'back to the model'               { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'closed'
-Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD, MAKE (shown BUILD)' 'back on the Build tab it was opened from'
+Ui-ExpectNew 'Ribbon tabs: START, SOLID, BUILD, MAKE (shown BUILD)' 'back on the Build tab it was opened from'
 Ui-Step 'save (Ctrl+S)'                   { Ui-Key 'ctrl+s' }
 Ui-ExpectNew 'Saved ' 'saved'
 if (-not (Select-String -Path $design -Pattern '"drawings"' -Quiet)) { Ui-Fail 'the design file has no drawings' }

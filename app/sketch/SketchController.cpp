@@ -1295,7 +1295,9 @@ void SketchController::editDimension(const QString& id) {
         qDebug().noquote() << QStringLiteral("Dimension %1 = %2 (%3)")
                                   .arg(id, expression, changed != nullptr ? changed->parameter : QString());
       },
-      d->driven ? QString() : d->parameter);
+      d->driven ? QString() : d->parameter,
+      // Up and Down stop where the dimension's kind does (mitcad#1254).
+      sketchDimensionStepLimit(d->type, d->signedOffset));
   m_editorDimension = id;
   // What the dimension is, as its tooltip says (mitcad#231).
   if (m_editor) {
@@ -2864,6 +2866,17 @@ void SketchController::setFields(const QVector<FieldSpec>& fields) {
                                                            : ParameterKind::Length;
       suggest.sketch = m_uid;
       suggest.label = QStringLiteral("sketch %1").arg(spec.id);
+      // Up, Down and the wheel step a plain value (mitcad#1254), down to
+      // the tool's minimum: a size the tool refuses at 0 (a circle's
+      // diameter, core/sketch/src/tools.rs) above 0; the one count a tool
+      // asks for is a polygon's sides, 3 to 256 (tools.rs, polygon).
+      suggest.steps = true;
+      suggest.stepLimit.minimum = spec.stepMinimum;
+      suggest.stepLimit.above = spec.stepAboveMinimum;
+      if (spec.kind == FieldSpec::Kind::Count) {
+        suggest.stepLimit.minimum = 3.0;
+        suggest.stepLimit.above = false;
+      }
       ParameterField::attach(edit, suggest);
       // Its fx button's presses pass to the view as the field's do
       // (fieldMouse(), mitcad#671).
@@ -3166,7 +3179,8 @@ void SketchController::setLive(const QString& id, double value) {
 }
 
 void SketchController::openValueEditor(const QPointF& at, const QString& text, FieldSpec::Kind kind,
-                                       std::function<void(const QString&)> accept, const QString& name) {
+                                       std::function<void(const QString&)> accept, const QString& name,
+                                       const ValueStepLimit& stepLimit) {
   closeEditor();
   auto* edit = new QLineEdit(&m_viewer);
   edit->setObjectName(QStringLiteral("sketchValueEditor"));
@@ -3198,6 +3212,10 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
     suggest.sketch = m_uid;
     suggest.label = name.isEmpty() ? QStringLiteral("sketch dimension") : QStringLiteral("dimension %1").arg(name);
     suggest.naming = true;
+    // Up, Down and the wheel step a plain value (mitcad#1254); Enter
+    // takes it, as a typed one.
+    suggest.steps = true;
+    suggest.stepLimit = stepLimit;
     ParameterField::attach(edit, suggest);
     width += 20; // the fx button
   }

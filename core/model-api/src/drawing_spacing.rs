@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::ApiError;
-use super::drawing_annotations::{AddAnnotationCommand, EditAnnotationCommand};
+use super::drawing_annotations::{AddAnnotationCommand, Asked, EditAnnotationCommand};
 use super::drawings::Evaluated;
 use super::prelude::*;
 use mitcad_model::Document;
@@ -204,10 +204,16 @@ fn snap_new<K: Kernel>(
         ));
     };
     let unsnapped = json!({"at": at, "snapped": false});
-    let Ok(kind) = serde_json::from_value::<AnnotationType>(json!(c.kind)) else {
+    let Some(asked) = Asked::of(&c.kind) else {
         return Ok(unsnapped);
     };
-    let Some(view_id) = c.view.filter(|_| spaced(kind)) else {
+    // A dimension whose picks choose its type (mitcad#1272) snaps as the
+    // one they choose.
+    let snaps = match asked {
+        Asked::Type(kind) => spaced(kind),
+        Asked::Dimension => true,
+    };
+    let Some(view_id) = c.view.filter(|_| snaps) else {
         return Ok(unsnapped);
     };
     let drawing = doc.find_drawing(&c.drawing)?;
@@ -219,7 +225,7 @@ fn snap_new<K: Kernel>(
         .view_at(drawing, si, &evaluated, view_id)
         .map_err(ApiError)?;
     let (annotation, seen) =
-        doc.placing_annotation(&view, c, kind, drawing.next_annotation_id())?;
+        doc.placing_annotation(&view, c, asked, drawing.next_annotation_id())?;
     let frame = view.frame();
     let mut from = None;
     let snap = if free {
@@ -234,7 +240,31 @@ fn snap_new<K: Kernel>(
     let to = snap.map_or(at, |s| s.to);
     let mut placed = annotation;
     annotate::placed_at(&mut placed, &seen, &frame, to);
-    Ok(answer("at", to, &placed, &seen, &frame, snap.zip(from)))
+    let mut value = answer("at", to, &placed, &seen, &frame, snap.zip(from));
+    made(&mut value, &placed, &seen, &frame);
+    Ok(value)
+}
+
+/// What a placing click makes, for its preview (mitcad#1272): its `type`
+/// and `along`; a linear dimension's `ends` (where its extension lines
+/// start, on the sheet) and `direction` (what it measures along, a unit
+/// vector on the sheet).
+fn made(value: &mut Value, placed: &ViewAnnotation, seen: &[Seen], frame: &Frame<'_>) {
+    value["type"] = json!(placed.kind.key());
+    if let Some(along) = placed.along {
+        value["along"] = json!(along);
+    }
+    if placed.kind != AnnotationType::Linear || seen.len() < 2 {
+        return;
+    }
+    let Ok((_, d)) = annotate::linear_axes(placed.along, placed.turn, seen) else {
+        return;
+    };
+    let (a, b) = (seen[0].point(), seen[1].point());
+    let (sa, sb) = (frame.map.at(a), frame.map.at(b));
+    // The view's map scales and moves: its directions stay.
+    value["ends"] = json!([sa, sb]);
+    value["direction"] = json!(d);
 }
 
 /// A placed dimension's drag.

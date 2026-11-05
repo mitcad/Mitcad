@@ -19,6 +19,7 @@
 // the body's material there.
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -114,6 +115,17 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
 // beyond it" for the first such edge and face (with how many more), for an
 // error when the chamfer cannot be built so. Empty when there is none.
 std::string overflow_failure(const Shape& body, const std::vector<int>& owner, double contact);
+
+// Where a chamfer of the selected edges (`owner`) reaches exactly to a far
+// edge of a face beside them, its contact on the face touching that edge
+// at a tangent (mitcad#1260: the face would end in a point there, between
+// the parts the chamfer runs over and those it leaves): "the chamfer of
+// edge E{…} reaches exactly to the edge between face F… and face F… beyond
+// it, at (x, y, z), …" for the first such place. `reach(e, f)` is how far
+// the chamfer of selected edge `e` reaches along its face `f` (the faces'
+// far edges are those overflow_failure looks at). Empty when there is none.
+std::string overflow_tangent(const Shape& body, const std::vector<int>& owner,
+                             const std::function<double(int, int)>& reach);
 
 // Puts the walls fill_overflow took away (`cutouts.rising`) into
 // `cutouts.rejoin`, given the chamfer of the cleared body (`chamfered`,

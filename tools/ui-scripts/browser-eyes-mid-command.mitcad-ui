@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: MIT
+# Browser eyes while a command is open (mitcad#1263), on
+# browser-eyes-mid-command.json (the rod Body1 F2.b0 around the Z axis, the
+# block Body2 F4.b0 beside it, Section1 kept at XZ and hidden):
+#   1. Thread on the rod, modelled: Section1's eye turns the section on
+#      during it. The panel stays open, the preview is computed again and
+#      its threaded rod clipped at the plane on the section worker's thread;
+#      the eye is an undo step of its own (one more than before Thread);
+#      OK adds the modelled thread with the panel's inputs, the section
+#      stays on. Undo takes back the thread first, then the eye.
+#   2. Thread again: Section1's eye; another browser action (Delete on
+#      Section1's row) still waits for the command; Esc cancels Thread and
+#      keeps the section; its eye is the last undo step.
+#   3. Fillet on the block's top face: the rod's eye and then the eye of the
+#      block being filleted hide them during Fillet; the face stays
+#      selected, the preview is drawn again without recomputing for the
+#      rod; OK adds the fillet. Undo: the fillet, then each eye.
+# Run by tools/ui-browser-eyes-mid-command-test.sh (Linux) and
+# tools/ui-windows-browser-eyes-mid-command-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Browser eye Root/Analysis/Section1 at '
+expect-never '^Section analysis at '
+
+# 1. Thread, modelled; Section1 turned on while its panel is open.
+mark
+command solid.thread
+expect-log '^Command Thread started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:side[(]c1[)]'
+wait-log '^Thread Faces: 1 face'
+wait-log '^Preview Thread: ok' 30
+mark
+click-logged '^Panel Thread input modeled at '
+wait-log '^Thread: Modeled = on'
+wait-log '^Preview Thread: ok' 120
+wait-idle 120
+capture-undo-depth before_thread
+mark
+click-logged '^Browser eye Root/Analysis/Section1 at '
+expect-log '^Visibility Root/Analysis/Section1: shown [(]during Thread[)]$'
+expect-log '^Section analysis at '
+# The preview drawn at no plane is computed again and clipped at this one.
+wait-log '^Preview Thread: ok' 120
+wait-log '^Section preview clips at .* off the UI thread [(]section worker[)]: 1 bodies, 1 new' 60
+wait-log '^Section preview ready at .*: 1 bodies from the section worker' 60
+wait-idle 120
+expect-no-log '^Command Thread (cancelled|finished)|^Thread Faces: nothing|Finish the command or the sketch first'
+expect-no-log '^Section: F2[.]b0 shown whole'
+expect-undo-depth ${before_thread} 1
+mark
+button '^OK$'
+wait-log '^Added modeled thread M10x1[.]5 6g on 1 face[(]s[)]' 120
+wait-idle 120
+expect-no-log '^Section analysis off'
+expect-undo-depth ${before_thread} 2
+# The eye's step comes before the command's: Undo takes back the thread
+# first, the section stays; the next one hides the section.
+mark
+command edit.undo
+expect-log '^Undo: Add Thread'
+wait-idle 60
+expect-no-log '^Section analysis off'
+mark
+command edit.undo
+expect-log '^Undo: Show Section1$'
+expect-log '^Section analysis off'
+wait-idle
+expect-undo-depth ${before_thread} 0
+
+# 2. Thread again: Section1's eye, then Esc cancels Thread, the section kept.
+capture-undo-depth before_cancel
+mark
+command solid.thread
+expect-log '^Command Thread started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:side[(]c1[)]'
+wait-log '^Thread Faces: 1 face'
+wait-log '^Preview Thread: ok' 30
+wait-idle
+mark
+click-logged '^Browser eye Root/Analysis/Section1 at '
+expect-log '^Visibility Root/Analysis/Section1: shown [(]during Thread[)]$'
+expect-log '^Section analysis at '
+wait-idle 60
+expect-undo-depth ${before_cancel} 1
+# Every other model change still waits for the command.
+mark
+context-menu-logged '^Browser Root/Analysis/Section1 at ' 'Delete'
+expect-log 'Finish the command or the sketch first[.]'
+expect-no-log '^Deleted analysis Section1|^Command Thread (cancelled|finished)'
+expect-undo-depth ${before_cancel} 1
+mark
+key Escape
+expect-log '^Command Thread cancelled'
+wait-idle
+expect-no-log '^Section analysis off'
+expect-undo-depth ${before_cancel} 1
+mark
+command edit.undo
+expect-log '^Undo: Show Section1$'
+expect-log '^Section analysis off'
+wait-idle
+expect-undo-depth ${before_cancel} 0
+
+# 3. Fillet on the block's top face; the rod's eye, then the block's own.
+capture-undo-depth before_fillet
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'face F4[.]b0/F4:end[(]'
+wait-log '^Fillet Edges: 1 face'
+wait-log '^Preview Fillet: ok' 30
+wait-idle
+mark
+click-logged '^Browser eye Root/Bodies/Body1 at '
+expect-log '^Visibility Root/Bodies/Body1: hidden [(]during Fillet[)]$'
+expect-log '^Preview bodies: '
+wait-idle
+expect-no-log '^Preview Fillet: (?!refining the display meshes|display meshes refined)|^Command Fillet (cancelled|finished)'
+mark
+click-logged '^Browser eye Root/Bodies/Body2 at '
+expect-log '^Visibility Root/Bodies/Body2: hidden [(]during Fillet[)]$'
+wait-idle 60
+expect-no-log '^Fillet Edges: nothing|^Command Fillet (cancelled|finished)|Finish the command or the sketch first'
+expect-undo-depth ${before_fillet} 2
+mark
+button '^OK$'
+wait-log '^Added fillet on 4 edge[(]s[)]' 30
+wait-idle
+expect-undo-depth ${before_fillet} 3
+mark
+command edit.undo
+expect-log '^Undo: Add Fillet'
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: Hide Body2$'
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: Hide Body1$'
+wait-idle
+expect-undo-depth ${before_fillet} 0
+expect-never 'Recompute failed|TestDriver: FAIL'

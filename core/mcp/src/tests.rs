@@ -601,6 +601,9 @@ fn live_profile_requires_initialization_and_describes_application_ownership() {
     assert!(instructions.contains("make every sketch fully constrained and dimensioned"));
     assert!(instructions.contains("until the sketch query's dof is 0"));
     assert!(!instructions.contains("headless"));
+    // A new design beside the open ones (mitcad#1266); closing stays out.
+    assert!(instructions.contains("document_new makes an empty design beside the open ones"));
+    assert!(instructions.contains("File imports and closing are not available"));
     assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
     assert!(matches!(
         session.prepare(call("document_list", json!({}))).unwrap(),
@@ -638,7 +641,8 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             "ui_screenshot",
             "ui_select",
             "ui_command",
-            "ui_camera"
+            "ui_camera",
+            "document_new"
         ]
     );
     for tool in tools
@@ -845,6 +849,74 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
         assert!(matches!(
             session.prepare(call(name, arguments.clone())).unwrap(),
             PreparedMessage::Tool { name: tool, arguments: given } if tool == name && given == arguments
+        ));
+        session.finish(json!({}), false).unwrap();
+    }
+}
+
+#[test]
+fn live_document_new_takes_an_optional_name_and_folder() {
+    // A new design beside the open ones (mitcad#1266): the application
+    // checks the folder and the name.
+    let mut session = ready_live();
+    let response = live_response(
+        session
+            .prepare(request(json!(3), "tools/list", json!({})))
+            .unwrap(),
+    )
+    .unwrap();
+    let tools = response["result"]["tools"].as_array().unwrap();
+    let new = tools
+        .iter()
+        .find(|tool| tool["name"] == "document_new")
+        .unwrap();
+    assert_eq!(
+        new["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["document", "folder", "name"]
+    );
+    assert_eq!(new["inputSchema"]["required"], json!([]));
+    assert_eq!(new["annotations"]["destructiveHint"], false);
+    let description = new["description"].as_str().unwrap();
+    assert!(description.contains("New Design") && description.contains("never replaces"));
+    // ui_command's refusal of New Design points here.
+    let command = tools
+        .iter()
+        .find(|tool| tool["name"] == "ui_command")
+        .unwrap();
+    assert!(
+        command["description"]
+            .as_str()
+            .unwrap()
+            .contains("document_new")
+    );
+    for arguments in [
+        json!({"name": ""}),
+        json!({"folder": ""}),
+        json!({"path": "x.mitcad"}),
+        json!({"name": 7}),
+        json!({"name": "n".repeat(1025)}),
+    ] {
+        let response = live_response(
+            session
+                .prepare(call("document_new", arguments.clone()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{arguments}");
+    }
+    for arguments in [
+        json!({}),
+        json!({"name": "nipple"}),
+        json!({"name": "nipple", "folder": "parts", "document": "live-1"}),
+    ] {
+        assert!(matches!(
+            session.prepare(call("document_new", arguments.clone())).unwrap(),
+            PreparedMessage::Tool { name, arguments: given }
+                if name == "document_new" && given == arguments
         ));
         session.finish(json!({}), false).unwrap();
     }
@@ -2042,4 +2114,81 @@ fn resolve_comment_is_refused_unless_the_user_allows_agents_to_resolve() {
         .unwrap();
     assert_eq!(response["result"]["isError"], true);
     assert!(headless.backend.calls.is_empty());
+}
+
+#[test]
+fn ui_command_lists_the_commands_and_the_instructions_say_how_ids_are_found() {
+    // The chat agent guessed command ids and sketch ids (mitcad#1269): the
+    // live catalog lists the commands with ui_command's search, and both
+    // servers' instructions say how sketch ids are given out.
+    let mut session = LiveSession::new();
+    let response = live_response(session.prepare(initialize()).unwrap()).unwrap();
+    let instructions = response["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("ui_command with search"));
+    assert!(instructions.contains("an unknown id is refused with the nearest ones"));
+    assert!(instructions.contains("points, curves and texts share one numbering"));
+    assert!(instructions.contains("A point input [x, y] is always a new point"));
+    assert!(!instructions.contains("app/COMMANDS.md"));
+    assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
+    let response = live_response(
+        session
+            .prepare(request(json!(3), "tools/list", json!({})))
+            .unwrap(),
+    )
+    .unwrap();
+    let tools = response["result"]["tools"].as_array().unwrap();
+    let command = tools
+        .iter()
+        .find(|tool| tool["name"] == "ui_command")
+        .unwrap();
+    let properties = &command["inputSchema"]["properties"];
+    assert_eq!(properties["search"]["type"], "string");
+    let search = properties["search"]["description"].as_str().unwrap();
+    assert!(search.contains("whether an agent may run it"));
+    assert!(search.contains("\"\" lists all"));
+    assert!(
+        properties["id"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("search lists them")
+    );
+    // The application lists them.
+    for arguments in [
+        json!({"document": "live-1", "search": ""}),
+        json!({"document": "live-1", "search": "fillet edge"}),
+        json!({"document": "live-1"}),
+    ] {
+        assert!(matches!(
+            session.prepare(call("ui_command", arguments.clone())).unwrap(),
+            PreparedMessage::Tool { name, arguments: given }
+                if name == "ui_command" && given == arguments
+        ));
+        session.finish(json!({"commands": []}), false).unwrap();
+    }
+    // A listing runs nothing.
+    for arguments in [
+        json!({"document": "live-1", "search": "new", "id": "file.new_design"}),
+        json!({"document": "live-1", "search": "", "edit": "F1"}),
+        json!({"document": "live-1", "search": "x", "inputs": {}}),
+        json!({"document": "live-1", "search": 3}),
+        json!({"document": "live-1", "search": "n".repeat(1025)}),
+    ] {
+        let response = live_response(
+            session
+                .prepare(call("ui_command", arguments.clone()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{arguments}");
+    }
+    // The headless server's instructions say how sketch ids are given out,
+    // without the application's commands.
+    let mut headless = Session::new(MockBackend::default());
+    let response = headless.handle(initialize()).unwrap();
+    let instructions = response["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("points, curves and texts share one numbering"));
+    assert!(instructions.contains(
+        "do not guess the ids a command earlier in the same model_command array will make"
+    ));
+    assert!(!instructions.contains("ui_command"));
 }

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# The rolled-back features evaluated in the background (mitcad#1267) on
+# background-evaluation.json: the marker after Sketch2, Fillet1 and Fillet2
+# rolled back. Each background evaluation is made 4 s longer per feature
+# (MITCAD_TEST_RECOMPUTE_DELAY_MS="background evaluation=4000"), so that a
+# command can start while one runs.
+#   1. A join added before the marker: at the idle point after it the
+#      background evaluates the rolled-back fillets anew and the document
+#      adopts them; the marker dragged to the end then evaluates nothing.
+#   2. Another join before the marker; while its background evaluation
+#      runs, editing Extrude1 cancels it at once (its line names what
+#      cancelled it, logged before the edit's preview job starts), and the
+#      edit's preview builds.
+# Run by tools/ui-background-evaluation-test.sh (Linux) and
+# tools/ui-windows-background-evaluation-test.ps1 (Windows).
+wait-idle
+# The open's idle point: the fillets have no results yet.
+wait-log '^Background evaluation: [0-9]+ features in [0-9]+ ms, adopted [0-9]+$' 60
+
+# 1. A join before the marker, evaluated in the background.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1}"}],"extent":{"type":"distance","distance":15},"operation":"join","participants":["F2.b0"]}}'
+wait-log '^Background evaluation started: 2 features after the marker$'
+wait-log '^Background evaluation: [1-9][0-9]* features in [0-9]+ ms, adopted [1-9][0-9]*$' 60
+mark
+drag-logged '^Timeline marker at ' '^Timeline Fillet2 at ' 30
+wait-log '^Marker at 6 of 6$'
+wait-log '^Recomputed 0 feature\(s\) in '
+expect-no-log '^Recomputed [1-9][0-9]* feature'
+
+# 2. A command started while a background evaluation runs.
+mark
+context-menu-logged '^Timeline Extrude2 at ' 'Roll Timeline Marker Here'
+wait-log '^Marker at 4 of 6$'
+# The fillets' results are cached: nothing to evaluate.
+wait-log '^Background evaluation: 0 features in [0-9]+ ms, adopted 0$' 60
+mark
+model-command '{"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1}"}],"extent":{"type":"distance","distance":12},"operation":"join","participants":["F2.b0"]}}'
+wait-log '^Background evaluation started: 2 features after the marker$'
+dblclick-logged '^Timeline Extrude1 at '
+expect-log 'Editing F2 with Extrude'
+# Cancelled as the edit opened (or at the latest as its first job started),
+# before any job of the edit's.
+wait-log '^Background evaluation cancelled by (a command|job [^ ]+) after [0-9]+ ms: [0-9]+ features, adopted [0-9]+$' 30
+type 20
+wait-log '^Preview Extrude: ok' 30
+expect-no-log '^Background evaluation: '
+key Escape
+wait-idle
+expect-never 'TestDriver: FAIL'

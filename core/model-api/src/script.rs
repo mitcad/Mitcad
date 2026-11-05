@@ -9,8 +9,9 @@
 //! - `"bodies": n`: the number of bodies at the timeline marker;
 //! - `"body": "Body1"` (a name or uid) with any of `"volume"`, `"area"`
 //!   (relative `"tolerance"`, default 1e-6), `"faces"`, `"edges"` (counts),
-//!   `"has_face"`, `"has_edge"` and `"no_edge"` (topological names), and
-//!   `"min"`, `"max"` (bounding box corners, the same tolerance);
+//!   `"has_face"`, `"has_edge"` and `"no_edge"` (topological names),
+//!   `"min"`, `"max"` (bounding box corners, the same tolerance) and
+//!   `"max_triangles"` (the most triangles its mesh at 0.1 mm may have);
 //! - `"feature": "Fillet1"` (a name or uid) with `"status"` (`ok`,
 //!   `warning`, `error`, `suppressed`, `rolled_back`) and `"error_contains"`
 //!   (the error, or the warnings of a feature that succeeded with them);
@@ -79,6 +80,8 @@ struct Expectation {
     world_volume: Option<f64>,
     // Thread end chamfers (mitcad#304): no sliver faces.
     min_face_area: Option<f64>,
+    // Envelopes (mitcad#1271): light bodies.
+    max_triangles: Option<usize>,
 }
 
 /// A body's bounding box.
@@ -301,6 +304,24 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
                     return fail(format!(
                         "every face of {wanted} to have an area of {least} or more, got {} for {:?}",
                         small.area, small.names
+                    ));
+                }
+            }
+            if let Some(most) = expect.max_triangles {
+                let tolerance = mitcad_model::exchange::MeshTolerance {
+                    deviation: 0.1,
+                    angle: 0.5,
+                    face_triangles: 0,
+                    max_edge: 0.0,
+                };
+                let count = kernel
+                    .triangle_mesh(body.shape, &tolerance)
+                    .map_err(error)?
+                    .triangles
+                    .len();
+                if count > most {
+                    return fail(format!(
+                        "{wanted} to have at most {most} triangles, got {count}"
                     ));
                 }
             }

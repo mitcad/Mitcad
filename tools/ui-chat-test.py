@@ -23,6 +23,10 @@ discovery and chat folders:
             calls grouped as before, and the agent resumes its session
   docked    the Docked layout: installed and signed in, the model chosen
             (Sonnet, given as --model), one message, one undo step
+  new-design  a design from a design (mitcad#1266): the agent reads the
+            open design, makes nipple.mitcad beside it with document_new
+            (no card, no dialog), builds in it without a handle and reads
+            the first design again, which is unchanged
   codex     Claude Code and Codex installed: the switcher shows both,
             Codex chosen starts a new conversation in it and is kept as the
             last used one; through Codex's app server a message adds two
@@ -100,7 +104,7 @@ def run(app, name, work, out, chrome, script, extra_args=(), on_log=None, timeou
         env[variable] = str(work / variable.lower())
     env.update(MITCAD_TEST_ASSISTANT_EXECUTABLES=str(work / "clients"), MITCAD_ASSISTANT_TEST_WORK=str(work),
                MITCAD_TEST_CHAT_SAVE_PATH=str(work / "designs" / "chat design.mitcad"),
-               MITCAD_TEST_LOG_URLS="1", MITCAD_RESULT_STORE="off", MITCAD_NO_UPDATE_CHECK="1",
+               MITCAD_TEST_LOG_URLS="1", MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1",
                QT_FORCE_STDERR_LOGGING="1", MITCAD_LOG_VOLUMES="1")
     source = work / (name + ".mitcad-ui")
     source.write_text("\n".join(script) + "\n", encoding="utf-8")
@@ -486,6 +490,48 @@ def main():
         argv = lines(work / "chat-starts.jsonl")[-1]["argv"]
         if "--model" not in argv or argv[argv.index("--model") + 1] != "sonnet":
             raise RuntimeError("the chosen model did not go to Claude Code as --model")
+
+    # A design from a design (mitcad#1266): the agent reads the open design,
+    # makes a new one beside it with document_new and builds in it, with no
+    # hand of the user's (no card, no dialog).
+    with tempfile.TemporaryDirectory(prefix="chat-new-design-", dir=out) as temporary:
+        work = Path(temporary)
+        (work / "designs").mkdir()
+        install_stub(stub, work / "clients")
+        (work / "claude-signed-in").write_text("", encoding="utf-8")
+        block = {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 30,
+                                               "width": 20, "height": 10, "operation": "new_body"}}
+        new_design = [
+            "wait-idle",
+            "model-command '" + json.dumps(block) + "'",
+            "wait-idle",
+            "expect-model-bodies 1 6000",
+            "capture-document-window first",
+            "command view.chat",
+            "wait-log 'Chat panel: ready' 60",
+            *send("make a new design from this one"),
+            "button '^Continue$' chatContinue",
+            "wait-log 'MCP: an agent made a new design .*nipple\\.mitcad' 60",
+            "wait-log 'Chat: turn ended \\(success\\)' 120",
+            "expect-no-log 'Chat: approval asked'",
+            "expect-document-windows 2",
+            # The new design is the active one, with only the agent's box.
+            "capture-document-window second",
+            "expect-model-bodies 1 1000",
+            "screenshot '" + str(out / "chat-new-design.png") + "'",
+            # The design the chat started in is as it was.
+            "focus-document-window first",
+            "expect-model-bodies 1 6000",
+        ]
+        run(app, "new-design", work, out, "floating", new_design)
+        record = lines(work / "chat-new-design.jsonl")
+        if len(record) != 1 or not record[0]["ok"]:
+            raise RuntimeError("the agent's design from a design failed: " + repr(record))
+        made = work / "designs" / "nipple.mitcad"
+        if not made.is_file() or Path(record[0]["path"]).resolve() != made.resolve():
+            raise RuntimeError("document_new did not make designs/nipple.mitcad: " + repr(record))
+        if record[0]["built_in"] != record[0]["design"] or record[0]["own_bodies_after"] != 1:
+            raise RuntimeError("the agent's box went to the design it came from: " + repr(record))
 
     with tempfile.TemporaryDirectory(prefix="chat-codex-", dir=out) as temporary:
         work = Path(temporary)

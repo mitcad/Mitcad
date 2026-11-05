@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -31,6 +32,7 @@
 
 #include "../framework/CommandSession.hpp"
 #include "../framework/NoticeLevel.hpp"
+#include "../framework/ValueStep.hpp"
 #include "AutoConstraint.hpp"
 #include "SketchModel.hpp"
 #include "SketchSnap.hpp"
@@ -92,9 +94,21 @@ class SketchTool;
 // A value typed in the view while drawing (heads-up input).
 struct FieldSpec {
   enum class Kind { Length, Angle, Count, Text };
+  FieldSpec() = default;
+  // A constructor, not an aggregate: the tools' brace lists leave the step
+  // minimum out without a missing-initializer warning.
+  FieldSpec(QString fieldId, QString fieldLabel, Kind fieldKind = Kind::Length,
+            double minimum = -std::numeric_limits<double>::infinity(), bool aboveMinimum = false)
+      : id(std::move(fieldId)), label(std::move(fieldLabel)), kind(fieldKind), stepMinimum(minimum),
+        stepAboveMinimum(aboveMinimum) {}
   QString id;
   QString label;
   Kind kind = Kind::Length;
+  // The smallest value Up, Down and the wheel step it to (mitcad#1254,
+  // framework/ValueStep.hpp), in mm (a length): above it with
+  // stepAboveMinimum (a circle's diameter above 0).
+  double stepMinimum = -std::numeric_limits<double>::infinity();
+  bool stepAboveMinimum = false;
 };
 
 // Entities that a picking tool or a drag accepts.
@@ -406,10 +420,11 @@ public:
   QRectF fieldRect(const QString& id) const;
   // Shows what the cursor gives, while nothing is typed.
   void setLive(const QString& id, double value);
-  // A value editor at a view position (a dimension's value).
+  // A value editor at a view position (a dimension's value); Up, Down and
+  // the wheel step its value down to `stepLimit` (mitcad#1254).
   void openValueEditor(const QPointF& at, const QString& text, FieldSpec::Kind kind,
                        std::function<void(const QString&)> accept,
-                       const QString& name = QString());
+                       const QString& name = QString(), const ValueStepLimit& stepLimit = {});
   // Inserts a parameter's name at the open value editor's cursor.
   void insertIntoEditor(const QString& name);
   bool valueEditorOpen() const { return m_editor != nullptr; }

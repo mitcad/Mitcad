@@ -2524,3 +2524,39 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/camera_turn.cpp view/CameraTurn.hpp)
   target_link_libraries(test_app PRIVATE TKService)
 endif()
+
+# Up and Down and the mouse wheel step a value field's number (mitcad#1254,
+# app/COMMANDS.md "Stepping a value"): the command panel's value fields and
+# the sketch's value fields, through framework/ParameterField.cpp.
+target_sources(mitcad PRIVATE framework/ValueStep.cpp framework/ValueStep.hpp)
+if(BUILD_TESTING)
+  # The step in the unit shown, the modifiers, the minimum, the texts left
+  # alone: plain Qt Core. ParameterField.cpp in test_app calls it.
+  target_sources(test_app PRIVATE tests/value_step.cpp framework/ValueStep.cpp framework/ValueStep.hpp)
+endif()
+
+# The Start tab (mitcad#1258, GitHub mitcad/Mitcad#125, app/COMMANDS.md "The
+# Start tab"): the ribbon's START tab shows the Start page over the 3D view:
+# quick actions, the recent designs with the previews a save writes, their
+# pins and search, the resources, Show start page at launch.
+target_sources(mitcad PRIVATE MainWindowStart.cpp files/RecentDesigns.cpp files/RecentDesigns.hpp
+               files/StartPage.cpp files/StartPage.hpp)
+if(BUILD_TESTING)
+  # The list, its times, pins and filters, a missing file, the previews'
+  # places: plain Qt Core.
+  target_sources(test_app PRIVATE tests/recent_designs.cpp files/RecentDesigns.cpp files/RecentDesigns.hpp)
+endif()
+
+# ui_command's listing of the commands an agent may run and the nearest ids
+# to an unknown one (mitcad#1269, docs/mcp.md): the command registry as
+# live MCP shows it.
+target_sources(mitcad PRIVATE mcp/UiCommandList.cpp mcp/UiCommandList.hpp)
+if(BUILD_TESTING)
+  # The words, the nearest ids, the refusals of dialogs: plain Qt Core and
+  # the registry (in test_app for command_alias.cpp).
+  target_sources(test_app PRIVATE tests/ui_command_list.cpp mcp/UiCommandList.cpp mcp/UiCommandList.hpp)
+endif()
+
+# Envelope's panel in the SOLID tab's CREATE menu (mitcad#1276): a light
+# outer skin of a component, an occurrence or bodies.
+target_sources(mitcad PRIVATE commands/EnvelopeCommands.cpp)

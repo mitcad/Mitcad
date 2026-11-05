@@ -115,7 +115,13 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Dogbones: the relief cylinders at a body's inside corners (mitcad#1011).
   kernel/dogbone.rs
   # Topology counts for Physical Properties (mitcad#1095).
-  kernel/topology.rs)
+  kernel/topology.rs
+  # Outlines of faces seen along a direction: Project of a curved face (mitcad#1265).
+  kernel/face_outline.rs
+  # The assembly structure of STEP files (mitcad#1274).
+  kernel/file_structure.rs
+  # Repeated parts: bodies equal up to a rigid motion (mitcad#1277).
+  kernel/repeated_parts.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -285,6 +291,18 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/topology.cpp
   cpp/bridge/topology.hpp)
+# Outlines of faces seen along a direction: Project of a curved face (mitcad#1265).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/face_outline.cpp
+  cpp/bridge/face_outline.hpp)
+# The assembly structure of STEP files (mitcad#1274).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/file_structure.cpp
+  cpp/bridge/file_structure.hpp)
+# Repeated parts: bodies equal up to a rigid motion (mitcad#1277).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/repeated_parts.cpp
+  cpp/bridge/repeated_parts.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.

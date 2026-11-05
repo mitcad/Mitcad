@@ -16,6 +16,8 @@
 #include <vector>
 
 #include <BOPAlgo_Alerts.hxx>
+#include <Message_Alert.hxx>
+#include <Message_Report.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
@@ -52,11 +54,13 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_XYZ.hxx>
 
+#include "face_join.hpp"
 #include "far_features.hpp"
 #include "history.hpp"
 #include "mitcad/analysis/common.hpp"
 #include "mitcad/geometry/contact.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "union_groups.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -629,11 +633,13 @@ std::unique_ptr<BRepAlgoAPI_BooleanOperation> make_operation(BooleanOp op) {
 // non-destructive boolean asks for) gives the edges of the faces it merges
 // p-curves on the merged face's surface in place (T0e, input_check.hpp).
 // `seen` (if given) gets the copies of the targets, whose faces the result
-// shares where it kept them.
+// shares where it kept them. `unused` (if given) tells whether OCCT warned
+// that it left pieces of the result unused (detail::leaves_pieces_unused).
 detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const Shape*, int>>& targets,
                                 const Shape& tool, int tool_tag, bool simplify = true,
                                 std::vector<TopoDS_Shape>* seen = nullptr, bool reduce = true,
-                                bool* split = nullptr, double fuzzy = 0.0, bool* lost = nullptr) {
+                                bool* split = nullptr, double fuzzy = 0.0, bool* lost = nullptr,
+                                bool* unused = nullptr) {
   PhaseTrace trace(std::string(operation_name(op)));
   if (tracing()) {
     std::string faces;
@@ -689,6 +695,15 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
   trace.mark("bop");
   if (!operation->IsDone() || operation->HasErrors()) {
     throw std::runtime_error("the boolean operation failed");
+  }
+  if (unused != nullptr) {
+    *unused = false;
+    for (const occ::handle<Message_Alert>& alert : operation->GetReport()->GetAlerts(Message_Warning)) {
+      *unused = *unused || detail::leaves_pieces_unused(alert);
+    }
+    if (*unused) {
+      trace.note("pieces left unused");
+    }
   }
   // Faces the solids of the result could not be built with (a face split
   // wrongly where curves meet tangentially, edges a few micrometres apart
@@ -798,7 +813,7 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
     // corpus design: its merged faces made a shell that cannot be
     // oriented); then the result keeps the faces as the operation left
     // them.
-    return run_operation(op, targets, tool, tool_tag, false, seen, reduce, split, fuzzy, lost);
+    return run_operation(op, targets, tool, tool_tag, false, seen, reduce, split, fuzzy, lost, unused);
   }
   if (!simplify && !untouched) {
     detail::require_valid_where_changed(namer.result(), kept, "the boolean operation", &report);
@@ -1131,21 +1146,24 @@ ShapePtr reseamed(const Shape& target) {
   }
 }
 
-// The fuzzy values a join tries up to `reach` (at least kNearContact),
-// smallest first: kNearContact, then 3 and 10 times each power of ten above
-// it below `reach`, then `reach` (mitcad#298). The smallest that works
-// moves the least geometry.
-std::vector<double> fuzzy_steps(double reach) {
+// The fuzzy values a boolean tries from `start` up to `reach` (at least
+// `start`), smallest first: `start`, then 3 and 10 times each power of ten
+// above it below `reach`, then `reach` (mitcad#298). The smallest that
+// works moves the least geometry. A join's start from kNearContact
+// (fuzzy_steps).
+std::vector<double> fuzzy_steps_from(double start, double reach) {
   std::vector<double> steps;
-  for (double decade = kNearContact; decade < reach; decade *= 10.0) {
+  for (double decade = start; decade < reach; decade *= 10.0) {
     steps.push_back(decade);
     if (3.0 * decade < reach) {
       steps.push_back(3.0 * decade);
     }
   }
-  steps.push_back(std::max(reach, kNearContact));
+  steps.push_back(std::max(reach, start));
   return steps;
 }
+
+std::vector<double> fuzzy_steps(double reach) { return fuzzy_steps_from(kNearContact, reach); }
 
 // The edges of a shape shorter than kNearContact between two vertices of
 // their own: what a join leaves where it keeps two vertices of its operands
@@ -1237,8 +1255,12 @@ std::vector<detail::FaceNamer::Piece> cut_within(const Shape& target, int tag, c
 // The contacts of a new Extrude's tool (contact.cpp, mitcad#289).
 bool detail::shapes_touch(const Shape& a, const Shape& b) { return touches(a, b); }
 
-BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, const Shape& tool,
-                      double within) {
+namespace {
+
+// The operation's pieces as OCCT's merge after it leaves them (boolean
+// below joins what that leaves of faces on one surface).
+BooleanResult merged_boolean(BooleanOp op, const std::vector<const Shape*>& targets, const Shape& tool,
+                             double within) {
   for (const Shape* target : targets) {
     detail::require_surfaces(target->occt(), operation_name(op));
   }
@@ -1521,10 +1543,16 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
         std::vector<TopoDS_Shape> copies;
         std::vector<detail::FaceNamer::Piece> solids =
             run_operation(op, joined, tool, tool_tag, true, &copies).pieces();
-        if (lost_volume(solids, joined, copies)) {
+        // A join of targets the tool touches that gives no solid at all is
+        // wrong as one that lost volume is (mitcad#1273: a nut inside a
+        // threaded carriage, micrometres from the thread's vertices).
+        if (solids.empty() || lost_volume(solids, joined, copies)) {
           if (std::optional<std::vector<detail::FaceNamer::Piece>> fuzzy = without_volume_loss(joined)) {
             solids = std::move(*fuzzy);
           }
+        }
+        if (solids.empty()) {
+          throw std::runtime_error("the join gave an empty result");
         }
         result.pieces = to_pieces(solids);
         return result;
@@ -1675,7 +1703,39 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
       if (op == BooleanOp::Cut && within > 0.0) {
         solids = cut_within(*targets[i], static_cast<int>(i), tool, tool_tag, within, seen, trace);
       } else {
-        solids = run_operation(op, {{targets[i], static_cast<int>(i)}}, tool, tool_tag, true, &seen).pieces();
+        bool unused = false;
+        solids = run_operation(op, {{targets[i], static_cast<int>(i)}}, tool, tool_tag, true, &seen, true, nullptr,
+                               0.0, nullptr, &unused)
+                     .pieces();
+        // (mitcad#1278) An operation OCCT left pieces of unused is wrong
+        // whatever the tolerance, as a join is (pattern.cpp's union): two
+        // copies of a plate whose side walls lie 1e-4 mm apart, one cut by
+        // the other, came out whole and as nothing, and their intersection
+        // empty. It is made again with the smallest fuzzy value from
+        // kUnusedStart up to kUnusedReach (or the caller's tolerance) that
+        // leaves nothing unused; where none does, the exact one stands.
+        if (unused) {
+          for (const double step : fuzzy_steps_from(detail::kUnusedStart, std::max(within, detail::kUnusedReach))) {
+            std::vector<TopoDS_Shape> fuzzy_seen;
+            std::vector<detail::FaceNamer::Piece> fuzzy_solids;
+            bool fuzzy_unused = false;
+            try {
+              fuzzy_solids = run_operation(op, {{targets[i], static_cast<int>(i)}}, tool, tool_tag, true,
+                                           &fuzzy_seen, false, nullptr, step, nullptr, &fuzzy_unused)
+                                 .pieces();
+            } catch (const Cancelled&) {
+              throw;
+            } catch (...) {
+              continue;
+            }
+            if (!fuzzy_unused) {
+              trace.note("unused pieces fuzzy=" + std::to_string(step));
+              solids = std::move(fuzzy_solids);
+              seen = std::move(fuzzy_seen);
+              break;
+            }
+          }
+        }
       }
       // A single piece of the same volume is the target unchanged (a tool
       // touching a face shares the face but removes nothing); no piece at
@@ -1714,6 +1774,25 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
       for (const detail::FaceNamer::Piece& piece : solids) {
         result.pieces.push_back({piece.shape, {i}});
       }
+    }
+    return result;
+  });
+}
+
+} // namespace
+
+BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, const Shape& tool,
+                      double within) {
+  BooleanResult result = merged_boolean(op, targets, tool, within);
+  // OCCT's merge after the operation is exact without a fuzzy value: the
+  // faces of one surface whose pieces lie a few 1e-7 mm apart (the arcs of
+  // a solved sketch's circle, a cut's wall going on from a rim) it leaves
+  // apart, as it does all the faces where its merge broke the result
+  // (run_operation). They are joined here, keeping all their names
+  // (mitcad#1261).
+  return detail::run(operation_name(op), [&] {
+    for (BooleanPiece& piece : result.pieces) {
+      piece.shape = detail::join_same_surfaces(piece.shape);
     }
     return result;
   });

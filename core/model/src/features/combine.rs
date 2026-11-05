@@ -279,12 +279,24 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
         let kernel = ctx.kernel;
         let error = |e: crate::kernel::KernelError| e.to_string();
         let mut changes = Vec::new();
+        // Whether the bodies hold material: an empty result of bodies that
+        // do is broken, and storing it would replace the target with
+        // nothing and remove the tools (mitcad#1273). A cut's or an
+        // intersection's pieces are of the target (a sheet's are sheets).
+        let target_material = has_solids(kernel, std::iter::once(&target));
+        let material = target_material || has_solids(kernel, tools.iter());
+        let count = tools.len() + 1;
         match self.operation {
             CombineOperation::Join => {
                 let mut all = vec![&target];
                 all.extend(tools.iter());
                 // (Within the document's join tolerance, mitcad#397.)
                 let joined = ctx.unite(&all).map_err(error)?;
+                if material {
+                    require_solid(kernel, &joined, || {
+                        format!("the join of {count} bodies gave an empty result")
+                    })?;
+                }
                 changes.push(BodyChange::Set(self.target, joined));
             }
             CombineOperation::Cut | CombineOperation::Intersect => {
@@ -292,7 +304,21 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
                 let tool = if tools.len() == 1 {
                     tools[0].clone()
                 } else {
-                    kernel.unite(&refs).map_err(error)?
+                    let united = kernel.unite(&refs).map_err(error)?;
+                    if has_solids(kernel, tools.iter()) {
+                        require_solid(kernel, &united, || {
+                            format!(
+                                "the union of the {} tool bodies gave an empty result",
+                                tools.len()
+                            )
+                        })?;
+                    }
+                    united
+                };
+                let verb = if self.operation == CombineOperation::Cut {
+                    "cut"
+                } else {
+                    "intersection"
                 };
                 let op = if self.operation == CombineOperation::Cut {
                     BooleanOp::Cut
@@ -301,6 +327,15 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
                 };
                 let result = kernel.boolean(op, &[&target], &tool).map_err(error)?;
                 let pieces: Vec<K::Shape> = result.pieces.into_iter().map(|p| p.shape).collect();
+                // A piece without material is broken; no piece at all is a
+                // target the tools cover (a cut) or miss (an intersection).
+                if target_material {
+                    for piece in &pieces {
+                        require_solid(kernel, piece, || {
+                            format!("the {verb} of {count} bodies gave an empty result")
+                        })?;
+                    }
+                }
                 if op == BooleanOp::Intersect {
                     if !result.touched[0] || pieces.is_empty() {
                         return Err("the target and the tool bodies do not intersect".to_owned());
@@ -311,6 +346,11 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
                         let refs: Vec<&K::Shape> = pieces.iter().collect();
                         kernel.unite(&refs).map_err(error)?
                     };
+                    if target_material {
+                        require_solid(kernel, &common, || {
+                            format!("the {verb} of {count} bodies gave an empty result")
+                        })?;
+                    }
                     changes.push(BodyChange::Set(self.target, common));
                 } else if result.touched[0] {
                     // Needles a cut leaves are lumps of the first piece.
@@ -341,6 +381,32 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
             changes,
             ..FeatureOutput::default()
         })
+    }
+}
+
+/// Whether any of the shapes holds a solid, or may (a kernel that cannot
+/// count solids).
+fn has_solids<'a, K: Kernel>(kernel: &K, shapes: impl IntoIterator<Item = &'a K::Shape>) -> bool
+where
+    K::Shape: 'a,
+{
+    shapes
+        .into_iter()
+        .any(|shape| !matches!(kernel.solid_count(shape), Ok(0)))
+}
+
+/// Fails a result of bodies with material that holds no solid (mitcad#1273:
+/// a union that came out empty was stored as the target's shape, and the
+/// tools it consumed were removed, so the model vanished without an error).
+/// A kernel that cannot count solids lets the result pass.
+fn require_solid<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    message: impl FnOnce() -> String,
+) -> Result<(), String> {
+    match kernel.solid_count(shape) {
+        Ok(0) => Err(message()),
+        _ => Ok(()),
     }
 }
 

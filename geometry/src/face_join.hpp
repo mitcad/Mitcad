@@ -46,4 +46,30 @@ ShapePtr split_joined_pieces(const Shape& result, const Shape& body, const std::
 // the same frame and radius, a B-spline of the same poles and knots).
 bool same_surface(const occ::handle<Geom_Surface>& a, const occ::handle<Geom_Surface>& b);
 
+// How far apart two faces' surfaces may lie and still be one surface
+// (join_same_surfaces): their parameters within 1e-6 mm, their axes and
+// normals within 1e-9 rad.
+inline constexpr double kOneSurface = 1.0e-6;
+inline constexpr double kOneSurfaceAngle = 1.0e-9;
+
+// `body` with the faces that lie on one plane, cylinder, cone, sphere or
+// torus (within kOneSurface and kOneSurfaceAngle, whatever their surfaces'
+// frames: coplanar planes, coaxial cylinders of one radius, ...), facing
+// the same way, and meet along an edge joined into one face that holds all
+// their names, the edges between them gone (mitcad#1261): a cut's wall
+// from the arcs of one sketch circle, its pieces' surfaces a few 1e-7 mm
+// apart as a solved sketch leaves them, which OCCT's merge after a boolean
+// (exact without a fuzzy value) leaves apart, and the rim it goes on from.
+// OCCT's face merge (ShapeUpgrade_UnifySameDomain) joins them, on a copy
+// of the body and only across the edges between such faces, with that
+// tolerance, each piece first put on its group's first piece's surface. A
+// face closed round its axis whose seam is in pieces (pieces joined with
+// their seams at other angles) is made anew with one seam. The faces of a
+// group whose joined faces would not be valid stay apart, each such group
+// named in an info of the result (its reason); a group that would make a
+// face winding round its axis more than once (a thread's turns) stays
+// apart. `body` itself where nothing changes. B-spline pieces (a thread's
+// flanks) are join_surface_pieces' and are left as they are.
+ShapePtr join_same_surfaces(const ShapePtr& body);
+
 } // namespace mitcad::geometry::detail

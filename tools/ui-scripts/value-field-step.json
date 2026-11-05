@@ -1,0 +1,13 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Stepping value fields with Up, Down and the wheel (mitcad#1254), tools/ui-value-field-step-test.sh: a 10 mm cube with its corner at (20, 20, 0) (sketch F1, its body F2.b0) and a second sketch (F3) on the xy plane with a 10 x 10 rectangle at (-40, -40), not extruded, for the test's Extrude."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[20,20],"width":10,"height":10},
+  {"cmd":"add_feature","def":{"type":"extrude",
+    "profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":10},"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F3","corner":[-40,-40],"width":10,"height":10},
+  {"expect":{"feature":"F2","status":"ok"}},
+  {"expect":{"feature":"F3","status":"ok"}}
+]

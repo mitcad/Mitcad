@@ -249,6 +249,16 @@ design in a project.
   cache's budget, and the workers are stopped (and waited for) before the
   cache drops results for its budget, since the cache keeps what a worker
   still holds.
+- **Rolled-back features evaluated beside the document** (mitcad#1267,
+  `core/model/src/document/rolled_back.rs`): `Document::rolled_back_run`
+  forks the document with the marker at the end, `RolledBackRun::run`
+  recomputes the fork (on another thread; its monitor cancels it), and
+  `Document::adopt_rolled_back` takes the results it evaluated into the
+  cache when the document's definition is still the run's (the marker
+  aside), the nearest the marker first and within the budget beside what
+  the document's results hold (`Cache::adopt_new`, `Cache::held_bytes`);
+  the next marker move then evaluates nothing. The application runs it
+  at its idle points (*Background evaluation* under Application).
 - **Memory:** an allocation that fails ends the process (Rust's cannot be
   caught; OCCT's `Standard_OutOfMemory` and `std::bad_alloc` inside a
   kernel operation become its error "<operation>: out of memory",
@@ -964,6 +974,27 @@ design in a project.
   lengths), so the feature still cuts once and joins once
   ([commands.md](../core/model-api/src/commands.md), "Mortise and
   Tenon").
+- **Envelope** (mitcad#1271, `core/model/src/features/envelope.rs`,
+  `features/envelope/wrap.rs`, `document/envelope.rs`): no kernel method
+  of its own. The kernel tessellates the source (`Kernel::triangle_mesh`);
+  the wrap is plain Rust on a voxel grid of half the detail size (mark,
+  close by one cell with the outside flood-filled between, make
+  well-composed, take the surface in runs of flat faces), so it is tested
+  without OCCT; Convert Mesh's `faceted_solid` merges the surface into
+  planar faces and `Kernel::boundary_body` builds the solid. The same
+  `build` serves a linked component shown by its envelope
+  (`Document::set_link_envelope`): its base feature then holds the one
+  envelope body instead of the design's bodies, and the link records the
+  detail size (`ExternalLink::envelope`), which `update_links` uses
+  ([commands.md](../core/model-api/src/commands.md), "Envelope").
+  Each occurrence chooses (mitcad#1276): one shown otherwise than its
+  component goes into another component linking the same file (made for
+  it when none is shown so), so a component holds either the design's
+  bodies or one envelope and the renderer needs nothing of its own. Joint
+  origins on the design's faces resolve in the component that shows it in
+  full, or, when the component itself is switched, from the frames they
+  had in full (`ExternalLink::frames`, `joints::envelope_side`). Both
+  `link` fields make a build before them refuse the design file.
 
 ### Units
 
@@ -1026,6 +1057,33 @@ the `Shape` type.
   triangulation in its faces).
 - Boolean results get coplanar faces and collinear edges merged, unless
   the merge breaks a result OCCT's checker accepted.
+- Faces on one surface (mitcad#1261, `join_same_surfaces` in
+  `geometry/src/face_join.hpp`): OCCT's merge after a boolean takes its
+  linear tolerance from the fuzzy value, none for an exact operation, so
+  pieces of one plane, cylinder, cone, sphere or torus whose surfaces lie
+  more than a few 1e-8 mm apart stay separate faces with an edge between
+  them (the arcs of a solved sketch's circle as a cut's wall, the wall
+  going on from a rim), as do all faces where the merge broke the result.
+  After Join, Cut and Intersect, fillets, chamfers and extrusions of
+  several profiles, faces whose surfaces agree within 1e-6 mm and 1e-9 rad
+  (whatever their frames), that face the same way and meet along an edge
+  are joined: OCCT's merge with that tolerance, on a copy of the body,
+  allowed to remove only the edges between them and to join only the edges
+  along them. Before it, each piece of a cylinder, cone, sphere or torus is
+  put on its group's first piece's surface (its edges' curves moved by the
+  map between the two surfaces' parameters, u' = ±u + b, v' = ±v + d, the
+  periods taken from an edge they share): OCCT's own move of curves onto
+  another frame's surface is right only for cylinders (a torus or cone
+  whose axis points the other way stayed apart). A face closed round its
+  axis whose seam is in pieces at several angles (pieces joined with their
+  seams apart, OCCT's merge included, which leaves the rim between two
+  seams as an edge) is made anew with one seam by OCCT's shape healing.
+  The joined face holds all its pieces' names, so a reference to any of
+  them finds it. A group whose joined faces would not be valid stays
+  apart, with an info of the result naming it; a group that would make a
+  face winding round its axis more than once (the turns of a thread's
+  root, a face each) stays apart without one. B-spline pieces (a thread's
+  flanks) are `join_surface_pieces`' and are not joined here.
 - Local booleans (`geometry/src/local_boolean.hpp`, modelled threads):
   OCCT's booleans rebuild the whole shell of a solid whose faces they
   split, and its checker visits every face, both quadratic in the faces.
@@ -1105,6 +1163,75 @@ the `Shape` type.
   without the merge, keeping every piece. The `interference` query's
   booleans of pairs of bodies run on all cores, as the model's do (such a
   slab against the stringer took 2 s on one).
+- A union of several bodies (mitcad#1273, `geometry/src/union_groups.cpp`)
+  first groups them by their boxes: bodies whose boxes meet, directly or
+  through others, are one group (a union within a tolerance widens the
+  boxes by it). Each group of several is united on its own, the groups
+  beside each other on OCCT's threads, and the groups' results, which
+  share nothing, are put together as one compound without a boolean
+  operation; a union of bodies all apart is a compound at once, as
+  before. A union that lost material of its bodies (no solid where they
+  have some, or, where OCCT warned, less volume than the largest of them)
+  or whose pieces OCCT left unused (`BOPAlgo_AlertFaceBuilderUnusedEdges`,
+  `BOPAlgo_AlertSolidBuilderUnusedFaces`), or where sub-shapes of one body
+  came to meet (`BOPAlgo_AlertAcquiredSelfIntersection`: a mount whose
+  stud stands coaxially in a carriage's threaded hole stayed a solid of its
+  own), is wrong whatever the tolerance. The bodies whose boxes reach those
+  places are united first, place by place, and the union of all is made
+  again, exactly, with those unions in their places; a union of a few
+  bodies, or one whose places reach all of them, tries fuzzy values from
+  1e-4 mm up to 1e-3 mm (or its tolerance) and takes the first sound one
+  (with 1e-5 mm the carriage and the mount gave one solid that missed most
+  of their common volume, without a warning). Where none is,
+  a union that lost material fails (`the union of the shapes gave an
+  empty result`, `the union lost material of the shapes it joins`) and
+  one that only left pieces unused stands as before. OCCT's exact union of
+  a nut lying inside a threaded carriage, its bore's seam a few
+  micrometres from the vertices of the thread's faces, came out with no
+  solid, a result its checker finds valid; two copies of a plate whose
+  sides lie 1e-4 mm apart joined to the lower plate alone. A join
+  (`boolean`) of targets the tool touches that gives no solid is retried
+  with the fuzzy values of a join that loses volume and fails when it
+  stays empty. Combine fails a join, cut or intersection of bodies with
+  material whose result holds no solid ("the join of 257 bodies gave an
+  empty result"), keeping the target and the tools, for any kernel. The
+  face merge after a union of thousands of faces spent most of its time in
+  ShapeFix's orientation of the shell's faces, which went through the
+  whole shell after every face (port patch 1270). The union is made once
+  and named both before and after its faces are merged (the merge works on
+  copies, `SetSafeInputMode`): where the merge breaks it, the union as
+  OCCT left it is taken without making it again. The bodies with
+  free-form faces are joined after the elementary ones (mitcad#400) only
+  when there are a few of them (at most 4): a machine's 30 such bodies
+  among 257, each meeting a few others, took two unions of most of the
+  bodies so, and a fault between a body of the first union and one joined
+  after it could only be mended in the union of all.
+- Near misses before a union of many (mitcad#1278, `near_misses` in
+  `geometry/src/union_groups.cpp`): before the union of a group of 8 or
+  more bodies, every pair whose boxes meet is looked at, on all cores,
+  for a vertex of one that lies near a face of the other but not on it:
+  farther from the face than their tolerances together (which an exact
+  boolean takes as touching), no farther than 1e-3 mm. The pairs found,
+  and those linked through each other, are united first, beside each
+  other, each exactly where that is sound and else with the fuzzy values
+  above; the union of all is then made once, exactly, with those unions in
+  their places. Found only in the union of all, those places took a
+  second union of all: the reported 257 bodies' join took two unions of
+  some 10 s each (35 s in all), and now takes one (25 s, 1.7 GB at most). The
+  vertices' distances to the faces near them took 0.3 s for the design's
+  709 pairs and found the 7 pairs whose exact union OCCT gets wrong, no
+  more; uniting each of the 709 pairs to find them took about 100 s of
+  CPU time. A place the near misses miss is still found by the union of
+  all and mended as above. A checked union's result is marked as found
+  valid (`Shape::checked_valid`), so that operations on it check only
+  what they change. A cut or an intersection of a target with a tool
+  (`boolean`) that OCCT left pieces of unused, or where sub-shapes of one
+  operand came to meet, is wrong as such a union is: it is made again
+  with the smallest fuzzy value from 1e-4 mm up to 1e-3 mm (or the
+  caller's tolerance) that leaves nothing unused, and where none does the
+  exact result stands. Two copies of a plate whose side walls lie
+  1e-4 mm apart, one cut by the other, came out whole and as nothing, and
+  their intersection empty.
 - Large bodies (mitcad#181): OCCT's checker runs on OCCT's thread pool
   (its jobs count their failed allocations as the calling thread's,
   mitcad#132), where it checks whole bodies (operation results, the
@@ -1273,6 +1400,15 @@ the `Shape` type.
   (`loft_skin.cpp`), asymmetric and curvature-continuous fillets
   (`blend.cpp`) and setback/blend corners (`corner.cpp`) are built so;
   free lofts stay OCCT's through-sections.
+- Import of STEP assemblies (mitcad#1274): `Kernel::read_file_structure`
+  reads the file once (`geometry/io` `read_step_structured`) and gives
+  each distinct part's bodies once, in the part's coordinates, with the
+  instances that place parts and sub-assemblies; the model
+  (`core/model/src/exchange/assembly_import.rs`) makes a component per
+  part (its bodies one base feature) and an occurrence per instance, so
+  repeated parts share one B-rep in memory, in the design file and in
+  the display meshes. Files without an assembly come as bodies, as
+  `Kernel::read_file` reads them.
 - Export: 3MF and STL are written by the model from
   `Kernel::triangle_mesh` (one closed, outward-facing mesh per body,
   placed by its occurrences). STEP, IGES, OBJ and BRep go through
@@ -1747,7 +1883,10 @@ not recompute.
   feature under the sketches it uses (the `timeline` query's `sketches`,
   from the same references), and its selection and the timeline's follow
   each other (mitcad#177). The light bulbs of bodies, sketches,
-  construction geometry, components and their folders work in every mode;
+  construction geometry, components and their folders work in every mode,
+  and so do a kept analysis's and an image reference's (mitcad#1263: a
+  section turned on clips the open command's preview, which no longer
+  covers the cut and is computed again);
   during a command they run outside its undo range (a cancelled command
   leaves them, a committed one is an undo step of its own after them;
   `CommandSession::runVisibility`, mitcad#295). Edit Parameters works
@@ -1843,7 +1982,9 @@ not recompute.
   the exception, is left failed and the others are meshed; an allocation
   that failed in one makes the meshing throw "triangulation: out of
   memory" (mitcad#936). All the bodies of a job are meshed
-  together in one compound (`io::mesh_all_in_place`, mitcad#438), so that
+  together, in one compound per deviation they mesh with (by their sizes,
+  mitcad#1275: few steps, so few compounds) (`io::mesh_all_in_place`,
+  mitcad#438), so that
   OCCT meshes the faces of all of them in parallel on every core (one body
   at a time, a design of many small bodies used a core or two) and a face
   that bodies share is meshed once; should that throw, the bodies are
@@ -1985,6 +2126,46 @@ not recompute.
   triangulations and both tiers find them meshed (the input is not changed;
   it shares its sub-shapes with the result). Mirrors, scales and mesh
   bodies are copied as before.
+- **Background evaluation** of the rolled-back features (mitcad#1267,
+  `DocumentSession`, `core/ffi/src/background.rs`,
+  `core/model/src/document/rolled_back.rs`; the log lines in
+  [app/COMMANDS.md](../app/COMMANDS.md#background-evaluation-of-the-rolled-back-features-mitcad1267)).
+  An edit before the marker gives every rolled-back feature new inputs,
+  so none of their cached results fits and a marker moved forward
+  evaluates each as it passes it. At the session's idle point after a
+  job (no timer), with the mode idle (no command panel, no sketch), the
+  marker before the end and a state no run went through yet, the session
+  makes a fork of the idle document on its own thread
+  (`Document::rolled_back_run`: `Document::fork` with the marker at the
+  end, reporting to a monitor of its own) and runs it on a second
+  `ModelWorker` at `QThread::IdlePriority` (the Utility quality on
+  macOS), never on the model worker, so the user's jobs do not queue
+  behind it; one run at a time. The fork shares no mutable state with the
+  document: its definition and cache are copies whose results are shared
+  read-only, its kernel is `Kernel::fork`'s, and the shapes both hold are
+  only read by its evaluations, as by the import's forks and the
+  recompute's workers. What could write into them is kept apart: every
+  job first cancels the run and waits for it to stop
+  (`stopBackgroundEvaluation`: the run's monitor, the kernel's long
+  operations stop inside an evaluation, P7e), since a job may mesh new
+  bodies that share their faces; and no run starts after a job that was
+  asked to stop, whose meshing may have left bodies the view meshes on
+  its own thread. A command or a sketch that opens cancels it at once
+  without waiting (`cancelBackgroundEvaluation`). When it ends (or a job
+  stops it), the document adopts what it evaluated on the session's
+  thread while no job runs (`Document::adopt_rolled_back`): only when its
+  definition is still the run's (the marker aside), the features nearest
+  the marker first, and no more than the memory cache's budget leaves
+  beside what the document's results hold; the fork goes before the cache
+  is trimmed, since it holds every result it was made with. Versions are
+  fingerprints, so an adopted result of another state could never be
+  taken wrongly; the check only keeps memory from results never used. A
+  feature that fails in the run is not reported (failures are not
+  cached), and each run logs one line at its end (and one as it starts).
+  `MITCAD_BACKGROUND_EVALUATION=0` turns it off. Not yet: the fork has no
+  result store, so it
+  evaluates what a marker move could have read from the store, and OCCT's
+  own thread pool inside an operation is not lowered with the thread.
 - **macOS computation scheduling** (`app/platform/macos/MacWork.mm`,
   through `MacChrome.hpp`, mitcad#556): model and section workers set
   `QOS_CLASS_USER_INITIATED` on entering their thread loops. Before either
@@ -2072,7 +2253,7 @@ not recompute.
   Initialized client labels are UI metadata, never authentication identities.
 - **MCP** (`core/mcp`, `core/ffi/src/mcp.rs`, `app/mcp`): the live
   application profile exposes `document_list`, `model_query`,
-  `model_command`, `model_export`, `model_reference`, `document_save`, `document_open` and the application's
+  `model_command`, `model_export`, `model_reference`, `document_save`, `document_open`, `document_new` and the application's
   own `ui_state`, `ui_log`, `ui_screenshot`, `ui_select`, `ui_command` and
   `ui_camera` against the
   target window's actual `DocumentSession`. One process listener routes
@@ -2082,7 +2263,12 @@ not recompute.
   `app/MainWindowMcpUi.cpp`). Save As (`document_save` with a path) and
   Open reach only the folders for designs (`app/mcp/AgentFolders`:
   Preferences › AI Assistants, `--mcp-folder`; none by default, mitcad#402), live
-  mode's counterpart of headless mode's workspace. Replies that move the
+  mode's counterpart of headless mode's workspace. `document_new`
+  (mitcad#1266) makes an empty design there, in the current project (its
+  `new_design`) or untitled, in a new `MainWindow` beside the caller's,
+  never in place of one; the listener then sends the client's omitted
+  handles to it, and a chat agent may use the designs it made beside its
+  own. Replies that move the
   view (`ui_camera`, `ui_select`'s reveal, `view.*` commands) end the
   view's animation and any pending fit first (`OcctViewer::settleCamera`,
   mitcad#405), so their camera and the next screenshot agree. Each
@@ -2328,8 +2514,21 @@ not recompute.
   top-level window's `NSView`. The GL assumptions stay in the surface
   format and `occtDrawable()`, so that another backend stays local (OCCT
   has no Metal one). The orientation cube and pick widths scale with the
-  device pixel ratio. The view meshes at an absolute 0.01 mm and 5°, and
-  each doubly curved face within about 20 000 triangles
+  device pixel ratio. The view meshes each body at an absolute deviation
+  by its size (mitcad#1275): a thousandth of its bounding box's diagonal,
+  at least 0.01 mm (parts under 10 mm across) and at most 0.5 mm, in steps
+  of the square root of 2 (`io::shape_deviation`); its edges with 12° (cut
+  in steps of 6°), its faces' insides with 15°. A machine of 257 bodies
+  took 5.3 million triangles at 0.01 mm everywhere. Every face that is not
+  a plane is held within 20 000 triangles, a small face within a quarter
+  of a triangle per square of its deviation in its area: one that comes
+  out with more is
+  triangulated again with a larger deviation
+  (`MeshOptions::hold_face_triangles`; a small part's B-spline faces took
+  56 000 each). The faces whose deviation only the size raised record
+  0.01 mm, the drawers' deviation, so the drawers keep them; their edges'
+  polygons keep the deviation they were cut at. And each doubly curved
+  face is meshed within about 20 000 triangles beforehand
   (`app/view/ViewTessellation.hpp`, mitcad#398): a face that would take
   more (a sphere of metres took millions) meshes with a deviation that
   grows with its size (`geometry/io` `mesh.hpp`, `face_deviation_floor`).
@@ -2340,13 +2539,21 @@ not recompute.
   of their faces, planes having no say, and no more than their own
   curve's), mesh with a deviation of 2e-5 of the radius (about 700 points
   a turn, as BRepMesh cuts edges at half their deviation); smaller ones,
-  and edges shared with small faces, at 0.01 mm.
+  and edges shared with small faces, at the body's deviation.
   OCCT's presentations mesh through that algorithm
   (`use_bounded_presentation_meshes`, BRepMesh's default for the process);
   the model's worker makes the same meshes beforehand (`mesh_in_place`,
-  for all the bodies of a job at once `mesh_all_in_place`),
-  and the exports' presets bound their faces the same way
-  ([commands.md](../core/model-api/src/commands.md), Mesh refinement).
+  for all the bodies of a job at once `mesh_all_in_place`, one meshing per
+  deviation), and the exports' presets bound their faces the same way
+  ([commands.md](../core/model-api/src/commands.md), Mesh refinement), at
+  their own deviations (not by size, not held). A pattern of bodies moves
+  its copies as locations on the body's shape (`Kernel::move_shape`, as a
+  Move's copy, mitcad#838), so their faces are the body's and the view
+  draws every copy from the body's meshes. A window selection of whole
+  bodies decides by the bodies' boxes first (`OcctViewer::
+  decideWindowByBounds`): a body whose box the window holds is taken, one
+  it misses is not, both without OCCT's pick, which tests their
+  triangles; only the bodies it crosses are left to OCCT.
 - **Theme and icons** (`app/framework/Theme`, `Icons`): dark mode is read
   from the application palette (`isDarkPalette`), and the error, warning
   and accent colours and the `set*StyleSheet` helpers follow palette
@@ -2493,7 +2700,12 @@ after them while a sketch is edited; while a drawing is open the Drawing
 tab alone (Cut Sheet for a cut sheet) holds the drawing's tools and the
 drawing covers the whole 3D view (mitcad#1008; app/COMMANDS.md,
 *Drawings*); the AppKit frontend lists BUILD's commands in a menu and
-shows the Drawing and Cut Sheet tabs the same way (mitcad#1073).
+shows the Drawing and Cut Sheet tabs the same way (mitcad#1073). Before
+them all is the Start tab (mitcad#1258; app/COMMANDS.md, *The Start
+tab*): a page without groups, for which the window shows the Start page,
+a child of the 3D view covering it as a drawing does, the cards and docks
+hidden meanwhile; the AppKit frontend shows the same page over its
+embedded view and hides its cards (`NativeMacWindow::setStartPageShown`).
 
 Docked has a look of its own, `WindowStyle` (`app/framework/WindowStyle`,
 mitcad#251), the same on every platform and in both themes: the docks and
@@ -2644,7 +2856,10 @@ live in base features as OCCT binary BRep, zlib + base64
 (`Kernel::adopt_shape`, mitcad#244): the body its data reads as, without
 reading the data back, sharing the shape's B-rep and keeping what was
 measured of it that does not depend on face names. Later evaluations read
-the data.
+the data. A body whose bodies before it were taken out of its base
+feature (Find Repeated Parts, mitcad#1277: copies made occurrences of one
+component) keeps its id and face names by its entry's `number` and
+`first_face`.
 
 **Design in a project** (format 3): a project is a folder with the
 marker `.mitcad/project.json`. Designs inside keep base-feature B-rep

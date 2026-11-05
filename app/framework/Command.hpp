@@ -542,6 +542,12 @@ struct InputDef {
   // marks shows none.
   std::function<FieldMark(const CommandState&)> markFor;
   std::function<void(CommandState&, const CommandContext&)> onMark;
+  // Value: the smallest value Up, Down and the wheel step the field to
+  // (mitcad#1254, framework/ValueStep.hpp), in mm, degrees or as the
+  // number (a quantity's 1); above it, not at it, with stepAboveMinimum (a
+  // radius above 0). What is typed is checked by the model as before.
+  double stepMinimum = -std::numeric_limits<double>::infinity();
+  bool stepAboveMinimum = false;
 
   InputDef& withTooltip(const QString& tip) {
     tooltip = tip;
@@ -769,6 +775,11 @@ struct InputDef {
                      std::function<void(CommandState&, const CommandContext&)> action) {
     markFor = std::move(mark);
     onMark = std::move(action);
+    return *this;
+  }
+  InputDef& withStepMinimum(double least, bool above = false) {
+    stepMinimum = least;
+    stepAboveMinimum = above;
     return *this;
   }
 

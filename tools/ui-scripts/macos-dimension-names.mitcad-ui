@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# Entered with Extrude1 open and its distance field deliberately focused.
+# Each ordinary-paint assertion and WindowServer capture precedes its
+# geometry reference composite. The composite manually paints overlays and
+# is visual context only: it is never independent repaint evidence.
+expect-log '^Parameter labels for Extrude: Sketch1 k5 d1'
+expect-log '^Parameter label Sketch1 k7 d3 drawn at '
+screenshot-screen '${MITCAD_TEST_WORK}/initial.png'
+screenshot '${MITCAD_TEST_WORK}/initial-reference-composite.png'
+
+mark
+menu 'View/Standard Views/Right View'
+wait-log '^Camera direction -1 0 0 up 0 0 1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/right.png'
+screenshot '${MITCAD_TEST_WORK}/right-reference-composite.png'
+mark
+menu 'View/Standard Views/Front View'
+wait-log '^Camera direction 0 1 0 up 0 0 1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/front.png'
+screenshot '${MITCAD_TEST_WORK}/front-reference-composite.png'
+mark
+menu 'View/Standard Views/Right View'
+wait-log '^Camera direction -1 0 0 up 0 0 1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+screenshot-screen '${MITCAD_TEST_WORK}/right-again.png'
+screenshot '${MITCAD_TEST_WORK}/right-again-reference-composite.png'
+mark
+menu 'View/Standard Views/Front View'
+wait-log '^Camera direction 0 1 0 up 0 0 1'
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+screenshot-screen '${MITCAD_TEST_WORK}/front-again.png'
+screenshot '${MITCAD_TEST_WORK}/front-again-reference-composite.png'
+
+# Fresh macOS settings use the Trackpad preset. Pixel scroll does not click
+# the view or take the distance field's keyboard. These are synthetic Qt
+# scroll events, not a claim to reproduce physical trackpad delivery.
+capture-view-orientation before
+mark
+trackpad-scroll 45 45 45 25 alt
+expect-view-orientation ${before} changed
+sleep 400
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/orbit.png'
+screenshot '${MITCAD_TEST_WORK}/orbit-reference-composite.png'
+capture-view-target target
+mark
+trackpad-scroll 45 45 45 25 ''
+expect-view-pan ${target} changed
+sleep 400
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+screenshot-screen '${MITCAD_TEST_WORK}/pan.png'
+screenshot '${MITCAD_TEST_WORK}/pan-reference-composite.png'
+capture-view-height height
+mark
+trackpad-scroll 45 45 0 45 shift
+expect-view-zoom ${height} in
+sleep 400
+capture at '^Parameter label Sketch1 k5 d1 at (-?[0-9]+,-?[0-9]+)$'
+expect-log '^Parameter label Sketch1 k5 d1 drawn at ${at}$'
+expect-no-log '^Parameter labels for Extrude hidden$'
+screenshot-screen '${MITCAD_TEST_WORK}/zoom.png'
+screenshot '${MITCAD_TEST_WORK}/zoom-reference-composite.png'
+key Escape
+expect-log '^Command Extrude cancelled$'
+expect-model-bodies 1 10000
+wait-idle 30
+sleep 400
+screenshot-screen '${MITCAD_TEST_WORK}/cancelled.png'
+screenshot '${MITCAD_TEST_WORK}/cancelled-reference-composite.png'
+mark
+menu 'View/Standard Views/Right View'
+wait-log '^Camera direction -1 0 0 up 0 0 1'
+expect-no-log '^Parameter label Sketch1 '
+screenshot-screen '${MITCAD_TEST_WORK}/cancelled-right.png'
+screenshot '${MITCAD_TEST_WORK}/cancelled-right-reference-composite.png'
+quit

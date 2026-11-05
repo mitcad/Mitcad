@@ -282,7 +282,7 @@ void addCircularPattern(CommandRegistry& registry, SketchController& c) {
           .withAccepts(ofSketch(c)),
       selectionInput(QStringLiteral("center"), QObject::tr("Center Point"), SelectKind::SketchPoint, 0, 1)
           .withAccepts(ofSketch(c)),
-      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")),
+      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
       valueInput(QStringLiteral("angle"), QObject::tr("Total Angle"), ValueKind::Angle, QStringLiteral("360 deg")),
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
@@ -360,13 +360,13 @@ void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
       selectionInput(QStringLiteral("direction"), QObject::tr("Direction"), SelectKind::SketchCurve, 0, 1)
           .withAccepts(linesOf(c)),
       sketchDirectionType(QStringLiteral("direction_type1"), QObject::tr("Direction Type")),
-      valueInput(QStringLiteral("quantity1"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")),
+      valueInput(QStringLiteral("quantity1"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
       valueInput(QStringLiteral("distance1"), QObject::tr("Spacing"), ValueKind::Length, QStringLiteral("10")),
       flipInput(QStringLiteral("flip1"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("Copies against the direction"))
           .withVisible(notSymmetric(QStringLiteral("direction_type1"))),
       sketchDirectionType(QStringLiteral("direction_type2"), QObject::tr("Direction Type 2")),
-      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1")),
+      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1")).withStepMinimum(1),
       valueInput(QStringLiteral("distance2"), QObject::tr("Spacing 2"), ValueKind::Length, QStringLiteral("10")),
       flipInput(QStringLiteral("flip2"), QObject::tr("Flip 2"))
           .withTooltip(QObject::tr("Copies against the second direction"))
@@ -706,7 +706,7 @@ void addFillet(CommandRegistry& registry, SketchController& c) {
           })
           .withTooltip(QObject::tr("Two lines or arcs: their corner; more: every corner where two end together; "
                                    "a point: its corner")),
-      valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("2")),
+      valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("2")).withStepMinimum(0.0, true),
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
     QJsonArray curves;
@@ -759,10 +759,10 @@ void addChamfer(CommandRegistry& registry, SketchController& c) {
       selectionInput(QStringLiteral("b"), QObject::tr("Second Line"), SelectKind::SketchCurve, 1, 1)
           .withAccepts(linesOf(c)),
       choiceInput(QStringLiteral("type"), QObject::tr("Chamfer Type"), types, QStringLiteral("equal_distance")),
-      valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("2")),
-      valueInput(QStringLiteral("distance2"), QObject::tr("Distance 2"), ValueKind::Length, QStringLiteral("2"))
+      valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("2")).withStepMinimum(0.0, true),
+      valueInput(QStringLiteral("distance2"), QObject::tr("Distance 2"), ValueKind::Length, QStringLiteral("2")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return s.choice(QStringLiteral("type")) == QStringLiteral("two_distances"); }),
-      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("45 deg"))
+      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("45 deg")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return s.choice(QStringLiteral("type")) == QStringLiteral("distance_angle"); }),
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
@@ -903,7 +903,7 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
       selectionInput(QStringLiteral("entity"), QObject::tr("Pattern"), SelectKind::SketchCurve | SelectKind::SketchPoint,
                      1, 1)
           .withAccepts(editable(c, lookup)),
-      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")),
+      valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
       valueInput(QStringLiteral("angle"), QObject::tr("Total Angle"), ValueKind::Angle, QStringLiteral("360 deg"))
           .withVisible(circular),
       valueInput(QStringLiteral("distance1"), QObject::tr("Spacing"), ValueKind::Length, QStringLiteral("10"))
@@ -911,7 +911,7 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
       flipInput(QStringLiteral("flip1"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("Copies against the direction"))
           .withVisible(rectangular),
-      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1"))
+      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1")).withStepMinimum(1)
           .withVisible(rectangular),
       valueInput(QStringLiteral("distance2"), QObject::tr("Spacing 2"), ValueKind::Length, QStringLiteral("10"))
           .withVisible(rectangular),

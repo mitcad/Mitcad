@@ -1,0 +1,15 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Browser eyes while a command is open (mitcad#1263), tools/ui-browser-eyes-mid-command-test.sh: a rod of diameter 10, 10 long, around the Z axis (sketch F1, Body1 F2.b0), a 20 x 20 x 10 block beside it from (30, -10) (sketch F3, Body2 F4.b0), and Section1 kept at XZ, which runs through the rod's axis and the block's middle, hidden."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [30, -10], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_analysis", "def": {"type": "section", "plane": "xz"}},
+  {"cmd": "set_analysis_visible", "name": "Section1", "visible": false}
+]

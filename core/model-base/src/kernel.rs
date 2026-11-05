@@ -1832,6 +1832,69 @@ pub trait Kernel: Send {
     fn infos(&self, _shape: &Self::Shape) -> Vec<String> {
         Vec::new()
     }
+
+    // Outlines of faces seen along a direction: Project of a curved face
+    // (mitcad#1265; `sketch/project.rs`).
+
+    /// The faces `face` resolves to as they are seen along `direction` (a
+    /// unit vector: a sketch's normal in the shape's coordinates), in model
+    /// space: their boundary edges as [`Kernel::curves_of`] lists them, but
+    /// without a seam edge that is not on the outline (where the face's
+    /// normal is not at right angles to `direction` all along it, or the
+    /// seam is seen end on: a seam is no edge of the face to see), and the
+    /// face's silhouettes, the curves along which its normal is at right
+    /// angles to `direction`, each clipped to the face. A cylinder's or a
+    /// cone's are the generator lines where it turns away from the view (none
+    /// seen along its axis), other curved surfaces' their outline curves; a
+    /// plane has none. Empty when the shape has nothing by that name. The
+    /// shape is left as it is.
+    fn face_outline(
+        &self,
+        _shape: &Self::Shape,
+        _face: &FaceName,
+        _direction: [f64; 3],
+    ) -> Result<Vec<Curve3>, KernelError> {
+        Err(KernelError::Unsupported("face outlines"))
+    }
+
+    // The assembly structure of files (mitcad#1274).
+
+    /// Reads a file once, as [`Kernel::read_file`] does, but with
+    /// `keep_assembly` a STEP file whose assembly places two parts or more
+    /// comes as its structure: each distinct part's bodies once, in the
+    /// part's coordinates, and the instances that place parts and
+    /// assemblies ([`FileRead::Assembly`](crate::exchange::FileRead)).
+    /// Other files, and STEP files
+    /// without such an assembly, come as bodies.
+    fn read_file_structure(
+        &self,
+        _path: &str,
+        _options: &ReadOptions,
+        _keep_assembly: bool,
+    ) -> Result<crate::exchange::FileRead<Self::Shape>, KernelError> {
+        Err(KernelError::Unsupported("the assembly structure of files"))
+    }
+
+    // Repeated parts: bodies equal up to a rigid motion (mitcad#1277;
+    // `mitcad_model::document::repeated_parts`).
+
+    /// Which bodies are copies of one another moved by a rigid motion (a
+    /// rotation and a translation; a mirror image is not one): one entry
+    /// per body, in order, naming the first body of its kind and the
+    /// placement from that body onto it. Compared by topology counts,
+    /// volume, area and principal moments, then by a frame of principal
+    /// axes (several where the body has a symmetry, tried until one
+    /// matches) that puts every vertex and face centroid within
+    /// `tolerance` mm (beside the vertices' own tolerances) of the other's.
+    /// A body that copies none, and a mesh body, is its own. The bodies
+    /// are left as they are.
+    fn rigid_copies(
+        &self,
+        _bodies: &[&Self::Shape],
+        _tolerance: f64,
+    ) -> Result<Vec<RigidCopy>, KernelError> {
+        Err(KernelError::Unsupported("repeated parts"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2955,4 +3018,17 @@ pub struct TopologyCounts {
     pub faces: usize,
     pub edges: usize,
     pub vertices: usize,
+}
+
+// Repeated parts (mitcad#1277).
+
+/// What [`Kernel::rigid_copies`] gives for one body.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RigidCopy {
+    /// The body it is a copy of (an index into the bodies given): the
+    /// first of its kind, itself for that one and for a body that copies
+    /// none.
+    pub of: usize,
+    /// From body `of` onto this one, rigid; the identity for `of` itself.
+    pub transform: Transform,
 }

@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::edit::SketchEdit;
+use super::edit::{PointInput, SketchEdit};
 use super::fonts::FontData;
 use super::geometry::{Curve2, Nurbs, P2, add, dist, dot, perp, scale, sub, unit};
 use super::regions::RegionCurve;
@@ -904,14 +904,14 @@ impl SketchEdit<'_> {
         }
         let mode = if angle == 0.0 {
             RectangleMode::TwoPoint {
-                a: o,
-                b: add(o, [w, h]),
+                a: PointInput::At(o),
+                b: PointInput::At(add(o, [w, h])),
             }
         } else {
             let b = add(o, scale(u, w));
             RectangleMode::ThreePoint {
-                a: o,
-                b,
+                a: PointInput::At(o),
+                b: PointInput::At(b),
                 c: add(b, scale(v, h)),
             }
         };

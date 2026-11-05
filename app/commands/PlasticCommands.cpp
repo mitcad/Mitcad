@@ -152,26 +152,26 @@ CommandDef plasticCommand(const CommandContext& context) {
       valueInput(QStringLiteral("y"), QObject::tr("Point Y"), ValueKind::Length, length("0 mm")).withVisible(atPoint),
       valueInput(QStringLiteral("z"), QObject::tr("Point Z"), ValueKind::Length, length("0 mm")).withVisible(atPoint),
       // Boss.
-      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, length("6 mm"))
+      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, length("6 mm")).withStepMinimum(0.0, true)
           .withVisible(boss),
-      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, length("10 mm"))
+      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, length("10 mm")).withStepMinimum(0.0, true)
           .withVisible(height),
-      valueInput(QStringLiteral("hole_diameter"), QObject::tr("Hole Diameter"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("hole_diameter"), QObject::tr("Hole Diameter"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("0: no hole"))
           .withVisible(boss),
-      valueInput(QStringLiteral("hole_depth"), QObject::tr("Hole Depth"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("hole_depth"), QObject::tr("Hole Depth"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("From the top; 0: down to the face"))
           .withVisible(boss),
-      valueInput(QStringLiteral("fillet"), QObject::tr("Root Fillet"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("fillet"), QObject::tr("Root Fillet"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withVisible(boss),
-      valueInput(QStringLiteral("ribs"), QObject::tr("Ribs"), ValueKind::Unitless, length("0")).withVisible(boss),
-      valueInput(QStringLiteral("rib_thickness"), QObject::tr("Rib Thickness"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("ribs"), QObject::tr("Ribs"), ValueKind::Unitless, length("0")).withVisible(boss).withStepMinimum(0.0),
+      valueInput(QStringLiteral("rib_thickness"), QObject::tr("Rib Thickness"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("0: 0.3 times the boss's radius"))
           .withVisible(boss),
-      valueInput(QStringLiteral("rib_length"), QObject::tr("Rib Length"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("rib_length"), QObject::tr("Rib Length"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("Out of the boss's wall; 0: its radius"))
           .withVisible(boss),
-      valueInput(QStringLiteral("rib_offset"), QObject::tr("Rib Offset"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("rib_offset"), QObject::tr("Rib Offset"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("The ribs' tops below the boss's top"))
           .withVisible(boss),
       // Rest.
@@ -181,15 +181,15 @@ CommandDef plasticCommand(const CommandContext& context) {
                   QStringLiteral("round"))
           .withVisible(rest),
       // Lip, groove, snap fit and rest.
-      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, length("1 mm"))
+      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, length("1 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("A round rest's diameter"))
           .withVisible(width),
-      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, length("12 mm"))
+      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, length("12 mm")).withStepMinimum(0.0, true)
           .withVisible([snap, rectangle](const CommandState& s) { return snap(s) || rectangle(s); }),
       choiceInput(QStringLiteral("along"), QObject::tr("Length Along"), kDirections, QStringLiteral("x"))
           .withVisible(rectangle),
-      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, length("2 mm")).withVisible(groove),
-      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, length("2 mm")).withVisible(groove).withStepMinimum(0.0, true),
+      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("Added to the width and depth; 0: the plastic rule's clearance"))
           .withVisible(groove),
       choiceInput(QStringLiteral("side"), QObject::tr("Side"),
@@ -198,14 +198,14 @@ CommandDef plasticCommand(const CommandContext& context) {
                   QStringLiteral("inside"))
           .withVisible(band),
       // Snap fit.
-      valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, length("1.5 mm"))
+      valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, length("1.5 mm")).withStepMinimum(0.0, true)
           .withVisible(snap),
-      valueInput(QStringLiteral("wall"), QObject::tr("Wall Thickness"), ValueKind::Length, length("0 mm"))
+      valueInput(QStringLiteral("wall"), QObject::tr("Wall Thickness"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("0: a solid rest"))
           .withVisible(rest),
-      valueInput(QStringLiteral("catch_depth"), QObject::tr("Catch Depth"), ValueKind::Length, length("1 mm"))
+      valueInput(QStringLiteral("catch_depth"), QObject::tr("Catch Depth"), ValueKind::Length, length("1 mm")).withStepMinimum(0.0, true)
           .withVisible(snap),
-      valueInput(QStringLiteral("catch_length"), QObject::tr("Catch Length"), ValueKind::Length, length("2 mm"))
+      valueInput(QStringLiteral("catch_length"), QObject::tr("Catch Length"), ValueKind::Length, length("2 mm")).withStepMinimum(0.0, true)
           .withVisible(snap),
       choiceInput(QStringLiteral("hook"), QObject::tr("Catch Toward"), kDirections, QStringLiteral("x"))
           .withVisible(snap),
@@ -218,7 +218,7 @@ CommandDef plasticCommand(const CommandContext& context) {
       // Plastic rule.
       textInput(QStringLiteral("rule_name"), QObject::tr("Name"), QStringLiteral("ABS (1.5mm)")).withVisible(rule),
       textInput(QStringLiteral("material"), QObject::tr("Material"), QStringLiteral("ABS Plastic")).withVisible(rule),
-      valueInput(QStringLiteral("thickness_rule"), QObject::tr("Nominal Wall"), ValueKind::Length, length("1.5 mm"))
+      valueInput(QStringLiteral("thickness_rule"), QObject::tr("Nominal Wall"), ValueKind::Length, length("1.5 mm")).withStepMinimum(0.0, true)
           .withVisible(rule),
       valueInput(QStringLiteral("nominal_radius"), QObject::tr("Nominal Radius"), ValueKind::Length, length("0.75 mm"))
           .withVisible(rule),

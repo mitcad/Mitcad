@@ -63,6 +63,10 @@ constexpr int kBuildPage = 2;
 constexpr int kDrawingPage = 3;
 constexpr int kCutSheetPage = 4;
 constexpr int kMakePage = 5;
+// The Start tab (mitcad#1258): first, before SOLID; its page has no groups
+// (the window shows the Start page over the view, MainWindowStart.cpp).
+const QString kStart = QStringLiteral("START");
+constexpr int kStartPage = 6;
 // The tabs of a mode (a sketch, a drawing): their names in the accent colour.
 bool isModeTab(int page) { return page == kSketchPage || page == kDrawingPage || page == kCutSheetPage; }
 // A page's tab by its internal name.
@@ -78,6 +82,8 @@ const QString& tabName(int page) {
     return kCutSheet;
   case kMakePage:
     return kMake;
+  case kStartPage:
+    return kStart;
   default:
     return kSolid;
   }
@@ -200,7 +206,10 @@ public:
 
 protected:
   QSize tabSizeHint(int index) const override {
-    return QSize(fontMetrics().horizontalAdvance(tabText(index)) + 30, kHeight);
+    // 11 px each side of the name (15 before the Start tab, mitcad#1258):
+    // four tabs take about the room three took, so that the title row keeps
+    // the quick-access group unfolded beside the name at 1280 px.
+    return QSize(fontMetrics().horizontalAdvance(tabText(index)) + 22, kHeight);
   }
   QSize minimumTabSizeHint(int index) const override { return tabSizeHint(index); }
 
@@ -914,6 +923,11 @@ const QStringList& Ribbon::groups(const QString& tab) {
   // CAM's commands (mitcad#1013): a group without commands is not listed.
   static const QStringList make = {QStringLiteral("MATERIALS"), QStringLiteral("ANNOTATE"),
                                    QStringLiteral("3D PRINT"), QStringLiteral("LASER")};
+  // The Start tab (mitcad#1258): no groups, the Start page is its content.
+  static const QStringList start;
+  if (tab == kStart) {
+    return start;
+  }
   if (tab == kBuild) {
     return build;
   }
@@ -966,7 +980,11 @@ void Ribbon::build() {
   m_pages->addWidget(createPage(kCutSheet));
   // MAKE (mitcad#1049), the page after them.
   m_pages->addWidget(createPage(kMake));
+  // START (mitcad#1258): an empty page; SOLID is shown at first, the
+  // window shows START when the Start page opens at launch.
+  m_pages->addWidget(createPage(kStart));
   addModelTabs();
+  m_tabs->setCurrentIndex(tabOfPage(kSolidPage));
 }
 
 void Ribbon::addModelTabs() {
@@ -982,6 +1000,20 @@ void Ribbon::addModelTabs() {
   const int make = m_tabs->insertTab(2, displayName(kMake));
   m_tabs->setTabData(make, kMakePage);
   m_tabs->setTabToolTip(make, tr("Make: materials, annotations, 3D printing and laser cutting"));
+  // START (mitcad#1258) before them all, inserted last so that the tab
+  // shown stays the one it was.
+  const int start = m_tabs->insertTab(0, displayName(kStart));
+  m_tabs->setTabData(start, kStartPage);
+  m_tabs->setTabToolTip(start, tr("Start: new and recent designs, resources"));
+}
+
+void Ribbon::showTab(const QString& tab) {
+  for (int i = 0; i < m_tabs->count(); ++i) {
+    if (tabName(m_tabs->tabData(i).toInt()) == tab) {
+      m_tabs->setCurrentIndex(i);
+      return;
+    }
+  }
 }
 
 QString Ribbon::currentTab() const {
@@ -1804,6 +1836,10 @@ void Ribbon::setSketchMode(bool sketching) {
   if (sketching && shown < 0) {
     // Back to the tab the sketch started from afterwards (SOLID or BUILD).
     m_pageBeforeSketch = m_tabs->tabData(m_tabs->currentIndex()).toInt();
+    // Not to the Start tab (mitcad#1258): a sketch is the model's.
+    if (m_pageBeforeSketch == kStartPage) {
+      m_pageBeforeSketch = kSolidPage;
+    }
     const int index = m_tabs->addTab(displayName(kSketch));
     m_tabs->setTabData(index, kSketchPage);
     m_tabs->setTabTextColor(index, accentColor(palette()));
@@ -1832,6 +1868,10 @@ void Ribbon::setDrawingMode(bool open, bool cutSheet) {
       // Back to the tab the drawing was opened from afterwards (SOLID or
       // BUILD).
       m_pageBeforeDrawing = m_tabs->currentIndex() >= 0 ? m_tabs->tabData(m_tabs->currentIndex()).toInt() : kSolidPage;
+      // A drawing made from the Start tab (mitcad#1258) closes to SOLID.
+      if (m_pageBeforeDrawing == kStartPage) {
+        m_pageBeforeDrawing = kSolidPage;
+      }
     }
     // The drawing's tab alone: SOLID and BUILD (or another drawing's tab)
     // go until it closes, so that the toolbar is one row.

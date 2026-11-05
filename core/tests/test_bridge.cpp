@@ -1197,6 +1197,44 @@ void test_linked_projection_follows_its_source() {
   CHECK(!has_point(points, 80, -20));
 }
 
+// How many times `part` is in `text`.
+int occurrences(const std::string& text, const std::string& part) {
+  int count = 0;
+  for (std::size_t at = text.find(part); at != std::string::npos; at = text.find(part, at + 1)) {
+    ++count;
+  }
+  return count;
+}
+
+// Project of a cylinder's side face (mitcad#1265, as reported): a 200 mm
+// extruded circle of radius 31.6 standing on XY, its side face projected
+// with Projection Link into a sketch on XZ (sketch y is -Z), is the
+// rectangle it is seen as: the circles seen edge on and both silhouettes,
+// no seam line inside it. It follows a change of the circle's diameter.
+void test_a_cylinders_side_face_projects_as_its_outline() {
+  auto document = mitcad::new_document();
+  run(*document, R"({"cmd": "sketch.create"})");                                  // F1
+  run(*document, sketch_circle("F1", 0, 0, 63.2));                                // c1, d1
+  run(*document, extrude("F1", "r{c1}", 200, "new_body"));                        // F2
+  run(*document, R"({"cmd": "sketch.create", "plane": "xz"})");                   // F3
+  run(*document,
+      R"json({"cmd": "sketch.project", "sketch": "F3", "source": "F2:side(c1)", "body": "F2.b0", "linked": true})json");
+  const auto check_rectangle = [&document](double r) {
+    const std::string json(document->query(R"({"query": "sketch", "uid": "F3"})"));
+    CHECK(occurrences(json, R"("type":"line")") == 4);
+    CHECK(occurrences(json, R"("type":"circle")") == 0);
+    CHECK(contains(json, R"("outline":true)"));
+    CHECK(contains(json, R"("warnings":[])"));
+    const auto points = sketch_points(*document, "F3");
+    CHECK(points.size() == 4);
+    CHECK(has_point(points, r, 0) && has_point(points, -r, 0));
+    CHECK(has_point(points, r, -200) && has_point(points, -r, -200));
+  };
+  check_rectangle(31.6);
+  CHECK(contains(run(*document, set("d1", 80)), R"("error":null)"));
+  check_rectangle(40.0);
+}
+
 // Distances from a body's faces (the .f3d import's fillet edge guesses):
 // zero on a spline face (projected from the nearest point of its grid) and
 // on an extruded side face, at most 1e-5 for a point 2e-6 off a face, the
@@ -1829,6 +1867,7 @@ int main(int argc, char** argv) {
   test_kernel_operation_cancelled_inside();
   test_remote_bridge();
   test_linked_projection_follows_its_source();
+  test_a_cylinders_side_face_projects_as_its_outline();
   test_boundary_distances_on_spline_faces();
   test_boundary_distances_of_a_plate_with_holes();
   test_boundary_distances_off_free_form_faces();

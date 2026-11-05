@@ -616,6 +616,38 @@ pub fn default_along(seen: &[Seen]) -> Along {
     }
 }
 
+/// How far apart two points' coordinates may be and still count as level
+/// or plumb, view mm.
+const LEVEL: f64 = 1e-6;
+
+/// The direction a linear dimension between two points (view) measures
+/// along when its placing click (view) chooses it (mitcad#1272), as a
+/// sketch's dimensions do: placed above or below them (between them
+/// along x, beyond them along y) horizontal, beside them vertical, else
+/// (between them both ways, or beyond them both ways) aligned. Two points
+/// level or plumb measure along that axis wherever it is placed; without
+/// a click, [`default_along`].
+pub fn placed_along(a: P2, b: P2, at: Option<P2>) -> Along {
+    let level = (a[1] - b[1]).abs() <= LEVEL;
+    let plumb = (a[0] - b[0]).abs() <= LEVEL;
+    if level || plumb {
+        return if plumb && !level {
+            Along::Vertical
+        } else {
+            Along::Horizontal
+        };
+    }
+    let Some(c) = at else {
+        return default_along(&[Seen::Point(a), Seen::Point(b)]);
+    };
+    let between = |k: usize| c[k] > a[k].min(b[k]) && c[k] < a[k].max(b[k]);
+    match (between(0), between(1)) {
+        (true, false) => Along::Horizontal,
+        (false, true) => Along::Vertical,
+        _ => Along::Aligned,
+    }
+}
+
 /// A direction of the view turned `turn` degrees counter-clockwise (a
 /// dimension's that turned with its view, mitcad#729).
 pub fn turned(d: P2, turn: Option<f64>) -> P2 {
@@ -642,7 +674,7 @@ pub(crate) fn ordinate_axes(annotation: &ViewAnnotation) -> (P2, P2) {
 /// The direction (unit, view) a linear dimension measures along, and
 /// whether its picks are parallel lines; a horizontal or vertical one's
 /// as turned with its view (`turn`, degrees).
-pub(crate) fn linear_axes(
+pub fn linear_axes(
     along: Option<Along>,
     turn: Option<f64>,
     seen: &[Seen],
@@ -1343,16 +1375,87 @@ fn centerline_of(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(), 
             );
             Ok(())
         }
+        [
+            Seen::Circle {
+                center,
+                radius: ra,
+                end_on: true,
+                arc: arc_a,
+                ..
+            },
+            Seen::Circle {
+                center: other,
+                radius: rb,
+                end_on: true,
+                arc: arc_b,
+                ..
+            },
+        ] if len2(sub2(*center, *other)) <= 1e-9 * ra.max(*rb).max(1.0)
+            && (ra - rb).abs() > 1e-9
+            && (arc_a.is_some() || arc_b.is_some()) =>
+        {
+            slot_centerline(g, *center, *ra, *rb, [*arc_a, *arc_b], frame);
+            Ok(())
+        }
         [p, q] => {
             let (a, b) = (frame.at(p.point()), frame.at(q.point()));
             if len2(sub2(b, a)) < 1e-9 {
-                return Err("the picks share their center".to_owned());
+                return Err(
+                    "the picks share their center: two concentric arcs (a curved slot's sides) \
+                     make its center arc, whole circles none"
+                        .to_owned(),
+                );
             }
             centerline(g, a, b, rim(p), rim(q));
             Ok(())
         }
         _ => Err("a centerline takes one or two picks".to_owned()),
     }
+}
+
+/// The centre arc of a curved slot (mitcad#1272) from its two concentric
+/// sides (radii `ra` and `rb` about `center`, view mm; their ranges of
+/// angles, none for a whole circle): halfway between them, so through the
+/// centres of the slot's ends, from one end's centre to the other's and
+/// run on beyond each by the ends' radius and a little more, as a
+/// centreline through two circles is; long-dash dotted. The sides' ranges
+/// taken together.
+fn slot_centerline(
+    g: &mut Group,
+    center: P2,
+    ra: f64,
+    rb: f64,
+    arcs: [Option<(f64, f64)>; 2],
+    frame: &Frame<'_>,
+) {
+    let (start, end) = match arcs {
+        [Some((s1, e1)), Some((s2, e2))] => {
+            // The second range turned to lie about the first one's start.
+            let shift = TAU * ((s1 - s2) / TAU).round();
+            let (s2, e2) = (s2 + shift, e2 + shift);
+            let start = s1.min(s2);
+            (start, e1.max(e2).min(start + TAU))
+        }
+        [Some(range), None] | [None, Some(range)] => range,
+        [None, None] => (0.0, TAU),
+    };
+    // The view's map onto the sheet scales and moves: its angles stay.
+    let scale = frame.map.scale;
+    let radius = (ra + rb) / 2.0 * scale;
+    let ends = (ra - rb).abs() / 2.0 * scale;
+    let beyond = if end - start >= TAU - 1e-9 {
+        0.0
+    } else {
+        (ends + CENTER_BEYOND) / radius.max(1e-9)
+    };
+    let from = start - beyond;
+    g.items.push(Item::Arc {
+        pen: Pen::Chain,
+        center: frame.at(center),
+        radius,
+        start: from,
+        end: (end + beyond).min(from + TAU),
+    });
 }
 
 /// Where a circle's centre is on the sheet and its radius there: a circle
@@ -2680,5 +2783,94 @@ mod tests {
         assert!(value.get("pen").is_none());
         let back: SketchItem = serde_json::from_value(value).unwrap();
         assert_eq!(back, arc);
+    }
+
+    #[test]
+    fn the_placing_click_chooses_horizontal_vertical_or_aligned() {
+        // mitcad#1272: as a sketch's dimensions, between two points 40
+        // apart along x and 20 along y.
+        let (a, b) = ([0.0, 0.0], [40.0, 20.0]);
+        let along = |at: P2| placed_along(a, b, Some(at));
+        // Above or below them: horizontal; beside them: vertical.
+        assert_eq!(along([20.0, 35.0]), Along::Horizontal);
+        assert_eq!(along([20.0, -15.0]), Along::Horizontal);
+        assert_eq!(along([55.0, 10.0]), Along::Vertical);
+        assert_eq!(along([-12.0, 10.0]), Along::Vertical);
+        // Between them both ways, or beyond them both ways: aligned.
+        assert_eq!(along([25.0, 8.0]), Along::Aligned);
+        assert_eq!(along([60.0, 40.0]), Along::Aligned);
+        // Level or plumb points measure along their axis wherever placed,
+        // so never 0.
+        for at in [[20.0, 10.0], [60.0, 0.0], [20.0, -5.0]] {
+            assert_eq!(
+                placed_along([0.0, 0.0], [40.0, 0.0], Some(at)),
+                Along::Horizontal
+            );
+            assert_eq!(
+                placed_along([5.0, 0.0], [5.0, 30.0], Some(at)),
+                Along::Vertical
+            );
+        }
+        // No click: the axis they lie further apart along.
+        assert_eq!(placed_along(a, b, None), Along::Horizontal);
+    }
+
+    #[test]
+    fn a_centerline_of_two_concentric_arcs_is_the_slots_centre_arc() {
+        // mitcad#1272: a curved slot's sides, radii 40 and 50 about the
+        // view's origin from 30 to 60 degrees; its ends' centres on the
+        // radius 45 at 30 and 60 degrees.
+        let (from, to) = (PI / 6.0, PI / 3.0);
+        let side = |radius: f64| Seen::Circle {
+            center: [0.0, 0.0],
+            radius,
+            end_on: true,
+            across: [1.0, 0.0],
+            arc: Some((from, to)),
+        };
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let line = ViewAnnotation::new(1, AnnotationType::Centerline, Vec::new());
+        let laid = lay_out(&line, &[side(40.0), side(50.0)], &frame, None, &[]).unwrap();
+        let drawn = arcs(&laid);
+        assert_eq!(drawn.len(), 1, "{drawn:?}");
+        let (center, radius, start, end) = drawn[0];
+        assert!(len2(sub2(center, [100.0, 100.0])) < 1e-9, "{center:?}");
+        assert!((radius - 45.0).abs() < 1e-9, "{radius}");
+        // Through both ends' centres, run on beyond each by the ends'
+        // radius (5) and a little more.
+        let beyond = (5.0 + CENTER_BEYOND) / 45.0;
+        assert!((start - (from - beyond)).abs() < 1e-9, "{start}");
+        assert!((end - (to + beyond)).abs() < 1e-9, "{end}");
+        assert!(laid.group.items.iter().all(|i| matches!(
+            i,
+            Item::Arc {
+                pen: Pen::Chain,
+                ..
+            }
+        )));
+        // The sides in the other order, one of them given a whole turn
+        // further on: the same arc (its angles may be a whole turn on).
+        let mut turned = side(50.0);
+        if let Seen::Circle { arc, .. } = &mut turned {
+            *arc = Some((from + TAU, to + TAU));
+        }
+        let again = lay_out(&line, &[turned, side(40.0)], &frame, None, &[]).unwrap();
+        let (_, radius, start, end) = arcs(&again)[0];
+        assert!((radius - 45.0).abs() < 1e-9);
+        let off = (start - (from - beyond)).rem_euclid(TAU);
+        assert!(off < 1e-9 || TAU - off < 1e-9, "{start}");
+        assert!(
+            ((end - start) - (to - from + 2.0 * beyond)).abs() < 1e-9,
+            "{start} {end}"
+        );
+        // Two concentric whole circles have no slot: refused.
+        let whole = |radius: f64| circle([0.0, 0.0], radius);
+        let error = lay_out(&line, &[whole(4.0), whole(6.0)], &frame, None, &[]).unwrap_err();
+        assert!(error.contains("share their center"), "{error}");
     }
 }

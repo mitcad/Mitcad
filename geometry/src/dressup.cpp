@@ -60,12 +60,14 @@
 #include <TopLoc_Location.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <gp_Pnt2d.hxx>
 
 #include "blend.hpp"
 #include "canonical.hpp"
 #include "corner.hpp"
 #include "cutouts.hpp"
+#include "dressup_check.hpp"
 #include "face_join.hpp"
 #include "face_select.hpp"
 #include "history.hpp"
@@ -577,6 +579,45 @@ bool inherited_faults_only(const TopoDS_Shape& result, const TopoDS_Shape& input
   return true;
 }
 
+// Where a dressup's result that OCCT's checker rejects is faulty, for its
+// error (mitcad#1253): "; the fault lies in the corner of the fillet at
+// V{…}", the first of the faces the dressup made (<feature>:…) that the
+// checker rejects, with how many more; empty when none is. Only the made
+// faces are checked again: on a large body the whole check takes about as
+// long as the dressup.
+std::string faulty_where(const Shape& result, const std::string& feature, const char* role) {
+  try {
+    OCC_CATCH_SIGNALS
+    const std::string prefix = feature + ":";
+    BRep_Builder builder;
+    TopoDS_Compound made_faces;
+    builder.MakeCompound(made_faces);
+    for (int f = 0; f < result.face_count(); ++f) {
+      const NameList& names = result.face_names(f);
+      if (!names.empty() && names.front().compare(0, prefix.size(), prefix) == 0) {
+        builder.Add(made_faces, result.face(f));
+      }
+    }
+    const ShapeMap faulty = faulty_parts(made_faces);
+    std::vector<std::string> where;
+    for (int i = 1; i <= faulty.Extent(); ++i) {
+      const int f = faulty(i).ShapeType() == TopAbs_FACE ? result.face_index(faulty(i)) : -1;
+      if (f >= 0) {
+        where.push_back(detail::made_face(result.face_names(f).front(), feature, role, false));
+      }
+    }
+    if (where.empty()) {
+      return {};
+    }
+    const std::size_t more = where.size() - 1;
+    return "; the fault lies in " + where.front() +
+           (more == 0 ? std::string()
+                      : " (and in " + std::to_string(more) + " more " + (more == 1 ? "face" : "faces") + ")");
+  } catch (const Standard_Failure&) {
+    return {};
+  }
+}
+
 } // namespace
 
 // (util.hpp)
@@ -870,7 +911,14 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
     }
     // (An open result says so.)
     require_closed(body.occt(), namer.result(), role);
-    detail::require_valid(namer.result(), role); // throws with the problem
+    // Throws with the problem, and where it lies (mitcad#1253).
+    try {
+      detail::require_valid(namer.result(), role);
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const std::runtime_error& error) {
+      throw std::runtime_error(error.what() + faulty_where(*namer.shape(), feature, role));
+    }
   }
   require_closed(body.occt(), namer.result(), role);
   return namer.shape();
@@ -3204,10 +3252,26 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
   if (result) {
     require_closed(given.occt(), result->occt(), "fillet");
   }
+  // A result whose made faces reach to the wrong side of the body (a folded
+  // or spiked corner) gets a warning, never a refusal (mitcad#1253).
+  const auto warned = [&](const ShapePtr& rounded) {
+    // (Faces of one surface joined, mitcad#1261.)
+    const ShapePtr built = detail::join_same_surfaces(rounded);
+    if (built) {
+      if (const auto side = detail::dressup_side(input, owner)) {
+        const std::string warning =
+            detail::dressup_warning(given, *built, feature, "fillet", *side, largest_size(sets));
+        if (!warning.empty()) {
+          built->add_note(warning);
+        }
+      }
+    }
+    return built;
+  };
   // (The joined pieces split again: the body keeps its thread a turn a face,
   // as later operations near it take far longer on faces of many turns.)
   if (!result || pieces.empty()) {
-    return result;
+    return warned(result);
   }
   double reach = 0.0;
   for (const FilletSet& set : sets) {
@@ -3222,7 +3286,7 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
   } catch (const Standard_Failure&) {
     split = nullptr;
   }
-  return split ? split : result;
+  return warned(split ? split : result);
 }
 
 ShapePtr fillet(const std::string& feature, const Shape& body, const std::vector<std::string>& edges,
@@ -3340,7 +3404,18 @@ std::string chamfer_context(const Shape& body, const std::vector<ChamferSet>& se
 ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
                  ChamferCorner corner) {
   try {
-    return detail::chamfer_unexplained(feature, input, sets, corner);
+    // (Faces of one surface joined, mitcad#1261.)
+    const ShapePtr result = detail::join_same_surfaces(detail::chamfer_unexplained(feature, input, sets, corner));
+    // A result whose made faces reach to the wrong side of the body gets a
+    // warning, never a refusal (mitcad#1253).
+    if (const auto side = detail::dressup_side(input, select_edges(input, sets))) {
+      const std::string warning =
+          detail::dressup_warning(input, *result, feature, "chamfer", *side, largest_size(sets));
+      if (!warning.empty()) {
+        result->add_note(warning);
+      }
+    }
+    return result;
   } catch (const std::invalid_argument&) {
     throw;
   } catch (const Cancelled&) {
@@ -3421,7 +3496,30 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
         } catch (...) {
           // At the exact size, before the 0.1 % smaller retry: a chamfer
           // wider than a narrow face beside its edges goes on past the
-          // face's far edge, cut by the faces beyond (mitcad#1232).
+          // face's far edge, cut by the faces beyond (mitcad#1232). Not
+          // where it reaches exactly to that edge, its contact touching it
+          // (mitcad#1260): the error says where.
+          {
+            const ShapePtr copy = detail::working_copy(input);
+            const std::string tangent = detail::overflow_tangent(*copy, selected, [&](int e, int f) {
+              const int s = selected[static_cast<std::size_t>(e)];
+              if (s < 0) {
+                return 0.0;
+              }
+              const ChamferSpec& spec = sets[static_cast<std::size_t>(s)].spec;
+              if (spec.type == ChamferType::EqualDistance) {
+                return spec.distance;
+              }
+              const bool measured = measured_face(*copy, e, spec.reference_face, spec.flip) == f;
+              if (spec.type == ChamferType::TwoDistances) {
+                return measured ? spec.distance : spec.distance2;
+              }
+              return measured ? spec.distance : spec.distance * std::tan(spec.angle);
+            });
+            if (!tangent.empty()) {
+              throw std::runtime_error(tangent);
+            }
+          }
           std::string why;
           if (ShapePtr over = over_narrow_faces(feature, input, sets, selected, bevelled, &why)) {
             return over;

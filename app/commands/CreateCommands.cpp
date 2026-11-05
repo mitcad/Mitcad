@@ -32,13 +32,15 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(coilCommand(context));
   registry.add(helixCommand(context));
   registry.add(pipeCommand(context));
-  // the Pattern submenu and Mirror; the Machine Elements submenu (Gear,
-  // Pulley) follows from MainWindow::registerCommands.
+  // the Pattern submenu and Mirror, Envelope (mitcad#1276); the Machine
+  // Elements submenu (Gear, Pulley) follows from
+  // MainWindow::registerCommands.
   registry.add(rectangularPatternCommand(context));
   registry.add(circularPatternCommand(context));
   registry.add(pathPatternCommand(context));
   registry.add(pointPatternCommand(context));
   registry.add(mirrorCommand(context));
+  registry.add(envelopeCommand(context));
 }
 
 } // namespace mitcad

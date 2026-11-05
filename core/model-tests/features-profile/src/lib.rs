@@ -12,3 +12,5 @@ mod f3_tests;
 mod face_extrude_tests;
 mod hole_size_tests;
 mod profile_feature_tests;
+// A thread's fit to its face and the wall behind it (mitcad#1262).
+mod thread_fit_tests;
