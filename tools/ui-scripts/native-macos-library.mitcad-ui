@@ -14,7 +14,7 @@ focus-main
 # Two pictured tiles with readable captions, the groups as a readable
 # source list beside them and every control inside the dialog.
 command insert.library_component
-focus-dialog '^Insert from Library$'
+focus-dialog '^Browse Components$'
 expect-native-tiles count libraryResults 2
 expect-native-tiles pictures libraryResults 2
 expect-native-tiles captions libraryResults
@@ -90,7 +90,7 @@ expect-native-tiles current libraryResults iso4032
 mark
 key Return
 expect-log 'Part picker chose mitcad-parts/iso4032'
-expect-native-dialog-gone '^Insert from Library$'
+expect-native-dialog-gone '^Browse Components$'
 # A fastener has a mount frame (mitcad#1197): Place Component starts,
 # Return without a pick drops it in at the origin, Escape closes it.
 expect-log 'Command Place Component started'
@@ -102,7 +102,7 @@ focus-main
 
 # The pointer: a double click on a tile inserts it.
 command insert.library_component
-focus-dialog '^Insert from Library$'
+focus-dialog '^Browse Components$'
 expect-native-tiles count libraryResults 2
 
 # The screw's suppliers' articles behind a button, in a table with the
@@ -118,11 +118,11 @@ button '^Copy as TSV$'
 expect-log 'Supplier articles copied: [0-9]+ rows'
 button '^Close$'
 expect-native-dialog-gone '^Supplier Articles - '
-focus-dialog '^Insert from Library$'
+focus-dialog '^Browse Components$'
 mark
 native-tiles dblclick libraryResults iso4762
 expect-log 'Part picker chose mitcad-parts/iso4762'
-expect-native-dialog-gone '^Insert from Library$'
+expect-native-dialog-gone '^Browse Components$'
 # A fastener has a mount frame (mitcad#1197): Place Component starts,
 # Return without a pick drops it in at the origin, Escape closes it.
 expect-log 'Command Place Component started'
@@ -132,9 +132,10 @@ expect-log 'Inserted component .* from mitcad-parts'
 key Escape
 focus-main
 
-# Community Library shares the catalogue.
+# Community Library opens the same window on Community (mitcad#1283),
+# the same catalogue.
 command tools.community_library
-focus-dialog '^Community Library$'
+focus-dialog '^Browse Components$'
 expect-native-tiles count libraryResults 2
 expect-native-tiles pictures libraryResults 2
 expect-native-tiles captions libraryResults
@@ -142,5 +143,5 @@ expect-native-tiles groups partPickerGroups 4
 expect-native-tiles layout libraryResults
 screenshot-dialog '${MITCAD_TEST_WORK}/community-${MITCAD_TEST_COLOR_SCHEME}.png'
 button '^Close$'
-expect-native-dialog-gone '^Community Library$'
+expect-native-dialog-gone '^Browse Components$'
 focus-main

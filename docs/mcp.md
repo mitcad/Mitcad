@@ -82,9 +82,20 @@ The state line names the next step, and its button does it:
   authentication identities. **Disconnect** ends the chosen assistant's
   connections only (**Disconnect *assistant*** while others stay connected,
   an **Other** client by its own name) and keeps the design and its
-  unsaved edits and the assistant's setup. The old bridge connection ends;
-  reconnect in the assistant as the state line explains. A client that
-  closes its connection gets the same reconnect advice.
+  unsaved edits and the assistant's setup. The connection ends, and it
+  stays ended: until you choose **Connect** again (or **Allow *assistant*
+  to Connect Again** in the assistant indicator's menu), MitCad refuses
+  that assistant's new connections, also those its bridge makes by itself
+  (the line reads **Disconnected: *assistant* cannot connect to MitCad
+  until you connect it again**). Once allowed, a bridge still running
+  connects again by itself; otherwise reconnect in the assistant as the
+  state line explains. A client that closes its connection gets the same
+  reconnect advice.
+- **Installed in Claude Desktop, not connected: turn the MitCad extension
+  off and on in Claude Desktop, or start a new chat**, with **Open Claude
+  Desktop**: MitCad's extension is installed in Claude Desktop (MitCad
+  reads Claude Desktop's extensions folder), but Claude Desktop is not
+  connected now. Nothing needs to be installed again.
 - A failure: one short line in the error colour saying what to do, with
   **Try again**. The details (a client's error output, for instance) are
   in the line's tooltip.
@@ -283,10 +294,28 @@ as UTC milliseconds beside its private discovery record, along with its
 design title (the name its title bar shows, without the modified mark) and
 connected client names, without a token. The bridge names
 its choice and the other designs on stderr; MCP stdout stays JSON-RPC only.
-A connected bridge keeps its chosen process until the session ends.
+A connected bridge keeps its chosen process while that connection lasts.
 If none of the live instances has an activation time (for example, older
 applications), the bridge asks for `--instance` as before. For scripts,
 `--connect --instance ID` always selects exactly that ID from the list.
+
+Without `--instance`, the bridge outlives its window's connection
+(mitcad#1288): MitCad not started yet, the window closing or restarting
+its listener, or **Disconnect**. Until a window is there again it answers
+the client itself: `initialize`, the tool and resource lists and
+`model_reference` as a window would, and every other tool call with the
+error **MitCad is not running: start MitCad (or reopen the design) and
+try again** (a call the ending connection cut short: **The connection to
+MitCad ended during this call: check the design in MitCad, then try
+again**). It looks for a window every 2 s, and at once for a tool call;
+the window it finds gets the client's `initialize`,
+`notifications/initialized` and resource subscriptions first, under ids of
+the bridge's own (`mitcad-bridge-N`), whose answers stay in the bridge.
+So an assistant such as Claude Desktop never sees the server stop while
+MitCad runs. A window that refuses the client at `initialize` (its
+assistant was disconnected there, below) answers the calls with its reason
+and is asked again every 10 s. Only end of input ends the bridge; with
+`--instance` it ends with its window's connection, as before.
 
 An instance is live only when the token of its record authenticates on
 its port. A port that another program reuses is not sufficient. If the

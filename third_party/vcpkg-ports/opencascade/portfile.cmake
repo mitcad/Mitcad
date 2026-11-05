@@ -242,6 +242,12 @@ vcpkg_from_github(
         1230-chfi3d-rolls-before-a-blend-curving-away-as-fast-as-the-ball.patch
         1240-chfi3d-short-end-walked-on-until-both-contacts-leave.patch
         1270-shapefix-shell-closed-shell-found-as-faces-are-added.patch
+        1280-bopalgo-stick-vertices-of-face-pairs-by-an-index.patch
+        1281-brepclass3d-edge-faces-mapped-only-where-the-line-meets-an-edge.patch
+        1282-brepclass3d-face-intersectors-made-beside-each-other.patch
+        1283-intcurvesface-only-points-in-range-classified.patch
+        1284-bopalgo-buildersolid-solid-edges-mapped-once-for-its-holes.patch
+        1285-brepclass3d-point-classified-along-fixed-lines-once-the-segments-run-out.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

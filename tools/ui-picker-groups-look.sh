@@ -77,8 +77,8 @@ done
 # the mouse away (no hover, no tooltip).
 shot() {
   local window
-  window=$(xdotool search --onlyvisible --name '^Insert from Library$' 2> /dev/null | head -1)
-  [ -n "$window" ] || ui_fail "no window Insert from Library"
+  window=$(xdotool search --onlyvisible --name '^Browse Components$' 2> /dev/null | head -1)
+  [ -n "$window" ] || ui_fail "no window Browse Components"
   xdotool mousemove 5000 5000
   ui_wait_idle
   ui_sync "$window"
@@ -96,7 +96,7 @@ for theme in light dark; do
   ui_expect_log "Window style: $theme, " "the window's style is $theme"
   ui_mark
   ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_expect_new "Part picker groups: " "the groups logged"
   ui_expect_new "Library browser selected " "the parts listed"
   grep "^Part picker groups: " "$UI_LOG" | tail -1

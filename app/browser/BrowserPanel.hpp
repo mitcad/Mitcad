@@ -377,7 +377,8 @@ private:
   QSet<QString> m_foldedSelection; // the selection Collapse All left; showSelection does not reveal it again
   bool m_building = false;
   bool m_originShown = false;        // the Origin folder's light bulb, as last rebuilt
-  // The origin's rows greyed by its light bulb.
+  bool m_originsKindShown = true;    // View › Show's Origins (mitcad#1287), as last rebuilt
+  // The origin's rows greyed by its light bulb or View › Show.
   void styleOriginRows(QTreeWidgetItem* folder);
   QString m_logged;
   QSet<QString> m_loggedPlaces; // what logLayout logged a place for, and has not logged out of sight

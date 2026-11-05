@@ -122,6 +122,8 @@ bool MainWindow::readOnlyModelCommand(const QString& name) {
       // origin's.
       QStringLiteral("add_center_of_mass"), QStringLiteral("set_center_of_mass_visible"),
       QStringLiteral("delete_center_of_mass"),
+      // View › Show of the whole design (mitcad#1287): display state.
+      QStringLiteral("set_view_show"),
   };
   return allowed.contains(name);
 }

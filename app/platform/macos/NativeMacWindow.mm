@@ -557,6 +557,7 @@ struct NativeMacWindowState {
   bool frameInitialized = false;
   bool layingOut = false;
   QSize viewportSize;
+  int viewportContentTop = 0;
   CGFloat viewportScale = 0;
   bool historyAppearanceValid = false;
   bool historyAppearanceCanChange = false;
@@ -1890,6 +1891,7 @@ struct NativeMacWindowState {
     constexpr CGFloat ribbonHeight = 76;
     constexpr CGFloat margin = 12;
     constexpr CGFloat gap = 8;
+    const CGFloat contentTop = ribbonHeight + viewportContentTop;
     const CGFloat width = canvasRoot.bounds.size.width;
     const CGFloat height = canvasRoot.bounds.size.height;
     // The Chat card on the right edge (mitcad#1075); the other cards share
@@ -1917,22 +1919,22 @@ struct NativeMacWindowState {
       configurationWidth = std::max(cards.browser, std::min(configurationWidth, width - chatRoom - 2 * margin -
                                                             NativeCardWidths::freeCanvas - cards.inspector));
     }
-    layoutLeftColumn(ribbonHeight + margin, floor, margin, gap, cards, configurationWidth);
-    CGFloat rightTop = ribbonHeight + 190;
+    layoutLeftColumn(contentTop + margin, floor, margin, gap, cards, configurationWidth);
+    CGFloat rightTop = contentTop + 190;
     CGFloat available = std::max(CGFloat(1), floor - rightTop);
     inspectorCard.frame = NSMakeRect(width - margin - chatRoom - cards.inspector, rightTop, cards.inspector, available);
     const CGFloat formHeight = inspectorContentHeight();
     // Like the shared floating layout, a long form first grows above the
     // orientation cube before it needs a scrollbar.
     if (formHeight + 4 > available) {
-      rightTop = ribbonHeight + margin;
+      rightTop = contentTop + margin;
       available = std::max(CGFloat(1), floor - rightTop);
     }
     inspectorCard.frame = NSMakeRect(width - margin - chatRoom - cards.inspector, rightTop, cards.inspector,
                                      std::min(available, std::max(CGFloat(160), formHeight + 4)));
     // From below the toolbar's rows to above the timeline, as the Floating
     // chatCard.
-    const CGFloat chatTop = ribbonHeight + margin;
+    const CGFloat chatTop = contentTop + margin;
     chatCard.frame = NSMakeRect(width - margin - chatWidth, chatTop, chatWidth, std::max(CGFloat(1), floor - chatTop));
     // The navigation bar centred just above the message band's row
     // (mitcad#1099, mitcad#1098), as the Floating layout places it.
@@ -1942,18 +1944,18 @@ struct NativeMacWindowState {
       for (NSView* card in @[projectsCard, configurationCard, sidebarCard, inspectorCard, historyCard, chatCard, messageCard]) {
         if (card.hidden) continue;
         const NSRect rect = card.frame;
-        covered.emplace_back(int(std::lround(rect.origin.x)), int(std::lround(rect.origin.y - ribbonHeight)),
+        covered.emplace_back(int(std::lround(rect.origin.x)), int(std::lround(rect.origin.y - contentTop)),
                              int(std::lround(rect.size.width)), int(std::lround(rect.size.height)));
       }
       if (navigationCard != nil && !navigationCard.hidden) {
         const NSRect rect = navigationCard.frame;
-        covered.emplace_back(int(std::lround(rect.origin.x)), int(std::lround(rect.origin.y - ribbonHeight)),
+        covered.emplace_back(int(std::lround(rect.origin.x)), int(std::lround(rect.origin.y - contentTop)),
                              int(std::lround(rect.size.width)), int(std::lround(rect.size.height)));
       }
       const int bottom = historyCard.hidden ? 0 : int(std::lround(height - floor));
       // The cube and its arrows left of the inspector when it reaches the
       // top, and left of the Chat card.
-      const int cubeRight = !inspectorCard.hidden && rightTop < ribbonHeight + 190
+      const int cubeRight = !inspectorCard.hidden && rightTop < contentTop + 190
                               ? int(std::lround(cards.inspector + margin + gap + chatRoom))
                               : chatCard.hidden ? 0 : int(std::lround(chatRoom + margin));
       callbacks.viewportOverlays(QMargins(0, 0, cubeRight, bottom), covered);
@@ -2086,7 +2088,7 @@ struct NativeMacWindowState {
     for (const NativeMacCubeArrow& arrow : cubeArrowPresentation) {
       const QRect& at = arrow.geometry;
       cubeArrows[ns(arrow.id)].frame =
-          NSInsetRect(NSMakeRect(origin.x + at.x(), origin.y + at.y(), at.width(), at.height()), 2, 2);
+          NSInsetRect(NSMakeRect(origin.x + at.x(), origin.y + viewportContentTop + at.y(), at.width(), at.height()), 2, 2);
     }
   }
 
@@ -3637,18 +3639,28 @@ struct NativeMacWindowState {
     [window.contentView.superview layoutSubtreeIfNeeded];
     const CGFloat tabsRight = NSMaxX([workspaceTabs convertRect:workspaceTabs.bounds toView:nil]);
     CGFloat right = window.frame.size.width;
+    bool rightItemsOverflowed = false;
     for (NSToolbarItem* item in window.toolbar.items) {
-      NSView* view = item.view;
-      if (view.window == nil || view.hiddenOrHasHiddenAncestor) continue;
       if ([item.itemIdentifier isEqualToString:projectID] || [item.itemIdentifier isEqualToString:agentID] ||
           [item.itemIdentifier isEqualToString:searchID]) {
-        right = std::min(right, NSMinX([view convertRect:view.bounds toView:nil]));
+        NSView* view = item.view;
+        if (view.window == nil || view.hiddenOrHasHiddenAncestor) {
+          // AppKit may already have moved these controls to its overflow
+          // menu. Their absence is not spare space for the unfolded group.
+          rightItemsOverflowed = true;
+        } else {
+          right = std::min(right, NSMinX([view convertRect:view.bounds toView:nil]));
+        }
       }
     }
     const CGFloat freeLeft = tabsRight + 8 + quickUnfoldedWidth() + 16;
     const CGFloat freeRight = right - 16;
     const CGFloat title = std::min<CGFloat>(220, std::ceil(documentTitle.attributedStringValue.size.width));
-    const bool folded = freeRight - freeLeft < title;
+    const bool folded = rightItemsOverflowed || freeRight - freeLeft < title;
+    if (window.frame.size.width < 900) {
+      qDebug().noquote() << QStringLiteral("Native quick access fit: width %1, tabs right %2, left %3, right %4, title %5, folded %6")
+                               .arg(window.frame.size.width).arg(tabsRight).arg(freeLeft).arg(freeRight).arg(title).arg(folded);
+    }
     if (folded == quickFolded) return;
     quickFolded = folded;
     applyQuickFolded();
@@ -4050,6 +4062,13 @@ void NativeMacWindow::showChat(bool shown) {
 bool NativeMacWindow::chatShown() const { return !m_state->chatCard.hidden; }
 void NativeMacWindow::setDrawingOpen(bool open) { m_state->setDrawingOpen(open); }
 void NativeMacWindow::setStartPageShown(bool shown) { m_state->setStartPageShown(shown); }
+void NativeMacWindow::setViewportContentTop(int top) {
+  top = std::max(0, top);
+  if (m_state->viewportContentTop == top) return;
+  m_state->viewportContentTop = top;
+  m_state->layoutOverlays();
+  qDebug().noquote() << QStringLiteral("Native viewport notices: %1 points").arg(top);
+}
 void NativeMacWindow::setNavigationBar(const NativeMacNavigationBar& bar) { m_state->setNavigationBar(bar); }
 
 void* nativeDocumentWindowMenu(void* nativeWindow) {

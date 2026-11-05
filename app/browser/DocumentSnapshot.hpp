@@ -188,6 +188,20 @@ struct DocumentSnapshot {
   // the view is isolated to (bodies and occurrences; none: everything).
   bool originShown = false;
   Selection isolation;
+  // View › Show of the whole design (mitcad#1287): the kinds shown, from the
+  // `document` query's display.show (everything while it has none). The
+  // light bulbs (featureShown, originShown) stay as they are.
+  bool showOrigins = true;
+  bool showConstruction = true;
+  bool showSketches = true;
+  // Whether View › Show hides a feature's kind: a sketch, construction
+  // geometry or a joint origin.
+  bool kindHidden(const Feature& feature) const;
+  // Whether View › Show hides the feature of this uid (false for none).
+  bool kindHidden(const QString& feature) const;
+  // A sketch or a construction feature the view draws: its light bulb on
+  // and its kind shown.
+  bool isDrawn(const QString& feature) const { return isShown(feature) && !kindHidden(feature); }
   // The Center of Mass marker (mitcad#1094): the `center_of_mass` query's
   // answer while the design has one (its `marker` with the light bulb;
   // `error` when the query failed), else empty. Read only while there is

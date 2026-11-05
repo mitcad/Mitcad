@@ -43,6 +43,7 @@
 #include "mcp/LiveServer.hpp"
 #include "mcp/LogRing.hpp"
 #include "platform/MacChrome.hpp"
+#include "platform/WindowsTheme.hpp"
 #include "print/MaterialProperties.hpp"
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
@@ -360,6 +361,9 @@ int runApplication(int argc, char* argv[]) {
   }
   qInfo().noquote() << "Style:" << QApplication::style()->name() << "Chrome:"
                     << mitcad::chromeStyleName(mitcad::chromeStyle()) << QStringLiteral("(%1)").arg(chromeSource);
+  // Windows 10's dark app mode (mitcad#1282): Qt's own style with a dark palette
+  // while it is dark, before the first window; nothing elsewhere.
+  mitcad::win::followAppColorScheme();
   // What a restart keeps of this run's arguments (framework/Restart.hpp): its
   // settings, not its start actions nor --chrome.
   {

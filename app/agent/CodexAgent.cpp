@@ -115,6 +115,10 @@ QString CodexAgent::findProgram(QString* reason) const {
 
 bool CodexAgent::installedNow() const { return !findProgram(nullptr).isEmpty(); }
 
+QString CodexAgent::signedOutText() const {
+  return tr("Codex is not signed in: sign in here, or run codex logout, then codex login in a terminal.");
+}
+
 void CodexAgent::setReadiness(Readiness readiness, const QString& detail) {
   if (readiness == m_readiness && detail == m_detail) {
     return;

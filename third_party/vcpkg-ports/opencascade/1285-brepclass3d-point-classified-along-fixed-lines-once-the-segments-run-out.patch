@@ -1,0 +1,196 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepClass3d: the solid classifier (BRepClass3d_SClassifier::Perform) takes
+segments from the point to points of the faces one face after another
+(BRepClass3d_SolidExplorer::Segment, OtherSegment) and drops a segment that
+passes through an edge or a vertex or ends on a face's boundary; a face
+whose surface holds the point gives none, and a face seen almost edge-on
+gives only a weak one, which a later face holding the point discards. When
+the faces ran out, the line was rejected and State() counted it as OUT. A
+point in the plane of a far face of the shell, every other face of it seen
+almost edge-on, was so found outside: BRepCheck_Solid took a point of one
+cavity for lying outside the solid of another whose bottom face lies in its
+plane (BRepCheck_SubshapeNotInShape), and the face-merged union of a
+machine's 257 bodies was thrown away for the unmerged one (mitcad#1280). Now
+the point is classified along fixed lines instead, from the point towards
+32 points spread over the shape's box (an additive sequence of three
+irrational steps, the same on every call), each past the box's farthest
+corner, until one meets a face cleanly: a line that meets no face, touches
+one or passes through an edge or a vertex is passed over as the segments
+are. Only when none does is the line rejected, as before. Classifications
+whose segments did not run out are unchanged.
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
+@@ -32,6 +32,9 @@
+ #include <BRepAdaptor_Surface.hxx>
+ #include <Extrema_ExtPS.hxx>
+ #include <NCollection_LinearVector.hxx>
++#include <BRepBndLib.hxx>
++
++#include <cmath>
+ 
+ // modified by NIZHNY-MKK  Mon Jun 21 15:13:40 2004
+ static bool FaceNormal(const TopoDS_Face& aF, const double U, const double V, gp_Dir& aDN);
+@@ -54,6 +57,72 @@
+ 
+ static void Trans(double parmin, IntCurveSurface_TransitionOnCurve& tran, int& state);
+ 
++//=======================================================================
++// function : FixedLine
++// purpose  : Mitcad: the lines a point is classified along once the
++//            segments to the faces (SolidExplorer::Segment, OtherSegment)
++//            have run out, every one of them rejected (through an edge or a
++//            vertex, or ending on a face's boundary; a face whose surface
++//            holds the point gives none). Such a point counted as OUT: a
++//            point of one cavity in the plane of other cavities' faces,
++//            where they ran out, was found outside the solid of another
++//            cavity. The lines go from <theP> towards points spread over the
++//            box of <theShape> (a fixed sequence, the same on every call),
++//            each <thePar> long, past the box's farthest corner.
++//            <theIndex> counts the lines given (the box is computed with
++//            the first). False when the sequence has ended or the box is
++//            not finite.
++//=======================================================================
++static bool FixedLine(const TopoDS_Shape& theShape,
++                      const gp_Pnt&       theP,
++                      Bnd_Box&            theBox,
++                      int&                theIndex,
++                      gp_Lin&             theL,
++                      double&             thePar)
++{
++  constexpr int NB_FIXED_LINES = 32;
++  if (theIndex == 0)
++  {
++    BRepBndLib::Add(theShape, theBox, false);
++  }
++  if (theBox.IsVoid() || theBox.IsOpen())
++  {
++    return false;
++  }
++  double aXmin, aYmin, aZmin, aXmax, aYmax, aZmax;
++  theBox.Get(aXmin, aYmin, aZmin, aXmax, aYmax, aZmax);
++  double aFar = 0.0;
++  for (int aCorner = 0; aCorner < 8; ++aCorner)
++  {
++    const gp_Pnt aPnt((aCorner & 1) != 0 ? aXmax : aXmin,
++                      (aCorner & 2) != 0 ? aYmax : aYmin,
++                      (aCorner & 4) != 0 ? aZmax : aZmin);
++    aFar = std::max(aFar, theP.Distance(aPnt));
++  }
++  while (theIndex < NB_FIXED_LINES)
++  {
++    const double aK = static_cast<double>(theIndex);
++    ++theIndex;
++    // An additive sequence of three irrational steps (the first point the
++    // box's centre), kept off the box's sides.
++    const double aFx = 0.1 + 0.8 * std::fmod(0.5 + aK * 0.8191725133961645, 1.0);
++    const double aFy = 0.1 + 0.8 * std::fmod(0.5 + aK * 0.6710436067037893, 1.0);
++    const double aFz = 0.1 + 0.8 * std::fmod(0.5 + aK * 0.5497004779019703, 1.0);
++    const gp_Pnt aTarget(aXmin + aFx * (aXmax - aXmin),
++                         aYmin + aFy * (aYmax - aYmin),
++                         aZmin + aFz * (aZmax - aZmin));
++    const gp_Vec aV(theP, aTarget);
++    if (aV.Magnitude() <= Precision::Confusion())
++    {
++      continue;
++    }
++    theL   = gp_Lin(theP, gp_Dir(aV));
++    thePar = aFar + Precision::Confusion();
++    return true;
++  }
++  return false;
++}
++
+ //=================================================================================================
+ 
+ BRepClass3d_SClassifier::BRepClass3d_SClassifier()
+@@ -258,27 +327,47 @@
+   bool   isFaultyLine = true;
+   int    anIndFace    = 0;
+   double parmin       = 0.0;
++  // Mitcad: once the segments to the faces have run out, the point is
++  // classified along fixed lines (FixedLine) instead of being counted as OUT.
++  bool    isFixedLine   = false;
++  int     aNbFixedLines = 0;
++  Bnd_Box aShapeBox;
+   while (isFaultyLine)
+   {
+-    if (anIndFace == 0)
++    if (isFixedLine)
+     {
+-      iFlag = SolidExplorer.Segment(P, L, Par);
++      if (!FixedLine(SolidExplorer.GetShape(), P, aShapeBox, aNbFixedLines, L, Par))
++      {
++        myState = 1; // Faulty.
++        return;
++      }
++      iFlag   = 0;
++      myState = 0;
++      myFace.Nullify();
+     }
+     else
+     {
+-      iFlag = SolidExplorer.OtherSegment(P, L, Par);
+-    }
++      if (anIndFace == 0)
++      {
++        iFlag = SolidExplorer.Segment(P, L, Par);
++      }
++      else
++      {
++        iFlag = SolidExplorer.OtherSegment(P, L, Par);
++      }
+ 
+-    int aCurInd = SolidExplorer.GetFaceSegmentIndex();
++      int aCurInd = SolidExplorer.GetFaceSegmentIndex();
+ 
+-    if (aCurInd > anIndFace)
+-    {
+-      anIndFace = aCurInd;
+-    }
+-    else
+-    {
+-      myState = 1; // Faulty.
+-      return;
++      if (aCurInd > anIndFace)
++      {
++        anIndFace = aCurInd;
++      }
++      else
++      {
++        // The segments have run out, every one rejected: the fixed lines.
++        isFixedLine = true;
++        continue;
++      }
+     }
+ 
+     if (iFlag == 1)
+@@ -475,6 +564,13 @@
+ #ifdef OCCT_DEBUG
+                       std::cout << "*Problem ds BRepClass3d_SClassifier.cxx" << std::endl;
+ #endif
++                      if (isFixedLine)
++                      {
++                        // Mitcad: a fixed line touching a face decides
++                        // nothing: the next one.
++                        isFaultyLine = true;
++                        break;
++                      }
+                       continue; // ignore this point
+                     }
+ 
+@@ -522,6 +618,12 @@
+     {
+       isFaultyLine = true;
+     }
++    // Mitcad: a fixed line that met no face (it may pass by the shape), or
++    // whose nearest face's intersection failed, decides nothing either.
++    if (isFixedLine && !isFaultyLine && (myState == 0 || myState == 1))
++    {
++      isFaultyLine = true;
++    }
+   }
+ 
+ #ifdef OCCT_DEBUG

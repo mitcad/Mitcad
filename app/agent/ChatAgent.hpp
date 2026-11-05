@@ -76,6 +76,13 @@ public:
   virtual QString accountName() const = 0;
   // The models it offers; Codex's come from its app server once it ran.
   virtual QList<Model> models() const = 0;
+  // Where it was found when several of one kind are (mitcad#1289: a second
+  // Claude Code's folder, "~/.local/bin"); empty for the first or only one.
+  virtual QString place() const { return QString(); }
+  // The account it is signed in to as its own check tells it (an email
+  // address), and that account's plan; empty when it does not tell.
+  virtual QString account() const { return QString(); }
+  virtual QString subscription() const { return QString(); }
 
   virtual void check() = 0;
   // Only a file check (no process): the agent's program appeared since

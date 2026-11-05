@@ -3,7 +3,8 @@
 // (mitcad#947, tools/ui-chat-test.py): no AI. Copied into the test's
 // MITCAD_TEST_ASSISTANT_EXECUTABLES folder as `claude`, it answers
 // `--version`, `auth status` and `auth login` (signed in once the login ran:
-// a file in MITCAD_ASSISTANT_TEST_WORK), and in print mode speaks Claude
+// a file in MITCAD_ASSISTANT_TEST_WORK; a `claude-account` file beside the
+// copy names its own account, or `signed-out`), and in print mode speaks Claude
 // Code's stream-json: it checks the command line the chat gives it, starts
 // the MCP server of its --mcp-config (the real mitcad-cli bridge, with the
 // chat's marker) and, for each user message, streams an answer and calls
@@ -304,7 +305,9 @@ QJsonObject query(const QString& document, const QString& name) {
 }
 
 int printMode(const QStringList& args) {
-  appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("argv"), QJsonArray::fromStringList(args)}});
+  // Which copy started (mitcad#1289: several Claude Codes found).
+  appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("argv"), QJsonArray::fromStringList(args)},
+                                                   {QStringLiteral("program"), QCoreApplication::applicationFilePath()}});
   const auto value = [&args](const QString& option) {
     const qsizetype at = args.indexOf(option);
     return at >= 0 && at + 1 < args.size() ? args.at(at + 1) : QString();
@@ -1299,6 +1302,23 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (args.size() == 2 && args.first() == QStringLiteral("auth")) {
+    // A claude-account file beside this copy (mitcad#1289): the account it
+    // is signed in to, or `signed-out`; each copy its own.
+    QFile account(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("claude-account")));
+    if (args.at(1) == QStringLiteral("status") && account.open(QIODevice::ReadOnly)) {
+      const QString email = QString::fromUtf8(account.readAll()).trimmed();
+      if (email == QStringLiteral("signed-out")) {
+        std::fputs("{\"loggedIn\": false}\n", stdout);
+        return 1;
+      }
+      const QByteArray status = QJsonDocument(QJsonObject{{QStringLiteral("loggedIn"), true},
+                                                          {QStringLiteral("authMethod"), QStringLiteral("claude.ai")},
+                                                          {QStringLiteral("email"), email}})
+                                    .toJson(QJsonDocument::Compact);
+      std::fputs(status.constData(), stdout);
+      std::fputs("\n", stdout);
+      return 0;
+    }
     if (args.at(1) == QStringLiteral("status")) {
       const bool in = QFileInfo::exists(signedIn);
       std::fputs(in ? "{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}\n" : "{\"loggedIn\": false}\n", stdout);

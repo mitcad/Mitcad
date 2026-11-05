@@ -1,0 +1,43 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepClass3d: the classification of a point against a solid
+(BRepClass3d_SClassifier::Perform) mapped every edge of the solid to its
+faces for every point, though the map is read only where the line through
+the point passes through an edge. Against a solid of thousands of faces,
+making and freeing that map took most of each point's classification: the
+placement of a union's cavities (BOPAlgo_BuilderSolid) and the checker's
+test of a solid's shells (BRepCheck_Solid) classify tens of points against
+such a solid (mitcad#1279). The map is now made the first time it is read.
+The results are unchanged.
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
+index a7bed33d..ba64963e 100644
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
+@@ -229,9 +229,13 @@ void BRepClass3d_SClassifier::Perform(BRepClass3d_SolidExplorer& SolidExplorer,
+     return;
+   }
+ 
++  // The faces of each edge of the solid, mapped only when the line passes
++  // through an edge: mapping every edge of the solid for every point took
++  // most of the classification of points against a solid of thousands of
++  // faces (mitcad#1279).
+   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+     mapEF;
+-  TopExp::MapShapesAndAncestors(SolidExplorer.GetShape(), TopAbs_EDGE, TopAbs_FACE, mapEF);
++  bool isMappedEF = false;
+ 
+   BRepClass3d_BndBoxTreeSelectorLine aSelectorLine(aMapEV);
+ 
+@@ -332,6 +336,11 @@ void BRepClass3d_SClassifier::Perform(BRepClass3d_SolidExplorer& SolidExplorer,
+       {
+         // Line and edge.
+         aSelectorLine.GetEdgeParam(i, EE, param, Lpar);
++        if (!isMappedEF)
++        {
++          TopExp::MapShapesAndAncestors(SolidExplorer.GetShape(), TopAbs_EDGE, TopAbs_FACE, mapEF);
++          isMappedEF = true;
++        }
+         const NCollection_List<TopoDS_Shape>& ffs = mapEF.FindFromKey(EE); // ffs size == 2
+         if (ffs.Extent() != 2)
+         {

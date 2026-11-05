@@ -10,8 +10,8 @@
 # PETG and a printer Bench X. The library entries start by shortcuts of
 # the test's.
 #   1. With no design open (the empty Untitled window): Tools > Libraries
-#      (Alt+T, L) lists, in its groups, Insert from Library..., Community
-#      Library... | Components in This Design..., Publish to Library... |
+#      (Alt+T, L) lists, in its groups, Browse Components... (mitcad#1283)
+#      | Components in This Design..., Publish to Library... |
 #      Material Library..., Printer Library..., Process Library... |
 #      Library Sources....
 #   2. Material Library...: the Materials manager on the libraries, My
@@ -172,7 +172,7 @@ Ui-Step 'Libraries (L)'                  { Ui-Key 'l' }
 Ui-ExpectNew 'Libraries menu: ' 'the Libraries menu opened'
 $line = Ui-LoggedAfter 'Libraries menu: '
 $menu = $line.Substring($line.IndexOf('Libraries menu: ') + 'Libraries menu: '.Length)
-$expected = "Insert from Library$e | Community Library$e | - | Components in This Design$e | Publish to Library$e | - | " +
+$expected = "Browse Components$e | - | Components in This Design$e | Publish to Library$e | - | " +
             "Material Library$e | Printer Library$e | Process Library$e | - | Library Sources$e"
 if ($menu -ne $expected) { Ui-Fail "the Libraries menu is '$menu', expected '$expected'" }
 Write-Host 'ok   the Libraries menu in its four groups'

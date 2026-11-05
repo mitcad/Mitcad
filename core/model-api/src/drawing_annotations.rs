@@ -346,7 +346,12 @@ impl ViewAt<'_> {
     /// Whether a view point lies on a line the view draws as visible (its
     /// visible edges and the outlines of its cut faces).
     fn on_visible(&self, p: P2) -> bool {
-        let near = VISIBLE_NEAR / self.placed.map.scale;
+        self.on_visible_within(p, VISIBLE_NEAR / self.placed.map.scale)
+    }
+
+    /// Whether a view point lies within `near` (view mm) of a line the
+    /// view draws as visible.
+    fn on_visible_within(&self, p: P2, near: f64) -> bool {
         let projection = &self.placed.projection;
         let on_edge = projection
             .edges
@@ -358,6 +363,23 @@ impl ViewAt<'_> {
                 (0..lp.len())
                     .any(|i| annotate::segment_distance(p, lp[i], lp[(i + 1) % lp.len()]) <= near)
             })
+    }
+
+    /// Whether the view draws a round feature's lines (mitcad#1286): at
+    /// least half of `points` (view points along a circle seen end on, or
+    /// along a round face's outlines seen from the side) lie on its visible
+    /// lines, within a tenth of the feature's `radius` (a thread's crest,
+    /// drawn by convention, is not quite the hole's own circle) or
+    /// `VISIBLE_NEAR` on the sheet. A hole inside the part, which a view
+    /// without hidden lines leaves out, is not drawn: where its outline
+    /// crosses another line is not enough.
+    fn draws(&self, points: &[P2], radius: f64) -> bool {
+        let near = (VISIBLE_NEAR / self.placed.map.scale).max(0.1 * radius);
+        let on = points
+            .iter()
+            .filter(|p| self.on_visible_within(**p, near))
+            .count();
+        !points.is_empty() && 2 * on >= points.len()
     }
 }
 
@@ -744,6 +766,33 @@ fn seen_round(
         },
         sweep,
     ))
+}
+
+/// Whether a view draws a round face it sees from the side, its axis from
+/// `a` to `b` (view mm): one of its outlines, `radius` either side of the
+/// axis, lies on the view's visible lines (mitcad#1286). A hole across a
+/// bar, inside it, is not drawn by a view without hidden lines: its
+/// centreline would cross the bar alone, past the outline, between the
+/// holes the view sees end on.
+fn draws_outline(view: &ViewAt<'_>, a: P2, b: P2, radius: f64) -> bool {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let length = d[0].hypot(d[1]);
+    if length < 1e-12 {
+        return false;
+    }
+    let across = [-d[1] / length * radius, d[0] / length * radius];
+    [1.0, -1.0].into_iter().any(|side: f64| {
+        let along: Vec<P2> = [0.2, 0.4, 0.6, 0.8]
+            .into_iter()
+            .map(|t: f64| {
+                [
+                    a[0] + d[0] * t + across[0] * side,
+                    a[1] + d[1] * t + across[1] * side,
+                ]
+            })
+            .collect();
+        view.draws(&along, radius)
+    })
 }
 
 /// Where a section's plane cuts a planar face, as the view draws it: the
@@ -2320,7 +2369,8 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// mitcad#717: a half-cylinder hole's too), and a centreline on each
     /// round face it sees from the side whose ends turn half way round at
     /// least; inside a detail's circle, beside breaks and behind a
-    /// section's plane.
+    /// section's plane; on a view without hidden lines, only of what it
+    /// draws (mitcad#1286: not of the holes inside the part).
     fn automatic_marks(&self, view: &ViewAt<'_>) -> Vec<Group>;
 }
 
@@ -3191,6 +3241,19 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 if !view.sees(c) {
                     continue;
                 }
+                // Only a circle the view draws (mitcad#1286); points off
+                // its ends, eight along it.
+                if !spec.hidden {
+                    let along: Vec<P2> = annotate::arc_points3(center, normal, radius, start, end)
+                        .into_iter()
+                        .skip(1)
+                        .step_by(4)
+                        .map(|p| spec.project(p))
+                        .collect();
+                    if !view.draws(&along, radius) {
+                        continue;
+                    }
+                }
                 match circles
                     .iter_mut()
                     .find(|(o, _)| (o[0] - c[0]).abs() < 1e-6 && (o[1] - c[1]).abs() < 1e-6)
@@ -3202,7 +3265,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             for face in &geometry.cylinders {
                 if let Some((
                     Found {
-                        seen: Seen::Axis { a, b, .. },
+                        seen: Seen::Axis { a, b, radius },
                         ..
                     },
                     sweep,
@@ -3210,6 +3273,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     && sweep >= PI - 1e-6
                     && view.sees(a)
                     && view.sees(b)
+                    && (spec.hidden || draws_outline(view, a, b, radius))
                 {
                     let same =
                         |p: P2, q: P2| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6;

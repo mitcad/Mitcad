@@ -2792,6 +2792,7 @@ int cameraTurnTests();
 int valueStepTests();
 int recentDesignsTests();
 int uiCommandListTests();
+int orbitWrapTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2931,6 +2932,7 @@ int main(int argc, char* argv[]) {
     failures += valueStepTests();
     failures += recentDesignsTests();
     failures += uiCommandListTests();
+    failures += orbitWrapTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

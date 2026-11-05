@@ -79,8 +79,18 @@ public:
   ChatAgent* agent() const { return m_agent; }
   const std::vector<ChatAgent*>& agents() const { return m_agents; }
   // The agents found on this computer (a file check), and the chosen one
-  // whether found or not: the panel's switcher.
+  // whether found or not: the panel's switcher. Each Claude Code found is
+  // one (mitcad#1289).
   QList<ChatAgent*> detectedAgents() const;
+  // An agent's name in the switcher (its place beside it when several of
+  // its kind are found: "Claude Code (~/.local/bin)"), and its state there:
+  // checking, not found, not signed in, signed in as <account>, ready, and
+  // a known account failure after it (mitcad#1289).
+  static QString choiceName(const ChatAgent* candidate);
+  QString choiceState(const ChatAgent* candidate) const;
+  // Another agent found that is ready, offered where the chosen one cannot
+  // be used (its sign-in, its account); none: nullptr.
+  ChatAgent* readyAlternative() const;
   // Another agent: its setup is checked, and a new conversation starts in
   // it; it is the last used one from now on (chat/agent).
   void chooseAgent(const QString& id);
@@ -187,6 +197,11 @@ private:
   static bool sameState(const QJsonObject& a, const QJsonObject& b);
 
   void noteDetected();
+  // An agent's signals, once (each Claude Code found later, mitcad#1289).
+  void adopt(ChatAgent* candidate);
+  // The Claude Codes found besides the lookup's first one, as agents of
+  // their own (mitcad#1289); new ones only.
+  void addClaudeCodes();
   void accountFailed(const QJsonObject& account, const QString& text);
   void beginAccountProbe();
   // Check again's setup check has an outcome (mitcad#1155,
@@ -203,6 +218,7 @@ private:
   std::vector<ChatAgent*> m_agents;
   ChatAgent* m_agent = nullptr;
   QStringList m_detected; // the ids of the agents found, at the last look
+  QStringList m_claudePrograms; // the other Claude Codes' executables made agents
   ChatHistoryStore m_store;
   Activity m_activity = Activity::Idle;
   QString m_model;

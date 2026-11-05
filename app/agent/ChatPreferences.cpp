@@ -42,6 +42,11 @@ ChatPreferencesBox::ChatPreferencesBox(QWidget* parent)
     m_agent->addItem(preset.name, preset.id);
   }
   m_agent->addItem(tr("Custom command"), QStringLiteral("acp"));
+  // Another Claude Code found, chosen in the panel (mitcad#1289), stays
+  // the choice.
+  if (m_agent->findData(settings.agent) < 0 && settings.agent.startsWith(QStringLiteral("claude-"))) {
+    m_agent->insertItem(1, tr("Claude Code (another one found)"), settings.agent);
+  }
   m_agent->setCurrentIndex(std::max(0, m_agent->findData(settings.agent)));
   form->addRow(tr("Agent:"), m_agent);
   m_approvals = new QComboBox;

@@ -61,6 +61,10 @@ namespace mitcad {
 //   desktop's setting changes while Mitcad runs (QStyleHints::
 //   setColorScheme; Qt's GTK platform theme follows it, the generic one
 //   does not; tools/ui-theme-test.sh).
+// - MITCAD_TEST_WINDOWS10=1: Windows 10's dark app mode path (Qt's own
+//   style with a dark palette while the app mode is dark, mitcad#1282) on
+//   Windows 11 too, the build VM's (platform/WindowsTheme.hpp;
+//   tools/ui-windows-windows10-dark-test.ps1).
 inline QString testColorScheme() { return qEnvironmentVariable("MITCAD_TEST_COLOR_SCHEME"); }
 inline bool volumesLogged() {
   static const bool logged = qEnvironmentVariableIntValue("MITCAD_LOG_VOLUMES") != 0;

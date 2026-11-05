@@ -106,8 +106,9 @@ struct PickerPart {
   // by its options under the grid (mitcad#810).
   QJsonObject table;
   QString refused;      // not choosable: why (greyed, the reason in the tooltip)
-  // An index's library that is not fetched (Insert from Library, Community
-  // Library): a tile of its own in the group "Libraries to get".
+  // An index's library that is not fetched (Browse Components): a tile of
+  // its own in the group "Libraries to get"; with `component`, one of the
+  // components the index lists for it (mitcad#1283).
   bool libraryEntry = false;
 };
 

@@ -1333,9 +1333,15 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DDESIGN=${drawing}/drawing.mitcad"
             "-DWORK=${drawing}/out" -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-test.cmake")
   set_tests_properties(cli.export_drawing PROPERTIES FIXTURES_REQUIRED cli_drawing)
+  # A view's automatic centre marks only on the holes it draws, not on
+  # cross holes hidden inside a bar (mitcad#1286).
+  add_test(NAME cli.drawing_hidden_holes
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/drawing_cross_holes.json"
+            "-DWORK=${drawing}/hidden-holes" -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-hidden-holes-test.cmake")
   if(WIN32)
-    set_property(TEST cli.drawing_design cli.export_drawing APPEND PROPERTY ENVIRONMENT_MODIFICATION
-      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    set_property(TEST cli.drawing_design cli.export_drawing cli.drawing_hidden_holes APPEND PROPERTY
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()
 

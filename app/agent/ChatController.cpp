@@ -5,8 +5,10 @@
 #include <utility>
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QTimer>
 #include <QUuid>
@@ -104,6 +106,8 @@ ChatController::ChatController(ChatHost host, QObject* parent)
   // A custom command over the Agent Client Protocol (mitcad#1198): offered
   // once set in Preferences.
   m_agents.push_back(new AcpAgent(this));
+  // Every other Claude Code found, beside the first (mitcad#1289), comes
+  // with the first look.
   noteDetected();
   // The last used one; when it is not found and another is, that one.
   const QString chosen = ChatSettings::load().agent;
@@ -125,31 +129,10 @@ ChatController::ChatController(ChatHost host, QObject* parent)
   qInfo().noquote() << (bridge.isEmpty() ? QStringLiteral("Chat: bridge not found")
                                          : QStringLiteral("Chat: bridge %1").arg(QDir::toNativeSeparators(bridge)));
   qInfo().noquote() << QStringLiteral("Chat: agent %1 (found: %2)")
-                           .arg(m_agent->name(), m_detected.isEmpty() ? QStringLiteral("none")
-                                                                      : m_detected.join(QStringLiteral(", ")));
+                           .arg(choiceName(m_agent), m_detected.isEmpty() ? QStringLiteral("none")
+                                                                          : m_detected.join(QStringLiteral(", ")));
   for (ChatAgent* candidate : m_agents) {
-    connect(candidate, &ChatAgent::modelsChanged, this, [this, candidate] {
-      if (candidate == m_agent) {
-        emit setupChanged();
-      }
-    });
-    connect(candidate, &ChatAgent::readinessChanged, this, [this, candidate] {
-      if (candidate == m_agent) {
-        qInfo().noquote() << QStringLiteral("Chat state: %1").arg(readinessName(m_agent->readiness()));
-        emit setupChanged();
-        settleAccountCheck(false);
-      }
-    });
-    connect(candidate, &ChatAgent::panelEvent, this, [this, candidate](const QJsonObject& event) {
-      if (candidate == m_agent) {
-        onEvent(event);
-      }
-    });
-    connect(candidate, &ChatAgent::exited, this, [this, candidate](int code, const QString& errors, bool stopped) {
-      if (candidate == m_agent) {
-        onExited(code, errors, stopped);
-      }
-    });
+    adopt(candidate);
   }
   // Preferences cleared every design's history.
   connect(&ChatNotifier::instance(), &ChatNotifier::historyCleared, this, [this] {
@@ -172,7 +155,104 @@ ChatController::ChatController(ChatHost host, QObject* parent)
   });
 }
 
+void ChatController::adopt(ChatAgent* candidate) {
+  connect(candidate, &ChatAgent::modelsChanged, this, [this, candidate] {
+    if (candidate == m_agent) {
+      emit setupChanged();
+    }
+  });
+  connect(candidate, &ChatAgent::readinessChanged, this, [this, candidate] {
+    if (candidate == m_agent) {
+      qInfo().noquote() << QStringLiteral("Chat state: %1").arg(readinessName(m_agent->readiness()));
+      emit setupChanged();
+      settleAccountCheck(false);
+    } else {
+      emit setupChanged(); // its state in the switcher (mitcad#1289)
+    }
+  });
+  connect(candidate, &ChatAgent::panelEvent, this, [this, candidate](const QJsonObject& event) {
+    if (candidate == m_agent) {
+      onEvent(event);
+    }
+  });
+  connect(candidate, &ChatAgent::exited, this, [this, candidate](int code, const QString& errors, bool stopped) {
+    if (candidate == m_agent) {
+      onExited(code, errors, stopped);
+    }
+  });
+}
+
+void ChatController::addClaudeCodes() {
+  const QString first = QFileInfo(mcp::assistantExecutable(QStringLiteral("claude"))).canonicalFilePath();
+  const QString testHome =
+      qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") ? QString() : qEnvironmentVariable("MITCAD_TEST_ASSISTANT_HOME");
+  const QString home = testHome.isEmpty() ? QDir::homePath() : testHome;
+  // After the Claude Codes already there, before Codex.
+  auto at = std::find_if(m_agents.begin(), m_agents.end(),
+                         [](const ChatAgent* candidate) { return !qobject_cast<const ClaudeCodeAgent*>(candidate); });
+  const bool adopting = m_agent != nullptr; // later looks; the constructor adopts every agent itself
+  for (const QString& program : mcp::assistantExecutables(QStringLiteral("claude"))) {
+    if (program == first || m_claudePrograms.contains(program)) {
+      continue;
+    }
+    m_claudePrograms << program;
+    const QString digest =
+        QString::fromLatin1(QCryptographicHash::hash(program.toUtf8(), QCryptographicHash::Sha256).toHex().left(8));
+    // The one Claude Desktop keeps (claude-code/<version>/claude).
+    const QDir folder = QFileInfo(program).absoluteDir();
+    const bool desktop = QFileInfo(folder.absolutePath()).dir().dirName() == QStringLiteral("claude-code");
+    const QString place = desktop ? tr("Claude Desktop's") : mcp::assistantPlace(program, home);
+    auto* found = new ClaudeCodeAgent(program, QStringLiteral("claude-") + digest, place, this);
+    at = m_agents.insert(at, found) + 1;
+    qInfo().noquote() << QStringLiteral("Chat: another Claude Code at %1").arg(QDir::toNativeSeparators(program));
+    if (adopting) {
+      adopt(found);
+    }
+  }
+}
+
+QString ChatController::choiceName(const ChatAgent* candidate) {
+  return candidate->place().isEmpty() ? candidate->name() : tr("%1 (%2)").arg(candidate->name(), candidate->place());
+}
+
+QString ChatController::choiceState(const ChatAgent* candidate) const {
+  QString state;
+  switch (candidate->readiness()) {
+  case ChatAgent::Readiness::Checking: state = tr("checking"); break;
+  case ChatAgent::Readiness::Missing: state = tr("not found"); break;
+  case ChatAgent::Readiness::Outdated: state = tr("needs an update"); break;
+  case ChatAgent::Readiness::SignedOut: state = candidate->asksForKey() ? tr("needs an API key") : tr("not signed in"); break;
+  case ChatAgent::Readiness::SigningIn: state = tr("signing in"); break;
+  case ChatAgent::Readiness::Ready:
+    // Only the agents with a sign-in of their own are signed in.
+    if (candidate->configuredInPreferences()) {
+      state = tr("ready");
+    } else if (candidate->account().isEmpty()) {
+      state = tr("signed in");
+    } else {
+      state = tr("signed in as %1").arg(candidate->account());
+    }
+    break;
+  }
+  const QJsonObject failure = m_accountErrors.value(candidate->id());
+  if (!failure.isEmpty()) {
+    state += QStringLiteral(" · ") + failure.value(QStringLiteral("reason")).toString();
+  }
+  return state;
+}
+
+ChatAgent* ChatController::readyAlternative() const {
+  for (ChatAgent* candidate : detectedAgents()) {
+    if (candidate != m_agent && candidate->readiness() == ChatAgent::Readiness::Ready &&
+        !m_accountErrors.contains(candidate->id())) {
+      return candidate;
+    }
+  }
+  return nullptr;
+}
+
 void ChatController::noteDetected() {
+  addClaudeCodes();
   QStringList found;
   for (ChatAgent* candidate : m_agents) {
     if (candidate->installedNow()) {
@@ -239,7 +319,7 @@ void ChatController::chooseAgent(const QString& id) {
     settings.agent = id;
     settings.save();
     m_model.clear();
-    qInfo().noquote() << QStringLiteral("Chat: agent %1").arg(m_agent->name());
+    qInfo().noquote() << QStringLiteral("Chat: agent %1").arg(choiceName(m_agent));
     // A new conversation in it: the other agent's is not its own.
     startOver(true);
     m_agent->check();
@@ -266,6 +346,14 @@ void ChatController::refreshSetup(bool full) {
   }
   if (full) {
     m_agent->check();
+    // The others found too: their sign-in shows in the switcher before one
+    // is chosen (mitcad#1289). Not the custom command, which is started
+    // only once chosen.
+    for (ChatAgent* candidate : detectedAgents()) {
+      if (candidate != m_agent && !candidate->running() && qobject_cast<AcpAgent*>(candidate) == nullptr) {
+        candidate->check();
+      }
+    }
   } else if (m_agent->readiness() == ChatAgent::Readiness::Missing && m_agent->installedNow()) {
     // Installed meanwhile: on without a restart.
     qInfo().noquote() << QStringLiteral("Chat: %1 appeared").arg(m_agent->name());

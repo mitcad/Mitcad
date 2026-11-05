@@ -32,6 +32,14 @@
 #      `distance_type`) and the copies' centres.
 #   4. Opened again: each pattern's panel shows its stored options (Extent
 #      and Symmetric chosen, the Extent label; Symmetric checked).
+#   5. The Pattern Type from the selection made before the command
+#      (mitcad#1290), as tools/ui-pattern-options-test.sh does, on a
+#      30 x 20 x 6 block with a 5 mm hole cut through it (Extrude2, F4; its
+#      wall F4:side(c1) on F2.b0): the hole's wall selected in the view,
+#      then Extrude2 in the timeline, start Rectangular Pattern, Circular
+#      Pattern, Pattern on Path and Mirror with Pattern Type Features and
+#      the cut in Objects; Body1 selected in the browser starts Rectangular
+#      Pattern with Bodies.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-pattern-options-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -41,7 +49,8 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'solid.rectangular_pattern' = 'F7'; 'solid.circular_pattern' = 'F8' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.rectangular_pattern' = 'F7'; 'solid.circular_pattern' = 'F8';
+  'solid.path_pattern' = 'F9'; 'solid.mirror' = 'F11' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -62,6 +71,27 @@ Set-Content -Encoding ascii $modelScript @'
 '@
 $made = & $cli run $modelScript --save $design
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $design)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
+
+# Sketch1 (F1), Extrude1 (F2): the block, Body1; Sketch2 (F3), Extrude2
+# (F4): the hole, cut through all (part 5).
+$holeScript = Join-Path $work 'hole.json'
+$holeDesign = Join-Path $work 'pattern-preselect.mitcad'
+Set-Content -Encoding ascii $holeScript @'
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-15, -10], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 6}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [-7, 0], "diameter": 5},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c1}"}],
+    "extent": {"type": "through_all"}, "operation": "cut", "participants": ["F2.b0"]}}
+]
+'@
+$made = & $cli run $holeScript --save $holeDesign
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $holeDesign)) { Ui-Fail "mitcad-cli (the block with a hole): $($made -join ' / ')" }
+$bore = 'F4:side(c1)'
 
 # Expect-Hidden "Panel <command> input <id>" "description": the input's
 # last logged place says it is hidden (the panel logs its places again when
@@ -343,5 +373,61 @@ Ui-ExpectNew 'Preview Circular Pattern: ok' 'previewed' 30
 Ui-Mark
 Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Circular Pattern cancelled' 'left as it was'
+
+Write-Host '--- 5. The Pattern Type from the selection made before (mitcad#1290)'
+# Starts-With command key type objects what: the command started by its
+# shortcut with the selection made before: its panel's Pattern Type is
+# type and its Objects row holds objects. Cancelled, and the selection
+# cleared for the next case.
+function Starts-With([string]$Command, [string]$Key, [string]$Type, [string]$Objects, [string]$What) {
+  Ui-Mark
+  Ui-Step "$Command ($Key)"              { Ui-Key $Key }
+  Ui-ExpectNew "Command $Command started" "$Command started"
+  Ui-ExpectNew "Panel $Command choices: object_type=$Type," "${What}: $Command's Pattern Type $Type"
+  Ui-ExpectNew "$Command Objects: $Objects" "${What}: $Objects in $Command's Objects"
+  Ui-Mark
+  Ui-Step 'cancel (Esc)'                 { Ui-Key 'Escape' }
+  Ui-ExpectNew "Command $Command cancelled" "$Command cancelled"
+  Ui-Step 'clear the selection (Esc)'    { Ui-Key 'Escape' }
+  Ui-Sync
+}
+# Select-Wall: the hole's wall selected in the view. Measure first for the
+# log's pick place of the wall: it takes faces, edges and vertices, as an
+# idle click does, so its place for the wall is one no edge or vertex
+# takes (the patterns' Features input logs places among faces only, where
+# the rim may take an idle click; Fillet's, among faces and edges, lay on
+# the rim's seam vertex on Windows). Cancelled before the click.
+function Select-Wall {
+  Ui-Mark
+  Ui-Step 'measure (I)'                  { Ui-Key 'i' }
+  Ui-ExpectNew "Pick face F2.b0/$bore at" 'the hole''s wall can be picked'
+  $wall = Ui-PickAt "face F2.b0/$bore"
+  Ui-Mark
+  Ui-Step 'cancel (Esc)'                 { Ui-Key 'Escape' }
+  Ui-ExpectNew 'Command Measure cancelled' 'Measure cancelled'
+  Ui-Mark
+  Ui-Step 'select the hole''s wall'      { Ui-Click $wall[0] $wall[1] }
+  Ui-ExpectNew "Selected: 1 face [face $bore of F2.b0" 'the hole''s wall selected'
+}
+$patterns = @(@('Rectangular Pattern', 'F7'), @('Circular Pattern', 'F8'), @('Pattern on Path', 'F9'), @('Mirror', 'F11'))
+Ui-StartApp 'pattern-preselect' @('--open', $holeDesign)
+Ui-ExpectLog 'pattern-preselect.mitcad' 'the block with a hole opened'
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-ExpectLog 'Bodies shown: F2.b0' 'the block shown'
+foreach ($pattern in $patterns) {
+  Select-Wall
+  Starts-With $pattern[0] $pattern[1] 'features' '1 feature [feature F4]' 'the hole''s wall'
+}
+foreach ($pattern in $patterns) {
+  Ui-Mark
+  Ui-Step 'select Extrude2 in the timeline' { Ui-ClickLogged 'Timeline Extrude2' }
+  Ui-ExpectNew 'Selected: 1 feature [feature F4' 'the hole''s cut selected'
+  Starts-With $pattern[0] $pattern[1] 'features' '1 feature [feature F4]' 'the cut in the timeline'
+}
+Ui-Mark
+Ui-Step 'select Body1 in the browser'    { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
+Ui-ExpectNew 'Selected: 1 body [body F2.b0]' 'Body1 selected'
+Starts-With 'Rectangular Pattern' 'F7' 'bodies' '1 body [body F2.b0]' 'a body'
+if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 
 Ui-Finish 'UI Windows pattern options test'

@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138): the
+# Start page and the Browser are dark in the dark app mode and light in the
+# light one, as the window draws them ("TestDriver: widget theme ..."):
+#   1. The Start tab at launch in the dark app mode
+#      (MITCAD_TEST_COLOR_SCHEME=dark, asked for again here).
+#   2. The light app mode, after a switch while Mitcad runs.
+#   3. The dark app mode again.
+#   4. The Solid tab: the Browser in the dark app mode.
+# Run with MITCAD_START_PAGE=1 by tools/ui-windows-windows10-dark-test.ps1,
+# with the Windows 10 path forced (MITCAD_TEST_WINDOWS10=1 over the
+# windowsvista style) and without it (Windows 11's own style, as before);
+# the test reads the log for which path ran.
+expect-ever '^Start page shown$' 30
+wait-idle
+
+# 1. Dark at launch.
+color-scheme dark
+wait-idle
+sleep 500
+expect-widget-theme startPage dark
+
+# 2. Light.
+color-scheme light
+wait-idle
+sleep 500
+expect-widget-theme startPage light
+
+# 3. Dark again.
+color-scheme dark
+wait-idle
+sleep 500
+expect-widget-theme startPage dark
+
+# 4. The Browser.
+expect-ever '^Ribbon tab SOLID at ' 10
+mark
+click-logged '^Ribbon tab SOLID at '
+expect-log '^Start page hidden$'
+wait-idle
+sleep 500
+expect-widget-theme modelBrowserTree dark
+expect-never 'TestDriver: FAIL'

@@ -121,7 +121,7 @@ Ui-FocusMain
 Write-Host '--- 2. Insert from Library: empty until Update (mitcad#317)'
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew "Library search '': 0 components, 0 libraries" 'nothing listed before a fetch'
 Ui-ExpectNew 'Library browser empty: nothing fetched yet, press Update' 'the empty list says to press Update'
 Ui-Mark
@@ -143,7 +143,7 @@ Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Library browser selected test-blocks/block: version ' 'the block selected'
 Ui-Mark
 Ui-Step 'Update (Alt+U)'                 { Ui-Key 'alt+u' }
@@ -153,15 +153,15 @@ Ui-ExpectNew 'Library fetch of 2 source(s): 1 failed' 'one failure' 30
 Ui-ExpectNew 'Library browser kept the selection component|' 'the search ran again, the block kept'
 Ui-FocusDialog '^Fetch Libraries$'
 Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 
 Write-Host '--- 4. The part picker: a group, a search, a star, Favorites, In this design (mitcad#418)'
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
-Ui-ExpectNew 'Part picker opened: 1 parts for Insert from Library' 'the results as the picker grid'
+Ui-FocusDialog '^Browse Components$'
+Ui-ExpectNew 'Part picker opened: 1 parts for Browse Components' 'the results as the picker grid'
 Ui-ExpectNew 'Part picker in this design: 0 parts' 'no library part in the design yet'
 Ui-Mark
 Ui-Step 'the group Blocks (Alt+O, B)'    { Ui-Key 'alt+o'; Type-Ahead 'B' }
@@ -188,7 +188,7 @@ Ui-ExpectNew 'Part picker chose test-blocks/block' 'chosen in the picker'
 Ui-ExpectNew 'Inserted component Test block (linked) from test-blocks ' 'the block inserted'
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Part picker in this design: 1 parts: test-blocks/block x1' 'the block in this design'
 Ui-ExpectNew 'Part picker group All components: 1 parts, first test-blocks/block' 'All components again'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
@@ -239,7 +239,7 @@ Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Mark
 Ui-Step 'Update (Alt+U)'                 { Ui-Key 'alt+u' }
 Ui-ExpectNew "Library fetched: library Test wood (test-wood) from $wood" 'the wood library fetched' 30
@@ -247,7 +247,7 @@ Ui-ExpectNew "Library fetched: library Test sheets (test-sheets) from $sheets" '
 Ui-ExpectNew 'Library fetch of 4 source(s): 1 failed' 'only the broken source fails' 30
 Ui-FocusDialog '^Fetch Libraries$'
 Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew ', Wood/Sheets' "the groups as a tree, the other library's Sheets in the same Wood"
 $groupsTree = Ui-LastMatch '^Part picker groups: (.*)$'
 # By name, then Wood's count of both libraries' parts (mitcad#1015).
@@ -287,7 +287,7 @@ Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Wood (2) (folded)' 'the fold remembered'
 $groupsTree = Ui-LastMatch '^Part picker groups: (.*)$'
 if ("$groupsTree" -like '*Wood/Beams*') { Ui-Fail "a folded group's subgroups are shown: '$groupsTree'" }
@@ -359,14 +359,14 @@ Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Mark
 Ui-Step 'Update (Alt+U)'                 { Ui-Key 'alt+u' }
 Ui-ExpectNew "Library fetched: library Test screws (test-screws) from $screws" 'the screws fetched' 30
 Ui-ExpectNew 'source(s): 1 failed' 'only the broken source fails' 30
 Ui-FocusDialog '^Fetch Libraries$'
 Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Step 'All components (Alt+O, A)'           { Ui-Key 'alt+o'; Type-Ahead 'A' }
 # The Supplier filter (mitcad#1015): the groups' counts under it; the
 # groups with none of Acme's parts (Wood, Slot profile, Blocks and
@@ -436,7 +436,7 @@ Ui-ExpectNew 'Supplier articles copied: 2 rows' 'both articles copied'
 Ui-Step 'Open Link (Alt+L)'              { Ui-Key 'alt+l' }
 Ui-ExpectNew 'Supplier link opened: https://acme.example.org' "the supplier's site"
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
 Ui-FocusMain
 Ui-ExpectNew 'Inserted component DIN 912 M6x8 (linked) from test-screws' 'the part named by DIN 912'

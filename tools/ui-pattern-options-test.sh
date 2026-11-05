@@ -12,7 +12,14 @@
 #     100 mm; the added line carries the options;
 #   - Circular Pattern about Z, 3 in 90 degrees, Symmetric;
 #   - saved; mitcad-cli reads the stored definitions and the copies'
-#     centres; opened again, the panels show the stored options.
+#     centres; opened again, the panels show the stored options;
+#   - the Pattern Type from the selection made before the command
+#     (mitcad#1290), on a 30 x 20 x 6 block with a 5 mm hole cut through it
+#     (Extrude2, F4; its wall F4:side(c1) on F2.b0): the hole's wall
+#     selected in the view, then the hole's Extrude2 in the timeline, start
+#     Rectangular Pattern, Circular Pattern, Pattern on Path and Mirror with
+#     Pattern Type Features and the cut in Objects; Body1 selected in the
+#     browser starts Rectangular Pattern with Bodies.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-pattern-options-test.sh [screenshot.png]
@@ -35,6 +42,25 @@ cat > "$WORK/cube.json" << 'EOF'
 EOF
 "$CLI" run "$WORK/cube.json" --save "$WORK/cube.mitcad" > "$WORK/cli.log" 2>&1 ||
   { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+
+# Sketch1 (F1), Extrude1 (F2): the block, Body1; Sketch2 (F3), Extrude2
+# (F4): the hole, cut through all.
+cat > "$WORK/hole.json" << 'EOF'
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-15, -10], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 6}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [-7, 0], "diameter": 5},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c1}"}],
+    "extent": {"type": "through_all"}, "operation": "cut", "participants": ["F2.b0"]}}
+]
+EOF
+"$CLI" run "$WORK/hole.json" --save "$WORK/hole.mitcad" > "$WORK/cli.log" 2>&1 ||
+  { cat "$WORK/cli.log"; ui_fail "mitcad-cli (the block with a hole)"; }
+BORE='F4:side(c1)'
 
 # expect_hidden "Panel <command> input <id>" description: the input's last
 # logged place says it is hidden.
@@ -101,6 +127,23 @@ edit_timeline() {
   sleep 0.5
   ui_sync
   ui_double_click_logged "$1"
+}
+
+# starts_with COMMAND TYPE OBJECTS WHAT: COMMAND started from the search
+# with the selection made before (mitcad#1290): its panel's Pattern Type
+# is TYPE and its Objects row holds OBJECTS. Cancelled, and the selection
+# cleared for the next case.
+starts_with() {
+  ui_mark
+  ui_step "$1 (search)"                    ui_command "$1"
+  ui_expect_new "Command $1 started" "$1 started"
+  ui_expect_new "Panel $1 choices: object_type=$2," "$4: $1's Pattern Type $2"
+  ui_expect_new "$1 Objects: $3" "$4: $3 in $1's Objects"
+  ui_mark
+  ui_step "cancel (Esc)"                   ui_key Escape
+  ui_expect_new "Command $1 cancelled" "$1 cancelled"
+  ui_step "clear the selection (Esc)"      ui_key Escape
+  ui_sync
 }
 
 ui_start_display
@@ -213,6 +256,46 @@ ui_expect_new "Panel Circular Pattern checks: symmetric=on" "Symmetric checked"
 ui_mark
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Circular Pattern cancelled" "left as it was"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- The Pattern Type from the selection made before (mitcad#1290)"
+ui_stop_app
+ui_start_app --open "$WORK/hole.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_expect_log "Bodies shown: F2.b0" "the block shown"
+# select_wall: the hole's wall selected in the view. Measure first for the
+# log's pick place of the wall: it takes faces, edges and vertices, as an
+# idle click does, so its place for the wall is one no edge or vertex
+# takes (the patterns' Features input logs places among faces only, where
+# the rim may take an idle click; Fillet's, among faces and edges, lay on
+# the rim's seam vertex on Windows). Cancelled before the click.
+select_wall() {
+  local wall
+  ui_mark
+  ui_step "measure (search)"               ui_command "Measure"
+  ui_expect_new "Pick face F2.b0/$BORE at" "the hole's wall can be picked"
+  wall=$(ui_pick_at "face F2.b0/$BORE")
+  ui_mark
+  ui_step "cancel (Esc)"                   ui_key Escape
+  ui_expect_new "Command Measure cancelled" "Measure cancelled"
+  ui_mark
+  ui_step "select the hole's wall"         xdotool mousemove $wall click 1
+  ui_expect_new "Selected: 1 face [face $BORE of F2.b0" "the hole's wall selected"
+}
+for command in "Rectangular Pattern" "Circular Pattern" "Pattern on Path" "Mirror"; do
+  select_wall
+  starts_with "$command" features "1 feature [feature F4]" "the hole's wall"
+done
+for command in "Rectangular Pattern" "Circular Pattern" "Pattern on Path" "Mirror"; do
+  ui_mark
+  ui_step "select Extrude2 in the timeline" ui_click_logged "Timeline Extrude2"
+  ui_expect_new "Selected: 1 feature [feature F4" "the hole's cut selected"
+  starts_with "$command" features "1 feature [feature F4]" "the cut in the timeline"
+done
+ui_mark
+ui_step "select Body1 in the browser"      ui_click_logged "Browser Root/Bodies/Body1"
+ui_expect_new "Selected: 1 body [body F2.b0]" "Body1 selected"
+starts_with "Rectangular Pattern" bodies "1 body [body F2.b0]" "a body"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI pattern options test"

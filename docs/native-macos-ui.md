@@ -184,6 +184,11 @@ menu tracking or WindowServer foreground-input acceptance. See the
   repaint the viewport only when its size or backing scale changes.
   Settings, view controls and project utilities keep their intended menu-bar
   locations; search-only settings pages stay available in command search.
+  View › Show (Origins, Construction, Sketches of the whole design,
+  mitcad#1287) is a submenu of the shared View menu, so the native menu bar
+  has it in the same place with the same check marks (`refreshNativeActions`
+  walks the Qt menus' submenus); the commands are `view.show_origins`,
+  `view.show_construction` and `view.show_sketches`.
 - The OCCT viewport spans the full document window width below the ribbon.
   The Browser floats over its left edge and the inspector floats on
   the right, leaving the canvas width unchanged when either card is hidden.
@@ -401,7 +406,11 @@ the AppKit ribbon's button and Export menu.
 
 ### Part catalogue and Component Picker
 
-Insert from Library, Community Library and the Component Picker present the
+Browse Components (mitcad#1283: one window, which Insert from Library and
+Community Library open on its Installed and Community views; Tools ›
+Libraries has the one entry in the native menu too, which reads the Qt
+menu; its views' tabs, a `QTabBar`, are the generic bridge's pop-up
+button with the same three entries) and the Component Picker present the
 shared part catalogue (`PartGrid`) with a dedicated adapter
 (`platform/macos/NativeCollection.mm`, mitcad#813) rather than generic
 rows. The groups are a source list of readable width with the shared
@@ -1119,7 +1128,9 @@ folds ("Native quick access hidden", "Native quick access shown"). The group fol
 by `TitleBar::updateQuickFold`'s rule: when the document's name, from the
 unfolded group's right to the project, agent and search items, 16 points
 off each, would have less room than its width (at most the title's 220
-points).
+points). If AppKit has already moved a configured project, agent or
+search item into the toolbar's overflow menu, the group folds too: an
+overflowed control's missing frame is not free space for the title.
 
 `app.ui-macos-native-quick-access` (`tools/ui-macos-native-quick-access-test.sh`)
 opens a saved plate and checks the default buttons, Save disabled with

@@ -5,15 +5,18 @@
 // - LibrariesDialog: the sources (libraries and community indexes, on or
 //   off, and Auto-update: fetched in the background at start-up,
 //   mitcad#576), added by URL or folder, fetched when asked.
-// - LibraryBrowser: Insert from Library and the community library: search
-//   with a licence filter, the results as the part picker's grid of previews
-//   (PartGrid, mitcad#418: groups, favourites, In this design), details
-//   with the licence and the attribution, the version and the size (with
-//   the Standard and Supplier filters, mitcad#949), the row's designation
-//   and its suppliers' articles behind a button that opens their table
-//   (mitcad#979, SupplierPartsDialog.hpp), linked or a copy; libraries a community
-//   index lists are fetched from there, those an enabled source has under
-//   another id left out.
+// - LibraryBrowser: Browse Components (mitcad#1283; Insert from Library and
+//   the community library before), one window with the views Installed,
+//   Community and Favorites: search with a licence filter, the results as
+//   the part picker's grid of previews (PartGrid, mitcad#418: groups,
+//   favourites, In this design), details with the licence and the
+//   attribution, the version and the size (with the Standard and Supplier
+//   filters, mitcad#949), the row's designation and its suppliers' articles
+//   behind a button that opens their table (mitcad#979,
+//   SupplierPartsDialog.hpp), linked or a copy; libraries a community index
+//   lists, and their components, are fetched from there (Get Library, the
+//   primary button while the selected item's library is not here), those
+//   an enabled source has under another id left out.
 // - LibraryPartsDialog: the design's library parts, each kept at the
 //   version chosen for it: another version or size, what changes, the
 //   update; and the parts list with the designations (a bill of
@@ -46,6 +49,7 @@ class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
 class QRadioButton;
+class QTabBar;
 class QTableWidget;
 
 namespace mitcad {
@@ -102,18 +106,43 @@ class LibraryBrowser : public QDialog {
   Q_OBJECT
 
 public:
-  // `community`: titled Community Library, listing the libraries the
-  // fetched indexes name first.
-  explicit LibraryBrowser(bool community, QWidget* parent = nullptr);
+  // The browser's views (mitcad#1283), the tabs above the grid:
+  // - Installed: the fetched libraries' components, then the libraries the
+  //   fetched indexes name that are not fetched ("Libraries to get");
+  // - Community: every library the fetched indexes name first, each not
+  //   fetched one with its components (the index's list, tiles in
+  //   "Libraries to get" whose primary button is Get Library), then the
+  //   fetched components (the community library before);
+  // - Favorites: the starred components of the fetched libraries.
+  enum class View { Installed, Community, Favorites };
+
+  explicit LibraryBrowser(View view, QWidget* parent = nullptr);
   std::optional<LibraryChoice> choice() const { return m_choice; }
   // The open design's library parts: the grid's In this design (mitcad#418).
   void setUsedParts(const QList<UsedPart>& used);
+  View view() const { return m_view; }
+  // The view's name as its tab shows it, without the underline.
+  static QString viewName(View view);
 
 private:
   // The item of m_items the grid's current tile is, or -1.
   int currentIndex() const;
+  // Another view (its tab): the search, the filters and the selected item
+  // kept while it is listed there.
+  void setView(View view);
   void search();
   void select();
+  // The primary button follows the selected item (mitcad#1283): Get Library
+  // (`get`) while its library is not here, else Insert; `enabled`
+  // whether it can now. Logs "Library browser button: Get Library" or
+  // "... Insert", with " (off)" while disabled, when that changes.
+  void setPrimary(bool get, bool enabled);
+  // The primary button pressed (or a tile activated): Insert or Get Library.
+  void primary();
+  // After Get Library on a component of an index's library (mitcad#1283):
+  // that component of the fetched library selected; false when it is not
+  // listed.
+  bool selectFetched(const QJsonObject& wanted);
   void showVersion();
   // The chosen row's designation (following the Standard filter) under the
   // size (mitcad#949), and the button of its suppliers' articles
@@ -133,7 +162,9 @@ private:
   // Whether any enabled source has been fetched (the empty list's text).
   static bool anySourceFetched();
 
-  bool m_community = false;
+  View m_view = View::Installed;
+  // The views as tabs (libraryView), in View's order.
+  QTabBar* m_views = nullptr;
   QLineEdit* m_search = nullptr;
   QComboBox* m_license = nullptr;
   QCheckBox* m_unlicensed = nullptr;
@@ -149,8 +180,10 @@ private:
   SupplierPartsRequest m_supplierRequest;
   QRadioButton* m_link = nullptr;
   QRadioButton* m_copy = nullptr;
-  QPushButton* m_insert = nullptr;
-  QPushButton* m_get = nullptr;
+  // Insert or Get Library (setPrimary), the dialog's default button.
+  QPushButton* m_primary = nullptr;
+  bool m_primaryGets = false;
+  QString m_primaryLogged;
   QJsonArray m_items;
   QJsonObject m_shown; // library_show of the selected item's version
   std::optional<LibraryChoice> m_choice;

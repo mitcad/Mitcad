@@ -1459,7 +1459,8 @@ in the distro only:
   union gave without a solid: one valid solid of the expected volume
   (mitcad#1273); skipped with a message without it. Its synthetic test of
   unions in groups runs without the file. It also joins all 257 bodies,
-  logs the union's time, and checks its solids, shells, volume and points
+  logs the union's time, and checks its solids, shells, volume, that its
+  faces are merged (port patch 1285 of mitcad#1280) and points
   sampled in every body's box, and checks Cut and Intersect of the design's
   two back plates against their union, also by sampled points
   (mitcad#1278); a synthetic row of blocks with a near miss runs without

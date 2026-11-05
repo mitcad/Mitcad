@@ -164,19 +164,27 @@ fn parse_version(word: &str) -> Option<[u64; 3]> {
 }
 
 /// Signed in by `claude auth status`: exit status 0, unless its JSON says
-/// `loggedIn` false. Only the method is read besides.
+/// `loggedIn` false. Besides, only the method and the account it names
+/// (`email`, `orgName`, `subscriptionType`), which the chat's agent choice
+/// shows beside each Claude Code found (mitcad#1289), are read.
 pub fn auth(exit_code: i64, output: &str) -> Value {
     let status = serde_json::from_str::<Value>(output.trim()).ok();
     let logged_in = status
         .as_ref()
         .and_then(|value| value.get("loggedIn"))
         .and_then(Value::as_bool);
-    let method = status
-        .as_ref()
-        .and_then(|value| value.get("authMethod"))
-        .and_then(Value::as_str)
-        .map(|method| cut(method, 80));
-    json!({"signed_in": exit_code == 0 && logged_in != Some(false), "method": method})
+    let field = |key: &str, limit: usize| {
+        status
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| cut(text, limit))
+    };
+    json!({"signed_in": exit_code == 0 && logged_in != Some(false), "method": field("authMethod", 80),
+           "account": field("email", 120), "organization": field("orgName", 120),
+           "subscription": field("subscriptionType", 40)})
 }
 
 /// Claude Code's stream-json output as panel events. With partial messages

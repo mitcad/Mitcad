@@ -75,6 +75,34 @@ QString findAssistantExecutable(const QString& name, const QStringList& folders,
 // MITCAD_TEST_ASSISTANT_EXECUTABLES (`none`: nothing), then in the folders of
 // the home MITCAD_TEST_ASSISTANT_HOME, when either is set.
 QString assistantExecutable(const QString& name, const QString& home = {});
+// Every executable of the client the lookup finds, each once and in the
+// lookup's order (mitcad#1289): PATH, then each of the folders after it on
+// its own, then on macOS the ChatGPT application's Codex; for `claude` last
+// the Claude Code that Claude Desktop keeps (claudeDesktopClaudeCode). The
+// first is assistantExecutable's. A test run as assistantExecutable says,
+// each folder on its own, and for `claude` the Claude Desktop folders in
+// the work folder (MITCAD_ASSISTANT_TEST_WORK's `local-app-data` and
+// `roaming-app-data`, on every platform).
+QStringList assistantExecutables(const QString& name);
+// The Claude Code that Claude Desktop keeps in one of its folders
+// (`claude-code/<version>/claude`, or `claude-code/<version>/<build id>/
+// claude.exe` as the Windows application keeps it): the highest version's,
+// empty when none is there. Whether it runs on its own and with whose
+// sign-in is its own `claude auth status`'s to tell (the chat checks it as
+// any other).
+QString claudeDesktopClaudeCode(const QStringList& settingsFolders);
+// The Windows application's data folders, each subfolder of
+// `<localAppData>/Claude-Data` (`claude_<package family id>`), where it
+// keeps its Claude Code; none without localAppData.
+QStringList claudeDesktopDataFolders(const QString& localAppData);
+// Claude Desktop's settings folders on this computer (on Windows
+// claudeDesktopWindowsSettingsFolders, on macOS Application Support's
+// `Claude`), none elsewhere.
+QStringList claudeDesktopSettingsFolders();
+// An executable's folder for people, beside its name when several of one
+// client are found: under `home`, `~/` and the rest with forward slashes;
+// else the folder with the platform's separators.
+QString assistantPlace(const QString& executable, const QString& home);
 // The program of a registration command: the bare name when PATH finds it,
 // else the full path where it was found, else the bare name.
 QString assistantProgram(const QString& name);
@@ -109,6 +137,25 @@ QString assistantConfigurationPolicy(const QString& path);
 // assistant, so that the dialog shows Connected for the right choice. Labels
 // are supplied by the clients: this picks a state to show, never a right.
 bool assistantLabelMatches(AssistantClient client, const QString& label);
+// Assistants the user disconnected (mitcad#1289): Disconnect *assistant*
+// (and the indicator's Disconnect) keeps the clients of that assistant from
+// connecting to MitCad again until Connect, or the indicator's Allow, allows
+// them. Kept by the clients' labels (clientInfo.name) for this run of MitCad
+// (on the GUI thread); a label is disconnected when it is one of them or is
+// the same assistant as one of them (assistantLabelMatches: Claude Code,
+// Claude Desktop, Codex; an Other client by its own label only).
+bool disconnectedLabelMatches(const QStringList& disconnected, const QString& label);
+void disconnectAssistants(const QStringList& labels);
+// Allows the labels of this assistant again (Other: those of no known
+// assistant); returns whether any was disconnected.
+bool allowAssistant(AssistantClient client);
+QStringList disconnectedAssistants();
+bool assistantDisconnected(const QString& label);
+// Whether one of this assistant's labels is disconnected (Other: a label no
+// known assistant matches).
+bool assistantClientDisconnected(AssistantClient client);
+// The assistant a client's label is (Other when no known one matches).
+AssistantClient assistantClientOf(const QString& label);
 // The assistant's name on its choice ("Claude Desktop", "ChatGPT / Codex").
 QString assistantName(AssistantClient client);
 // The assistant's name in a sentence ("Ready to connect Codex"): its
@@ -137,5 +184,23 @@ bool claudeDesktopApplicationInWindowsFolders(const QString& localAppData);
 // (LOCALAPPDATA, APPDATA): the installer's application folder, the package
 // above, or the settings folder Claude Desktop makes on its first start.
 bool claudeDesktopInWindowsFolders(const QString& localAppData, const QString& roamingAppData);
+
+// Claude Desktop's settings folders on Windows (mitcad#1288): the
+// installer's in the roaming application data (`Claude`), the Microsoft Store
+// package's in its LocalCache (`Packages/<family>/LocalCache/Roaming/Claude`);
+// those of the empty arguments are left out.
+QStringList claudeDesktopWindowsSettingsFolders(const QString& localAppData, const QString& roamingAppData);
+// The MitCad extension installed in Claude Desktop: a folder in a settings
+// folder's `Claude Extensions` whose `manifest.json` is named as
+// assistantBundleManifest names it, and the bridge it starts (the first of
+// its arguments; empty when it names none).
+struct InstalledDesktopExtension {
+  bool found = false;
+  QString bridge;
+};
+InstalledDesktopExtension claudeDesktopExtension(const QStringList& settingsFolders);
+// Whether that extension starts this bridge (with either separator; case
+// aside on Windows): one that starts another MitCad's is installed again.
+bool claudeDesktopExtensionStarts(const InstalledDesktopExtension& extension, const QString& bridge);
 
 } // namespace mitcad::mcp

@@ -1,0 +1,49 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+IntCurvesFace: a face intersector (IntCurvesFace_Intersector::InternalCall)
+classified every point where the line meets the face's surface in the face,
+and only then kept those within the segment's range. A solid classifier's
+segment meets the surfaces of most faces of a large solid outside its
+range, and each such classification could make the face's 2D classifier
+(mitcad#1279). Only the points within the range are now classified, and a
+face with none is left at once. The points kept are the same, so the
+results are unchanged.
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx b/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx
+index d1176bf2..2b9a961a 100644
+--- a/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx
+@@ -231,6 +231,20 @@ void IntCurvesFace_Intersector::InternalCall(const IntCurveSurface_HInter& HICS,
+ {
+   if (HICS.IsDone() && HICS.NbPoints() > 0)
+   {
++    // Only the points within [parinf, parsup] are kept, so only they are
++    // classified in the face: a solid classifier's segment crosses the
++    // surfaces of most faces of a large solid outside its range, and
++    // classifying those points took much of its time (mitcad#1279).
++    bool isInRange = false;
++    for (int index = 1; index <= HICS.NbPoints() && !isInRange; index++)
++    {
++      const double HICSW = HICS.Point(index).W();
++      isInRange          = HICSW >= parinf && HICSW <= parsup;
++    }
++    if (!isInRange)
++    {
++      return;
++    }
+     // Calculate tolerance for 2d classifier
+     double          mintol3d = BRep_Tool::Tolerance(face);
+     double          maxtol3d = mintol3d;
+@@ -251,7 +265,11 @@ void IntCurvesFace_Intersector::InternalCall(const IntCurveSurface_HInter& HICS,
+     for (int index = HICS.NbPoints(); index >= 1; index--)
+     {
+       const IntCurveSurface_IntersectionPoint& HICSPointindex = HICS.Point(index);
+-      gp_Pnt2d                                 Puv(HICSPointindex.U(), HICSPointindex.V());
++      if (HICSPointindex.W() < parinf || HICSPointindex.W() > parsup)
++      {
++        continue; // not kept (below), not classified
++      }
++      gp_Pnt2d Puv(HICSPointindex.U(), HICSPointindex.V());
+ 
+       // TopAbs_State currentstate = myTopolTool->Classify(Puv,Tol);
+       TopAbs_State currentstate = myTopolTool->Classify(Puv, !myUseBoundTol ? 0 : mintol2d);

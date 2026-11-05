@@ -51,12 +51,14 @@ def make_private(path, directory):
 class Session:
     """Reader thread gives pipe reads a timeout on Windows as well as Unix."""
 
-    def __init__(self, workspace, read_only=False):
+    def __init__(self, workspace, read_only=False, connect=False, env=None):
         self.stderr = tempfile.TemporaryFile(dir=workspace)
-        args = [CLI, "mcp", "--workspace", str(workspace)]
+        # connect: the bridge to a window (mcp --connect) in place of the
+        # headless server.
+        args = [CLI, "mcp", "--connect"] if connect else [CLI, "mcp", "--workspace", str(workspace)]
         if read_only:
             args.append("--read-only")
-        self.process = subprocess.Popen(args, stdin=subprocess.PIPE,
+        self.process = subprocess.Popen(args, stdin=subprocess.PIPE, env=env,
                                         stdout=subprocess.PIPE, stderr=self.stderr)
         self.messages = queue.Queue()
         self.next_id = 0
@@ -241,6 +243,110 @@ class FakeInstance:
             return self.accepted
 
 
+class FakeWindow:
+    """A window's MCP endpoint that speaks the protocol (mitcad#1288).
+
+    It answers initialize, subscriptions and every tool call (with its own
+    instance id), and records each message it got. With refuse, it answers
+    initialize with that error and closes the connection, as a window does
+    for an assistant disconnected there (mitcad#1289).
+    """
+
+    def __init__(self, discovery, instance, refuse=None):
+        self.instance = instance
+        self.token = instance[0] * 64
+        self.refuse = refuse
+        self.messages = []
+        self.errors = []
+        self.connections = []
+        self.lock = threading.Lock()
+        self.stopping = threading.Event()
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(8)
+        self.listener.settimeout(0.1)
+        self.record = discovery / (instance + ".json")
+        self.record.write_text(json.dumps({"protocol": 1, "host": "127.0.0.1",
+                                           "port": self.listener.getsockname()[1], "pid": os.getpid(),
+                                           "instance": instance, "token": self.token}), encoding="utf-8")
+        make_private(self.record, False)
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def close(self):
+        """The window closes: its record, its listener and its connections go."""
+        if self.stopping.is_set():
+            return
+        self.stopping.set()
+        self.thread.join(timeout=TIMEOUT)
+        self.record.unlink(missing_ok=True)
+        self.listener.close()
+        with self.lock:
+            for connection in self.connections:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                connection.close()
+
+    def serve(self):
+        while not self.stopping.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            with self.lock:
+                self.connections.append(connection)
+            threading.Thread(target=self.talk, args=(connection,), daemon=True).start()
+
+    def talk(self, connection):
+        try:
+            connection.settimeout(None)
+            source = connection.makefile("rb")
+            if json.loads(source.readline()) != {"mitcadAuth": self.token}:
+                raise AssertionError("Unexpected authentication frame")
+            connection.sendall(b'{"authenticated":true}\n')
+            for line in source:
+                message = json.loads(line)
+                with self.lock:
+                    self.messages.append(message)
+                if "id" not in message:
+                    continue
+                method = message.get("method")
+                if method == "initialize" and self.refuse:
+                    connection.sendall(json.dumps({"jsonrpc": "2.0", "id": message["id"], "error": {
+                        "code": -32001, "message": self.refuse}}).encode("utf-8") + b"\n")
+                    connection.shutdown(socket.SHUT_RDWR)
+                    return
+                if method == "initialize":
+                    result = {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
+                              "serverInfo": {"name": "mitcad", "version": "test"}}
+                elif method == "tools/call":
+                    answer = {"window": self.instance}
+                    result = {"content": [{"type": "text", "text": json.dumps(answer)}],
+                              "structuredContent": answer, "isError": False}
+                else:
+                    result = {}
+                connection.sendall(json.dumps({"jsonrpc": "2.0", "id": message["id"],
+                                               "result": result}).encode("utf-8") + b"\n")
+        except OSError:
+            pass  # the bridge or the test closed the connection
+        except (AssertionError, ValueError) as error:
+            self.errors.append(error)
+
+    def methods(self):
+        with self.lock:
+            return [message.get("method") for message in self.messages]
+
+
 class McpTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="session-", dir=WORK)
@@ -404,6 +510,84 @@ class McpTest(unittest.TestCase):
         self.assertFalse(errors, errors)
         self.assertEqual(accepted, [0, 1])
         self.assertEqual(result.stdout, b"")
+
+    def test_connect_outlives_its_window(self):
+        # mitcad#1288: the bridge started before MitCad, a window coming,
+        # closing and another coming: the bridge stays up, answers tool calls
+        # "not running" while no window is there, and connects again, giving
+        # the new window the client's initialize, initialized and
+        # subscription first.
+        discovery, env = self.private_discovery()
+        quiet = subprocess.run([CLI, "mcp", "--connect"], env=env, input=b"",
+                               capture_output=True, timeout=TIMEOUT)
+        self.assertEqual(quiet.returncode, 0, quiet.stderr)
+        self.assertEqual(quiet.stdout, b"")
+        self.assertIn(b"MitCad is not running", quiet.stderr)
+
+        def call(client):
+            response = client.request("tools/call", {"name": "document_list", "arguments": {}})
+            self.assertNotIn("error", response)
+            return response["result"]
+
+        def offline(client, expected="MitCad is not running"):
+            # Until the expected answer comes: a call the bridge sent to a
+            # window that went (or refused this client) during it is
+            # answered as cut short; a call made while no window is
+            # connected, also before the bridge's next look finds a new
+            # (refusing) window, as not running.
+            deadline = time.monotonic() + TIMEOUT
+            while True:
+                result = call(client)
+                self.assertTrue(result["isError"], result)
+                text = result["content"][0]["text"]
+                if expected in text:
+                    return json.loads(text)
+                self.assertTrue("ended during this call" in text or "MitCad is not running" in text, text)
+                self.assertLess(time.monotonic(), deadline, text)
+                time.sleep(0.2)
+
+        def online(client, window):
+            deadline = time.monotonic() + TIMEOUT
+            while True:
+                result = call(client)
+                if not result.get("isError"):
+                    self.assertEqual(result["structuredContent"], {"window": window.instance})
+                    return
+                self.assertLess(time.monotonic(), deadline, "The bridge did not connect to the window")
+                time.sleep(0.2)
+
+        with Session(self.workspace, connect=True, env=env) as client:
+            # The bridge's own answers: initialize, the tool list, the reference.
+            info = client.initialize()
+            self.assertEqual(info["serverInfo"]["name"], "mitcad")
+            tools = {tool["name"] for tool in client.request("tools/list")["result"]["tools"]}
+            self.assertTrue({"document_list", "model_command", "ui_state", "model_reference"} <= tools, tools)
+            reference = client.request("tools/call", {"name": "model_reference", "arguments": {}})["result"]
+            self.assertFalse(reference.get("isError"), reference)
+            self.assertIn("error", offline(client))
+            self.assertEqual(client.request("resources/subscribe", {"uri": "mitcad://comments"})["result"], {})
+            self.assertEqual(client.process.poll(), None)
+            with FakeWindow(discovery, "c" * 32) as first:
+                online(client, first)
+                methods = first.methods()
+                self.assertEqual(methods[:3], ["initialize", "notifications/initialized", "resources/subscribe"], methods)
+                self.assertTrue(str(first.messages[0]["id"]).startswith("mitcad-bridge-"), first.messages[0])
+                self.assertEqual(first.messages[0]["params"]["clientInfo"]["name"], "mitcad-integration-test")
+                self.assertEqual(first.messages[2]["params"], {"uri": "mitcad://comments"})
+                first.close()
+                offline(client)
+            self.assertFalse(first.errors, first.errors)
+            self.assertEqual(client.process.poll(), None, "The bridge ended with its window")
+            # A window that refuses this client (its assistant disconnected
+            # there, mitcad#1289): its reason answers the calls.
+            with FakeWindow(discovery, "e" * 32, refuse="Disconnected in MitCad") as refusing:
+                offline(client, "Disconnected in MitCad")
+            with FakeWindow(discovery, "d" * 32) as second:
+                online(client, second)
+                self.assertEqual(second.methods()[:3],
+                                 ["initialize", "notifications/initialized", "resources/subscribe"])
+                client.finish()
+            self.assertFalse(refusing.errors + second.errors, refusing.errors + second.errors)
 
     def test_cli_arguments(self):
         for args in ([], ["--workspace"], ["--workspace", str(self.workspace / "missing")],

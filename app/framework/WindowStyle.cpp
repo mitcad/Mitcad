@@ -425,9 +425,7 @@ WindowStyle::WindowStyle(QMainWindow* window) : QObject(window), m_window(window
   // The gap to the window's sides; the menu bar's and the status bar's
   // colour is the window's, so they read as before.
   window->setContentsMargins(panel::kGap, 0, panel::kGap, 0);
-  auto* gaps = new GapStyle(QStyleFactory::create(QApplication::style()->name()));
-  gaps->setParent(this);
-  window->setStyle(gaps);
+  followApplicationStyle();
   for (QDockWidget* dock : window->findChildren<QDockWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
     styleDock(dock);
   }
@@ -536,10 +534,27 @@ bool WindowStyle::eventFilter(QObject* watched, QEvent* event) {
   return QObject::eventFilter(watched, event);
 }
 
+void WindowStyle::followApplicationStyle() {
+  // A widget with a style of its own gets no StyleChange when the
+  // application's style changes; the palette that comes with the change
+  // brings it here (apply). The one before stays this object's child, as
+  // a child's style sheet style may still refer to it; the app mode
+  // changes seldom.
+  const QString name = QApplication::style()->name();
+  if (m_window == nullptr || (m_gaps != nullptr && name == m_gapsBase)) {
+    return;
+  }
+  m_gaps = new GapStyle(QStyleFactory::create(name));
+  m_gaps->setParent(this);
+  m_gapsBase = name;
+  m_window->setStyle(m_gaps);
+}
+
 void WindowStyle::apply() {
   if (m_window == nullptr) {
     return;
   }
+  followApplicationStyle();
   const WindowColors colors = windowColors();
   const QString applied = QStringLiteral("Window style: %1, window %2, panels %3, accent %4, font %5")
                               .arg(colors.dark ? QStringLiteral("dark") : QStringLiteral("light"), colors.window.name(),

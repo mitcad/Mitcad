@@ -380,9 +380,53 @@ const StepSpec kSpecs[] = {
     {"observe-document-frame-close-all", 0, 0, kIdle},
     // The colour a widget shows as drawn in its window (mitcad#1245).
     {"expect-widget-background", 3, 3, kIdle},
+    // Whether that colour is dark or light (mitcad#1282).
+    {"expect-widget-theme", 2, 2, kIdle},
     // The wheel over a logged place, a panel's value field (mitcad#1254).
     {"wheel-logged", 2, 3, kInputOfMain},
 };
+
+// The colour that covers most of a visible widget's area as its window
+// draws it, the parents' backgrounds under it included (mitcad#1245: the
+// Docked toolbar's surface under the ribbon's groups and beside Undo, not a
+// style's own fill), with how many of the area's pixels have it; `missing`
+// says why there is none (expect-widget-background, expect-widget-theme).
+struct WidgetColor {
+  QColor color;
+  int count = 0;
+  int total = 0;
+  QString missing;
+};
+
+WidgetColor mostCommonColor(QWidget* top, QWidget* widget, const QString& widgetName) {
+  WidgetColor result;
+  if (top == nullptr || widget == nullptr || !widget->isVisible()) {
+    result.missing = QStringLiteral("no visible widget %1").arg(widgetName);
+    return result;
+  }
+  const QRect area =
+      QRect(top->mapFromGlobal(widget->mapToGlobal(QPoint(0, 0))), widget->size()).intersected(top->rect());
+  const QImage shot = area.isEmpty() ? QImage() : top->grab(area).toImage().convertToFormat(QImage::Format_RGB32);
+  if (shot.isNull()) {
+    result.missing = QStringLiteral("%1 has no area in its window").arg(widgetName);
+    return result;
+  }
+  QHash<QRgb, int> counts;
+  QRgb most = 0;
+  for (int y = 0; y < shot.height(); ++y) {
+    for (int x = 0; x < shot.width(); ++x) {
+      const QRgb rgb = shot.pixel(x, y);
+      const int count = ++counts[rgb];
+      if (count > result.count) {
+        most = rgb;
+        result.count = count;
+      }
+    }
+  }
+  result.color = QColor(most);
+  result.total = shot.width() * shot.height();
+  return result;
+}
 
 const StepSpec* findSpec(const QString& name) {
   for (const StepSpec& spec : kSpecs) {
@@ -4527,9 +4571,7 @@ void TestDriver::run(const Step& step) {
     }
   } else if (name == QLatin1String("expect-widget-background")) {
     // The colour that covers most of a visible widget's area as its window
-    // draws it, the parents' backgrounds under it included (mitcad#1245:
-    // the Docked toolbar's surface under the ribbon's groups and beside
-    // Undo, not a style's own fill).
+    // draws it (mostCommonColor).
     const QColor wanted(a.at(1));
     bool number = false;
     const int tolerance = a.at(2).toInt(&number);
@@ -4540,45 +4582,52 @@ void TestDriver::run(const Step& step) {
     const QString widgetName = a.at(0);
     whenReady(
         [this, widgetName, wanted, tolerance] {
-          QWidget* top = topWindow();
-          QWidget* widget = namedWidget(m_main.data(), widgetName);
-          if (top == nullptr || widget == nullptr || !widget->isVisible()) {
-            m_waitDetail = QStringLiteral("no visible widget %1").arg(widgetName);
+          const WidgetColor most = mostCommonColor(topWindow(), namedWidget(m_main.data(), widgetName), widgetName);
+          if (!most.missing.isEmpty()) {
+            m_waitDetail = most.missing;
             return false;
           }
-          const QRect area =
-              QRect(top->mapFromGlobal(widget->mapToGlobal(QPoint(0, 0))), widget->size()).intersected(top->rect());
-          const QImage shot = area.isEmpty() ? QImage() : top->grab(area).toImage().convertToFormat(QImage::Format_RGB32);
-          if (shot.isNull()) {
-            m_waitDetail = QStringLiteral("%1 has no area in its window").arg(widgetName);
-            return false;
-          }
-          QHash<QRgb, int> counts;
-          QRgb most = 0;
-          int mostCount = 0;
-          for (int y = 0; y < shot.height(); ++y) {
-            for (int x = 0; x < shot.width(); ++x) {
-              const QRgb rgb = shot.pixel(x, y);
-              const int count = ++counts[rgb];
-              if (count > mostCount) {
-                most = rgb;
-                mostCount = count;
-              }
-            }
-          }
-          const QColor seen(most);
+          const QColor& seen = most.color;
           const int off = std::abs(seen.red() - wanted.red()) + std::abs(seen.green() - wanted.green()) +
                           std::abs(seen.blue() - wanted.blue());
           m_waitDetail = QStringLiteral("%1 %2 (%3 of %4 pixels), wanted %5, off by %6")
                              .arg(widgetName, seen.name())
-                             .arg(mostCount)
-                             .arg(shot.width() * shot.height())
+                             .arg(most.count)
+                             .arg(most.total)
                              .arg(wanted.name())
                              .arg(off);
           return off <= tolerance;
         },
         6, QStringLiteral("the background of %1 is not %2").arg(a.at(0), a.at(1)),
         [this] { qDebug().noquote() << QStringLiteral("TestDriver: widget background %1").arg(m_waitDetail); });
+  } else if (name == QLatin1String("expect-widget-theme")) {
+    // Whether that colour is a dark or a light one, as isDarkPalette decides
+    // on a window (lightness below 128): the Start page and the Browser in
+    // Windows 10's dark app mode (mitcad#1282), whatever colour exactly.
+    const bool dark = a.at(1) == QLatin1String("dark");
+    if (!dark && a.at(1) != QLatin1String("light")) {
+      fail(line, QStringLiteral("expect-widget-theme <object-name> dark|light"));
+      return;
+    }
+    const QString widgetName = a.at(0);
+    whenReady(
+        [this, widgetName, dark] {
+          const WidgetColor most = mostCommonColor(topWindow(), namedWidget(m_main.data(), widgetName), widgetName);
+          if (!most.missing.isEmpty()) {
+            m_waitDetail = most.missing;
+            return false;
+          }
+          const bool seenDark = most.color.lightness() < 128;
+          m_waitDetail = QStringLiteral("%1 %2 (%3 of %4 pixels), lightness %5: %6")
+                             .arg(widgetName, most.color.name())
+                             .arg(most.count)
+                             .arg(most.total)
+                             .arg(most.color.lightness())
+                             .arg(seenDark ? QStringLiteral("dark") : QStringLiteral("light"));
+          return seenDark == dark;
+        },
+        6, QStringLiteral("the background of %1 is not %2").arg(a.at(0), a.at(1)),
+        [this] { qDebug().noquote() << QStringLiteral("TestDriver: widget theme %1").arg(m_waitDetail); });
   } else if (name == QLatin1String("expect-setting")) {
     const QVariant value = QSettings().value(a.at(0));
     if (!value.isValid() || value.toString() != a.at(1)) {

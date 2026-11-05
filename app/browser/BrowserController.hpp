@@ -322,9 +322,17 @@ private:
   void rename(const BrowserNode& node, const QString& name);
   void renameFeature(const QString& uid, const QString& name);
   void deleteNode(const BrowserNode& node);
+  // A body row deletes only its body (mitcad#1287): Delete Body's
+  // remove_body, with the other rows' deletions in one undo step.
   void deleteNodes(const QVector<BrowserNode>& nodes);
+  // `bodies` are taken out after the features go, those of a deleted
+  // feature with it.
   void deleteTargets(const QStringList& features, const QJsonArray& otherCommands,
-                     const QStringList& otherNames, const QStringList& skipped);
+                     const QStringList& otherNames, const QStringList& skipped,
+                     const QStringList& bodies = {});
+  // The remove_body features that take the bodies out (one in each body's
+  // component), their names appended to `names`.
+  QJsonArray removeBodyCommands(const QStringList& bodies, QStringList& names) const;
   // The Delete key in the browser and the timeline: as deleteNode and
   // deleteFeature, except of model items while a drawing is open.
   bool keyDeletesModel();

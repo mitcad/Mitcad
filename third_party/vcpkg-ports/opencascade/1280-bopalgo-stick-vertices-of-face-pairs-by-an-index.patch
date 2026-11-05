@@ -1,0 +1,260 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BOPAlgo: the stick vertices of a pair of intersected faces
+(BOPAlgo_PaveFiller::GetStickVertices, the vertices of the VV, VE, EE, VF
+and EF interferences between the two faces' sub-shapes) were found by going
+through every such interference of the operation for every pair of faces,
+in MakeBlocks and again in PostTreatFF: quadratic in the interferences of a
+union of many bodies. On the union of a machine's 257 bodies (mitcad#1279)
+it took about 1.4 s of the union's single-threaded part. The interferences
+are now listed by the shapes they join (an index made once, and made again
+when interferences have been added since), and those of a pair
+are found from the sub-shapes of its two faces; their vertices are added in
+the order the scan added them (by kind, then by index), so the maps filled
+are the same. GetStickVertices itself is unchanged. The results are
+unchanged.
+diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
+index 8611aaa8..a945999d 100644
+--- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
++++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
+@@ -75,10 +75,203 @@
+ #include <TopoDS_Vertex.hxx>
+ #include <TopoDS_Shape.hxx>
+ #include <TopTools_ShapeMapHasher.hxx>
++
++#include <algorithm>
++#include <vector>
+ class BOPDS_PaveBlock;
+ 
+ static double ToleranceFF(const BRepAdaptor_Surface& aBAS1, const BRepAdaptor_Surface& aBAS2);
+ 
++namespace
++{
++//! The interferences GetStickVertices reads (VV, VE, EE, VF and EF) listed
++//! by each shape they join (mitcad#1279). GetStickVertices went through all
++//! of them for every pair of intersected faces, which grew with the square
++//! of the interferences of a union of many bodies; the index finds those of
++//! a pair from the sub-shapes of its two faces and adds their vertices in
++//! the order GetStickVertices adds them (by kind, then by index), so that
++//! the maps it fills are the same. It is made again when interferences
++//! have been added since it was made.
++class BOPAlgo_StickVertexIndex
++{
++public:
++  //! The vertices of the interferences between the sub-shapes of the faces
++  //! nF1 and nF2, as BOPAlgo_PaveFiller::GetStickVertices gives them.
++  void Get(BOPDS_DS&             theDS,
++           const int             nF1,
++           const int             nF2,
++           NCollection_Map<int>& theMVStick,
++           NCollection_Map<int>& theMVEF,
++           NCollection_Map<int>& theMI)
++  {
++    theMI.Clear();
++    addFullShape(theDS, nF1, theMI);
++    addFullShape(theDS, nF2, theMI);
++    if (!isCurrent(theDS))
++    {
++      build(theDS);
++    }
++    myFound.clear();
++    for (NCollection_Map<int>::Iterator anIt(theMI); anIt.More(); anIt.Next())
++    {
++      const int nS = anIt.Value();
++      if (nS < 0 || nS >= myNbShapes)
++      {
++        continue;
++      }
++      for (size_t k = myStarts[nS]; k < myStarts[nS + 1]; ++k)
++      {
++        const BOPDS_Interf* anInt = interference(theDS, myCodes[k]);
++        int                 nS1, nS2;
++        anInt->Indices(nS1, nS2);
++        if (anInt->HasIndexNew() && theMI.Contains(nS1) && theMI.Contains(nS2))
++        {
++          myFound.push_back(myCodes[k]);
++        }
++      }
++    }
++    std::sort(myFound.begin(), myFound.end());
++    myFound.erase(std::unique(myFound.begin(), myFound.end()), myFound.end());
++    for (const long long aCode : myFound)
++    {
++      int nVNew = interference(theDS, aCode)->IndexNew();
++      theDS.HasShapeSD(nVNew, nVNew);
++      theMVStick.Add(nVNew);
++      if (kind(aCode) == 4)
++      {
++        theMVEF.Add(nVNew);
++      }
++    }
++  }
++
++private:
++  static int kind(const long long theCode) { return static_cast<int>(theCode >> 32); }
++
++  static int index(const long long theCode) { return static_cast<int>(theCode & 0xFFFFFFFFLL); }
++
++  static long long code(const int theKind, const int theIndex)
++  {
++    return (static_cast<long long>(theKind) << 32) | static_cast<long long>(theIndex);
++  }
++
++  static int length(BOPDS_DS& theDS, const int theKind)
++  {
++    switch (theKind)
++    {
++      case 0:
++        return theDS.InterfVV().Length();
++      case 1:
++        return theDS.InterfVE().Length();
++      case 2:
++        return theDS.InterfEE().Length();
++      case 3:
++        return theDS.InterfVF().Length();
++      default:
++        return theDS.InterfEF().Length();
++    }
++  }
++
++  static const BOPDS_Interf* interference(BOPDS_DS& theDS, const long long theCode)
++  {
++    const int i = index(theCode);
++    switch (kind(theCode))
++    {
++      case 0:
++        return &theDS.InterfVV()(i);
++      case 1:
++        return &theDS.InterfVE()(i);
++      case 2:
++        return &theDS.InterfEE()(i);
++      case 3:
++        return &theDS.InterfVF()(i);
++      default:
++        return &theDS.InterfEF()(i);
++    }
++  }
++
++  //! The face and its sub-shapes, as BOPAlgo_PaveFiller::GetFullShapeMap.
++  static void addFullShape(BOPDS_DS& theDS, const int nF, NCollection_Map<int>& theMI)
++  {
++    theMI.Add(nF);
++    for (NCollection_List<int>::Iterator anIt(theDS.ShapeInfo(nF).SubShapes()); anIt.More();
++         anIt.Next())
++    {
++      theMI.Add(anIt.Value());
++    }
++  }
++
++  //! Whether no interference was added since the index was made. Shapes
++  //! added since (the new vertices of section curves) have none: an
++  //! interference joins shapes that were there when it was made.
++  bool isCurrent(BOPDS_DS& theDS) const
++  {
++    if (myNbShapes < 0)
++    {
++      return false;
++    }
++    for (int aKind = 0; aKind < 5; ++aKind)
++    {
++      if (myLengths[aKind] != length(theDS, aKind))
++      {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  void build(BOPDS_DS& theDS)
++  {
++    myNbShapes = theDS.NbShapes();
++    myStarts.assign(static_cast<size_t>(myNbShapes) + 1, 0);
++    for (int aPass = 0; aPass < 2; ++aPass)
++    {
++      if (aPass == 1)
++      {
++        // The counts into the starts of the lists, then each list filled
++        // from its start (myFill) on.
++        for (int nS = 0; nS < myNbShapes; ++nS)
++        {
++          myStarts[nS + 1] += myStarts[nS];
++        }
++        myFill.assign(myStarts.begin(), myStarts.end() - 1);
++        myCodes.assign(myStarts[myNbShapes], 0);
++      }
++      for (int aKind = 0; aKind < 5; ++aKind)
++      {
++        myLengths[aKind] = length(theDS, aKind);
++        for (int i = 0; i < myLengths[aKind]; ++i)
++        {
++          int nS[2];
++          interference(theDS, code(aKind, i))->Indices(nS[0], nS[1]);
++          for (int j = 0; j < 2; ++j)
++          {
++            if (nS[j] < 0 || nS[j] >= myNbShapes || (j == 1 && nS[1] == nS[0]))
++            {
++              continue;
++            }
++            if (aPass == 0)
++            {
++              ++myStarts[nS[j] + 1];
++            }
++            else
++            {
++              myCodes[myFill[nS[j]]++] = code(aKind, i);
++            }
++          }
++        }
++      }
++    }
++  }
++
++  int                    myNbShapes   = -1;
++  int                    myLengths[5] = {-1, -1, -1, -1, -1};
++  std::vector<size_t>    myStarts;
++  std::vector<size_t>    myFill;
++  std::vector<long long> myCodes;
++  std::vector<long long> myFound;
++};
++} // namespace
++
+ //=================================================================================================
+ 
+ static bool IsPlaneFF(const occ::handle<Geom_Surface>& theSurface)
+@@ -742,6 +935,8 @@ void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
+   //
+   // The vector aFFToRecheck contains indices of potentially problematic Face-Face intersections
+   NCollection_DynamicArray<int> aFFToRecheck;
++  // The stick vertices of each pair of faces by an index (mitcad#1279)
++  BOPAlgo_StickVertexIndex aStickIndex;
+   // aNbFF may be increased while processing this loop, because it is necessary to recheck
+   // some of Face-Face intersections to avoid missing section edges
+   // aNbFF will be increased to the number of potentially problematic Face-Face intersections
+@@ -815,7 +1010,7 @@ void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
+     }
+     //
+     // 2. Treat Curves
+-    GetStickVertices(nF1, nF2, aMVStick, aMVEF, aMI);
++    aStickIndex.Get(*myDS, nF1, nF2, aMVStick, aMVEF, aMI);
+     //
+     for (j = 0; j < aNbC; ++j)
+     {
+@@ -1227,6 +1422,8 @@ void BOPAlgo_PaveFiller::PostTreatFF(
+   // Find unused vertices
+   NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> VertsUnused;
+   NCollection_Map<int>                                          IndMap;
++  // The stick vertices of each pair of faces by an index (mitcad#1279)
++  BOPAlgo_StickVertexIndex aStickIndex;
+   for (int i = 0; i < aNbFF; i++)
+   {
+     BOPDS_InterfFF& aFF = aFFs(i);
+@@ -1234,7 +1431,7 @@ void BOPAlgo_PaveFiller::PostTreatFF(
+     aFF.Indices(nF1, nF2);
+ 
+     NCollection_Map<int> aMV, aMVEF, aMI;
+-    GetStickVertices(nF1, nF2, aMV, aMVEF, aMI);
++    aStickIndex.Get(*myDS, nF1, nF2, aMV, aMVEF, aMI);
+     NCollection_DynamicArray<BOPDS_Curve>& aVC = aFF.ChangeCurves();
+     RemoveUsedVertices(aVC, aMV);
+ 

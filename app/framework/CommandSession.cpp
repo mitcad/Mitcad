@@ -1445,6 +1445,24 @@ void CommandSession::selectionChanged(const QString& key) {
   autoOperationOverruled(key);
   if (const auto slot = slotOf(key); slot && slot->def->onChange) {
     slot->def->onChange(m_state, m_host);
+    // Values it set (made NaN) are evaluated again, as after a pick or a
+    // choice: a Place row's new reference measures the part where it is
+    // (mitcad#1285). An empty Auto field is NaN on purpose.
+    const auto unevaluated = [this](const Slot& other) {
+      return other.def->type == InputDef::Type::Value && std::isnan(m_state.value(other.key)) &&
+             !(other.def->autoText && m_state.text(other.key).trimmed().isEmpty());
+    };
+    const QVector<Slot> all = slotsOf(false);
+    if (std::any_of(all.begin(), all.end(), unevaluated)) {
+      if (m_presenter) {
+        m_presenter->refresh(m_state);
+      }
+      for (const Slot& other : all) {
+        if (unevaluated(other)) {
+          evaluate(other.key);
+        }
+      }
+    }
   }
   logSelection(key);
   listItems();

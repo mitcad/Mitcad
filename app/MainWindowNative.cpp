@@ -60,6 +60,33 @@
 namespace mitcad {
 namespace {
 
+// The embedded Qt window keeps its notice bars above the CAD view. Follow
+// the laid-out central widget, including bars added after the shell exists.
+class NativeContentWatcher : public QObject {
+public:
+  NativeContentWatcher(QWidget* content, std::function<void(int)> changed)
+      : QObject(content), m_content(content), m_changed(std::move(changed)) {
+    content->installEventFilter(this);
+  }
+
+  bool eventFilter(QObject*, QEvent* event) override {
+    if (!m_pending && (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
+                       event->type() == QEvent::Show)) {
+      m_pending = true;
+      QTimer::singleShot(0, this, [this] {
+        m_pending = false;
+        m_changed(m_content->y());
+      });
+    }
+    return false;
+  }
+
+private:
+  QWidget* m_content;
+  std::function<void(int)> m_changed;
+  bool m_pending = false;
+};
+
 // AppKit holds rendered icon images, so a Qt palette change must replace
 // those images after Qt finishes updating the application's palette.
 class NativePaletteWatcher : public QObject {
@@ -635,8 +662,8 @@ void MainWindow::createNativeWindow() {
   };
   connect(m_agentIndicator, &mcp::AgentIndicator::presentationChanged, this, agentStatus);
   agentStatus();
-  // Notices remain shared state, but their Qt toolbar does not enter
-  // AppKit's viewport. The native status and menus expose their actions.
+  // Hide the old toolbars. Notice bars are created later by startUp();
+  // their laid-out height reserves space above the native overlay cards.
   auto* noticeStore = new QWidget(this);
   noticeStore->hide();
   // These retained Qt presenters must never paint beside the native card.
@@ -650,6 +677,9 @@ void MainWindow::createNativeWindow() {
     toolbar->setParent(noticeStore);
     toolbar->hide();
   }
+  new NativeContentWatcher(centralWidget(), [this](int top) {
+    if (m_nativeWindow) m_nativeWindow->setViewportContentTop(top);
+  });
   connect(m_documentSession, &DocumentSession::busyChanged, this, [this](bool busy) {
     refreshNativeActions();
     if (!busy) {

@@ -21,7 +21,10 @@
 #   - Named views: saved in the document and in its file, shown again from
 #     the browser; the environment's background; Preferences' navigation
 #     (a scheme saved by index in older settings is read and saved by its
-#     id; the middle button orbits); Preferences' pages (mitcad#25: opened
+#     id; the middle button orbits); an orbit past the edge of the screen
+#     (mitcad#1281: the cursor jumps to the opposite edge, the view turns
+#     on without a step, a cube drag released where it was pressed is not
+#     a click); Preferences' pages (mitcad#25: opened
 #     on one by its command, again on the last one, the window fits a
 #     1366 x 768 screen); the shortcut overview.
 #   - The layout grid: its spacing follows the zoom (1 or 5 times a power
@@ -490,6 +493,99 @@ echo "ok   the scheme is saved by its id"
 ui_mark
 ui_step "middle drag orbits"               ui_view_drag 2 40 60 55 50
 ui_expect_new "Camera direction" "the middle button orbits" 8
+
+echo "--- An orbit past the edge of the screen (mitcad#1281)"
+read -r orbit_w orbit_h <<< "$(xdotool getdisplaygeometry)"
+orbit_steps() {
+  local i
+  for ((i = 0; i < $3; i++)); do
+    xdotool mousemove_relative -- "$1" "$2"
+    sleep 0.03
+  done
+}
+orbit_camera() {
+  grep "Camera direction" "$UI_LOG" | tail -1 | sed 's/.*Camera direction \([^ ]*\) \([^ ]*\) \([^ ]*\) up.*/\1 \2 \3/'
+}
+# (Local: X and Y are also the window's place, for ui_logged_at.)
+orbit_cursor_x() {
+  local X Y SCREEN WINDOW
+  eval "$(xdotool getmouselocation --shell 2> /dev/null)"
+  echo "$X"
+}
+# orbit_degrees "x y z" "x y z": the angle between two camera directions.
+orbit_degrees() {
+  echo "$1 $2" | awk '{ d = $1 * $4 + $2 * $5 + $3 * $6; if (d > 1) d = 1; if (d < -1) d = -1
+                        printf "%.1f", atan2(sqrt(1 - d * d), d) * 57.29578 }'
+}
+orbit_iso="-0.577 0.577 -0.577"
+read -r orbit_x orbit_y <<< "$(ui_view_at 50 50)"
+# orbit_from_iso: Isometric View, then the middle button down in the view.
+orbit_from_iso() {
+  ui_mark
+  ui_step "isometric view (search)"        ui_command "Isometric View"
+  sleep 1
+  ui_focus_main
+  ui_mark
+  ui_apart "$orbit_x" "$orbit_y"
+  xdotool mousemove "$orbit_x" "$orbit_y" mousedown 2
+  sleep 0.1
+}
+# How far a drag turns the view, from one that stays away from the edge.
+orbit_from_iso
+orbit_steps 10 0 20
+ui_sync
+xdotool mouseup 2
+ui_expect_new "Camera direction" "a short orbit turns the view" 8
+sleep 0.5
+grep -q "Orbit cursor jumped" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "the cursor jumped away from the edge"
+per_pixel=$(awk -v a="$(orbit_degrees "$orbit_iso" "$(orbit_camera)")" 'BEGIN { printf "%.5f", a / 200 }')
+# A drag over the edge turns it as far as its whole length says: nothing lost
+# and nothing added at the jump. Steps shorter than OrbitWrap's margin.
+orbit_from_iso
+xdotool mousemove $((orbit_w - 40)) "$orbit_y"
+sleep 0.1
+orbit_steps 10 0 $((orbit_w / 40))
+ui_sync
+ui_expect_new "Orbit cursor jumped" "the cursor jumps at the edge of the screen" 8
+at=$(orbit_cursor_x)
+[ "$at" -lt $((orbit_w / 2)) ] || ui_fail "the cursor did not continue from the opposite edge: x $at of $orbit_w"
+xdotool mouseup 2
+sleep 0.5
+past=$(orbit_camera)
+length=$((orbit_w - 40 - orbit_x + orbit_w / 4))
+turned=$(orbit_degrees "$orbit_iso" "$past")
+expected=$(awk -v l="$length" -v p="$per_pixel" 'BEGIN { a = l * p; while (a >= 360) a -= 360; if (a > 180) a = 360 - a; printf "%.1f", a }')
+echo "     $per_pixel degrees per pixel; over the edge, $length pixels: $turned degrees, expected $expected"
+awk -v a="$turned" -v b="$expected" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= 3) }' ||
+  ui_fail "the orbit stepped at the edge: $turned degrees, expected $expected"
+echo "ok   the orbit goes on past the edge without a step"
+# After the jump the release can be where the press was, with the view turned:
+# a drag and not a click on the cube, which would turn the view to that corner.
+ui_mark
+ui_step "isometric view (search)"          ui_command "Isometric View"
+expect_camera "-0.577 0.577 -0.577" "isometric, for the cube"
+ui_expect_new "Orientation cube front-right-top at" "the cube's corner, to drag"
+ui_focus_main
+read -r cube_x cube_y <<< "$(ui_logged_at "Orientation cube front-right-top")"
+ui_mark
+ui_apart "$cube_x" "$cube_y"
+xdotool mousemove "$cube_x" "$cube_y" mousedown 1
+sleep 0.1
+orbit_steps 0 -40 $((cube_y / 40 + 2))
+ui_sync
+ui_expect_new "Orbit cursor jumped" "the cube's drag jumps at the top of the screen" 8
+xdotool mousemove "$cube_x" "$cube_y"
+sleep 0.1
+ui_sync
+xdotool mouseup 1
+sleep 0.5
+back=$(orbit_camera)
+turned=$(orbit_degrees "$orbit_iso" "$back")
+echo "     released where it was pressed: $back; $turned degrees from isometric"
+awk -v a="$turned" 'BEGIN { exit !(a >= 10) }' || ui_fail "a cube drag over the edge counted as a click: $back"
+grep -q "Selected: " <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "a cube drag over the edge selected something"
+echo "ok   a cube drag over the edge is not a click"
+
 ui_mark
 ui_step "overview (search)"                ui_command "Keyboard and Mouse Overview"
 ui_expect_new "Shortcut overview:" "the overview lists the shortcuts"

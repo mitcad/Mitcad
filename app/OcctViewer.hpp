@@ -63,8 +63,10 @@
 #include "view/ViewNavigation.hpp"
 #include "view/SpaceMouseTiming.hpp"
 #include "view/Navigation.hpp"
+#include "view/OrbitWrap.hpp"
 
 class QNativeGestureEvent;
+class QScreen;
 class QTimer;
 class QToolButton;
 class QWheelEvent;
@@ -1011,6 +1013,9 @@ private:
 
   Aspect_Drawable occtDrawable();
   NCollection_Vec2<int> toDevicePixels(const QPointF& point) const;
+  // An orbit past the edge of the screen (view/OrbitWrap.hpp).
+  void wrapOrbitCursor(const QMouseEvent* event);
+  void resetOrbitWrap();
   Aspect_VKeyMouse viewButtons(Qt::MouseButtons buttons) const;
   Aspect_VKeyFlags viewFlags(Qt::KeyboardModifiers modifiers) const;
   void display(const occ::handle<AIS_Shape>& object, int displayMode, PickInfo info,
@@ -1391,6 +1396,9 @@ private:
   NavigationSettings m_navigation;
   QPointF m_panRemainder;
   bool m_f4Press = false;
+  // An orbit goes on past the edge of the screen, on the screen it began.
+  OrbitWrap m_orbitWrap;
+  QPointer<QScreen> m_orbitScreen;
   Graphic3d_ZLayerId m_hiddenLayer = Graphic3d_ZLayerId_UNKNOWN;
   Graphic3d_ZLayerId m_edgeLayer = Graphic3d_ZLayerId_UNKNOWN;
   // Sketch entities' halos, just before the top layer (mitcad#302).

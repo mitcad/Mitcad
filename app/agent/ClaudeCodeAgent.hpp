@@ -43,15 +43,27 @@ class ClaudeCodeAgent : public ChatAgent {
   Q_OBJECT
 
 public:
+  // The first Claude Code the lookup finds (`claude`), or another one found
+  // (mitcad#1289): its executable, its id (`claude-` and a digest of its
+  // path, kept as the chosen agent) and its place for people.
   explicit ClaudeCodeAgent(QObject* parent = nullptr);
+  ClaudeCodeAgent(const QString& program, const QString& id, const QString& place, QObject* parent = nullptr);
   ~ClaudeCodeAgent() override;
 
-  QString id() const override { return QStringLiteral("claude"); }
+  QString id() const override { return m_id; }
   QString name() const override { return tr("Claude Code"); }
   QString installPage() const override { return QStringLiteral("https://code.claude.com/docs/en/setup"); }
   QString accountName() const override { return QStringLiteral("Claude"); }
   // The aliases --model takes (core/mcp/src/chat/claude.rs).
   QList<Model> models() const override;
+  QString place() const override { return m_place; }
+  QString account() const override { return m_account; }
+  QString subscription() const override { return m_subscription; }
+  // The fix in a terminal beside Sign in (mitcad#1289).
+  QString signedOutText() const override;
+  // The executable it starts: fixed for another one found, else the
+  // lookup's first.
+  const QString& fixedProgram() const { return m_fixed; }
 
   void check() override;
   bool installedNow() const override;
@@ -75,6 +87,11 @@ private:
   // The program found, or why it cannot be used.
   QString findProgram(QString* reason) const;
 
+  QString m_id = QStringLiteral("claude");
+  QString m_fixed;
+  QString m_place;
+  QString m_account;
+  QString m_subscription;
   QString m_program;
   Readiness m_readiness = Readiness::Checking;
   QString m_detail;

@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/CommandPanel.cpp app/framework/CommandSession.cpp
 # check-all sources: app/framework/ManipulatorOverlay.cpp app/commands/HoleCommands.cpp app/commands/PlaceInputs.cpp
-# Hole's keyboard and its dimensions in the view (mitcad#1181), through the
-# real UI on the demo block (60 x 40 x 20, Body1, F2.b0); the Windows
-# counterpart is tools/ui-windows-hole-entry-test.ps1 (ctest
-# app.ui-windows-hole-entry):
+# Hole's keyboard, its dimensions in the view (mitcad#1181) and its Reference
+# rows (mitcad#1285), through the real UI on the demo block (60 x 40 x 20,
+# Body1, F2.b0); the Windows counterpart is
+# tools/ui-windows-hole-entry-test.ps1 (ctest app.ui-windows-hole-entry):
 #   1. In the Floating and the Docked layout: Hole on the top face,
 #      Distance 1 and Distance 2 typed (15, 20). Tab in Distance 2 moves
 #      the keyboard on to Diameter, which takes what is typed next (10);
@@ -17,6 +17,14 @@
 #      Enter is refused (the box stays, the command too), Esc puts 12 back.
 #      Depth's again, 10 and Enter. OK makes the hole 15 and 20 from the
 #      edges, 10 across and 10 deep (the volume of ui-create-test's hole).
+#   3. Floating (mitcad#1285): Hole at the top face's center, 10 across;
+#      the edge across the face picked through the Reference 2 row: no
+#      failure notice, the hole where it was, Distance 1 and 2 evaluated,
+#      Distance 2 the distance from the new edge. Then Distance 1 typed 12
+#      and the edge across from Reference 1 picked through its row (or,
+#      when the view hides that edge, the same with Reference 2's first
+#      edge): the hole stays, the distance is the rest of the face's width.
+#      OK makes the hole.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-hole-entry-test.sh
@@ -139,6 +147,111 @@ ui_stop_app
 hole_on_top "Docked" --chrome=docked
 tab_steps
 ui_step "Esc (cancel)"                     ui_key Escape
+ui_stop_app
+
+echo "=== A reference picked in its row (mitcad#1285)"
+# The sketch line of a top edge (c1 along X at y 0, c2 at x 60, c3 at y 40,
+# c4 at x 0), the one across the face from it, and the face's center's
+# distance from it.
+side_of() { sed -n 's/.*F2:side(\(c[1-4]\)\[.*/\1/p' <<< "$1"; }
+token_of() {
+  case $1 in
+    c1) echo "c1[c4,c2]" ;;
+    c2) echo "c2[c1,c3]" ;;
+    c3) echo "c3[c2,c4]" ;;
+    *)  echo "c4[c3,c1]" ;;
+  esac
+}
+opposite_of() { case $1 in c1) token_of c3 ;; c2) token_of c4 ;; c3) token_of c1 ;; *) token_of c2 ;; esac; }
+center_from() { case $1 in c1 | c3) echo 20 ;; *) echo 30 ;; esac; }
+# The top edge of the side `cN[neighbours]` among the newest pick places;
+# empty when it cannot be clicked (behind the panel, say).
+top_edge() {
+  local start
+  start=$(grep -n "^Pick places:" "$UI_LOG" | tail -1 | cut -d: -f1)
+  tail -n +"${start:-1}" "$UI_LOG" | grep "^Pick edge F2\.b0/E{" | grep -F "F2:end(" | grep -F "F2:side($1)" |
+    sed -n 's/^Pick edge F2\.b0\/\(E{[^ ]*}\) at .*/\1/p' | tail -1
+}
+ui_start_app --demo --chrome=floating
+ui_step "fit (F6)"                         ui_key F6
+ui_mark
+ui_step "hole (H)"                         ui_key h
+ui_expect_new "Command Hole started" "hole started"
+ui_expect_new "Pick places:" "the picks are logged"
+ui_step "click the top face"               ui_click_pick "face F2.b0/F2:end($RECT)"
+ui_expect_new "Hole Place On: 1 face" "the face picked"
+ui_expect_new "Place Hole: face face F2:end(" "measured from two of its edges"
+refs=$(grep "^Place Hole: face face " "$UI_LOG" | tail -1 |
+  sed -n 's/^Place Hole: face face [^ ]* of F2\.b0, [0-9.-]* mm from edge \(E{[^ ]*}\) of F2\.b0, [0-9.-]* mm from edge \(E{[^ ]*}\) of F2\.b0 (point.*/\1 \2/p')
+read -r ref1 ref2 <<< "$refs"
+[ -n "$ref2" ] || ui_fail "no references logged"
+side1=$(side_of "$ref1")
+side2=$(side_of "$ref2")
+opposite=$(opposite_of "$side2")
+d1=$(center_from "$side1")
+d2=$(center_from "$side2")
+echo "     references $side1 and $side2: the face's center $d1 and $d2 from them"
+ui_step "distance 1: $d1"                  ui_type_in "Panel Hole input at_offset1" "$d1"
+ui_step "distance 2: $d2"                  ui_type_in "Panel Hole input at_offset2" "$d2"
+ui_step "diameter 10"                      ui_type_in "Panel Hole input diameter" "10"
+ui_expect_new "Preview Hole: ok" "the hole previewed at the face's center" 30
+ui_step "the Reference 2 row"              ui_click_logged "Panel Hole input at_edge2"
+other=$(top_edge "$opposite")
+[ -n "$other" ] || ui_fail "no pick place logged for the edge across from Reference 2"
+# For the second pick: the edge across from Reference 1, or else Reference
+# 2's first edge, whichever the view lets a click pick.
+across1=$(top_edge "$(opposite_of "$side1")")
+first2=$(top_edge "$(token_of "$side2")")
+ui_mark
+ui_step "click the edge across the face"   ui_click_pick "edge F2.b0/$other at"
+ui_expect_new "Hole Reference 2: 1 edge [edge $other of F2.b0]" "the edge across the face is Reference 2"
+ui_expect_new ", $d2 mm from edge $other of F2.b0 (point 30, 20, 20)" \
+  "the hole kept at the center, $d2 mm from the new edge"
+ui_expect_new "Hole Distance 1: $d1 mm = $d1 mm" "Distance 1 evaluated"
+ui_expect_new "Hole Distance 2: $d2 mm = $d2 mm" "Distance 2 evaluated"
+ui_expect_new "Preview Hole: ok" "previewed where it was" 30
+grep -q "^Panel Hole error: " <(tail -n +"$UI_MARK" "$UI_LOG") &&
+  ui_fail "a failure notice: $(grep "^Panel Hole error: " "$UI_LOG" | tail -1)"
+echo "ok   no failure notice"
+
+# Off the center: 12 mm from a row's reference, then the edge across from
+# it picked through that row measures the rest of the face's width.
+if [ -n "$across1" ]; then
+  row=1 now=$side1 edge=$across1
+elif [ -n "$first2" ]; then
+  row=2 now=$(side_of "F2:side($opposite)") edge=$first2
+else
+  ui_fail "neither the edge across from Reference 1 nor Reference 2's first edge can be picked"
+fi
+case $now in
+  c1) width=40 at="30, 12, 20" ;;
+  c3) width=40 at="30, 28, 20" ;;
+  c2) width=60 at="48, 20, 20" ;;
+  *)  width=60 at="12, 20, 20" ;;
+esac
+rest=$((width - 12))
+ui_mark
+ui_step "distance $row: 12"                ui_type_in "Panel Hole input at_offset$row" "12"
+ui_expect_new "Preview Hole: ok" "previewed 12 mm from Reference $row" 30
+ui_step "the Reference $row row"           ui_click_logged "Panel Hole input at_edge$row"
+ui_mark
+ui_step "click the edge across from it"    ui_click_pick "edge F2.b0/$edge at"
+ui_expect_new "Hole Reference $row: 1 edge [edge $edge of F2.b0]" "the edge across the face is Reference $row"
+ui_expect_new "$rest mm from edge $edge of F2.b0" "$rest mm from the new edge"
+grep "^Place Hole: " "$UI_LOG" | tail -1 | grep -qF "(point $at)" ||
+  ui_fail "the hole moved: $(grep "^Place Hole: " "$UI_LOG" | tail -1)"
+echo "ok   the hole kept at $at"
+ui_expect_new "Hole Distance $row: $rest mm = $rest mm" "Distance $row evaluated"
+ui_expect_new "Preview Hole: ok" "previewed where it was" 30
+grep -q "^Panel Hole error: " <(tail -n +"$UI_MARK" "$UI_LOG") &&
+  ui_fail "a failure notice: $(grep "^Panel Hole error: " "$UI_LOG" | tail -1)"
+echo "ok   no failure notice"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added 1 hole(s) (simple), diameter 10" "the hole added" 30
+ui_expect_volume "Body Body1 (F2.b0): volume 48000.000 -> \([0-9.]*\) mm3" \
+  "$(awk 'BEGIN { printf "%.6f", 47135.94936549554 }')" "one hole, 10 deep"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 
 ui_finish "UI Hole entry test"

@@ -30,6 +30,12 @@ public:
   // Runs commands as one undo step named `label`; when one is rejected or
   // cancelled, those before it are taken back.
   virtual bool runModelCommands(const QJsonArray& commands, const QString& label) = 0;
+  // As runModelCommands, but a single undo step is named `label` too,
+  // instead of the model's own name for it (mitcad#1287: Delete Body's
+  // "Delete Body2", not the model's "Add RemoveBody1").
+  virtual bool runNamedModelCommands(const QJsonArray& commands, const QString& label) {
+    return runModelCommands(commands, label);
+  }
   // Why the model rejected the last command that it rejected.
   virtual QString lastError() const = 0;
   // Whether that command was cancelled in the progress dialog rather than

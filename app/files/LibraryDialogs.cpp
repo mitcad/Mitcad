@@ -31,8 +31,10 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -40,6 +42,7 @@
 
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
+#include "../library/PartFavourites.hpp"
 #include "../library/PartPicker.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "Libraries.hpp"
@@ -133,6 +136,54 @@ bool fetchAndReport(QWidget* parent, const QStringList& urls, const std::functio
     sheetWarning(parent, QObject::tr("Fetch Libraries"), failures.join(QStringLiteral("\n\n")));
   }
   return failures.isEmpty();
+}
+
+// The texts of a JSON array of strings (tags).
+QStringList texts(const QJsonValue& value) {
+  QStringList out;
+  for (const QJsonValue& entry : value.toArray()) {
+    out << entry.toString();
+  }
+  return out;
+}
+
+// The components a community index lists for a library it names (the
+// entry's `components`, mitcad#1283) as the browser's items of kind
+// "indexcomponent", each with its library's id, name, URL and licence.
+// With `words` (the search's, in lower case) only those whose own name,
+// id, standard and tags, with their library's name, id, description and
+// tags, have every word (as library_search matches the entry).
+QList<QJsonObject> indexComponentItems(const QJsonObject& library, const QStringList& words) {
+  const QStringList libraryText = QStringList{str(library, "id"), str(library, "name"), str(library, "description")} +
+                                  texts(library.value(QStringLiteral("tags")));
+  QList<QJsonObject> items;
+  for (const QJsonValue& value : library.value(QStringLiteral("components")).toArray()) {
+    const QJsonObject component = value.toObject();
+    const QString id = str(component, "id");
+    if (id.isEmpty()) {
+      continue;
+    }
+    const QString name = str(component, "name").isEmpty() ? id : str(component, "name");
+    const QStringList tags = texts(component.value(QStringLiteral("tags")));
+    const QString haystack =
+        (libraryText + QStringList{id, name, str(component, "standard")} + tags).join(QLatin1Char(' ')).toLower();
+    if (!std::all_of(words.cbegin(), words.cend(),
+                     [&haystack](const QString& word) { return haystack.contains(word); })) {
+      continue;
+    }
+    items.append(QJsonObject{{QStringLiteral("item"), QStringLiteral("indexcomponent")},
+                             {QStringLiteral("id"), id},
+                             {QStringLiteral("name"), name},
+                             {QStringLiteral("tags"), QJsonArray::fromStringList(tags)},
+                             {QStringLiteral("library"), str(library, "id")},
+                             {QStringLiteral("library_name"), str(library, "name")},
+                             {QStringLiteral("url"), str(library, "url")},
+                             {QStringLiteral("license"), library.value(QStringLiteral("license"))},
+                             {QStringLiteral("description"), str(library, "description")},
+                             {QStringLiteral("index"), str(library, "index")},
+                             {QStringLiteral("fetched"), false}});
+  }
+  return items;
 }
 
 } // namespace
@@ -377,10 +428,38 @@ void LibrariesDialog::fetch(bool all) {
 // ---------------------------------------------------------------------------
 // LibraryBrowser
 
-LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent), m_community(community) {
-  setWindowTitle(community ? tr("Community Library") : tr("Insert from Library"));
+QString LibraryBrowser::viewName(View view) {
+  switch (view) {
+  case View::Installed:
+    return tr("Installed");
+  case View::Community:
+    return tr("Community");
+  case View::Favorites:
+    return tr("Favorites");
+  }
+  return tr("Installed");
+}
+
+LibraryBrowser::LibraryBrowser(View view, QWidget* parent) : QDialog(parent), m_view(view) {
+  // One window for every view (mitcad#1283), titled as its command.
+  setWindowTitle(tr("Browse Components"));
   resize(1180, 680);
   auto* layout = new QVBoxLayout(this);
+  // The views as tabs above the grid; the search, the filters and the
+  // selection stay when another is chosen.
+  m_views = new QTabBar;
+  m_views->setObjectName(QStringLiteral("libraryView"));
+  m_views->setAccessibleName(tr("Components to browse"));
+  m_views->setExpanding(false);
+  m_views->setDrawBase(false);
+  m_views->addTab(tr("I&nstalled"));
+  m_views->setTabToolTip(0, tr("Components of the libraries you have"));
+  m_views->addTab(tr("Co&mmunity"));
+  m_views->setTabToolTip(1, tr("Libraries and components the community indexes list; Get Library fetches them"));
+  m_views->addTab(tr("&Favorites"));
+  m_views->setTabToolTip(2, tr("The components you starred"));
+  m_views->setCurrentIndex(static_cast<int>(view));
+  layout->addWidget(m_views);
   // The results are the part picker's grid (mitcad#418): its search runs
   // library_search here (the licence filter beside it).
   m_grid = new PartGrid;
@@ -417,7 +496,8 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   auto* form = new QFormLayout;
   m_version = new QComboBox;
   m_version->setObjectName(QStringLiteral("libraryVersion"));
-  m_version->setToolTip(tr("The component keeps this version; it changes only with Library Components › Update"));
+  m_version->setToolTip(
+      tr("The component keeps this version; it changes only with Components in This Design › Update"));
   form->addRow(tr("&Version:"), m_version);
   side->addLayout(form);
   m_size = new SizeChooser;
@@ -451,39 +531,46 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   split->setStretchFactor(1, 1);
   layout->addWidget(split, 1);
   auto* buttons = new QDialogButtonBox;
-  auto* libraries = new QPushButton(tr("Li&braries…"));
-  // Fetches every enabled source, as Fetch All in Libraries... (mitcad#317).
+  // The same window as Tools › Libraries › Library Sources… (mitcad#1283).
+  auto* libraries = new QPushButton(tr("Li&brary Sources…"));
+  libraries->setObjectName(QStringLiteral("libraryBrowserSources"));
+  libraries->setToolTip(tr("The component libraries and community indexes to use; fetch them"));
+  // Fetches every enabled source, as Fetch All in Library Sources...
+  // (mitcad#317).
   auto* update = new QPushButton(tr("&Update"));
   update->setObjectName(QStringLiteral("libraryUpdate"));
   update->setToolTip(tr("Fetch newer versions of all enabled libraries"));
-  m_get = new QPushButton(tr("&Get Library"));
-  m_insert = new QPushButton(tr("&Insert"));
+  // One primary button that follows the selected item (mitcad#1283):
+  // Insert while its library is here, Get Library while it is not.
+  m_primary = new QPushButton(tr("&Insert"));
+  m_primary->setObjectName(QStringLiteral("libraryPrimary"));
   auto* close = new QPushButton(tr("Close"));
   buttons->addButton(libraries, QDialogButtonBox::ResetRole);
   buttons->addButton(update, QDialogButtonBox::ResetRole);
-  buttons->addButton(m_get, QDialogButtonBox::ActionRole);
-  buttons->addButton(m_insert, QDialogButtonBox::AcceptRole);
+  buttons->addButton(m_primary, QDialogButtonBox::AcceptRole);
   buttons->addButton(close, QDialogButtonBox::RejectRole);
-  mac::styleDialogButtons(buttons, m_insert, true);
+  mac::styleDialogButtons(buttons, m_primary, true);
   layout->addWidget(buttons);
-  m_get->setEnabled(false);
-  m_insert->setEnabled(false);
+  m_primary->setEnabled(false);
+  connect(m_views, &QTabBar::currentChanged, this, [this](int index) {
+    if (index >= 0 && index <= static_cast<int>(View::Favorites)) {
+      setView(static_cast<View>(index));
+    }
+  });
   connect(m_grid, &PartGrid::searchChanged, this, &LibraryBrowser::search);
   connect(m_license, &QComboBox::currentIndexChanged, this, &LibraryBrowser::search);
   connect(m_unlicensed, &QCheckBox::toggled, this, &LibraryBrowser::search);
   connect(m_grid, &PartGrid::currentChanged, this, &LibraryBrowser::select);
   connect(m_version, &QComboBox::currentIndexChanged, this, &LibraryBrowser::showVersion);
   connect(m_grid, &PartGrid::activated, this, [this] {
-    if (m_insert->isEnabled()) {
-      insert();
-    } else if (m_get->isEnabled()) {
-      getLibrary();
+    if (m_primary->isEnabled()) {
+      primary();
     }
   });
-  connect(m_insert, &QPushButton::clicked, this, &LibraryBrowser::insert);
-  connect(m_get, &QPushButton::clicked, this, &LibraryBrowser::getLibrary);
+  connect(m_primary, &QPushButton::clicked, this, &LibraryBrowser::primary);
   connect(close, &QPushButton::clicked, this, &QDialog::reject);
   connect(libraries, &QPushButton::clicked, this, [this] {
+    qInfo().noquote() << QStringLiteral("Library browser: Library Sources opened");
     LibrariesDialog dialog(this);
     prepareModal(&dialog);
     execDialog(&dialog);
@@ -516,9 +603,50 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
     refresh();
   });
   // Up and Down in the search field move through the results (the grid's).
+  qInfo().noquote() << QStringLiteral("Library browser view: %1").arg(viewName(m_view));
   search();
   qInfo().noquote() << QStringLiteral("Part picker opened: %1 parts for %2").arg(m_items.size()).arg(windowTitle());
   m_search->setFocus();
+}
+
+void LibraryBrowser::setView(View view) {
+  if (view == m_view) {
+    return;
+  }
+  m_view = view;
+  if (m_views->currentIndex() != static_cast<int>(view)) {
+    const QSignalBlocker quiet(m_views);
+    m_views->setCurrentIndex(static_cast<int>(view));
+  }
+  qInfo().noquote() << QStringLiteral("Library browser view: %1").arg(viewName(view));
+  // The search again with the same text and filters, the selected item
+  // kept when the view lists it too.
+  refresh();
+}
+
+void LibraryBrowser::setPrimary(bool get, bool enabled) {
+  m_primaryGets = get;
+  m_primary->setText(get ? tr("&Get Library") : tr("&Insert"));
+  m_primary->setToolTip(get ? tr("Fetch the library of this item; then Insert places its components")
+                            : tr("Place the component in the design"));
+  m_primary->setEnabled(enabled);
+  const QString state = QStringLiteral("%1%2").arg(get ? QStringLiteral("Get Library") : QStringLiteral("Insert"),
+                                                  enabled ? QString() : QStringLiteral(" (off)"));
+  if (state != m_primaryLogged) {
+    m_primaryLogged = state;
+    qInfo().noquote() << QStringLiteral("Library browser button: %1").arg(state);
+  }
+}
+
+void LibraryBrowser::primary() {
+  if (!m_primary->isEnabled()) {
+    return;
+  }
+  if (m_primaryGets) {
+    getLibrary();
+  } else {
+    insert();
+  }
 }
 
 void LibraryBrowser::setUsedParts(const QList<UsedPart>& used) { m_grid->setUsedParts(used); }
@@ -543,7 +671,8 @@ void LibraryBrowser::search() {
   m_items = {};
   const QJsonArray components = answer.value(QStringLiteral("components")).toArray();
   QStringList leftOut;
-  const QJsonArray libraries = browserLibraries(answer, sources, m_community, &leftOut);
+  const bool community = m_view == View::Community;
+  const QJsonArray libraries = browserLibraries(answer, sources, community, &leftOut);
   logLeftOutLibraries(leftOut);
   const auto addAll = [this](const QJsonArray& list, const char* kind) {
     for (const QJsonValue& value : list) {
@@ -552,22 +681,69 @@ void LibraryBrowser::search() {
       m_items.append(item);
     }
   };
-  if (m_community) {
-    addAll(libraries, "library");
+  int indexComponents = 0;
+  if (m_view == View::Community) {
+    // Each library an index names, the components of one not fetched
+    // after it (the index's list, mitcad#1283): Get Library fetches them.
+    const QStringList words = m_search->text().toLower().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    for (const QJsonValue& value : libraries) {
+      QJsonObject library = value.toObject();
+      library.insert(QStringLiteral("item"), QLatin1String("library"));
+      m_items.append(library);
+      if (library.value(QStringLiteral("fetched")).toBool()) {
+        continue;
+      }
+      for (const QJsonObject& item : indexComponentItems(library, words)) {
+        m_items.append(item);
+        ++indexComponents;
+      }
+    }
     addAll(components, "component");
+  } else if (m_view == View::Favorites) {
+    // The starred components (a star of any of a component's rows).
+    QSet<QString> starred;
+    for (const PartStar& star : PartFavourites::instance().starredParts()) {
+      starred.insert(star.library + QLatin1Char('|') + star.component);
+    }
+    QJsonArray favorites;
+    for (const QJsonValue& value : components) {
+      const QJsonObject component = value.toObject();
+      if (starred.contains(str(component, "library") + QLatin1Char('|') + str(component, "id"))) {
+        favorites.append(component);
+      }
+    }
+    addAll(favorites, "component");
+    qInfo().noquote() << QStringLiteral("Library browser favorites: %1 of %2 components starred")
+                             .arg(favorites.size())
+                             .arg(components.size());
   } else {
     addAll(components, "component");
     addAll(libraries, "library");
   }
   // The grid's tiles: the components with their pictures (read as they come
-  // into sight), an index's libraries in "Libraries to get".
+  // into sight), an index's libraries and their components in "Libraries
+  // to get".
   QList<PickerPart> parts;
   m_keys.clear();
   for (const QJsonValue& value : m_items) {
     const QJsonObject item = value.toObject();
+    const QString kind = str(item, "item");
     PickerPart part;
-    if (str(item, "item") == QLatin1String("component")) {
+    if (kind == QLatin1String("component")) {
       part = pickerPart(item);
+    } else if (kind == QLatin1String("indexcomponent")) {
+      part.library = str(item, "library");
+      part.libraryName = str(item, "library_name");
+      part.component = str(item, "id");
+      part.name = str(item, "name");
+      part.url = str(item, "url");
+      part.description = str(item, "description");
+      for (const QJsonValue& tag : item.value(QStringLiteral("tags")).toArray()) {
+        part.keywords << tag.toString();
+      }
+      part.license = item.value(QStringLiteral("license")).toString();
+      part.preview = false;
+      part.libraryEntry = true;
     } else {
       part.library = str(item, "id");
       part.libraryName = str(item, "name");
@@ -588,6 +764,9 @@ void LibraryBrowser::search() {
                            .arg(components.size())
                            .arg(libraries.size())
                            .arg(answer.value(QStringLiteral("hidden")).toInt());
+  if (indexComponents > 0) {
+    qInfo().noquote() << QStringLiteral("Library browser: %1 components of libraries to get").arg(indexComponents);
+  }
   m_grid->selectFirst(false);
   select();
 }
@@ -600,10 +779,12 @@ void LibraryBrowser::select() {
   m_size->setTable({});
   m_rowDetails->hide();
   setSupplierPartsCount(m_supplierButton, 0);
-  m_insert->setEnabled(false);
-  m_get->setEnabled(false);
+  // Off until the item shows what it can do; logged by setPrimary only
+  // when the outcome differs from what it was.
+  m_primary->setEnabled(false);
   m_shown = {};
   if (row < 0 || row >= m_items.size()) {
+    setPrimary(false, false);
     // Parts found, but none in the group shown under the search and the
     // filters (mitcad#1015): say so, not that nothing is fetched or found.
     const QString reason = m_grid->emptyReason();
@@ -614,19 +795,48 @@ void LibraryBrowser::select() {
       return;
     }
     // No enabled source fetched yet (a fresh install): Update fetches them
-    // (mitcad#317); Libraries... adds sources.
+    // (mitcad#317); Library Sources... adds sources.
     if (!anySourceFetched()) {
       m_details->setText(tr("<p>No library is fetched yet. Press <b>Update</b> to fetch the enabled libraries; "
-                            "add sources in <b>Libraries…</b>.</p>"));
+                            "add sources in <b>Library Sources…</b>.</p>"));
       qInfo().noquote() << QStringLiteral("Library browser empty: nothing fetched yet, press Update");
       return;
     }
+    // Favorites without a star that the search leaves (mitcad#1283).
+    if (m_view == View::Favorites) {
+      m_details->setText(tr("<p>No favorites here. Star a component (the star on its tile, or Ctrl+D) in "
+                            "<b>Installed</b> or <b>Community</b> to list it in <b>Favorites</b>.</p>"));
+      qInfo().noquote() << QStringLiteral("Library browser empty: no favorites");
+      return;
+    }
     m_details->setText(tr("<p>Nothing found. Fetch newer versions with <b>Update</b> or add sources in "
-                          "<b>Libraries…</b>; items without an accepted license are hidden unless asked for.</p>"));
+                          "<b>Library Sources…</b>; items without an accepted license are hidden unless asked "
+                          "for.</p>"));
     qInfo().noquote() << QStringLiteral("Library browser empty: nothing found");
     return;
   }
   const QJsonObject item = m_items[row].toObject();
+  if (str(item, "item") == QLatin1String("indexcomponent")) {
+    // A component of a library an index names, not fetched (mitcad#1283):
+    // what the index says, and Get Library.
+    const QString license = item.value(QStringLiteral("license")).toString();
+    const QStringList tags = texts(item.value(QStringLiteral("tags")));
+    m_details->setText(tr("<h3>%1</h3><p><b>Library:</b> %2 (%3), not fetched yet<br>%4</p><p><b>License:</b> %5 %6</p>"
+                          "%7<p>Press <b>Get Library</b> to fetch the library; then <b>Insert</b> places the "
+                          "component.</p>")
+                           .arg(escaped(str(item, "name")), escaped(str(item, "library_name")),
+                                escaped(str(item, "library")), escaped(str(item, "url")),
+                                license.isEmpty() ? tr("none") : escaped(license), escaped(licenseNote(license)),
+                                tags.isEmpty() ? QString()
+                                               : tr("<p><b>Tags:</b> %1</p>")
+                                                     .arg(escaped(tags.join(QStringLiteral(", "))))));
+    setPrimary(true, true);
+    qInfo().noquote()
+        << QStringLiteral("Library browser selected %1/%2 of a library to get (%3), licence %4: Get Library")
+               .arg(str(item, "library"), str(item, "id"), str(item, "url"),
+                    license.isEmpty() ? QStringLiteral("none") : license);
+    return;
+  }
   if (str(item, "item") == QLatin1String("library")) {
     QStringList components;
     for (const QJsonValue& c : item.value(QStringLiteral("components")).toArray()) {
@@ -649,7 +859,10 @@ void LibraryBrowser::select() {
                                 license.isEmpty() ? tr("none") : escaped(license), escaped(licenseNote(license)),
                                 maintainers.join(QStringLiteral(", ")), components.join(QStringLiteral(", ")),
                                 reviewed.isEmpty() ? tr("none") : reviewed.join(QStringLiteral(", "))));
-    m_get->setEnabled(!item.value(QStringLiteral("fetched")).toBool());
+    // Get Library while it is not here; a fetched one lists its components
+    // (nothing to insert from its own tile).
+    const bool fetched = item.value(QStringLiteral("fetched")).toBool();
+    setPrimary(!fetched, !fetched);
     qInfo().noquote() << QStringLiteral("Library browser selected library %1 (%2), licence %3, %4")
                              .arg(str(item, "id"), str(item, "url"), license.isEmpty() ? QStringLiteral("none") : license,
                                   item.value(QStringLiteral("fetched")).toBool() ? QStringLiteral("fetched")
@@ -670,7 +883,11 @@ void LibraryBrowser::select() {
 
 void LibraryBrowser::showVersion() {
   const int row = currentIndex();
-  if (row < 0 || row >= m_items.size() || m_version->count() == 0) {
+  if (row < 0 || row >= m_items.size()) {
+    return;
+  }
+  if (m_version->count() == 0) {
+    setPrimary(false, false);
     return;
   }
   const QJsonObject item = m_items[row].toObject();
@@ -687,7 +904,7 @@ void LibraryBrowser::showVersion() {
   if (component.isEmpty()) {
     m_details->setText(tr("<p>This version of the library has no %1.</p>").arg(escaped(str(item, "name"))));
     m_size->setTable({});
-    m_insert->setEnabled(false);
+    setPrimary(false, false);
     return;
   }
   const QJsonObject manifest = m_shown.value(QStringLiteral("manifest")).toObject();
@@ -744,7 +961,7 @@ void LibraryBrowser::showVersion() {
   table.insert(QStringLiteral("standards"), component.value(QStringLiteral("standards")));
   m_size->setSupplierFilter(m_grid->supplierFilter(), false);
   m_size->setTable(table);
-  m_insert->setEnabled(true);
+  setPrimary(false, true);
   showRowDetails();
   orderFields();
   qInfo().noquote() << QStringLiteral("Library browser selected %1/%2: version %3, size %4, licence %5")
@@ -823,13 +1040,17 @@ void LibraryBrowser::getLibrary() {
     return;
   }
   const QJsonObject item = m_items[row].toObject();
+  // A component of a library to get (mitcad#1283): its library is fetched,
+  // and the component stays selected for Insert.
+  const bool component = str(item, "item") == QLatin1String("indexcomponent");
   const QString url = str(item, "url");
+  const QString name = component ? str(item, "library_name") : str(item, "name");
   const QString license = item.value(QStringLiteral("license")).toString();
   // The address comes from an index: shown before anything is fetched.
   if (sheetQuestion(this, tr("Get Library"),
                     tr("Fetch the library %1 from\n%2\n\nLicence: %3\n\nIts designs are data from that repository; "
                        "nothing in it is run.")
-                        .arg(str(item, "name"), url, license.isEmpty() ? tr("none") : license)) != QMessageBox::Yes) {
+                        .arg(name, url, license.isEmpty() ? tr("none") : license)) != QMessageBox::Yes) {
     return;
   }
   LibrarySettings settings = LibrarySettings::load();
@@ -837,10 +1058,53 @@ void LibraryBrowser::getLibrary() {
     settings.save();
   }
   const QList<QJsonObject> answers = fetchLibraries(this, {url});
-  if (!answers.isEmpty() && !errorOf(answers.first()).isEmpty()) {
+  const bool failed = !answers.isEmpty() && !errorOf(answers.first()).isEmpty();
+  if (failed) {
     sheetWarning(this, tr("Get Library"), errorOf(answers.first()));
   }
+  // The same search, filters and view; the item kept when it is still
+  // listed (a library's tile in Community), else the fetched component.
   refresh();
+  if (component && !failed && !selectFetched(item)) {
+    qInfo().noquote() << QStringLiteral("Library browser fetched %1, but %1/%2 is not listed")
+                             .arg(str(item, "library"), str(item, "id"));
+  }
+}
+
+bool LibraryBrowser::selectFetched(const QJsonObject& wanted) {
+  // The fetched library's component of the same id: by its key (the same
+  // URL), else by its library's id (a source that redirects).
+  QJsonObject as = wanted;
+  as.insert(QStringLiteral("item"), QStringLiteral("component"));
+  QString key = itemKey(as);
+  if (!m_keys.contains(key)) {
+    key.clear();
+    for (const QJsonValue& value : m_items) {
+      const QJsonObject item = value.toObject();
+      if (str(item, "item") == QLatin1String("component") && str(item, "library") == str(wanted, "library") &&
+          str(item, "id") == str(wanted, "id")) {
+        key = itemKey(item);
+        break;
+      }
+    }
+  }
+  if (key.isEmpty()) {
+    return false;
+  }
+  if (m_grid->shownKeys().contains(key)) {
+    if (key != m_grid->currentKey()) {
+      m_grid->setCurrent(key, true);
+    }
+  } else if (m_grid->reveal(key)) {
+    // In another group (its category, no longer Libraries to get): All
+    // components shows it; reveal signals nothing.
+    select();
+  } else {
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Library browser fetched %1: selected %1/%2")
+                           .arg(str(wanted, "library"), str(wanted, "id"));
+  return true;
 }
 
 void LibraryBrowser::updateLibraries() {
@@ -849,7 +1113,7 @@ void LibraryBrowser::updateLibraries() {
   const QStringList urls = LibrarySettings::load().enabledUrls();
   qInfo().noquote() << QStringLiteral("Library browser update: %1 enabled source(s)").arg(urls.size());
   if (urls.isEmpty()) {
-    sheetInformation(this, tr("Update"), tr("No library source is enabled. Add or enable sources in Libraries…"));
+    sheetInformation(this, tr("Update"), tr("No library source is enabled. Add or enable sources in Library Sources…"));
     return;
   }
   fetchAndReport(this, urls, [this] { refresh(); });
@@ -892,10 +1156,13 @@ bool LibraryBrowser::anySourceFetched() {
 
 void LibraryBrowser::insert() {
   const int row = currentIndex();
-  if (row < 0 || row >= m_items.size() || !m_insert->isEnabled()) {
+  if (row < 0 || row >= m_items.size() || m_primaryGets || !m_primary->isEnabled()) {
     return;
   }
   const QJsonObject item = m_items[row].toObject();
+  if (str(item, "item") != QLatin1String("component")) {
+    return;
+  }
   LibraryChoice choice;
   choice.library = str(item, "library");
   choice.url = str(item, "url");

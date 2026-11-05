@@ -278,6 +278,11 @@ pub struct MockKernel {
     /// made from a triangulation (`polygonal`), as the kernel's quick path
     /// does; otherwise as exact.
     pub projects_polygonal: Cell<bool>,
+    /// Drawings (mitcad#1286): lines in the model (polylines through
+    /// these points) that `project_view` draws as visible in every view
+    /// besides the boxes' edges, as the kernel draws the rim of a hole the
+    /// eye sees; a curve left out is one the part hides.
+    pub drawn_curves: RefCell<Vec<Vec<[f64; 3]>>>,
     /// Section Analysis (mitcad#824): `section` cuts the bounds as
     /// `section_curves` does (one edge per side of the polygon, one face
     /// when there are edges, the polygon's perimeter and area); otherwise
@@ -4097,7 +4102,8 @@ impl Kernel for MockKernel {
     /// Drawings (mitcad#471): the twelve edges of each shape's box, all
     /// seen, each with its shape's index as its source (mitcad#1112); a
     /// section's (mitcad#717) what lies behind its plane of them,
-    /// and where the plane cuts the box as its cut face.
+    /// and where the plane cuts the box as its cut face; then the
+    /// `drawn_curves`, seen (mitcad#1286).
     fn project_view(
         &self,
         shapes: &[&MockShape],
@@ -4173,6 +4179,14 @@ impl Kernel for MockKernel {
                 });
                 projection.cuts.push(vec![crossings]);
             }
+        }
+        for curve in self.drawn_curves.borrow().iter() {
+            projection.edges.push(ViewEdge {
+                visible: true,
+                kind: ViewEdgeKind::Sharp,
+                curve: ViewCurve::Polyline(curve.iter().map(|p| spec.project(*p)).collect()),
+                source: None,
+            });
         }
         Ok(projection)
     }

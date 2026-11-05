@@ -1,4 +1,4 @@
-# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270
+# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284
 
 These patches change no result. Each removes repeated work that made an
 OCCT algorithm quadratic (or worse) in the edges or wires of a face or a
@@ -25,6 +25,12 @@ The same kind of bound for booleans on faces that run many turns is in
   instead of going through all of its edges after every face added, which
   made the face merge after a boolean quadratic in the faces of a large
   shell (mitcad#1273).
+- **1280 to 1284** take the repeated work out of the union of many bodies:
+  the stick vertices of each pair of faces found by an index instead of a
+  scan of all interferences, the solid classifier's map of edge faces made
+  only when it is read, a solid's face intersectors made beside each other,
+  a face intersector classifying only the points in its range, and a new
+  solid's edges mapped once for all its holes (mitcad#1279).
 
 ## 0006 to 0009: booleans and the checker
 
@@ -127,6 +133,81 @@ toggles them) are kept in a map as the faces are added; the shell is closed
 when it has an edge that counts and none is left over, the same test, and
 the map is emptied with each new shell.
 
+## 1280 to 1284: the union of many bodies
+
+The union of a machine's 257 bodies (mitcad#1279: after mitcad#1278 one
+union of all, 17 s in `geometry.join_many_bodies` on a 32-core
+workstation) spent most of its single-threaded time in three places,
+which stack samples of every thread showed: the stick vertices of each
+pair of intersected faces (about 1.4 s), the placement of the result's
+cavities in `BOPAlgo_BuilderSolid` (about 3.5 s) and the checker's test of
+the solid's shells in `BRepCheck_Solid` (about 3.5 s). The last two were
+mostly the solid classifier, on a solid of 8 800 faces: the map of its
+edges' faces made for every point, and the loading of the solid. With the
+five patches the union takes 12.9 s, with the same result (the same
+solids, shells, faces and volume); the design's Combine in `mitcad-cli
+info --timings` 13.7 s instead of 19.4 s, its peak 1.48 GB instead of
+1.73 GB.
+
+### 1280-bopalgo-stick-vertices-of-face-pairs-by-an-index
+
+`BOPAlgo_PaveFiller::GetStickVertices` gives the vertices of the VV, VE,
+EE, VF and EF interferences between the sub-shapes of two intersected
+faces. It went through every such interference of the operation for every
+pair of faces, in `MakeBlocks` and again in `PostTreatFF`: quadratic in
+the interferences. The two loops now read an index of the interferences
+by the shapes they join, made once (and made again when the interferences
+or the shapes have grown since), and find a pair's interferences from the
+sub-shapes of its two faces. Their vertices are added in the order of the
+scan (by kind, then by index), so the maps filled, whose order of
+iteration later steps follow, are the same. `GetStickVertices` itself is
+unchanged.
+
+### 1281-brepclass3d-edge-faces-mapped-only-where-the-line-meets-an-edge
+
+`BRepClass3d_SClassifier::Perform`, which classifies a point against a
+solid, mapped every edge of the solid to its faces for every point, though
+the map is read only where the line through the point passes through an
+edge. Against the union's solid, making and freeing that map was most of
+each classification. It is now made the first time it is read.
+
+### 1282-brepclass3d-face-intersectors-made-beside-each-other
+
+`BRepClass3d_SolidExplorer::InitShape` (a classifier's loading of a solid)
+makes an intersector for each face, which samples the face's surface; the
+union's solid is loaded several times (the builder's classification of its
+shells, its placement of the cavities, the checker). The intersectors are
+now made beside each other (`OSD_Parallel`, from 64 faces on) and bound to
+the faces in the faces' order, as before.
+
+### 1283-intcurvesface-only-points-in-range-classified
+
+`IntCurvesFace_Intersector::InternalCall` classified every point where a
+line meets a face's surface in the face and only then kept those in the
+segment's range. A classifier's segment meets the surfaces of most faces
+of a large solid outside its range. Only the points in the range are now
+classified, and a face with none is left at once; the points kept are the
+same.
+
+### 1284-bopalgo-buildersolid-solid-edges-mapped-once-for-its-holes
+
+`BOPAlgo_BuilderSolid::PerformAreas` tests each hole shell whose box meets
+a new solid's box for whether it lies in the solid (`IsInside`), and
+mapped all the solid's edges for every such hole. They are now mapped once
+for all the holes tried in the solid. 1283 and 1284 together took 0.4 s
+off the union.
+
+Not patched: a box test of a hole's shell before the checker classifies
+another shell's point against it (`BRepCheck_Solid`; a point outside the
+box of a cavity is outside the cavity) changes a result. OCCT's classifier
+fails (it reports a rejected line, which counts as out) on a point of one
+of the union's cavities that lies in the plane of the bottom faces of two
+other cavities 300 mm away, so the checker finds the union with merged
+faces invalid ("a sub-shape not in the shape") and the union is taken as
+OCCT left it (8 721 faces). With the box test the merged union is valid
+and taken (7 458 faces, 0.26 mm³ less), and the union took 1.5 s less,
+mostly because the union as OCCT left it was then not checked.
+
 ## Reports and tests
 
 - 0006 to 0009: the reports mitcad#84 (0006), mitcad#90 (0007), mitcad#91
@@ -138,3 +219,6 @@ the map is emptied with each new shell.
 - 1270: mitcad#1273, the union of the reported design of GitHub #133 in
   `geometry/tests/test_join_many_bodies.cpp` (its results are the same
   without the patch; only its time changes).
+- 1280 to 1284: mitcad#1279, the same test (the same results, 17 s → 12.9 s
+  for the union), and the boolean, fillet and chamfer tests of `geometry`
+  and `core.model.features-solid`, whose results are OCCT's without them.

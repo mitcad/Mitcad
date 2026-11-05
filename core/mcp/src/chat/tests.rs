@@ -261,7 +261,19 @@ fn versions_and_sign_in() {
     let signed = request(&json!({"op": "claude_auth", "exit_code": 0,
         "output": "{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}"}))
     .unwrap();
-    assert_eq!(signed, json!({"signed_in": true, "method": "claude.ai"}));
+    assert_eq!(
+        signed,
+        json!({"signed_in": true, "method": "claude.ai", "account": null, "organization": null,
+               "subscription": null})
+    );
+    // The account it names (mitcad#1289), as the agent choice shows it.
+    let named = request(&json!({"op": "claude_auth", "exit_code": 0,
+        "output": "{\"loggedIn\": true, \"authMethod\": \"claude.ai\", \"email\": \"someone@example.com\", \
+                   \"orgName\": \"Example Org\", \"subscriptionType\": \"max\"}"}))
+    .unwrap();
+    assert_eq!(named["account"], "someone@example.com");
+    assert_eq!(named["organization"], "Example Org");
+    assert_eq!(named["subscription"], "max");
     let out =
         request(&json!({"op": "claude_auth", "exit_code": 1, "output": "Not logged in"})).unwrap();
     assert_eq!(out["signed_in"], false);

@@ -520,6 +520,15 @@ named_enum! {
             visible: bool,
         },
         "delete_center_of_mass" => DeleteCenterOfMass,
+        // View › Show of the whole design (mitcad#1287, `document/display.rs`).
+        "set_view_show" => SetViewShow {
+            #[serde(default)]
+            origins: Option<bool>,
+            #[serde(default)]
+            construction: Option<bool>,
+            #[serde(default)]
+            sketches: Option<bool>,
+        },
         // A body drawn see-through (mitcad#1093).
         "set_body_transparent" => SetBodyTransparent {
             uid: BodyUid,
@@ -1141,6 +1150,16 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 // The Center of Mass marker (mitcad#1094), while there is one.
                 if let Some(marker) = self.display().center_of_mass {
                     value["display"]["center_of_mass"] = json!({"visible": marker.visible});
+                }
+                // View › Show of the whole design (mitcad#1287), while it
+                // hides a kind.
+                let hidden = self.display().hidden;
+                if !hidden.is_default() {
+                    value["display"]["show"] = json!({
+                        "origins": !hidden.origins,
+                        "construction": !hidden.construction,
+                        "sketches": !hidden.sketches,
+                    });
                 }
                 // A hybrid assembly allowed without asking (mitcad#171).
                 if self.hybrid_assembly() {
@@ -2315,6 +2334,14 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::ExportDrawing(command) => self.export_drawing_command(command)?,
             Command::SetPrintBedFace { uid, face } => {
                 self.set_print_bed_face(uid, face.as_deref())?;
+                json!({})
+            }
+            Command::SetViewShow {
+                origins,
+                construction,
+                sketches,
+            } => {
+                self.set_view_show(origins, construction, sketches)?;
                 json!({})
             }
         })

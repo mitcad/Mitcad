@@ -24,8 +24,9 @@ command edit.undo
 expect-model-bodies 4 4000
 expect-undo-depth ${baseline} 0
 
-# Browser bodies map to features. Moving only keyboard focus into the
-# timeline must keep that exact external selection and delete all of it.
+# Browser bodies select their features in the timeline. Moving only
+# keyboard focus into the timeline must keep that exact external selection
+# and delete all of it: the timeline deletes features.
 click-logged '^Browser Root/Bodies/Body1 at '
 click-logged '^Browser Root/Bodies/Body2 at ' ctrl
 click-logged '^Browser Root/Bodies/Body3 at ' ctrl
@@ -42,7 +43,8 @@ command edit.undo
 expect-model-bodies 4 4000
 expect-undo-depth ${baseline} 0
 
-# The same rows with the Browser itself retaining keyboard focus.
+# The same rows with the Browser itself retaining keyboard focus: body rows
+# delete only their bodies (mitcad#1287), one Remove Body, the features kept.
 click-logged '^Browser Root/Bodies/Body1 at '
 click-logged '^Browser Root/Bodies/Body2 at ' ctrl
 click-logged '^Browser Root/Bodies/Body3 at ' ctrl
@@ -50,7 +52,7 @@ focus-main
 focus-widget modelBrowserTree
 mark
 key Delete
-wait-log '^Deleted A, B, C$'
+wait-log '^Deleted body Body1, Body2, Body3$'
 expect-model-bodies 1 1000
 expect-undo-depth ${baseline} 1
 command edit.undo
@@ -88,8 +90,8 @@ click-logged '^Browser Root/Bodies/Body1 at '
 click-logged '^Browser Root/Bodies/Body2 at ' ctrl
 click-logged '^Browser Root/Bodies/Body3 at ' ctrl
 mark
-context-menu-logged '^Browser Root/Bodies/Body2 at ' 'Delete'
-wait-log '^Deleted A, B, C$'
+context-menu-logged '^Browser Root/Bodies/Body2 at ' 'Delete Bodies'
+wait-log '^Deleted body Body1, Body2, Body3$'
 expect-model-bodies 1 1000
 expect-undo-depth ${baseline} 1
 command edit.undo

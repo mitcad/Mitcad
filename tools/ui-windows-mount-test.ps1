@@ -207,7 +207,7 @@ function Close-Libraries {
 function Insert([string]$Search, [string]$Id, [switch]$Copy) {
   Ui-Mark
   Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-  Ui-FocusDialog '^Insert from Library$'
+  Ui-FocusDialog '^Browse Components$'
   Ui-Step "search $Search"                 { Ui-Key 'alt+s'; Ui-Type $Search }
   Ui-ExpectNew "Library search '$Search': 1 components" 'the search finds it'
   Ui-ExpectNew "Library browser selected test-mounts/${Id}: version " 'the part selected'
@@ -373,7 +373,7 @@ if ($env:MITCAD_GRIDFINITY_LIBRARY -and (Test-Path (Join-Path $env:MITCAD_GRIDFI
   Close-Libraries
   Ui-Mark
   Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-  Ui-FocusDialog '^Insert from Library$'
+  Ui-FocusDialog '^Browse Components$'
   Ui-Step "search $($gridPart.name)"       { Ui-Key 'alt+s'; Ui-Type $gridPart.name }
   Ui-Step 'a copy (Alt+P)'                 { Ui-Key 'alt+p' }
   Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
@@ -386,7 +386,7 @@ if ($env:MITCAD_GRIDFINITY_LIBRARY -and (Test-Path (Join-Path $env:MITCAD_GRIDFI
   Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
   Ui-Mark
   Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
-  Ui-FocusDialog '^Insert from Library$'
+  Ui-FocusDialog '^Browse Components$'
   Ui-Step "search $($footPart.name)"       { Ui-Key 'alt+s'; Ui-Type $footPart.name }
   Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
   Ui-FocusMain
@@ -484,7 +484,7 @@ Ui-ExpectNew "Library fetched: library My screws (my-screws) from $mine" 'the ow
 Close-Libraries
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'         { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search Screw M8'                  { Ui-Key 'alt+s'; Ui-Type 'Screw M8' }
 Ui-ExpectNew 'Library browser selected my-screws/screw-m8' 'the own screw'
 Ui-Step 'Insert (Alt+I)'                   { Ui-Key 'alt+i' }
@@ -570,7 +570,7 @@ Ui-Step "select the rim"                   { Ui-ClickPick "$rim at" }
 Ui-ExpectNew 'Selected: 1 edge' "the hole's rim selected"
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'         { Ui-Key 'F9' }
-Ui-FocusDialog '^Insert from Library$'
+Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search 4762'                      { Ui-Key 'alt+s'; Ui-Type '4762' }
 Ui-ExpectNew "Library search '4762': 1 components" 'the search finds the screw'
 Ui-ExpectNew 'Library browser selected test-iso/iso4762: version ' 'the screw selected'

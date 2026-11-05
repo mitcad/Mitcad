@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "AssistantSetup.hpp"
 
+#include <algorithm>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -13,6 +15,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUuid>
+#include <QVersionNumber>
 
 namespace mitcad::mcp {
 namespace {
@@ -213,6 +216,177 @@ QString assistantProgram(const QString& name) {
   return found.isEmpty() || onPath ? name : found;
 }
 
+QStringList assistantExecutables(const QString& name) {
+  QStringList found;
+  // One entry per file: PATH's result and a folder's can name it differently.
+  const auto add = [&found](const QString& path) {
+    const QString file = path.isEmpty() ? QString() : QFileInfo(path).canonicalFilePath();
+    if (!file.isEmpty() && !found.contains(file)) found << file;
+  };
+  const QStringList suffixes = assistantExecutableSuffixes(kWindows, qEnvironmentVariable("PATHEXT"));
+  const auto roaming = [](const QString& base) {
+    return kWindows ? QDir(base).filePath(QStringLiteral("AppData/Roaming")) : QString();
+  };
+  const auto eachFolder = [&](const QStringList& folders) {
+    for (const QString& folder : folders) add(findAssistantExecutable(name, {folder}, suffixes));
+  };
+  const bool claude = name == QStringLiteral("claude");
+  if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+    const QString folder = qEnvironmentVariable("MITCAD_TEST_ASSISTANT_EXECUTABLES");
+    const QString testHome = qEnvironmentVariable("MITCAD_TEST_ASSISTANT_HOME");
+    if (!folder.isEmpty() || !testHome.isEmpty()) {
+      if (folder == QStringLiteral("none")) return {};
+      if (!folder.isEmpty()) eachFolder({folder});
+      if (!testHome.isEmpty()) eachFolder(assistantFallbackFolders(testHome, roaming(testHome), {}));
+      const QString work = qEnvironmentVariable("MITCAD_ASSISTANT_TEST_WORK");
+      if (claude && !work.isEmpty()) {
+        const QString local = QDir(work).filePath(QStringLiteral("local-app-data"));
+        add(claudeDesktopClaudeCode(
+            claudeDesktopWindowsSettingsFolders(local, QDir(work).filePath(QStringLiteral("roaming-app-data"))) +
+            claudeDesktopDataFolders(local)));
+      }
+      return found;
+    }
+  }
+  add(QStandardPaths::findExecutable(name));
+  eachFolder(assistantFallbackFolders(QDir::homePath(), kWindows ? qEnvironmentVariable("APPDATA") : QString(),
+                                      storedUserPath()));
+  add(assistantExecutable(name)); // the applications' own (macOS)
+  if (claude) {
+    add(claudeDesktopClaudeCode(claudeDesktopSettingsFolders() +
+                                claudeDesktopDataFolders(kWindows ? qEnvironmentVariable("LOCALAPPDATA") : QString())));
+  }
+  return found;
+}
+
+QString claudeDesktopClaudeCode(const QStringList& settingsFolders) {
+  const QString program = kWindows ? QStringLiteral("claude.exe") : QStringLiteral("claude");
+  QString best;
+  QVersionNumber highest;
+  for (const QString& settings : settingsFolders) {
+    const QDir versions(QDir(settings).filePath(QStringLiteral("claude-code")));
+    if (!versions.exists()) continue;
+    for (const QString& entry : versions.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+      const QVersionNumber version = QVersionNumber::fromString(entry);
+      if (version.isNull()) continue;
+      // The program in the version's folder, or in a build folder under it
+      // (`<version>/<build id>/claude.exe` on Windows); the newest such.
+      const QDir folder(versions.filePath(entry));
+      QString found = executable(folder.filePath(program));
+      if (found.isEmpty()) {
+        QDateTime newest;
+        for (const QString& build : folder.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+          const QString candidate = executable(QDir(folder.filePath(build)).filePath(program));
+          const QDateTime written = QFileInfo(candidate).lastModified();
+          if (!candidate.isEmpty() && (found.isEmpty() || written > newest)) {
+            found = candidate;
+            newest = written;
+          }
+        }
+      }
+      if (!found.isEmpty() && (best.isEmpty() || version > highest)) {
+        best = found;
+        highest = version;
+      }
+    }
+  }
+  return best;
+}
+
+QStringList claudeDesktopDataFolders(const QString& localAppData) {
+  QStringList folders;
+  if (localAppData.isEmpty()) return folders;
+  const QDir data(QDir(localAppData).filePath(QStringLiteral("Claude-Data")));
+  for (const QString& entry : data.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) folders << data.filePath(entry);
+  return folders;
+}
+
+QStringList claudeDesktopSettingsFolders() {
+#if defined(Q_OS_WIN)
+  return claudeDesktopWindowsSettingsFolders(qEnvironmentVariable("LOCALAPPDATA"), qEnvironmentVariable("APPDATA"));
+#elif defined(Q_OS_MACOS)
+  return {QDir::home().filePath(QStringLiteral("Library/Application Support/Claude"))};
+#else
+  return {};
+#endif
+}
+
+QString assistantPlace(const QString& executable, const QString& home) {
+  const QString folder = QFileInfo(executable).path();
+  const QString root = QDir::cleanPath(QDir::fromNativeSeparators(home));
+  const QString clean = QDir::cleanPath(QDir::fromNativeSeparators(folder));
+  const Qt::CaseSensitivity sensitivity = kWindows ? Qt::CaseInsensitive : Qt::CaseSensitive;
+  if (!root.isEmpty() && clean.startsWith(root + QLatin1Char('/'), sensitivity)) {
+    return QStringLiteral("~/") + clean.mid(root.size() + 1);
+  }
+  return QDir::toNativeSeparators(clean);
+}
+
+namespace {
+// The labels Disconnect ended, for this run (mitcad#1289).
+QStringList& disconnectedLabels() {
+  static QStringList labels;
+  return labels;
+}
+
+// The known assistant a label is, if any.
+bool knownAssistant(const QString& label, AssistantClient& client) {
+  for (const AssistantClient known : {AssistantClient::ClaudeCode, AssistantClient::ClaudeDesktop, AssistantClient::Codex}) {
+    if (assistantLabelMatches(known, label)) {
+      client = known;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool labelOf(AssistantClient client, const QString& label) {
+  AssistantClient known = AssistantClient::Other;
+  return client == AssistantClient::Other ? !knownAssistant(label, known) : assistantLabelMatches(client, label);
+}
+} // namespace
+
+bool disconnectedLabelMatches(const QStringList& disconnected, const QString& label) {
+  for (const QString& gone : disconnected) {
+    if (gone == label) return true;
+    AssistantClient client = AssistantClient::Other;
+    if (knownAssistant(gone, client) && assistantLabelMatches(client, label)) return true;
+  }
+  return false;
+}
+
+void disconnectAssistants(const QStringList& labels) {
+  QStringList& disconnected = disconnectedLabels();
+  for (const QString& label : labels) {
+    if (!label.isEmpty() && !disconnected.contains(label)) disconnected << label;
+  }
+}
+
+bool allowAssistant(AssistantClient client) {
+  QStringList& disconnected = disconnectedLabels();
+  const qsizetype before = disconnected.size();
+  disconnected.erase(std::remove_if(disconnected.begin(), disconnected.end(),
+                                    [client](const QString& label) { return labelOf(client, label); }),
+                     disconnected.end());
+  return disconnected.size() != before;
+}
+
+QStringList disconnectedAssistants() { return disconnectedLabels(); }
+
+bool assistantDisconnected(const QString& label) { return disconnectedLabelMatches(disconnectedLabels(), label); }
+
+AssistantClient assistantClientOf(const QString& label) {
+  AssistantClient client = AssistantClient::Other;
+  knownAssistant(label, client);
+  return client;
+}
+
+bool assistantClientDisconnected(AssistantClient client) {
+  const QStringList& disconnected = disconnectedLabels();
+  return std::any_of(disconnected.cbegin(), disconnected.cend(),
+                     [client](const QString& label) { return labelOf(client, label); });
+}
+
 QString codexConfigurationPath() {
   const QString home = qEnvironmentVariable("CODEX_HOME");
   return QDir(home.isEmpty() ? QDir::home().filePath(QStringLiteral(".codex")) : home)
@@ -393,6 +567,51 @@ bool claudeDesktopApplicationInWindowsFolders(const QString& localAppData) {
 bool claudeDesktopInWindowsFolders(const QString& localAppData, const QString& roamingAppData) {
   return claudeDesktopApplicationInWindowsFolders(localAppData) ||
       (!roamingAppData.isEmpty() && QFileInfo(QDir(roamingAppData).filePath(QStringLiteral("Claude"))).isDir());
+}
+
+QStringList claudeDesktopWindowsSettingsFolders(const QString& localAppData, const QString& roamingAppData) {
+  QStringList folders;
+  if (!roamingAppData.isEmpty()) folders << QDir(roamingAppData).filePath(QStringLiteral("Claude"));
+  if (!localAppData.isEmpty()) {
+    folders << QDir(localAppData).filePath(QStringLiteral("Packages/") + QLatin1String(kClaudeDesktopPackageFamily) +
+                                           QStringLiteral("/LocalCache/Roaming/Claude"));
+  }
+  return folders;
+}
+
+InstalledDesktopExtension claudeDesktopExtension(const QStringList& settingsFolders) {
+  // The settings are read every second while Connect AI Assistant is open:
+  // a bounded number of small manifests.
+  constexpr int kMostExtensions = 256;
+  constexpr qint64 kManifestLimit = 1024 * 1024;
+  const QString name = assistantBundleManifest(QString(), false, QString()).value(QStringLiteral("name")).toString();
+  for (const QString& settings : settingsFolders) {
+    const QDir extensions(QDir(settings).filePath(QStringLiteral("Claude Extensions")));
+    if (!extensions.exists()) continue;
+    const QFileInfoList entries = extensions.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (qsizetype index = 0; index < entries.size() && index < kMostExtensions; ++index) {
+      QFile file(QDir(entries.at(index).absoluteFilePath()).filePath(QStringLiteral("manifest.json")));
+      if (!file.exists() || file.size() > kManifestLimit || !file.open(QIODevice::ReadOnly)) continue;
+      const QJsonObject manifest = QJsonDocument::fromJson(file.read(kManifestLimit)).object();
+      if (manifest.value(QStringLiteral("name")).toString() != name) continue;
+      const QJsonArray arguments = manifest.value(QStringLiteral("server")).toObject().value(QStringLiteral("mcp_config"))
+          .toObject().value(QStringLiteral("args")).toArray();
+      return {true, arguments.isEmpty() ? QString() : arguments.first().toString()};
+    }
+  }
+  return {};
+}
+
+bool claudeDesktopExtensionStarts(const InstalledDesktopExtension& extension, const QString& bridge) {
+  if (!extension.found) return false;
+  if (extension.bridge.isEmpty()) return true; // nothing to tell it by
+#ifdef Q_OS_WIN
+  const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+  const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+  return QDir::cleanPath(QDir::fromNativeSeparators(extension.bridge))
+             .compare(QDir::cleanPath(QDir::fromNativeSeparators(bridge)), sensitivity) == 0;
 }
 
 } // namespace mitcad::mcp

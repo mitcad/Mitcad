@@ -1,0 +1,65 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepClass3d: loading a solid into a classifier
+(BRepClass3d_SolidExplorer::InitShape) makes an intersector for each face,
+which samples the face's surface; one by one, that took most of the loading
+of a solid of thousands of faces, which a union of many bodies loads several
+times (the placement of its cavities in BOPAlgo_BuilderSolid, the checker's
+BRepCheck_Solid; mitcad#1279). The intersectors are now made beside each
+other (OSD_Parallel, from 64 faces on) and bound to their faces in the
+faces' order, as before. The results are unchanged.
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
+index c92cb6e4..79ae20dd 100644
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
+@@ -33,6 +33,7 @@
+ #include <gp_Vec.hxx>
+ #include <gp_Vec2d.hxx>
+ #include <IntCurvesFace_Intersector.hxx>
++#include <OSD_Parallel.hxx>
+ #include <Precision.hxx>
+ #include <TopAbs_Orientation.hxx>
+ #include <TopExp_Explorer.hxx>
+@@ -42,6 +43,8 @@
+ #include <TopoDS_Shell.hxx>
+ #include <TopExp.hxx>
+ 
++#include <vector>
++
+ //=======================================================================
+ // function : FindAPointInTheFace
+ // purpose  : Compute a point P in the face  F. Param is a Real in
+@@ -917,12 +920,28 @@ void BRepClass3d_SolidExplorer::InitShape(const TopoDS_Shape& S)
+ 
+   myReject = true; //-- case of infinite solid (without any face)
+ 
+-  TopExp_Explorer Expl;
++  // The faces' intersectors are made beside each other and bound in the
++  // faces' order, as they were made one by one: each samples its face's
++  // surface, which took most of the loading of a solid of thousands of
++  // faces (mitcad#1279).
++  std::vector<TopoDS_Face> aFaces;
++  TopExp_Explorer          Expl;
+   for (Expl.Init(S, TopAbs_FACE); Expl.More(); Expl.Next())
+   {
+-    const TopoDS_Face Face = TopoDS::Face(Expl.Current());
+-    void* ptr = (void*)(new IntCurvesFace_Intersector(Face, Precision::Confusion(), true, false));
+-    myMapOfInter.Bind(Face, ptr);
++    aFaces.push_back(TopoDS::Face(Expl.Current()));
++  }
++  std::vector<IntCurvesFace_Intersector*> anIntersectors(aFaces.size(), nullptr);
++  OSD_Parallel::For(
++    0,
++    static_cast<int>(aFaces.size()),
++    [&](const int theIndex) {
++      anIntersectors[theIndex] =
++        new IntCurvesFace_Intersector(aFaces[theIndex], Precision::Confusion(), true, false);
++    },
++    aFaces.size() < 64);
++  for (size_t i = 0; i < aFaces.size(); ++i)
++  {
++    myMapOfInter.Bind(aFaces[i], (void*)anIntersectors[i]);
+     myReject = false; //-- at least one face in the solid
+   }
+ 

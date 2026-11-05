@@ -266,6 +266,97 @@ int assistantSetupTests() {
           QFileInfo(root.filePath(QStringLiteral(".local/bin/claude"))).canonicalFilePath());
 #endif
   }
+  // The extension installed in Claude Desktop (mitcad#1288): its manifest
+  // in a settings folder's Claude Extensions, the installer's and the
+  // Microsoft Store package's; one that starts another bridge is not this
+  // one's.
+  {
+    QTemporaryDir local, roaming;
+    CHECK(local.isValid() && roaming.isValid());
+    const QStringList folders = claudeDesktopWindowsSettingsFolders(local.path(), roaming.path());
+    CHECK(folders.size() == 2 && folders.at(0) == QDir(roaming.path()).filePath(QStringLiteral("Claude")) &&
+          folders.at(1) == QDir(local.path()).filePath(QStringLiteral(
+                               "Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude")));
+    CHECK(claudeDesktopWindowsSettingsFolders(QString(), QString()).isEmpty());
+    CHECK(!claudeDesktopExtension(folders).found);
+    const QString other = QDir(folders.at(1)).filePath(QStringLiteral("Claude Extensions/local.mcpb.someone.notes"));
+    CHECK(QDir().mkpath(other));
+    CHECK(put(QDir(other).filePath(QStringLiteral("manifest.json")), QByteArrayLiteral("{\"name\": \"notes\"}")));
+    CHECK(!claudeDesktopExtension(folders).found);
+    const QString ours =
+        QDir(folders.at(1)).filePath(QStringLiteral("Claude Extensions/local.mcpb.mitcad-developers.mitcad-desktop"));
+    CHECK(QDir().mkpath(ours));
+    const QString installed = QStringLiteral("C:\\Program Files\\MitCad\\bin\\mitcad-cli.exe");
+    CHECK(put(QDir(ours).filePath(QStringLiteral("manifest.json")),
+              QJsonDocument(assistantBundleManifest(installed, true, QStringLiteral("win32"))).toJson()));
+    const InstalledDesktopExtension extension = claudeDesktopExtension(folders);
+    CHECK(extension.found && extension.bridge == installed);
+    CHECK(claudeDesktopExtensionStarts(extension, QStringLiteral("C:/Program Files/MitCad/bin/mitcad-cli.exe")));
+    CHECK(!claudeDesktopExtensionStarts(extension, QStringLiteral("C:/Other/mitcad-cli.exe")));
+    CHECK(!claudeDesktopExtensionStarts(InstalledDesktopExtension{}, installed));
+  }
+  // The Claude Code Claude Desktop keeps (mitcad#1289): the highest
+  // version's under claude-code; an executable's place for people.
+  {
+    QTemporaryDir settings;
+    CHECK(settings.isValid());
+#ifdef Q_OS_WIN
+    const QString program = QStringLiteral("claude.exe");
+#else
+    const QString program = QStringLiteral("claude");
+#endif
+    const auto executableFile = [](const QString& path) {
+      return QDir().mkpath(QFileInfo(path).absolutePath()) && put(path, QByteArrayLiteral("x")) &&
+          QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    };
+    CHECK(claudeDesktopClaudeCode({settings.path()}).isEmpty());
+    const QDir versions(QDir(settings.path()).filePath(QStringLiteral("claude-code")));
+    CHECK(executableFile(versions.filePath(QStringLiteral("2.0.9/")) + program));
+    CHECK(executableFile(versions.filePath(QStringLiteral("2.0.10/")) + program));
+    CHECK(QDir().mkpath(versions.filePath(QStringLiteral("2.1.0")))); // no program in it
+    CHECK(QDir().mkpath(versions.filePath(QStringLiteral("not-a-version"))));
+    CHECK(claudeDesktopClaudeCode({settings.path()}) ==
+          QFileInfo(versions.filePath(QStringLiteral("2.0.10/")) + program).canonicalFilePath());
+    // As the Windows application keeps it: under Claude-Data's
+    // claude_<family>, a build folder inside the version's.
+    QTemporaryDir local;
+    CHECK(local.isValid());
+    CHECK(claudeDesktopDataFolders(local.path()).isEmpty());
+    const QDir data(QDir(local.path()).filePath(QStringLiteral("Claude-Data/claude_pzs8sxrjxfjjc")));
+    CHECK(executableFile(data.filePath(QStringLiteral("claude-code/2.1.309/9078b9c1d466/")) + program));
+    CHECK(claudeDesktopDataFolders(local.path()) == QStringList{data.path()});
+    CHECK(claudeDesktopClaudeCode(QStringList{settings.path()} + claudeDesktopDataFolders(local.path())) ==
+          QFileInfo(data.filePath(QStringLiteral("claude-code/2.1.309/9078b9c1d466/")) + program).canonicalFilePath());
+    CHECK(claudeDesktopDataFolders(QString()).isEmpty());
+    CHECK(assistantPlace(QStringLiteral("/home/someone/.local/bin/claude"), QStringLiteral("/home/someone")) ==
+          QStringLiteral("~/.local/bin"));
+    CHECK(assistantPlace(QStringLiteral("/opt/tools/claude"), QStringLiteral("/home/someone")) ==
+          QDir::toNativeSeparators(QStringLiteral("/opt/tools")));
+  }
+  // Disconnect sticks (mitcad#1289): a disconnected label, and the same
+  // assistant's other labels; Other only by its own label; allowed again.
+  {
+    CHECK(disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("claude-code")));
+    CHECK(disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("Claude Code (beta)")));
+    CHECK(!disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("claude-ai")));
+    CHECK(!disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("codex-mcp-client")));
+    CHECK(disconnectedLabelMatches({QStringLiteral("example-client")}, QStringLiteral("example-client")));
+    CHECK(!disconnectedLabelMatches({QStringLiteral("example-client")}, QStringLiteral("other-client")));
+    CHECK(assistantClientOf(QStringLiteral("claude-ai")) == AssistantClient::ClaudeDesktop);
+    CHECK(assistantClientOf(QStringLiteral("example-client")) == AssistantClient::Other);
+    CHECK(disconnectedAssistants().isEmpty());
+    disconnectAssistants({QStringLiteral("claude-code"), QStringLiteral("example-client")});
+    CHECK(assistantDisconnected(QStringLiteral("claude-code")));
+    CHECK(assistantClientDisconnected(AssistantClient::ClaudeCode));
+    CHECK(assistantClientDisconnected(AssistantClient::Other));
+    CHECK(!assistantClientDisconnected(AssistantClient::Codex));
+    CHECK(!allowAssistant(AssistantClient::Codex));
+    CHECK(allowAssistant(AssistantClient::ClaudeCode));
+    CHECK(!assistantDisconnected(QStringLiteral("claude-code")));
+    CHECK(assistantDisconnected(QStringLiteral("example-client")));
+    CHECK(allowAssistant(AssistantClient::Other));
+    CHECK(disconnectedAssistants().isEmpty());
+  }
 #ifndef Q_OS_WIN
   const QString linked = directory.filePath(QStringLiteral("linked.toml"));
   CHECK(QFile::link(path, linked));

@@ -909,7 +909,8 @@ void BrowserController::deleteNode(const BrowserNode& node) {
 }
 
 void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
-  QStringList features, names, skipped;
+  QStringList features, names, skipped, bodies;
+  Selection bodyItems;
   QJsonArray commands;
   for (const BrowserNode& node : nodes) {
     QJsonObject command;
@@ -920,8 +921,13 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
       name = tr("the flat pattern of %1").arg(m_host.model().bodyName(node.uid));
       break;
     case BrowserNode::Type::Body:
-      // The feature that made it goes, as nothing removes a body by itself.
-      features.append(node.uid.section(QLatin1Char('.'), 0, 0));
+      // Only the body goes (mitcad#1287), as Delete Body in the view: a
+      // Remove Body feature; the feature that made it stays, deleted from
+      // its own row.
+      if (!bodies.contains(node.uid)) {
+        bodies.append(node.uid);
+        bodyItems.append(SelectionItem{SelectKind::Body, node.uid, QString(), QString()});
+      }
       continue;
     case BrowserNode::Type::Sketch:
     case BrowserNode::Type::Datum:
@@ -971,7 +977,11 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
     if (command.isEmpty()) skipped.append(node.name);
     else if (!commands.contains(command)) { commands.append(command); names.append(name); }
   }
-  deleteTargets(features, commands, names, skipped);
+  if (!bodies.isEmpty() && features.isEmpty() && commands.isEmpty() && skipped.isEmpty()) {
+    deleteBodies(bodyItems); // Delete Body's undo step and log
+    return;
+  }
+  deleteTargets(features, commands, names, skipped, bodies);
 }
 
 void BrowserController::newComponent(const BrowserNode& node) {
@@ -1528,7 +1538,10 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     }
     menu.separator();
     renameEntry();
-    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    // Only the body (or the selected bodies) goes (mitcad#1287); its
+    // feature is deleted from its own row or the timeline.
+    menu.add(QStringLiteral("delete"), bodies.size() > 1 ? tr("Delete Bodies") : tr("Delete Body"),
+             [this, node] { deleteNode(node); });
     timelineEntry(feature);
     // A comment for an AI agent on the body (mitcad#1119), before Save as
     // Mesh…, which stays the last entry before Collapse All.
@@ -1911,7 +1924,8 @@ void BrowserController::deleteFeatures(const QStringList& uids) {
 }
 
 void BrowserController::deleteTargets(const QStringList& features, const QJsonArray& otherCommands,
-                                      const QStringList& otherNames, const QStringList& skipped) {
+                                      const QStringList& otherNames, const QStringList& skipped,
+                                      const QStringList& bodies) {
   const bool markerOnly = features.isEmpty() && otherCommands.size() == 1 &&
       otherCommands.first().toObject().value(QStringLiteral("cmd")) == QStringLiteral("delete_center_of_mass");
   if (!canChange(markerOnly)) return;
@@ -1926,7 +1940,7 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
     qDebug().noquote() << QStringLiteral("Delete skipped: %1").arg(omitted.join(QStringLiteral(", ")));
     m_host.showStatus(tr("Cannot delete: %1").arg(omitted.join(QStringLiteral(", "))), NoticeLevel::Warning);
   }
-  if (requested.isEmpty() && otherCommands.isEmpty()) return;
+  if (requested.isEmpty() && otherCommands.isEmpty() && bodies.isEmpty()) return;
   QSet<QString> removed = requested;
   try {
     for (const QString& uid : requested) {
@@ -1954,6 +1968,18 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
   }
   names.append(otherNames);
   allNames.append(otherNames);
+  // The bodies of the features that go go with them; the others are taken
+  // out after (mitcad#1287).
+  QStringList kept;
+  for (const QString& body : bodies) {
+    if (!removed.contains(body.section(QLatin1Char('.'), 0, 0))) {
+      kept.append(body);
+    }
+  }
+  QStringList bodyNames;
+  const QJsonArray bodyCommands = removeBodyCommands(kept, bodyNames);
+  names.append(bodyNames);
+  allNames.append(bodyNames);
   const QString name = names.join(QStringLiteral(", "));
   if (!dependents.isEmpty()) {
     // One union of dependents, never a second question for another root.
@@ -2003,7 +2029,12 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
   for (const QJsonObject& command : extra) {
     if (occurrence(command)) commands.append(command);
   }
-  if (m_host.runModelCommands(commands, tr("Delete %1").arg(allNames.join(QStringLiteral(", "))))) {
+  for (const QJsonValue& command : bodyCommands) commands.append(command);
+  if (commands.isEmpty()) return;
+  const QString label = tr("Delete %1").arg(allNames.join(QStringLiteral(", ")));
+  // A Remove Body alone is named as Delete Body names it (mitcad#1287).
+  if (bodyCommands.isEmpty() ? m_host.runModelCommands(commands, label)
+                             : m_host.runNamedModelCommands(commands, label)) {
     qDebug().noquote() << QStringLiteral("Deleted %1").arg(allNames.join(QStringLiteral(", ")));
   }
 }
@@ -2502,15 +2533,10 @@ void BrowserController::setTransparent(const Selection& items, bool transparent)
   }
 }
 
-void BrowserController::deleteBodies(const Selection& items) {
-  const QStringList bodies = hideableBodies(items);
-  if (bodies.isEmpty() || !canChange()) {
-    return;
-  }
+QJsonArray BrowserController::removeBodyCommands(const QStringList& bodies, QStringList& names) const {
   // A feature works on its own component's bodies: one remove_body in each.
   QStringList components;
   QHash<QString, QJsonArray> byComponent;
-  QStringList names;
   for (const QString& uid : bodies) {
     const auto body = m_snapshot.bodies.constFind(uid);
     const QString component = body != m_snapshot.bodies.cend() ? body->component : QString();
@@ -2530,7 +2556,18 @@ void BrowserController::deleteBodies(const Selection& items) {
     }
     commands.append(command);
   }
-  if (m_host.runModelCommands(commands, bodies.size() == 1 ? tr("Delete %1").arg(names.first()) : tr("Delete Bodies"))) {
+  return commands;
+}
+
+void BrowserController::deleteBodies(const Selection& items) {
+  const QStringList bodies = hideableBodies(items);
+  if (bodies.isEmpty() || !canChange()) {
+    return;
+  }
+  QStringList names;
+  const QJsonArray commands = removeBodyCommands(bodies, names);
+  // Named so also as one step (mitcad#1287): "Delete Body2", not the model's "Add RemoveBody1".
+  if (m_host.runNamedModelCommands(commands, bodies.size() == 1 ? tr("Delete %1").arg(names.first()) : tr("Delete Bodies"))) {
     qDebug().noquote() << QStringLiteral("Deleted body %1").arg(names.join(QStringLiteral(", ")));
   }
 }

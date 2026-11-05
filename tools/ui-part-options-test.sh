@@ -116,7 +116,7 @@ ui_focus_main
 echo "--- 1. Insert from Library: an open table's options, filtered by the rule"
 ui_mark
 ui_step "Insert from Library"              ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search Shelf board"               xdotool type --delay 40 "Shelf board"
 ui_expect_new "Library search 'Shelf board': 1 components" "the search finds it"
 ui_expect_new "Library browser selected test-options/shelf-board: version v1.0.0 (" "the board selected"
@@ -182,7 +182,7 @@ ui_focus_main
 echo "--- 3. A closed table: chosen by its rows as before"
 ui_mark
 ui_step "Insert from Library"              ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search Spacer"                    xdotool type --delay 40 "Spacer"
 ui_expect_new "Library browser selected test-options/spacer: version v1.0.0 (" "the spacer selected"
 ui_expect_new ", size Short, licence CC0-1.0" "its default row"

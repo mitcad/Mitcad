@@ -51,11 +51,42 @@ The oldest versions the chat starts are Claude Code 2.1.0 and Codex
 
 ### Choosing the agent
 
-With both installed, the header shows a choice of the agents found
-instead of the agent's name. Choosing the other one starts a new
-conversation in it (the agents do not share what was said), and MitCad
-uses it from then on, also after a restart. **Preferences › AI Assistants
-› Chat › Agent** chooses it too.
+With more than one agent available, the header shows a choice of them
+instead of the agent's name: every Claude Code found (one on `PATH`, one
+in `~/.local/bin`, npm's, each separately, with its folder beside its
+name: **Claude Code (~/.local/bin)**), Codex, and every API endpoint or
+local model and the custom command turned on in Preferences. The Claude
+Code that Claude Desktop keeps for itself (in its settings folder's
+`claude-code`) is listed as **Claude Code (Claude Desktop's)** when it is
+there; whether it runs on its own and with which sign-in is what its own
+check says beside it.
+
+Each entry in the list shows its state, so that a wrong account is seen
+before you send: **Claude Code · signed in as someone@example.com**,
+**not signed in**, **needs an API key**, **not found**, **ready** (an
+endpoint, a local model), and the account failure the chat met, if any
+(**· your organization has disabled access**). MitCad checks every agent
+found when the panel opens.
+
+Choosing another one starts a new conversation in it (the agents do not
+share what was said), and MitCad uses it from then on, also after a
+restart. **Preferences › AI Assistants › Chat › Agent** chooses it too.
+
+When the chosen agent cannot be used (it is not signed in, its account
+fails, it is missing), its line says how to fix it: for Claude Code, sign
+in here or run `claude` in a terminal and type `/login`; for Codex, sign in
+here or run `codex logout`, then `codex login`. Another agent that is
+ready is offered beside it (**Use Codex**).
+
+Claude Desktop itself is not an agent of the chat: it has no program the
+chat can start. Where it is the only assistant installed, the panel says
+so and points to **Connect AI Assistant**, through which Claude Desktop
+works with MitCad.
+
+The chat's own agent is not one of the assistants connected to the window:
+the assistant indicator says **Claude Code working** while it works on a
+message, and its connection cannot be disconnected there. **Disconnect**
+in Connect AI Assistant concerns the assistants connected from outside.
 
 ### Choosing the model
 
@@ -188,7 +219,7 @@ and shows the failure once in the conversation. A failed CAD tool does not
 change the account state.
 
 **How to fix** opens help inside the panel. For Claude Code, sign in again
-with an allowed account (`claude /logout`, then `claude /login` in a terminal),
+with an allowed account (run `claude` in a terminal, then type `/logout` and `/login`),
 set `ANTHROPIC_API_KEY` for MitCad and restart it, or ask your organization's
 administrator to enable access. For Codex, use `codex logout`, then `codex
 login`, or configure its API key. For an API agent, enter a valid key in

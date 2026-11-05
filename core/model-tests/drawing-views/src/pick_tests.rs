@@ -546,6 +546,16 @@ fn holed(other: bool) -> Document<MockKernel> {
             radius: 5.0,
         },
     );
+    // The top's half circle is drawn (mitcad#1286); the hole's outlines
+    // are not: the block hides them from the front.
+    doc.kernel().drawn_curves.borrow_mut().push(
+        (0..=16)
+            .map(|i| {
+                let a = std::f64::consts::PI * f64::from(i) / 16.0;
+                [20.0 + 5.0 * a.cos(), 15.0 + 5.0 * a.sin(), 20.0]
+            })
+            .collect(),
+    );
     command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
     command(
         &mut doc,
@@ -578,12 +588,13 @@ fn upright_marks(doc: &Document<MockKernel>, x: f64, low: f64, high: f64) -> Vec
 
 #[test]
 fn a_round_face_ends_at_its_own_edges_and_a_half_hole_is_marked() {
-    // Half circles only: the top view marks their centre, the front view
-    // draws the face's centreline.
+    // Half circles only: the top view marks their centre; the front view,
+    // which the block hides the hole from, draws no centreline without
+    // hidden lines (mitcad#1286; with them below).
     let doc = holed(false);
     let place = point(&view(&doc, 2)["place"]);
     let marks = groups(&doc, "center-mark");
-    assert!(marks.len() >= 2, "{marks:?}");
+    assert_eq!(marks.len(), 1, "{marks:?}");
     let (x, y) = (place[0] + 20.0, place[1] + 15.0);
     assert!(
         !upright_marks(&doc, x, y - 1.0, y + 1.0).is_empty(),
@@ -600,6 +611,18 @@ fn a_round_face_ends_at_its_own_edges_and_a_half_hole_is_marked() {
     assert!(
         near(ys[0].min(ys[1]), 110.0) && near(ys[0].max(ys[1]), 130.0),
         "{picked}"
+    );
+    // The block hides the hole from the front: no centreline there
+    // (mitcad#1286), until the view shows hidden lines.
+    assert!(
+        upright_marks(&doc, 85.0, 100.0, 140.0).is_empty(),
+        "a centerline of the hidden hole in the front view"
+    );
+    let mut doc = doc;
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "style": {"hidden_lines": true}}),
     );
     // The front view's centreline, drawn from its middle out.
     let centreline = upright_marks(&doc, 85.0, 100.0, 140.0);

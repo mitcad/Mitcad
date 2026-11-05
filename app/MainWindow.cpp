@@ -1065,6 +1065,9 @@ void MainWindow::registerCommands() {
   // Standard views, visual styles, the camera, the grid, the environment,
   // named views, Preferences and the shortcut overview (U5).
   m_viewController->registerCommands();
+  // View › Show: origins, construction and sketches of the whole design
+  // (mitcad#1287, MainWindowVisibility.cpp).
+  registerViewShowCommands();
   // Import, export and the INSERT group (U6).
   registerFileCommands();
   // New Project, Save with Description, Start Version History (P12d).
@@ -1334,6 +1337,7 @@ void MainWindow::createMenus() {
   // Overview (ViewController::createMenus).
   help->addAction(m_registry->action(QStringLiteral("help.user_guide")));
   m_viewController->createMenus(view, tools, help);
+  syncViewShowChecks(); // View › Show's check marks (mitcad#1287)
   help->addAction(m_registry->action(QStringLiteral("help.connect_assistant")));
   help->addAction(m_registry->action(QStringLiteral("help.diagnostics")));
   help->addAction(m_registry->action(QStringLiteral("help.open_log_folder")));
@@ -3234,6 +3238,8 @@ void MainWindow::refreshScene() {
   // The Origin folder and Isolate are the document's (P9).
   m_originShown = m_snapshot.originShown;
   m_isolation = m_snapshot.isolation;
+  // View › Show's check marks (mitcad#1287), the design's too.
+  syncViewShowChecks();
   // The document's home view (U5), if it has one.
   std::optional<CameraState> home;
   for (const QJsonValue& view : std::as_const(m_snapshot.namedViews)) {
@@ -3910,7 +3916,7 @@ void MainWindow::showSketches() {
       }
       // Shown only for a command (mitcad#546): lighter, as it hides again.
       const bool temporary = !(m_sketch->isActive() && sketch == m_sketch->uid()) &&
-                             m_commandSketches.temporary(sketch, m_snapshot.isShown(sketch));
+                             m_commandSketches.temporary(sketch, m_snapshot.isDrawn(sketch));
       // The signature also has how the entity is drawn and placed.
       for (SketchEntityDisplay& entity : some) {
         entity.temporary = temporary;
@@ -3944,10 +3950,14 @@ void MainWindow::showDatums() {
           .toArray();
   timing.finish();
   // The origin while Create Sketch asks for a plane or its light bulb is
-  // on; construction features unless hidden.
-  const bool origin = m_originVisible || m_originShown;
+  // on; construction features unless hidden. View › Show leaves out the
+  // origins or the construction geometry of the whole design whatever the
+  // light bulbs say (mitcad#1287); Create Sketch's plane pick still shows
+  // the origin planes.
+  const bool origin = m_originVisible || (m_originShown && m_snapshot.showOrigins);
   const bool picks = qEnvironmentVariableIsSet("MITCAD_LOG_PICKS");
   QVector<QJsonObject> logged;
+  QStringList construction; // for UI tests: the construction datums drawn
   for (const QJsonValue& value : all) {
     const QJsonObject datum = value.toObject();
     const QString uid = datum.value(QStringLiteral("uid")).toString();
@@ -3956,6 +3966,10 @@ void MainWindow::showDatums() {
     }
     if (m_constructionHidden) {
       continue; // an input that takes none hides them (mitcad#394)
+    }
+    const DocumentSnapshot::Feature* feature = kOriginDatums.contains(uid) ? nullptr : m_snapshot.feature(uid);
+    if (feature != nullptr && m_snapshot.kindHidden(*feature)) {
+      continue; // View › Show (mitcad#1287)
     }
     const SelectKind kind = datumKind(datum.value(QStringLiteral("type")).toString());
     DatumDisplay display{uid, kind, datumShape(datum, kDatumSize)};
@@ -3973,8 +3987,19 @@ void MainWindow::showDatums() {
     if (kOriginDatums.contains(uid) ? origin : picks) {
       logged.append(datum);
     }
+    if (feature != nullptr && feature->isConstruction()) {
+      construction << (display.occurrence.isEmpty() ? feature->name
+                                                    : QStringLiteral("%1 in %2").arg(feature->name, display.occurrence));
+    }
   }
   m_viewer->setDatums(datums);
+  // For UI tests (mitcad#1287): the construction planes, axes and points
+  // the view draws, when they change.
+  const QString constructionShown = construction.isEmpty() ? QStringLiteral("none") : construction.join(QStringLiteral(", "));
+  if (constructionShown != m_loggedConstruction) {
+    m_loggedConstruction = constructionShown;
+    qDebug().noquote() << QStringLiteral("Construction shown: %1").arg(constructionShown);
+  }
   // For UI tests (mitcad#739): whether the view shows the design's origin,
   // and the Origin folder's light bulb, when either changes. A sketch draws
   // its own origin and axes whatever these say.
@@ -4232,6 +4257,14 @@ bool MainWindow::runModelCommand(const QJsonObject& command, QJsonObject* result
 }
 
 bool MainWindow::runModelCommands(const QJsonArray& commands, const QString& label) {
+  return runModelCommandSteps(commands, label, false);
+}
+
+bool MainWindow::runNamedModelCommands(const QJsonArray& commands, const QString& label) {
+  return runModelCommandSteps(commands, label, true);
+}
+
+bool MainWindow::runModelCommandSteps(const QJsonArray& commands, const QString& label, bool nameSingle) {
   if (modelBusy() && !m_documentSession->yieldBackgroundJob()) {
     return commands.isEmpty() || runCommand(commands.first().toObject()); // refused
   }
@@ -4256,7 +4289,9 @@ bool MainWindow::runModelCommands(const QJsonArray& commands, const QString& lab
       return false;
     }
   }
-  if (undoDepth() > depth + 1) {
+  // Several steps become one named `label`; one step is named so too when
+  // asked (merge_undo of a single step renames it).
+  if (undoDepth() > depth + 1 || (nameSingle && !label.isEmpty() && undoDepth() == depth + 1)) {
     runCommand({{QStringLiteral("cmd"), QStringLiteral("merge_undo")},
                 {QStringLiteral("depth"), depth},
                 {QStringLiteral("label"), label}});

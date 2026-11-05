@@ -78,6 +78,11 @@
 //                           differences); logs "TestDriver: widget
 //                           background <name> #rrggbb (n of m pixels), ..."
 //                           (mitcad#1245)
+//   expect-widget-theme <object-name> dark|light  wait until that colour is
+//                           a dark one (lightness below 128, as
+//                           isDarkPalette decides) or a light one; logs
+//                           "TestDriver: widget theme <name> #rrggbb (n of
+//                           m pixels), lightness l: dark|light" (mitcad#1282)
 //   expect-projects-layout <count>  actual Projects/Browser bounds and card
 //                           slots, toolbar containment and loaded project count
 //   expect-sketch-finish-layout  no title-row Finish Sketch or reserved gap;

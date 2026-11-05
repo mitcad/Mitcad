@@ -25,6 +25,8 @@
 #include <QSet>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -46,6 +48,25 @@ namespace {
 
 constexpr int kPollMs = 3000;
 constexpr int kRenderMs = 60;
+
+// The agent's state beside its name in the switcher's list (mitcad#1289):
+// "Claude Code · signed in as someone@example.com". The item's text stays
+// the name, which the closed choice shows.
+constexpr int kAgentStateRole = Qt::UserRole + 1;
+
+class AgentChoiceDelegate : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+  void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    const QString state = index.data(kAgentStateRole).toString();
+    if (!state.isEmpty()) {
+      option->text = QStringLiteral("%1 · %2").arg(option->text, state);
+    }
+  }
+};
 
 QLabel* wrapped(const QString& objectName) {
   auto* label = new QLabel;
@@ -130,6 +151,7 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_agentChoice = new QComboBox;
   m_agentChoice->setObjectName(QStringLiteral("chatAgentChoice"));
   m_agentChoice->setToolTip(tr("The agent; another one starts a new conversation"));
+  m_agentChoice->setItemDelegate(new AgentChoiceDelegate(m_agentChoice));
   m_agentChoice->hide();
   m_modelChoice = new QComboBox;
   m_modelChoice->setObjectName(QStringLiteral("chatModelChoice"));
@@ -252,8 +274,15 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_secondary = new QPushButton(tr("Connect AI Assistant…"));
   m_secondary->setObjectName(QStringLiteral("chatConnectAssistant"));
   m_secondary->setFlat(true);
+  // Another agent found that is ready, where this one cannot be used
+  // (mitcad#1289).
+  m_otherAgent = new QPushButton;
+  m_otherAgent->setObjectName(QStringLiteral("chatOtherAgent"));
+  m_otherAgent->setFlat(true);
+  m_otherAgent->hide();
   setupLine->addWidget(m_setup);
   setupLine->addWidget(m_secondary);
+  setupLine->addWidget(m_otherAgent);
   m_checkAccount = new QPushButton(tr("Check again"));
   m_checkAccount->setObjectName(QStringLiteral("chatCheckAccount"));
   m_checkAccount->hide();
@@ -289,6 +318,10 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
     }
   });
   connect(m_secondary, &QPushButton::clicked, this, [this] { emit connectAssistantRequested(); });
+  connect(m_otherAgent, &QPushButton::clicked, this, [this] {
+    qInfo().noquote() << QStringLiteral("Chat: %1").arg(m_otherAgent->text());
+    m_chat.chooseAgent(m_otherAgent->property("chatAgentId").toString());
+  });
   connect(m_key, &QLineEdit::returnPressed, m_setup, &QPushButton::click);
 
   // The message, what goes with it, Send.
@@ -818,9 +851,23 @@ void ChatPanel::updateChoices() {
     const QSignalBlocker blockAgents(m_agentChoice);
     m_agentChoice->clear();
     for (ChatAgent* candidate : found) {
-      m_agentChoice->addItem(candidate->name(), candidate->id());
+      m_agentChoice->addItem(ChatController::choiceName(candidate), candidate->id());
     }
     m_agentItems = ids;
+  }
+  // Each one's sign-in and account beside it (mitcad#1289), logged when
+  // they change.
+  QStringList labels;
+  for (int index = 0; index < int(found.size()); ++index) {
+    const QString state = m_chat.choiceState(found.at(index));
+    const QString label = QStringLiteral("%1 · %2").arg(ChatController::choiceName(found.at(index)), state);
+    m_agentChoice->setItemData(index, state, kAgentStateRole);
+    m_agentChoice->setItemData(index, label, Qt::ToolTipRole);
+    labels << label;
+  }
+  if (labels != m_agentLabels) {
+    m_agentLabels = labels;
+    qInfo().noquote() << QStringLiteral("Chat agents: %1").arg(labels.join(QStringLiteral(" | ")));
   }
   const int chosenAgent = m_agentChoice->findData(m_chat.agent()->id());
   if (chosenAgent >= 0 && m_agentChoice->currentIndex() != chosenAgent) {
@@ -829,6 +876,10 @@ void ChatPanel::updateChoices() {
   }
   m_agentChoice->setVisible(ids.size() > 1);
   m_agentName->setVisible(ids.size() <= 1);
+  const int shownAgent = m_agentChoice->currentIndex();
+  m_agentChoice->setToolTip(tr("The agent; another one starts a new conversation") +
+                            (shownAgent >= 0 && shownAgent < labels.size() ? QStringLiteral("\n") + labels.at(shownAgent)
+                                                                           : QString()));
 
   // The models: the default, the ones the agent names, a typed name.
   const QList<ChatAgent::Model> models = m_chat.agent()->models();
@@ -878,7 +929,7 @@ void ChatPanel::applyModel() {
 void ChatPanel::updateState() {
   ChatAgent* agent = m_chat.agent();
   const QString name = agent->name();
-  m_agentName->setText(name);
+  m_agentName->setText(ChatController::choiceName(agent));
   updateChoices();
   m_model->setText(m_chat.model());
   m_model->setToolTip(m_chat.model().isEmpty() ? QString() : tr("The model %1 reported").arg(name));
@@ -937,7 +988,7 @@ void ChatPanel::updateState() {
       break;
     case ChatAgent::Readiness::Missing:
       key = QStringLiteral("missing");
-      secondary = agent->id() == QStringLiteral("claude") && mcp::claudeDesktopOnComputer();
+      secondary = agent->id().startsWith(QStringLiteral("claude")) && mcp::claudeDesktopOnComputer();
       text = !agent->readinessDetail().isEmpty() ? agent->readinessDetail()
              : secondary ? tr("The chat uses %1; Claude Desktop connects through Connect AI Assistant.").arg(name)
                          : tr("The chat uses %1, which is not installed.").arg(name);
@@ -977,8 +1028,8 @@ void ChatPanel::updateState() {
     m_accountHelp->hide();
   }
   m_accountHelpText->setText(!agent->accountHelp().isEmpty() ? agent->accountHelp()
-      : agent->id() == QStringLiteral("claude")
-      ? tr("Sign in again with an account allowed to use Claude Code: in a terminal run claude /logout, then claude /login. "
+      : agent->id().startsWith(QStringLiteral("claude"))
+      ? tr("Sign in again with an account allowed to use Claude Code: in a terminal run claude, then type /logout and /login. "
            "Alternatively set ANTHROPIC_API_KEY for MitCad and restart it, or ask your organization's administrator to enable access. "
            "For a credit or rate limit, check the account's billing or wait for the limit to reset. "
            "Then choose Check again. The check sends one short request without your design or conversation; account usage may apply. "
@@ -993,6 +1044,17 @@ void ChatPanel::updateState() {
   m_setup->setText(actionText);
   m_setupRow->setVisible(!action.isEmpty());
   m_secondary->setVisible(secondary);
+  // This one cannot be used now and another found is ready: offered by
+  // name (mitcad#1289).
+  const bool unusableNow = key == QStringLiteral("signed-out") || key == QStringLiteral("account-error") ||
+                           key == QStringLiteral("missing") || key == QStringLiteral("outdated");
+  ChatAgent* other = unusableNow ? m_chat.readyAlternative() : nullptr;
+  m_otherAgent->setVisible(other != nullptr);
+  if (other != nullptr) {
+    m_otherAgent->setText(tr("Use %1").arg(ChatController::choiceName(other)));
+    m_otherAgent->setProperty("chatAgentId", other->id());
+  }
+  m_otherAgent->setEnabled(activity == ChatController::Activity::Idle && !m_chat.checkingAccount());
   const bool ready = unavailable.isEmpty() && !accountProblem && !m_chat.checkingAccount() && (readiness == ChatAgent::Readiness::Ready ||
                                                 activity != ChatController::Activity::Idle);
   m_inputRow->setVisible(ready && !m_notice->isVisibleTo(this));

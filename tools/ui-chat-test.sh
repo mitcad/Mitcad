@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp
+# check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp app/mcp/AssistantSetup.cpp
 # check-all sources: app/mcp/ConnectAssistantDialog.cpp app/framework/FloatingLayout.cpp app/framework/TitleBar.cpp
 # check-all sources: app/tests/chat_test_agent.cpp core/mcp/src/chat core/ffi/src/chat.rs tools/cli tools/ui-chat-test.py
 # check-all sources: app/MainWindowMcp.cpp app/mcp/AgentFolders.cpp core/mcp/src/catalog.rs

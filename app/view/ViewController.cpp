@@ -725,6 +725,17 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
     styles->addAction(action(QStringLiteral("file.render_image")));
   }
   QMenu* environment = view->addMenu(themeIcon(QStringLiteral("environment")), tr("Environment"));
+  // Show: the origins, construction geometry and sketches of the whole
+  // design (mitcad#1287, MainWindowVisibility.cpp, which keeps their check
+  // marks as the design has them).
+  QMenu* kinds = view->addMenu(themeIcon(QStringLiteral("eye")), tr("Show"));
+  kinds->setObjectName(QStringLiteral("viewShowMenu"));
+  for (const char* id : {"view.show_origins", "view.show_construction", "view.show_sketches"}) {
+    if (QAction* kind = action(QString::fromLatin1(id))) {
+      kind->setCheckable(true);
+      kinds->addAction(kind);
+    }
+  }
   view->addAction(checkable(QStringLiteral("view.component_colors")));
   view->addAction(checkable(QStringLiteral("view.build_volume")));
   auto* backgrounds = new QActionGroup(this);

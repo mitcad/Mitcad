@@ -10,14 +10,14 @@ screenshot-dialog '${MITCAD_STYLE_SHOTS}/libraries-${MITCAD_TEST_COLOR_SCHEME}.p
 key Escape
 focus-main
 command insert.library_component
-focus-dialog '^Insert from Library$'
+focus-dialog '^Browse Components$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 test-dialog-controls insert
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/insert-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Escape
 focus-main
 command tools.community_library
-focus-dialog '^Community Library$'
+focus-dialog '^Browse Components$'
 test-dialog-controls community
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/community-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Escape

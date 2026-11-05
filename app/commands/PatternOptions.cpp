@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "PatternOptions.hpp"
 
+#include "../framework/Command.hpp"
+
 #include <QJsonValue>
 #include <QObject>
 #include <QStringList>
@@ -78,6 +80,12 @@ QString patternOptionsText(const QJsonObject& def) {
              def.value(QStringLiteral("flip")).toBool() ? QStringLiteral(", flipped") : QString());
   }
   return QString();
+}
+
+void choosePreselectedPatternType(CommandState& state) {
+  if (state.items(QStringLiteral("bodies")).isEmpty() && !state.items(QStringLiteral("features")).isEmpty()) {
+    state.setChoice(QStringLiteral("object_type"), QStringLiteral("features"));
+  }
 }
 
 } // namespace mitcad::cmd

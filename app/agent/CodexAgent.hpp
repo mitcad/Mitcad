@@ -51,6 +51,8 @@ public:
   QString installPage() const override { return QStringLiteral("https://github.com/openai/codex"); }
   QString accountName() const override { return QStringLiteral("ChatGPT"); }
   QList<Model> models() const override { return m_models; }
+  // The fix in a terminal beside Sign in (mitcad#1289).
+  QString signedOutText() const override;
 
   void check() override;
   bool installedNow() const override;

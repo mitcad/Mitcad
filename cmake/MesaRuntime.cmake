@@ -1153,13 +1153,14 @@ if(MITCAD_MESA_DIR)
     # Hole's keyboard and its dimensions in the view (mitcad#1181), as
     # tools/ui-hole-entry-test.sh: Tab from Distance 2 to Diameter and back,
     # Distance 2 and Depth typed in their value boxes (Enter, Esc, a text
-    # that is not a value refused).
+    # that is not a value refused), and a reference picked in its row
+    # (mitcad#1285: the distances evaluated, the hole where it was).
     add_test(NAME app.ui-windows-hole-entry
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
               -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-hole-entry-test.ps1"
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-hole-entry"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
-    set_tests_properties(app.ui-windows-hole-entry PROPERTIES TIMEOUT 300)
+    set_tests_properties(app.ui-windows-hole-entry PROPERTIES TIMEOUT 450)
     # Sketch Fillet at a corner of a line and an arc picked by its corner
     # point (mitcad#1192); the Linux test's shared input script.
     add_test(NAME app.ui-windows-sketch-fillet-arc
@@ -1475,6 +1476,41 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-window-bodies"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-window-bodies PROPERTIES TIMEOUT 300)
+    # Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138):
+    # with the Windows 10 path forced over its default style, the Start
+    # page and the Browser dark in the dark app mode and the Start page
+    # light in the light one, Docked and Floating; without it, Windows 11's
+    # own style as before.
+    add_test(NAME app.ui-windows-windows10-dark
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-windows10-dark-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-windows10-dark"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-windows10-dark PROPERTIES TIMEOUT 300)
+    # Browse Components (mitcad#1283, GitHub #136): Tools › Libraries lists
+    # it once; Library Sources… from the browser; a component of a library
+    # an index names shows Get Library, stays selected after the fetch and
+    # is inserted; Installed, Community and Favorites; Insert from Library
+    # and Community Library open the same window; the Floating layout. The
+    # Linux test is tools/ui-browse-components-test.sh.
+    add_test(NAME app.ui-windows-browse-components
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-browse-components-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-browse-components"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-browse-components PROPERTIES TIMEOUT 360)
+    # A body's Browser row and View › Show (mitcad#1287, GitHub
+    # mitcad/Mitcad#142): Delete on a row of an imported base feature's
+    # body removes only that body (Docked); View › Show › Construction,
+    # Sketches and Origins hide and show them in two components without
+    # changing a light bulb (Floating). The Linux test is
+    # tools/ui-view-show-test.sh.
+    add_test(NAME app.ui-windows-view-show
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-view-show-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-view-show" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-view-show PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

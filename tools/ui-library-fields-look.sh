@@ -76,12 +76,12 @@ for theme in light dark; do
   ui_expect_log "Window style: $theme, " "the window's style is $theme"
   ui_mark
   ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_step "search 4762"                      xdotool type --delay 40 "4762"
   ui_expect_new "Library browser selected mitcad-parts/iso4762: version " "the socket head cap screw"
   ui_expect_new "Library fields at x: Version " "the browser's fields logged"
   grep "^Library fields at x: " "$UI_LOG" | tail -1
-  shot '^Insert from Library$' "$theme-browser" screen
+  shot '^Browse Components$' "$theme-browser" screen
   ui_mark
   ui_step "Insert (Alt+I)"                   ui_key alt+i
   ui_focus_main

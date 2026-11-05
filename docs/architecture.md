@@ -1197,10 +1197,20 @@ the `Shape` type.
   empty result"), keeping the target and the tools, for any kernel. The
   face merge after a union of thousands of faces spent most of its time in
   ShapeFix's orientation of the shell's faces, which went through the
-  whole shell after every face (port patch 1270). The union is made once
+  whole shell after every face (port patch 1270); the union's own
+  single-threaded parts, the stick vertices of each pair of faces and the
+  solid classifier that places the result's cavities and checks its
+  shells, are faster with port patches 1280 to 1284 (mitcad#1279: the
+  union of 257 bodies 17 s → 12.9 s, the same result). The union is made once
   and named both before and after its faces are merged (the merge works on
   copies, `SetSafeInputMode`): where the merge breaks it, the union as
-  OCCT left it is taken without making it again. The bodies with
+  OCCT left it is taken without making it again. The reported join's
+  merged union (7 458 faces) was taken for broken so, and kept as OCCT
+  left it (8 721): OCCT's solid classifier, in the checker's test that
+  each cavity lies outside the others, gave up on a point of a cavity in
+  the plane of two far cavities' bottom faces and counted it as outside;
+  such a point is now classified along fixed lines through the shape's
+  box (port patch 1285, mitcad#1280). The bodies with
   free-form faces are joined after the elementary ones (mitcad#400) only
   when there are a few of them (at most 4): a machine's 30 such bodies
   among 257, each meeting a few others, took two unions of most of the
@@ -2557,7 +2567,10 @@ not recompute.
 - **Theme and icons** (`app/framework/Theme`, `Icons`): dark mode is read
   from the application palette (`isDarkPalette`), and the error, warning
   and accent colours and the `set*StyleSheet` helpers follow palette
-  changes. The SVG icons are rendered on demand at the asked size and
+  changes. The palette is the platform's, except on Windows 10, whose
+  default style keeps a light palette in the dark app mode: there, while
+  the app mode is dark, Qt's own style (QFusionStyle) with a dark palette
+  of the neutral roles (`app/platform/WindowsTheme`, mitcad#1282). The SVG icons are rendered on demand at the asked size and
   device pixel ratio. Their colours are roles (`IconRole`): each source
   `#rrggbb` stands for one role (outline, lit top, side and far faces, pale
   surface, hollow, construction, action, sketch, pencil, muted, status), and
@@ -2870,7 +2883,8 @@ Store files are written once, before the design file, so the JSON stays
 small and diffable. A file is version 3 only when it has such references.
 Opening resolves them from the nearest enclosing project and checks size
 and hash; missing data fails its base feature with a message. The
-per-user display state (Origin folder, Isolate) is kept out of versioned
+per-user display state (Origin folder, Isolate, View › Show's hidden
+kinds) is kept out of versioned
 files in `.mitcad/local/display/<path>.json`. Autosave and the import
 process always write single-file designs (format 2).
 

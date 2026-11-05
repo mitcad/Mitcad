@@ -367,6 +367,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     // A linked component shown by its envelope reads its file again
     // (mitcad#1271).
     ("set_link_envelope", FileIo),
+    // View › Show of the whole design (mitcad#1287): display state.
+    ("set_view_show", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`

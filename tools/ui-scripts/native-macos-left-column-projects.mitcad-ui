@@ -21,3 +21,20 @@ expect-native-card-height native.configurationCard 100 190
 expect-native-card-height native.sidebar bottom
 expect-native-layout
 screenshot '${MITCAD_TEST_WORK}/left-column-projects.png'
+# The update bar is shared Qt content above the CAD view (mitcad#1291).
+# ui_init disables update checks: this message needs no network or installer.
+command help.check_updates
+wait-log '^Native viewport notices: [1-9][0-9]* points$'
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/left-column-update-notice.png'
+screenshot-screen '${MITCAD_TEST_WORK}/left-column-update-notice-window.png'
+native-resize 1000 720
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/left-column-update-notice-narrow.png'
+native-resize 1280 820
+click-logged '^Update notice Close at '
+wait-log '^Native viewport notices: 0 points$'
+expect-native-layout
+native-resize 1280 820
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/left-column-update-notice-closed.png'

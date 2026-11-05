@@ -8,7 +8,7 @@
 # library is the test's own folder (MITCAD_PRINT_LIBRARY_DIR) with a
 # material Shop PETG and a printer Bench X.
 #   1. With no design open (the empty Untitled window): Tools › Libraries
-#      lists, in its groups, Insert from Library…, Community Library… |
+#      lists, in its groups, Browse Components… (mitcad#1283) |
 #      Components in This Design…, Publish to Library… | Material Library…,
 #      Printer Library…, Process Library… | Library Sources….
 #   2. Material Library… (its mnemonic): the Materials manager on the
@@ -110,7 +110,7 @@ ui_focus_main
 ui_mark
 libraries_entry m
 menu=$(logged_after "Libraries menu: " 's/.*Libraries menu: //')
-expected="Insert from Library… | Community Library… | - | Components in This Design… | Publish to Library… | - | \
+expected="Browse Components… | - | Components in This Design… | Publish to Library… | - | \
 Material Library… | Printer Library… | Process Library… | - | Library Sources…"
 [ "$menu" = "$expected" ] || ui_fail "the Libraries menu is '$menu', expected '$expected'"
 echo "ok   the Libraries menu in its four groups: $menu"

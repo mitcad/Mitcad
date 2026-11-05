@@ -195,7 +195,7 @@ echo "ok   no start-up fetch without Auto-update"
 echo "--- 2b. Insert from Library: empty until Update (mitcad#317)"
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new "Library search '': 0 components, 0 libraries" "nothing listed before a fetch"
 ui_expect_new "Library browser empty: nothing fetched yet, press Update" "the empty list says to press Update"
 ui_mark
@@ -215,7 +215,7 @@ ui_focus_main
 echo "--- 3. Insert from Library"
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search 4762"                      xdotool type --delay 40 "4762"
 ui_expect_new "Library search '4762': 1 components" "the search"
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" "the newest version first"
@@ -240,7 +240,7 @@ ui_step "Open Link (Alt+L)"                ui_key alt+l
 ui_expect_new "Supplier link opened: https://" "the supplier's site"
 ui_expect_new "Open URL (test, not opened): https://" "opened in the browser (logged in the tests)"
 ui_step "close (Escape)"                   ui_key Escape
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "the older version (Alt+V, Down)"  eval 'ui_key alt+v; ui_sync; ui_key Down'
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.0.0 (" "v1.0.0 chosen"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
@@ -251,7 +251,7 @@ ui_expect_volume "New body ISO 4762 M5x16 ([^)]*): volume \([0-9.]*\) mm3" 560.1
 closed
 ui_mark
 ui_step "Insert from Library again"        ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search nut"                       xdotool type --delay 40 "hexagon nut"
 ui_expect_new "Library browser selected mitcad-parts/iso4032: version v1.1.0 (" "the nut"
 ui_step "a copy (Alt+P), Insert (Alt+I)"   eval 'ui_key alt+p; ui_sync; ui_key alt+i'
@@ -309,7 +309,7 @@ ui_focus_main
 echo "--- 5. Community Library"
 ui_mark
 ui_step "Community Library (command search)" ui_command "Community Library"
-ui_focus_dialog '^Community Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new "Library search '': 2 components, 1 libraries, 1 hidden by the licence" "the unlicensed library hidden"
 ui_step "with items without a licence (Alt+W)" ui_key alt+w
 ui_expect_new "Library search '': 2 components, 2 libraries, 0 hidden by the licence" "shown when asked"
@@ -318,7 +318,7 @@ ui_expect_new "Library browser selected library test-brackets ($OTHER), licence 
 ui_step "Get Library (Alt+G)"              ui_key alt+g
 ui_focus_dialog '^Get Library$'
 ui_step "yes (Alt+Y)"                      ui_key alt+y
-ui_focus_dialog '^Community Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new "Library fetched: library Test brackets (test-brackets) from $OTHER" "the library fetched" 30
 ui_step "its component (Alt+S, Down)"      eval 'ui_key alt+s; ui_sync; ui_key Down'
 ui_expect_new "Library browser selected test-brackets/boss-bracket: version " "its component"
@@ -350,7 +350,7 @@ ui_step "close (Alt+C)"                    ui_key alt+c
 ui_focus_main
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search 4762"                      xdotool type --delay 40 "4762"
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" "the screw selected"
 ui_mark
@@ -362,14 +362,14 @@ ui_expect_new "Library search '4762': 1 components" "the search ran again"
 ui_expect_new "Library browser kept the selection component|" "the selection kept"
 ui_focus_dialog '^Fetch Libraries$'
 ui_step "close the warning (Return)"       ui_key Return
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "close (Escape)"                   ui_key Escape
 ui_focus_main
 
 echo "--- 7. The part picker in Insert from Library (mitcad#418)"
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new "Part picker opened: " "the results as the picker's grid"
 ui_expect_new "Part picker in this design: " "the design's library parts read"
 ui_expect_new "mitcad-parts/iso4762 x1" "the inserted screw in this design, once"
@@ -407,7 +407,7 @@ ui_expect_new "Inserted component ISO 4032 M5 (1) (linked) from mitcad-parts " "
 closed
 ui_mark
 ui_step "Insert from Library again"        ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new "mitcad-parts/iso4032 x2" "the nut in this design after the placement: the copy and this one"
 ui_mark
 ui_step "In this design (Alt+O, I)"        eval 'ui_key alt+o; ui_sync; ui_type_ahead "I"'
@@ -462,7 +462,7 @@ ui_step "close (Alt+C)"                    ui_key alt+c
 ui_focus_main
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_mark
 ui_step "Update (Alt+U)"                   ui_key alt+u
 ui_expect_new "Library fetched: library Test wood (test-wood) from $WOOD" "the wood library fetched" 30
@@ -470,7 +470,7 @@ ui_expect_new "Library fetched: library Test sheets (test-sheets) from $SHEETS" 
 ui_expect_new "source(s): 1 failed" "only the broken source fails" 30
 ui_focus_dialog '^Fetch Libraries$'
 ui_step "close the warning (Return)"       ui_key Return
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new ", Wood/Sheets" "the groups as a tree, the other library's Sheets in the same Wood"
 GROUPS_TREE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //')
 # Each with its count (mitcad#1015): Wood with both libraries' parts, the
@@ -541,7 +541,7 @@ ui_step "close (Escape)"                   ui_key Escape
 ui_focus_main
 ui_mark
 ui_step "Insert from Library again"        ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_expect_new "Wood (2) (folded)" "the fold remembered"
 GROUPS_TREE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1)
 [[ $GROUPS_TREE != *"Wood/Beams"* ]] || ui_fail "a folded group's subgroups are shown: '$GROUPS_TREE'"
@@ -558,7 +558,7 @@ echo "--- 9. The Standard filter (mitcad#949)"
 # that standard.
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "All components (Alt+O, A)"             eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
 ui_mark
 ui_step "search 4762"                      eval 'ui_key alt+s; ui_sync; xdotool type --delay 40 "4762"'

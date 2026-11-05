@@ -288,16 +288,17 @@ native-pointer-button '^Close$'
 expect-native-dialog-gone '^Keyboard and Mouse Overview$'
 focus-main
 
-# Insert from Library: helpers on the left, Close and Insert on the right.
+# Browse Components (Insert from Library opens it on Installed): helpers
+# on the left, Close and the primary button (Insert) on the right.
 mark
 command insert.library_component
-focus-dialog '^Insert from Library$'
-expect-native-button-order '^Libraries' '^Update$' '^Get Library$' '^Close$' '^Insert$'
+focus-dialog '^Browse Components$'
+expect-native-button-order '^Library Sources' '^Update$' '^Close$' '^Insert$'
 screenshot '${MITCAD_TEST_WORK}/insert-${MITCAD_TEST_APPEARANCE}.png'
 native-dialog-resize 400 300
-expect-native-button-order '^Libraries' '^Update$' '^Get Library$' '^Close$' '^Insert$'
+expect-native-button-order '^Library Sources' '^Update$' '^Close$' '^Insert$'
 key Escape
-expect-native-dialog-gone '^Insert from Library$'
+expect-native-dialog-gone '^Browse Components$'
 focus-main
 
 # Render Image: Cancel and Save on the left, Close and Render on the right.
@@ -342,10 +343,10 @@ native-pointer-button '^Cancel$'
 expect-native-dialog-gone '^New Project$'
 focus-main
 command insert.library_component
-focus-dialog '^Insert from Library$'
-expect-native-button-order '^Libraries' '^Update$' '^Get Library$' '^Close$' '^Insert$'
+focus-dialog '^Browse Components$'
+expect-native-button-order '^Library Sources' '^Update$' '^Close$' '^Insert$'
 native-pointer-button '^Close$'
-expect-native-dialog-gone '^Insert from Library$'
+expect-native-dialog-gone '^Browse Components$'
 focus-main
 native-resize 1280 820
 expect-never 'Inserted component|Updated library parts|Render image preview'

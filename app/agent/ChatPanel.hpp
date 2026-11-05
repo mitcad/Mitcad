@@ -137,6 +137,7 @@ private:
   QComboBox* m_modelChoice = nullptr;
   QLabel* m_model = nullptr;
   QStringList m_agentItems; // the switcher's agent ids as shown
+  QStringList m_agentLabels; // their names and states, as last logged
   QString m_modelItems;     // the model choice's items as shown (agent, ids)
   QToolButton* m_new = nullptr;
   QToolButton* m_more = nullptr;
@@ -154,6 +155,7 @@ private:
   QPushButton* m_setup = nullptr;
   QLineEdit* m_key = nullptr; // an API agent's key (ChatAgent::asksForKey)
   QPushButton* m_secondary = nullptr;
+  QPushButton* m_otherAgent = nullptr; // Use <another agent> (mitcad#1289)
   QPushButton* m_checkAccount = nullptr;
   QFrame* m_accountHelp = nullptr;
   QLabel* m_accountHelpText = nullptr;

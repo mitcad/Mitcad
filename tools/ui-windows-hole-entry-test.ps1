@@ -16,6 +16,14 @@
 #      Enter is refused (the box stays, the command too), Esc puts 12 back.
 #      Depth's again, 10 and Enter. OK makes the hole 15 and 20 from the
 #      edges, 10 across and 10 deep.
+#   3. Floating (mitcad#1285): Hole at the top face's center, 10 across;
+#      the edge across the face picked through the Reference 2 row: no
+#      failure notice, the hole where it was, Distance 1 and 2 evaluated,
+#      Distance 2 the distance from the new edge. Then Distance 1 typed 12
+#      and the edge across from Reference 1 picked through its row (or,
+#      when the view hides that edge, the same with Reference 2's first
+#      edge): the hole stays, the distance is the rest of the face's width.
+#      OK makes the hole.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-hole-entry-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -139,5 +147,116 @@ Ui-ExpectVolume 'Body Body1 \(F2\.b0\): volume 48000\.000 -> ([0-9.]+) mm3' 4713
 Hole-OnTop 'docked' 'docked'
 Tab-Steps
 Ui-Step 'Esc (cancel)'                   { Ui-Key 'Escape' }
+
+Write-Host '=== A reference picked in its row (mitcad#1285)'
+# The sketch line of a top edge (c1 along X at y 0, c2 at x 60, c3 at y 40,
+# c4 at x 0), the one across the face from it, and the face's center's
+# distance from it.
+function Side-Of([string]$Edge) {
+  if ($Edge -notmatch 'F2:side\((c[1-4])\[') { Ui-Fail "no side in $Edge" }
+  return $Matches[1]
+}
+$tokens = @{ 'c1' = 'c1[c4,c2]'; 'c2' = 'c2[c1,c3]'; 'c3' = 'c3[c2,c4]'; 'c4' = 'c4[c3,c1]' }
+$opposites = @{ 'c1' = $tokens['c3']; 'c2' = $tokens['c4']; 'c3' = $tokens['c1']; 'c4' = $tokens['c2'] }
+function Center-From([string]$Side) { if ($Side -eq 'c1' -or $Side -eq 'c3') { return 20 } else { return 30 } }
+# The top edge of the side 'cN[neighbours]' among the newest pick places;
+# null when it cannot be clicked (behind the panel, say).
+function Top-Edge([string]$Side) {
+  $edge = $null
+  foreach ($line in @(Ui-LogLines)) {
+    if ($line.StartsWith('Pick places:')) {
+      $edge = $null
+    } elseif ($line -match '^Pick edge F2\.b0/(E\{\S+\}) at ' -and $line.Contains('F2:end(') -and
+              $line.Contains("F2:side($Side)")) {
+      $edge = $Matches[1]
+    }
+  }
+  return $edge
+}
+# Whether the panel said it failed since the mark.
+function Assert-NoFailure {
+  $failed = (Ui-LogLines | Select-Object -Skip ($script:UiMark + 1)) | Where-Object { $_.StartsWith('Panel Hole error: ') }
+  if ($failed) { Ui-Fail "a failure notice: $(@($failed)[-1])" }
+  Write-Host 'ok   no failure notice'
+}
+Ui-StartApp 'hole-entry-reference' @('--demo', '--chrome=floating')
+Start-Sleep -Milliseconds 800
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-Mark
+Ui-Step 'hole (F7)'                      { Ui-Key 'F7' }
+Ui-ExpectNew 'Command Hole started' 'the panel opened' 30
+Ui-ExpectNew 'Pick places:' 'the picks are logged'
+Ui-Mark
+Ui-Step 'click the top face'             { Ui-ClickPick "face F2.b0/F2:end($rect)" }
+Ui-ExpectNew 'Hole Place On: 1 face' 'the top face picked'
+Ui-ExpectNew 'Place Hole: face face F2:end(' 'measured from two of its edges'
+$place = Ui-LastMatch '^(Place Hole: face face .*)$'
+if ("$place" -notmatch '^Place Hole: face face \S+ of F2\.b0, [0-9.-]+ mm from edge (E\{\S+\}) of F2\.b0, [0-9.-]+ mm from edge (E\{\S+\}) of F2\.b0 \(point') {
+  Ui-Fail "no references logged: $place"
+}
+$ref1 = $Matches[1]
+$ref2 = $Matches[2]
+$side1 = Side-Of $ref1
+$side2 = Side-Of $ref2
+$opposite = $opposites[$side2]
+$d1 = Center-From $side1
+$d2 = Center-From $side2
+Write-Host "     references $side1 and ${side2}: the face's center $d1 and $d2 from them"
+Ui-Mark
+Ui-Step "distance 1: $d1"                { Ui-TypeIn 'Panel Hole input at_offset1' "$d1" }
+Ui-ExpectNew "Hole Distance 1: $d1 = $d1 mm" 'Distance 1 typed' 30
+Ui-Step "distance 2: $d2"                { Ui-TypeIn 'Panel Hole input at_offset2' "$d2" }
+Ui-ExpectNew "Hole Distance 2: $d2 = $d2 mm" 'Distance 2 typed' 30
+Ui-Step 'diameter 10'                    { Ui-TypeIn 'Panel Hole input diameter' '10' }
+Ui-ExpectNew 'Hole Diameter: 10 = 10 mm' 'the diameter typed' 30
+Ui-ExpectNew 'Preview Hole: ok' "the hole previewed at the face's center" 30
+Ui-Step 'the Reference 2 row'            { Ui-ClickLogged 'Panel Hole input at_edge2' }
+$other = Top-Edge $opposite
+if (-not $other) { Ui-Fail 'no pick place logged for the edge across from Reference 2' }
+# For the second pick: the edge across from Reference 1, or else Reference
+# 2's first edge, whichever the view lets a click pick.
+$across1 = Top-Edge $opposites[$side1]
+$first2 = Top-Edge $tokens[$side2]
+Ui-Mark
+Ui-Step 'click the edge across the face' { Ui-ClickPick "edge F2.b0/$other at" }
+Ui-ExpectNew "Hole Reference 2: 1 edge [edge $other of F2.b0]" 'the edge across the face is Reference 2'
+Ui-ExpectNew ", $d2 mm from edge $other of F2.b0 (point 30, 20, 20)" "the hole kept at the center, $d2 mm from the new edge"
+Ui-ExpectNew "Hole Distance 1: $d1 mm = $d1 mm" 'Distance 1 evaluated' 30
+Ui-ExpectNew "Hole Distance 2: $d2 mm = $d2 mm" 'Distance 2 evaluated' 30
+Ui-ExpectNew 'Preview Hole: ok' 'previewed where it was' 30
+Assert-NoFailure
+
+# Off the center: 12 mm from a row's reference, then the edge across from
+# it picked through that row measures the rest of the face's width.
+if ($across1) {
+  $row = 1; $now = $side1; $edge = $across1
+} elseif ($first2) {
+  $row = 2; $now = $opposite.Substring(0, 2); $edge = $first2
+} else {
+  Ui-Fail "neither the edge across from Reference 1 nor Reference 2's first edge can be picked"
+}
+$across = @{ 'c1' = @(40, '30, 12, 20'); 'c3' = @(40, '30, 28, 20'); 'c2' = @(60, '48, 20, 20'); 'c4' = @(60, '12, 20, 20') }
+$width = $across[$now][0]
+$at = $across[$now][1]
+$rest = $width - 12
+Ui-Mark
+Ui-Step "distance ${row}: 12"            { Ui-TypeIn "Panel Hole input at_offset$row" '12' }
+Ui-ExpectNew "Hole Distance ${row}: 12 = 12 mm" "Distance $row typed" 30
+Ui-ExpectNew 'Preview Hole: ok' "previewed 12 mm from Reference $row" 30
+Ui-Step "the Reference $row row"         { Ui-ClickLogged "Panel Hole input at_edge$row" }
+Ui-Mark
+Ui-Step 'click the edge across from it'  { Ui-ClickPick "edge F2.b0/$edge at" }
+Ui-ExpectNew "Hole Reference ${row}: 1 edge [edge $edge of F2.b0]" "the edge across the face is Reference $row"
+Ui-ExpectNew "$rest mm from edge $edge of F2.b0" "$rest mm from the new edge"
+$placed = Ui-LastMatch '^(Place Hole: .*)$'
+if (-not "$placed".Contains("(point $at)")) { Ui-Fail "the hole moved: $placed" }
+Write-Host "ok   the hole kept at $at"
+Ui-ExpectNew "Hole Distance ${row}: $rest mm = $rest mm" "Distance $row evaluated" 30
+Ui-ExpectNew 'Preview Hole: ok' 'previewed where it was' 30
+Assert-NoFailure
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Added 1 hole(s) (simple), diameter 10' 'the hole added' 30
+Ui-ExpectVolume 'Body Body1 \(F2\.b0\): volume 48000\.000 -> ([0-9.]+) mm3' 47135.94936549554 'one hole, 10 deep'
 
 Ui-Finish 'UI Windows Hole entry test'

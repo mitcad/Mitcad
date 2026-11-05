@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp
+# check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp app/mcp/AssistantSetup.cpp
 # check-all sources: app/framework/FloatingLayout.cpp app/framework/TitleBar.cpp app/tests/chat_test_agent.cpp
 # check-all sources: core/mcp/src/chat core/ffi/src/chat.rs tools/cli/mcp.cpp tools/cli/mcp-connect.cpp
 """The chat panel (mitcad#947) through the real UI, the real live MCP server
@@ -33,6 +33,14 @@ discovery and chat folders:
             boxes as one undo step, the model Codex lists is chosen and the
             thread resumed with it, Save As asks, Stop interrupts the turn
   codex-again  the next start: Codex and its model are still chosen
+  agents    every agent found (mitcad#1289): two Claude Codes (the clients
+            folder's, signed in as an account, and the test home's
+            .local/bin one, signed out) and a local model, each with its
+            sign-in in the switcher; the second chosen starts a new
+            conversation, says how to sign in and offers the first
+  agents-again  the next start: the second is still chosen; Use Claude
+            Code goes back to the first, whose message the first copy runs;
+            the chat's own agent is not shown as a connected assistant
   desktop   only Claude Desktop installed: the panel points to Connect AI
             Assistant
   account   each agent (mitcad#1126): an account failure (a message queued
@@ -626,6 +634,78 @@ def main():
             "expect-widget-property chatModelChoice currentText 'Test large'",
         ]
         run(app, "codex-again", work, out, "floating", again)
+
+    # Every agent found, each with its sign-in (mitcad#1289): two Claude
+    # Codes (the clients folder's, signed in as an account, and the home's
+    # .local/bin one, signed out) and a local model.
+    with tempfile.TemporaryDirectory(prefix="chat-agents-", dir=out) as temporary:
+        work = Path(temporary)
+        (work / "designs").mkdir()
+        install_stub(stub, work / "clients")
+        (work / "clients" / "claude-account").write_text("first@example.com", encoding="utf-8")
+        home = work / "user home"
+        local_bin = home / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        install_stub(stub, local_bin)
+        (local_bin / "claude-account").write_text("signed-out", encoding="utf-8")
+        second = "Claude Code (~/.local/bin)"
+        port = free_port()
+        server = serve(port, work / "api-requests.jsonl", "")
+        try:
+            agents = [
+                "wait-idle",
+                "set-setting chat/api/ollama/enabled true",
+                "set-setting chat/api/ollama/url http://localhost:%d/v1" % port,
+                "command view.chat",
+                "wait-log 'Chat panel: ready' 60",
+                "expect-widget-property chatAgentChoice visible true",
+                "expect-widget-property chatAgentChoice currentText 'Claude Code'",
+                # The three entries with their sign-in states and accounts.
+                "wait-log 'Chat agents: Claude Code · signed in as first@example\\.com \\| "
+                "Claude Code \\(~/\\.local/bin\\) · not signed in \\| Ollama · ready' 60",
+                # The other Claude Code: a new conversation in it; signed out,
+                # its fix and the agent that is ready instead.
+                "mark",
+                "qt-choice chatAgentChoice '" + second + "'",
+                "wait-log 'Chat: agent Claude Code \\(~/\\.local/bin\\)' 30",
+                "wait-log 'Chat: new conversation' 30",
+                "wait-log 'Chat panel: signed-out' 60",
+                "expect-widget-property chatState text 'Claude Code is not signed in: sign in here, or run claude in "
+                "a terminal and type /login.'",
+                "expect-widget-property chatOtherAgent visible true",
+                "expect-widget-property chatOtherAgent text 'Use Claude Code'",
+                "screenshot '" + str(out / "chat-agents.png") + "'",
+            ]
+            run(app, "agents", work, out, "floating", agents,
+                extra_env={"MITCAD_TEST_ASSISTANT_HOME": str(home)})
+            again = [
+                "wait-idle",
+                "command view.chat",
+                # Kept as the last used one after a restart.
+                "wait-log 'Chat panel: signed-out' 60",
+                "expect-widget-property chatAgentChoice currentText '" + second + "'",
+                "mark",
+                "button '^Use Claude Code$' chatOtherAgent",
+                "wait-log 'Chat: agent Claude Code' 30",
+                "wait-log 'Chat panel: ready' 60",
+                # The chat's own agent is not a connected assistant
+                # (mitcad#1289): the indicator says no assistant once the
+                # turn is over, while the agent's process stays.
+                *send("hello from the first one"),
+                "button '^Continue$' chatContinue",
+                "wait-log 'Agent indicator: chat working: Claude Code' 30",
+                "wait-log 'Chat: turn ended \\(success\\)' 60",
+                "wait-log 'Agent indicator: no agent' 30",
+                "expect-no-log 'Agent indicator: connected: claude-code'",
+                "expect-widget-property agentIndicator text 'No assistant'",
+            ]
+            run(app, "agents-again", work, out, "floating", again,
+                extra_env={"MITCAD_TEST_ASSISTANT_HOME": str(home)})
+        finally:
+            server.shutdown()
+        starts = lines(work / "chat-starts.jsonl")
+        if len(starts) != 1 or Path(starts[0]["program"]).parent.resolve() != (work / "clients").resolve():
+            raise RuntimeError("the message did not go to the first Claude Code: " + repr(starts))
 
     with tempfile.TemporaryDirectory(prefix="chat-desktop-", dir=out) as temporary:
         work = Path(temporary)

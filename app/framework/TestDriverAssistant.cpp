@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
@@ -22,6 +23,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPointer>
 #include <QProcess>
@@ -334,6 +336,15 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     // Settings were registered by the preceding Claude Code setup step.
     chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
     const bool again = mode == QStringLiteral("reconnect-again");
+    if (again) {
+      // Disconnect stuck (mitcad#1289): Connect allows Claude Code again,
+      // and the reconnect step follows.
+      if (stateOf(status) != QStringLiteral("disconnected") || actionOf(setup) != QStringLiteral("allow") ||
+          setup->text() != QStringLiteral("Connect")) {
+        fail(m_line, QStringLiteral("the disconnected Claude Code did not offer Connect: ") + status->text()); return;
+      }
+      setup->click();
+    }
     if (stateOf(status) != QStringLiteral("waiting") ||
         status->text().contains(QStringLiteral("/mcp")) != again) {
       fail(m_line, QStringLiteral("Claude Code's initial/reconnect step is wrong: ") + status->text()); return;
@@ -362,9 +373,35 @@ void TestDriver::testAssistantSetup(const QString& mode) {
         fail(m_line, QStringLiteral("Disconnect does not explain that setup is kept")); return;
       }
       setup->click();
-    } else {
-      bridge->closeWriteChannel(); // the client went away, rather than Disconnect
+      // Disconnect sticks (mitcad#1289): the bridge stays up (mitcad#1288)
+      // and is refused when it connects again, and a new Claude Code client
+      // is refused at its initialize, until Connect allows Claude Code.
+      auto* refused = new QProcess(dialog);
+      refused->setObjectName(QStringLiteral("assistantRefusedClient"));
+      connect(refused, &QProcess::started, refused, [refused] {
+        refused->write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
+                       "\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},"
+                       "\"clientInfo\":{\"name\":\"claude-code\",\"version\":\"new\"}}}\n");
+      });
+      refused->start(mcp::bundledBridge(), {QStringLiteral("mcp"), QStringLiteral("--connect")});
+      whenReady([bridge, refused, status, setup] {
+        const QByteArray more = refused->readAllStandardOutput();
+        if (!more.isEmpty()) refused->setProperty("answered", refused->property("answered").toByteArray() + more);
+        return bridge->state() != QProcess::NotRunning && stateOf(status) == QStringLiteral("disconnected") &&
+            actionOf(setup) == QStringLiteral("allow") && setup->text() == QStringLiteral("Connect") &&
+            status->text().contains(QStringLiteral("Claude Code")) &&
+            refused->property("answered").toByteArray().contains("Disconnected in MitCad");
+      }, 15, QStringLiteral("Disconnect did not keep Claude Code's clients out"), [bridge, refused] {
+        // Both clients go away; the dialog stays disconnected.
+        bridge->closeWriteChannel();
+        refused->closeWriteChannel();
+        for (QProcess* process : {bridge, refused}) {
+          connect(process, &QProcess::finished, process, &QObject::deleteLater);
+        }
+      });
+      return;
     }
+    bridge->closeWriteChannel(); // the client went away, rather than Disconnect
     whenReady([bridge, status, setup] {
       return bridge->state() == QProcess::NotRunning && stateOf(status) == QStringLiteral("waiting") &&
           status->text().contains(QStringLiteral("/mcp › mitcad › Reconnect")) && actionOf(setup).isEmpty();
@@ -378,9 +415,22 @@ void TestDriver::testAssistantSetup(const QString& mode) {
         claudeChosen = true;
       }
     }
-    if (!claudeChosen || stateOf(status) != QStringLiteral("waiting") ||
-        !status->text().contains(QStringLiteral("/mcp › mitcad › Reconnect"))) {
-      fail(m_line, QStringLiteral("reopening setup lost the selected assistant or reconnect step")); return;
+    // Still disconnected (mitcad#1289), and the indicator's menu offers to
+    // allow it again.
+    auto* indicator = m_main ? m_main->findChild<mcp::AgentIndicator*>(QStringLiteral("agentIndicator")) : nullptr;
+    bool allowOffered = false;
+    if (indicator && indicator->agentMenu()) {
+      emit indicator->agentMenu()->aboutToShow(); // fills it, as when it opens
+      for (QAction* action : indicator->agentMenu()->actions()) {
+        if (action->objectName() == QStringLiteral("allowAgent") &&
+            action->text().remove(QLatin1Char('&')) == QStringLiteral("Allow Claude Code to Connect Again")) {
+          allowOffered = true;
+        }
+      }
+    }
+    if (!claudeChosen || stateOf(status) != QStringLiteral("disconnected") || !allowOffered) {
+      fail(m_line, QStringLiteral("reopening setup lost the selected assistant or its disconnected state: ") +
+                       status->text()); return;
     }
   } else if (mode == QStringLiteral("bundle")) {
     auto* anyway = dialog->findChild<QPushButton*>(QStringLiteral("assistantConnectAnyway"));
@@ -493,6 +543,58 @@ void TestDriver::testAssistantSetup(const QString& mode) {
       if (QDir::cleanPath(dialog->property("assistantShownPath").toString()) != QDir::cleanPath(bundle) ||
           !dialog->property("assistantOpenedDesktop").toBool()) {
         problem = QStringLiteral("Show in Explorer or Open Claude Desktop did not point at the saved extension");
+      }
+    }
+    // The extension installed in the package's settings folder and no
+    // client connected (mitcad#1288): Claude Desktop's to start again, not
+    // the installation's instructions. One that starts another MitCad's
+    // bridge is installed again; without it, the instructions as before.
+    const QString extension = QDir(package).filePath(
+        QStringLiteral("LocalCache/Roaming/Claude/Claude Extensions/local.mcpb.mitcad-developers.mitcad-desktop"));
+    const auto installExtension = [&extension](const QString& bridge) {
+      QFile manifest(QDir(extension).filePath(QStringLiteral("manifest.json")));
+      return QDir().mkpath(extension) && manifest.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+          manifest.write(QJsonDocument(mcp::assistantBundleManifest(bridge, true, QStringLiteral("win32"))).toJson()) > 0;
+    };
+    const auto refreshed = [dialog] {
+      QEvent activation(QEvent::ActivationChange); // as when back from Claude Desktop
+      QCoreApplication::sendEvent(dialog, &activation);
+    };
+    if (problem.isEmpty() && !installExtension(QStringLiteral("C:/Other MitCad/mitcad-cli.exe"))) {
+      problem = QStringLiteral("isolated Claude Desktop extension could not be prepared");
+    }
+    if (problem.isEmpty()) {
+      refreshed();
+      if (stateOf(status) != QStringLiteral("install-extension")) {
+        problem = QStringLiteral("another MitCad's extension counted as this one's: ") + status->text();
+      }
+    }
+    if (problem.isEmpty() && !installExtension(mcp::registeredBridge().program)) {
+      problem = QStringLiteral("isolated Claude Desktop extension could not be prepared");
+    }
+    if (problem.isEmpty()) {
+      refreshed();
+      if (stateOf(status) != QStringLiteral("installed-not-connected") ||
+          status->text() != QStringLiteral("Installed in Claude Desktop, not connected: turn the MitCad extension off "
+                                           "and on in Claude Desktop, or start a new chat") ||
+          setup->isVisibleTo(dialog) || !openDesktop->isVisibleTo(dialog) || result->isVisibleTo(dialog)) {
+        problem = QStringLiteral("the installed extension without a client did not say installed, not connected: ") +
+                  status->text() + QStringLiteral(" / ") + result->text();
+      }
+    }
+    if (problem.isEmpty()) {
+      // Chosen again (a new look), still the same: not the installation.
+      chooseAssistant(dialog, mcp::AssistantClient::ClaudeDesktop);
+      if (stateOf(status) != QStringLiteral("installed-not-connected")) {
+        problem = QStringLiteral("choosing Claude Desktop again lost the installed extension: ") + status->text();
+      }
+    }
+    if (problem.isEmpty()) {
+      QDir(extension).removeRecursively();
+      chooseAssistant(dialog, mcp::AssistantClient::ClaudeDesktop);
+      setup->click();
+      if (stateOf(status) != QStringLiteral("install-extension") || actionOf(setup) != QStringLiteral("reveal")) {
+        problem = QStringLiteral("without the extension, Connect did not offer its installation again: ") + status->text();
       }
     }
     // Claude Desktop uninstalled meanwhile: Open Claude Desktop does not do

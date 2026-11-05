@@ -18207,7 +18207,10 @@ neither the model nor any drawing has that label.
 the view sees end on that turns half way round at least, a half hole's
 too, concentric ones once, and a centreline on each round face it sees
 from the side whose ends do; inside a detail's circle, outside breaks
-and behind a section's plane only) and `retrieved_dimensions` (off: the
+and behind a section's plane only; a view without hidden lines marks only
+the circles and round faces it draws, not the holes the part hides, such
+as a cross hole seen from the side through a bar, mitcad#1286) and
+`retrieved_dimensions` (off: the
 dimensions of the sketches that shape the bodies the view shows (those
 of the features that made or name them, and of their components'
 features that neither make nor name a body), seen square on, where the
@@ -21980,3 +21983,30 @@ splits a kind, refusals, one undo step, the import's option),
 `geometry.repeated_parts` (OCCT: a pinwheel with a quarter-turn symmetry
 copied four times, one turned by its symmetry, one about a slanted axis,
 its mirror image apart; a propeller turned by its half-turn symmetry).
+
+## View › Show of the whole design (mitcad#1287)
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_view_show` | `origins`, `construction`, `sketches` (each optional: true shows that kind, false hides it, left out keeps it; at least one) | undo step `Hide All Construction` / `Show All Sketches` (several joined by `, `) unless nothing changes; nothing recomputed |
+
+- Display state as the Origin folder's light bulb is (`document/display.rs`,
+  [Visibility and display](#visibility-and-display)): kept in the design
+  file as `"display": {"hidden": {"origins": true, "construction": true,
+  "sketches": true}}` (each left out while shown, the whole object while
+  nothing is hidden), per user in a project, an undo step that the
+  project's versions leave out. The application allows it in read-only
+  documents, as the Origin folder's light bulb.
+- A hidden kind is left out of the view in every component, linked
+  ones included: `origins` the design's origin planes, axes and point
+  and the joint origins, `construction` the construction planes, axes and
+  points, `sketches` the sketches. No feature's own light bulb
+  (`set_feature_visible`, `set_origin_visible`) changes: showing the kind
+  again shows what the light bulbs show.
+- The `document` query's `display` has `"show": {"origins": bool,
+  "construction": bool, "sketches": bool}` while a kind is hidden (left
+  out while everything is shown).
+
+Tests: `core.model.api` (`view_show_tests.rs`: the undo steps and their
+labels, the light bulbs unchanged, saved and read back, the document
+query).

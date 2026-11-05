@@ -33,6 +33,9 @@
 // made again with a fuzzy value where OCCT left pieces unused, as the join
 // is. Boxes 1e-4 mm aside, parallel or turned, cut and intersect exactly
 // (no synthetic pair reproduces it either).
+//
+// mitcad#1280: the union of all keeps its faces merged (port patch 1285),
+// which OCCT's checker had refused through its solid classifier.
 
 #include <algorithm>
 #include <chrono>
@@ -577,11 +580,18 @@ void test_reported_join_of_all_bodies() {
               seconds, solid_count(*joined), shells, joined->face_count(), volume_of(*joined));
   // Seven solids (the machine and the parts apart from it) of 76 shells
   // (the machine's closed cavities), the volume of #1273's union within
-  // 1e-7 of it, and a point in each body's box placed rightly.
+  // 1e-7 of it, and points in each body's box placed rightly.
   CHECK(solid_count(*joined) == 7);
   CHECK(shells == 76);
   CHECK_NEAR_TOL(volume_of(*joined), 50311221.665, 1e-7);
-  CHECK(misplaced_points(*joined, inputs, boxes, 1) == 0);
+  // Its faces merged (about 7 458; mitcad#1280): OCCT's solid classifier
+  // rejected a point of one cavity, in the plane of two far cavities'
+  // bottom faces, as outside, so the check of the merged union failed and
+  // the union was kept as OCCT left it (8 721 faces, 0.26 cubic
+  // millimetres more), until the port's patch 1285. The points sampled
+  // confirm the merged volume.
+  CHECK(joined->face_count() < 8000);
+  CHECK(misplaced_points(*joined, inputs, boxes, 4) == 0);
 }
 
 } // namespace

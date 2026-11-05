@@ -399,6 +399,9 @@ public:
   // be. Logs "Native cards: none (the Start page is shown)" and "Native
   // cards: all (the Start page left)".
   void setStartPageShown(bool shown);
+  // Top of the embedded Qt central widget: visible notice bars reserve
+  // this many points above the CAD view and its native overlay cards.
+  void setViewportContentTop(int top);
   // The left column's remembered split (columnSplitChosen); empty: the
   // automatic one. The Configuration card's remembered disclosure.
   void setColumnSplit(const std::vector<std::pair<QString, int>>& split);

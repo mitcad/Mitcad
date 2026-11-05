@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Component libraries in the main window (mitcad#64, mitcad#63): Insert
-// from Library (the INSERT group, the File menu), and Tools > Libraries
-// (mitcad#1250), grouped: Insert from Library... and Community Library...;
-// Components in This Design... (versions, sizes, updates, the parts list)
-// and Publish to Library...; Material, Printer and Process Library... (the
-// print managers on My library, also without a design); Library
-// Sources... (which component libraries to use).
+// from Library (the Assemble group), and Tools > Libraries (mitcad#1250),
+// grouped: Browse Components... (mitcad#1283: Installed, Community and
+// Favorites in one window; Insert from Library and Community Library stay
+// as commands that open it on Installed and on Community); Components in
+// This Design... (versions, sizes, updates, the parts list) and Publish to
+// Library...; Material, Printer and Process Library... (the print managers
+// on My library, also without a design); Library Sources... (which
+// component libraries to use).
 #include "../MainWindow.hpp"
 
 #include <QJsonArray>
@@ -44,9 +46,11 @@ void MainWindow::registerLibraryCommands() {
     d.run = std::move(run);
     return d;
   };
+  // Browse Components on Installed (mitcad#1283): the Assemble group's
+  // button, its shortcut and scripts keep this id.
   CommandDef insert = def("insert.library_component", tr("Insert from Library"), "insert-library",
                           tr("Places a library component, linked or as a copy"),
-                          [this] { insertFromLibrary(false); });
+                          [this] { browseComponents(false); });
   insert.mode = CommandDef::Mode::Model;
   insert.tab = QStringLiteral("SOLID");
   insert.group = QStringLiteral("ASSEMBLE");
@@ -54,6 +58,19 @@ void MainWindow::registerLibraryCommands() {
                      QStringLiteral("bolt"), QStringLiteral("nut"), QStringLiteral("washer"),
                      QStringLiteral("standard part"), QStringLiteral("iso")};
   m_registry->add(insert);
+  // One window to find, get and insert library components (mitcad#1283,
+  // GitHub #136): its views Installed, Community and Favorites, the menu's
+  // first entry in place of Insert from Library… and Community Library….
+  CommandDef browse = def("tools.browse_components", tr("Browse Components…"), "insert-library",
+                          tr("Finds, gets and inserts library components: installed, community and favorites"),
+                          [this] { browseComponents(false); });
+  browse.mode = CommandDef::Mode::Model;
+  browse.keywords = {QStringLiteral("library"),       QStringLiteral("insert from library"),
+                     QStringLiteral("community"),     QStringLiteral("community library"),
+                     QStringLiteral("favorites"),     QStringLiteral("get library"),
+                     QStringLiteral("download"),      QStringLiteral("fastener"),
+                     QStringLiteral("standard part"), QStringLiteral("components")};
+  m_registry->add(browse);
   // Named for what it shows, this design's library components (mitcad#1250:
   // once Library Components…, the id and the old name as a keyword kept).
   CommandDef parts = def("tools.library_parts", tr("Components in This Design…"), "parts-list",
@@ -71,9 +88,11 @@ void MainWindow::registerLibraryCommands() {
   libraries.keywords = {QStringLiteral("libraries"), QStringLiteral("library"), QStringLiteral("fetch"),
                         QStringLiteral("git"), QStringLiteral("sources")};
   m_registry->add(libraries);
+  // Browse Components on Community (mitcad#1283): no longer in the menu,
+  // the id kept for shortcuts, scripts and the command search.
   CommandDef community = def("tools.community_library", tr("Community Library…"), "library",
                              tr("Searches and inserts designs others share in git repositories"),
-                             [this] { insertFromLibrary(true); });
+                             [this] { browseComponents(true); });
   community.keywords = {QStringLiteral("community"), QStringLiteral("share"), QStringLiteral("download"),
                         QStringLiteral("index"), QStringLiteral("library")};
   m_registry->add(community);
@@ -132,10 +151,12 @@ void MainWindow::createLibraryMenu(QMenu* tools) {
   // Grouped (mitcad#1250): what to place, this design's components and
   // publishing, the print libraries, then where the libraries come from.
   // An empty id is a separator. The native macOS menu reads this one
-  // (MainWindow::refreshNativeActions), separators included.
+  // (MainWindow::refreshNativeActions), separators included. Browse
+  // Components… (mitcad#1283) is the one entry to place: Insert from
+  // Library and Community Library open its views from the ribbon, the
+  // shortcuts and the command search.
   const std::pair<const char*, QString> entries[] = {
-      {"insert.library_component", tr("&Insert from Library…")},
-      {"tools.community_library", tr("&Community Library…")},
+      {"tools.browse_components", tr("&Browse Components…")},
       {"", QString()},
       {"tools.library_parts", tr("Components in This &Design…")},
       {"tools.publish_library", tr("P&ublish to Library…")},
@@ -163,7 +184,7 @@ void MainWindow::createLibraryMenu(QMenu* tools) {
   });
 }
 
-void MainWindow::insertFromLibrary(bool community) {
+void MainWindow::browseComponents(bool community) {
   if (!canChangeModel()) {
     return;
   }
@@ -171,7 +192,7 @@ void MainWindow::insertFromLibrary(bool community) {
   // Place On where it takes it (a hole's rim or round face, an axis, a
   // flat face or a plane).
   const Selection before = m_selection;
-  LibraryBrowser browser(community, this);
+  LibraryBrowser browser(community ? LibraryBrowser::View::Community : LibraryBrowser::View::Installed, this);
   // The picker's In this design (mitcad#418).
   browser.setUsedParts(usedLibraryParts(model()));
   prepareModal(&browser);

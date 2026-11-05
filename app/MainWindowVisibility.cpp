@@ -2,13 +2,19 @@
 // Light bulbs in every mode (mitcad#295; kept analyses and image references
 // too since mitcad#1263) and Create Sketch's plane pick
 // (mitcad#474: its banner and the picks it refuses; mitcad#844: the origin
-// planes behind the model) in the main window.
+// planes behind the model) in the main window, and View › Show's kinds of
+// the whole design (mitcad#1287).
 #include "MainWindow.hpp"
 
+#include <utility>
+
+#include <QAction>
+#include <QMenu>
 #include <QtLogging>
 
 #include "OcctViewer.hpp"
 #include "browser/BrowserController.hpp"
+#include "framework/CommandRegistry.hpp"
 #include "view/ModeBanner.hpp"
 
 namespace mitcad {
@@ -152,7 +158,7 @@ void MainWindow::beginCommandSketches(const QString& editUid, const Selection& i
   }
   const QStringList used = CommandSketches::usedBy(edited, editUid.isEmpty() ? items : Selection());
   const QStringList shown = m_commandSketches.begin(
-      used, [this](const QString& sketch) { return m_snapshot.isShown(sketch); }, label);
+      used, [this](const QString& sketch) { return m_snapshot.isDrawn(sketch); }, label);
   for (const QString& sketch : shown) {
     const DocumentSnapshot::Feature* feature = m_snapshot.feature(sketch);
     qDebug().noquote() << QStringLiteral("Sketch %1 shown for %2")
@@ -163,7 +169,7 @@ void MainWindow::beginCommandSketches(const QString& editUid, const Selection& i
 void MainWindow::endCommandSketches(CommandSketches ended) {
   const QString label = ended.label();
   for (const CommandSketches::Ended& sketch :
-       ended.end([this](const QString& uid) { return m_snapshot.isShown(uid); })) {
+       ended.end([this](const QString& uid) { return m_snapshot.isDrawn(uid); })) {
     const DocumentSnapshot::Feature* feature = m_snapshot.feature(sketch.sketch);
     if (feature == nullptr) {
       continue; // no longer in the design (an undo during the command)
@@ -197,8 +203,89 @@ void MainWindow::showStartingSketches(const CommandSession& session) {
   }
 }
 
+// View › Show (mitcad#1287): the origins, the construction geometry and the
+// sketches of the whole design, every component's (linked ones too), turned
+// off and on as display state the design keeps (the model's set_view_show).
+// The light bulbs stay as they are: showDatums and sketchShown leave the
+// hidden kinds out, and the browser greys their rows. Like a light bulb it
+// works in every mode, outside a command's undo range.
+void MainWindow::registerViewShowCommands() {
+  const auto add = [this](const char* id, const char* kind, const QString& name, const char* icon,
+                          const QString& tooltip, const QStringList& keywords) {
+    CommandDef def;
+    def.id = QString::fromLatin1(id);
+    def.name = name;
+    def.icon = QString::fromLatin1(icon);
+    def.tooltip = tooltip;
+    def.kind = CommandDef::Kind::Action;
+    def.mode = CommandDef::Mode::Any;
+    def.tab.clear(); // the View menu's Show, the command search and shortcuts
+    def.group.clear();
+    def.duringCommands = true;
+    def.keywords = keywords;
+    def.keywords << QStringLiteral("view") << QStringLiteral("show") << QStringLiteral("hide")
+                 << QStringLiteral("display");
+    const QString key = QString::fromLatin1(kind);
+    def.run = [this, key] { toggleViewShow(key); };
+    // Its action, made later by createActions, is made checkable where the
+    // View menu takes it (ViewController::createMenus).
+    m_registry->add(def);
+  };
+  add("view.show_origins", "origins", tr("Origins"), "origin",
+      tr("Shows or hides the design's origin and the joint origins in every component"),
+      {QStringLiteral("origin"), QStringLiteral("joint origin"), QStringLiteral("axes")});
+  add("view.show_construction", "construction", tr("Construction"), "construction",
+      tr("Shows or hides the construction planes, axes and points of every component"),
+      {QStringLiteral("construction"), QStringLiteral("plane"), QStringLiteral("axis"), QStringLiteral("point"),
+       QStringLiteral("datum")});
+  add("view.show_sketches", "sketches", tr("Sketches"), "sketch",
+      tr("Shows or hides the sketches of every component"), {QStringLiteral("sketch"), QStringLiteral("sketches")});
+}
+
+void MainWindow::toggleViewShow(const QString& kind) {
+  bool shown = m_snapshot.showSketches;
+  if (kind == QStringLiteral("origins")) {
+    shown = m_snapshot.showOrigins;
+  } else if (kind == QStringLiteral("construction")) {
+    shown = m_snapshot.showConstruction;
+  }
+  const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_view_show")}, {kind, !shown}};
+  if (runVisibilityCommands(QJsonArray{command}, QString())) {
+    qDebug().noquote() << QStringLiteral("View show %1: %2")
+                              .arg(kind, shown ? QStringLiteral("hidden") : QStringLiteral("shown"));
+  }
+  // The check marks as the design has them, also after a refusal.
+  syncViewShowChecks();
+}
+
+void MainWindow::syncViewShowChecks() {
+  const std::pair<const char*, bool> checks[] = {{"view.show_origins", m_snapshot.showOrigins},
+                                                 {"view.show_construction", m_snapshot.showConstruction},
+                                                 {"view.show_sketches", m_snapshot.showSketches}};
+  for (const auto& [id, on] : checks) {
+    if (QAction* action = m_registry->action(QString::fromLatin1(id))) {
+      action->setCheckable(true);
+      action->setChecked(on);
+    }
+  }
+  // For UI tests: View › Show's entries with their check marks, as the
+  // menu has them, when they change.
+  if (const auto* menu = findChild<QMenu*>(QStringLiteral("viewShowMenu"))) {
+    QStringList entries;
+    for (const QAction* entry : menu->actions()) {
+      entries << QStringLiteral("%1 %2").arg(entry->text().remove(QLatin1Char('&')),
+                                             entry->isChecked() ? QStringLiteral("on") : QStringLiteral("off"));
+    }
+    const QString line = QStringLiteral("View Show menu: %1").arg(entries.join(QStringLiteral(" | ")));
+    if (line != m_loggedViewShow) {
+      m_loggedViewShow = line;
+      qDebug().noquote() << line;
+    }
+  }
+}
+
 bool MainWindow::sketchShown(const QString& sketch) const {
-  return m_commandSketches.shows(sketch, m_snapshot.isShown(sketch));
+  return m_commandSketches.shows(sketch, m_snapshot.isDrawn(sketch)); // View › Show too (mitcad#1287)
 }
 
 } // namespace mitcad

@@ -45,3 +45,5 @@ mod table_reference_rename_tests;
 // The rolled-back features evaluated beside the document, adopted by it
 // (mitcad#1267).
 mod rolled_back_tests;
+// View › Show of the whole design (mitcad#1287).
+mod view_show_tests;

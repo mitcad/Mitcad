@@ -363,19 +363,23 @@ void TestDriver::testNavigationRelease() {
       const auto orbitKey = scheme == NavigationScheme::TrackpadShift ? Qt::ShiftModifier : Qt::AltModifier;
       scroll(Qt::ScrollBegin, {}, orbitKey);
       scroll(Qt::ScrollUpdate, {18, 9}, orbitKey);
-      // Consume real viewport input while keeping this event sequence in
-      // one turn: software-rendered frames can outlast the 150 ms quiet
-      // fallback, which is not an intentional pause in this gesture.
-      state->view->repaint();
+      // Render the real viewport synchronously: QOpenGLWidget::repaint()
+      // can defer its paint, leaving the camera unchanged at this check.
+      // Keep one event turn so the 150 ms quiet fallback cannot interrupt
+      // this gesture when a software-rendered frame takes longer.
+      state->view->grabFramebuffer();
       for (const auto keys : {Qt::NoModifier, Qt::ControlModifier}) {
         const CameraState before = state->view->camera();
         scroll(Qt::ScrollMomentum, {18, 9}, keys);
-        state->view->repaint();
+        state->view->grabFramebuffer();
         const CameraState after = state->view->camera();
         const double angle = gp_Vec(before.eye, before.target).Angle(gp_Vec(after.eye, after.target));
         if (angle < 1e-8 || std::abs(before.height - after.height) > 1e-6 ||
             state->view->PressedMouseButtons() != Aspect_VKeyMouse_LeftButton) {
-          fail(m_line, QStringLiteral("trackpad momentum changed the original orbit after its modifier changed"));
+          fail(m_line, QStringLiteral("trackpad momentum changed the original orbit after its modifier changed: angle %1, height delta %2, pressed buttons %3, scheme %4, keys %5")
+                           .arg(angle, 0, 'g', 16).arg(after.height - before.height, 0, 'g', 16)
+                           .arg(static_cast<int>(state->view->PressedMouseButtons()))
+                           .arg(static_cast<int>(scheme)).arg(static_cast<int>(keys)));
           return;
         }
       }

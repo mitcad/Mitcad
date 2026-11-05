@@ -202,11 +202,13 @@ assistant indicator, or choose **Connect AI Assistant…** in
    | Ready to connect *assistant* | **Connect** | MitCad sets the connection up |
    | Approve MitCad in Claude Desktop, then start a new chat | **Open in Claude Desktop again** | Approve the extension in Claude Desktop; the button opens it again if needed |
    | Install Claude Desktop first, in red | **Get Claude Desktop** | No application on this computer took the extension and Claude Desktop was not found (also after **Open Claude Desktop** found it gone): install Claude Desktop, then choose it again |
+   | Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, or start a new chat | **Open Claude Desktop** | The extension is installed in Claude Desktop, but Claude Desktop is not connected to MitCad now. In Claude Desktop's **Settings › Extensions**, turn **MitCad** off and on again, or start a new chat; nothing needs to be installed again |
    | Install the extension in Claude Desktop | **Show in Explorer** (**Show in Finder** on macOS), and **Open Claude Desktop** | Claude Desktop is installed but does not open the extension by itself (Claude Desktop from the Microsoft Store). The line below says where: **In Claude Desktop: Settings › Extensions › Advanced settings › Install Extension…, then choose** the saved `mitcad-desktop.mcpb`, which the button shows (do not double-click it). Approve and enable the extension, then start a new chat |
    | Start a new Claude Code session to use MitCad / Restart ChatGPT or start a new Codex session to use MitCad | none | Start a new conversation in the assistant |
    | Reconnect MitCad in Claude Code (/mcp › mitcad › Reconnect) or start a new session | none | After a disconnect, run `/mcp` in Claude Code, choose **mitcad**, then **Reconnect**, or start a new session |
    | Restart ChatGPT or Codex, or start a new session | none | After a disconnect, restart the assistant or start a new session |
-   | ✓ Connected: *assistant* | **Disconnect** | Work with the assistant; **Disconnect** keeps its setup, the design and unsaved changes; reconnect using the step shown afterwards |
+   | ✓ Connected: *assistant* | **Disconnect** | Work with the assistant; **Disconnect** keeps its setup, the design and unsaved changes |
+   | Disconnected: *assistant* cannot connect to MitCad until you connect it again | **Connect** | After **Disconnect**, MitCad refuses the assistant's new connections. **Connect** (or **Allow *assistant* to Connect Again** in the assistant indicator's menu) lets it connect again; then use the step shown |
    | A short message saying what went wrong, in red | **Try again** | Do what the message says, then try again |
 
    Connected shows for the assistant that is connected, by its name
@@ -779,6 +781,12 @@ In every scheme a pinch zooms about the fingers. A two-finger rotation
 rolls the view (not with a constrained orbit). A two-finger double tap
 fits everything. A two-finger orbit has a 1.3× motion gain. Pan, zoom
 and mouse drags keep their own sensitivity.
+
+An orbit with the mouse or the cube goes on past the edge of the screen:
+the cursor continues from the opposite edge of the same screen and the
+view keeps turning, so a long orbit needs no second drag. Where the
+system does not let an application move the cursor (Wayland), the orbit
+stops at the edge.
 
 The **orientation cube** turns the view. A click on a face, an edge or
 a corner of the cube turns the view there. Drag the cube to orbit. The
@@ -3681,6 +3689,26 @@ Browser: the command takes it as it takes a click in the view. Or turn
 on the eye of the Origin folder: then the view shows the origin, also
 during the commands, and you click it there.
 
+**Show or hide a kind in the whole design.** The **View › Show** menu
+has three entries: **Origins**, **Construction** and **Sketches**. Each
+entry shows or hides that kind in all the components of the design, also
+in linked components:
+
+- **Origins**: the origin of the design and the joint origins.
+- **Construction**: the construction planes, axes and points.
+- **Sketches**: the sketches.
+
+Use these entries in a large assembly, where it is slow to click the
+eyes of each component. The eyes do not change. The Browser shows the
+rows of a hidden kind in gray. When you turn the kind on again, the view
+shows what the eyes show. The design saves the three entries. Each
+change is an Undo step. The entries also work while a command's panel or
+a sketch is open. The sketch that you edit stays in the view, and so do
+the sketches that a command shows for its inputs. Create Sketch also
+shows the origin planes for the pick while Origins is off. You can find
+the entries in the command search and give them keys in Keyboard
+Shortcuts.
+
 When you edit a feature, the view shows the sketches that the feature
 uses, also hidden sketches. A hidden sketch is a little lighter. You can
 select its profiles, curves and points for the inputs of the panel. When
@@ -3763,9 +3791,18 @@ these entries:
 - Create Sketch
 - Look At
 - Rename
-- Delete
+- Delete (for a body: **Delete Body**, or **Delete Bodies** for the
+  bodies that are selected with the row)
 - Find in Timeline
 - Save as Mesh… (for bodies and components)
+
+**Delete Body** in the menu of a body's row deletes only that body. The
+Delete key does the same on the selected rows of bodies. The other bodies
+of the feature stay. For example, delete one body of an imported file,
+and the other bodies of the import stay. MitCad adds a Remove Body
+feature to the timeline, as **Delete › Delete Body** in the context menu
+of the view does. One Undo step brings the bodies back. To delete the
+feature that made the body, use the row of the feature in the timeline.
 - Collapse All
 
 **Collapse All** is the last entry of the menu of every row. It folds
@@ -6616,7 +6653,7 @@ hole sketched on a profile, or a cut. MitCad saves it in the design and
 opens it again as it was.
 
 The components come from MitCad's component library. To get the library, add it
-and fetch it in Tools › Libraries, or use Update in Insert from Library.
+and fetch it in Tools › Libraries, or use Update in Browse Components.
 Each component lists its supplier and part number. A component placed once stays in
 the design. Thus you need no library to place more of it.
 
@@ -8668,8 +8705,8 @@ table of its sizes.
 
 **Tools › Libraries** has four groups:
 
-- **Insert from Library…** and **Community Library…** place a component
-  or a shared design.
+- **Browse Components…** finds, gets and places a component: of the
+  libraries you have, of the community indexes, or of your favorites.
 - **Components in This Design…** shows the library components of the
   open design; **Publish to Library…** adds the design to a library of
   your own.
@@ -8733,9 +8770,23 @@ switch the library off, the check box is gray. MitCad keeps its state.
 Without **Auto-update**, MitCad fetches a library only when you ask for
 it.
 
-**Insert from Library** is in the Assemble group and in **Tools ›
-Libraries**. It shows the components as pictures in the grid of the component
-picker (refer to [Component picker](#component-picker)). To insert a component:
+**Tools › Libraries › Browse Components…** opens one window for all
+library components. **Insert from Library** in the Assemble group opens
+the same window. The window shows the components as pictures in the grid
+of the component picker (refer to [Component picker](#component-picker)).
+The tabs above the grid select what it lists:
+
+- **Installed**: the components of the libraries that you have, and the
+  libraries that the community indexes offer (in **Libraries to get**)
+- **Community**: the libraries that the community indexes offer, with
+  their components, then the components that you have. **Community
+  Library…** in the command search opens the window on this tab.
+- **Favorites**: the components that you starred
+
+When you select another tab, the search, the filters and the selected
+component stay.
+
+To insert a component:
 
 1. Select a group on the left, or search by name, standard or tag
    (`4762`, `washer`).
@@ -8745,6 +8796,15 @@ picker (refer to [Component picker](#component-picker)). To insert a component:
    read-only. A copy is editable and has its history.
 
 MitCad shows the license and the attribution before you insert the component.
+
+The main button follows the component that you select. It is **Insert**
+when you have the component's library. It is **Get Library** when you do
+not have it yet. **Get Library** shows the library's address and license
+and fetches the library. After the fetch, the same component stays
+selected, with the same search, and **Insert** places it.
+
+**Library Sources…** in the window opens the same window as **Tools ›
+Libraries › Library Sources…**.
 
 #### Place Component
 
@@ -8923,9 +8983,9 @@ for folders, SSH addresses and when **Use the installed git program** is
 on), and only when you ask with one of these commands:
 
 - **Fetch** in **Library Sources…**
-- **Update** in **Insert from Library**
+- **Update** in **Browse Components**
 - **Check for Newer Versions** in **Components in This Design**
-- **Get Library** in **Community Library…**
+- **Get Library** in **Browse Components**
 
 An update adds branches and tags. It removes nothing. Git's automatic
 garbage collection is off in these clones. Thus the versions that
@@ -8935,7 +8995,7 @@ designs use stay readable.
 
 The component picker shows the components of a library as a grid of pictures
 (tiles). Each tile shows the name and the main sizes of a component.
-**Insert from Library** uses the component picker. The Build commands that
+**Browse Components** uses the component picker. The Build commands that
 select a component also use it: **Profile**, **Panel**, **Linear Component** and
 **Connector**.
 
@@ -9016,14 +9076,16 @@ that selects components.
 
 ### Community library
 
-**Tools › Libraries › Community Library…** searches the designs and
-components that other people share in their own git repositories.
+The **Community** tab of **Tools › Libraries › Browse Components…**
+searches the designs and components that other people share in their own
+git repositories.
 Community indexes list these repositories. An index is also a git
 repository. Each item shows its license and the conditions of the
 license. The licenses are CC0, CC-BY, CC-BY-SA, MIT, Apache, BSD and
 CERN-OHL. MitCad hides items without a license unless you ask for them.
 
-**Get Library** fetches a library that an index lists. Then you can
+**Get Library** fetches a library that an index lists, also when you
+select one of the components that the index lists for it. Then you can
 insert its components linked or as copies. MitCad records the license and the
 source with every component in the design.
 
@@ -10547,7 +10609,9 @@ box beside its view marks it; select it to see why, and delete it or
 bring the geometry back.
 
 A view also shows center marks on its holes (half holes too) and
-centerlines on its round faces by itself (*Center Marks* in its panel),
+centerlines on its round faces by itself (*Center Marks* in its panel):
+on those it draws, so a hole hidden inside the part (a cross hole seen
+from the side) gets a centerline only when the view shows hidden lines;
 and on request the dimensions of the sketches it sees square on
 (*Sketch Dimensions*): those of the sketches that shape the bodies it
 shows, where it shows them. Exports draw all of them.

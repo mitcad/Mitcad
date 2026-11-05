@@ -313,6 +313,9 @@ public:
   const CommandContext& model() const override { return *this; }
   bool runModelCommand(const QJsonObject& command, QJsonObject* result = nullptr) override;
   bool runModelCommands(const QJsonArray& commands, const QString& label) override;
+  bool runNamedModelCommands(const QJsonArray& commands, const QString& label) override;
+  // Both: `nameSingle` names a single undo step `label` too (mitcad#1287).
+  bool runModelCommandSteps(const QJsonArray& commands, const QString& label, bool nameSingle);
   QString lastError() const override { return m_lastError; }
   bool canChangeModel(bool visibilityOnly = false) const override;
   QString changeBlockedReason() const override;
@@ -580,6 +583,8 @@ private:
   // The last "Design origin … in the view; the Origin folder's light bulb …"
   // line (showDatums, mitcad#739).
   QString m_loggedOriginState;
+  // The last "Construction shown: …" line (showDatums, mitcad#1287).
+  QString m_loggedConstruction;
   // Where the shown bodies are in the window, for UI tests (when changed).
   void logBodyPlaces();
   // Whether an instance of a body is shown while something is isolated.
@@ -1201,7 +1206,9 @@ private:
   // Component libraries (mitcad#64, mitcad#63, files/MainWindowLibraries.cpp).
   void registerLibraryCommands();
   void createLibraryMenu(QMenu* tools);
-  void insertFromLibrary(bool community);
+  // Browse Components (mitcad#1283) on its Installed view, or (`community`)
+  // on Community: Insert from Library and Community Library open it so.
+  void browseComponents(bool community);
   void showLibraryParts();
   void manageLibraries();
   void publishToLibrary();
@@ -1996,6 +2003,14 @@ private:
   // the timeline's and Edit Parameters' menus add one through
   // addCommentOn (DocumentHost).
   void registerCommentCommands();
+  // View › Show (mitcad#1287; MainWindowVisibility.cpp): view.show_origins,
+  // view.show_construction and view.show_sketches turn a kind of the whole
+  // design on or off (the model's set_view_show, display state, in every
+  // mode as the light bulbs); their check marks follow the snapshot.
+  void registerViewShowCommands();
+  void toggleViewShow(const QString& kind);
+  void syncViewShowChecks();
+  QString m_loggedViewShow; // the last "View Show menu: …" line (UI tests)
   CommandDef commentTargetCommand(bool retarget);
   void followComments();
   void openComments();

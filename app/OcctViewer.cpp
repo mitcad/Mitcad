@@ -51,6 +51,7 @@
 #include <typeinfo>
 #include <utility>
 
+#include <QCursor>
 #include <QGuiApplication>
 #include <QHelpEvent>
 #include <QKeyEvent>
@@ -6499,6 +6500,7 @@ void OcctViewer::cancelPointerInteraction() {
   }
   m_cubePress = false;
   m_f4Press = false;
+  resetOrbitWrap();
   m_panRemainder = {};
   m_cubeClick = false;
   m_windowPick = false;
@@ -6572,6 +6574,9 @@ bool OcctViewer::event(QEvent* event) {
 
 void OcctViewer::mousePressEvent(QMouseEvent* event) {
   QOpenGLWidget::mousePressEvent(event);
+  if (event->buttons() == event->button()) {
+    resetOrbitWrap(); // the first button: a new drag
+  }
   endScrollDrag();
   // Any button held may orbit, pan or drag: a navigation until it goes up
   // (a click without a move leaves the camera as it was).
@@ -6631,8 +6636,8 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
   }
   const bool wasPending = m_pointerInputPending;
   m_pointerInputPending = true;
-  if (UpdateMouseButtons(toDevicePixels(event->position()), viewButtons(event->buttons()),
-                         viewFlags(event->modifiers()), false)) {
+  if (UpdateMouseButtons(toDevicePixels(m_orbitWrap.position(event->position(), event->globalPosition())),
+                         viewButtons(event->buttons()), viewFlags(event->modifiers()), false)) {
     requestFrame();
   } else {
     m_pointerInputPending = wasPending; // no new input to flush
@@ -6698,6 +6703,12 @@ void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {
 
 void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseReleaseEvent(event);
+  // Where the view has the release: after an orbit past the edge of the
+  // screen, as far from the press as the whole drag went.
+  const QPointF released = m_orbitWrap.position(event->position(), event->globalPosition());
+  if (event->buttons() == Qt::NoButton) {
+    resetOrbitWrap();
+  }
   if (event->buttons() == Qt::NoButton && m_navigationState.buttons()) {
     buttonsReleased();
   }
@@ -6725,7 +6736,8 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
     return;
   }
   if (event->button() == Qt::LeftButton) {
-    const QPointF moved = event->position() - m_pressPosition;
+    // How far it went: an orbit past the edge can end where it began.
+    const QPointF moved = released - m_pressPosition;
     m_windowPick = std::hypot(moved.x(), moved.y()) > kDragPixels;
     if (m_windowPick) {
       m_cubeClick = false;
@@ -6755,8 +6767,7 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   }
   const bool wasPending = m_pointerInputPending;
   m_pointerInputPending = true;
-  if (UpdateMouseButtons(toDevicePixels(event->position()), viewButtons(event->buttons()), flags,
-                         false)) {
+  if (UpdateMouseButtons(toDevicePixels(released), viewButtons(event->buttons()), flags, false)) {
     requestFrame();
   } else {
     m_pointerInputPending = wasPending;
@@ -6764,7 +6775,7 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   // Release the view's gesture before a context menu can take input,
   // including when a caller connects directly to these signals.
   if (rightClick) {
-    const QPointF moved = event->position() - m_rightPressPosition;
+    const QPointF moved = released - m_rightPressPosition;
     if (std::hypot(moved.x(), moved.y()) <= kDragPixels) {
       if (isOnOrientationCube(event->position())) {
         m_context->ClearDetected(false);
@@ -6801,6 +6812,14 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   if (event->buttons() == Qt::NoButton) {
     // The hover with Shift shows what a widened click picks (mitcad#217).
     setShiftHeld(event->modifiers().testFlag(Qt::ShiftModifier), false);
+  }
+  // The move an orbit's cursor jump itself caused (view/OrbitWrap.hpp):
+  // macOS posts the cursor's new place as a move without buttons, which the
+  // guard below would take for a lost release, ending the orbit. It brings
+  // the view nothing new (the wrap puts it where the view already is).
+  if (event->buttons() == Qt::NoButton && m_orbitWrap.takeJumpMove(event->globalPosition())) {
+    m_orbitWrap.position(event->position(), event->globalPosition());
+    return;
   }
   // AppKit menu tracking and other controls may receive a release that
   // never reaches this widget. OCCT does not reconcile buttons on motion;
@@ -6841,10 +6860,47 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
       emit pointerMoved(event->position());
     }
   }
-  if (UpdateMousePosition(toDevicePixels(event->position()), viewButtons(event->buttons()),
-                          viewFlags(event->modifiers()), false)) {
+  if (UpdateMousePosition(toDevicePixels(m_orbitWrap.position(event->position(), event->globalPosition())),
+                          viewButtons(event->buttons()), viewFlags(event->modifiers()), false)) {
     requestFrame();
   }
+  wrapOrbitCursor(event);
+}
+
+// At the edge of the screen the cursor would stop and the orbit with it: the
+// cursor jumps to the opposite edge of the screen the drag is on, which the
+// view does not see (view/OrbitWrap.hpp, GitHub mitcad/Mitcad#139). Touch and
+// pens have no cursor of their own to move. Where the system does not move
+// the cursor (Wayland), the drag tries no more and the orbit stops at the
+// edge as before.
+void OcctViewer::wrapOrbitCursor(const QMouseEvent* event) {
+  if (myMouseActiveGesture != AIS_MouseGesture_RotateOrbit || event->source() != Qt::MouseEventNotSynthesized ||
+      !m_orbitWrap.canJump()) {
+    return;
+  }
+  const QPointF from = event->globalPosition();
+  if (!m_orbitScreen) {
+    m_orbitScreen = QGuiApplication::screenAt(from.toPoint());
+    if (!m_orbitScreen) {
+      return;
+    }
+  }
+  const std::optional<QPoint> to = OrbitWrap::target(from, m_orbitScreen->geometry());
+  if (!to) {
+    return;
+  }
+  QCursor::setPos(m_orbitScreen, *to);
+  if (!OrbitWrap::landed(QCursor::pos(m_orbitScreen), from, *to)) {
+    m_orbitWrap.refused();
+    return;
+  }
+  m_orbitWrap.jumped(from, *to);
+  qDebug().noquote() << QStringLiteral("Orbit cursor jumped to %1,%2").arg(to->x()).arg(to->y());
+}
+
+void OcctViewer::resetOrbitWrap() {
+  m_orbitWrap.reset();
+  m_orbitScreen = nullptr;
 }
 
 void OcctViewer::wheelEvent(QWheelEvent* event) {

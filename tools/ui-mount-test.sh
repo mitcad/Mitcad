@@ -152,7 +152,7 @@ save() {
 insert() {
   ui_mark
   ui_step "Insert from Library"            ui_command "Insert from Library"
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_step "search $1"                      xdotool type --delay 40 "$1"
   ui_expect_new "Library search '$1': 1 components" "the search finds it"
   ui_expect_new "Library browser selected $2: version " "the part selected"
@@ -292,7 +292,7 @@ print(first("grid").replace(" ", "_"), first("foot").replace(" ", "_"))' "$MITCA
   ui_focus_main
   ui_mark
   ui_step "Insert from Library"            ui_command "Insert from Library"
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_step "search $GRID_NAME"              xdotool type --delay 40 "$GRID_NAME"
   ui_step "a copy (Alt+P), Insert (Alt+I)" eval 'ui_key alt+p; ui_sync; ui_key alt+i'
   ui_focus_main
@@ -304,7 +304,7 @@ print(first("grid").replace(" ", "_"), first("foot").replace(" ", "_"))' "$MITCA
   ui_step "close (Escape)"                 ui_key Escape
   ui_mark
   ui_step "Insert from Library"            ui_command "Insert from Library"
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_step "search $FOOT_NAME"              xdotool type --delay 40 "$FOOT_NAME"
   ui_step "Insert (Alt+I)"                 ui_key alt+i
   ui_focus_main
@@ -396,7 +396,7 @@ ui_step "close (Alt+C)"                    ui_key alt+c
 ui_focus_main
 ui_mark
 ui_step "Insert from Library"              ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search Screw M8"                  xdotool type --delay 40 "Screw M8"
 ui_expect_new "Library browser selected my-screws/screw-m8" "the own screw"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
@@ -492,7 +492,7 @@ ui_step "select the rim ($RIM)"            ui_click_pick "$RIM at"
 ui_expect_new "Selected: 1 edge" "the hole's rim selected"
 ui_mark
 ui_step "Insert from Library"              ui_command "Insert from Library"
-ui_focus_dialog '^Insert from Library$'
+ui_focus_dialog '^Browse Components$'
 ui_step "search 4762"                      xdotool type --delay 40 "4762"
 ui_expect_new "Library search '4762': 1 components" "the search finds the screw"
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.0.0 (" "the generated screw"

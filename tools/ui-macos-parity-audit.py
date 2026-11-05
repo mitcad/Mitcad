@@ -231,9 +231,9 @@ def make_scenario(group, frontend, theme, directory):
     s = Scenario(frontend, theme, directory)
     dialogs = {
         "appearances": ("solid.appearances", "^Appearances$"),
-        "community": ("tools.community_library", "^Community Library$"),
+        "community": ("tools.community_library", "^Browse Components$"),
         "feedback": ("help.send_feedback", "^Send Feedback$"),
-        "insert": ("insert.library_component", "^Insert from Library$"),
+        "insert": ("insert.library_component", "^Browse Components$"),
         "libraries": ("tools.libraries", "^Library Sources$"),
         "new-project": ("file.new_project", "^New Project$"),
         "publish": ("tools.publish_library", "^Publish to Library$"),
@@ -315,7 +315,7 @@ def make_scenario(group, frontend, theme, directory):
         s.capture(group, dialog=False)
         s.add("key Escape", "expect-log 'Command Send to Slicer cancelled'")
     elif group == "parts-production":
-        s.open("insert.library_component", "^Insert from Library$")
+        s.open("insert.library_component", "^Browse Components$")
         if s.native:
             s.add("native-tiles dblclick libraryResults iso4762")
         else:

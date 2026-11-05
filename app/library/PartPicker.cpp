@@ -662,6 +662,11 @@ QVariant PartGridModel::data(const QModelIndex& index, int role) const {
     return shown->key;
   case kSizesRole:
     if (shown->libraryEntry) {
+      // A component of a library to get (Browse Components' Community,
+      // mitcad#1283): its library under its name.
+      if (!shown->component.isEmpty()) {
+        return tr("In %1, to get").arg(shown->libraryName.isEmpty() ? shown->library : shown->libraryName);
+      }
       return shown->license.isEmpty() ? tr("Library, no license") : tr("Library, %1").arg(shown->license);
     }
     return shown->sizes.isEmpty() ? shown->system : shown->sizes;

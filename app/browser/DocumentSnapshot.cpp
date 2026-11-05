@@ -153,6 +153,11 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.imageReferences = model.queryArray(QStringLiteral("image_references"));
   const QJsonObject display = document.value(QStringLiteral("display")).toObject();
   snapshot.originShown = display.value(QStringLiteral("origin")).toBool();
+  // View › Show (mitcad#1287).
+  const QJsonObject show = display.value(QStringLiteral("show")).toObject();
+  snapshot.showOrigins = show.value(QStringLiteral("origins")).toBool(true);
+  snapshot.showConstruction = show.value(QStringLiteral("construction")).toBool(true);
+  snapshot.showSketches = show.value(QStringLiteral("sketches")).toBool(true);
   // The Center of Mass marker (mitcad#1094): its place follows every
   // recompute, placement and material, so it is read with the rest.
   const QJsonValue centerMarker = display.value(QStringLiteral("center_of_mass"));
@@ -304,6 +309,21 @@ const DocumentSnapshot::Feature* DocumentSnapshot::feature(const QString& uid) c
     }
   }
   return nullptr;
+}
+
+bool DocumentSnapshot::kindHidden(const Feature& feature) const {
+  if (feature.isSketch()) {
+    return !showSketches;
+  }
+  if (feature.isConstruction()) {
+    return !showConstruction;
+  }
+  return feature.type == QStringLiteral("joint_origin") && !showOrigins;
+}
+
+bool DocumentSnapshot::kindHidden(const QString& uid) const {
+  const Feature* found = feature(uid);
+  return found != nullptr && kindHidden(*found);
 }
 
 QStringList DocumentSnapshot::conditionParts(const QString& condition) const {

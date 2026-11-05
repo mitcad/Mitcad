@@ -385,6 +385,21 @@ void AgentIndicator::fillMenu() {
           }
         });
   }
+  // Disconnect sticks (mitcad#1289): each assistant disconnected is
+  // allowed to connect again here, as Connect does.
+  QStringList allowed;
+  for (const QString& label : disconnectedAssistants()) {
+    const AssistantClient client = assistantClientOf(label);
+    const QString shown = client == AssistantClient::Other ? label : assistantSentenceName(client);
+    if (allowed.contains(shown)) {
+      continue;
+    }
+    allowed << shown;
+    add(tr("&Allow %1 to Connect Again").arg(shown), QStringLiteral("allowAgent"), [client, shown] {
+      allowAssistant(client);
+      qInfo().noquote() << QStringLiteral("Agent indicator: %1 allowed again").arg(shown);
+    });
+  }
   add(tr("&Connect AI Assistant…"), QStringLiteral("help.connect_assistant"), [this] {
     if (m_host.trigger) {
       m_host.trigger(QStringLiteral("help.connect_assistant"));

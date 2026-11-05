@@ -165,6 +165,16 @@ fn annotated() -> (Document<MockKernel>, Vec<String>) {
             },
         );
     }
+    // The circle on the top is drawn: its centre mark is of what the view
+    // shows (mitcad#1286).
+    doc.kernel().drawn_curves.borrow_mut().push(
+        (0..=32)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 32.0;
+                [20.0 + 5.0 * a.cos(), 15.0 + 5.0 * a.sin(), 20.0]
+            })
+            .collect(),
+    );
     command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
     command(
         &mut doc,

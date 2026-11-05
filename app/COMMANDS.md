@@ -188,7 +188,10 @@ Modifiers:
   an extra entry. `withOnChange(call)`: called after the user changed a
   choice, to set dependent inputs (a new size takes its coarse
   designation); shown values it leaves NaN (`state.setValue(id, NaN)`)
-  are evaluated again (Drive Joint's value of another motion). A value's
+  are evaluated again (Drive Joint's value of another motion). So are
+  the values a selection's `onChange` leaves NaN, whether the pick came
+  from the view, its row, Tab or a removed item (a Place row's new
+  reference measures the part where it is, mitcad#1285). A value's
   or a text's `onChange` runs when it is typed (a value's also when its
   handle drags it): BUILD's typed length detaches the auto length, its
   search narrows the picker.
@@ -3941,8 +3944,22 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   Ctrl-toggle selections, Shift runs and Browser selections mirrored into
   the timeline. An unhandled Delete in the view/window uses the same
   feature operation; text editors, sketch geometry and drawings keep their
-  own Delete behavior. Bodies map to their creating feature, and a feature
-  selected through several rows is counted once. The Browser retains exact
+  own Delete behavior. Bodies selected in the view map to their creating
+  feature, and a feature selected through several rows is counted once. A
+  Browser body row deletes only its body (mitcad#1287): its menu's entry
+  is **Delete Body** (**Delete Bodies** while the row is one of several
+  selected bodies), and it and the Delete key on selected body rows add
+  one Remove Body (`remove_body`, as the view's Delete › Delete Body,
+  `BrowserController::deleteBodies`) per component, one undo step named
+  `Delete Body2` (one body) or `Delete Bodies`, also when it is a single
+  Remove Body (`DocumentHost::runNamedModelCommands`: a `merge_undo` of
+  that one step gives it the label in place of the model's `Add
+  RemoveBody1`; the view's Delete › Delete Body reads the same), logged
+  `Deleted body Body1, Body2`. The feature
+  that made the body stays; it is deleted from its own row or the
+  timeline. Body rows selected with other rows go in the same batch,
+  after the features: a body whose feature goes with the batch goes with
+  it, the others are taken out by Remove Body. The Browser retains exact
   row selection even for origin/folder rows without a corresponding view
   item: these are skipped and named by `Cannot delete: ...` in the message
   line and `Delete skipped: ...` in the log.
@@ -7168,6 +7185,30 @@ settings in the user's settings (`ViewSettings`, group `view`);
   view logs `Camera direction -0.259 0.966 0`, Left turns back, Up and
   Down in perspective, the zoom unchanged; with the keyboard in Extrude's
   Distance field the keys leave the view as it is.
+- **Orbit past the edge of the screen** (mitcad#1281, GitHub
+  mitcad/Mitcad#139): during an orbit (every orbit binding, a cube drag,
+  F4 + left drag: OCCT's `AIS_MouseGesture_RotateOrbit`) the cursor jumps
+  to the opposite edge of the screen the drag is on once it comes within
+  16 logical pixels of an edge (`OrbitWrap::kMargin`), and the view does
+  not see the jump: every later position gets the distance jumped added,
+  so the orbit goes on at the same rate (`OcctViewer::wrapOrbitCursor`
+  after `UpdateMousePosition`, the pure `view/OrbitWrap.hpp`). Moves
+  queued before the jump count without it; synthesized events (touch,
+  pens) do not jump. The press and the release get the adjusted
+  position too, so a long drag that ends where it began is a drag, not a
+  click (a cube drag does not snap to a face, a right drag opens no
+  menu). The move without buttons that macOS posts for the jump is known
+  by the jump's target (`OrbitWrap::takeJumpMove`) and does not trip the
+  guard for a release lost to AppKit menu tracking. Where the system
+  does not move the cursor (Wayland, `QCursor::setPos` does nothing), the
+  drag tries no more jumps and the orbit stops at the edge as before, with
+  no message. Logs `Orbit cursor jumped to 17,500` for each jump. Tests:
+  `app/tests/orbit_wrap.cpp` (`app.unit`: targets on screens with any
+  origin, no step across a jump, queued moves, a refused jump, the jump's
+  own move) and `tools/ui-view-test.sh` ("An orbit past the edge of the
+  screen": a middle drag over the right edge turns the view as far as its
+  whole length, a cube drag over the top edge released where it was
+  pressed is not a click).
 - **3D mouse** (mitcad#951, `view/SpaceMouseController.*`,
   `view/SpaceMouseNavigation.hpp`, the backends behind
   `platform/SpaceMouseDevice.hpp`): a 6-DOF device navigates the 3D view
@@ -9510,22 +9551,58 @@ Libraries and the command search; Insert from Library is also in the
 SOLID tab's ASSEMBLE group.
 
 Tools › Libraries (`MainWindow::createLibraryMenu`, mitcad#1250, GitHub
-#132) has four groups between separators: **Insert from Library…**,
-**Community Library…**; **Components in This Design…**, **Publish to
+#132; mitcad#1283, GitHub #136) has four groups between separators:
+**Browse Components…**; **Components in This Design…**, **Publish to
 Library…**; **Material Library…**, **Printer Library…**, **Process
 Library…**; **Library Sources…**. The menu sets the entries' texts with
-their underlines (`&Material Library…`: M, R for Printer, O for Process)
-and logs them as it opens (`Libraries menu: …`). The native macOS menu
-reads the same Qt menu, separators included
-(`MainWindow::refreshNativeActions`).
+their underlines (`&Browse Components…`: B, `&Material Library…`: M, R
+for Printer, O for Process) and logs them as it opens (`Libraries menu:
+…`). The native macOS menu reads the same Qt menu, separators included
+(`MainWindow::refreshNativeActions`). Insert from Library and Community
+Library (mitcad#1283) are no longer in the menu: they stay as commands
+(ids, shortcuts, the command search, scripts and the MCP `ui_command`
+listing) that open Browse Components on Installed and on Community.
+
+**Browse Components** (`LibraryBrowser`, mitcad#1283): one window,
+titled Browse Components, whichever command opened it, with the views
+**Installed**, **Community** and **Favorites** as tabs above the grid
+(`libraryView`, underlines N, M, F; logged `Library browser view:
+Installed`). Choosing another view searches again with the same text and
+filters and keeps the selected item when the view lists it (`Library
+browser kept the selection …`). Installed lists the fetched libraries'
+components, then the libraries the fetched indexes name that are not
+fetched ("Libraries to get"); Community lists every library the indexes
+name first, each not fetched one followed by the components the index
+lists for it (tiles in "Libraries to get", `In <library>, to get` under
+the name; logged `Library browser: <n> components of libraries to
+get`), then the fetched components; Favorites lists the starred
+components (a star on any of a component's rows; `Library browser
+favorites: <n> of <m> components starred`; empty: how to star, `Library
+browser empty: no favorites`). The **primary button** follows the
+selected item (`libraryPrimary`, logged `Library browser button: Insert`,
+`… Get Library`, ` (off)` while disabled, when it changes): **Insert**
+while its library is here, **Get Library** while it is not (an index's
+library or one of its components: `Library browser selected
+<library>/<component> of a library to get (<url>), licence <id>: Get
+Library`). Get Library adds the library to the sources and fetches it
+after a question with its address and licence; the search, the filters
+and the view stay, and a component chosen before the fetch is selected
+in the fetched library (`Library browser fetched <library>: selected
+<library>/<component>`), so Insert places it at once. **Library
+Sources…** (`libraryBrowserSources`, B) opens the same window as Tools ›
+Libraries › Library Sources… (`Library browser: Library Sources opened`)
+and searches again when it closes. Tests: `tools/ui-browse-components-test.sh`,
+`tools/ui-windows-browse-components-test.ps1` (ctest
+`app.ui-windows-browse-components`).
 
 | Command | What it does | Model command / bridge |
 |---|---|---|
-| `insert.library_component` Insert from Library | `LibraryBrowser`: search (words, a licence filter, items without a licence only when asked), the results as the component picker's grid (`PartGrid`, [Component picker](#component-picker): groups with Favourites and In this design, the libraries' groups as a tree (mitcad#527), stars, the tiles' size, the hover's larger picture; an index's libraries not fetched in "Libraries to get"; a double click or Return inserts), details with the licence and the attribution, the version (newest first) and the size (a closed table's cascaded combo boxes per option, `SizeChooser`; an open table's chooser per option filtered by the rules, mitcad#810, [Options of library components](#options-of-library-components)), the row's designation and its suppliers' articles behind Supplier Articles (n)… (mitcad#979), linked or a copy; **Update** fetches every enabled source (as Fetch All, one warning for the failures) and searches again, keeping the selected item; while no enabled source is fetched the empty list says to press Update (mitcad#317); a part whose manifest lists mount frames goes on to Place Component (below, mitcad#525), the selection made before the command its Place On where it takes it (mitcad#1197); any other is dropped in at the origin as before, and the message band says so (Information: `Inserted <name> at the origin: no mount frame; join it with Joint.`) | `library_search`, `library_show`, `library_preview`, `library_list`, `library_fetch`, `library_configure`; then `insert_component` with `library` (and `parameters`) |
+| `tools.browse_components` Browse Components… (mitcad#1283) | Tools › Libraries' first entry, `Mode::Model`: Browse Components (above) on Installed; everything below for Insert from Library holds for each view | as Insert from Library |
+| `insert.library_component` Insert from Library | Browse Components on Installed (mitcad#1283; the Assemble group's button, its shortcut and scripts): `LibraryBrowser`: search (words, a licence filter, items without a licence only when asked), the results as the component picker's grid (`PartGrid`, [Component picker](#component-picker): groups with Favourites and In this design, the libraries' groups as a tree (mitcad#527), stars, the tiles' size, the hover's larger picture; an index's libraries not fetched in "Libraries to get"; a double click or Return inserts), details with the licence and the attribution, the version (newest first) and the size (a closed table's cascaded combo boxes per option, `SizeChooser`; an open table's chooser per option filtered by the rules, mitcad#810, [Options of library components](#options-of-library-components)), the row's designation and its suppliers' articles behind Supplier Articles (n)… (mitcad#979), linked or a copy; **Update** fetches every enabled source (as Fetch All, one warning for the failures) and searches again, keeping the selected item; while no enabled source is fetched the empty list says to press Update (mitcad#317); a part whose manifest lists mount frames goes on to Place Component (below, mitcad#525), the selection made before the command its Place On where it takes it (mitcad#1197); any other is dropped in at the origin as before, and the message band says so (Information: `Inserted <name> at the origin: no mount frame; join it with Joint.`) | `library_search`, `library_show`, `library_preview`, `library_list`, `library_fetch`, `library_configure`; then `insert_component` with `library` (and `parameters`) |
 | `insert.mount_part` Place Component (mitcad#525, `commands/MountCommands.cpp`) | Insert from Library starts it for a part whose manifest lists mount frames (`mounts`, [docs/libraries.md](../docs/libraries.md#mount-frames): mitcad-parts' screws, nuts, washers and wood fasteners, mitcad#1197); not in the ribbon. What was selected before Insert from Library goes to Place On when it takes it (a hole's circular edge or round face, an axis; a flat face or a plane for a face or grid frame), with its click's place and the way towards the viewer then: the part shows there at once and Place (Enter) places it (mitcad#1197). Place On (a flat face or a plane for a face or grid frame; for a foot frame any face of the part with the grid, the cell under the click, so that the planes of the frames of the parts already placed, which lie in the cells' faces, take no clicks; a round face, a circular edge or an axis for a shaft or hole frame; none: a drop-in), Mount Frame (the part's frames, the first chosen), Rotate (about the frame's z; on a grid quarter turns), Offset, Flip (a plane's other side, a hole's other end). A click snaps the frame to the pick face to face, its way towards the viewer kept with it (`towardViewer`: a hole's end); the preview shows the part there (`analysis_shape` `mount_preview`) with a marker on its frame, the panel the frame, where it goes (a grid's cells) and how it may move, or why it cannot (a taken cell). **Place** (Enter) places it and the panel stays for the next one; **Shift + click** places at once; Enter without a pick drops it in at the origin as before, to be joined later with Joint, whose origins take its frames (its component's joint origins, the browser's Joints rows); **Close** (Esc) keeps what was placed | `mount_preview` while the inputs change; `insert_component` with `mount` (without: as before) |
 | `tools.library_parts` Components in This Design… (Library Components… until mitcad#1250, the old name a search keyword) | `LibraryPartsDialog` (its window titled as the command since mitcad#1250; its first tab Library Components): each part's recorded version and size (with the Standard and Supplier filters, mitcad#949), the row's suppliers' articles behind Supplier Articles (n)… (mitcad#979, [Options of library components](#options-of-library-components)), another version or size, Show Changes, Update; Check for Newer Versions and Get Missing Libraries fetch (the latter after showing the addresses, which come from the design); the Bill of Materials tab (Copy as CSV; the column Supplier part numbers, `parts_list`'s `supplier_parts_text`) | `library_parts`, `parts_list`, `library_show`, `library_diff`, `library_fetch`; then `update_library_parts` |
 | `tools.libraries` Library Sources… (Libraries… until mitcad#1250, the old name a search keyword) | `LibrariesDialog` (its window titled Library Sources since mitcad#1250): the sources (settings `libraries/sources`: URL or folder, on or off, and Auto-update, mitcad#576; the defaults are MitCad's fastener library and the community index, both with Auto-update off), the columns On, Auto-update (tooltip "Fetch this library when MitCad starts"; greyed out, its state kept, while the source is off), Source, Library, Versions, Licence; Add URL, Add Folder, Remove, Fetch Selected, Fetch All; the advanced check box **Use the installed git program** (`libraryUseGit`, setting `libraries/useGit`, off by default, mitcad#1224): on, every fetch goes through git (SSH addresses, a sign-in with git's credential helper); off, `https://` libraries are fetched without git | `library_list`, `library_fetch` (with `use_git` when the box is on) |
-| `tools.community_library` Community Library... | the browser with the indexes' libraries first; Get Library adds a library an index lists to the sources and fetches it after a question with its address and licence | as Insert from Library |
+| `tools.community_library` Community Library... | Browse Components on Community (mitcad#1283; not in the menu since then): the indexes' libraries first, with the components they list for a library not fetched; Get Library adds a library an index lists to the sources and fetches it after a question with its address and licence | as Insert from Library |
 | `tools.publish_library` Publish to Library... | `PublishLibraryDialog`: the open design (a single file) added to a library folder of one's own (made when new), an image of the view as its preview, recorded as a version of the folder's project, pushed (`connect` with a remote URL, else `push`), and the index entry (copied) | `library_init`, `library_add`, the project's `commit`, `connect`/`push`, `index_entry` |
 | `tools.material_library` Material Library…, `tools.printer_library` Printer Library…, `tools.process_library` Process Library… (mitcad#1250) | `Mode::Any`, also in a sketch, not while a panel is open: `BrowserController::openLibrary` opens the Materials, Printers or Processes manager on My library (`openPlace("user")`: My library's group at the top of the list, its first item selected, logged `Materials on My library: Shop PETG` or `… nothing selected`; My library the place New, Duplicate and Import offer first until the manager is opened by its own command again). With no design open the manager works on the libraries alone (`ManagerHosts`, mitcad#1135): This design is no group, nothing errs and the window's design stays unchanged; with a design as Make › Edit Materials…, Printers… and Processes…, which are unchanged | the managers' (`library_items`, `create_material`, `edit_material`, `create_print_profile`, …) |
 
@@ -9595,7 +9672,15 @@ source(s)`, `Library browser empty: nothing fetched yet, press Update` (or
 `nothing found`; or, when parts are found but the group shown has none
 under the search and the filters, mitcad#1015, `No parts in <group> with
 this search and these filters.`, the details panel saying so and to
-choose another group or change the search or the filters), `Library browser kept the selection <key>`, `Library source <url> (on|off):
+choose another group or change the search or the filters; `no favorites`
+in Favorites, mitcad#1283), `Library browser kept the selection <key>`,
+`Library browser view: Installed|Community|Favorites`, `Library browser
+button: Insert|Get Library[ (off)]`, `Library browser: <n> components of
+libraries to get`, `Library browser favorites: <n> of <m> components
+starred`, `Library browser selected <library>/<component> of a library
+to get (<url>), licence <id>: Get Library`, `Library browser fetched
+<library>: selected <library>/<component>`, `Library browser: Library
+Sources opened` (mitcad#1283), `Library source <url> (on|off):
 <what>; versions ...; auto-update on|off`, `Library source added|removed: <url>`, `Library
 search '<text>': <n> components, <m> libraries, <k> hidden by the
 licence`, `Library browser selected <library>/<component>: version ...,
@@ -10848,6 +10933,13 @@ SVG at several sizes (`themeIcon`).
   Pattern's Symmetric check centres the angle on the originals (a full
   turn is the same either way). The defaults stay one direction and
   spacing; `load` shows an imported or saved pattern's stored values.
+  The selection made before the command picks the Pattern Type of
+  Rectangular Pattern, Circular Pattern, Pattern on Path and Mirror
+  (mitcad#1290, `choosePreselectedPatternType`, their `preselected`): a
+  timeline feature or a face a feature made, taken as that feature, with
+  no body selected starts the panel with Features and the feature in
+  Objects; a body, or no selection, keeps Bodies, and Faces is never
+  chosen from the selection.
   The added line carries the options (`Added rectangular pattern of 1
   bodies: direction 1 symmetric, quantity 3, extent 40 mm; direction 2
   one direction, quantity 3, extent 100 mm`, `Added circular pattern of 1
@@ -11702,10 +11794,32 @@ Assistant (`help.connect_assistant`), and its arrow or a right click the
 menu; otherwise a click opens the menu (InstantPopup): the reason first
 when unavailable, else each client (assistant name, own label and
 version, connected since) and Disconnect *assistant* (Disconnect All,
-`disconnectAgent`), then Connect AI Assistant…, Copy Command for This
+`disconnectAgent`), then for each assistant the user disconnected Allow
+*assistant* to Connect Again (`allowAgent`, mitcad#1289), then Connect AI Assistant…, Copy Command for This
 Window (`copyConnectCommand`, only while several windows listen) and Folders
 for Designs… (`tools.preferences.agents`). The log keeps the clients' own
-labels ("Agent indicator: connected: <label>").
+labels ("Agent indicator: connected: <label>"). The chat panel's own
+agent is not among the connected clients (mitcad#1289: the indicator
+reads "Claude Code working" while it works on a message, else as if it
+were not there; its connection cannot be disconnected from here, and it
+is not counted in "2 assistants connected" nor published to other
+windows).
+
+Disconnect sticks (mitcad#1289, `mcp::disconnectAssistants`,
+`LiveServer`): the user's Disconnect (the dialog's or the indicator's)
+also keeps the labels of the clients it ended for this run of MitCad, and
+a new client whose `initialize` names one of them, or the same assistant
+(`disconnectedLabelMatches`: Claude Code, Claude Desktop, Codex by
+`assistantLabelMatches`, an Other client by its own label), gets the error
+-32001 "Disconnected in MitCad: choose Connect for *assistant* in Help ›
+Connect AI Assistant, or Allow in the assistant indicator's menu, to
+connect it again" and its connection is closed (log `MCP refused: <label>
+was disconnected by the user`; Disconnect logs `MCP: <labels> disconnected
+until allowed again`). A bridge that outlives its connection (mitcad#1288)
+answers its tool calls with that reason and asks again every 10 s. Connect
+(any setup of that assistant, `connectAssistant`), the dialog's
+`disconnected` state's Connect (`allow`: only the refusal ends, the setup
+stays) and the indicator's Allow allow it again (`allowAssistant`).
 
 Save As and Open have tools of their own instead (mitcad#402):
 `document_save` with a `path` and `document_open`, into and from the
@@ -11828,6 +11942,7 @@ next screenshot.
 | `Timeline colours: dark, marker #c8d0da, buttons #f0f0f0, window #1f2024, handle #5aa2ff` (`light, marker #2b3a4a, buttons the style's, …`), `Asking the platform for the dark colour scheme` | the timeline's palette colours at start and when the theme changes (the marker's handle: the Docked window's accent colour, orange in the Floating layout); the switch of `MITCAD_TEST_COLOR_SCHEME` |
 | `Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin, Root/Sketches/Sketch1; error #ff9c9c: Root/Sketches/Sketch1/Fillet1` (`light, hidden #4c525c: …`; `none`; groups hidden, error, warning, success, info, each its colour on the rows' palette now and at most 12 paths in order, then `<n> more`; a value that is none of these last, as `unknown <n>: <paths>`, mitcad#1143) | the Browser rows whose names have a colour role (a hidden, failed or warned row; mitcad#1104: the item keeps the role, the delegate paints its colour in the theme of the moment), after each rebuild and when the theme changes, when it changed; the test driver's `color-scheme light\|dark` switches the scheme at a step (`tools/ui-theme-test.sh`, `tools/ui-windows-test.ps1`) |
 | `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font Segoe UI Variable Text` (`light, …`; `font the platform's`), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme. `panels` is the toolbar's surface, which the Classic ribbon's body and the bar's Undo, Redo, separator and Chat buttons show in both themes (the test driver's `expect-widget-background`, `TestDriver: widget background ribbonPageScroll #1f2024 (…)`; `tools/ui-docked-toolbar-colors-test.sh`, `app.ui-windows-docked-toolbar-colors`, mitcad#1245) |
+| `Windows 10 app mode: followed (Windows build 19045, the style windowsvista)` (`not followed (Windows build 26100)`, `not followed (the style <name>)`; `, MITCAD_TEST_WINDOWS10=1` when forced), `Windows 10 app mode: dark, the style <name> with a dark palette (window #1f2024)`, `Windows 10 app mode: light, the style windowsvista with its own palette` | Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138; `platform/windows/WindowsTheme`), at start: on Windows 10 (build < 22000) over its default style (windowsvista, which keeps a light palette whatever the app mode), while the app mode is dark, Qt's own style (its class QFusionStyle) with a dark palette of the theme's neutral roles, and the default style with its own palette again when it is light, at start and at each change of the app mode; not on Windows 11, Linux and macOS, where the default style follows the app mode, nor over a style chosen with `-style` or `QT_STYLE_OVERRIDE`. No preference. `MITCAD_TEST_WINDOWS10=1` takes the path on Windows 11 too, over any style (the test driver's `expect-widget-theme`, `TestDriver: widget theme startPage #141518 (…), lightness 22: dark`; `app.ui-windows-windows10-dark`) |
 | `Timeline hover highlighted: F3 1, F4 2` / `none`, `F5 12 (edges 4)` | timeline hover preview (uid and number of faces; a Fillet's or Chamfer's picked edges drawn with it, mitcad#1076), without changing selection; folded groups include every active member; the AppKit timeline's hover sets the same preview; drawn in the hover colour with the Browser hover's look (in sight as the view's hover, fainter through what hides it, with outlines; `HighlightDisplay::hoverLook`, mitcad#1041) |
 | `Feature faces highlighted: F3 1, F4 2` / `none` | the faces of the features selected on the timeline (uid and number of faces), when they change |
 | `Feature inputs highlighted: Fillet1 edges 4, Chamfer1 edges 2` / `none` | the picked edges of the Fillets and Chamfers selected, drawn where they were (mitcad#957; name and number of edges), when they change |
@@ -11927,7 +12042,7 @@ next screenshot.
 | `Import STEP Assembly dialog opened: pins.step`, `Import STEP Assembly: components` (`base`, `cancelled`; `components, repeated parts` with Find repeated parts, mitcad#1277), `Imported pins.step as Base1: 1 body(ies), 1 component(s), 2 occurrence(s)` (`…, repeated parts: 1 component(s), 1 copies`) | a STEP assembly (mitcad#1274): the Import STEP Assembly dialog and what the import made; `tools/ui-import-test.sh` |
 | `Recent files: a.mitcad \| b.step`, `Dropped <paths>`, `Document closed`, `New document` (each after `Opened the new design with Component1 active`, mitcad#898), `File menu: New Design \| Open \| Open Recent > \| … \| - \| Project > [New Project \| … \| Project Settings] \| … \| Exit` (debug, as it opens: `-` a separator, names without underlines and dots, mitcad#175) | the File menu |
 | `Tools menu: Command Search \| Keyboard Shortcuts \| … ` (debug, as it opens: `-` a separator, names without underlines; mitcad#1135: no My Library…) | the Tools menu |
-| `Libraries menu: Insert from Library… \| Community Library… \| - \| Components in This Design… \| Publish to Library… \| - \| Material Library… \| Printer Library… \| Process Library… \| - \| Library Sources…` (debug, as it opens: `-` a separator, names without underlines; mitcad#1250) | Tools › Libraries |
+| `Libraries menu: Browse Components… \| - \| Components in This Design… \| Publish to Library… \| - \| Material Library… \| Printer Library… \| Process Library… \| - \| Library Sources…` (debug, as it opens: `-` a separator, names without underlines; mitcad#1250, mitcad#1283) | Tools › Libraries |
 | `Materials on My library: Shop PETG` (`nothing selected`; also `Printers`, `Processes`), `Materials library opened` (`, first opening`), `Material tool: Material Library opened`, `Material tool: materials read again, 42 offered, new: Bench PETG` | a print manager opened on My library (`openPlace`, mitcad#1250) and the Material tool's Material Library…: the materials it offers once the manager closed |
 | `Remote status: synced` (`ahead N`, `behind N`, `push`, `fetch`, `sync`, `conflict`, `offline`, `sign-in needed`, `remote not found`), `Remote task <command> started\|done\|failed (<class>): <message>`, `Remote push: sent N version(s) to origin/main`, `Remote check: ahead N, behind M`, `Remote notice: <text> [Sync Now, Dismiss]`, `Sync: <case>[ (<class>)], N replayed, sent\|nothing sent`, `Sync conflict: <path> (<kind>): <choice>`, `Sync done: <text>` | the current Cloud project's remote: its state (the indicator shows it), a remote task, a push, a check, the notice, a sync and its conflicts |
 | `Computing part.mitcad started`, `Computing part.mitcad: 57 of 196, Extrude6` (when the feature changes, at most 5 a second, after the first 50 ms), `Progress dialog shown: part.mitcad`, `Computing part.mitcad: cancel requested after <ms> ms`, `Computing part.mitcad cancelled after <ms> ms`, `Computing part.mitcad done in <ms> ms (<n> evaluated)`, `Opening part.mitcad cancelled` | a job on the model's worker thread (opening a design, an imported design, New, Close) |
@@ -12509,9 +12624,10 @@ connected, by the names Connected shows: for Other the clients' own
 labels). **Disconnect** says in its tooltip that the setup is kept.
 `AgentIndicator::previousClients` keeps the initialized clients' labels
 for this run, even while the dialog is closed; `Host::previousClients`
-passes them into a newly opened dialog. After either a user disconnect or
-a client closing its connection, the waiting line gives the reconnect
-step for that assistant. Before its first connection the original next
+passes them into a newly opened dialog. After a client closing its
+connection, and after a user disconnect once Connect allowed the
+assistant again (until then the state is `disconnected`, mitcad#1289), the
+waiting line gives the reconnect step for that assistant. Before its first connection the original next
 step remains. The settings files
 (`~/.claude.json`, the Codex TOML) are read again only when their size or
 modification time changed.
@@ -12523,7 +12639,9 @@ The state line's `assistantState` property and the button's
 |---|---|---|
 | `failed` | the error, saying what to do | `retry` (Try again); none when the installed CLI is missing; `install` (Get Claude Desktop) for Install Claude Desktop first, when no application takes the extension (on Windows: no `.mcpb` association, `AssocQueryStringW`, checked before opening and every second after) and Claude Desktop was not found either |
 | `install-extension` | Install the extension in Claude Desktop (mitcad#763): Claude Desktop was found but no application takes the extension, as with a Microsoft Store install, which registers only `claude://`; the result line below says In Claude Desktop: Settings › Extensions › Advanced settings › Install Extension…, then choose *path* (cleared once Claude Desktop connects) | `reveal` (Show in Explorer, Show in Finder on macOS: the saved `mitcad-desktop.mcpb` selected, its path in the tooltip), with the quiet **Open Claude Desktop** (`assistantOpenDesktop`, opens `claude://`; without Claude Desktop's application, or when the link does not open, the state becomes Install Claude Desktop first) |
+| `installed-not-connected` | Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, or start a new chat (mitcad#1288): MitCad's extension, starting this bridge, is in Claude Desktop's settings (`claudeDesktopExtension`) and no Claude Desktop client is connected to any window; it comes before `install-extension`, `waiting` and `ready`, and clears the installation's line | none, with the quiet **Open Claude Desktop** |
 | `busy` | Connecting *assistant*… | `connect`, disabled |
+| `disconnected` | Disconnected: *assistant* cannot connect to MitCad until you connect it again (mitcad#1289: the user disconnected it in this run and none of its clients is connected; before every state but `busy`) | `allow` (Connect: lets it connect again, tooltip "Lets *assistant* connect to MitCad again"; the setup stays as it is) |
 | `connected` | ✓ Connected: *the chosen assistant's name* (Other: the clients' labels) | `disconnect` (Disconnect) |
 | `manual` | Copy the configuration into your assistant's settings (Other) | `copy` (Copy configuration) |
 | `unavailable` | Claude Desktop is not available for this system (Linux) | none |
@@ -12548,6 +12666,21 @@ Claude Desktop when Claude Desktop's application is found
 the settings folder an uninstall leaves behind;
 `claudeDesktopApplicationInWindowsFolders` in a test run), else Install
 Claude Desktop first.
+
+The extension installed (mitcad#1288, `claudeDesktopExtension`): a folder
+in `Claude Extensions` of one of Claude Desktop's settings folders whose
+`manifest.json` has the bundle's name, `mitcad-desktop`, and starts this
+bridge (the first of `server.mcp_config.args`, `claudeDesktopExtensionStarts`:
+either separator, case aside on Windows; one that starts another MitCad's
+bridge is installed again). The settings folders
+(`claudeDesktopWindowsSettingsFolders`): on Windows `%APPDATA%\Claude` (the
+installer's) and
+`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude`
+(the Microsoft Store package's); on macOS
+`~/Library/Application Support/Claude`; in a Windows test run the same
+under the work folder's `roaming-app-data` and `local-app-data`, else none.
+At most 256 extension folders and manifests up to 1 MB are read, every
+second while the dialog is open.
 
 The executable's lookup order (mitcad#956, `app/mcp/AssistantSetup.cpp`):
 
@@ -12633,11 +12766,15 @@ own whose host lists a Claude Code client and `example-client`: Disconnect
 names Claude Code with it chosen, and with Other chosen reads "Disconnect
 example-client" and ends only that client (mitcad#724). The successful
 file/Floating case starts a real CLI bridge with a scripted Claude Code
-MCP client: initial waiting advice, connected, Disconnect, reconnect
-advice, reopening the dialog through the empty indicator with the same
-choice and advice, a new bridge connection, then client EOF with the same
-reconnect advice (`reconnect-start`, `reconnect-disconnect`,
-`reconnect-line`, `reconnect-again`, `reconnect-eof`, mitcad#1123). Its
+MCP client: initial waiting advice, connected, Disconnect (mitcad#1289:
+the bridge stays up and is refused, a second bridge's new Claude Code
+client gets "Disconnected in MitCad" at its initialize, the state is
+`disconnected` with Connect), reopening the dialog through the empty
+indicator with the same choice and state and the indicator's Allow Claude
+Code to Connect Again, Connect giving the reconnect advice and a new
+bridge connection, then client EOF with the same reconnect advice
+(`reconnect-start`, `reconnect-disconnect`, `reconnect-line`,
+`reconnect-again`, `reconnect-eof`, mitcad#1123). Its
 `packaged-claude` mode (Windows, mitcad#763) sets
 `MITCAD_TEST_ASSISTANT_BUNDLE_OPEN=none` (no application for the
 extension, without the registry; the other modes' `capture` records the
@@ -12646,7 +12783,11 @@ Claude Desktop first; with the package's folder in the isolated
 `local-app-data`, Connect gives `install-extension` with `reveal` and Open
 Claude Desktop, which in an isolated run record the file
 (`assistantShownPath`) and the link (`assistantOpenedDesktop`) instead of
-opening them. Its `local-bin` mode (every platform, mitcad#956) sets
+opening them; an extension that starts another bridge in the package's
+`LocalCache\Roaming\Claude\Claude Extensions` keeps `install-extension`,
+this bridge's gives `installed-not-connected` (no primary button, Open
+Claude Desktop, no installation line, also when chosen again), and
+removed, Connect gives `install-extension` again (mitcad#1288). Its `local-bin` mode (every platform, mitcad#956) sets
 `MITCAD_TEST_ASSISTANT_HOME` to the work folder's `user home`: a missing
 Claude Code offers Check again (which says Not found yet); the stub copied
 to that home's `.local/bin` (`claude.exe` on Windows) is found when the
@@ -13567,7 +13708,24 @@ the window's live MCP server.
 - The panel (`agent/ChatPanel`): a header (the agent `chatAgent`, or the
   choice `chatAgentChoice` once more than one agent is found: the agents
   found on this computer and the chosen one; another one starts a new
-  conversation in it and is saved as `chat/agent`, the last used one; New
+  conversation in it and is saved as `chat/agent`, the last used one;
+  mitcad#1289: each Claude Code found is an entry of its own
+  (`mcp::assistantExecutables`: PATH, `.local/bin`, npm's folder,
+  `.cargo/bin`, the stored PATH's folders, and the Claude Code Claude
+  Desktop keeps, `claudeDesktopClaudeCode`: `claude-code/<version>/claude`
+  in its settings folders, the highest version's, listed only when there),
+  the first one `claude` as before, another `claude-<8 hex digits of its
+  path's SHA-256>`, named with its place, "Claude Code (~/.local/bin)" or
+  "Claude Code (Claude Desktop's)"; every entry's sign-in state beside its
+  name in the list (the item's `kAgentStateRole`, drawn by its delegate;
+  the item's text stays the name): checking, not found, needs an update,
+  not signed in, needs an API key, signing in, signed in, signed in as
+  *account* (Claude Code's `claude auth status` `email`), ready (an API
+  endpoint, a local model, the custom command), then "· *reason*" of a
+  known account failure; every agent found is checked when the panel opens
+  (`refreshSetup(true)`), and the list's names and states are logged as
+  `Chat agents: Claude Code · signed in as someone@example.com | Claude Code
+  (~/.local/bin) · not signed in | Ollama · ready` when they change; New
   conversation `chatNew`, the menu `chatMore`: New Conversation, Clear
   History of This Design, Chat Preferences… (`tools.preferences.agents`)),
   the line Model: `chatModelChoice` (editable: Default model, the agent's
@@ -13595,7 +13753,13 @@ the window's live MCP server.
   `chatPrivacy` (`chatContinue`, `chatCancel`), the setup's button
   `chatSetup` (Install Claude Code, Update Claude Code, Sign in to Claude,
   Install Codex, Update Codex, Sign in to ChatGPT, Check again) with
-  `chatConnectAssistant` (Claude Code chosen, Claude Desktop only), the
+  `chatConnectAssistant` (Claude Code chosen, Claude Desktop only) and
+  `chatOtherAgent` (mitcad#1289: Use *agent*, the first other agent found
+  that is ready, while the chosen one is signed out, has an account
+  failure, is missing or too old; the signed-out lines name the fix in a
+  terminal: "Claude Code is not signed in: sign in here, or run claude in a
+  terminal and type /login.", "Codex is not signed in: sign in here, or run
+  codex logout, then codex login in a terminal."), the
   field `chatInput` (Enter sends, Shift+Enter a new line, Esc stops),
   `chatAttachSelection` (on), `chatAttachComments` (on: the open comments
   go with the message, mitcad#1119), `chatAttachView` (off) and `chatSend` (Send;
@@ -13750,7 +13914,14 @@ the window's live MCP server.
   `test_chat_agent` (`app/tests/chat_test_agent.cpp`, copied as `claude`
   and as `codex`, whose app-server mode speaks Codex's JSON-RPC) through
   the real bridge, also the runs `codex` (the switcher, Codex, its model,
-  Save As, Stop) and `codex-again` (the last used agent and model);
+  Save As, Stop) and `codex-again` (the last used agent and model),
+  `agents` and `agents-again` (mitcad#1289: two Claude Codes, the second
+  in `MITCAD_TEST_ASSISTANT_HOME`'s `.local/bin`, each with its account
+  from a `claude-account` file beside it, and Ollama: the three entries
+  with their states, the second chosen in a new conversation, signed out
+  with its fix and Use Claude Code, still chosen after a restart, Use Claude
+  Code back to the first, whose copy runs the message, and the indicator's
+  No assistant after the turn);
   `core/mcp/src/chat/tests.rs` and `core/mcp/src/chat/codex_tests.rs`
   (cargo) and `app/tests/chat_history.cpp` (`app.unit`). The group rows
   (mitcad#983): the floating run's message "measure with several calls"
@@ -14672,3 +14843,51 @@ works in the Floating and the Docked layout as every panel does.
   two occurrences of a linked machine and Show in Full, the other in full
   throughout), the CREATE menu in `tools/ui-sketch-create-menu-test.sh` and
   `tools/ui-windows-pattern-options-test.ps1`.
+
+## View › Show (mitcad#1287)
+
+GitHub mitcad/Mitcad#142. `MainWindowVisibility.cpp`
+(`registerViewShowCommands`, `toggleViewShow`, `syncViewShowChecks`), the
+menu in `ViewController::createMenus`, the model's `set_view_show`
+(`core/model-api/src/commands.md`, "View › Show of the whole design").
+
+- **Commands:** `view.show_origins` (**Origins**: the design's origin
+  planes, axes and point, and the joint origins), `view.show_construction`
+  (**Construction**: construction planes, axes and points) and
+  `view.show_sketches` (**Sketches**), actions of mode Any without a ribbon
+  place (`def.tab` empty), checkable entries of the View menu's **Show**
+  submenu (object name `viewShowMenu`) in the Docked and the Floating
+  layouts alike, and so of the macOS native frontend's menu bar, which
+  reads the Qt menus (`refreshNativeActions`); also in the command search,
+  Keyboard Shortcuts and the quick-access group's View menu.
+- **What they do:** each turns its kind of the whole design off or on,
+  every component's, linked ones too, as display state the design keeps
+  (`set_view_show`, one undo step `Hide All Construction` / `Show All
+  Construction`, saved in the design file, per user in a project). No
+  light bulb changes: `MainWindow::showDatums` leaves out the hidden kinds'
+  datums (the root's origin while Origins is off, unless Create Sketch asks
+  for a plane), `sketchShown` the hidden sketches (the sketch being edited
+  and the sketches a command shows for its time stay, lighter, as a hidden
+  light bulb's do), and the Browser greys the rows of a hidden kind (the
+  Origin folder and its rows, the Sketches and Construction folders and
+  their rows, joint origins) with their light bulbs as they are. Showing
+  the kind again shows what the light bulbs show.
+- **Every mode:** as the light bulbs (`runVisibilityCommands`): while a
+  command's panel or a sketch is open, outside the command's undo range;
+  in a read-only document too (`readOnlyModelCommand`).
+- **Check marks** follow the `document` query's `display.show`
+  (`DocumentSnapshot::showOrigins`, `showConstruction`, `showSketches`) on
+  every refresh, also after an undo or a refused change.
+- **Logs:** `View show construction: hidden` (`… shown`), `View Show menu:
+  Origins on | Construction off | Sketches on` (the submenu's entries and
+  check marks when they change), `Construction shown: Plane1 in O1, Plane2`
+  (the construction datums drawn, `none`, when they change), with the
+  existing `Sketches shown: …`, `Design origin … in the view; the Origin
+  folder's light bulb …` and `Browser row colours: …`.
+- **Tests:** `tools/ui-view-show-test.sh` and
+  `tools/ui-windows-view-show-test.ps1` (`app.ui-windows-view-show`): Delete
+  on a row of an imported base feature's body (Docked), then Construction
+  off and on in two components (the planes drawn and greyed, the sketches
+  and the origin kept, the saved design's `display.hidden` and no light
+  bulb set), Sketches and Origins (Floating); `core.model.api`
+  (`view_show_tests.rs`).

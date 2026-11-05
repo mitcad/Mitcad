@@ -9,6 +9,10 @@
 #include <QJsonObject>
 #include <QString>
 
+namespace mitcad {
+class CommandState;
+}
+
 namespace mitcad::cmd {
 
 // The Direction Type values: copies along the direction, or on both sides
@@ -39,5 +43,14 @@ QString lengthLabel(const QString& distanceType, const QString& suffix = QString
 // 90 deg", "one direction, quantity 4, spacing 15 mm, flipped". Empty for
 // other definitions.
 QString patternOptionsText(const QJsonObject& def);
+
+// The Pattern Type (choice `object_type`) of Rectangular Pattern, Circular
+// Pattern, Pattern on Path and Mirror once the selection made before the
+// command went to their inputs (mitcad#1290): Features when the Features
+// input (`features`) took something, a timeline feature or a face a
+// feature made (as that feature), and the Bodies input (`bodies`)
+// nothing. Otherwise the type stays as it is (Bodies, the default); Faces
+// is never chosen from the selection.
+void choosePreselectedPatternType(CommandState& state);
 
 } // namespace mitcad::cmd

@@ -1,4 +1,4 @@
-# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040
+# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285
 
 OCCT's face merge after booleans (`ShapeUpgrade_UnifySameDomain`) and the
 boolean's wire splitter. The face merge's speed-ups are 0006 in
@@ -26,6 +26,10 @@ boolean's wire splitter. The face merge's speed-ups are 0006 in
   the signed angle between their X directions, which left a bin's corner cut
   by an extrusion going down in faces built separately with seams used
   once, an invalid result (mitcad#642).
+- **1285** classifies a point along fixed lines when the solid classifier's
+  segments to the faces have all run out, instead of counting it as
+  outside; the checker took a cavity of a face-merged union for lying
+  outside another, and the union was kept unmerged (mitcad#1280).
 
 ## 0110: a chain that cannot be concatenated
 
@@ -158,6 +162,44 @@ one interval of u and are merged into one face: the intersection is valid
 with 6 732 faces at the first try (0.8 s for the merge), the volume within
 0.06 mm³ (1.2e-6 of it) of the unmerged result's.
 
+## 1285: the solid classifier where its segments run out
+
+The patch 1285 comes from mitcad#1280 (found by mitcad#1279's profiling of
+the reported design of GitHub #133): the union of a machine's 257 bodies
+was made with its faces merged (7 458 faces), and the check of the merged
+union found a cavity lying outside another (`BRepCheck_SubshapeNotInShape`),
+so the union was taken as OCCT left it (8 721 faces). The checker
+(`BRepCheck_Solid`) classifies a point on an edge of each closed shell
+against the solid of every other one; the point of one cavity lay in the
+plane of the bottom faces of two cavities some 300 mm away, and their
+classifier gave up on it.
+
+### 1285-brepclass3d-point-classified-along-fixed-lines-once-the-segments-run-out
+
+`BRepClass3d_SClassifier::Perform` classifies a point along a segment from
+it to a point of a face, the faces taken one after another from the next
+one on (`BRepClass3d_SolidExplorer::OtherSegment`). A segment through an
+edge or a vertex, or one whose nearest face it meets on its boundary, is
+dropped for the next. A face whose surface holds the point (outside the
+face) gives no segment, and a face seen almost edge-on (every segment to it
+less than about 12° off its plane) only a weak one, which such a face
+later in the shell discards. When the faces ran out (`OtherSegment` started
+again from the first face), the classifier ended with its "rejected" state,
+which `State()` gives as `TopAbs_OUT`. A point in the plane of a far face
+of a shell whose other faces it sees almost edge-on so came out outside
+the shell's solid, whatever side it lay on.
+
+With the patch the point is then classified along fixed lines: from it
+towards 32 points spread over the shape's box (an additive sequence of
+three irrational steps starting at the box's centre, kept a tenth of the
+box from its sides, the same on every call), each reaching past the box's
+farthest corner. The intersections are those of the segments; a line that
+meets no face (it may pass by the shape), touches a face where it meets it
+first, ends on a face's boundary or passes through an edge or a vertex is
+passed over, and only when every one is the point rejected as before. The
+box is computed only then; classifications whose segments did not run out
+are unchanged.
+
 ## Reports and tests
 
 - 0220: mitcad#284 and the coaxial cylinders' join in
@@ -176,3 +218,13 @@ with 6 732 faces at the first try (0.8 s for the merge), the volume within
   faces stay apart wherever the other face's X direction lies behind the
   reference face's: the sector behind with the quarter first, the sector
   ahead with the sector first).
+- 1285: mitcad#1280 and a block with two cavities in
+  `geometry/tests/test_classifier_far_plane.cpp`: a thin pointed cavity
+  whose bottom face, last in its shell, lies in the plane of a box-shaped
+  cavity's bottom beyond its point, every other face of it seen almost
+  edge-on from there. Points of the box-shaped cavity's bottom classify IN
+  the pointed cavity's solid (without the patch they were rejected, OUT),
+  points inside it OUT, and the checker accepts the block (without the
+  patch `BRepCheck_SubshapeNotInShape`). The join of the reported design's
+  257 bodies in `geometry/tests/test_join_many_bodies.cpp` keeps its merged
+  union.

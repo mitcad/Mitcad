@@ -1744,7 +1744,10 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       folder.visible = folder.visible || snapshot.isShown(feature->uid);
     }
     QTreeWidgetItem* rows = addRow(parent, folder, QStringLiteral("folder"));
-    gray(rows, shown && folder.visible);
+    // View › Show greys a hidden kind's folder and rows, their light bulbs
+    // as they are (mitcad#1287).
+    const bool kindShown = sketches ? snapshot.showSketches : snapshot.showConstruction;
+    gray(rows, shown && folder.visible && kindShown);
     for (const DocumentSnapshot::Feature* feature : features) {
       BrowserNode node;
       node.type = sketches ? BrowserNode::Type::Sketch : BrowserNode::Type::Datum;
@@ -1767,7 +1770,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       }
       QTreeWidgetItem* row = addRow(rows, node, icon, tip);
       if (!markLevel(row, *feature)) {
-        gray(row, shown && node.visible);
+        gray(row, shown && node.visible && kindShown);
       }
       if (sketches) {
         addFeatureRows(row, snapshot, *feature, occurrence, shown, uses);
@@ -1844,7 +1847,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
                                   failed ? QStringLiteral("%1: %2").arg(feature->name, feature->error)
                                          : jointTooltip(snapshot, *feature));
     if (!markLevel(row, *feature)) {
-      gray(row, shown && node.visible);
+      gray(row, shown && node.visible && !snapshot.kindHidden(*feature)); // View › Show (mitcad#1287)
     }
     // A constraint set's rows nested under it (mitcad#148).
     if (feature->type == QStringLiteral("constraint_set")) {
@@ -2102,6 +2105,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
     addRow(origin, row, QString::fromLatin1(datum.icon));
   }
   m_originShown = originShown;
+  m_originsKindShown = snapshot.showOrigins; // View › Show greys it too (mitcad#1287)
   styleOriginRows(origin);
 
   // The Center of Mass marker (mitcad#1094), right under Origin while the
@@ -2523,9 +2527,10 @@ void BrowserPanel::styleOriginRows(QTreeWidgetItem* folder) {
       clearNameRole(item);
     }
   };
-  style(folder, !m_originShown);
+  const bool greyed = !m_originShown || !m_originsKindShown;
+  style(folder, greyed);
   for (int i = 0; i < folder->childCount(); ++i) {
-    style(folder->child(i), !m_originShown);
+    style(folder->child(i), greyed);
   }
 }
 

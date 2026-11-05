@@ -82,6 +82,17 @@ QVector<InputDef> patternObjects() {
   };
 }
 
+// The Pattern Type from the selection made before the command
+// (mitcad#1290), shared by the four commands of `patternObjects()`: a
+// preselected timeline feature, or a face a feature made, went to the
+// hidden Features input, so the panel starts with Pattern Type Features
+// and the feature in Objects; a body keeps Bodies.
+void choosePatternTypeOnPreselection(CommandDef& def) {
+  def.preselected = [](const Selection&, CommandState& state, const CommandContext&) {
+    choosePreselectedPatternType(state);
+  };
+}
+
 // The selection input in use, for the objects' middle.
 QString objectsKey(const CommandState& state) {
   return state.choice(QStringLiteral("object_type"));
@@ -261,6 +272,7 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
     return [type](const CommandState& s) { return s.choice(type) != symmetricDirection(); };
   };
   def.inputs = patternObjects();
+  choosePatternTypeOnPreselection(def);
   // The hover text names the Pattern Type first (mitcad#1235).
   def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
@@ -376,6 +388,7 @@ CommandDef circularPatternCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("array"), QStringLiteral("polar pattern"), QStringLiteral("radial")};
   def.featureType = QStringLiteral("circular_pattern");
   def.inputs = patternObjects();
+  choosePatternTypeOnPreselection(def);
   // The hover text names the Pattern Type first (mitcad#1235).
   def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
@@ -465,6 +478,7 @@ CommandDef pathPatternCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("array"), QStringLiteral("path pattern"), QStringLiteral("curve")};
   def.featureType = QStringLiteral("path_pattern");
   def.inputs = patternObjects();
+  choosePatternTypeOnPreselection(def);
   // The hover text names the Pattern Type first (mitcad#1235).
   def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
@@ -569,6 +583,7 @@ CommandDef mirrorCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("reflect"), QStringLiteral("symmetry")};
   def.featureType = QStringLiteral("mirror");
   def.inputs = patternObjects();
+  choosePatternTypeOnPreselection(def);
   def.inputs.first().label = QObject::tr("Type");
   def.inputs += {
       selectionInput(QStringLiteral("plane"), QObject::tr("Mirror Plane"), kPlaneKinds, 1, 1)

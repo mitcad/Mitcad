@@ -74,7 +74,7 @@ for theme in light dark; do
   ui_expect_log "Window style: $theme, " "the window's style is $theme"
   ui_mark
   ui_step "Insert from Library (command search)" ui_command "Insert from Library"
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_step "search 4762"                      xdotool type --delay 40 "4762"
   ui_expect_new "Library browser selected mitcad-parts/iso4762: version " "the socket head cap screw"
   ui_expect_new ", size M5x16, " "its default size M5x16"
@@ -85,7 +85,7 @@ for theme in light dark; do
   grep "^Supplier parts of M5x16: " "$UI_LOG" | tail -1
   shot "$theme"
   ui_step "close the table (Escape)"         ui_key Escape
-  ui_focus_dialog '^Insert from Library$'
+  ui_focus_dialog '^Browse Components$'
   ui_step "close (Escape)"                   ui_key Escape
   ui_focus_main
   cp -f "$UI_LOG" "$DIR/look-$theme.log"

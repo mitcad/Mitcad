@@ -29,6 +29,7 @@
 #include "WindowManager.hpp"
 #include "framework/TitleBar.hpp"
 #include "AgentIndicator.hpp"
+#include "AssistantSetup.hpp"
 #include "ChatGate.hpp"
 #include "EndpointLimits.hpp"
 #include "LiveErrors.hpp"
@@ -230,7 +231,11 @@ struct LiveServer::State {
   void updateAgents() {
     QList<ConnectedAgent> agents;
     for (const auto& client : clients) {
-      if (client->initialized && client->socket && client->socket->state() == QAbstractSocket::ConnectedState) {
+      // The chat panel's own agent is the chat's, not a connected
+      // assistant to disconnect while the chat uses it (mitcad#1289); the
+      // indicator says when it works.
+      if (client->initialized && client->chat.isEmpty() && client->socket &&
+          client->socket->state() == QAbstractSocket::ConnectedState) {
         agents.append({client->displayName, client->version, client->since, client->id, !client->chat.isEmpty()});
       }
     }
@@ -249,13 +254,46 @@ struct LiveServer::State {
     }
   }
 
+  // The user's Disconnect: these clients end, and their assistants' new
+  // clients are refused until Connect allows them again (mitcad#1289).
   void disconnectClients(const QStringList& ids) {
+    QStringList labels;
     for (const auto& client : clients) {
       if (client->initialized && client->socket && ids.contains(client->id)) {
+        if (client->chat.isEmpty() && !labels.contains(client->displayName)) labels << client->displayName;
         client->socket->abort();
       }
     }
+    if (!labels.isEmpty()) {
+      disconnectAssistants(labels);
+      qInfo().noquote() << QStringLiteral("MCP: %1 disconnected until allowed again").arg(labels.join(QStringLiteral(", ")));
+    }
     updateAgents();
+  }
+
+  // An initialize of an assistant the user disconnected: refused with why
+  // and how to allow it, and the connection closed.
+  bool refusedAsDisconnected(Client& client, const QByteArray& message) {
+    if (!client.chat.isEmpty() || client.initializeAccepted) return false;
+    const QJsonObject request = QJsonDocument::fromJson(message).object();
+    if (request.value(QStringLiteral("method")).toString() != QStringLiteral("initialize") ||
+        !request.contains(QStringLiteral("id"))) {
+      return false;
+    }
+    const QString label = request.value(QStringLiteral("params")).toObject().value(QStringLiteral("clientInfo"))
+        .toObject().value(QStringLiteral("name")).toString().simplified().left(80);
+    if (!assistantDisconnected(label)) return false;
+    const QString reason = QObject::tr("Disconnected in MitCad: choose Connect for %1 in Help › Connect AI Assistant, "
+                                       "or Allow in the assistant indicator's menu, to connect it again")
+                               .arg(assistantDisplayName(label));
+    write(client, QJsonDocument(QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                                            {QStringLiteral("id"), request.value(QStringLiteral("id"))},
+                                            {QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), -32001},
+                                                                                 {QStringLiteral("message"), reason}}}})
+                          .toJson(QJsonDocument::Compact) + '\n');
+    qInfo().noquote() << QStringLiteral("MCP refused: %1 was disconnected by the user").arg(label.left(80));
+    if (client.socket) client.socket->disconnectFromHost();
+    return true;
   }
 
   void write(Client& client, const QByteArray& response) {
@@ -411,6 +449,10 @@ struct LiveServer::State {
     }
     if (QString::fromUtf8(message).toUtf8() != message) {
       write(client, protocolError(-32700, QStringLiteral("Invalid UTF-8 JSON message")));
+      return;
+    }
+    // An assistant the user disconnected (mitcad#1289).
+    if (refusedAsDisconnected(client, message)) {
       return;
     }
     // Comments for agents (mitcad#1119): whether agents may resolve them

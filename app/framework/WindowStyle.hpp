@@ -22,6 +22,7 @@ class QMainWindow;
 class QModelIndex;
 class QPainter;
 class QPaintEvent;
+class QStyle;
 class QToolBar;
 class QTreeView;
 
@@ -183,8 +184,14 @@ private:
   // (a document frame, mitcad#1172): watched, and in the window's colour.
   void watchHost();
   void styleHost();
+  // The window's own style: the panels' gaps over the application's style,
+  // made again when that changes (Qt's own style in Windows 10's dark
+  // app mode, mitcad#1282).
+  void followApplicationStyle();
 
   QPointer<QMainWindow> m_window;
+  QStyle* m_gaps = nullptr; // the window's style, this object's child
+  QString m_gapsBase;       // the application style's name under it
   QPointer<QWidget> m_host;
   QPointer<QToolBar> m_toolBar;
   QList<QPointer<QDockWidget>> m_docks;

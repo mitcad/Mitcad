@@ -1,0 +1,80 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BOPAlgo: the builder of solids (BOPAlgo_BuilderSolid::PerformAreas) tests
+each hole shell whose box meets a new solid's box for whether it lies in
+that solid (IsInside), and mapped all edges of the solid for every such
+hole: a solid of thousands of faces with tens of cavities, the union of a
+machine's 257 bodies (mitcad#1279), mapped its tens of thousands of edges
+tens of times. The solid's edges are now mapped once for all the holes
+tried in it. The results are unchanged.
+diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx
+index 3428268d..ef1f0ac1 100644
+--- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx
++++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx
+@@ -50,6 +50,10 @@ static bool IsGrowthShell(const TopoDS_Shape&,
+                           const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>&);
+ static bool IsHole(const TopoDS_Shape&, occ::handle<IntTools_Context>&);
+ static bool IsInside(const TopoDS_Shape&, const TopoDS_Shape&, occ::handle<IntTools_Context>&);
++static bool IsInside(const TopoDS_Shape&,
++                     const TopoDS_Shape&,
++                     occ::handle<IntTools_Context>&,
++                     NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>&);
+ static void MakeInternalShells(const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>&,
+                                NCollection_List<TopoDS_Shape>&);
+ 
+@@ -503,12 +507,16 @@ void BOPAlgo_BuilderSolid::PerformAreas(const Message_ProgressRange& theRange)
+ 
+     const NCollection_List<int>&    aLI = aSelector.Indices();
+     NCollection_List<int>::Iterator aItLI(aLI);
++    // The edges of the solid, mapped once for all the holes tried in it
++    // (mitcad#1279): mapped for each hole, a solid of thousands of faces
++    // with tens of holes took a noticeable part of the building.
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aSolidBounds;
+     for (; aItLI.More(); aItLI.Next())
+     {
+       int                 k     = aItLI.Value();
+       const TopoDS_Shape& aHole = aHoleShells(k);
+       // Check if it is inside
+-      if (!IsInside(aHole, aSolid, myContext))
++      if (!IsInside(aHole, aSolid, myContext, aSolidBounds))
+       {
+         continue;
+       }
+@@ -835,6 +843,19 @@ bool IsHole(const TopoDS_Shape& theS2, occ::handle<IntTools_Context>& theContext
+ bool IsInside(const TopoDS_Shape&            theS1,
+               const TopoDS_Shape&            theS2,
+               occ::handle<IntTools_Context>& theContext)
++{
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aBounds;
++  return IsInside(theS1, theS2, theContext, aBounds);
++}
++
++//=================================================================================================
++
++// The same with the edges of theS2 mapped into theBounds when it is empty,
++// else read from it (mitcad#1279).
++bool IsInside(const TopoDS_Shape&                                            theS1,
++              const TopoDS_Shape&                                            theS2,
++              occ::handle<IntTools_Context>&                                 theContext,
++              NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& theBounds)
+ {
+   TopExp_Explorer aExp;
+   TopAbs_State    aState;
+@@ -850,11 +871,13 @@ bool IsInside(const TopoDS_Shape&            theS1,
+   }
+   else
+   {
+-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aBounds;
+-    TopExp::MapShapes(*pS2, TopAbs_EDGE, aBounds);
++    if (theBounds.IsEmpty())
++    {
++      TopExp::MapShapes(*pS2, TopAbs_EDGE, theBounds);
++    }
+     const TopoDS_Face& aF = (*(TopoDS_Face*)(&aExp.Current()));
+     aState =
+-      BOPTools_AlgoTools::ComputeState(aF, *pS2, Precision::Confusion(), aBounds, theContext);
++      BOPTools_AlgoTools::ComputeState(aF, *pS2, Precision::Confusion(), theBounds, theContext);
+   }
+   return (aState == TopAbs_IN);
+ }

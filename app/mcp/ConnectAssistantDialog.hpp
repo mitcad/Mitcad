@@ -78,6 +78,9 @@ private:
   AssistantClient client() const;
   bool installed(AssistantClient which) const;
   bool configured(AssistantClient which) const;
+  // Whether MitCad's extension, starting this bridge, is installed in Claude
+  // Desktop's settings (mitcad#1288).
+  bool desktopExtensionInstalled() const;
   bool cachedCheck(SettingsRead& cache, const QString& path, const std::function<bool(const QString&)>& check,
                    qint64 limit = kAssistantConfigurationLimit) const;
   QStringList chosenClientIds() const;

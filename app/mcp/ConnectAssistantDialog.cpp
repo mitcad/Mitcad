@@ -844,6 +844,31 @@ bool ConnectAssistantDialog::configured(AssistantClient which) const {
   }, kClaudeConfigurationLimit);
 }
 
+// Claude Desktop's settings folders: on Windows the installer's and the
+// Microsoft Store package's, on macOS its Application Support folder. A test
+// run looks only in its work folder's `local-app-data` and `roaming-app-data`
+// (Windows).
+bool ConnectAssistantDialog::desktopExtensionInstalled() const {
+  if (m_bridge.isEmpty()) return false;
+  QStringList folders;
+  const bool test =
+      !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") && !qEnvironmentVariableIsEmpty("MITCAD_TEST_ASSISTANT_EXECUTABLES");
+#if defined(Q_OS_WIN)
+  const QString work = isolatedTestWork();
+  if (!test) {
+    folders = claudeDesktopWindowsSettingsFolders(qEnvironmentVariable("LOCALAPPDATA"), qEnvironmentVariable("APPDATA"));
+  } else if (!work.isEmpty()) {
+    folders = claudeDesktopWindowsSettingsFolders(QDir(work).filePath(QStringLiteral("local-app-data")),
+                                                  QDir(work).filePath(QStringLiteral("roaming-app-data")));
+  }
+#elif defined(Q_OS_MACOS)
+  if (!test) folders << QDir::home().filePath(QStringLiteral("Library/Application Support/Claude"));
+#else
+  Q_UNUSED(test);
+#endif
+  return claudeDesktopExtensionStarts(claudeDesktopExtension(folders), m_bridge);
+}
+
 // The connections of the chosen assistant: what Disconnect ends.
 QStringList ConnectAssistantDialog::chosenClientIds() const {
   QStringList ids;
@@ -897,6 +922,16 @@ void ConnectAssistantDialog::refreshConnection() {
     m_bundleSaved.clear();
     clearMessage();
   }
+  // The extension installed in Claude Desktop but not connected to any
+  // window (mitcad#1288): Claude Desktop's to start again, not to install
+  // again; its installation's line is done as well.
+  const bool desktopIdle = selected == AssistantClient::ClaudeDesktop && desktopExtensions && mine.isEmpty() &&
+      elsewhere.isEmpty() && !m_desktopNotFound && m_process == nullptr && !m_result->property("setupError").toBool() &&
+      !assistantClientDisconnected(selected) && desktopExtensionInstalled();
+  if (desktopIdle && !m_bundleSaved.isEmpty()) {
+    m_bundleSaved.clear();
+    clearMessage();
+  }
   const bool busy = m_process != nullptr;
   for (QAbstractButton* button : m_clients->buttons()) button->setEnabled(!busy);
   m_config->setEnabled(!busy);
@@ -912,11 +947,23 @@ void ConnectAssistantDialog::refreshConnection() {
     state = QStringLiteral("busy");
     text = tr("Connecting %1…").arg(name);
     action = QStringLiteral("connect");
+  } else if (mine.isEmpty() && assistantClientDisconnected(selected)) {
+    // Disconnect sticks (mitcad#1289): its new clients are refused until
+    // Connect allows them again.
+    state = QStringLiteral("disconnected");
+    text = tr("Disconnected: %1 cannot connect to MitCad until you connect it again").arg(name);
+    action = QStringLiteral("allow");
   } else if (selected == AssistantClient::ClaudeDesktop && m_desktopNotFound && mine.isEmpty()) {
     // No application took the extension: not a wait for an approval.
     state = QStringLiteral("failed");
     text = tr("Install Claude Desktop first");
     action = QStringLiteral("install");
+  } else if (desktopIdle) {
+    // Claude Desktop starts its extensions' servers itself; Open Claude
+    // Desktop is beside the line.
+    state = QStringLiteral("installed-not-connected");
+    text = tr("Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, "
+              "or start a new chat");
   } else if (selected == AssistantClient::ClaudeDesktop && !m_bundleSaved.isEmpty() && mine.isEmpty()) {
     // Claude Desktop is here, but no application opens its extension (a
     // Microsoft Store install, mitcad#763): it is installed from Claude
@@ -1011,13 +1058,14 @@ void ConnectAssistantDialog::refreshConnection() {
       : tr("Connect"));
   // The extension's file in the tooltip as well (also shown below the line).
   m_setup->setToolTip(action == QStringLiteral("reveal") ? QDir::toNativeSeparators(m_bundleSaved)
-      : action == QStringLiteral("disconnect") ? tr("Ends the connection and keeps your assistant setup") : QString());
+      : action == QStringLiteral("disconnect") ? tr("Ends the connection until you connect again; keeps your assistant setup")
+      : action == QStringLiteral("allow") ? tr("Lets %1 connect to MitCad again").arg(name) : QString());
   // Check again goes with How to install (Claude Code, Codex).
   const bool checkAgain = state == QStringLiteral("not-installed") && selected != AssistantClient::ClaudeDesktop;
   m_checkAgain->setVisible(checkAgain);
   m_connectAnyway->setVisible(anyway);
   m_connectAnyway->setEnabled(!busy);
-  const bool openDesktop = action == QStringLiteral("reveal");
+  const bool openDesktop = action == QStringLiteral("reveal") || state == QStringLiteral("installed-not-connected");
   m_openDesktop->setVisible(openDesktop);
   // The folder line goes with the actions that allow it.
   const bool folderLine = anyway || action == QStringLiteral("connect") || action == QStringLiteral("copy") ||
@@ -1115,6 +1163,12 @@ void ConnectAssistantDialog::primaryAction() {
     if (m_host.disconnect) m_host.disconnect(chosenClientIds());
     clearMessage();
     refreshConnection();
+  } else if (action == QStringLiteral("allow")) {
+    // Disconnect's refusal ends (mitcad#1289); the setup stays as it is.
+    allowAssistant(client());
+    qInfo().noquote() << QStringLiteral("Assistant setup: %1 allowed again").arg(assistantName(client()));
+    clearMessage();
+    refreshConnection();
   } else if (action == QStringLiteral("reveal")) {
     // An isolated test run records the file instead of opening a window.
     if (!isolatedTestWork().isEmpty()) setProperty("assistantShownPath", m_bundleSaved);
@@ -1147,6 +1201,8 @@ void ConnectAssistantDialog::openClaudeDesktop() {
 void ConnectAssistantDialog::connectAssistant() {
   if (m_process) return;
   clearMessage();
+  // Any Connect allows an assistant the user disconnected again (mitcad#1289).
+  allowAssistant(client());
   // Pressing the button with the folder line shown is the consent.
   if (!grantFolder()) return;
   if (client() == AssistantClient::Other) {

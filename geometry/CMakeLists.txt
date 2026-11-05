@@ -809,3 +809,12 @@ if(BUILD_TESTING)
   target_link_libraries(test_repeated_parts PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.repeated_parts COMMAND test_repeated_parts)
 endif()
+
+if(BUILD_TESTING)
+  # OCCT's solid classifier on a point in the plane of a far face of the
+  # shell, and the check of a block whose two cavities' bottoms lie in one
+  # plane, with the port's patch 1285 (mitcad#1280).
+  add_executable(test_classifier_far_plane tests/test_classifier_far_plane.cpp)
+  target_link_libraries(test_classifier_far_plane PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.classifier_far_plane COMMAND test_classifier_far_plane)
+endif()

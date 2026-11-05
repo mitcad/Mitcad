@@ -1054,6 +1054,40 @@ bool floatingLayout(QString& error) {
     }
   }
   NSView* projects = identifiedView(content, QStringLiteral("native.projectsCard"));
+  // Qt notice bars occupy the embedded window above its CAD content. The
+  // actual source geometry, not the shell's cached inset, must be clear.
+  if (auto* manager = WindowManager::instance()) {
+    if (MainWindow* presenter = manager->activeWindow()) {
+      QWidget* central = presenter->centralWidget();
+      NSView* embedded = (__bridge NSView*)reinterpret_cast<void*>(presenter->winId());
+      const NSRect notices = [embedded convertRect:NSMakeRect(0, 0, presenter->width(), central->y()) toView:content];
+      for (NSString* identifier in @[@"native.projectsCard", @"native.configurationCard", @"native.sidebar",
+                                    @"native.inspectorCard", @"native.chatCard"]) {
+        NSView* card = identifiedView(content, qt(identifier));
+        if (!viewVisible(card)) continue;
+        const NSRect rect = [card convertRect:card.bounds toView:content];
+        if (NSIntersectsRect(rect, notices)) {
+          error = QStringLiteral("native overlay '%1' covers the Qt notice area").arg(qt(identifier));
+          return false;
+        }
+      }
+      if (viewVisible(projects)) {
+        const NSRect rect = [projects convertRect:projects.bounds toView:content];
+        if (!close(NSMinY(rect), NSMaxY(notices) + 12)) {
+          error = QStringLiteral("native Projects does not follow the CAD content below the notice area");
+          return false;
+        }
+      }
+      if (central->y() > 0) {
+        const NSPoint probe = NSMakePoint(16, NSMidY(notices));
+        NSView* hit = [content hitTest:[content convertPoint:probe toView:content.superview]];
+        if (hit != embedded && ![hit isDescendantOf:embedded]) {
+          error = QStringLiteral("the Qt notice area cannot receive pointer input above the canvas");
+          return false;
+        }
+      }
+    }
+  }
   if (viewVisible(projects)) {
     if (viewVisible(sidebar) && NSIntersectsRect(projects.frame, sidebar.frame)) {
       error = QStringLiteral("native Projects overlaps Browser");
@@ -3249,16 +3283,21 @@ bool screenshot(const QString& path, QOpenGLWidget* viewport) {
     // The model, inspector and ribbon float inside this same NSWindow.
     // Preserve their real AppKit capture when inserting the underlying
     // OpenGL framebuffer; separate-window exclusion alone is insufficient.
-    const CGFloat scaleX = viewport->width() / host.bounds.size.width;
-    const CGFloat scaleY = viewport->height() / host.bounds.size.height;
+    // The host embeds the whole Qt window, including notice bars, while
+    // origin and canvas name only its CAD view. Never scale the bars away.
+    QWidget* root = viewport->window();
+    const QPoint offset = viewport->mapTo(root, QPoint());
+    const CGFloat scaleX = root->width() / host.bounds.size.width;
+    const CGFloat scaleY = root->height() / host.bounds.size.height;
     const auto cover = [&](NSView* overlay) {
       if (!viewVisible(overlay)) return;
       NSRect rect = [overlay convertRect:overlay.bounds toView:host];
       if (!host.flipped) rect.origin.y = NSMaxY(host.bounds) - NSMaxY(rect);
-      covered += QRect(origin.x() + qFloor(rect.origin.x * scaleX), origin.y() + qFloor(rect.origin.y * scaleY),
+      covered += QRect(origin.x() - offset.x() + qFloor(rect.origin.x * scaleX),
+                       origin.y() - offset.y() + qFloor(rect.origin.y * scaleY),
                        qCeil(rect.size.width * scaleX), qCeil(rect.size.height * scaleY));
     };
-    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.chatCard", @"native.ribbon", @"native.messageBand", @"navigationBar"]) {
+    for (NSString* identifier in @[@"native.projectsCard", @"native.configurationCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.chatCard", @"native.ribbon", @"native.messageBand", @"navigationBar"]) {
       cover(identifiedView(content, qt(identifier)));
     }
     // The orientation cube's arrows, beside the viewport host.

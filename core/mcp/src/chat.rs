@@ -177,7 +177,8 @@ pub(crate) fn pictures(request: &Value) -> Result<Vec<(&str, &str)>, String> {
 /// - `claude_version`: `output` (of `claude --version`) → `version`, `ok`,
 ///   `minimum`
 /// - `claude_auth`: `exit_code`, `output` (of `claude auth status`) →
-///   `signed_in`, `method`
+///   `signed_in`, `method`, `account`, `organization`, `subscription`
+///   (each null when not told)
 /// - `account_error`: `text`, `details` (optional structured error) → `code`, `reason` or null
 /// - `claude_models` → `models` (`id`, `name`): Claude Code's model
 ///   aliases for its `--model`

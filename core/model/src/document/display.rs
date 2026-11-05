@@ -39,6 +39,32 @@ pub struct DisplayState {
     /// or hidden by its light bulb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub center_of_mass: Option<CenterOfMassMarker>,
+    /// What View › Show hides in the whole design (mitcad#1287).
+    #[serde(default, skip_serializing_if = "HiddenKinds::is_default")]
+    pub hidden: HiddenKinds,
+}
+
+/// The kinds of items View › Show hides in the whole design, every
+/// component's (mitcad#1287): the view leaves them out whatever their own
+/// light bulbs say, which stay as they are.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HiddenKinds {
+    /// The design's origin and the joint origins.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub origins: bool,
+    /// Construction planes, axes and points.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub construction: bool,
+    /// Sketches.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sketches: bool,
+}
+
+impl HiddenKinds {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// The Center of Mass marker of the browser's row under Origin
@@ -218,6 +244,52 @@ impl<K: Kernel> Document<K> {
         self.apply_with(|state| {
             state.display.center_of_mass = None;
             Ok(("Delete Center of Mass".to_owned(), (), false))
+        })
+    }
+
+    // View › Show (mitcad#1287): display state as the Origin folder is,
+    // each change an undo step that recomputes nothing.
+
+    /// Shows or hides the origins, the construction geometry or the
+    /// sketches of the whole design (`Some(true)` shows, `None` leaves the
+    /// kind as it is): one undo step (`Hide All Construction`) unless
+    /// nothing changes. No feature's own light bulb changes.
+    pub fn set_view_show(
+        &mut self,
+        origins: Option<bool>,
+        construction: Option<bool>,
+        sketches: Option<bool>,
+    ) -> Result<(), ModelError> {
+        if origins.is_none() && construction.is_none() && sketches.is_none() {
+            return Err(invalid(
+                "set_view_show needs origins, construction or sketches",
+            ));
+        }
+        let before = self.state.display.hidden;
+        let mut after = before;
+        let mut parts = Vec::new();
+        for (shown, hidden, name) in [
+            (origins, &mut after.origins, "Origins"),
+            (construction, &mut after.construction, "Construction"),
+            (sketches, &mut after.sketches, "Sketches"),
+        ] {
+            if let Some(shown) = shown
+                && *hidden == shown
+            {
+                *hidden = !shown;
+                parts.push(format!(
+                    "{} All {name}",
+                    if shown { "Show" } else { "Hide" }
+                ));
+            }
+        }
+        if after == before {
+            return Ok(());
+        }
+        let label = parts.join(", ");
+        self.apply_with(|state| {
+            state.display.hidden = after;
+            Ok((label, (), false))
         })
     }
 }

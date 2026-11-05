@@ -43,7 +43,10 @@ QString lastLines(const QByteArray& errors) {
 
 } // namespace
 
-ClaudeCodeAgent::ClaudeCodeAgent(QObject* parent) : ChatAgent(parent) {
+ClaudeCodeAgent::ClaudeCodeAgent(QObject* parent) : ClaudeCodeAgent(QString(), QStringLiteral("claude"), QString(), parent) {}
+
+ClaudeCodeAgent::ClaudeCodeAgent(const QString& program, const QString& id, const QString& place, QObject* parent)
+    : ChatAgent(parent), m_id(id), m_fixed(program), m_place(place) {
   m_stopTimer = new QTimer(this);
   m_stopTimer->setSingleShot(true);
   connect(m_stopTimer, &QTimer::timeout, this, [this] {
@@ -66,7 +69,13 @@ ClaudeCodeAgent::~ClaudeCodeAgent() {
 }
 
 QString ClaudeCodeAgent::findProgram(QString* reason) const {
-  const QString program = mcp::assistantExecutable(QStringLiteral("claude"));
+  // Another one found keeps its own executable while it is there.
+  QString program;
+  if (m_fixed.isEmpty()) {
+    program = mcp::assistantExecutable(QStringLiteral("claude"));
+  } else if (QFileInfo(m_fixed).isExecutable()) {
+    program = m_fixed;
+  }
   if (program.isEmpty()) {
     return QString();
   }
@@ -89,6 +98,10 @@ QString ClaudeCodeAgent::findProgram(QString* reason) const {
 }
 
 bool ClaudeCodeAgent::installedNow() const { return !findProgram(nullptr).isEmpty(); }
+
+QString ClaudeCodeAgent::signedOutText() const {
+  return tr("Claude Code is not signed in: sign in here, or run claude in a terminal and type /login.");
+}
 
 QList<ChatAgent::Model> ClaudeCodeAgent::models() const {
   QList<Model> found;
@@ -180,8 +193,13 @@ void ClaudeCodeAgent::check() {
                                             {QStringLiteral("exit_code"), status},
                                             {QStringLiteral("output"), QString::fromUtf8(answer)}});
       const bool signedIn = auth.value(QStringLiteral("signed_in")).toBool();
-      qInfo().noquote() << QStringLiteral("Chat: Claude Code %1 found, %2")
-                               .arg(found, signedIn ? QStringLiteral("signed in") : QStringLiteral("not signed in"));
+      // The account it names, shown in the agent choice (mitcad#1289).
+      m_account = signedIn ? auth.value(QStringLiteral("account")).toString() : QString();
+      m_subscription = signedIn ? auth.value(QStringLiteral("subscription")).toString() : QString();
+      qInfo().noquote() << QStringLiteral("Chat: Claude Code %1 found%2, %3")
+                               .arg(found,
+                                    m_place.isEmpty() ? QString() : QStringLiteral(" in %1").arg(m_place),
+                                    signedIn ? QStringLiteral("signed in") : QStringLiteral("not signed in"));
       if (signedIn) {
         setReadiness(Readiness::Ready, found);
       } else if (m_signIn == nullptr) {

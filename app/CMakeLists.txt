@@ -415,6 +415,13 @@ if(WIN32)
   target_link_libraries(mitcad PRIVATE dwmapi)
 endif()
 
+# Windows 10's dark app mode (mitcad#1282): Qt's own style with a dark
+# palette while the app mode is dark; nothing on Windows 11 and elsewhere.
+target_sources(mitcad PRIVATE platform/WindowsTheme.hpp)
+if(WIN32)
+  target_sources(mitcad PRIVATE platform/windows/WindowsTheme.cpp)
+endif()
+
 # Which bodies a feature's preview draws and where: hidden ones stay
 # hidden, placed and linked components' bodies where their occurrences put
 # them (mitcad#266).
@@ -1614,9 +1621,10 @@ target_sources(mitcad PRIVATE
   commands/PatternOptions.cpp
   commands/PatternOptions.hpp)
 if(BUILD_TESTING)
-  # The mapping and the words: plain Qt Core.
+  # The mapping and the words, and the Pattern Type a preselection picks
+  # (mitcad#1290) on a command state.
   target_sources(test_app PRIVATE tests/pattern_options.cpp commands/PatternOptions.cpp
-                 commands/PatternOptions.hpp)
+                 commands/PatternOptions.hpp framework/Command.cpp framework/Command.hpp)
 endif()
 
 # The sketches a command shows for its time (mitcad#546): an edited
@@ -2560,3 +2568,13 @@ endif()
 # Envelope's panel in the SOLID tab's CREATE menu (mitcad#1276): a light
 # outer skin of a component, an occurrence or bodies.
 target_sources(mitcad PRIVATE commands/EnvelopeCommands.cpp)
+
+# An orbit goes on past the edge of the screen (mitcad#1281, GitHub
+# mitcad/Mitcad#139): the cursor jumps to the opposite edge, which the view
+# does not see (OcctViewer::wrapOrbitCursor).
+target_sources(mitcad PRIVATE view/OrbitWrap.hpp)
+if(BUILD_TESTING)
+  # Where it jumps, the positions the view gets, queued moves, a refused
+  # jump, the jump's own move: plain Qt Core.
+  target_sources(test_app PRIVATE tests/orbit_wrap.cpp view/OrbitWrap.hpp)
+endif()
