@@ -6,7 +6,9 @@
 // tools of faces far apart built in parallel and applied together
 // (mitcad#843) with the result made face by face; a pitch of one's own,
 // multi-start threads and the trapezoidal profile (mitcad#893); a shank
-// whose end under a serrated head is uneven (mitcad#901).
+// whose end under a serrated head is uneven (mitcad#901); the run-outs
+// into a countersink and along the chamfers of a partial thread's ends
+// inside its face (mitcad#1300).
 
 #include <algorithm>
 #include <chrono>
@@ -623,9 +625,10 @@ void test_sized_chamfered_end() {
   CHECK(!inside(*threaded, gp_Pnt(end + 0.01, 0, 20 - 1e-3)));
   CHECK(near(bounding_box(*threaded).max.Z(), 20, 1e-6));
   // With the face sized alone the cone stays where it was: 1.92 mm3 more,
-  // 0.15 % of the bolt.
+  // 0.15 % of the bolt, before the grooves ran out into the cone
+  // (mitcad#1300), which takes part of the difference.
   const ShapePtr alone = modeled_thread(*sized, spec);
-  CHECK(volume(*alone) - volume(*made) > 1.5);
+  CHECK(volume(*alone) - volume(*made) > 0.5);
   // The two moves alone give the rod made at the major diameter.
   CHECK_NEAR_TOL(volume(*moved), volume(*chamfered_rod(k6g.major / 2.0, 1.5)), 1e-9);
 }
@@ -1696,6 +1699,207 @@ void test_thread_pieces_counted_from_their_ends() {
   }
 }
 
+// The point at radius `r` from the Z axis, `degrees` about it from X, at
+// height `z`.
+gp_Pnt polar(double r, double degrees, double z) {
+  const double a = degrees * kPi / 180.0;
+  return gp_Pnt(r * std::cos(a), r * std::sin(a), z);
+}
+
+// The angle about the Z axis (degrees, 0 to 360) where the groove of a
+// right-hand internal thread of `pitch` at angle 0, threaded from z = 0,
+// has its middle at the pitch diameter at height `z`: it lies 3/4 pitch up
+// at angle 0 and rises a pitch a turn.
+double internal_groove_at(double pitch, double z) {
+  const double turns = (z - 0.75 * pitch) / pitch;
+  return 360.0 * (turns - std::floor(turns));
+}
+
+void test_thread_runs_out_into_a_countersink() {
+  // (mitcad#1300) A Ø41 bore over z 0 … 15 through a plate 25 thick, a
+  // 90-degree countersink above it (the cone from radius 20.5 at z = 15 to
+  // 30.5 at the top), M45x3 internal over the whole bore. Past the bore's
+  // top the cone lies beyond the crest (radius 20.876) everywhere: the
+  // grooves run out into it by a pitch instead of stopping at z = 15 and
+  // leaving the cone's material between radius 20.5 and the major radius
+  // 22.5 over z 15 … 17 as a flat, unthreaded lip.
+  const double pitch = 3.0;
+  const Diameters m45 = basic(45, pitch);
+  const ShapePtr plate = extrude("F2", {rectangle(1, -50, -50, 100, 100)}, 0, 25);
+  HoleSpec sink;
+  sink.feature = "F3";
+  sink.positions = {gp_Ax1(gp_Pnt(0, 0, 25), gp_Dir(0, 0, -1))};
+  sink.type = HoleType::Countersink;
+  sink.diameter = 41;
+  sink.countersink_diameter = 61;
+  sink.countersink_angle = kPi / 2.0;
+  sink.extent = HoleExtent::ThroughAll;
+  sink.bodies = {plate};
+  const BooleanResult drilled = boolean(BooleanOp::Cut, {plate.get()}, *hole_tool(sink));
+  CHECK(drilled.pieces.size() == 1);
+  const ShapePtr nut = drilled.pieces.at(0).shape;
+  const ThreadSpec spec = spec_of("F4", "F3:hole0.wall", pitch, m45);
+  const ShapePtr threaded = modeled_thread(*nut, spec);
+  CHECK(BRepCheck_Analyzer(threaded->occt()).IsValid());
+  // Where the grooves pass above the bore's top, in the cone's material
+  // (the cone at radius 21 at z = 15.5, 22 at z = 16.5), nothing is left.
+  const gp_Pnt lip_low = polar(21.3, internal_groove_at(pitch, 15.5), 15.5);
+  const gp_Pnt lip_high = polar(22.2, internal_groove_at(pitch, 16.5), 16.5);
+  CHECK(inside(*nut, lip_low) && inside(*nut, lip_high));
+  CHECK(!inside(*threaded, lip_low));
+  CHECK(!inside(*threaded, lip_high));
+  // The tooth at the bore's top between them stays.
+  CHECK(inside(*threaded, polar(21.3, internal_groove_at(pitch, 16.5), 15.0)));
+  // Within the bore, the thread as before: a groove and a tooth halfway.
+  CHECK(!inside(*threaded, polar(21.3, internal_groove_at(pitch, 7.5), 7.5)));
+  CHECK(inside(*threaded, polar(21.3, internal_groove_at(pitch, 7.5), 9.0)));
+
+  // The ends as cut before (an import that keeps them, `flat_ends`): the
+  // grooves stop at z = 15, the lip stays, and the bore loses exactly the
+  // profile over its 15 mm.
+  ThreadSpec flat = spec;
+  flat.flat_ends = true;
+  const ShapePtr lipped = modeled_thread(*nut, flat);
+  CHECK(inside(*lipped, lip_low));
+  CHECK(inside(*lipped, lip_high));
+  const double bore = kPi * 20.5 * 20.5;
+  CHECK_NEAR_TOL(volume(*lipped), volume(*nut) - 15 * (nut_hole_per_mm(pitch, m45) - bore), 2e-5);
+  // The run-out takes the grooves' share of the lip's ring.
+  CHECK(volume(*lipped) - volume(*threaded) > 20.0);
+
+  // Chamfer Ends asked for both ends: only the plate's bottom, the free
+  // mouth, is countersunk; the cone at the top is its chamfer already, and
+  // the grooves still run out into it.
+  ThreadSpec chamfered = spec;
+  chamfered.chamfer = true;
+  chamfered.chamfer_angle = kPi / 4.0;
+  chamfered.chamfer_diameter = m45.major + pitch / 10.0;
+  chamfered.chamfer_ends = {{true, true}};
+  const ShapePtr sunk = modeled_thread(*nut, chamfered);
+  const bool low = !sunk->find_faces("F4:thread_chamfer_low(F3:hole0.wall)").empty();
+  const bool high = !sunk->find_faces("F4:thread_chamfer_high(F3:hole0.wall)").empty();
+  CHECK(low != high);
+  CHECK(!inside(*sunk, lip_low));
+  CHECK(!inside(*sunk, lip_high));
+  CHECK(!inside(*sunk, polar(m45.major / 2.0 + 0.1, 0, 1e-3)));
+
+  // A blind bore with a flat floor: its material lies past the bore's end
+  // inside the crest, so the grooves stop at the floor as before. The
+  // same bore 15 deep from the top of a block 25 high: exactly the profile
+  // over the 15 mm, with flat ends or without.
+  const ShapePtr block = extrude("F2", {rectangle(1, -50, -50, 100, 100)}, 0, 25);
+  HoleSpec blind;
+  blind.feature = "F3";
+  blind.positions = {gp_Ax1(gp_Pnt(0, 0, 25), gp_Dir(0, 0, -1))};
+  blind.diameter = 41;
+  blind.flat = true;
+  blind.extent = HoleExtent::Distance;
+  blind.depth = 15;
+  blind.bodies = {block};
+  const BooleanResult bored = boolean(BooleanOp::Cut, {block.get()}, *hole_tool(blind));
+  CHECK(bored.pieces.size() == 1);
+  const ShapePtr cup = bored.pieces.at(0).shape;
+  const ShapePtr floored = modeled_thread(*cup, spec);
+  CHECK_NEAR_TOL(volume(*floored), volume(*cup) - 15 * (nut_hole_per_mm(pitch, m45) - bore), 2e-5);
+  CHECK_NEAR_TOL(volume(*floored), volume(*modeled_thread(*cup, flat)), 1e-9);
+  // The floor is whole under the grooves.
+  CHECK(inside(*floored, polar(21.3, internal_groove_at(pitch, 9.5), 9.5)));
+}
+
+void test_thread_runs_out_along_its_chamfers() {
+  // (mitcad#1300) A partial thread with Chamfer Ends: at an end inside its
+  // face the chamfer is the run-out. M45x3 10 long in the middle of a Ø41
+  // bore 15 deep (z 2.5 … 12.5): past each end the grooves go on inside
+  // the 45-degree cone that narrows from the major radius 22.5 at the end
+  // to the bore's 20.5, 2 mm further, and so does the cut of the bore to
+  // the minor radius 20.876 (a chamfer of that step).
+  const double pitch = 3.0;
+  const Diameters m45 = basic(45, pitch);
+  const ShapePtr plate = extrude("F2", {rectangle(1, -50, -50, 100, 100)}, 0, 15);
+  const ShapePtr drill = extrude("F3", {circle(5, 0, 0, 20.5)}, -1, 16);
+  const BooleanResult drilled = boolean(BooleanOp::Cut, {plate.get()}, *drill);
+  CHECK(drilled.pieces.size() == 1);
+  const ShapePtr nut = drilled.pieces.at(0).shape;
+  ThreadSpec spec = spec_of("F4", "F3:side(c5)", pitch, m45);
+  spec.full_length = false;
+  spec.length = 10;
+  spec.offset = 2.5;
+  spec.chamfer = true;
+  spec.chamfer_angle = kPi / 4.0;
+  spec.chamfer_diameter = m45.major + pitch / 10.0;
+  spec.chamfer_ends = {{true, true, true, true}};
+  const ShapePtr threaded = modeled_thread(*nut, spec);
+  CHECK(BRepCheck_Analyzer(threaded->occt()).IsValid());
+  // Neither end is free: no chamfer's cone of its own.
+  CHECK(threaded->find_faces("F4:thread_chamfer_low(F3:side(c5))").empty());
+  CHECK(threaded->find_faces("F4:thread_chamfer_high(F3:side(c5))").empty());
+  // Half a millimetre past each end the cone is at radius 22: the groove
+  // is cut inside it, the material outside it stays.
+  for (const double z : {2.0, 13.0}) {
+    const double groove = internal_groove_at(pitch, z);
+    CHECK(inside(*nut, polar(21.3, groove, z)));
+    CHECK(!inside(*threaded, polar(21.3, groove, z)));
+    CHECK(inside(*threaded, polar(22.2, groove, z)));
+  }
+  // The step from the bore to the minor radius: cut inside the cone (at
+  // radius 21 a millimetre and a half past the end), the bore untouched
+  // where the cone has passed it (radius 20.3, 2.2 past).
+  for (const double z : {1.0, 14.0}) {
+    CHECK(!inside(*threaded, polar(20.7, 0, z)));
+  }
+  for (const double z : {0.3, 14.7}) {
+    CHECK(inside(*threaded, polar(20.7, 0, z)));
+  }
+
+  // Without the run-outs the ends stay flat, as before: the bore's
+  // material past them is whole.
+  ThreadSpec plain = spec;
+  plain.chamfer_ends = {{true, true}};
+  const ShapePtr flat = modeled_thread(*nut, plain);
+  for (const double z : {2.0, 13.0}) {
+    CHECK(inside(*flat, polar(21.3, internal_groove_at(pitch, z), z)));
+  }
+  CHECK(inside(*flat, polar(20.7, 0, 1.0)));
+  const double bore = kPi * 20.5 * 20.5;
+  CHECK_NEAR_TOL(volume(*flat), volume(*nut) - 10 * (nut_hole_per_mm(pitch, m45) - bore), 2e-5);
+  CHECK(volume(*flat) - volume(*threaded) > 5.0);
+  // `flat_ends` keeps them flat too.
+  ThreadSpec kept = spec;
+  kept.flat_ends = true;
+  CHECK_NEAR_TOL(volume(*modeled_thread(*nut, kept)), volume(*flat), 1e-9);
+
+  // An external thread: M10x1.5 8 long on a 10 mm rod 20 long (z 6 … 14).
+  // Past each end the grooves go on outside the cone that widens from the
+  // minor radius at the end to the rod's 5: half a millimetre past, at
+  // radius 4.688, a groove's material at 4.85 is cut, at 4.5 it stays.
+  const Diameters m10 = basic(10, 1.5);
+  const ShapePtr rod = extrude("F2", {circle(1, 0, 0, 5)}, 0, 20);
+  ThreadSpec shaft = spec_of("F3", "F2:side(c1)", 1.5, m10);
+  shaft.full_length = false;
+  shaft.length = 8;
+  shaft.offset = 6;
+  shaft.chamfer = true;
+  shaft.chamfer_angle = kPi / 4.0;
+  shaft.chamfer_diameter = m10.minor - 0.15;
+  shaft.chamfer_ends = {{true, true, true, true}};
+  const ShapePtr bolt = modeled_thread(*rod, shaft);
+  CHECK(BRepCheck_Analyzer(bolt->occt()).IsValid());
+  // The groove of a right-hand external thread at angle 0 lies a quarter
+  // pitch up at angle 0: its middle at z is a quarter turn earlier than an
+  // internal one's.
+  for (const double z : {5.5, 14.5}) {
+    const double turns = (z - 0.25 * 1.5) / 1.5;
+    const double groove = 360.0 * (turns - std::floor(turns));
+    CHECK(!inside(*bolt, polar(4.85, groove, z)));
+    CHECK(inside(*bolt, polar(4.5, groove, z)));
+  }
+  ThreadSpec square = shaft;
+  square.chamfer_ends = {{true, true}};
+  const ShapePtr squared = modeled_thread(*rod, square);
+  CHECK_NEAR_TOL(volume(*squared), 12 * kPi * 25 + 8 * bolt_per_mm(1.5, m10), 2e-5);
+  CHECK(volume(*squared) - volume(*bolt) > 1.0);
+}
+
 } // namespace
 
 // The suite's parts thread.1-thread.3 (test_main.cpp), each a ctest of its
@@ -1711,6 +1915,7 @@ void thread_tests_1() {
   guarded("test_large_body", test_large_body);
   guarded("test_thread_pieces_join_smoothly", test_thread_pieces_join_smoothly);
   guarded("test_custom_pitch", test_custom_pitch);
+  guarded("test_thread_runs_out_into_a_countersink", test_thread_runs_out_into_a_countersink);
 }
 
 void thread_tests_2() {
@@ -1731,6 +1936,7 @@ void thread_tests_3() {
   guarded("test_thread_tools_in_parallel", test_thread_tools_in_parallel);
   guarded("test_trapezoidal_threads", test_trapezoidal_threads);
   guarded("test_thread_pieces_counted_from_their_ends", test_thread_pieces_counted_from_their_ends);
+  guarded("test_thread_runs_out_along_its_chamfers", test_thread_runs_out_along_its_chamfers);
 }
 
 } // namespace test

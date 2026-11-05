@@ -112,6 +112,7 @@ namespace mcp {
 class AgentIndicator;
 class ChatGate;
 struct ConnectedAgent;
+struct OutgoingAgent;
 } // namespace mcp
 namespace agent {
 class ChatController;
@@ -1439,7 +1440,6 @@ private:
   QStringList m_mcpAgentNames;             // client-supplied display labels, not identities
   mcp::AgentIndicator* m_agentIndicator = nullptr; // beside the project indicator (mitcad#710)
   std::function<void(const QStringList& ids)> m_mcpDisconnect; // ends these agents' connections
-  void disconnectAllMcpAgents();
   bool m_mcpSketchEdited = false;          // an agent changed the sketch being edited
   rust::Box<Document>& m_document = m_documentSession->state().document;
   ModelWorker* m_worker = &m_documentSession->worker();
@@ -1810,6 +1810,11 @@ private:
   void createChat();
   void setChatShown(bool shown);
   void noteChatDocument();
+  // The agent indicator's Outgoing connections (mitcad#1299): the chat's
+  // agents found, each with its state and whether the panel offers it, and
+  // turning one on or off.
+  QList<mcp::OutgoingAgent> chatOutgoingAgents() const;
+  void offerChatAgent(const QString& id, bool offered);
   agent::ChatController* m_chat = nullptr;
   agent::ChatPanel* m_chatPanel = nullptr;
   QPointer<QWidget> m_chatContainer;

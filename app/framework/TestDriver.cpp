@@ -243,6 +243,7 @@ const StepSpec kSpecs[] = {
     {"expect-navigation-runtime", 0, 0, kIdle},
     {"expect-navigation-release", 0, 0, kIdle},
     {"expect-assistant-setup", 1, 1, kIdle},
+    {"agent-menu", 2, 2, kIdle},
     {"expect-formula-builder", 0, 0, kIdle},
     {"open-formula-field", 1, 1, kInputOfTarget},
     {"expect-navigation-controls", 1, 1, kIdle},
@@ -2293,6 +2294,8 @@ void TestDriver::run(const Step& step) {
     testNavigationRelease();
   } else if (name == QLatin1String("expect-assistant-setup")) {
     testAssistantSetup(a.at(0));
+  } else if (name == QLatin1String("agent-menu")) {
+    agentMenuChoice(a.at(0), a.at(1));
   } else if (name == QLatin1String("expect-formula-builder")) {
     testFormulaBuilder();
   } else if (name == QLatin1String("open-formula-field")) {

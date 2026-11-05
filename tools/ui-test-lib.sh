@@ -441,7 +441,8 @@ ui_wait_busy() {
 ui_expect_log() {
   local i=0 busy=0
   while [ "$i" -lt 45 ]; do
-    sed "s/…/.../g" "$UI_LOG" | grep -qF -- "${1//…/...}" && { echo "ok   $2"; return; }
+    # (No pipeline into grep -q under pipefail: ui_expect_new.)
+    grep -qF -- "${1//…/...}" < <(sed "s/…/.../g" "$UI_LOG") && { echo "ok   $2"; return; }
     if ui_wait_busy "$busy"; then
       busy=$((busy + 1))
       continue
@@ -608,7 +609,7 @@ ui_panel_reveal() {
     xdotool mousemove $((X + bx * UI_SCALE)) $((Y + by * UI_SCALE)) sleep 0.08 \
       click "$([ "$y" -gt $((bottom - margin)) ] && echo 5 || echo 4)"
     for j in $(seq 1 30); do
-      tail -n +$((count + 1)) "$UI_LOG" | grep -qF -- "$view" && break
+      grep -qF -- "$view" < <(tail -n +$((count + 1)) "$UI_LOG") && break
       sleep 0.1
     done
     ui_sync >&2
@@ -793,7 +794,7 @@ ui_double_click_expect() {
     ui_sync
     ui_crashed && ui_fail "crashed during the double-click on '$1'"
     for _ in $(seq 1 15); do
-      tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF -- "$2" && { echo "ok   $3"; return; }
+      grep -qF -- "$2" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && { echo "ok   $3"; return; }
       sleep 0.2
     done
     echo "note: no '$2' after the double-click on '$1' (attempt $attempt)"
@@ -939,7 +940,11 @@ ui_mark() { UI_MARK=$(wc -l < "$UI_LOG"); }
 ui_expect_new() {
   local i=0 busy=0 looks=$((${3:-6} * 5 + 15))
   while [ "$i" -lt "$looks" ]; do
-    tail -n +$((${UI_MARK:-0} + 1)) "$UI_LOG" | sed "s/…/.../g" | grep -qF -- "${1//…/...}" && { echo "ok   $2"; return; }
+    # Not a pipeline into grep -q: grep stops at the first match, the
+    # writer before it then dies of SIGPIPE when more of the log follows,
+    # and pipefail (the tests' set -o) made a line found one not found.
+    grep -qF -- "${1//…/...}" < <(tail -n +$((${UI_MARK:-0} + 1)) "$UI_LOG" | sed "s/…/.../g") &&
+      { echo "ok   $2"; return; }
     if ui_wait_busy "$busy"; then
       busy=$((busy + 1))
       continue
@@ -1042,10 +1047,10 @@ ui_picker_choose() {
   from=$(wc -l < "$UI_LOG")
   ui_click_logged "$1"
   for _ in $(seq 1 40); do
-    tail -n +$((from + 1)) "$UI_LOG" | grep -qF "$2 opened: " && break
+    grep -qF "$2 opened: " < <(tail -n +$((from + 1)) "$UI_LOG") && break
     sleep 0.2
   done
-  tail -n +$((from + 1)) "$UI_LOG" | grep -qF "$2 opened: " || ui_fail "the $2 did not open"
+  grep -qF "$2 opened: " < <(tail -n +$((from + 1)) "$UI_LOG") || ui_fail "the $2 did not open"
   title="${2% picker} Picker"
   ui_focus_dialog "^$title\$"
   xdotool type --delay 40 -- "$3"
@@ -1057,7 +1062,7 @@ ui_picker_choose() {
   [ "$line" = "$2 search: $3, first $3" ] || ui_fail "the $2 finds '${line##*first }' first for '$3'"
   ui_key Return
   for _ in $(seq 1 40); do
-    if tail -n +$((from + 1)) "$UI_LOG" | grep -qxF "$2 chose: $3"; then
+    if grep -qxF "$2 chose: $3" < <(tail -n +$((from + 1)) "$UI_LOG"); then
       ui_focus_main
       echo "ok   $3 chosen in the $2"
       return

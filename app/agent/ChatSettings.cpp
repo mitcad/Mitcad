@@ -179,6 +179,30 @@ void setCustomAgentArguments(const QString& arguments) {
   }
 }
 
+bool chatAgentOffered(const QString& agent) {
+  return !QSettings().value(QStringLiteral("chat/off")).toStringList().contains(agent);
+}
+
+bool setChatAgentOffered(const QString& agent, bool offered) {
+  QSettings settings;
+  QStringList off = settings.value(QStringLiteral("chat/off")).toStringList();
+  if (offered == !off.contains(agent) || agent.isEmpty()) {
+    return false;
+  }
+  if (offered) {
+    off.removeAll(agent);
+  } else {
+    off << agent;
+  }
+  if (off.isEmpty()) {
+    settings.remove(QStringLiteral("chat/off"));
+  } else {
+    settings.setValue(QStringLiteral("chat/off"), off);
+  }
+  emit ChatNotifier::instance().offeredChanged();
+  return true;
+}
+
 ChatNotifier& ChatNotifier::instance() {
   static ChatNotifier notifier;
   return notifier;

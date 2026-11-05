@@ -3252,6 +3252,10 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 let mut def = json!({"type": "thread", "faces": faces, "thread": spec});
                 if let Some((diameters, _)) = &modelled {
                     def["modeled"] = json!(true);
+                    // The file's thread ends at the planes of its face's
+                    // ends and leaves the lip of a cone or countersink
+                    // beyond them unthreaded (mitcad#1302).
+                    def["ends"] = json!("flat");
                     if let Some(d) = diameters {
                         def["diameters"] = d.clone();
                     }
@@ -3640,6 +3644,9 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 .map_err(|e| e.to_string())?;
             standard.check_modeled()?;
             def["modeled"] = json!(true);
+            // Ended at the wall's ends, as the file's threads are: a
+            // countersink above keeps its lip (mitcad#1302).
+            def["ends"] = json!("flat");
             if let Some(d) = thread_diameters(info) {
                 def["diameters"] = d;
             }

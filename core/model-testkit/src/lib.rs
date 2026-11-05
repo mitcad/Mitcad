@@ -2157,6 +2157,14 @@ impl Kernel for MockKernel {
                 chamfer.diameter,
                 chamfer.ends
             );
+            // Run-outs along the cones (mitcad#1300), only when there are some.
+            if chamfer.runouts.iter().any(|&(low, high)| low || high) {
+                clearance += &format!(" runouts {:?}", chamfer.runouts);
+            }
+        }
+        // The ends as cut before mitcad#1300.
+        if spec.flat_ends {
+            clearance += " flat ends";
         }
         // Per face angles (a pattern's copies, mitcad#733).
         if !spec.face_angles.is_empty() {

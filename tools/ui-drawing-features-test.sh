@@ -9,7 +9,9 @@
 #     (the plate's corner at 120, 120 on the sheet).
 #   - The drawing's Decimals (1) and Text Height (5 mm) in the sheet's
 #     panel; a dimension of the plate's width then reads 60.0; its own text
-#     height in its panel.
+#     height in its panel; its Replace Value (mitcad#1292): SEE NOTE drawn
+#     in place of the value, the measured 60.0 beside the field, undone
+#     and redone, then the field emptied: 60.0 again.
 #   - Center Pattern: one hole clicked, every hole of the pattern marked.
 #   - Edge Extension of one edge; a Line in the view, an Arc on the sheet
 #     and a Text in the view; the view dragged: the line drawn in it moves
@@ -219,6 +221,41 @@ ui_expect_new "Drawing panel drawingAnnotationHeight at" "its own text height in
 ui_mark
 ui_step "its Text Height: 2.5"             field_text "Drawing panel drawingAnnotationHeight" "2.5"
 ui_expect_new '"height":2.5' "its own letters"
+no_refusal
+
+echo "--- A dimension's Replace Value (mitcad#1292)"
+ui_expect_log "Drawing panel Replace Value: empty, placeholder 60.0" "the field empty, the measured value its placeholder"
+ui_mark
+ui_step "its Replace Value: SEE NOTE"      field_text "Drawing panel drawingAnnotationReplace" "SEE NOTE"
+ui_expect_new '"format":{"replace":"SEE NOTE"}' "the text sent as its format's replace"
+ui_expect_new "Drawing annotations drawn: 1 = SEE NOTE" "drawn with the text only"
+ui_expect_new "Drawing panel Replace Value: SEE NOTE, measured 60.0 beside it" "the measured value beside the field"
+ui_expect_new "Drawing panel drawingAnnotationMeasured at" "its Measured row"
+no_refusal
+# The sheet takes the keyboard back from the field (a click on the
+# dimension), so that Ctrl+Z is the design's undo, not the field's.
+ui_mark
+settled "Drawing annotation 1"
+ui_step "click the dimension"              click_apart "Drawing annotation 1"
+ui_sync
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "Drawing annotations drawn: 1 = 60.0" "the value back with one undo step"
+ui_mark
+ui_step "redo (Ctrl+Y)"                    ui_key ctrl+y
+ui_expect_new "Drawing annotations drawn: 1 = SEE NOTE" "replaced again"
+settled "Drawing annotation 1"
+ui_step "select the dimension"             click_apart "Drawing annotation 1"
+ui_expect_new "Drawing panel Replace Value: SEE NOTE, measured 60.0 beside it" "its panel shows the text and the value"
+# An empty field: the measured value again.
+ui_mark
+settled "Drawing panel drawingAnnotationReplace"
+ui_step "clear Replace Value"              ui_click_logged "Drawing panel drawingAnnotationReplace"
+ui_sync
+ui_key ctrl+a BackSpace Return
+ui_sync
+ui_expect_new '"format":{"replace":null}' "an empty field sends null"
+ui_expect_new "Drawing annotations drawn: 1 = 60.0" "the measured value drawn again"
+ui_expect_new "Drawing panel Replace Value: empty, placeholder 60.0" "the field empty again"
 no_refusal
 ui_step "Esc"                              ui_key Escape
 

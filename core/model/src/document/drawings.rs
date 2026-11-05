@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::{DocState, Document, ModelError, invalid};
-use crate::drawing::def::{Drawing, DrawingUid, Subject};
+use crate::drawing::def::{Drawing, DrawingUid, Subject, SubjectBody};
 use crate::features::OccurrencePath;
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
@@ -443,6 +443,97 @@ impl<K: Kernel> Document<K> {
             )));
         }
         Ok(())
+    }
+
+    /// The bodies of `component` that the 3D view shows at the timeline
+    /// marker, as a base view placed with the whole component records them
+    /// (mitcad#1293): each where an occurrence places it, a path from the
+    /// component (none for the component's own bodies), in the order the
+    /// design places them. A body shows when it is visible and so is every
+    /// occurrence on its path below the component. None when the component
+    /// is not placed in the design.
+    pub fn shown_subject_bodies(&self, component: ComponentUid) -> Option<Vec<SubjectBody>> {
+        let assembly = &self.state.assembly;
+        let prefix = assembly.paths_to(component).into_iter().next()?;
+        let shown_path = |path: &[OccurrenceUid]| {
+            path.iter()
+                .all(|o| assembly.occurrence(*o).is_some_and(|o| o.visible))
+        };
+        Some(
+            self.instances()
+                .into_iter()
+                .filter(|i| i.path.starts_with(&prefix))
+                .filter(|i| {
+                    self.body_attributes(i.body).visible && shown_path(&i.path[prefix.len()..])
+                })
+                .map(|i| {
+                    let below = i.path[prefix.len()..].to_vec();
+                    SubjectBody {
+                        body: i.body,
+                        occurrence: (!below.is_empty()).then_some(OccurrencePath(below)),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Records as their subject what the views of a design file written
+    /// before mitcad#1293 show (base views, and laid out sections, whose
+    /// subject is the whole component: its bodies shown in the 3D view):
+    /// the bodies shown now, so that hiding, showing or adding components
+    /// no longer changes them. No undo step and no change to save: the
+    /// design file is read so. Each drawing pinned leaves a note
+    /// ([`Document::take_drawing_notes`]).
+    pub(crate) fn pin_drawing_subjects(&mut self) {
+        if !self
+            .state
+            .drawings
+            .iter()
+            .any(Drawing::has_unrecorded_subject)
+        {
+            return;
+        }
+        let mut drawings = self.state.drawings.clone();
+        let mut notes = Vec::new();
+        for drawing in drawings.iter_mut().filter(|d| d.has_unrecorded_subject()) {
+            // A component not placed shows nothing.
+            let bodies = self
+                .shown_subject_bodies(drawing.component)
+                .unwrap_or_default();
+            for view in drawing.sheets.iter_mut().flat_map(|s| s.views.iter_mut()) {
+                if view.has_unrecorded_subject() {
+                    view.subject = Some(Subject::Bodies {
+                        bodies: bodies.clone(),
+                    });
+                }
+            }
+            let name = if drawing.component.is_root() {
+                drawing.name.clone()
+            } else {
+                format!(
+                    "{} of {}",
+                    drawing.name,
+                    self.state.assembly.name(drawing.component)
+                )
+            };
+            let shown = match bodies.len() {
+                1 => "1 body".to_owned(),
+                n => format!("{n} bodies"),
+            };
+            notes.push(format!(
+                "{name} now keeps what its views showed when the design was opened ({shown}): \
+                 hiding, showing or adding components no longer changes them"
+            ));
+        }
+        self.state.drawings = drawings;
+        self.drawing_notes.extend(notes);
+    }
+
+    /// The notes of the drawings pinned since they were last taken
+    /// (mitcad#1293: one per drawing of a design file written before
+    /// it, information for the user).
+    pub fn take_drawing_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.drawing_notes)
     }
 }
 

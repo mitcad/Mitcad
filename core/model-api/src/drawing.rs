@@ -380,14 +380,30 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
         if options.views.is_empty() && options.section.is_none() {
             return Err(ApiError("a drawing needs at least one view".to_owned()));
         }
+        // Each body where the 3D view shows it, else wherever the design
+        // places it, recorded (mitcad#1293: a kept layout's views do not
+        // follow the 3D view's visibility).
+        let mut shown_now: std::collections::HashMap<BodyUid, Vec<SubjectBody>> =
+            std::collections::HashMap::new();
+        for b in self
+            .shown_subject_bodies(ComponentUid::ROOT)
+            .unwrap_or_default()
+        {
+            shown_now.entry(b.body).or_default().push(b);
+        }
+        let entries = |uid: BodyUid| -> Vec<SubjectBody> {
+            shown_now.get(&uid).cloned().unwrap_or_else(|| {
+                vec![SubjectBody {
+                    body: uid,
+                    occurrence: None,
+                }]
+            })
+        };
         // The bodies, without the empty ones.
         let mut drawn: Vec<(BodyUid, String)> = Vec::new();
         for uid in self.drawing_bodies(bodies)? {
             let subject = Subject::Bodies {
-                bodies: vec![SubjectBody {
-                    body: uid,
-                    occurrence: None,
-                }],
+                bodies: entries(uid),
             };
             let shown = self
                 .subject_bodies(ComponentUid::ROOT, &subject)
@@ -447,13 +463,7 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
         let mut next_id = 1u32;
         for (index, bodies) in sheet_bodies.iter().enumerate() {
             let subject = Subject::Bodies {
-                bodies: bodies
-                    .iter()
-                    .map(|b| SubjectBody {
-                        body: *b,
-                        occurrence: None,
-                    })
-                    .collect(),
+                bodies: bodies.iter().flat_map(|b| entries(*b)).collect(),
             };
             let mut sheet = DrawingSheet::new(format!("Sheet{}", index + 1));
             sheet.size = options.sheet;

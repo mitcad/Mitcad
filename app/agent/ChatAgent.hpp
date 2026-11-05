@@ -83,6 +83,10 @@ public:
   // address), and that account's plan; empty when it does not tell.
   virtual QString account() const { return QString(); }
   virtual QString subscription() const { return QString(); }
+  // The configuration folder its sign-in lives in (mitcad#1297: Claude
+  // Code's CLAUDE_CONFIG_DIR or ~/.claude); agents with one folder share one
+  // sign-in. Empty: its own, or not known.
+  virtual QString signInFolder() const { return QString(); }
 
   virtual void check() = 0;
   // Only a file check (no process): the agent's program appeared since

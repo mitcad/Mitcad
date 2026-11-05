@@ -242,12 +242,19 @@ private:
   // and the drawings' labels (the `drawing` query's `datum_letters`).
   QStringList datumLetters() const;
   void annotationMoved(int annotation, QPointF delta);
+  // A datum label's triangle or a frame's arrow dragged: its tip slides
+  // along its edge (`edit_drawing_annotation` with `slide`, mitcad#1295).
+  void annotationTipMoved(int annotation, QPointF delta);
   void deleteAnnotation(int annotation);
   // Runs one field's change of an annotation after the event that made it.
   void editAnnotation(const QJsonObject& command);
   // A base view's Shows list (subjectChoices): the drawing's component,
   // its occurrences and its bodies by name.
   QList<QPair<QString, QString>> subjects() const;
+  // A base view's Shows in its panel (mitcad#1293): the component's
+  // occurrences and bodies (subjectRows) checked as `subject` shows them;
+  // a change sends the bodies checked as the view's subject.
+  QWidget* showsList(int view, const QJsonObject& subject);
   // The 3D view's direction for Current View; empty, with why in the
   // status bar, when there is none.
   QJsonObject cameraDirection();

@@ -423,6 +423,13 @@ fn retrieved_dimensions_go_where_the_occurrences_put_their_sketch() {
         json!({"cmd": "copy_occurrence", "occurrence": plate,
                "transform": {"translation": [200, 60, 0]}}),
     );
+    // The view keeps what it showed (mitcad#1293): updated from the model,
+    // it shows the copy too.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": {"type": "design"}}),
+    );
     let x = place(&doc);
     let lines = retrieved_lines(&doc, "40");
     assert_eq!(lines.len(), 2, "{lines:?}");

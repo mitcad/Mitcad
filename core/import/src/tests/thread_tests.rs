@@ -248,6 +248,9 @@ fn modelled_threads_take_the_files_diameters() {
             .clone();
     assert_eq!(def["type"], "thread", "{def}");
     assert_eq!(def["modeled"], true, "{def}");
+    // The file's thread ends at its face's ends, leaving the lip of a cone
+    // beyond them (mitcad#1302): its ends are cut flat.
+    assert_eq!(def["ends"], "flat", "{def}");
     let spec = doc.kernel().mock.specs.borrow().join("\n");
     assert!(
         spec.contains(&format!(
@@ -255,6 +258,7 @@ fn modelled_threads_take_the_files_diameters() {
         )),
         "{spec}"
     );
+    assert!(spec.contains(" flat ends"), "{spec}");
     // Without a history the angle is not measured.
     assert!(def.get("angle").is_none(), "{def}");
     let mut doc = Document::new(kernel());
@@ -419,6 +423,8 @@ fn a_tapped_hole_comes_in_with_its_thread_on_the_wall() {
         json!({"designation": "M6x1", "class": "6H"})
     );
     assert_eq!(thread["location"], "low_end");
+    // A cosmetic thread has no ends to cut (mitcad#1302).
+    assert!(thread.get("ends").is_none(), "{thread}");
     // The bore is the hole's diameter (its own state's); the minor
     // diameter is the next guess.
     let params = doc.parameters();
@@ -428,6 +434,76 @@ fn a_tapped_hole_comes_in_with_its_thread_on_the_wall() {
         Some(5.0),
         "{hole}"
     );
+}
+
+/// A tapped hole with a modelled thread (mitcad#1302): the thread on its
+/// wall is cut with flat ends, as the file's thread ends at the wall's
+/// ends and leaves a countersink above unthreaded.
+#[test]
+fn a_tapped_holes_modelled_thread_keeps_flat_ends() {
+    let kernel = || TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    };
+    let mut items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(kernel());
+    import_design(
+        &mut reference,
+        &timeline_dump(items.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let top = reference.bodies()[0]
+        .shape
+        .faces
+        .iter()
+        .find(|f| f.role == "end")
+        .cloned()
+        .expect("a top face");
+    items.push(json!({
+        "index": 2, "name": "Hole1", "objectType": "HoleFeature",
+        "detail": {
+            "holeType": "SimpleHoleType", "holeTapType": "TappedHoleTapType",
+            "holeDiameter": param("d6", "5 mm", 0.5, "mm"),
+            "tipAngle": param("d7", "118 deg", 2.0594885173533086, "deg"),
+            "extentDefinition": {"_type": "DistanceExtentDefinition",
+                                 "distance": param("d8", "15 mm", 1.5, "mm")},
+            "position": [2.0, 1.0, 1.0],
+            "holePositionDefinition": {"planarEntity": {
+                "kind": "face", "geometry": {"type": "Plane"},
+                "point_on_face": face_point(&top).map(|x| x / 10.0)}},
+            "tappedHoleInfo": {"_type": "ThreadInfo", "threadType": "ISO Metric profile",
+                               "threadDesignation": "M6x1", "threadClass": "6H",
+                               "isInternal": true, "minorDiameter": 0.5035},
+            "thread": {"_type": "ThreadFeature", "isModeled": true, "isFullLength": true}
+        }
+    }));
+    let mut doc = Document::new(kernel());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let thread: Value =
+        serde_json::from_str::<Value>(&doc.query(r#"{"query": "feature", "uid": "F4"}"#).unwrap())
+            .unwrap()["def"]
+            .clone();
+    assert_eq!(thread["type"], "thread", "{thread}");
+    assert_eq!(thread["faces"][0]["face"], "F3:hole0.wall", "{thread}");
+    assert_eq!(thread["modeled"], true, "{thread}");
+    assert_eq!(thread["ends"], "flat", "{thread}");
+    let spec = doc.kernel().mock.specs.borrow().join("\n");
+    assert!(spec.contains(" flat ends"), "{spec}");
 }
 
 /// A hole placed at distances from two edges of its face comes in at those

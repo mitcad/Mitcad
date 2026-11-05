@@ -189,6 +189,38 @@ int drawingToolsTests() {
   CHECK(armList.size() == 3);
   CHECK(armList.value(1) == qMakePair(QStringLiteral("occurrence:O4"), QStringLiteral("Pin:2")));
   CHECK(armList.value(2) == qMakePair(QStringLiteral("body:F5.b0"), QStringLiteral("Arm body")));
+  // The view panel's Shows (mitcad#1293): the root's own bodies, then each
+  // occurrence with its component's bodies and its occurrences.
+  const QVector<SubjectRow> rows = subjectRows(QStringLiteral("C0"), components, allBodies);
+  CHECK(rows.size() == 4);
+  CHECK(rows.value(0).label == QStringLiteral("Base") && rows.value(0).body == QStringLiteral("F2.b0") &&
+        rows.value(0).occurrence.isEmpty() && rows.value(0).depth == 0);
+  CHECK(rows.value(1).label == QStringLiteral("Arm:1") && rows.value(1).body.isEmpty() &&
+        rows.value(1).occurrence == QStringLiteral("O1") && rows.value(1).depth == 0);
+  CHECK(rows.value(2).label == QStringLiteral("Arm body") && rows.value(2).body == QStringLiteral("F5.b0") &&
+        rows.value(2).occurrence == QStringLiteral("O1") && rows.value(2).depth == 1);
+  CHECK(rows.value(3).label == QStringLiteral("Pin:2") && rows.value(3).occurrence == QStringLiteral("O1/O4") &&
+        rows.value(3).depth == 1);
+  // A component's drawing: what is inside it, paths from it.
+  const QVector<SubjectRow> armRows = subjectRows(QStringLiteral("C1"), components, allBodies);
+  CHECK(armRows.size() == 2);
+  CHECK(armRows.value(0).body == QStringLiteral("F5.b0") && armRows.value(0).occurrence.isEmpty());
+  CHECK(armRows.value(1).occurrence == QStringLiteral("O4"));
+  // What a recorded subject shows, and the checked rows as a subject.
+  const QJsonObject recorded = chosenSubject({{QStringLiteral("F2.b0"), QString()},
+                                              {QStringLiteral("F5.b0"), QStringLiteral("O1")}});
+  CHECK(recorded.value(QStringLiteral("type")).toString() == QStringLiteral("bodies"));
+  CHECK(recorded.value(QStringLiteral("bodies")).toArray() ==
+        QJsonArray({QJsonObject{{QStringLiteral("body"), QStringLiteral("F2.b0")}},
+                    QJsonObject{{QStringLiteral("body"), QStringLiteral("F5.b0")},
+                                {QStringLiteral("occurrence"), QStringLiteral("O1")}}}));
+  CHECK(subjectShows(recorded, QStringLiteral("F2.b0"), QString()));
+  CHECK(subjectShows(recorded, QStringLiteral("F5.b0"), QStringLiteral("O1")));
+  CHECK(!subjectShows(recorded, QStringLiteral("F5.b0"), QStringLiteral("O2")));
+  const QJsonObject arm{{QStringLiteral("type"), QStringLiteral("occurrence")}, {QStringLiteral("occurrence"), QStringLiteral("O1")}};
+  CHECK(subjectShows(arm, QStringLiteral("F7.b0"), QStringLiteral("O1/O4")));
+  CHECK(!subjectShows(arm, QStringLiteral("F2.b0"), QString()));
+  CHECK(!subjectShows(arm, QStringLiteral("F7.b0"), QStringLiteral("O11")));
   // Current View: the 3D view's direction the workspace gives; nothing
   // without it. The isometric views from below too.
   const QHash<QString, QString> current{{QStringLiteral("direction"), QStringLiteral("current")}};
@@ -410,6 +442,13 @@ int drawingToolsTests() {
   command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("before"), QStringLiteral(" 4 x "));
   CHECK(command.value(QStringLiteral("format")).toObject().value(QStringLiteral("before")).toString() ==
         QStringLiteral("4 x"));
+  // Replace Value (mitcad#1292): its text, empty back to the measured value.
+  command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("replace"), QStringLiteral(" SEE NOTE "));
+  CHECK(command.value(QStringLiteral("format")).toObject() ==
+        QJsonObject({{QStringLiteral("replace"), QStringLiteral("SEE NOTE")}}));
+  command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("replace"), QStringLiteral(" "));
+  CHECK(command.value(QStringLiteral("format")).toObject().contains(QStringLiteral("replace")));
+  CHECK(command.value(QStringLiteral("format")).toObject().value(QStringLiteral("replace")).isNull());
   command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("prefix"), QStringLiteral("auto"));
   CHECK(command.value(QStringLiteral("format")).toObject().value(QStringLiteral("prefix")).isNull());
   CHECK(annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("letter"), QStringLiteral(" ")).isEmpty());

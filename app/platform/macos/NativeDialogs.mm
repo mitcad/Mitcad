@@ -355,6 +355,8 @@ QString title(QString text) {
   text.replace(QStringLiteral("&&"), QStringLiteral("\x01"));
   text.remove(QLatin1Char('&'));
   text.replace(QChar(1), QLatin1Char('&'));
+  // A Qt menu's second column (the assistant menu's states, mitcad#1299).
+  text.replace(QLatin1Char('\t'), QStringLiteral(" — "));
   return text;
 }
 QString plain(const QString& text) {

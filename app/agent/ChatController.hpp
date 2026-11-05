@@ -64,6 +64,10 @@ struct ChatHost {
   // The design's open comments (mitcad#1119): id, text, label (the target)
   // and author of each.
   std::function<QJsonArray()> comments;
+  // The labels (clientInfo names) of the assistants connected to this
+  // window over MCP, not the chat's own agent (mitcad#1297: Claude Desktop
+  // among them).
+  std::function<QStringList()> assistants;
 };
 
 class ChatController : public QObject, public mcp::ChatGate {
@@ -79,9 +83,21 @@ public:
   ChatAgent* agent() const { return m_agent; }
   const std::vector<ChatAgent*>& agents() const { return m_agents; }
   // The agents found on this computer (a file check), and the chosen one
-  // whether found or not: the panel's switcher. Each Claude Code found is
-  // one (mitcad#1289).
+  // whether found or not: the assistant menu's Outgoing connections
+  // (mitcad#1299). Each Claude Code found is one (mitcad#1289).
+  QList<ChatAgent*> foundAgents() const;
+  // Those the panel offers (chatAgentOffered): its switcher. One turned off
+  // is not listed and never started.
   QList<ChatAgent*> detectedAgents() const;
+  static bool offered(const ChatAgent* candidate);
+  // Turns an agent on or off for every window's chat (the assistant
+  // menu's checkmark); the chosen one turned off gives way, when idle, to
+  // another one offered.
+  void setOffered(const QString& id, bool on);
+  // An agent's state in the assistant menu: as the switcher shows it
+  // (choiceState), "off" when turned off, "found" before the panel first
+  // looked for the agents.
+  QString menuState(const ChatAgent* candidate) const;
   // An agent's name in the switcher (its place beside it when several of
   // its kind are found: "Claude Code (~/.local/bin)"), and its state there:
   // checking, not found, not signed in, signed in as <account>, ready, and
@@ -91,6 +107,18 @@ public:
   // Another agent found that is ready, offered where the chosen one cannot
   // be used (its sign-in, its account); none: nullptr.
   ChatAgent* readyAlternative() const;
+  // The other agents found that share this one's sign-in (mitcad#1297: the
+  // same configuration folder, ChatAgent::signInFolder), in the switcher's
+  // order: its state says so, and an account error of one is all of theirs.
+  QList<ChatAgent*> sharingSignIn(const ChatAgent* candidate) const;
+  // Claude Desktop is connected to this window over MCP (mitcad#1297): the
+  // panel points to it where the chat cannot work.
+  bool claudeDesktopConnected() const;
+  // The window's connected assistants changed: the panel's state again.
+  void assistantsChanged();
+  // Brings Claude Desktop forward through its claude:// link (no rights of
+  // its own: the link its installation registers).
+  void openClaudeDesktop();
   // Another agent: its setup is checked, and a new conversation starts in
   // it; it is the last used one from now on (chat/agent).
   void chooseAgent(const QString& id);
@@ -202,6 +230,11 @@ private:
   // The Claude Codes found besides the lookup's first one, as agents of
   // their own (mitcad#1289); new ones only.
   void addClaudeCodes();
+  // The agents of `among` with the sign-in of `candidate`, not itself.
+  static QList<ChatAgent*> sameSignInAs(const ChatAgent* candidate, const QList<ChatAgent*>& among);
+  // Each agent found that shares the sign-in of one before it, logged when
+  // that changes (mitcad#1297).
+  void noteShares();
   void accountFailed(const QJsonObject& account, const QString& text);
   void beginAccountProbe();
   // Check again's setup check has an outcome (mitcad#1155,
@@ -218,7 +251,10 @@ private:
   std::vector<ChatAgent*> m_agents;
   ChatAgent* m_agent = nullptr;
   QStringList m_detected; // the ids of the agents found, at the last look
+  QStringList m_offered;  // the ids of the agents offered, at the last change (mitcad#1299)
+  bool m_lookedFor = false; // refreshSetup(true) ran: the agents' states were checked
   QStringList m_claudePrograms; // the other Claude Codes' executables made agents
+  QStringList m_loggedShares;   // "<agent> shares the sign-in of <agent>", as last logged
   ChatHistoryStore m_store;
   Activity m_activity = Activity::Idle;
   QString m_model;

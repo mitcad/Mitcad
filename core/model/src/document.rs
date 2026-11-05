@@ -582,6 +582,11 @@ impl DocState {
             };
             helix.settle_construction(had.unwrap_or(HelixConstruction::Mitcad));
         }
+        // A modelled thread made or edited without `ends` runs out
+        // (mitcad#1300).
+        if let FeatureDef::Thread(thread) = &mut resolved {
+            thread.settle_ends(crate::features::thread::ThreadEnds::RunOut);
+        }
         if let FeatureDef::SheetFace(face) = &mut resolved {
             face.settle(match old {
                 Some(FeatureDef::SheetFace(old)) => Some(old),
@@ -1457,6 +1462,9 @@ pub struct Document<K: Kernel> {
     preview: Option<Preview<K::Shape>>,
     /// What loading the design file changed, such as renamed parameters.
     warnings: Vec<String>,
+    /// The notes of drawings whose views were pinned to what they showed
+    /// (mitcad#1293, [`Document::take_drawing_notes`]), not yet taken.
+    drawing_notes: Vec<String>,
     /// Where recomputes report progress and find cancel requests (P7).
     monitor: Option<Arc<RecomputeMonitor>>,
     /// Reads library components (mitcad#64); the process's when None.
@@ -1553,6 +1561,7 @@ impl<K: Kernel> Document<K> {
             recomputes: 0,
             preview: None,
             warnings: Vec::new(),
+            drawing_notes: Vec::new(),
             monitor: None,
             resolver: None,
             source_directory: RwLock::new(None),
@@ -1723,6 +1732,9 @@ impl<K: Kernel> Document<K> {
         self.recomputes += 1;
         // Results only the last ones held may go now (a memory budget).
         self.cache.trim();
+        // The views of a design file written before mitcad#1293 keep what
+        // they show now.
+        self.pin_drawing_subjects();
     }
 
     /// Recomputes from now on report their progress to `monitor` and stop
@@ -1883,6 +1895,7 @@ impl<K: Kernel> Document<K> {
             recomputes: self.recomputes,
             preview: None,
             warnings: Vec::new(),
+            drawing_notes: Vec::new(),
             monitor: None,
             resolver: self.resolver.clone(),
             source_directory: RwLock::new(self.source_directory()),

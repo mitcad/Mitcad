@@ -1717,17 +1717,19 @@ void test_exceptions_across_the_bridge() {
 // The end pieces of a modelled thread (mitcad#1231): a revolved body with
 // a bore 8 mm across and an M10x1.5 thread modelled in it, 4 mm in from
 // its high end down to its low mouth (its length follows the profile's
-// height d2), with end chamfers asked for at both ends (the mouth gets
-// one). Chamfer1 chamfers the edge where the thread meets the plain rest
-// of the bore, Fillet1 rounds an edge of that chamfer. A change of the
-// profile's height gives the thread more turns or fewer: the end's pieces
-// are counted from the end, so the chamfer and the fillet keep working
-// with their references as they are. A design that names the end piece by
-// its number along the thread (as designs saved before name it) finds the
-// edge again, with a notice.
+// height d2), with an end chamfer at the mouth (its `end`; the thread's
+// start, 4 mm in, ends flat). Chamfer1 chamfers the edge where the thread
+// meets the plain rest of the bore, Fillet1 rounds an edge of that
+// chamfer. A change of the profile's height gives the thread more turns or
+// fewer: the end's pieces are counted from the end, so the chamfer and the
+// fillet keep working with their references as they are. A design that
+// names the end piece by its number along the thread (as designs saved
+// before name it) finds the edge again, with a notice. With end chamfers
+// asked for at both ends, the start inside the bore runs out along its
+// chamfer's cone (mitcad#1300), and its end pieces keep their names too.
 const std::string kBore = "F2:side(c4[c3,c1])";
 
-rust::Box<mitcad::Document> threaded_bore() {
+rust::Box<mitcad::Document> threaded_bore(const char* chamfer = "end") {
   auto document = mitcad::new_document();
   run(*document, R"({"cmd": "sketch.create"})");
   run(*document, sketch_rectangle("F1", 4.0, 0, 6.0, 20)); // d1 width, d2 height
@@ -1735,8 +1737,29 @@ rust::Box<mitcad::Document> threaded_bore() {
                      kRectangle + R"j("}], "axis": "y", "extent": {"type": "full"}, "operation": "new_body"}})j");
   run(*document, R"j({"cmd": "add_feature", "def": {"type": "thread", "faces": [{"body": "F2.b0", "face": ")j" + kBore +
                      R"j("}], "thread": {"designation": "M10x1.5", "class": "6H"}, "modeled": true,
-                     "length": "d2 - 4 mm", "offset": 4, "chamfer": "both"}})j");
+                     "length": "d2 - 4 mm", "offset": 4, "chamfer": ")j" +
+                     std::string(chamfer) + R"j("}})j");
   return document;
+}
+
+// The document as a design file written before mitcad#1300 holds it: its
+// thread without `ends`, which opening reads as the flat ends threads had
+// then.
+rust::Box<mitcad::Document> as_saved_before(const mitcad::Document& document) {
+  std::string json(document.to_json());
+  bool found = false;
+  for (const char* field : {R"("ends": "run_out")", R"("ends":"run_out")"}) {
+    const std::size_t at = json.find(field);
+    const std::size_t comma = at == std::string::npos ? std::string::npos : json.rfind(',', at);
+    if (comma == std::string::npos) {
+      continue;
+    }
+    json.erase(comma, at + std::string(field).size() - comma);
+    found = true;
+    break;
+  }
+  CHECK(found);
+  return mitcad::load_document(json);
 }
 
 // Chamfer1 (F4) on `chamfered` and Fillet1 (F5) on `filleted`.
@@ -1836,6 +1859,54 @@ void test_thread_end_pieces_keep_their_names() {
       const auto body = document->body_shape("F2.b0");
       CHECK(!body->find_faces("F4:chamfer(" + end + ")").empty());
       CHECK(!body->find_faces("F5:fillet(E{" + kBore + "|" + chamfer_face + "})").empty());
+    }
+  }
+  {
+    // A design saved before mitcad#1300 with chamfers asked for at both
+    // ends: its thread keeps the flat start it had (the start inside the
+    // bore got no chamfer then), and the chamfer and the fillet on it keep
+    // their references, the chamfer's face its piece number, at every
+    // height.
+    auto document = as_saved_before(*threaded_bore("both"));
+    CHECK(contains(run(*document, R"({"cmd": "recompute"})"), R"("error":null)"));
+    CHECK(feature_ok(*document, "Thread1"));
+    CHECK(document->body_shape("F2.b0")->find_edges(end).size() == 1);
+    CHECK(contains(std::string(document->to_json()), R"("ends": "flat")"));
+    chamfer_and_fillet(*document, end, "E{" + kBore + "|" + chamfer_face + "}");
+    CHECK(feature_ok(*document, "Fillet1"));
+    double previous = body_volume(*document);
+    for (const double height : {23.0, 17.0, 21.5}) {
+      CHECK(contains(run(*document, set("d2", height)), R"("error":null)"));
+      for (const char* name : {"Thread1", "Chamfer1", "Fillet1"}) {
+        CHECK(feature_ok(*document, name));
+      }
+      const auto body = document->body_shape("F2.b0");
+      CHECK(body->find_edges(end).empty());
+      CHECK(!body->find_faces(chamfer_face).empty());
+      CHECK(!body->find_faces("F5:fillet(E{" + kBore + "|" + chamfer_face + "})").empty());
+      const double volume = body_volume(*document);
+      CHECK(std::abs(volume - previous) > 1.0);
+      previous = volume;
+    }
+  }
+  {
+    // Chamfers asked for at both ends: the start runs out along its cone
+    // (mitcad#1300). The cone's edge with the bore is still the end
+    // piece's, by the same name at every height; the chamfer on it is one
+    // piece there.
+    const std::string runout_face = "F4:chamfer(" + end + ")";
+    auto document = threaded_bore("both");
+    CHECK(feature_ok(*document, "Thread1"));
+    CHECK(document->body_shape("F2.b0")->find_edges(end).size() == 1);
+    chamfer_and_fillet(*document, end, "E{" + kBore + "|" + runout_face + "}");
+    for (const double height : {23.0, 17.0, 21.5}) {
+      CHECK(contains(run(*document, set("d2", height)), R"("error":null)"));
+      for (const char* name : {"Thread1", "Chamfer1", "Fillet1"}) {
+        CHECK(feature_ok(*document, name));
+      }
+      const auto body = document->body_shape("F2.b0");
+      CHECK(!body->find_faces(runout_face).empty());
+      CHECK(!body->find_faces("F5:fillet(E{" + kBore + "|" + runout_face + "})").empty());
     }
   }
 }

@@ -32,11 +32,19 @@ namespace mitcad::geometry {
 // the major diameter, a bore wider than the minor one) the teeth are added
 // up to the crest. The part runs between planes across the axis; at an end
 // of the face with no material beyond it (the free end of a shaft, the
-// mouth of a hole) the thread runs out through it. An end against the
+// mouth of a hole) the thread runs out through it. So it does, by a pitch,
+// at an end of the face beyond which material lies only on the material's
+// side of the crest (mitcad#1300): a cone or a countersink that opens away
+// from a hole's thread, a shaft's end chamfer or a neck narrowing away
+// from its thread; the grooves cut into that face as far as they reach
+// it, and fade out of it. Material past the end on the crest's other side
+// (a hole's floor or narrower continuation, a shaft's shoulder or wider
+// continuation) stops the thread there. An end against the
 // body that is uneven (a shank under a head's serrated underside; the
 // face's end not one circle across the axis) ends the thread a hundredth
 // of a pitch short of where the face ends all round (mitcad#901), so that
-// it cuts nothing beyond the face.
+// it cuts nothing beyond the face. `flat_ends` keeps the ends as threads
+// were cut before mitcad#1300.
 //
 // The helix: take the axis pointing up (+Z; axes across Z towards +Y, the
 // X axis towards +X), whichever way the face's surface runs. From the
@@ -110,9 +118,20 @@ struct ThreadSpec {
   // hole's mouth). The cones' faces are named
   // <feature>:thread_chamfer_low(<face reference>) and
   // <feature>:thread_chamfer_high(<face reference>).
+  // `low_runout` and `high_runout` (mitcad#1300): where that end of a
+  // modelled straight thread's part lies inside its face (a partial
+  // thread), the chamfer is the thread's run-out there: the grooves (and
+  // what lies beyond the crest) go on past the end inside a cone at
+  // `chamfer_angle` to the axis, for an internal thread narrowing from the
+  // root (the major diameter) at the end to the face, for an external one
+  // widening from its root (the minor diameter) to the face, so that they
+  // fade out of the face with no flat wall. Ignored at an end the part
+  // reaches, and with `flat_ends`.
   struct ChamferEnds {
     bool low = false;
     bool high = false;
+    bool low_runout = false;
+    bool high_runout = false;
   };
   bool chamfer = false;
   double chamfer_angle = 0.0;
@@ -135,6 +154,13 @@ struct ThreadSpec {
   // middle at the face's low end turned by `angle`). No end chamfers.
   double taper = 0.0;
   bool taper_high_end = true;
+  // The ends as threads were cut before mitcad#1300 (an import whose
+  // source program leaves them so): a modelled straight thread's grooves
+  // run out only through ends with nothing of the body beyond them, and
+  // stop flat at every other end, a cone or countersink that opens away
+  // from the thread too; no run-outs along the chamfers at a partial
+  // thread's ends inside its face.
+  bool flat_ends = false;
 };
 
 // The body with the threads. The thread's new faces (flanks, crests and

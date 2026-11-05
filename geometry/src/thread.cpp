@@ -71,6 +71,7 @@
 #include <gp_Lin.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_XY.hxx>
 // OSD_Parallel.hxx brings in windows.h on Windows, whose empty near and far
 // macros would remove those names below.
 #ifdef near
@@ -323,6 +324,77 @@ TopoDS_Shape tube(const Thread& t, double inner, double outer, double from, doub
   return shape;
 }
 
+// A half-plane of the thread's axial section (mitcad#1300), `s` along the
+// axis and `r` the radius: the points with a s + b r <= c.
+struct HalfPlane {
+  double a = 0.0;
+  double b = 0.0;
+  double c = 0.0;
+};
+
+// The section between two radii and two positions along the axis within
+// the half-planes (a polygon clipped by each in turn), its corners as
+// (s, r); none where nothing of it is left.
+std::vector<gp_XY> clipped_section(double inner, double outer, double from, double to,
+                                   const std::vector<HalfPlane>& limits) {
+  std::vector<gp_XY> section{gp_XY(from, inner), gp_XY(to, inner), gp_XY(to, outer), gp_XY(from, outer)};
+  for (const HalfPlane& h : limits) {
+    std::vector<gp_XY> kept;
+    const std::size_t n = section.size();
+    for (std::size_t i = 0; i < n; ++i) {
+      const gp_XY& p = section[i];
+      const gp_XY& q = section[(i + 1) % n];
+      const double fp = h.a * p.X() + h.b * p.Y() - h.c;
+      const double fq = h.a * q.X() + h.b * q.Y() - h.c;
+      if (fp <= 0.0) {
+        kept.push_back(p);
+      }
+      if ((fp < 0.0 && fq > 0.0) || (fp > 0.0 && fq < 0.0)) {
+        kept.push_back(p + (q - p) * (fp / (fp - fq)));
+      }
+    }
+    // (Corners that fall together are one.)
+    section.clear();
+    for (const gp_XY& p : kept) {
+      if (section.empty() || (p - section.back()).Modulus() > kSame) {
+        section.push_back(p);
+      }
+    }
+    if (section.size() > 1 && (section.front() - section.back()).Modulus() <= kSame) {
+      section.pop_back();
+    }
+    if (section.size() < 3) {
+      return {};
+    }
+  }
+  return section;
+}
+
+// The solid of revolution about the thread's axis of an axial section
+// (clipped_section), a null shape for none: a tube limited by the
+// half-planes.
+TopoDS_Shape limited_tube(const Thread& t, double inner, double outer, double from, double to,
+                          const std::vector<HalfPlane>& limits) {
+  const std::vector<gp_XY> corners = clipped_section(inner, outer, from, to, limits);
+  if (corners.empty()) {
+    return TopoDS_Shape();
+  }
+  BRepBuilderAPI_MakePolygon section;
+  for (const gp_XY& corner : corners) {
+    section.Add(t.origin.Translated(gp_Vec(t.along) * corner.X() + gp_Vec(t.reference) * corner.Y()));
+  }
+  section.Close();
+  BRepBuilderAPI_MakeFace face(section.Wire(), true);
+  if (!face.IsDone()) {
+    throw std::runtime_error("the thread's run-out could not be built");
+  }
+  BRepPrimAPI_MakeRevol revol(face.Face(), gp_Ax1(t.origin, t.along), kTwoPi);
+  if (!revol.IsDone()) {
+    throw std::runtime_error("the thread's run-out could not be built");
+  }
+  return revol.Shape();
+}
+
 // The groove over several turns from the angle `theta`: its axial section
 // between two radii swept along the helix of its middle, a spine of one
 // edge per turn. (A spine of one edge over many turns makes OCCT's cut
@@ -437,9 +509,10 @@ gp_Trsf start_turn(const Thread& t, int k) {
 // turns covering more than a pitch past both ends, cut to the length by a
 // cylinder of radius `outer`; for several starts, each start's groove (the
 // first one turned about the axis). `screws` gets the screw surfaces its
-// faces approximate (screw_surfaces).
+// faces approximate (screw_surfaces). With `limits` (the run-outs' cones,
+// mitcad#1300) the length is that tube within them.
 TopoDS_Shape grooves(const Thread& t, double low, double high, double from, double to, double outer,
-                     std::vector<occ::handle<Geom_Surface>>& screws) {
+                     std::vector<occ::handle<Geom_Surface>>& screws, const std::vector<HalfPlane>& limits) {
   const double sign = t.right_handed ? 1.0 : -1.0;
   // The turns start a pitch before the start of the thread's helix (the
   // low end of a right-hand thread, the high end of a left-hand one). The
@@ -477,7 +550,15 @@ TopoDS_Shape grooves(const Thread& t, double low, double high, double from, doub
     }
     sweep = all;
   }
-  return common_of(sweep, tube(t, 0.0, outer, from, to), "the thread's grooves could not be cut to length");
+  TopoDS_Shape length;
+  if (!limits.empty()) {
+    // (From half the minor radius: the section keeps off the axis.)
+    length = limited_tube(t, 0.5 * t.minor_radius, outer, from, to, limits);
+  }
+  if (length.IsNull()) {
+    length = tube(t, 0.0, outer, from, to);
+  }
+  return common_of(sweep, length, "the thread's grooves could not be cut to length");
 }
 
 // Whether the body has material just past the end of the threaded part
@@ -665,7 +746,9 @@ TopoDS_Shape radial_band(const std::vector<TopoDS_Shape>& pieces, const std::str
 
 // The end chamfers of one face (mitcad#304), in the thread's axis terms:
 // whether its low and high end are to get one, the cone's radius at the
-// end and the tangent of its angle to the axis, and the names of the cones.
+// end and the tangent of its angle to the axis, and the names of the cones;
+// whether the grooves run out along a cone at that angle past its low and
+// high end where they lie inside the face (mitcad#1300).
 struct EndChamfers {
   bool low = false;
   bool high = false;
@@ -673,7 +756,46 @@ struct EndChamfers {
   double tan = 1.0;
   std::string low_name;
   std::string high_name;
+  bool low_runout = false;
+  bool high_runout = false;
 };
+
+// How far past the end of its part a modelled straight thread's run-out
+// along a cone of the chamfers' angle reaches (mitcad#1300): from the root
+// at the end until the cone has passed the tools' radii, down to `inner`
+// inside (a little inside the face or the crest), out to `outer` outside.
+double runout_reach(const Thread& t, const EndChamfers& c, double inner, double outer) {
+  return (t.internal ? t.root() - inner : outer - t.root()) / c.tan;
+}
+
+// The run-outs' cones of a face's part from `from` to `to` (mitcad#1300),
+// as limits of its tools' axial section: inside the cone that narrows from
+// an internal thread's root at the end away from the thread, outside the
+// one that widens from an external thread's root; none at ends without a
+// run-out. Within the part the cones lie beyond the root.
+std::vector<HalfPlane> runout_limits(const Thread& t, const EndChamfers& c, bool low, bool high, double from,
+                                     double to) {
+  const double root = t.root();
+  std::vector<HalfPlane> limits;
+  if (t.internal) {
+    // r <= root + (s - from) tan, r <= root - (s - to) tan.
+    if (low) {
+      limits.push_back({-c.tan, 1.0, root - c.tan * from});
+    }
+    if (high) {
+      limits.push_back({c.tan, 1.0, root + c.tan * to});
+    }
+  } else {
+    // r >= root - (s - from) tan, r >= root + (s - to) tan.
+    if (low) {
+      limits.push_back({-c.tan, -1.0, -(root + c.tan * from)});
+    }
+    if (high) {
+      limits.push_back({c.tan, -1.0, c.tan * to - root});
+    }
+  }
+  return limits;
+}
 
 // The solid an end chamfer takes away at `at` along the thread's axis (the
 // low end with `side` -1, the high end with +1): for an external thread
@@ -856,17 +978,19 @@ TopoDS_Shape taper_tool(const Thread& t, double radius, double from, double to, 
 
 // A face's grooves from `from` to `to`, from the root to a little past the
 // crest (no further: the grooves of neighbouring turns must not meet), cut
-// to length within the radius `outer`.
-TopoDS_Shape thread_grooves(const Thread& t, double from, double to, double outer, Screws& screws) {
+// to length within the radius `outer` (and within the run-outs' cones,
+// `limits`, mitcad#1300).
+TopoDS_Shape thread_grooves(const Thread& t, double from, double to, double outer, Screws& screws,
+                            const std::vector<HalfPlane>& limits = {}) {
   const double margin = 0.1 * t.pitch;
   // Where the flanks of a tooth meet.
   const double reach = t.reach();
   if (t.internal) {
     const double past = std::min(margin / 2.0, 0.5 * (t.minor_radius - (t.pitch_radius - reach)));
-    return grooves(t, t.minor_radius - past, t.major_radius, from, to, outer, screws);
+    return grooves(t, t.minor_radius - past, t.major_radius, from, to, outer, screws, limits);
   }
   const double past = std::min(margin / 2.0, 0.5 * (t.pitch_radius + reach - t.major_radius));
-  return grooves(t, t.minor_radius, t.major_radius + past, from, to, outer, screws);
+  return grooves(t, t.minor_radius, t.major_radius + past, from, to, outer, screws, limits);
 }
 
 // One face of a thread as modeled_thread reads it from the body and the
@@ -969,10 +1093,22 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
     const double outer = t.internal ? t.major_radius : std::max(face, t.crest()) + margin;
     bool free_low = false;
     bool free_high = false;
+    // The ends the grooves run out through (mitcad#1300): the free ones,
+    // and those with material past them only on the material's side of the
+    // crest (a cone or a countersink that opens away from the thread),
+    // nothing where the thread's crest and its mate lie.
+    bool run_low = false;
+    bool run_high = false;
     {
       const Timed timed(checks_time(trace));
       free_low = from <= kSame && !material_past(body.occt(), t, from, -1.0, inner, outer);
       free_high = to >= t.length - kSame && !material_past(body.occt(), t, to, 1.0, inner, outer);
+      const double mate_inner = t.internal ? inner : t.crest();
+      const double mate_outer = t.internal ? t.crest() : outer;
+      run_low = free_low || (!spec.flat_ends && from <= kSame &&
+                             !material_past(body.occt(), t, from, -1.0, mate_inner, mate_outer));
+      run_high = free_high || (!spec.flat_ends && to >= t.length - kSame &&
+                               !material_past(body.occt(), t, to, 1.0, mate_inner, mate_outer));
     }
     // At an end against the body that is uneven (mitcad#901: a shank under
     // a head's serrated underside), the tools stop a little short of where
@@ -980,10 +1116,10 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
     // the material beyond the face where the end is shorter, and their end
     // would touch the body's edges there, which the booleans leave open.
     const double short_of = kUnevenEndClearance * t.pitch;
-    if (!free_low && from <= kSame && p.even_low > from + kSame) {
+    if (!run_low && from <= kSame && p.even_low > from + kSame) {
       from = p.even_low + short_of;
     }
-    if (!free_high && to >= t.length - kSame && p.even_high < to - kSame) {
+    if (!run_high && to >= t.length - kSame && p.even_high < to - kSame) {
       to = p.even_high - short_of;
     }
     if (to - from <= kSame) {
@@ -998,22 +1134,34 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
       const double tool_outer = t.internal ? chamfers.radius : material + margin;
       chamfer_steps(steps, t, from, to, chamfers, free_low, free_high, tool_inner, tool_outer, material, p.face);
     }
-    if (free_low) {
+    // The run-outs along the chamfers' cones past the ends of the part
+    // inside the face (mitcad#1300), up to the face's ends.
+    const bool cone_low = chamfers.low_runout && !spec.flat_ends && p.from > kSame;
+    const bool cone_high = chamfers.high_runout && !spec.flat_ends && p.to < t.length - kSame;
+    const std::vector<HalfPlane> limits = runout_limits(t, chamfers, cone_low, cone_high, from, to);
+    const double cone_reach = runout_reach(t, chamfers, inner, outer);
+    if (run_low) {
       from -= t.pitch;
+    } else if (cone_low) {
+      from = std::max(0.0, from - cone_reach);
     }
-    if (free_high) {
+    if (run_high) {
       to += t.pitch;
+    } else if (cone_high) {
+      to = std::min(t.length, to + cone_reach);
     }
     // What lies beyond the crest goes first, then the grooves.
     if (std::abs(face - t.crest()) > kSame) {
-      steps.push_back({Stage::BeyondCrest, p.name, [t, face, from, to, margin](Screws&) {
-                         return t.internal ? tube(t, std::max(0.0, face - margin), t.minor_radius, from, to)
-                                           : tube(t, t.major_radius, face + margin, from, to);
+      steps.push_back({Stage::BeyondCrest, p.name, [t, face, from, to, margin, limits](Screws&) {
+                         const double band_in = t.internal ? std::max(0.0, face - margin) : t.major_radius;
+                         const double band_out = t.internal ? t.minor_radius : face + margin;
+                         return limits.empty() ? tube(t, band_in, band_out, from, to)
+                                               : limited_tube(t, band_in, band_out, from, to, limits);
                        }});
     }
     const double reach_out = t.major_radius + margin;
-    steps.push_back({Stage::Grooves, p.name, [t, from, to, reach_out](Screws& screws) {
-                       return thread_grooves(t, from, to, reach_out, screws);
+    steps.push_back({Stage::Grooves, p.name, [t, from, to, reach_out, limits](Screws& screws) {
+                       return thread_grooves(t, from, to, reach_out, screws, limits);
                      }});
     return steps;
   }
@@ -1571,6 +1719,9 @@ FacePlan plan_face(const Shape& body, const ThreadSpec& spec, std::size_t k, Fac
     chamfers.tan = std::tan(spec.chamfer_angle);
     chamfers.low_name = face_name(spec.feature, "thread_chamfer_low", face);
     chamfers.high_name = face_name(spec.feature, "thread_chamfer_high", face);
+    // (A modelled straight thread's run-outs along the cones, mitcad#1300.)
+    chamfers.low_runout = spec.groove && spec.taper <= 0.0 && spec.chamfer_ends[k].low_runout;
+    chamfers.high_runout = spec.groove && spec.taper <= 0.0 && spec.chamfer_ends[k].high_runout;
   }
   const bool reversed = !thread.along.IsEqual(cylinder.axis.Direction(), 1.0e-9);
   if (reversed) {
@@ -1580,6 +1731,7 @@ FacePlan plan_face(const Shape& body, const ThreadSpec& spec, std::size_t k, Fac
     to = cylinder.length - to;
     std::swap(chamfers.low, chamfers.high);
     std::swap(chamfers.low_name, chamfers.high_name);
+    std::swap(chamfers.low_runout, chamfers.high_runout);
   }
   // A taper pipe thread (mitcad#733): where it starts, and which ends
   // of its part are free (nothing of the body beyond them).
@@ -1652,11 +1804,20 @@ ShapePtr thread_in_order(const Shape& body, const ThreadSpec& spec, std::vector<
 // checks past the ends of its part classify: about its axis out to its
 // largest radius (the face's, the thread's, the chamfers' with their run
 // past the end, a taper's growth) and a margin, and along it two pitches
-// past both ends of its part (the tools run out by a pitch at most).
+// past both ends of its part (the tools run out by a pitch at most), or
+// further where a run-out along a chamfer's cone reaches further
+// (mitcad#1300).
 Bnd_Box reach_of(const FacePlan& p) {
   const Thread& t = p.thread;
-  const double low = p.from - 2.0 * t.pitch;
-  const double high = p.to + 2.0 * t.pitch;
+  double past = 2.0 * t.pitch;
+  if (p.chamfers.low_runout || p.chamfers.high_runout) {
+    const double margin = 0.1 * t.pitch;
+    const double reach = runout_reach(t, p.chamfers, std::max(0.0, std::min(t.face_radius, t.crest()) - margin),
+                                      std::max(t.face_radius, t.crest()) + margin);
+    past = std::max(past, reach + t.pitch);
+  }
+  const double low = p.from - past;
+  const double high = p.to + past;
   double radius = std::max({t.face_radius, t.major_radius, t.minor_radius});
   if (p.chamfers.low || p.chamfers.high) {
     radius = std::max(radius, p.chamfers.radius + 0.1 * t.pitch * p.chamfers.tan);

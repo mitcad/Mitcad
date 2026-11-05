@@ -36,6 +36,8 @@
 #include <QTabBar>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <QtLogging>
 
@@ -45,6 +47,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/Theme.hpp"
 #include "../view/AnnotationDialogs.hpp"
@@ -56,6 +59,11 @@ namespace {
 
 // The width of the panel beside the sheet, pixels.
 constexpr int kPanelWidth = 230;
+
+// A base view's Shows row's body uid (empty for an occurrence) and its
+// occurrence path (mitcad#1293).
+constexpr int kShowsBody = Qt::UserRole;
+constexpr int kShowsPath = Qt::UserRole + 1;
 
 QString compact(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
@@ -167,6 +175,12 @@ bool spacedType(const QString& type) {
          type == QStringLiteral("dimension");
 }
 
+// The annotations whose drag snaps their leader to multiples of 45 degrees
+// (mitcad#1294): a note's text, a datum's square, a frame.
+bool leaderType(const QString& type) {
+  return type == QStringLiteral("note") || type == QStringLiteral("datum") || type == QStringLiteral("frame");
+}
+
 // A line or an arc drawn outside the model (mitcad#729), whose clicks snap
 // to a view's points (mitcad#1272).
 bool sketchTool(const DrawingToolDef* tool) {
@@ -175,8 +189,12 @@ bool sketchTool(const DrawingToolDef* tool) {
 
 QString millimetres(double value) { return QString::number(value, 'f', 2); }
 
-// A `drawing_snap` answer's hint beside the snapped place: "12 mm × 2".
+// A `drawing_snap` answer's hint beside the snapped place: "12 mm × 2";
+// a leader's angle, "45°" (mitcad#1294).
 QString snapHint(const QJsonObject& answer) {
+  if (answer.contains(QStringLiteral("angle"))) {
+    return QObject::tr("%1°").arg(QString::number(answer.value(QStringLiteral("angle")).toDouble(), 'g', 4));
+  }
   return QObject::tr("%1 mm × %2")
       .arg(QString::number(answer.value(QStringLiteral("spacing")).toDouble(), 'g', 4))
       .arg(answer.value(QStringLiteral("multiple")).toInt());
@@ -441,6 +459,7 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   connect(m_sheetView, &DrawingSheetView::pickRequested, this, &DrawingWorkspace::pickRequested);
   connect(m_sheetView, &DrawingSheetView::annotationSelected, this, [this] { fillPanel(); });
   connect(m_sheetView, &DrawingSheetView::annotationMoved, this, &DrawingWorkspace::annotationMoved);
+  connect(m_sheetView, &DrawingSheetView::annotationTipMoved, this, &DrawingWorkspace::annotationTipMoved);
   connect(m_sheetView, &DrawingSheetView::annotationDeleteRequested, this, &DrawingWorkspace::deleteAnnotation);
   connect(m_sheetView, &DrawingSheetView::detailCircleMoved, this, [this](int view, QPointF center) {
     run({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_view")},
@@ -652,6 +671,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   // The views the model could not draw, in the status bar when that
   // changes (their boxes show on the sheet).
   QStringList problems;
+  QStringList gone;
   // A cut sheet's warnings (overlaps, parts off the sheet, missing
   // bodies) say it all.
   if (m_cutSheet) {
@@ -675,11 +695,21 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
       problems << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt())
                       .arg(view.value(QStringLiteral("error")).toString());
     }
+    // What of the bodies it keeps is gone from the design (mitcad#1293): a
+    // warning, the rest drawn.
+    for (const QJsonValue& warning : view.value(QStringLiteral("warnings")).toArray()) {
+      gone << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt()).arg(warning.toString());
+    }
   }
-  const QString said = problems.join(QStringLiteral("; "));
+  const QString said = (problems + gone).join(QStringLiteral("; "));
   if (said != m_problems) {
     m_problems = said;
-    setStatus(said, true);
+    if (!problems.isEmpty()) {
+      setStatus(said, true);
+    } else if (!gone.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Drawing view warnings: %1").arg(said);
+      m_host.showStatus(said, NoticeLevel::Warning);
+    }
   }
   // After the event that changed the model: a field of the panel may have
   // changed it, and its row goes with the rebuild.
@@ -1023,6 +1053,13 @@ void DrawingWorkspace::fillViewPanel(int id) {
     setErrorStyleSheet(why); // the view is missing (mitcad#1041)
     m_form->addRow(why);
   }
+  // Bodies or occurrences it keeps that are gone (mitcad#1293).
+  for (const QJsonValue& warning : json.value(QStringLiteral("warnings")).toArray()) {
+    auto* gone = new QLabel(warning.toString());
+    gone->setWordWrap(true);
+    setWarningStyleSheet(gone);
+    m_form->addRow(gone);
+  }
   if (type == QStringLiteral("base")) {
     const DrawingToolDef& base = *drawingTool(QStringLiteral("drawing.base_view"));
     const QJsonValue direction = json.value(QStringLiteral("direction"));
@@ -1046,25 +1083,17 @@ void DrawingWorkspace::fillViewPanel(int id) {
       }
     });
     m_form->addRow(tr("Orientation"), named(orientation, "drawingViewOrientation"));
-    // What it shows, by name (mitcad#725): the drawing's component, one of
-    // its occurrences or one of its bodies; another subject (several
-    // bodies) as it is.
-    const QList<QPair<QString, QString>> shown = subjects();
-    const QString current = subjectChoice(json.value(QStringLiteral("subject")).toObject());
-    QComboBox* shows = comboOf(shown, current);
-    if (current.isEmpty()) {
-      shows->addItem(tr("Chosen Bodies"), QString());
-      shows->setCurrentIndex(shows->count() - 1);
-    }
-    connect(shows, &QComboBox::currentIndexChanged, this, [edit, shows] {
-      const QString value = shows->currentData().toString();
-      if (value.isEmpty()) {
-        return;
-      }
-      const QJsonObject subject = subjectOf(value);
-      edit(QStringLiteral("subject"), subject.isEmpty() ? QStringLiteral(R"({"type": "design"})") : compact(subject));
+    // What it shows (mitcad#1293): the occurrences and bodies it keeps,
+    // checked in a list of the component's; each change one undo step.
+    // Update from Model takes what the 3D view shows now.
+    m_form->addRow(tr("Shows"), named(showsList(id, json.value(QStringLiteral("subject")).toObject()), "drawingViewShows"));
+    auto* update = new QPushButton(tr("Update from Model"));
+    update->setToolTip(tr("Shows the occurrences and bodies the 3D view shows now"));
+    connect(update, &QPushButton::clicked, this, [edit, id] {
+      qDebug().noquote() << QStringLiteral("Drawing view %1 updated from the model").arg(id);
+      edit(QStringLiteral("subject"), QStringLiteral(R"({"type": "design"})"));
     });
-    m_form->addRow(tr("Shows"), named(shows, "drawingViewShows"));
+    m_form->addRow(QString(), named(update, "drawingViewUpdate"));
   }
   if (type == QStringLiteral("projected")) {
     QComboBox* side = comboOf(sideChoices(), json.value(QStringLiteral("side")).toString());
@@ -1252,6 +1281,87 @@ QList<QPair<QString, QString>> DrawingWorkspace::subjects() const {
     qDebug().noquote() << QStringLiteral("Drawing subjects not listed: %1").arg(QString::fromUtf8(e.what()));
   }
   return subjectChoices(component, name, components, bodies);
+}
+
+QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
+  const QString component = m_answer.value(QStringLiteral("component")).toString();
+  QJsonObject components;
+  QJsonArray bodies;
+  try {
+    components = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
+    bodies = m_host.model().queryArray(QStringLiteral("bodies"));
+  } catch (const std::exception& e) {
+    qDebug().noquote() << QStringLiteral("Drawing subjects not listed: %1").arg(QString::fromUtf8(e.what()));
+  }
+  auto* tree = new QTreeWidget;
+  tree->setHeaderHidden(true);
+  tree->setColumnCount(1);
+  tree->setRootIsDecorated(true);
+  // Occurrences fold over their bodies and occurrences: a tree.
+  panel::setCompactIndentation(tree, panel::Indent::Tree);
+  tree->setUniformRowHeights(true);
+  tree->setToolTip(tr("The occurrences and bodies the view draws"));
+  // An occurrence's box follows its bodies' (all, some, none); a click on
+  // it checks or clears them all.
+  QVector<QTreeWidgetItem*> parents;
+  int bodiesListed = 0;
+  int bodiesShown = 0;
+  for (const SubjectRow& row : subjectRows(component, components, bodies)) {
+    parents.resize(std::min(static_cast<int>(parents.size()), row.depth));
+    QTreeWidgetItem* item = parents.isEmpty() ? new QTreeWidgetItem(tree) : new QTreeWidgetItem(parents.last());
+    item->setText(0, row.label);
+    item->setData(0, kShowsBody, row.body);
+    item->setData(0, kShowsPath, row.occurrence);
+    if (row.body.isEmpty()) {
+      item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable | Qt::ItemIsAutoTristate);
+      parents.append(item);
+    } else {
+      const bool on = subjectShows(subject, row.body, row.occurrence);
+      item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+      item->setCheckState(0, on ? Qt::Checked : Qt::Unchecked);
+      ++bodiesListed;
+      bodiesShown += on ? 1 : 0;
+    }
+  }
+  // An occurrence without bodies below it has no box of its own.
+  for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+    QTreeWidgetItem* item = *it;
+    if (item->data(0, kShowsBody).toString().isEmpty() && !item->data(0, Qt::CheckStateRole).isValid()) {
+      item->setFlags(item->flags() & ~(Qt::ItemIsUserCheckable | Qt::ItemIsAutoTristate));
+    }
+  }
+  qDebug().noquote() << QStringLiteral("Drawing view %1 shows %2 of %3 bodies").arg(view).arg(bodiesShown).arg(bodiesListed);
+  // A few rows in sight (the occurrences folded); more scroll.
+  const int rows = std::clamp(static_cast<int>(tree->topLevelItemCount()), 3, 8);
+  const int rowHeight = tree->fontMetrics().height() + 6;
+  tree->setFixedHeight(rows * rowHeight + 2 * tree->frameWidth() + 2);
+  // Its rows' places logged again once it is laid out (the UI tests click
+  // them), and when a row is unfolded.
+  new PlaceWatcher(tree, [this] { logButtons(); });
+  connect(tree, &QTreeWidget::itemExpanded, this, [this] { QTimer::singleShot(0, this, [this] { logButtons(); }); });
+  // A change (one box, or an occurrence's, which changes its bodies' one
+  // by one) sends the bodies checked once, after it.
+  const auto pending = std::make_shared<bool>(false);
+  connect(tree, &QTreeWidget::itemChanged, this, [this, tree, view, pending](QTreeWidgetItem*, int) {
+    if (*pending) {
+      return;
+    }
+    *pending = true;
+    QTimer::singleShot(0, tree, [this, tree, view, pending] {
+      *pending = false;
+      QVector<QPair<QString, QString>> chosen;
+      for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+        const QTreeWidgetItem* item = *it;
+        const QString body = item->data(0, kShowsBody).toString();
+        if (!body.isEmpty() && item->checkState(0) == Qt::Checked) {
+          chosen.append({body, item->data(0, kShowsPath).toString()});
+        }
+      }
+      qDebug().noquote() << QStringLiteral("Drawing view %1 Shows changed: %2 bodies").arg(view).arg(chosen.size());
+      editView(view, QStringLiteral("subject"), compact(chosenSubject(chosen)));
+    });
+  });
+  return tree;
 }
 
 QJsonObject DrawingWorkspace::cameraDirection() {
@@ -1464,7 +1574,7 @@ void DrawingWorkspace::snapNow() {
   bool snapped = false;
   if (m_snapAnnotation != 0) {
     const SheetAnnotation* dragged = m_sheetView->annotation(m_snapAnnotation);
-    if (dragged != nullptr && spacedType(dragged->type) &&
+    if (dragged != nullptr && (spacedType(dragged->type) || leaderType(dragged->type)) &&
         askSnap({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_annotation")},
                  {QStringLiteral("drawing"), m_drawing},
                  {QStringLiteral("annotation"), m_snapAnnotation},
@@ -1485,10 +1595,14 @@ void DrawingWorkspace::snapNow() {
     m_sheetView->setPlacingSnap(snapped && at.size() == 2, QPointF(at.at(0).toDouble(), at.at(1).toDouble()),
                                 snapped ? snapHint(answer) : QString());
   }
-  const QString logged = snapped ? QStringLiteral("%1 mm x%2")
-                                       .arg(millimetres(answer.value(QStringLiteral("spacing")).toDouble()))
-                                       .arg(answer.value(QStringLiteral("multiple")).toInt())
-                                 : QString();
+  // A leader's angle (mitcad#1294), or a dimension's spacing.
+  const QString logged =
+      !snapped ? QString()
+      : answer.contains(QStringLiteral("angle"))
+          ? QStringLiteral("leader at %1 degrees").arg(answer.value(QStringLiteral("angle")).toDouble(), 0, 'f', 0)
+          : QStringLiteral("%1 mm x%2")
+                .arg(millimetres(answer.value(QStringLiteral("spacing")).toDouble()))
+                .arg(answer.value(QStringLiteral("multiple")).toInt());
   if (logged != m_loggedSnap) {
     m_loggedSnap = logged;
     if (!logged.isEmpty()) {
@@ -1780,14 +1894,42 @@ void DrawingWorkspace::annotationMoved(int annotation, QPointF delta) {
   m_loggedSnap.clear();
   const SheetAnnotation* dragged = m_sheetView->annotation(annotation);
   if (dragged != nullptr && spacedType(dragged->type)) {
-    const bool freely = m_sheetView->releaseModifiers().testFlag(Qt::AltModifier);
+    const bool freely = DrawingSheetView::dragsFreely(m_sheetView->releaseModifiers());
     QJsonObject placed;
     if (askSnap(command, freely, &placed)) {
       command.insert(QStringLiteral("move"), placed.value(QStringLiteral("move")));
       qDebug().noquote() << QStringLiteral("Drawing dimension moved: %1").arg(placedText(placed, freely));
     }
+  } else if (dragged != nullptr && leaderType(dragged->type)) {
+    // A note's text, a datum's square or a frame: its leader snaps to
+    // 45 degrees (mitcad#1294); with Shift (or Alt) where it is dropped.
+    const bool freely = DrawingSheetView::dragsFreely(m_sheetView->releaseModifiers());
+    QJsonObject placed;
+    if (askSnap(command, freely, &placed)) {
+      command.insert(QStringLiteral("move"), placed.value(QStringLiteral("move")));
+      const QJsonArray offset = placed.value(QStringLiteral("text_offset")).toArray();
+      QString text = offset.size() == 2 ? QStringLiteral("text_offset %1,%2, ")
+                                              .arg(millimetres(offset.at(0).toDouble()),
+                                                   millimetres(offset.at(1).toDouble()))
+                                        : QString();
+      text += placed.value(QStringLiteral("snapped")).toBool()
+                  ? QStringLiteral("snapped to %1 degrees")
+                        .arg(placed.value(QStringLiteral("angle")).toDouble(), 0, 'f', 0)
+                  : (freely ? QStringLiteral("free") : QStringLiteral("not snapped"));
+      qDebug().noquote() << QStringLiteral("Drawing leader moved: %1 %2").arg(dragged->type, text);
+    }
   }
   run(command);
+}
+
+void DrawingWorkspace::annotationTipMoved(int annotation, QPointF delta) {
+  m_snapTimer->stop();
+  m_snapPending = false;
+  m_loggedSnap.clear();
+  run({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_annotation")},
+       {QStringLiteral("drawing"), m_drawing},
+       {QStringLiteral("annotation"), annotation},
+       {QStringLiteral("slide"), QJsonArray{delta.x(), delta.y()}}});
 }
 
 void DrawingWorkspace::deleteAnnotation(int annotation) {
@@ -1888,6 +2030,32 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
          "drawingAnnotationBefore");
     line(QStringLiteral("after"), format.value(QStringLiteral("after")).toString(), tr("Text After"),
          "drawingAnnotationAfter");
+    // Replace Value (mitcad#1292): a text in place of the value and its
+    // tolerance, the measured value as the sheet writes it its
+    // placeholder; while replaced the measured value stands beside it, so
+    // that a text the model has outgrown is seen. Empty: the value again.
+    const QJsonValue replaceValue = format.value(QStringLiteral("replace"));
+    const QString replaced = replaceValue.isString() ? replaceValue.toString() : QString();
+    const QString measured = json.value(QStringLiteral("measured")).toString();
+    auto* replace = new QLineEdit(replaced);
+    replace->setPlaceholderText(measured);
+    connect(replace, &QLineEdit::editingFinished, this, [field, replace, replaced] {
+      if (replace->text().trimmed() != replaced) {
+        field(QStringLiteral("replace"), replace->text(), QJsonObject());
+      }
+    });
+    m_form->addRow(tr("Replace Value"), named(replace, "drawingAnnotationReplace"));
+    if (replaceValue.isString()) {
+      if (!measured.isEmpty()) {
+        auto* measuredLabel = new QLabel(measured);
+        measuredLabel->setWordWrap(true);
+        m_form->addRow(tr("Measured"), named(measuredLabel, "drawingAnnotationMeasured"));
+      }
+      qDebug().noquote() << QStringLiteral("Drawing panel Replace Value: %1, measured %2 beside it")
+                                .arg(replaced, measured);
+    } else {
+      qDebug().noquote() << QStringLiteral("Drawing panel Replace Value: empty, placeholder %1").arg(measured);
+    }
   }
   if (type == QStringLiteral("note") || type == QStringLiteral("text")) {
     auto* change = new QPushButton(tr("Text…"));
@@ -1897,6 +2065,17 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
   if (type == QStringLiteral("datum")) {
     line(QStringLiteral("letter"), json.value(QStringLiteral("letter")).toString(), tr("Letter"),
          "drawingAnnotationLetter");
+    // Its terminator (mitcad#1296): its own, else a dot on a face picked
+    // face on and a triangle on an edge.
+    const QJsonObject firstPick = json.value(QStringLiteral("picks")).toArray().at(0).toObject();
+    const QString byPick =
+        firstPick.contains(QStringLiteral("on_face")) ? QStringLiteral("dot") : QStringLiteral("triangle");
+    QComboBox* terminator = comboOf({{QStringLiteral("triangle"), tr("Triangle")}, {QStringLiteral("dot"), tr("Dot")}},
+                                    json.value(QStringLiteral("terminator")).toString(byPick));
+    connect(terminator, &QComboBox::currentIndexChanged, this, [field, terminator] {
+      field(QStringLiteral("terminator"), terminator->currentData().toString(), QJsonObject());
+    });
+    m_form->addRow(tr("Terminator"), named(terminator, "drawingAnnotationTerminator"));
   }
   if (type == QStringLiteral("frame")) {
     const QJsonObject current = json.value(QStringLiteral("frame")).toObject();
@@ -3114,6 +3293,20 @@ void DrawingWorkspace::logButtons() {
         place = QStringLiteral("%1,%2").arg(box.x()).arg(box.y());
       }
       lines << QStringLiteral("Drawing panel %1 at %2").arg(field->objectName(), place);
+      // A list's rows in sight, each by its text (a base view's Shows,
+      // mitcad#1293): a click selects one, Space checks or clears it.
+      if (auto* list = qobject_cast<QTreeWidget*>(item->widget())) {
+        for (QTreeWidgetItemIterator it(list); *it != nullptr; ++it) {
+          const QRect box = list->visualItemRect(*it);
+          if (box.isValid() && list->viewport()->rect().contains(box.center())) {
+            const QPoint p = list->viewport()->mapTo(window(), box.center());
+            lines << QStringLiteral("Drawing panel %1 row %2 at %3,%4")
+                         .arg(field->objectName(), (*it)->text(0))
+                         .arg(p.x())
+                         .arg(p.y());
+          }
+        }
+      }
     }
   }
   const QString text = lines.join(QLatin1Char('\n'));

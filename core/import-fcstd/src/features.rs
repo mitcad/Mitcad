@@ -1769,10 +1769,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         }
                     }
                 }
-                candidate = candidate.then(
-                    json!({"type": "thread", "faces": faces, "thread": thread, "modeled": modeled}),
-                    " (thread)",
-                );
+                candidate = candidate.then(wall_thread(faces, thread, modeled), " (thread)");
             }
             for n in &notes {
                 candidate = candidate.partial(n.clone());
@@ -3548,6 +3545,20 @@ pub(super) fn in_polygon(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
         }
     }
     inside
+}
+
+/// A hole's thread on its walls `faces` (`thread`: `hole_thread`'s),
+/// tried after FreeCAD's own groove. A modelled one runs its grooves out
+/// (`ends` `run_out`, mitcad#1302): FreeCAD sweeps its groove from a pitch
+/// above the hole's top face down into the material, so a countersink or
+/// counterdrill at the top is threaded through and leaves no flat lip;
+/// FreeCAD's hole thread has no end chamfers.
+pub(super) fn wall_thread(faces: Vec<Value>, thread: &Value, modeled: bool) -> Value {
+    let mut def = json!({"type": "thread", "faces": faces, "thread": thread, "modeled": modeled});
+    if modeled {
+        def["ends"] = json!("run_out");
+    }
+    def
 }
 
 /// A modelled thread's groove as FreeCAD cuts it (`thread_groove`).

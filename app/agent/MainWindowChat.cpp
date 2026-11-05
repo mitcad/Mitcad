@@ -16,6 +16,7 @@
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QMenu>
+#include <QStringList>
 #include <QTimer>
 #include <QToolBar>
 #include <QUrl>
@@ -64,6 +65,27 @@ void MainWindow::registerChatCommands() {
 }
 
 mcp::ChatGate* MainWindow::chatGate() const { return m_chat; }
+
+QList<mcp::OutgoingAgent> MainWindow::chatOutgoingAgents() const {
+  QList<mcp::OutgoingAgent> outgoing;
+  if (m_chat == nullptr) {
+    return outgoing;
+  }
+  for (const agent::ChatAgent* candidate : m_chat->foundAgents()) {
+    // "Claude Code (chat panel)", "Claude Code (~/.local/bin, chat panel)".
+    const QString name = candidate->place().isEmpty()
+                             ? tr("%1 (chat panel)").arg(candidate->name())
+                             : tr("%1 (%2, chat panel)").arg(candidate->name(), candidate->place());
+    outgoing.append({candidate->id(), name, m_chat->menuState(candidate), agent::ChatController::offered(candidate)});
+  }
+  return outgoing;
+}
+
+void MainWindow::offerChatAgent(const QString& id, bool offered) {
+  if (m_chat != nullptr) {
+    m_chat->setOffered(id, offered);
+  }
+}
 
 void MainWindow::createChat() {
   agent::ChatHost host;
@@ -137,6 +159,17 @@ void MainWindow::createChat() {
       qInfo().noquote() << QStringLiteral("Chat: no comments: %1").arg(QString::fromUtf8(error.what()));
     }
     return open;
+  };
+  // The assistants connected to this window (mitcad#1297): the indicator
+  // already leaves the chat's own agent out.
+  host.assistants = [this]() {
+    QStringList labels;
+    for (const mcp::ConnectedAgent& connected : m_agentIndicator->agents()) {
+      if (!connected.chat) {
+        labels << connected.name;
+      }
+    }
+    return labels;
   };
   m_chat = new agent::ChatController(std::move(host), this);
 

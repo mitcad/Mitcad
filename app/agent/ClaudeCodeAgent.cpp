@@ -103,6 +103,12 @@ QString ClaudeCodeAgent::signedOutText() const {
   return tr("Claude Code is not signed in: sign in here, or run claude in a terminal and type /login.");
 }
 
+QString ClaudeCodeAgent::signInFolder() const {
+  // Started with MitCad's own environment: every Claude Code the chat runs
+  // signs in with the same folder, whichever program it is (mitcad#1297).
+  return mcp::claudeConfigurationFolder(qEnvironmentVariable("CLAUDE_CONFIG_DIR"), QDir::homePath());
+}
+
 QList<ChatAgent::Model> ClaudeCodeAgent::models() const {
   QList<Model> found;
   const QJsonObject answer = chatRequest({{QStringLiteral("op"), QStringLiteral("claude_models")}});

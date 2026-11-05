@@ -30,6 +30,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include "agent/ChatController.hpp"
 #include "browser/BrowserController.hpp"
 #include "files/LockController.hpp"
 #include "files/Projects.hpp"
@@ -707,6 +708,11 @@ void MainWindow::setMcpAgents(const QList<mcp::ConnectedAgent>& agents,
   m_mcpAgentNames = names;
   m_mcpAgents = int(agents.size());
   m_agentIndicator->setAgents(agents);
+  if (m_chat != nullptr) {
+    // The chat panel points to Claude Desktop while it is connected
+    // (mitcad#1297).
+    m_chat->assistantsChanged();
+  }
   if (m_mcpAgents > 0 && !before) {
     qInfo().noquote() << QStringLiteral("Agent connected");
     showHint(tr("%1 connected.").arg(shown.join(QStringLiteral(", "))));
@@ -714,17 +720,6 @@ void MainWindow::setMcpAgents(const QList<mcp::ConnectedAgent>& agents,
     qInfo().noquote() << QStringLiteral("Agent disconnected");
     showHint(tr("The AI assistant disconnected."));
   }
-}
-
-void MainWindow::disconnectAllMcpAgents() {
-  if (!m_mcpDisconnect) {
-    return;
-  }
-  QStringList ids;
-  for (const mcp::ConnectedAgent& agent : m_agentIndicator->agents()) {
-    ids << agent.id;
-  }
-  m_mcpDisconnect(ids);
 }
 
 void MainWindow::setMcpListener(const QString& instance, int port) {

@@ -344,6 +344,16 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawings"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-drawings PROPERTIES TIMEOUT 300)
+    # A drawing keeps what was put into it (mitcad#1293): a component hidden
+    # in the browser and one pasted later change no view; its Shows adds
+    # one, Update from Model takes what the 3D view shows, each one undo
+    # step; an older file's view is pinned when it opens.
+    add_test(NAME app.ui-windows-drawing-keeps-content
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-keeps-content-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-keeps-content"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-keeps-content PROPERTIES TIMEOUT 300)
 
     # Gear (mitcad#472): a spur gear from the panel, a rack meshing it.
     add_test(NAME app.ui-windows-gear
@@ -853,13 +863,14 @@ if(MITCAD_MESA_DIR)
     set_tests_properties(app.ui-windows-sketch-palette-create PROPERTIES TIMEOUT 300)
     # Remembered values (mitcad#1028): a fillet and a chamfer with 3 mm,
     # OK; Fillet and Chamfer again start with 3 mm, also after a new start;
-    # Cancel changes nothing.
+    # Cancel changes nothing. And Thread's settings kept by size
+    # (mitcad#1298): two modelled threads, so a longer timeout.
     add_test(NAME app.ui-windows-remembered-values
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
               -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-remembered-values-test.ps1"
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-remembered-values"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
-    set_tests_properties(app.ui-windows-remembered-values PROPERTIES TIMEOUT 300)
+    set_tests_properties(app.ui-windows-remembered-values PROPERTIES TIMEOUT 900)
     # A construction plane of the active component on a face of another
     # component's turned occurrence (mitcad#1029): kept in the active one,
     # linked, its preview where the finished plane is shown.

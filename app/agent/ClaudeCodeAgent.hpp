@@ -59,6 +59,8 @@ public:
   QString place() const override { return m_place; }
   QString account() const override { return m_account; }
   QString subscription() const override { return m_subscription; }
+  // CLAUDE_CONFIG_DIR of MitCad's environment, else ~/.claude (mitcad#1297).
+  QString signInFolder() const override;
   // The fix in a terminal beside Sign in (mitcad#1289).
   QString signedOutText() const override;
   // The executable it starts: fixed for another one found, else the

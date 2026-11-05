@@ -3,7 +3,13 @@
 
 // The account check's decisions (Check again, mitcad#1126, mitcad#1155) as
 // plain functions of the agent's readiness, so that the unit tests reach
-// the cases the UI cannot (tests/chat_account_check.cpp).
+// the cases the UI cannot (tests/chat_account_check.cpp), and which agents
+// share one sign-in (mitcad#1297), whose account error is all of theirs.
+
+#include <QDir>
+#include <QList>
+#include <QString>
+#include <QStringList>
 
 #include "ChatAgent.hpp"
 
@@ -45,6 +51,35 @@ inline bool agentUnusable(ChatAgent::Readiness readiness) {
 // its check would end at once).
 inline bool accountCheckOffered(bool accountError, ChatAgent::Readiness readiness, bool checking) {
   return accountError && !agentUnusable(readiness) && !checking;
+}
+
+// The others of `folders` (each agent's ChatAgent::signInFolder) that share
+// the sign-in of the one at `index` (mitcad#1297): the same configuration
+// folder, its path cleaned (on Windows in any case). An empty folder, a
+// sign-in of the agent's own, is shared with none.
+inline QList<int> sameSignIn(const QStringList& folders, int index) {
+  QList<int> others;
+  if (index < 0 || index >= int(folders.size())) {
+    return others;
+  }
+#ifdef Q_OS_WIN
+  constexpr Qt::CaseSensitivity kCase = Qt::CaseInsensitive;
+#else
+  constexpr Qt::CaseSensitivity kCase = Qt::CaseSensitive;
+#endif
+  const auto cleaned = [](const QString& folder) {
+    return folder.trimmed().isEmpty() ? QString() : QDir::cleanPath(QDir::fromNativeSeparators(folder.trimmed()));
+  };
+  const QString own = cleaned(folders.at(index));
+  if (own.isEmpty()) {
+    return others;
+  }
+  for (int other = 0; other < int(folders.size()); ++other) {
+    if (other != index && cleaned(folders.at(other)).compare(own, kCase) == 0) {
+      others.append(other);
+    }
+  }
+  return others;
 }
 
 } // namespace mitcad::agent

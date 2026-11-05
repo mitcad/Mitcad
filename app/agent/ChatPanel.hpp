@@ -149,6 +149,12 @@ private:
   QHash<int, ToolGroup> m_groups; // by the index of their first call
 
   QLabel* m_state = nullptr;
+  // Claude Desktop is connected while the chat cannot work (mitcad#1297):
+  // the line that points to it, and Open Claude Desktop.
+  QWidget* m_desktopRow = nullptr;
+  QLabel* m_desktopHint = nullptr;
+  QPushButton* m_openDesktop = nullptr;
+  QString m_loggedDesktop; // the state the Claude Desktop line was last logged for
   QFrame* m_notice = nullptr; // the privacy notice before the first message
   QLabel* m_noticeText = nullptr;
   QWidget* m_setupRow = nullptr;
@@ -172,6 +178,7 @@ private:
   QString m_waiting; // the message held by the privacy notice
   QString m_setupAction;
   QString m_loggedState;
+  QString m_loggedAgent; // the agent whose state m_loggedState is
   bool m_checked = false; // the agent was looked for since the panel opened
   bool m_presented = false; // shown by another frontend (setPresented)
 };

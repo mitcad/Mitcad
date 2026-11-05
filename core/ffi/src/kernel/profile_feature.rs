@@ -102,7 +102,9 @@ pub mod ffi {
         flank_clearance: f64,
         /// End chamfers (mitcad#304; `ThreadSpec` in thread.hpp): `groove`
         /// false cuts only them; per face whether its low (1) and high (2)
-        /// end along its cylinder's axis get one.
+        /// end along its cylinder's axis get one, and whether the grooves
+        /// run out along the cone past its low (4) and high (8) end inside
+        /// the face (mitcad#1300).
         groove: bool,
         chamfer: bool,
         chamfer_angle: f64,
@@ -121,6 +123,9 @@ pub mod ffi {
         /// (mitcad#893; `ThreadSpec` in thread.hpp).
         starts: u32,
         flank_angle: f64,
+        /// The ends as threads were cut before mitcad#1300 (`ThreadSpec`
+        /// in thread.hpp).
+        flat_ends: bool,
     }
 
     struct PlaneOutput {
@@ -414,7 +419,15 @@ pub fn thread_input(spec: &ThreadSpec<'_>) -> ffi::ThreadInput {
         chamfer_ends: spec.chamfer.as_ref().map_or_else(Vec::new, |c| {
             c.ends
                 .iter()
-                .map(|&(low, high)| u8::from(low) | (u8::from(high) << 1))
+                .enumerate()
+                .map(|(i, &(low, high))| {
+                    let (low_runout, high_runout) =
+                        c.runouts.get(i).copied().unwrap_or((false, false));
+                    u8::from(low)
+                        | (u8::from(high) << 1)
+                        | (u8::from(low_runout) << 2)
+                        | (u8::from(high_runout) << 3)
+                })
                 .collect()
         }),
         taper: spec.taper.map_or(0.0, |t| t.per_length),
@@ -422,6 +435,7 @@ pub fn thread_input(spec: &ThreadSpec<'_>) -> ffi::ThreadInput {
         angles: spec.face_angles.to_vec(),
         starts: spec.starts,
         flank_angle: spec.flank_angle,
+        flat_ends: spec.flat_ends,
     }
 }
 

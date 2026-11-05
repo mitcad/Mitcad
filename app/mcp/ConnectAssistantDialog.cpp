@@ -927,7 +927,7 @@ void ConnectAssistantDialog::refreshConnection() {
   // again; its installation's line is done as well.
   const bool desktopIdle = selected == AssistantClient::ClaudeDesktop && desktopExtensions && mine.isEmpty() &&
       elsewhere.isEmpty() && !m_desktopNotFound && m_process == nullptr && !m_result->property("setupError").toBool() &&
-      !assistantClientDisconnected(selected) && desktopExtensionInstalled();
+      !assistantClientBlocked(selected) && desktopExtensionInstalled();
   if (desktopIdle && !m_bundleSaved.isEmpty()) {
     m_bundleSaved.clear();
     clearMessage();
@@ -947,11 +947,18 @@ void ConnectAssistantDialog::refreshConnection() {
     state = QStringLiteral("busy");
     text = tr("Connecting %1…").arg(name);
     action = QStringLiteral("connect");
-  } else if (mine.isEmpty() && assistantClientDisconnected(selected)) {
-    // Disconnect sticks (mitcad#1289): its new clients are refused until
-    // Connect allows them again.
-    state = QStringLiteral("disconnected");
-    text = tr("Disconnected: %1 cannot connect to MitCad until you connect it again").arg(name);
+  } else if (mine.isEmpty() && assistantClientBlocked(selected)) {
+    // Blocked in the assistant menu, or by Disconnect (mitcad#1289,
+    // mitcad#1299): its new clients are refused until Allow (or the menu's
+    // checkmark) allows them again. A choice of several rows (Claude
+    // Desktop's chat and Code tab, Other's clients) names the blocked ones.
+    state = QStringLiteral("blocked");
+    QStringList blocked;
+    for (const QString& key : blockedAssistantRows()) {
+      if (assistantRowClient(key) == selected) blocked << assistantRowName(key);
+    }
+    text = assistantRows(selected).size() == 1 ? tr("Blocked in the assistant menu")
+                                               : tr("Blocked in the assistant menu: %1").arg(blocked.join(QStringLiteral(", ")));
     action = QStringLiteral("allow");
   } else if (selected == AssistantClient::ClaudeDesktop && m_desktopNotFound && mine.isEmpty()) {
     // No application took the extension: not a wait for an approval.
@@ -1055,11 +1062,13 @@ void ConnectAssistantDialog::refreshConnection() {
       : action == QStringLiteral("copy") ? tr("Copy configuration")
       : action == QStringLiteral("reopen") ? tr("Open in Claude Desktop again")
       : action == QStringLiteral("reveal") ? showFileText()
+      : action == QStringLiteral("allow") ? tr("Allow")
       : tr("Connect"));
   // The extension's file in the tooltip as well (also shown below the line).
   m_setup->setToolTip(action == QStringLiteral("reveal") ? QDir::toNativeSeparators(m_bundleSaved)
-      : action == QStringLiteral("disconnect") ? tr("Ends the connection until you connect again; keeps your assistant setup")
-      : action == QStringLiteral("allow") ? tr("Lets %1 connect to MitCad again").arg(name) : QString());
+      : action == QStringLiteral("disconnect") ? tr("Ends the connection and blocks it until you allow it; keeps your assistant setup")
+      : action == QStringLiteral("allow") ? tr("Lets %1 connect to MitCad again (its checkmark in the assistant menu)").arg(name)
+      : QString());
   // Check again goes with How to install (Claude Code, Codex).
   const bool checkAgain = state == QStringLiteral("not-installed") && selected != AssistantClient::ClaudeDesktop;
   m_checkAgain->setVisible(checkAgain);
@@ -1164,7 +1173,8 @@ void ConnectAssistantDialog::primaryAction() {
     clearMessage();
     refreshConnection();
   } else if (action == QStringLiteral("allow")) {
-    // Disconnect's refusal ends (mitcad#1289); the setup stays as it is.
+    // The block ends (mitcad#1289, mitcad#1299: the menu's rows are checked
+    // again); the setup stays as it is.
     allowAssistant(client());
     qInfo().noquote() << QStringLiteral("Assistant setup: %1 allowed again").arg(assistantName(client()));
     clearMessage();
@@ -1201,8 +1211,10 @@ void ConnectAssistantDialog::openClaudeDesktop() {
 void ConnectAssistantDialog::connectAssistant() {
   if (m_process) return;
   clearMessage();
-  // Any Connect allows an assistant the user disconnected again (mitcad#1289).
+  // Any Connect allows an assistant the user blocked again (mitcad#1289),
+  // and its rows stay in the assistant menu (mitcad#1299).
   allowAssistant(client());
+  rememberAssistantRows(assistantRows(client()));
   // Pressing the button with the folder line shown is the consent.
   if (!grantFolder()) return;
   if (client() == AssistantClient::Other) {

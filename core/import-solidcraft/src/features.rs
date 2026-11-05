@@ -1129,8 +1129,7 @@ fn thread<K: Kernel>(
             "a thread without a designation".to_owned(),
         ));
     }
-    let mut def = json!({"type": "thread", "faces": [{"body": body.to_string(), "face": face}],
-        "thread": {"designation": designation}, "modeled": t.modeled, "location": location});
+    let mut def = thread_def(&body.to_string(), &face, &designation, t.modeled, location);
     if t.length.is_some() {
         def["length"] = json!(im.slot(f, "/length")?);
     }
@@ -1141,6 +1140,27 @@ fn thread<K: Kernel>(
     }
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
+}
+
+/// A thread on the face `face` of `body`. A modelled one runs its grooves
+/// out (`ends` `run_out`, mitcad#1302): SolidCraft runs its groove a pitch
+/// past each end of the threaded length that is an end of the face,
+/// through whatever lies there (a cone or a countersink too), so it leaves
+/// no flat lip; an end inside the face stops square in both, and a
+/// SolidCraft thread has no end chamfers.
+pub(crate) fn thread_def(
+    body: &str,
+    face: &str,
+    designation: &str,
+    modeled: bool,
+    location: &str,
+) -> Value {
+    let mut def = json!({"type": "thread", "faces": [{"body": body, "face": face}],
+        "thread": {"designation": designation}, "modeled": modeled, "location": location});
+    if modeled {
+        def["ends"] = json!("run_out");
+    }
+    def
 }
 
 /// The objects of a pattern or mirror: its features' Mitcad features, or

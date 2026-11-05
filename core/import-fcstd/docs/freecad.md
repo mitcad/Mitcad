@@ -270,7 +270,10 @@ feature of their own, `elements.rs` references.
   wide at the major diameter plus the class's clearance) on a plane
   through the axis, swept by a `helix` from a pitch above the top as deep
   as FreeCAD's thread runs, then the hole; then as a modelled `thread`
-  (#57's profile with the bore as the minor diameter).
+  (#57's profile with the bore as the minor diameter). That `thread`'s
+  ends are `run_out` (mitcad#1302): FreeCAD's groove starts above the top
+  and threads a countersink or counterdrill there, leaving no flat lip,
+  and its hole thread has no end chamfers.
 - A hole is drilled at its sketch's circle and arc centres, or, without
   any, at its points: each drawn point once, in the sketch's order, and no
   construction point (FreeCAD's sketch shape leaves those out). Coincident

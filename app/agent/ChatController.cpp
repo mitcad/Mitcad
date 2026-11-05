@@ -117,11 +117,19 @@ ChatController::ChatController(ChatHost host, QObject* parent)
       m_agent = candidate;
     }
   }
-  if (!m_detected.contains(m_agent->id()) && !m_detected.isEmpty()) {
-    for (ChatAgent* candidate : m_agents) {
-      if (candidate->id() == m_detected.first()) {
-        m_agent = candidate;
-      }
+  // Nor when it is turned off in the assistant menu (mitcad#1299): the first
+  // one found that is offered.
+  if (!m_detected.contains(m_agent->id()) || !offered(m_agent)) {
+    const auto first = std::find_if(m_agents.begin(), m_agents.end(), [this](const ChatAgent* candidate) {
+      return m_detected.contains(candidate->id()) && offered(candidate);
+    });
+    if (first != m_agents.end()) {
+      m_agent = *first;
+    }
+  }
+  for (ChatAgent* candidate : m_agents) {
+    if (offered(candidate)) {
+      m_offered << candidate->id();
     }
   }
   // The bridge the agents start (mitcad#1170: inside an AppImage too).
@@ -150,6 +158,37 @@ ChatController::ChatController(ChatHost host, QObject* parent)
       m_agent->shutdown();
       m_marker.clear();
       m_agent->check();
+    }
+    emit setupChanged();
+  });
+  // An agent turned on or off in a window's assistant menu (mitcad#1299).
+  connect(&ChatNotifier::instance(), &ChatNotifier::offeredChanged, this, [this] {
+    QStringList now;
+    for (ChatAgent* candidate : m_agents) {
+      if (offered(candidate)) {
+        now << candidate->id();
+      }
+    }
+    const QStringList before = m_offered;
+    m_offered = now;
+    if (!offered(m_agent) && m_activity == Activity::Idle && !m_checkingAccount) {
+      // The chosen one off: another one offered, else none is started.
+      const QList<ChatAgent*> others = detectedAgents();
+      if (!others.isEmpty()) {
+        chooseAgent(others.first()->id());
+      } else {
+        closeAnswer();
+        m_agent->shutdown();
+        m_marker.clear();
+      }
+    }
+    // One turned on again shows its state, once the panel has looked for
+    // the agents; the custom command only once chosen.
+    for (ChatAgent* candidate : detectedAgents()) {
+      if (m_lookedFor && !before.contains(candidate->id()) && !candidate->running() &&
+          qobject_cast<AcpAgent*>(candidate) == nullptr) {
+        candidate->check();
+      }
     }
     emit setupChanged();
   });
@@ -198,10 +237,10 @@ void ChatController::addClaudeCodes() {
     m_claudePrograms << program;
     const QString digest =
         QString::fromLatin1(QCryptographicHash::hash(program.toUtf8(), QCryptographicHash::Sha256).toHex().left(8));
-    // The one Claude Desktop keeps (claude-code/<version>/claude).
-    const QDir folder = QFileInfo(program).absoluteDir();
-    const bool desktop = QFileInfo(folder.absolutePath()).dir().dirName() == QStringLiteral("claude-code");
-    const QString place = desktop ? tr("Claude Desktop's") : mcp::assistantPlace(program, home);
+    // The one Claude Desktop keeps (claude-code/<version>/claude, or
+    // claude-code/<version>/<build id>/claude.exe, mitcad#1297).
+    const QString place =
+        mcp::claudeDesktopKeepsClaudeCode(program) ? tr("Claude Desktop's") : mcp::assistantPlace(program, home);
     auto* found = new ClaudeCodeAgent(program, QStringLiteral("claude-") + digest, place, this);
     at = m_agents.insert(at, found) + 1;
     qInfo().noquote() << QStringLiteral("Chat: another Claude Code at %1").arg(QDir::toNativeSeparators(program));
@@ -234,6 +273,12 @@ QString ChatController::choiceState(const ChatAgent* candidate) const {
     }
     break;
   }
+  // One sign-in with another entry (mitcad#1297): trying that one does not
+  // help with this one's sign-in or account.
+  const QList<ChatAgent*> sharing = sharingSignIn(candidate);
+  if (!sharing.isEmpty()) {
+    state += QStringLiteral(" · ") + tr("same sign-in as %1").arg(choiceName(sharing.first()));
+  }
   const QJsonObject failure = m_accountErrors.value(candidate->id());
   if (!failure.isEmpty()) {
     state += QStringLiteral(" · ") + failure.value(QStringLiteral("reason")).toString();
@@ -251,6 +296,68 @@ ChatAgent* ChatController::readyAlternative() const {
   return nullptr;
 }
 
+QList<ChatAgent*> ChatController::sameSignInAs(const ChatAgent* candidate, const QList<ChatAgent*>& among) {
+  QStringList folders;
+  int own = -1;
+  for (int index = 0; index < int(among.size()); ++index) {
+    folders << among.at(index)->signInFolder();
+    if (among.at(index) == candidate) {
+      own = index;
+    }
+  }
+  if (own < 0) {
+    folders << candidate->signInFolder();
+    own = int(folders.size()) - 1;
+  }
+  QList<ChatAgent*> others;
+  for (const int index : sameSignIn(folders, own)) {
+    if (index < int(among.size())) {
+      others.append(among.at(index));
+    }
+  }
+  return others;
+}
+
+QList<ChatAgent*> ChatController::sharingSignIn(const ChatAgent* candidate) const {
+  return sameSignInAs(candidate, detectedAgents());
+}
+
+void ChatController::noteShares() {
+  QStringList shares;
+  const QList<ChatAgent*> shown = detectedAgents();
+  for (int index = 0; index < int(shown.size()); ++index) {
+    const QList<ChatAgent*> sharing = sameSignInAs(shown.at(index), shown.mid(0, index));
+    if (!sharing.isEmpty()) {
+      shares << QStringLiteral("%1 shares the sign-in of %2").arg(choiceName(shown.at(index)), choiceName(sharing.first()));
+    }
+  }
+  if (shares != m_loggedShares) {
+    m_loggedShares = shares;
+    for (const QString& share : shares) {
+      qInfo().noquote() << QStringLiteral("Chat: %1").arg(share);
+    }
+  }
+}
+
+bool ChatController::claudeDesktopConnected() const {
+  if (!m_host.assistants) {
+    return false;
+  }
+  const QStringList labels = m_host.assistants();
+  return std::any_of(labels.begin(), labels.end(), [](const QString& label) {
+    return mcp::assistantLabelMatches(mcp::AssistantClient::ClaudeDesktop, label);
+  });
+}
+
+void ChatController::assistantsChanged() { emit setupChanged(); }
+
+void ChatController::openClaudeDesktop() {
+  qInfo().noquote() << QStringLiteral("Chat: Open Claude Desktop");
+  if (m_host.openUrl) {
+    m_host.openUrl(QStringLiteral("claude://"));
+  }
+}
+
 void ChatController::noteDetected() {
   addClaudeCodes();
   QStringList found;
@@ -264,9 +371,10 @@ void ChatController::noteDetected() {
     qInfo().noquote() << QStringLiteral("Chat: agents found: %1")
                              .arg(found.isEmpty() ? QStringLiteral("none") : found.join(QStringLiteral(", ")));
   }
+  noteShares();
 }
 
-QList<ChatAgent*> ChatController::detectedAgents() const {
+QList<ChatAgent*> ChatController::foundAgents() const {
   QList<ChatAgent*> shown;
   for (ChatAgent* candidate : m_agents) {
     if (candidate == m_agent || m_detected.contains(candidate->id())) {
@@ -274,6 +382,29 @@ QList<ChatAgent*> ChatController::detectedAgents() const {
     }
   }
   return shown;
+}
+
+QList<ChatAgent*> ChatController::detectedAgents() const {
+  QList<ChatAgent*> shown = foundAgents();
+  shown.removeIf([](const ChatAgent* candidate) { return !offered(candidate); });
+  return shown;
+}
+
+bool ChatController::offered(const ChatAgent* candidate) { return chatAgentOffered(candidate->id()); }
+
+void ChatController::setOffered(const QString& id, bool on) {
+  // Every window's chat follows (ChatNotifier::offeredChanged).
+  setChatAgentOffered(id, on);
+}
+
+QString ChatController::menuState(const ChatAgent* candidate) const {
+  if (!offered(candidate)) {
+    return tr("off");
+  }
+  if (!m_lookedFor && candidate->readiness() == ChatAgent::Readiness::Checking) {
+    return tr("found");
+  }
+  return choiceState(candidate);
 }
 
 QString ChatController::chosenModel() const { return chatModel(m_agent->id()); }
@@ -329,10 +460,14 @@ void ChatController::chooseAgent(const QString& id) {
 
 QString ChatController::unavailable() const {
   QString reason;
-  if (!m_host.listener(&reason).isEmpty()) {
-    return QString();
+  if (m_host.listener(&reason).isEmpty()) {
+    return reason.isEmpty() ? tr("MitCad's listener for assistants is not running.") : reason;
   }
-  return reason.isEmpty() ? tr("MitCad's listener for assistants is not running.") : reason;
+  // Every agent found turned off in the assistant menu (mitcad#1299).
+  if (!offered(m_agent)) {
+    return tr("No chat agent is on: check one under Outgoing connections in the assistant menu.");
+  }
+  return QString();
 }
 
 void ChatController::refreshSetup(bool full) {
@@ -342,6 +477,13 @@ void ChatController::refreshSetup(bool full) {
     emit setupChanged(); // the switcher's agents
   }
   if (m_activity != Activity::Idle || m_checkingAccount) {
+    return;
+  }
+  // An agent turned off is never started (mitcad#1299), not even checked.
+  if (full) {
+    m_lookedFor = true;
+  }
+  if (!offered(m_agent)) {
     return;
   }
   if (full) {
@@ -379,6 +521,13 @@ void ChatController::accountFailed(const QJsonObject& account, const QString& te
   }
   qInfo().noquote() << QStringLiteral("Chat: %1 account error: %2")
                            .arg(m_agent->name(), account.value(QStringLiteral("code")).toString());
+  // The same sign-in's other entries cannot use the account either
+  // (mitcad#1297): the user is not sent from one to the other.
+  const QList<ChatAgent*> all(m_agents.begin(), m_agents.end());
+  for (ChatAgent* other : sameSignInAs(m_agent, all)) {
+    m_accountErrors.insert(other->id(), account);
+    qInfo().noquote() << QStringLiteral("Chat: the account error is %1's too (the same sign-in)").arg(choiceName(other));
+  }
   if (!m_checkingAccount && !repeated) {
     const QString shown = text.isEmpty() ? account.value(QStringLiteral("reason")).toString() : text;
     if (m_answer >= 0 && m_entries[m_answer].value(QStringLiteral("text")).toString().trimmed() == shown.trimmed()) {
@@ -504,6 +653,11 @@ void ChatController::finishAccountProbe(bool success, const QString& reason) {
   m_marker.clear();
   if (success) {
     m_accountErrors.remove(m_agent->id());
+    // The sign-in passed for every entry that shares it (mitcad#1297).
+    const QList<ChatAgent*> all(m_agents.begin(), m_agents.end());
+    for (ChatAgent* other : sameSignInAs(m_agent, all)) {
+      m_accountErrors.remove(other->id());
+    }
     qInfo().noquote() << QStringLiteral("Chat: %1 account check passed").arg(m_agent->name());
   } else {
     // The account's own reason stays in the state line (mitcad#1155); why
@@ -805,6 +959,11 @@ void ChatController::send(const QString& text, bool attachSelection, bool attach
 }
 
 bool ChatController::startAgent(QString* error) {
+  // Turned off in the assistant menu: never started (mitcad#1299).
+  if (!offered(m_agent)) {
+    *error = tr("%1 is off: check it under Outgoing connections in the assistant menu.").arg(choiceName(m_agent));
+    return false;
+  }
   QString reason;
   const QString instance = m_host.listener(&reason);
   if (instance.isEmpty()) {

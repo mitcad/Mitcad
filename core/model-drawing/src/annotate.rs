@@ -53,7 +53,8 @@ use mitcad_model::topo::{EdgeName, FaceName};
 pub const LINE_GAP: f64 = 10.0;
 /// A leader's text from its arrow (paper mm) when not moved.
 pub const NOTE_SHIFT: P2 = [10.0, 8.0];
-/// A datum label's square from its triangle (paper mm) when not moved.
+/// A datum label's square (its lower middle) from its triangle's tip on
+/// the feature (paper mm) when not moved.
 pub const DATUM_SHIFT: P2 = [0.0, 12.0];
 /// How far centre lines reach beyond their circle or cylinder, paper mm.
 pub const CENTER_BEYOND: f64 = 2.5;
@@ -297,6 +298,117 @@ impl Seen {
                 };
                 add2(foot, mul2(n, side * radius))
             }
+        }
+    }
+
+    /// Which way it runs at its point nearest a view point (unit): a
+    /// line's direction, a circle's tangent there (seen from the side, its
+    /// line across), a round face's outline along its axis; None for a
+    /// point (mitcad#1294: a datum's triangle sits with its base along
+    /// it).
+    pub fn along(&self, q: P2) -> Option<P2> {
+        match *self {
+            Self::Point(_) => None,
+            Self::Line(a, b) | Self::Axis { a, b, .. } => vec2::unit(sub2(b, a)),
+            Self::Circle {
+                center,
+                end_on: true,
+                ..
+            } => vec2::unit(sub2(self.nearest(q), center)).map(perp),
+            Self::Circle { across, .. } => vec2::unit(across),
+        }
+    }
+
+    /// How far along it its point nearest a view point lies, as a fraction
+    /// from its start (mitcad#1295): a line's from `a` to `b`, a round
+    /// face's along its axis, an arc's from its first end to its second,
+    /// a circle seen from the side across from its low end; None for a
+    /// point and a whole circle seen end on.
+    pub fn fraction(&self, q: P2) -> Option<f64> {
+        let along = |a: P2, b: P2| {
+            let ab = sub2(b, a);
+            let length = dot2(ab, ab);
+            (length > 1e-24).then(|| (dot2(sub2(q, a), ab) / length).clamp(0.0, 1.0))
+        };
+        match *self {
+            Self::Point(_) => None,
+            Self::Line(a, b) | Self::Axis { a, b, .. } => along(a, b),
+            Self::Circle {
+                center,
+                radius,
+                end_on: false,
+                across,
+                arc,
+            } => {
+                let (low, high) = arc.unwrap_or((-radius, radius));
+                along(
+                    add2(center, mul2(across, low)),
+                    add2(center, mul2(across, high)),
+                )
+            }
+            Self::Circle {
+                center,
+                arc: Some((start, end)),
+                ..
+            } => {
+                let sweep = end - start;
+                if sweep <= 1e-12 {
+                    return None;
+                }
+                let d = sub2(self.nearest(q), center);
+                let turned = (d[1].atan2(d[0]) - start).rem_euclid(TAU);
+                // Its first end, a whole turn on.
+                let turned = if turned > sweep + 1e-9 { 0.0 } else { turned };
+                Some((turned / sweep).clamp(0.0, 1.0))
+            }
+            Self::Circle { .. } => None,
+        }
+    }
+
+    /// Its point a fraction `t` of the way from its start, as
+    /// [`Seen::fraction`] measures it (a round face's outline on the side
+    /// of `near`); None where that has none. A line's runs on along its
+    /// line below 0 and above 1 (a datum on an edge's extension,
+    /// mitcad#1296); the others' stop at their ends.
+    pub fn at_fraction(&self, t: f64, near: P2) -> Option<P2> {
+        if let Self::Line(a, b) = *self {
+            return Some(add2(a, mul2(sub2(b, a), t)));
+        }
+        let t = t.clamp(0.0, 1.0);
+        let lerp = |a: P2, b: P2| add2(a, mul2(sub2(b, a), t));
+        match *self {
+            Self::Point(_) => None,
+            Self::Line(a, b) => Some(lerp(a, b)),
+            Self::Axis { a, b, radius } => {
+                let foot = lerp(a, b);
+                let n = perp(unit2(sub2(b, a)));
+                let side = if dot2(sub2(near, foot), n) >= 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                Some(add2(foot, mul2(n, side * radius)))
+            }
+            Self::Circle {
+                center,
+                radius,
+                end_on: false,
+                across,
+                arc,
+            } => {
+                let (low, high) = arc.unwrap_or((-radius, radius));
+                Some(add2(center, mul2(across, low + (high - low) * t)))
+            }
+            Self::Circle {
+                center,
+                radius,
+                arc: Some((start, end)),
+                ..
+            } => {
+                let a = start + (end - start) * t;
+                Some(add2(center, mul2([a.cos(), a.sin()], radius)))
+            }
+            Self::Circle { .. } => None,
         }
     }
 }
@@ -795,12 +907,19 @@ pub fn lay_out(
         AnnotationType::Datum => {
             let tip = leader_tip(annotation, &seen[0], frame);
             let shift = annotation.text_offset.unwrap_or(DATUM_SHIFT);
+            // On the edge's line beyond its ends: its own extension line
+            // (mitcad#1296).
+            if let Some((from, to)) = datum_extension(annotation, &seen[0], frame) {
+                g.line(Pen::Thin, from, to);
+            }
             datum(
                 &mut g,
                 tip,
+                leader_along(annotation, &seen[0]),
                 add2(tip, shift),
                 annotation.letter.as_deref().unwrap_or(""),
                 h,
+                annotation.terminator(),
             );
         }
         AnnotationType::Frame => {
@@ -1681,8 +1800,104 @@ fn edge_extension(
 /// Where a leader's arrow points (sheet): the pick's point nearest where
 /// it was clicked (its point, where it is one).
 fn leader_tip(annotation: &ViewAnnotation, seen: &Seen, frame: &Frame<'_>) -> P2 {
+    frame.at(leader_point(annotation, seen))
+}
+
+/// Where a leader's arrow points in its view (view mm): a datum's or a
+/// frame's place along its pick where it has one (mitcad#1295), else the
+/// pick's point nearest where it was clicked.
+fn leader_point(annotation: &ViewAnnotation, seen: &Seen) -> P2 {
     let near = annotation.at.unwrap_or_else(|| seen.point());
-    frame.at(seen.nearest(near))
+    annotation
+        .tip_along
+        .and_then(|t| seen.at_fraction(t, near))
+        .unwrap_or_else(|| seen.nearest(near))
+}
+
+/// Which way the pick runs where a leader's arrow points (unit, on the
+/// sheet: a view's map scales without turning); None for a point.
+fn leader_along(annotation: &ViewAnnotation, seen: &Seen) -> Option<P2> {
+    seen.along(leader_point(annotation, seen))
+}
+
+/// A new datum label's or frame's tip kept as its place along its pick
+/// (`tip_along`, mitcad#1295), where the pick has one; the others are
+/// left as they are.
+pub fn keep_tip_along(annotation: &mut ViewAnnotation, seen: &[Seen]) {
+    if !matches!(
+        annotation.kind,
+        AnnotationType::Datum | AnnotationType::Frame
+    ) {
+        return;
+    }
+    if let Some(first) = seen.first() {
+        let tip = leader_point(annotation, first);
+        annotation.tip_along = first.fraction(tip);
+    }
+}
+
+/// A drag of a datum label's triangle or a frame's arrow by `delta`
+/// (sheet, mitcad#1295): the tip slides along its pick to the point of it
+/// nearest where the drag takes it, clamped to its ends; the square or the
+/// frame keeps its offset from the tip, so it follows. Kept as `at` and
+/// `tip_along`. Nothing for the other annotations.
+pub fn slid(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'_>, delta: P2) {
+    if !matches!(
+        annotation.kind,
+        AnnotationType::Datum | AnnotationType::Frame
+    ) {
+        return;
+    }
+    let Some(first) = seen.first() else {
+        return;
+    };
+    let tip = leader_tip(annotation, first, frame);
+    let to = frame.map.view_point(add2(tip, delta));
+    // A datum on a straight edge runs on along the edge's line past its
+    // ends (mitcad#1296); a frame's arrow stays on the edge.
+    if let (AnnotationType::Datum, Seen::Line(a, b)) = (annotation.kind, *first) {
+        let ab = sub2(b, a);
+        let length = dot2(ab, ab);
+        if length > 1e-24 {
+            let t = dot2(sub2(to, a), ab) / length;
+            annotation.at = Some(add2(a, mul2(ab, t)));
+            annotation.tip_along = Some(t);
+            return;
+        }
+    }
+    let on = first.nearest(to);
+    annotation.at = Some(on);
+    annotation.tip_along = first.fraction(on);
+}
+
+/// A datum label's own extension line (sheet, mitcad#1296) when its tip
+/// sits on its straight edge's line beyond the edge's ends: from a little
+/// off the nearer end to a little past the tip, as an edge extension
+/// draws it; None while the tip is on the edge.
+fn datum_extension(
+    annotation: &ViewAnnotation,
+    seen: &Seen,
+    frame: &Frame<'_>,
+) -> Option<(P2, P2)> {
+    let Seen::Line(a, b) = *seen else {
+        return None;
+    };
+    let t = annotation.tip_along?;
+    let end = if t > 1.0 {
+        b
+    } else if t < 0.0 {
+        a
+    } else {
+        return None;
+    };
+    let (end, tip) = (frame.at(end), leader_tip(annotation, seen, frame));
+    let out = vec2::unit(sub2(tip, end))?;
+    (len2(sub2(tip, end)) > EXTENSION_GAP).then(|| {
+        (
+            add2(end, mul2(out, EXTENSION_GAP)),
+            add2(tip, mul2(out, EXTENSION_BEYOND)),
+        )
+    })
 }
 
 /// A leader from `tip` (its arrow there) to text lines on a shoulder at
@@ -1704,30 +1919,170 @@ fn leader_text(g: &mut Group, tip: P2, knee: P2, lines: &[String], h: f64) {
     }
 }
 
-/// A datum label: a filled triangle on the feature at `tip`, a leader to
-/// a square at `at` (its lower middle) with the letter (`h` high, the
-/// square in proportion).
-fn datum(g: &mut Group, tip: P2, at: P2, letter: &str, h: f64) {
-    let v = unit2(sub2(at, tip));
-    let base = mul2(perp(v), 1.6);
+/// Half the base of a datum label's triangle and its height, paper mm.
+const DATUM_HALF_BASE: f64 = 1.6;
+const DATUM_HEIGHT: f64 = 2.8;
+
+/// The radius of a datum label's dot on a face (ISO 5459, mitcad#1296),
+/// paper mm.
+const DATUM_DOT: f64 = 1.0;
+
+/// A datum label's parts on the sheet (ISO 5459, mitcad#1294).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatumLabel {
+    /// The filled terminator: a triangle's two base ends, on the feature,
+    /// and its apex; or a dot's outline about the tip (mitcad#1296).
+    pub mark: Vec<P2>,
+    /// Where the leader leaves it: the triangle's apex, the dot's centre.
+    pub from: P2,
+    /// Where the leader ends: the middle of the square's side nearest
+    /// `from` (its bottom, top, left or right).
+    pub end: P2,
+    /// The square's lower left and upper right corners.
+    pub square: (P2, P2),
+}
+
+/// Where a datum label's parts go: its triangle's base along the feature
+/// at `tip` (`along`: the feature's direction there, unit; none for a
+/// point, when the base lies square to the leader), the triangle on the
+/// square's side of the feature; the square at `at` (its lower middle)
+/// `h` letters high; its leader from the triangle's apex to the side of
+/// the square that faces it, so that it never crosses the square. With a
+/// dot (`terminator`, mitcad#1296) the dot sits about the tip and the
+/// leader leaves its centre.
+pub fn datum_label(
+    tip: P2,
+    along: Option<P2>,
+    at: P2,
+    h: f64,
+    terminator: Terminator,
+) -> DatumLabel {
+    let half = CELL * h / DIMENSION_TEXT / 2.0;
+    let center = [at[0], at[1] + half];
+    let towards = sub2(center, tip);
+    let (base, up) = match along {
+        Some(t) => {
+            let n = perp(t);
+            (
+                t,
+                if dot2(towards, n) < 0.0 {
+                    mul2(n, -1.0)
+                } else {
+                    n
+                },
+            )
+        }
+        None => {
+            let v = unit2(towards);
+            (perp(v), v)
+        }
+    };
+    let base = mul2(base, DATUM_HALF_BASE);
+    let (mark, from) = match terminator {
+        Terminator::Triangle => {
+            let apex = add2(tip, mul2(up, DATUM_HEIGHT));
+            (vec![add2(tip, base), sub2(tip, base), apex], apex)
+        }
+        Terminator::Dot => (
+            (0..24)
+                .map(|i| {
+                    let a = TAU * f64::from(i) / 24.0;
+                    add2(tip, mul2([a.cos(), a.sin()], DATUM_DOT))
+                })
+                .collect(),
+            tip,
+        ),
+    };
+    let d = sub2(from, center);
+    let side = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
+    let end = if d[1].abs() >= d[0].abs() {
+        [center[0], center[1] + half * side(d[1])]
+    } else {
+        [center[0] + half * side(d[0]), center[1]]
+    };
+    DatumLabel {
+        mark,
+        from,
+        end,
+        square: (
+            [center[0] - half, center[1] - half],
+            [center[0] + half, center[1] + half],
+        ),
+    }
+}
+
+/// A datum label: a filled triangle or dot on the feature at `tip`, a
+/// leader to a square at `at` (its lower middle) with the letter (`h`
+/// high, the square in proportion); as [`datum_label`] places them.
+fn datum(
+    g: &mut Group,
+    tip: P2,
+    along: Option<P2>,
+    at: P2,
+    letter: &str,
+    h: f64,
+    terminator: Terminator,
+) {
+    let label = datum_label(tip, along, at, h, terminator);
     g.items.push(Item::Fill {
-        points: vec![add2(tip, base), sub2(tip, base), add2(tip, mul2(v, 2.8))],
+        points: label.mark.clone(),
     });
-    g.line(Pen::Thin, tip, at);
-    let cell = CELL * h / DIMENSION_TEXT;
-    let half = cell / 2.0;
-    g.rect(
-        Pen::Thin,
-        [at[0] - half, at[1]],
-        [at[0] + half, at[1] + cell],
-    );
+    if len2(sub2(label.end, label.from)) > 1e-9 {
+        g.line(Pen::Thin, label.from, label.end);
+    }
+    let (min, max) = label.square;
+    g.rect(Pen::Thin, min, max);
     g.text(
-        [at[0], at[1] + half - h / 2.0],
+        [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0 - h / 2.0],
         h,
         0.0,
         Anchor::Middle,
         letter,
     );
+}
+
+/// The widths of a feature control frame's cells (`cells` as
+/// [`control_frame`] takes them) with letters `h` high, and their cell's
+/// height.
+fn frame_widths(cells: &[String], h: f64) -> (Vec<f64>, f64) {
+    let cell = CELL * h / DIMENSION_TEXT;
+    let widths = cells
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if i == 0 {
+                cell
+            } else {
+                (text_width(c, h) + 3.0).max(cell)
+            }
+        })
+        .collect();
+    (widths, cell)
+}
+
+/// Where a feature control frame's leader leaves it (mitcad#1294): the
+/// frame at `at` (its left middle), `total` long and `cell` high, its
+/// arrow at `tip`. From the end the tip lies beyond (left or right), else
+/// from the middle of the side it lies below or above, so that the
+/// leader never crosses the frame.
+fn frame_leader_from(tip: P2, at: P2, total: f64, cell: f64) -> P2 {
+    let (left, right) = (at[0], at[0] + total);
+    let (bottom, top) = (at[1] - cell / 2.0, at[1] + cell / 2.0);
+    let middle = at[0] + total / 2.0;
+    if tip[0] <= left {
+        at
+    } else if tip[0] >= right {
+        [right, at[1]]
+    } else if tip[1] <= bottom {
+        [middle, bottom]
+    } else if tip[1] >= top {
+        [middle, top]
+    } else if tip[0] <= middle {
+        // Inside the frame: from its nearer end.
+        at
+    } else {
+        [right, at[1]]
+    }
 }
 
 /// A feature control frame at `at` (its left middle), a leader from it to
@@ -1743,18 +2098,7 @@ fn control_frame(
     cells: &[String],
     h: f64,
 ) {
-    let cell = CELL * h / DIMENSION_TEXT;
-    let widths: Vec<f64> = cells
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            if i == 0 {
-                cell
-            } else {
-                (text_width(c, h) + 3.0).max(cell)
-            }
-        })
-        .collect();
+    let (widths, cell) = frame_widths(cells, h);
     let total: f64 = widths.iter().sum::<f64>().max(cell);
     let bottom = at[1] - cell / 2.0;
     g.rect(Pen::Thin, [at[0], bottom], [at[0] + total, bottom + cell]);
@@ -1774,12 +2118,8 @@ fn control_frame(
         }
         x += w;
     }
-    // The leader from the frame's nearer end.
-    let from = if tip[0] <= at[0] + total / 2.0 {
-        at
-    } else {
-        [at[0] + total, at[1]]
-    };
+    // The leader from the frame's side that faces the tip.
+    let from = frame_leader_from(tip, at, total, cell);
     g.line(Pen::Thin, from, tip);
     arrow(g, tip, unit2(sub2(tip, from)));
 }
@@ -2074,6 +2414,94 @@ pub fn moved(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'_>, 
         | AnnotationType::CenterPattern
         | AnnotationType::EdgeExtension => {}
     }
+}
+
+/// The angle step a leader's drag snaps to, and how near it (degrees,
+/// mitcad#1294).
+pub const LEADER_STEP: f64 = 45.0;
+pub const LEADER_SNAP: f64 = 4.0;
+
+/// Where the leader of a note, a datum label or a feature control frame
+/// runs on the sheet, as [`lay_out`] draws it: from its end at the
+/// feature (the arrow; a datum triangle's apex) to its end at the text (a
+/// note's shoulder, the side of the frame or of the datum's square it
+/// meets). `cells`: a frame's cells, as [`lay_out`] takes them. None for
+/// the others.
+pub fn leader_line(
+    annotation: &ViewAnnotation,
+    seen: &[Seen],
+    frame: &Frame<'_>,
+    cells: &[String],
+) -> Option<(P2, P2)> {
+    let first = seen.first()?;
+    let tip = leader_tip(annotation, first, frame);
+    let h = frame.text;
+    match annotation.kind {
+        AnnotationType::Note => {
+            Some((tip, add2(tip, annotation.text_offset.unwrap_or(NOTE_SHIFT))))
+        }
+        AnnotationType::Datum => {
+            let at = add2(tip, annotation.text_offset.unwrap_or(DATUM_SHIFT));
+            let along = leader_along(annotation, first);
+            let label = datum_label(tip, along, at, h, annotation.terminator());
+            Some((label.from, label.end))
+        }
+        AnnotationType::Frame => {
+            let at = add2(tip, annotation.text_offset.unwrap_or(NOTE_SHIFT));
+            let (widths, cell) = frame_widths(cells, h);
+            let total = widths.iter().sum::<f64>().max(cell);
+            Some((tip, frame_leader_from(tip, at, total, cell)))
+        }
+        _ => None,
+    }
+}
+
+/// A leader's drag snapped to an angle: the drag (sheet) and the angle
+/// the leader then runs at from its feature, degrees counter-clockwise
+/// from the sheet's x axis (0 to 315).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeaderSnap {
+    pub to: P2,
+    pub angle: f64,
+}
+
+/// The drag of a note's text, a datum's square or a frame by `delta`
+/// (sheet) snapped so that its leader runs at a multiple of
+/// [`LEADER_STEP`] when it would run within [`LEADER_SNAP`] of one, its
+/// length kept (mitcad#1294); None when it would not, or for an
+/// annotation without such a leader.
+pub fn snap_leader(
+    annotation: &ViewAnnotation,
+    seen: &[Seen],
+    frame: &Frame<'_>,
+    cells: &[String],
+    delta: P2,
+) -> Option<LeaderSnap> {
+    let line = |d: P2| {
+        let mut placed = annotation.clone();
+        moved(&mut placed, seen, frame, d);
+        let (from, to) = leader_line(&placed, seen, frame, cells)?;
+        let run = sub2(to, from);
+        (len2(run) > 1e-6).then_some((from, to, run[1].atan2(run[0]).to_degrees()))
+    };
+    let (from, to, angle) = line(delta)?;
+    let snapped = (angle / LEADER_STEP).round() * LEADER_STEP;
+    if (angle - snapped).abs() > LEADER_SNAP {
+        return None;
+    }
+    let r = len2(sub2(to, from));
+    let a = snapped.to_radians();
+    let want = add2(from, mul2([a.cos(), a.sin()], r));
+    // The text's end moves with the drag; the feature's end stays while
+    // the text keeps its side of the feature.
+    let snapped_delta = add2(delta, sub2(want, to));
+    let (_, _, check) = line(snapped_delta)?;
+    let off = (check - snapped + 180.0).rem_euclid(360.0) - 180.0;
+    (off.abs() < 1e-6).then_some(LeaderSnap {
+        to: snapped_delta,
+        // No -0 for the leader along the x axis.
+        angle: snapped.rem_euclid(360.0) + 0.0,
+    })
 }
 
 /// The direction a dimension's text runs along a line along `d`.
@@ -2404,6 +2832,7 @@ mod tests {
             edge: Some("E{F2:start|F2:side(c1[c4,c2])}".parse().unwrap()),
             face: None,
             point: None,
+            on_face: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, vec![pick.clone()]);
         assert!(d.check().unwrap_err().contains("takes 2 picks"));
@@ -2657,6 +3086,7 @@ mod tests {
             edge: Some("E{F2:start|F2:side(c1[c4,c2])}".parse().unwrap()),
             face: None,
             point: None,
+            on_face: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, Vec::new());
         d.along = Some(Along::Horizontal);
@@ -2872,5 +3302,618 @@ mod tests {
         let whole = |radius: f64| circle([0.0, 0.0], radius);
         let error = lay_out(&line, &[whole(4.0), whole(6.0)], &frame, None, &[]).unwrap_err();
         assert!(error.contains("share their center"), "{error}");
+    }
+
+    /// Whether the segment from `a` to `b` runs through the inside of the
+    /// box from `min` to `max` (touching its outline is not crossing it).
+    fn crosses(a: P2, b: P2, min: P2, max: P2) -> bool {
+        let eps = 1e-6;
+        let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+        let d = sub2(b, a);
+        for k in [0_usize, 1] {
+            let (lo, hi) = (min[k] + eps, max[k] - eps);
+            if d[k].abs() < 1e-12 {
+                if a[k] <= lo || a[k] >= hi {
+                    return false;
+                }
+                continue;
+            }
+            let (mut s0, mut s1) = ((lo - a[k]) / d[k], (hi - a[k]) / d[k]);
+            if s0 > s1 {
+                std::mem::swap(&mut s0, &mut s1);
+            }
+            t0 = t0.max(s0);
+            t1 = t1.min(s1);
+        }
+        t1 - t0 > 1e-9
+    }
+
+    /// Whether a point lies on the outline of the box from `min` to `max`.
+    fn on_outline(p: P2, min: P2, max: P2) -> bool {
+        let inside = (0..2).all(|k| p[k] >= min[k] - 1e-9 && p[k] <= max[k] + 1e-9);
+        let edge = (0..2).any(|k| (p[k] - min[k]).abs() < 1e-9 || (p[k] - max[k]).abs() < 1e-9);
+        inside && edge
+    }
+
+    fn lines(laid: &Laid) -> Vec<(P2, P2)> {
+        laid.group
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Line { a, b, .. } => Some((*a, *b)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The first closed outline drawn: a datum's square, a frame's box.
+    fn first_box(laid: &Laid) -> (P2, P2) {
+        laid.group
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Polyline {
+                    points,
+                    closed: true,
+                    ..
+                } => {
+                    let mut b = Bounds::empty();
+                    for p in points {
+                        b.add(*p);
+                    }
+                    Some((b.min, b.max))
+                }
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn a_datums_triangle_sits_on_its_edge_and_its_leader_meets_the_squares_near_side() {
+        // mitcad#1294: a datum on a horizontal edge at (20, 0) of the view,
+        // the sheet's (120, 100); its square below left, above, left and
+        // right of the tip.
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
+        let tip = [120.0, 100.0];
+        for (shift, side) in [
+            ([-10.0, -25.0], "top"),
+            ([0.0, 12.0], "bottom"),
+            ([-20.0, 2.0], "right"),
+            ([20.0, 2.0], "left"),
+        ] {
+            let mut d = ViewAnnotation::new(1, AnnotationType::Datum, Vec::new());
+            d.letter = Some("A".to_owned());
+            d.at = Some([20.0, 0.0]);
+            d.text_offset = Some(shift);
+            let laid = lay_out(&d, &[edge], &frame, None, &[]).unwrap();
+            let triangle: Vec<P2> = laid
+                .group
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Fill { points } => Some(points.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let (min, max) = first_box(&laid);
+            let center = mid(min, max);
+            // The base along the edge, at the tip; the apex on the square's
+            // side of the edge, square to it.
+            assert_eq!(triangle.len(), 3);
+            for p in &triangle[..2] {
+                assert!((p[1] - tip[1]).abs() < 1e-9, "{shift:?}: {triangle:?}");
+            }
+            assert!((mid(triangle[0], triangle[1])[0] - tip[0]).abs() < 1e-9);
+            assert!((len2(sub2(triangle[0], triangle[1])) - 2.0 * DATUM_HALF_BASE).abs() < 1e-9);
+            let apex = triangle[2];
+            assert!((apex[0] - tip[0]).abs() < 1e-9, "{shift:?}: {apex:?}");
+            assert!(
+                (apex[1] - tip[1]) * (center[1] - tip[1]) > 0.0,
+                "{shift:?}: the apex {apex:?} away from the square {center:?}"
+            );
+            // One leader, from the apex to the middle of the square's side
+            // nearest it; through neither the square nor its letter.
+            let leaders = lines(&laid);
+            assert_eq!(leaders.len(), 1, "{shift:?}: {leaders:?}");
+            let (from, to) = leaders[0];
+            assert!(len2(sub2(from, apex)) < 1e-9, "{shift:?}: {from:?}");
+            assert!(
+                on_outline(to, min, max),
+                "{shift:?}: {to:?} {min:?} {max:?}"
+            );
+            let expected = match side {
+                "top" => [center[0], max[1]],
+                "bottom" => [center[0], min[1]],
+                "left" => [min[0], center[1]],
+                _ => [max[0], center[1]],
+            };
+            assert!(
+                len2(sub2(to, expected)) < 1e-9,
+                "{shift:?}: {to:?} not {side}"
+            );
+            assert!(
+                !crosses(from, to, min, max),
+                "{shift:?}: through the square"
+            );
+            // The square where the shift puts it: its lower middle.
+            assert!(len2(sub2([center[0], min[1]], add2(tip, shift))) < 1e-9);
+            assert_eq!(texts(&laid), ["A"]);
+        }
+        // On a point the triangle sits square to the leader, as before.
+        let mut d = ViewAnnotation::new(2, AnnotationType::Datum, Vec::new());
+        d.letter = Some("B".to_owned());
+        let triangle = Terminator::Triangle;
+        let label = datum_label(tip, None, add2(tip, DATUM_SHIFT), DIMENSION_TEXT, triangle);
+        assert!((label.mark[0][1] - tip[1]).abs() < 1e-9);
+        assert!((label.mark[2][1] - tip[1] - DATUM_HEIGHT).abs() < 1e-9);
+        assert_eq!(label.from, label.mark[2]);
+        assert!(lay_out(&d, &[Seen::Point([20.0, 0.0])], &frame, None, &[]).is_ok());
+        // On an upright edge the base stands upright.
+        let upright = datum_label(
+            tip,
+            Some([0.0, 1.0]),
+            [140.0, 100.0],
+            DIMENSION_TEXT,
+            triangle,
+        );
+        assert!((upright.mark[0][0] - tip[0]).abs() < 1e-9);
+        assert!((upright.mark[1][0] - tip[0]).abs() < 1e-9);
+        assert!((upright.mark[2][0] - tip[0] - DATUM_HEIGHT).abs() < 1e-9);
+        // A circle seen end on: the base along its tangent at the tip.
+        let round = circle([0.0, 0.0], 10.0);
+        let t = round.along([0.0, 30.0]).unwrap();
+        assert!(
+            t[1].abs() < 1e-9 && (t[0].abs() - 1.0).abs() < 1e-9,
+            "{t:?}"
+        );
+    }
+
+    #[test]
+    fn a_frames_leader_leaves_the_side_that_faces_its_tip() {
+        // mitcad#1294: a frame on a horizontal edge, its arrow at the
+        // sheet's (120, 100).
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
+        let tip = [120.0, 100.0];
+        let cells = ["".to_owned(), "0.05".to_owned(), "A".to_owned()];
+        // Its box left of the tip, right of it, above and below it.
+        for shift in [
+            [-40.0, 5.0],
+            [-40.0, -5.0],
+            [10.0, 8.0],
+            [-10.0, 15.0],
+            [-10.0, -15.0],
+        ] {
+            let mut f = ViewAnnotation::new(1, AnnotationType::Frame, Vec::new());
+            f.at = Some([20.0, 0.0]);
+            f.text_offset = Some(shift);
+            let laid = lay_out(&f, &[edge], &frame, None, &cells).unwrap();
+            let (min, max) = first_box(&laid);
+            let leader = lines(&laid)
+                .into_iter()
+                .find(|(_, b)| len2(sub2(*b, tip)) < 1e-9)
+                .unwrap_or_else(|| panic!("{shift:?}: no leader to the tip"));
+            assert!(on_outline(leader.0, min, max), "{shift:?}: {leader:?}");
+            assert!(
+                !crosses(leader.0, leader.1, min, max),
+                "{shift:?}: through the frame"
+            );
+            assert_eq!(
+                leader_line(&f, &[edge], &frame, &cells),
+                Some((tip, leader.0)),
+                "{shift:?}"
+            );
+            if shift[0] < -30.0 {
+                // Left of the tip: from its right end's middle.
+                assert!((leader.0[0] - max[0]).abs() < 1e-9, "{shift:?}: {leader:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_leaders_drag_snaps_to_multiples_of_45_degrees() {
+        // mitcad#1294: a datum's square, a note's text and a frame dragged
+        // near 45 degrees: their leaders run at 45, as long as dragged.
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
+        let cells = ["".to_owned(), "0.05".to_owned()];
+        let angle_of = |a: &ViewAnnotation| {
+            let (from, to) = leader_line(a, &[edge], &frame, &cells).unwrap();
+            let run = sub2(to, from);
+            (run[1].atan2(run[0]).to_degrees(), len2(run))
+        };
+        for kind in [
+            AnnotationType::Datum,
+            AnnotationType::Note,
+            AnnotationType::Frame,
+        ] {
+            let mut a = ViewAnnotation::new(1, kind, Vec::new());
+            a.at = Some([20.0, 0.0]);
+            a.letter = Some("A".to_owned());
+            a.text = Some("DEBURR".to_owned());
+            // A drag that puts the leader's end `degrees` from where it
+            // starts, 20 mm away (the end may move to another side of a
+            // square or a frame on the way: found again a few times).
+            let r = 20.0;
+            let drag = |degrees: f64| {
+                let at = degrees.to_radians();
+                let mut delta = [0.0, 0.0];
+                for _ in 0..4 {
+                    let mut placed = a.clone();
+                    moved(&mut placed, &[edge], &frame, delta);
+                    let (from, to) = leader_line(&placed, &[edge], &frame, &cells).unwrap();
+                    let want = add2(from, [r * at.cos(), r * at.sin()]);
+                    delta = add2(delta, sub2(want, to));
+                }
+                let mut placed = a.clone();
+                moved(&mut placed, &[edge], &frame, delta);
+                let (angle, length) = angle_of(&placed);
+                assert!(
+                    (angle - degrees).abs() < 1e-6,
+                    "{kind:?}: {angle} for {degrees}"
+                );
+                assert!((length - r).abs() < 1e-6, "{kind:?}: {length}");
+                delta
+            };
+            let snap = snap_leader(&a, &[edge], &frame, &cells, drag(47.0))
+                .unwrap_or_else(|| panic!("{kind:?}: not snapped"));
+            assert!((snap.angle - 45.0).abs() < 1e-9, "{kind:?}: {snap:?}");
+            let mut placed = a.clone();
+            moved(&mut placed, &[edge], &frame, snap.to);
+            let (angle, length) = angle_of(&placed);
+            assert!((angle - 45.0).abs() < 1e-6, "{kind:?}: {angle}");
+            assert!((length - r).abs() < 1e-6, "{kind:?}: {length}");
+            // Ten degrees off: where dragged.
+            assert_eq!(
+                snap_leader(&a, &[edge], &frame, &cells, drag(55.0)),
+                None,
+                "{kind:?}"
+            );
+            // Near straight up, and near straight left (180).
+            for (degrees, expected) in [(92.0_f64, 90.0), (177.0, 180.0)] {
+                let snap = snap_leader(&a, &[edge], &frame, &cells, drag(degrees))
+                    .unwrap_or_else(|| panic!("{kind:?} {degrees}: not snapped"));
+                assert!((snap.angle - expected).abs() < 1e-9, "{kind:?}: {snap:?}");
+            }
+        }
+        // What has no such leader: no snap.
+        let balloon = ViewAnnotation::new(2, AnnotationType::Balloon, Vec::new());
+        assert_eq!(
+            snap_leader(&balloon, &[edge], &frame, &[], [1.0, 1.0]),
+            None
+        );
+    }
+
+    /// Where a datum's triangle sits as laid out: its base's middle.
+    fn datum_tip(d: &ViewAnnotation, seen: Seen, frame: &Frame<'_>) -> P2 {
+        let laid = lay_out(d, &[seen], frame, None, &[]).unwrap();
+        let triangle = laid
+            .group
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Fill { points } => Some(points.clone()),
+                _ => None,
+            })
+            .unwrap();
+        mid(triangle[0], triangle[1])
+    }
+
+    #[test]
+    fn a_datums_tip_keeps_its_place_along_its_edge_and_slides_along_it() {
+        // mitcad#1295: a datum clicked above a quarter of a 40 mm edge of
+        // the view (the sheet's (100, 100) its start).
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let short = Seen::Line([0.0, 0.0], [40.0, 0.0]);
+        let mut d = ViewAnnotation::new(1, AnnotationType::Datum, Vec::new());
+        d.letter = Some("A".to_owned());
+        d.at = Some([10.0, 3.0]);
+        keep_tip_along(&mut d, &[short]);
+        assert!((d.tip_along.unwrap() - 0.25).abs() < 1e-12, "{d:?}");
+        let pick = ViewPick {
+            body: "F2.b0".parse().unwrap(),
+            occurrence: None,
+            edge: Some("E{F2:start|F2:side(c1[c4,c2])}".parse().unwrap()),
+            face: None,
+            point: None,
+            on_face: None,
+        };
+        let picked = |a: &ViewAnnotation| {
+            let mut a = a.clone();
+            a.picks = vec![pick.clone()];
+            a.check()
+        };
+        picked(&d).unwrap();
+        assert!(len2(sub2(datum_tip(&d, short, &frame), [110.0, 100.0])) < 1e-9);
+        // The edge made twice as long in the model: still a quarter along
+        // it; a label without the place (an older file) keeps the point
+        // nearest where it was clicked.
+        let long = Seen::Line([0.0, 0.0], [80.0, 0.0]);
+        let tip = datum_tip(&d, long, &frame);
+        assert!(len2(sub2(tip, [120.0, 100.0])) < 1e-9, "{tip:?}");
+        let mut older = d.clone();
+        older.tip_along = None;
+        let tip = datum_tip(&older, long, &frame);
+        assert!(len2(sub2(tip, [110.0, 100.0])) < 1e-9, "{tip:?}");
+        // The same edge the other way round: a quarter from its own start.
+        let reversed = Seen::Line([80.0, 0.0], [0.0, 0.0]);
+        let tip = datum_tip(&d, reversed, &frame);
+        assert!(len2(sub2(tip, [160.0, 100.0])) < 1e-9, "{tip:?}");
+
+        // Its triangle dragged 15 along the edge and 4 off it: the tip
+        // slides along it, the square follows (its offset kept).
+        let laid = lay_out(&d, &[long], &frame, None, &[]).unwrap();
+        let square_before = first_box(&laid);
+        slid(&mut d, &[long], &frame, [15.0, 4.0]);
+        assert!((d.tip_along.unwrap() - 35.0 / 80.0).abs() < 1e-12, "{d:?}");
+        assert_eq!(d.text_offset, None);
+        let tip = datum_tip(&d, long, &frame);
+        assert!(len2(sub2(tip, [135.0, 100.0])) < 1e-9, "{tip:?}");
+        let laid = lay_out(&d, &[long], &frame, None, &[]).unwrap();
+        let square_after = first_box(&laid);
+        assert!(len2(sub2(sub2(square_after.0, square_before.0), [15.0, 0.0])) < 1e-9);
+        // Past its end: on the edge's line beyond it (mitcad#1296; a
+        // frame's arrow stops at the end, below).
+        slid(&mut d, &[long], &frame, [55.0, -3.0]);
+        assert!((d.tip_along.unwrap() - 1.125).abs() < 1e-12, "{d:?}");
+        let tip = datum_tip(&d, long, &frame);
+        assert!(len2(sub2(tip, [190.0, 100.0])) < 1e-9, "{tip:?}");
+        slid(&mut d, &[long], &frame, [-10.0, 0.0]);
+        assert!((d.tip_along.unwrap() - 1.0).abs() < 1e-12, "{d:?}");
+
+        // A frame's arrow slides the same way; a note has no such tip.
+        let cells = ["".to_owned(), "0.05".to_owned()];
+        let mut f = ViewAnnotation::new(2, AnnotationType::Frame, Vec::new());
+        f.at = Some([10.0, 3.0]);
+        keep_tip_along(&mut f, &[long]);
+        assert!((f.tip_along.unwrap() - 0.125).abs() < 1e-12);
+        slid(&mut f, &[long], &frame, [-20.0, 0.0]);
+        assert_eq!(f.tip_along, Some(0.0));
+        let (arrow, _) = leader_line(&f, &[long], &frame, &cells).unwrap();
+        assert!(len2(sub2(arrow, [100.0, 100.0])) < 1e-9, "{arrow:?}");
+        let mut n = ViewAnnotation::new(3, AnnotationType::Note, Vec::new());
+        n.text = Some("DEBURR".to_owned());
+        keep_tip_along(&mut n, &[long]);
+        slid(&mut n, &[long], &frame, [5.0, 0.0]);
+        assert_eq!((n.tip_along, n.at), (None, None));
+        n.tip_along = Some(0.5);
+        assert!(picked(&n).unwrap_err().contains("no place along its edge"));
+        // A datum may sit beyond its edge's ends, a frame's arrow not.
+        d.tip_along = Some(1.5);
+        picked(&d).unwrap();
+        // (Checked before its missing tolerance.)
+        let mut f = f.clone();
+        f.tip_along = Some(1.5);
+        assert!(picked(&f).unwrap_err().contains("from 0 to 1"));
+        d.terminator = Some(Terminator::Dot);
+        picked(&d).unwrap();
+        n.tip_along = None;
+        n.terminator = Some(Terminator::Dot);
+        assert!(picked(&n).unwrap_err().contains("no terminator"));
+    }
+
+    #[test]
+    fn places_along_arcs_round_faces_and_circles_seen_from_the_side() {
+        // mitcad#1295: what `tip_along` measures on each kind of pick.
+        let axis = Seen::Axis {
+            a: [0.0, 0.0],
+            b: [0.0, 30.0],
+            radius: 4.0,
+        };
+        let t = axis.fraction([5.0, 10.0]).unwrap();
+        assert!((t - 1.0 / 3.0).abs() < 1e-12, "{t}");
+        let p = axis.at_fraction(t, [5.0, 10.0]).unwrap();
+        assert!(len2(sub2(p, [4.0, 10.0])) < 1e-9, "{p:?}");
+        let p = axis.at_fraction(t, [-5.0, 10.0]).unwrap();
+        assert!(
+            len2(sub2(p, [-4.0, 10.0])) < 1e-9,
+            "the other outline: {p:?}"
+        );
+        let quarter = Seen::Circle {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            end_on: true,
+            across: [1.0, 0.0],
+            arc: Some((0.0, PI / 2.0)),
+        };
+        let t = quarter.fraction([10.0, 10.0]).unwrap();
+        assert!((t - 0.5).abs() < 1e-12, "{t}");
+        let p = quarter.at_fraction(t, [0.0, 0.0]).unwrap();
+        assert!(len2(sub2(p, [10.0 * FRAC_1_SQRT_2, 10.0 * FRAC_1_SQRT_2])) < 1e-9);
+        // Off the arc beyond its first end: its first end.
+        assert_eq!(quarter.fraction([10.0, -5.0]), Some(0.0));
+        let side = Seen::Circle {
+            center: [0.0, 0.0],
+            radius: 5.0,
+            end_on: false,
+            across: [1.0, 0.0],
+            arc: None,
+        };
+        let t = side.fraction([2.5, 3.0]).unwrap();
+        assert!((t - 0.75).abs() < 1e-12, "{t}");
+        assert!(len2(sub2(side.at_fraction(t, [0.0, 0.0]).unwrap(), [2.5, 0.0])) < 1e-9);
+        // A whole circle seen end on and a point have no place along them.
+        assert_eq!(circle([0.0, 0.0], 5.0).fraction([5.0, 0.0]), None);
+        assert_eq!(Seen::Point([1.0, 1.0]).fraction([0.0, 0.0]), None);
+    }
+
+    #[test]
+    fn a_datum_past_its_edges_end_draws_its_own_extension_line() {
+        // mitcad#1296: a datum on a 40 mm edge of the view (the sheet's
+        // (100, 100) to (140, 100)), its tip a quarter of the edge past
+        // its end.
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let pick = ViewPick {
+            body: "F2.b0".parse().unwrap(),
+            occurrence: None,
+            edge: Some("E{F2:start|F2:side(c1[c4,c2])}".parse().unwrap()),
+            face: None,
+            point: None,
+            on_face: None,
+        };
+        let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![pick.clone()]);
+        d.letter = Some("A".to_owned());
+        d.tip_along = Some(1.25);
+        d.check().unwrap();
+        let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
+        let extension = |d: &ViewAnnotation, seen: Seen| {
+            let laid = lay_out(d, &[seen], &frame, None, &[]).unwrap();
+            // The leader rises from the apex; the extension runs along
+            // the edge's line.
+            lines(&laid)
+                .into_iter()
+                .find(|(a, b)| (a[1] - 100.0).abs() < 1e-9 && (b[1] - 100.0).abs() < 1e-9)
+        };
+        assert_eq!(
+            terminator_points(&d, edge, &frame),
+            3,
+            "a triangle on an edge"
+        );
+        let tip = datum_tip(&d, edge, &frame);
+        assert!(len2(sub2(tip, [150.0, 100.0])) < 1e-9, "{tip:?}");
+        // From 1 mm off the edge's end to 2 mm past the tip.
+        let (from, to) = extension(&d, edge).expect("an extension line");
+        assert!(len2(sub2(from, [141.0, 100.0])) < 1e-9, "{from:?}");
+        assert!(len2(sub2(to, [152.0, 100.0])) < 1e-9, "{to:?}");
+        // Still the edge's annotation: its pick kept.
+        assert_eq!(d.picks, vec![pick.clone()]);
+        // The edge twice as long in the model: a quarter past its new end.
+        let long = Seen::Line([0.0, 0.0], [80.0, 0.0]);
+        let tip = datum_tip(&d, long, &frame);
+        assert!(len2(sub2(tip, [200.0, 100.0])) < 1e-9, "{tip:?}");
+        let (from, to) = extension(&d, long).expect("an extension line");
+        assert!(len2(sub2(from, [181.0, 100.0])) < 1e-9, "{from:?}");
+        assert!(len2(sub2(to, [202.0, 100.0])) < 1e-9, "{to:?}");
+        // Before the edge's start likewise; on the edge none.
+        d.tip_along = Some(-0.25);
+        let (from, to) = extension(&d, edge).expect("an extension line");
+        assert!(len2(sub2(from, [99.0, 100.0])) < 1e-9, "{from:?}");
+        assert!(len2(sub2(to, [88.0, 100.0])) < 1e-9, "{to:?}");
+        d.tip_along = Some(0.5);
+        assert_eq!(extension(&d, edge), None);
+        // A triangle dragged past the end goes onto the line; dragged
+        // back, onto the edge.
+        slid(&mut d, &[edge], &frame, [30.0, 2.0]);
+        assert!((d.tip_along.unwrap() - 1.25).abs() < 1e-12, "{d:?}");
+        assert!(extension(&d, edge).is_some());
+        slid(&mut d, &[edge], &frame, [-20.0, 0.0]);
+        assert!((d.tip_along.unwrap() - 0.75).abs() < 1e-12, "{d:?}");
+        assert_eq!(extension(&d, edge), None);
+    }
+
+    /// How many corners a datum's filled terminator has: 3 for a triangle,
+    /// a dot's outline more.
+    fn terminator_points(d: &ViewAnnotation, seen: Seen, frame: &Frame<'_>) -> usize {
+        let laid = lay_out(d, &[seen], frame, None, &[]).unwrap();
+        laid.group
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Fill { points } => Some(points.len()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn a_datum_on_a_face_ends_in_a_dot_and_its_terminator_is_chosen() {
+        // mitcad#1296: a datum on a planar face picked face on: its pick a
+        // point of the face, seen as a point; a dot about it, the leader
+        // from its middle to the square's near side.
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        let face = ViewPick {
+            body: "F2.b0".parse().unwrap(),
+            occurrence: None,
+            edge: None,
+            face: Some("F2:side(c1[c4,c2])".parse().unwrap()),
+            point: None,
+            on_face: Some([12.0, 5.0]),
+        };
+        let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![face.clone()]);
+        d.letter = Some("B".to_owned());
+        d.check().unwrap();
+        assert_eq!(d.terminator(), Terminator::Dot);
+        let seen = Seen::Point([12.0, 5.0]);
+        let laid = lay_out(&d, &[seen], &frame, None, &[]).unwrap();
+        let dot = laid
+            .group
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Fill { points } => Some(points.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(dot.len() > 3, "a dot: {dot:?}");
+        for p in &dot {
+            assert!(
+                (len2(sub2(*p, [112.0, 105.0])) - DATUM_DOT).abs() < 1e-9,
+                "{p:?}"
+            );
+        }
+        let leaders = lines(&laid);
+        assert_eq!(leaders.len(), 1, "{leaders:?}");
+        assert!(
+            len2(sub2(leaders[0].0, [112.0, 105.0])) < 1e-9,
+            "{leaders:?}"
+        );
+        let (min, max) = first_box(&laid);
+        assert!(on_outline(leaders[0].1, min, max));
+        assert!(!crosses(leaders[0].0, leaders[0].1, min, max));
+        // Its terminator chosen: a triangle on the face, a dot on an edge.
+        d.terminator = Some(Terminator::Triangle);
+        assert_eq!(terminator_points(&d, seen, &frame), 3);
+        let mut e = ViewAnnotation::new(2, AnnotationType::Datum, Vec::new());
+        e.letter = Some("C".to_owned());
+        let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
+        assert_eq!(e.terminator(), Terminator::Triangle);
+        e.terminator = Some(Terminator::Dot);
+        assert!(terminator_points(&e, edge, &frame) > 3);
+        // A point on a face is a pick of the face alone.
+        let mut wrong = face;
+        wrong.edge = Some("E{F2:start|F2:side(c1[c4,c2])}".parse().unwrap());
+        let mut w = ViewAnnotation::new(3, AnnotationType::Datum, vec![wrong]);
+        w.letter = Some("D".to_owned());
+        assert!(w.check().unwrap_err().contains("of the face alone"));
+        // The face's own axes: square to each other and to its normal.
+        for normal in [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.6, 0.8]] {
+            let (x, y) = face_axes(normal);
+            for (a, b) in [(x, y), (x, normal), (y, normal)] {
+                assert!(mitcad_vec3::dot(a, b).abs() < 1e-12, "{normal:?}");
+            }
+            assert!((mitcad_vec3::norm(x) - 1.0).abs() < 1e-12);
+            assert!((mitcad_vec3::norm(y) - 1.0).abs() < 1e-12);
+        }
     }
 }

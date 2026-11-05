@@ -111,6 +111,10 @@
 //   expect-navigation-release       synthetic modifier/button/scroll release ordering
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
+//   agent-menu <row> on|off         the agent indicator's menu filled as it opens,
+//                           then the checkmark of the row named so (Incoming
+//                           or Outgoing connections) clicked when it differs
+//                           (mitcad#1299)
 //   expect-formula-builder          the open expression editor's real controls
 //   open-formula-field <name>        open the editor attached to a real value field
 //   expect-navigation-controls <mode>  default|configure|restored|reset
@@ -652,6 +656,7 @@ private:
   void testNavigationRelease();
   void testNavigationControls(const QString& mode);
   void testAssistantSetup(const QString& mode);
+  void agentMenuChoice(const QString& row, const QString& state);
   void testFormulaBuilder();
   void openFormulaField(const QString& name);
   void sendWheel(const QPoint& windowPos, int notches, Qt::KeyboardModifiers modifiers);

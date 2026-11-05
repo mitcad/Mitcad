@@ -75,19 +75,23 @@ The state line names the next step, and its button does it:
 - **✓ Connected: *assistant*** with **Disconnect**: shown only after the
   MCP initialization handshake completes, and only for the chosen
   assistant's clients, recognised by the names they give themselves
-  (`claude-ai` is Claude Desktop, `claude-code` Claude Code, and a name
-  with `codex`, `chatgpt` or `openai` is Codex; any other name counts as
-  **Other** and is shown as given). Clients of other assistants are named
-  quietly below the line (**Also connected: …**). Names are labels, not
-  authentication identities. **Disconnect** ends the chosen assistant's
-  connections only (**Disconnect *assistant*** while others stay connected,
-  an **Other** client by its own name) and keeps the design and its
-  unsaved edits and the assistant's setup. The connection ends, and it
-  stays ended: until you choose **Connect** again (or **Allow *assistant*
-  to Connect Again** in the assistant indicator's menu), MitCad refuses
-  that assistant's new connections, also those its bridge makes by itself
-  (the line reads **Disconnected: *assistant* cannot connect to MitCad
-  until you connect it again**). Once allowed, a bridge still running
+  (`claude-ai` is Claude Desktop (chat), `local-agent-mode-*` Claude
+  Desktop (Code tab), both under Claude Desktop, `claude-code` Claude
+  Code, and a name with `codex`, `chatgpt` or `openai` is Codex; any other
+  name counts as **Other** and is shown as given). Clients of other
+  assistants are named quietly below the line (**Also connected: …**).
+  Names are labels, not authentication identities. **Disconnect** ends the
+  chosen assistant's connections only (**Disconnect *assistant*** while
+  others stay connected, an **Other** client by its own name) and keeps the
+  design and its unsaved edits and the assistant's setup. The connection
+  ends, and it stays ended, also after a restart: the assistant is blocked,
+  unchecked under **Incoming connections** in the assistant indicator's
+  menu, as unchecking it there does. Until you choose **Allow** (or
+  **Connect**, or check it again in the menu), MitCad refuses that
+  assistant's new connections, also those its bridge makes by itself, with
+  "Blocked in MitCad: check *assistant* under Incoming connections in
+  MitCad's assistant menu to connect it again" (the line reads **Blocked in
+  the assistant menu**). Once allowed, a bridge still running
   connects again by itself; otherwise reconnect in the assistant as the
   state line explains. A client that closes its connection gets the same
   reconnect advice.
@@ -647,17 +651,25 @@ assistant indicator, beside the project indicator, shows the connection:
 with several), and "Assistants unavailable" when the listener did not
 start (or MitCad was started with `--no-mcp`). A client is named by the
 assistant its `clientInfo` name matches ("Claude Code connected" for
-`claude-code`), else by that name. It is in the status bar of the Docked
-layout, in the title row of the Floating layout and in the toolbar of the
-native macOS window; its tooltip adds the window's instance id and port.
-With no assistant connected, a click on it opens Connect AI Assistant;
-otherwise a click opens its menu. The menu says first why assistants are
-unavailable, or lists each connected client (the assistant's name, its
-`clientInfo` name and version, and when it connected) with Disconnect
-<assistant> (Disconnect All with several), then Connect AI Assistant…,
-Copy Command for This Window (only while several MitCad windows listen; for this
-window, `mitcad-cli mcp --connect --instance <id>`) and Folders
-for Designs… (Preferences › AI Assistants). Disconnect ends the connection.
+`claude-code`), else by that name; blocked assistants follow ("No
+assistant · 1 blocked", "1 connected · 1 blocked"). It is in the status
+bar of the Docked layout, in the title row of the Floating layout and in
+the toolbar of the native macOS window; its tooltip adds the window's
+instance id and port. With no assistant connected, a click on it opens
+Connect AI Assistant; otherwise a click opens its menu. The menu says
+first why assistants are unavailable, then has two sections of checkable
+rows. Incoming connections: one row per assistant (Claude Desktop (chat),
+Claude Desktop (Code tab), Claude Code, Codex, another client by its
+`clientInfo` name) set up with Connect AI Assistant, blocked, or connected
+in this run, with its state (connected since, not connected, blocked) and
+its clients' `clientInfo` names and versions in the tooltip; unchecking a
+row disconnects its clients and refuses its new ones, checking it allows
+them again, and the choice is kept across restarts. Outgoing connections:
+the chat panel's agents with the panel's state; one unchecked is not
+offered in the panel and never started. Then Connect AI Assistant…, Copy
+Command for This Window (only while several MitCad windows listen; for
+this window, `mitcad-cli mcp --connect --instance <id>`) and Folders
+Assistants May Use… (Preferences › AI Assistants).
 
 If the stdin of the bridge closes, the connection ends after the bridge
 forwards the requested replies. The GUI and its unsaved work stay open.

@@ -163,6 +163,28 @@ QJsonObject subjectOf(const QString& choice);
 // (several bodies, or a body where an occurrence places it).
 QString subjectChoice(const QJsonObject& subject);
 
+// A row of a base view's Shows list in its panel (mitcad#1293): an
+// occurrence of the drawing's component (`body` empty) or a body where an
+// occurrence places it. `occurrence` is the path of uids from the
+// component ("O2/O5"; empty for the component's own bodies), `depth` the
+// row's level in the list (0 at the top).
+struct SubjectRow {
+  QString label;
+  QString body;
+  QString occurrence;
+  int depth = 0;
+};
+// The rows of a drawing of `component` ("C0" the root's), from the
+// `components` and `bodies` queries, depth first: the component's own
+// bodies, then each occurrence with its bodies and its occurrences.
+QVector<SubjectRow> subjectRows(const QString& component, const QJsonObject& components, const QJsonArray& bodies);
+// Whether a view's `subject` shows `body` where the occurrence path
+// `occurrence` places it.
+bool subjectShows(const QJsonObject& subject, const QString& body, const QString& occurrence);
+// Chosen bodies, each a (body, occurrence path) pair, as the model's
+// `subject` (`bodies`; no `occurrence` for the component's own bodies).
+QJsonObject chosenSubject(const QVector<QPair<QString, QString>>& chosen);
+
 // An option's value: the chosen one (`options`: the tool's own, by option
 // id), else its default.
 QString optionValue(const DrawingToolDef& tool, const QHash<QString, QString>& options, const QString& id);
@@ -208,7 +230,9 @@ QJsonObject viewEdit(const QString& drawing, int view, const QString& field, con
 // field cannot take. Since mitcad#729 "height" is every annotation's own
 // letters' height (empty: the drawing's again), "pen" a line's or an
 // arc's, and "length" an edge extension's reach beyond its edge (mm,
-// its `line_offset`; empty: 10).
+// its `line_offset`; empty: 10). "replace" (mitcad#1292) is a dimension's
+// text in place of its value and tolerance (empty: `null`, the measured
+// value again).
 QJsonObject annotationEdit(const QString& drawing, int annotation, const QString& field, const QString& value,
                            const QJsonObject& finish = QJsonObject());
 

@@ -10,6 +10,28 @@
 //! Either may have a chamfer cut at its free ends (mitcad#304), a cosmetic
 //! one too.
 //!
+//! A modelled straight thread's ends (mitcad#1300): its grooves run out by
+//! a pitch through an end of the face with nothing of the body beyond it,
+//! and also through one beyond which material lies only on the material's
+//! side of the crest (a cone or a countersink that opens away from a
+//! hole's thread, a shaft's end chamfer or a neck narrowing away from its
+//! thread): they cut into that face as far as they reach it and leave no
+//! flat lip. A floor, a shoulder or the hole or shaft going on across the
+//! crest stops them flat at the end. End chamfers are cut only at the
+//! free ends (a cone already there is the chamfer). Where a partial
+//! thread's part ends inside its face and Chamfer Ends asks for that end,
+//! the chamfer is the run-out: the grooves go on past the end inside a
+//! cone at the chamfer's angle, narrowing from an internal thread's major
+//! diameter at the end to the face, widening from an external thread's
+//! minor diameter to the face, so that they fade out of it; without a
+//! chamfer there the end stays flat. `ends` `flat` keeps the ends as they
+//! were cut before: flat at every end that is not free, no run-outs along
+//! the chamfers. A modelled thread made or edited by a command without
+//! `ends` gets `run_out` ([`ThreadDef::settle_ends`]); one in a design file
+//! written before `ends` existed is read as `flat`, so that saved designs
+//! (a fillet on an edge of the thread's end, say) keep their shape and
+//! names; an import sets `flat` where its source program leaves the lip.
+//!
 //! A custom thread (mitcad#893) takes a major diameter and a pitch of its
 //! own (`custom`, expressions) on the 60-degree profile; a trapezoidal
 //! thread is modelled with the 30-degree profile of ISO 2901 and its crest
@@ -342,7 +364,9 @@ pub struct ThreadDef<P = ParamId> {
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub flank_clearance: Option<P>,
     /// A chamfer at these ends of each face where the thread runs out
-    /// through a free end (mitcad#304); none without.
+    /// through a free end (mitcad#304), and a modelled thread's run-out
+    /// along a cone at the chamfer's angle where its part ends inside the
+    /// face (mitcad#1300); none without.
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub chamfer: Option<ThreadChamferEnds>,
     /// The chamfer's angle to the axis; `DEFAULT_CHAMFER_ANGLE` without.
@@ -367,6 +391,29 @@ pub struct ThreadDef<P = ParamId> {
     /// designation with a lead (`Tr10x4(P2)`) gives its own; 1 without.
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub starts: Option<P>,
+    /// How a modelled thread's ends are cut (mitcad#1300, [`ThreadEnds`]).
+    /// A stored modelled thread always has it, except in design files
+    /// written before it existed, which are read as `flat`; a command
+    /// without it means `run_out` ([`ThreadDef::settle_ends`]). Ignored on
+    /// a cosmetic thread.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub ends: Option<ThreadEnds>,
+}
+
+/// How a modelled thread's ends are cut (mitcad#1300).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadEnds {
+    /// The grooves run out by a pitch through an end of the face beyond
+    /// which material lies only on the material's side of the crest (a
+    /// cone or countersink that opens away from the thread), and along the
+    /// chamfer's cone at a partial thread's chamfered end inside its face.
+    RunOut,
+    /// As threads were cut before: the grooves stop flat at every end that
+    /// is not free, and no run-out along a chamfer at an end inside the
+    /// face. Threads of designs saved before, and imports whose source
+    /// program leaves those ends so.
+    Flat,
 }
 
 impl<P> ThreadDef<P> {
@@ -422,7 +469,23 @@ impl<P> ThreadDef<P> {
                 .map(|c| c.map_params("custom.", &mut *f))
                 .transpose()?,
             starts: self.starts.as_ref().map(|v| f("starts", v)).transpose()?,
+            ends: self.ends,
         })
+    }
+
+    /// Whether a modelled thread's ends are cut flat, as before
+    /// mitcad#1300 ([`ThreadEnds::Flat`]).
+    pub fn flat_ends(&self) -> bool {
+        self.ends == Some(ThreadEnds::Flat)
+    }
+
+    /// Gives a modelled thread without `ends` `ends`: `run_out` for a
+    /// command (a thread made or edited from now on), `flat` for a design
+    /// file written before mitcad#1300, whose threads were cut so.
+    pub(crate) fn settle_ends(&mut self, ends: ThreadEnds) {
+        if self.modeled && self.ends.is_none() {
+            self.ends = Some(ends);
+        }
     }
 
     /// Whether it is a taper pipe thread that tapers (mitcad#733).
@@ -431,9 +494,14 @@ impl<P> ThreadDef<P> {
     }
 }
 
-/// A body's threaded faces with the ends (low, high) to chamfer of each,
+/// A body's threaded faces with the ends (low, high) to chamfer of each
+/// and those whose chamfers are run-outs inside the face (mitcad#1300),
 /// and the angle each is turned by.
-type ThreadedBody<S> = (BodyUid, S, Vec<FaceName>, Vec<(bool, bool)>, Vec<f64>);
+type ThreadedBody<S> = (BodyUid, S, Vec<FaceName>, Vec<FaceEnds>, Vec<f64>);
+
+/// A face's ends (low, high) to chamfer, and those to run out along the
+/// chamfer's cone inside the face (mitcad#1300).
+type FaceEnds = ((bool, bool), (bool, bool));
 
 /// A threaded face with its body, the body's shape before the thread and
 /// the face's cylinder (the fit checks, mitcad#1262).
@@ -1011,14 +1079,21 @@ impl ThreadDef {
                 ));
             }
             // The ends asked for that the thread reaches; the kernel
-            // chamfers those with nothing beyond them.
+            // chamfers those with nothing beyond them. A modelled straight
+            // thread runs out along the chamfer's cone at those it does not
+            // reach, inside the face (mitcad#1300), unless its ends are cut
+            // as before.
             let ends = match ends_asked {
                 Some(chamfer) => {
                     let (low, high) = chamfer.low_high(self.location);
                     let (reaches_low, reaches_high) = part_reaches(part, cylinder.length);
-                    (low && reaches_low, high && reaches_high)
+                    let runs = self.modeled && !self.tapers() && !self.flat_ends();
+                    (
+                        (low && reaches_low, high && reaches_high),
+                        (runs && low && !reaches_low, runs && high && !reaches_high),
+                    )
                 }
-                None => (false, false),
+                None => ((false, false), (false, false)),
             };
             // The material at the face: the face, or the crest of a modelled
             // thread where that lies further into the material.
@@ -1077,13 +1152,16 @@ impl ThreadDef {
             clearance
         };
         let (radial_clearance, flank_clearance) = clearance;
-        // The end chamfers, when an end is to be chamfered.
+        // The end chamfers, when an end is to be chamfered or to run out
+        // along a chamfer's cone (mitcad#1300).
+        let chamfered = bodies
+            .iter()
+            .any(|(_, _, _, ends, _)| ends.iter().any(|&((l, h), _)| l || h));
+        let runs_out = bodies
+            .iter()
+            .any(|(_, _, _, ends, _)| ends.iter().any(|&(_, (l, h))| l || h));
         let chamfer = match chamfer_angle {
-            Some(angle)
-                if bodies
-                    .iter()
-                    .any(|(_, _, _, ends, _)| ends.iter().any(|&(l, h)| l || h)) =>
-            {
+            Some(angle) if chamfered || runs_out => {
                 // The profile's root diameter, moved by the radial clearance.
                 let root = self.modeled.then_some(if is_internal {
                     major + 2.0 * radial_clearance
@@ -1092,7 +1170,8 @@ impl ThreadDef {
                 });
                 let diameter = chamfer_diameter
                     .unwrap_or_else(|| default_chamfer_diameter(data, is_internal, root));
-                if let Some(material) = extreme_diameter {
+                // (A run-out's cone does not take the diameter.)
+                if let Some(material) = extreme_diameter.filter(|_| chamfered) {
                     if !is_internal && diameter >= material {
                         return Err(format!(
                             "the thread's chamfer diameter {diameter} must be smaller than the \
@@ -1150,6 +1229,14 @@ impl ThreadDef {
             } else {
                 &angles
             };
+            // The ends to chamfer, and those to run out inside the faces
+            // (none when no face has one).
+            let runouts: Vec<(bool, bool)> = if ends.iter().any(|&(_, (l, h))| l || h) {
+                ends.iter().map(|&(_, runout)| runout).collect()
+            } else {
+                Vec::new()
+            };
+            let ends: Vec<(bool, bool)> = ends.iter().map(|&(chamfer, _)| chamfer).collect();
             let spec = ThreadSpec {
                 feature,
                 faces: &faces,
@@ -1168,10 +1255,12 @@ impl ThreadDef {
                     angle,
                     diameter,
                     ends,
+                    runouts,
                 }),
                 taper,
                 starts,
                 flank_angle,
+                flat_ends: self.flat_ends(),
             };
             if !self.modeled
                 && spec.taper.is_none()

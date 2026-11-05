@@ -713,6 +713,24 @@ private:
   QJsonValue m_sectionBefore; // the section shown before an inspection
   QJsonObject m_analysis; // the analysis edited (mitcad#41), else empty
 
+  // A panel's settings kept by size (mitcad#1298, CommandDef::settingsKey,
+  // framework/RememberedValues.hpp). The panel's values (`kept`: as they
+  // are kept, else as typed), choices and checks, of the inputs outside
+  // lists.
+  PanelSettings panelSettings(bool kept) const;
+  // The inputs whose value, choice or check differs from where the panel
+  // started.
+  QSet<QString> changedSinceStart() const;
+  // The size known now: when it is new and matches the kept settings', the
+  // inputs not in `changed` start from them.
+  void considerKeptSettings(const QSet<QString>& changed);
+  // Whether a value's text evaluates in the design for the input's kind.
+  bool evaluatesHere(const QString& text, const InputDef& input);
+  PanelSettings m_startSettings;           // where the panel started
+  std::optional<PanelSizeKey> m_settingsKey; // the size the faces give now
+  QString m_consideredKey;                 // the size last compared
+  std::optional<QSet<QString>> m_changedBeforePick; // the changes before a pick's own reaction
+
   // Parameter names picked from the view (mitcad#250;
   // CommandSessionPicks.cpp): while a value field has the keyboard, the
   // visible sketches' dimensions and the earlier features' values are

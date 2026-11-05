@@ -2,6 +2,8 @@
 #include "AssistantSetup.hpp"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -10,6 +12,8 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QObject>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
@@ -293,6 +297,29 @@ QString claudeDesktopClaudeCode(const QStringList& settingsFolders) {
   return best;
 }
 
+bool claudeDesktopKeepsClaudeCode(const QString& program) {
+  const QStringList parts = QDir::fromNativeSeparators(program).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+  const qsizetype count = parts.size();
+  if (count < 3) return false;
+  const QString file = parts.last();
+  if (file.compare(QStringLiteral("claude"), Qt::CaseInsensitive) != 0 &&
+      file.compare(QStringLiteral("claude.exe"), Qt::CaseInsensitive) != 0) {
+    return false;
+  }
+  static const QRegularExpression version(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
+  // `claude-code/<version>/claude`, or a build folder between.
+  const auto keptAt = [&parts, count](qsizetype versionAt) {
+    return versionAt >= 1 && parts.at(versionAt - 1).compare(QStringLiteral("claude-code"), Qt::CaseInsensitive) == 0 &&
+        version.match(parts.at(versionAt)).hasMatch();
+  };
+  return keptAt(count - 2) || (count >= 4 && keptAt(count - 3));
+}
+
+QString claudeConfigurationFolder(const QString& configured, const QString& home) {
+  if (!configured.trimmed().isEmpty()) return QDir::cleanPath(QDir(configured.trimmed()).absolutePath());
+  return QDir::cleanPath(QDir(home).filePath(QStringLiteral(".claude")));
+}
+
 QStringList claudeDesktopDataFolders(const QString& localAppData) {
   QStringList folders;
   if (localAppData.isEmpty()) return folders;
@@ -323,11 +350,14 @@ QString assistantPlace(const QString& executable, const QString& home) {
 }
 
 namespace {
-// The labels Disconnect ended, for this run (mitcad#1289).
-QStringList& disconnectedLabels() {
-  static QStringList labels;
-  return labels;
-}
+// The settings of the assistant menu's rows (mitcad#1299).
+const QString kBlockedKey = QStringLiteral("assistant/blocked");
+const QString kRowsKey = QStringLiteral("assistant/rows");
+const QString kClientRow = QStringLiteral("client:");
+const QString kDesktopChat = QStringLiteral("claude-desktop-chat");
+const QString kDesktopCode = QStringLiteral("claude-desktop-code");
+const QString kClaudeCode = QStringLiteral("claude-code");
+const QString kCodex = QStringLiteral("codex");
 
 // The known assistant a label is, if any.
 bool knownAssistant(const QString& label, AssistantClient& client) {
@@ -340,40 +370,38 @@ bool knownAssistant(const QString& label, AssistantClient& client) {
   return false;
 }
 
-bool labelOf(AssistantClient client, const QString& label) {
-  AssistantClient known = AssistantClient::Other;
-  return client == AssistantClient::Other ? !knownAssistant(label, known) : assistantLabelMatches(client, label);
+bool desktopCodeTab(const QString& label) {
+  return label.trimmed().startsWith(QStringLiteral("local-agent-mode"), Qt::CaseInsensitive);
+}
+
+struct BlockWatcher {
+  QPointer<QObject> context;
+  std::function<void()> changed;
+};
+
+std::vector<BlockWatcher>& blockWatchers() {
+  static std::vector<BlockWatcher> watchers;
+  return watchers;
+}
+
+void saveBlocked(const QStringList& rows) {
+  QSettings settings;
+  if (rows.isEmpty()) {
+    settings.remove(kBlockedKey);
+  } else {
+    settings.setValue(kBlockedKey, rows);
+  }
+  // A copy: a watcher may add another one.
+  std::vector<BlockWatcher>& watchers = blockWatchers();
+  watchers.erase(std::remove_if(watchers.begin(), watchers.end(),
+                                [](const BlockWatcher& watcher) { return watcher.context.isNull(); }),
+                 watchers.end());
+  const std::vector<BlockWatcher> calls = watchers;
+  for (const BlockWatcher& watcher : calls) {
+    if (!watcher.context.isNull() && watcher.changed) watcher.changed();
+  }
 }
 } // namespace
-
-bool disconnectedLabelMatches(const QStringList& disconnected, const QString& label) {
-  for (const QString& gone : disconnected) {
-    if (gone == label) return true;
-    AssistantClient client = AssistantClient::Other;
-    if (knownAssistant(gone, client) && assistantLabelMatches(client, label)) return true;
-  }
-  return false;
-}
-
-void disconnectAssistants(const QStringList& labels) {
-  QStringList& disconnected = disconnectedLabels();
-  for (const QString& label : labels) {
-    if (!label.isEmpty() && !disconnected.contains(label)) disconnected << label;
-  }
-}
-
-bool allowAssistant(AssistantClient client) {
-  QStringList& disconnected = disconnectedLabels();
-  const qsizetype before = disconnected.size();
-  disconnected.erase(std::remove_if(disconnected.begin(), disconnected.end(),
-                                    [client](const QString& label) { return labelOf(client, label); }),
-                     disconnected.end());
-  return disconnected.size() != before;
-}
-
-QStringList disconnectedAssistants() { return disconnectedLabels(); }
-
-bool assistantDisconnected(const QString& label) { return disconnectedLabelMatches(disconnectedLabels(), label); }
 
 AssistantClient assistantClientOf(const QString& label) {
   AssistantClient client = AssistantClient::Other;
@@ -381,10 +409,115 @@ AssistantClient assistantClientOf(const QString& label) {
   return client;
 }
 
-bool assistantClientDisconnected(AssistantClient client) {
-  const QStringList& disconnected = disconnectedLabels();
-  return std::any_of(disconnected.cbegin(), disconnected.cend(),
-                     [client](const QString& label) { return labelOf(client, label); });
+QString assistantRowKey(const QString& label) {
+  if (desktopCodeTab(label)) return kDesktopCode;
+  switch (assistantClientOf(label)) {
+  case AssistantClient::ClaudeDesktop: return kDesktopChat;
+  case AssistantClient::ClaudeCode: return kClaudeCode;
+  case AssistantClient::Codex: return kCodex;
+  case AssistantClient::Other: break;
+  }
+  return kClientRow + label;
+}
+
+QString assistantRowName(const QString& key) {
+  if (key == kDesktopChat) return QObject::tr("Claude Desktop (chat)");
+  if (key == kDesktopCode) return QObject::tr("Claude Desktop (Code tab)");
+  if (key == kClaudeCode) return assistantSentenceName(AssistantClient::ClaudeCode);
+  if (key == kCodex) return assistantSentenceName(AssistantClient::Codex);
+  return key.startsWith(kClientRow) ? key.mid(kClientRow.size()) : key;
+}
+
+QStringList knownAssistantRows() { return {kDesktopChat, kDesktopCode, kClaudeCode, kCodex}; }
+
+QStringList assistantRows(AssistantClient client) {
+  switch (client) {
+  case AssistantClient::ClaudeDesktop: return {kDesktopChat, kDesktopCode};
+  case AssistantClient::ClaudeCode: return {kClaudeCode};
+  case AssistantClient::Codex: return {kCodex};
+  case AssistantClient::Other: break;
+  }
+  return {};
+}
+
+AssistantClient assistantRowClient(const QString& key) {
+  if (key == kDesktopChat || key == kDesktopCode) return AssistantClient::ClaudeDesktop;
+  if (key == kClaudeCode) return AssistantClient::ClaudeCode;
+  if (key == kCodex) return AssistantClient::Codex;
+  return AssistantClient::Other;
+}
+
+QStringList blockedAssistantRows() { return QSettings().value(kBlockedKey).toStringList(); }
+
+bool blockAssistantRow(const QString& key) {
+  QStringList rows = blockedAssistantRows();
+  if (key.isEmpty() || key == kClientRow || rows.contains(key)) return false;
+  rows << key;
+  saveBlocked(rows);
+  return true;
+}
+
+bool allowAssistantRow(const QString& key) {
+  QStringList rows = blockedAssistantRows();
+  if (rows.removeAll(key) == 0) return false;
+  saveBlocked(rows);
+  return true;
+}
+
+void blockAssistants(const QStringList& labels) {
+  QStringList rows = blockedAssistantRows();
+  const qsizetype before = rows.size();
+  for (const QString& label : labels) {
+    const QString key = assistantRowKey(label);
+    if (!label.isEmpty() && !rows.contains(key)) rows << key;
+  }
+  if (rows.size() != before) saveBlocked(rows);
+}
+
+bool allowAssistant(AssistantClient client) {
+  QStringList rows = blockedAssistantRows();
+  const qsizetype before = rows.size();
+  rows.erase(std::remove_if(rows.begin(), rows.end(),
+                            [client](const QString& key) { return assistantRowClient(key) == client; }),
+             rows.end());
+  if (rows.size() == before) return false;
+  saveBlocked(rows);
+  return true;
+}
+
+bool assistantRowBlocked(const QStringList& blocked, const QString& label) {
+  return blocked.contains(assistantRowKey(label));
+}
+
+bool assistantBlocked(const QString& label) { return assistantRowBlocked(blockedAssistantRows(), label); }
+
+bool assistantClientBlocked(AssistantClient client) {
+  const QStringList rows = blockedAssistantRows();
+  return std::any_of(rows.cbegin(), rows.cend(),
+                     [client](const QString& key) { return assistantRowClient(key) == client; });
+}
+
+QString assistantRefusal(const QString& label) {
+  if (!assistantBlocked(label)) return {};
+  return QObject::tr("Blocked in MitCad: check %1 under Incoming connections in MitCad's assistant menu "
+                     "to connect it again")
+      .arg(assistantRowName(assistantRowKey(label)));
+}
+
+void watchAssistantBlocks(QObject* context, std::function<void()> changed) {
+  if (context != nullptr && changed) blockWatchers().push_back({context, std::move(changed)});
+}
+
+QStringList rememberedAssistantRows() { return QSettings().value(kRowsKey).toStringList(); }
+
+void rememberAssistantRows(const QStringList& keys) {
+  QStringList rows = rememberedAssistantRows();
+  const qsizetype before = rows.size();
+  for (const QString& key : keys) {
+    // Known assistants only: another client's row is this run's.
+    if (knownAssistantRows().contains(key) && !rows.contains(key)) rows << key;
+  }
+  if (rows.size() != before) QSettings().setValue(kRowsKey, rows);
 }
 
 QString codexConfigurationPath() {
@@ -520,15 +653,17 @@ QString assistantConfigurationPolicy(const QString& path) {
 
 bool assistantLabelMatches(AssistantClient client, const QString& label) {
   const QString name = label.toLower();
-  const bool code = name.contains(QStringLiteral("claude-code")) || name.contains(QStringLiteral("claude code"));
+  // Claude Desktop's Code tab (mitcad#1299), whatever its name goes on with.
+  const bool tab = desktopCodeTab(name);
+  const bool code = !tab && (name.contains(QStringLiteral("claude-code")) || name.contains(QStringLiteral("claude code")));
   const bool claude = name.contains(QStringLiteral("claude"));
   const bool codex = name.contains(QStringLiteral("codex")) || name.contains(QStringLiteral("chatgpt")) ||
                      name.contains(QStringLiteral("openai"));
   switch (client) {
-  case AssistantClient::ClaudeDesktop: return claude && !code;
+  case AssistantClient::ClaudeDesktop: return tab || (claude && !code);
   case AssistantClient::ClaudeCode: return code;
-  case AssistantClient::Codex: return codex && !claude;
-  case AssistantClient::Other: return !claude && !codex;
+  case AssistantClient::Codex: return codex && !claude && !tab;
+  case AssistantClient::Other: return !claude && !codex && !tab;
   }
   return false;
 }
@@ -547,12 +682,7 @@ QString assistantSentenceName(AssistantClient client) {
   return client == AssistantClient::Codex ? QObject::tr("Codex") : assistantName(client);
 }
 
-QString assistantDisplayName(const QString& label) {
-  for (const AssistantClient client : {AssistantClient::ClaudeCode, AssistantClient::ClaudeDesktop, AssistantClient::Codex}) {
-    if (assistantLabelMatches(client, label)) return assistantSentenceName(client);
-  }
-  return label;
-}
+QString assistantDisplayName(const QString& label) { return assistantRowName(assistantRowKey(label)); }
 
 bool claudeDesktopPackaged(const QString& localAppData) {
   if (localAppData.isEmpty()) return false;

@@ -123,6 +123,15 @@ rust::Box<mitcad::Document> open_document(const std::string& path, const StoreOp
   const auto start = std::chrono::steady_clock::now();
   const std::string recomputed(document->command(R"({"cmd": "recompute"})"));
   const std::chrono::duration<double, std::milli> recompute_ms = std::chrono::steady_clock::now() - start;
+  // The drawings of an older design file whose views now keep the bodies
+  // they showed (mitcad#1293), one line each.
+  if (log != nullptr) {
+    const QJsonArray notices =
+        QJsonDocument::fromJson(QByteArray::fromStdString(recomputed)).object().value(QStringLiteral("notices")).toArray();
+    for (const QJsonValue& notice : notices) {
+      *log << "Drawing pinned: " << notice.toObject().value(QStringLiteral("message")).toString().toStdString() << "\n";
+    }
+  }
   // Slot connectors and their nuts and screws placed by the first BUILD
   // rule are placed by the current one, as the application opens them
   // (mitcad#1115). A refused upgrade leaves them as they are and the

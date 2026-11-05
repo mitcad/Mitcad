@@ -158,6 +158,7 @@ impl AnnotationType {
             Self::Ordinate | Self::HoleTable => Want::Point,
             Self::Angle | Self::EdgeExtension => Want::Line,
             Self::Radius | Self::Diameter | Self::CenterMark | Self::CenterPattern => Want::Circle,
+            Self::Datum => Want::Datum,
             _ => Want::Any,
         }
     }
@@ -181,6 +182,9 @@ pub enum Want {
     /// (mitcad#1272): an edge's end, a straight edge's middle, or a
     /// circle's or an arc's centre.
     Snap,
+    /// What a datum label goes on (mitcad#1296): as `Any`, else a planar
+    /// face the view sees face on with the click inside its outline.
+    Datum,
 }
 
 /// The direction a linear or an ordinate dimension measures along: the
@@ -218,6 +222,13 @@ pub struct ViewPick {
     pub face: Option<FaceName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point: Option<PickPoint>,
+    /// A point of a planar face (mitcad#1296: a datum label on the face,
+    /// picked inside its outline where the view sees it face on), in the
+    /// face's own coordinates: millimetres from its plane's origin along
+    /// the plane's own axes ([`face_axes`]), in its body's coordinates; so
+    /// it keeps its place on the face when the model or the view changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_face: Option<[f64; 2]>,
 }
 
 impl ViewPick {
@@ -227,11 +238,53 @@ impl ViewPick {
     }
 
     fn check(&self) -> Result<(), String> {
+        if let Some(on) = self.on_face {
+            if self.face.is_none() || self.edge.is_some() || self.point.is_some() {
+                return Err("a point on a face is a pick of the face alone".to_owned());
+            }
+            if on.iter().any(|v| !v.is_finite()) {
+                return Err("a point on a face is two numbers".to_owned());
+            }
+        }
         match (&self.edge, &self.face, self.point) {
             (Some(_), None, _) => Ok(()),
             (None, Some(_), None | Some(PickPoint::Center)) => Ok(()),
             (None, Some(_), Some(_)) => Err("a face's point is its center".to_owned()),
             _ => Err("a pick is a body's edge or face".to_owned()),
+        }
+    }
+}
+
+/// A planar face's own axes (mitcad#1296): two unit vectors at right
+/// angles to each other and to its unit `normal`, chosen from the normal
+/// alone, so that a point kept in them ([`ViewPick::on_face`]) stays on
+/// the face as long as its plane keeps its direction.
+pub fn face_axes(normal: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let n = mitcad_vec3::unit(normal).unwrap_or([0.0, 0.0, 1.0]);
+    let other = if n[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let x = mitcad_vec3::unit(mitcad_vec3::cross(other, n)).unwrap_or([0.0, 1.0, 0.0]);
+    (x, mitcad_vec3::cross(n, x))
+}
+
+/// How a datum label's leader ends on its feature (ISO 5459,
+/// mitcad#1296): a filled triangle on an edge or its extension line, a
+/// filled dot on a face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Terminator {
+    Triangle,
+    Dot,
+}
+
+impl Terminator {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Triangle => "triangle",
+            Self::Dot => "dot",
         }
     }
 }
@@ -319,6 +372,21 @@ pub struct ViewAnnotation {
     /// rotated. None: along the view's x or y.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<f64>,
+    /// Where a datum label's triangle or a frame's arrow sits along its
+    /// pick (mitcad#1295): the fraction of the way from the pick's start,
+    /// by its own direction (an edge from its start to its end, an arc
+    /// from its first end to its second, a round face along its axis), 0
+    /// to 1; so it keeps its place on the edge when the model or the view
+    /// changes. None (older files, a point, a whole circle): the pick's
+    /// point nearest `at`. A datum label on a straight edge may sit on the
+    /// edge's line beyond its ends (below 0 or above 1, mitcad#1296): it
+    /// then draws its own extension line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip_along: Option<f64>,
+    /// A datum label's terminator (mitcad#1296); left out: a dot on a
+    /// face picked face on ([`ViewPick::on_face`]), else a triangle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminator: Option<Terminator>,
 }
 
 /// A text note on the sheet, without a leader.
@@ -375,7 +443,21 @@ impl ViewAnnotation {
             table: None,
             height: None,
             turn: None,
+            tip_along: None,
+            terminator: None,
         }
+    }
+
+    /// A datum label's terminator: its own, else a dot on a face picked
+    /// face on and a triangle on anything else (mitcad#1296).
+    pub fn terminator(&self) -> Terminator {
+        self.terminator.unwrap_or_else(|| {
+            if self.picks.first().is_some_and(|p| p.on_face.is_some()) {
+                Terminator::Dot
+            } else {
+                Terminator::Triangle
+            }
+        })
     }
 
     /// Why it cannot be kept, if it cannot (not its geometry).
@@ -422,6 +504,23 @@ impl ViewAnnotation {
             || self.at.is_some_and(|o| o.iter().any(|v| !v.is_finite()))
         {
             return Err("a place is two numbers".to_owned());
+        }
+        if let Some(t) = self.tip_along {
+            match kind {
+                // On the edge's line beyond its ends too (mitcad#1296).
+                AnnotationType::Datum if !t.is_finite() => {
+                    return Err("a place along an edge is a number".to_owned());
+                }
+                AnnotationType::Datum => {}
+                AnnotationType::Frame if !(0.0..=1.0).contains(&t) => {
+                    return Err("a place along an edge is a fraction from 0 to 1".to_owned());
+                }
+                AnnotationType::Frame => {}
+                _ => return Err(format!("a {name} has no place along its edge")),
+            }
+        }
+        if self.terminator.is_some() && kind != AnnotationType::Datum {
+            return Err(format!("a {name} has no terminator: a datum label has"));
         }
         if kind.is_dimension() {
             crate::document::check_format(&self.format)?;

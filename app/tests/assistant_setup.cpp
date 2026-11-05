@@ -2,12 +2,15 @@
 #include "mcp/AssistantSetup.hpp"
 
 #include <cstdio>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QObject>
+#include <QSettings>
 #include <QTemporaryDir>
 
 namespace {
@@ -43,7 +46,9 @@ int assistantSetupTests() {
   CHECK(assistantCommand(QStringLiteral("/opt/My Apps/mitcad-cli"), {QStringLiteral("mcp")}, true).startsWith(QStringLiteral("& '")));
   CHECK(assistantShellWord(QStringLiteral("/home/user/.codex"), true, true) == QStringLiteral("'/home/user/.codex'"));
   // The connected clients' names for people (mitcad#706, mitcad#710).
-  CHECK(assistantDisplayName(QStringLiteral("claude-ai")) == QStringLiteral("Claude Desktop"));
+  // Claude Desktop's chat and its Code tab by names users know (mitcad#1299).
+  CHECK(assistantDisplayName(QStringLiteral("claude-ai")) == QStringLiteral("Claude Desktop (chat)"));
+  CHECK(assistantDisplayName(QStringLiteral("local-agent-mode-MitCad")) == QStringLiteral("Claude Desktop (Code tab)"));
   CHECK(assistantDisplayName(QStringLiteral("claude-code")) == QStringLiteral("Claude Code"));
   // "ChatGPT / Codex" names its choice only; a sentence says "Codex" (mitcad#724).
   CHECK(assistantName(AssistantClient::Codex) == QStringLiteral("ChatGPT / Codex"));
@@ -58,6 +63,23 @@ int assistantSetupTests() {
   CHECK(!assistantLabelMatches(AssistantClient::ClaudeCode, QStringLiteral("claude-ai")));
   CHECK(assistantLabelMatches(AssistantClient::ClaudeCode, QStringLiteral("claude-code")));
   CHECK(!assistantLabelMatches(AssistantClient::ClaudeDesktop, QStringLiteral("claude-code")));
+  // Claude Desktop's Code tab (mitcad#1299): Claude Desktop, nothing else.
+  CHECK(assistantLabelMatches(AssistantClient::ClaudeDesktop, QStringLiteral("local-agent-mode-MitCad")));
+  CHECK(!assistantLabelMatches(AssistantClient::ClaudeCode, QStringLiteral("local-agent-mode-MitCad")));
+  CHECK(!assistantLabelMatches(AssistantClient::Codex, QStringLiteral("local-agent-mode-MitCad")));
+  CHECK(!assistantLabelMatches(AssistantClient::Other, QStringLiteral("local-agent-mode-MitCad")));
+  CHECK(assistantClientOf(QStringLiteral("local-agent-mode-MitCad")) == AssistantClient::ClaudeDesktop);
+  CHECK(assistantRowKey(QStringLiteral("local-agent-mode-MitCad")) == QStringLiteral("claude-desktop-code"));
+  CHECK(assistantRowKey(QStringLiteral("claude-ai")) == QStringLiteral("claude-desktop-chat"));
+  CHECK(assistantRowKey(QStringLiteral("claude-code")) == QStringLiteral("claude-code"));
+  CHECK(assistantRowKey(QStringLiteral("codex-mcp-client")) == QStringLiteral("codex"));
+  CHECK(assistantRowKey(QStringLiteral("example-client")) == QStringLiteral("client:example-client"));
+  CHECK(assistantRowName(QStringLiteral("client:example-client")) == QStringLiteral("example-client"));
+  CHECK(assistantRows(AssistantClient::ClaudeDesktop) ==
+        QStringList({QStringLiteral("claude-desktop-chat"), QStringLiteral("claude-desktop-code")}));
+  CHECK(assistantRows(AssistantClient::Other).isEmpty());
+  CHECK(assistantRowClient(QStringLiteral("claude-desktop-code")) == AssistantClient::ClaudeDesktop);
+  CHECK(assistantRowClient(QStringLiteral("client:example-client")) == AssistantClient::Other);
   CHECK(assistantLabelMatches(AssistantClient::Codex, QStringLiteral("codex-mcp-client")));
   CHECK(!assistantLabelMatches(AssistantClient::Other, QStringLiteral("Codex")));
   CHECK(assistantLabelMatches(AssistantClient::Other, QStringLiteral("example-client")));
@@ -291,7 +313,11 @@ int assistantSetupTests() {
               QJsonDocument(assistantBundleManifest(installed, true, QStringLiteral("win32"))).toJson()));
     const InstalledDesktopExtension extension = claudeDesktopExtension(folders);
     CHECK(extension.found && extension.bridge == installed);
+    CHECK(claudeDesktopExtensionStarts(extension, installed));
+#ifdef Q_OS_WIN
+    // Only Windows reads a backslash as a separator (QDir::fromNativeSeparators).
     CHECK(claudeDesktopExtensionStarts(extension, QStringLiteral("C:/Program Files/MitCad/bin/mitcad-cli.exe")));
+#endif
     CHECK(!claudeDesktopExtensionStarts(extension, QStringLiteral("C:/Other/mitcad-cli.exe")));
     CHECK(!claudeDesktopExtensionStarts(InstalledDesktopExtension{}, installed));
   }
@@ -328,34 +354,122 @@ int assistantSetupTests() {
     CHECK(claudeDesktopClaudeCode(QStringList{settings.path()} + claudeDesktopDataFolders(local.path())) ==
           QFileInfo(data.filePath(QStringLiteral("claude-code/2.1.309/9078b9c1d466/")) + program).canonicalFilePath());
     CHECK(claudeDesktopDataFolders(QString()).isEmpty());
+    // Both found ones are Claude Desktop's by their paths (mitcad#1297).
+    CHECK(claudeDesktopKeepsClaudeCode(claudeDesktopClaudeCode({settings.path()})));
+    CHECK(claudeDesktopKeepsClaudeCode(claudeDesktopClaudeCode(claudeDesktopDataFolders(local.path()))));
+  }
+  // Claude Desktop's Claude Code by its path alone (mitcad#1297): in the
+  // version's folder, or in a build folder under it as current versions keep
+  // it; synthetic paths, nothing on disk.
+  {
+    CHECK(claudeDesktopKeepsClaudeCode(QStringLiteral("/home/someone/.config/Claude/claude-code/2.0.10/claude")));
+    CHECK(claudeDesktopKeepsClaudeCode(
+        QStringLiteral("/Users/someone/Library/Application Support/Claude/claude-code/2.1.4/claude")));
+    CHECK(claudeDesktopKeepsClaudeCode(
+        QStringLiteral("C:/Users/someone/AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc/claude-code/2.1.309/"
+                       "9078b9c1d466/claude.exe")));
+    CHECK(claudeDesktopKeepsClaudeCode(QStringLiteral("/data/claude-code/2.1.309/9078b9c1d466/claude")));
+#ifdef Q_OS_WIN
+    // Only Windows reads a backslash as a separator.
+    CHECK(claudeDesktopKeepsClaudeCode(
+        QStringLiteral("C:\\Users\\someone\\AppData\\Local\\Claude-Data\\claude_x\\claude-code\\2.1.309\\ab12\\claude.exe")));
+#endif
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/home/someone/.local/bin/claude")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/home/someone/.claude/local/claude")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/data/claude-code/not-a-version/claude")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/data/claude-code/not-a-version/9078b9c1d466/claude")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/data/claude-code/2.1.309/one/two/claude")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/data/claude-code/2.1.309/codex")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QStringLiteral("/data/claude-code/claude")));
+    CHECK(!claudeDesktopKeepsClaudeCode(QString()));
+    // The configuration folder a Claude Code signs in with: CLAUDE_CONFIG_DIR,
+    // else .claude in the home folder.
+    CHECK(claudeConfigurationFolder(QString(), QStringLiteral("/home/someone")) == QStringLiteral("/home/someone/.claude"));
+    CHECK(claudeConfigurationFolder(QStringLiteral("  "), QStringLiteral("/home/someone")) ==
+          QStringLiteral("/home/someone/.claude"));
+    CHECK(claudeConfigurationFolder(QStringLiteral("/srv/claude-config/"), QStringLiteral("/home/someone")) ==
+          QDir::cleanPath(QDir(QStringLiteral("/srv/claude-config")).absolutePath()));
     CHECK(assistantPlace(QStringLiteral("/home/someone/.local/bin/claude"), QStringLiteral("/home/someone")) ==
           QStringLiteral("~/.local/bin"));
     CHECK(assistantPlace(QStringLiteral("/opt/tools/claude"), QStringLiteral("/home/someone")) ==
           QDir::toNativeSeparators(QStringLiteral("/opt/tools")));
   }
-  // Disconnect sticks (mitcad#1289): a disconnected label, and the same
-  // assistant's other labels; Other only by its own label; allowed again.
+  // Blocks (mitcad#1289, kept in the settings since mitcad#1299): a blocked
+  // label's row, and the same row's other labels; Other only by its own
+  // label; Claude Desktop's chat and Code tab apart; allowed again.
   {
-    CHECK(disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("claude-code")));
-    CHECK(disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("Claude Code (beta)")));
-    CHECK(!disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("claude-ai")));
-    CHECK(!disconnectedLabelMatches({QStringLiteral("claude-code")}, QStringLiteral("codex-mcp-client")));
-    CHECK(disconnectedLabelMatches({QStringLiteral("example-client")}, QStringLiteral("example-client")));
-    CHECK(!disconnectedLabelMatches({QStringLiteral("example-client")}, QStringLiteral("other-client")));
+    CHECK(assistantRowBlocked({QStringLiteral("claude-code")}, QStringLiteral("claude-code")));
+    CHECK(assistantRowBlocked({QStringLiteral("claude-code")}, QStringLiteral("Claude Code (beta)")));
+    CHECK(!assistantRowBlocked({QStringLiteral("claude-code")}, QStringLiteral("claude-ai")));
+    CHECK(!assistantRowBlocked({QStringLiteral("claude-code")}, QStringLiteral("codex-mcp-client")));
+    CHECK(assistantRowBlocked({QStringLiteral("client:example-client")}, QStringLiteral("example-client")));
+    CHECK(!assistantRowBlocked({QStringLiteral("client:example-client")}, QStringLiteral("other-client")));
+    CHECK(assistantRowBlocked({QStringLiteral("claude-desktop-code")}, QStringLiteral("local-agent-mode-MitCad")));
+    CHECK(!assistantRowBlocked({QStringLiteral("claude-desktop-code")}, QStringLiteral("claude-ai")));
     CHECK(assistantClientOf(QStringLiteral("claude-ai")) == AssistantClient::ClaudeDesktop);
     CHECK(assistantClientOf(QStringLiteral("example-client")) == AssistantClient::Other);
-    CHECK(disconnectedAssistants().isEmpty());
-    disconnectAssistants({QStringLiteral("claude-code"), QStringLiteral("example-client")});
-    CHECK(assistantDisconnected(QStringLiteral("claude-code")));
-    CHECK(assistantClientDisconnected(AssistantClient::ClaudeCode));
-    CHECK(assistantClientDisconnected(AssistantClient::Other));
-    CHECK(!assistantClientDisconnected(AssistantClient::Codex));
+
+    // The settings of a test's own, and a restart: the file as saved read
+    // from a fresh folder (QSettings keeps a file it has read in memory).
+    const QSettings::Format format = QSettings::defaultFormat();
+    const QString organization = QCoreApplication::organizationName();
+    const QString application = QCoreApplication::applicationName();
+    QCoreApplication::setOrganizationName(QStringLiteral("MitcadTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("assistant_blocks"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QTemporaryDir first;
+    QTemporaryDir second;
+    CHECK(first.isValid() && second.isValid());
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, first.path());
+    QObject watched;
+    int changes = 0;
+    watchAssistantBlocks(&watched, [&changes] { ++changes; });
+    CHECK(blockedAssistantRows().isEmpty());
+    blockAssistants({QStringLiteral("claude-code"), QStringLiteral("example-client")});
+    CHECK(changes == 1);
+    CHECK(assistantBlocked(QStringLiteral("claude-code")));
+    CHECK(assistantClientBlocked(AssistantClient::ClaudeCode));
+    CHECK(assistantClientBlocked(AssistantClient::Other));
+    CHECK(!assistantClientBlocked(AssistantClient::Codex));
     CHECK(!allowAssistant(AssistantClient::Codex));
     CHECK(allowAssistant(AssistantClient::ClaudeCode));
-    CHECK(!assistantDisconnected(QStringLiteral("claude-code")));
-    CHECK(assistantDisconnected(QStringLiteral("example-client")));
+    CHECK(!assistantBlocked(QStringLiteral("claude-code")));
+    CHECK(assistantBlocked(QStringLiteral("example-client")));
     CHECK(allowAssistant(AssistantClient::Other));
-    CHECK(disconnectedAssistants().isEmpty());
+    CHECK(blockedAssistantRows().isEmpty());
+    CHECK(changes == 3);
+    // A row unchecked in the menu: Claude Desktop's Code tab, not its chat;
+    // the refusal names the row and how to allow it.
+    CHECK(blockAssistantRow(QStringLiteral("claude-desktop-code")));
+    CHECK(!blockAssistantRow(QStringLiteral("claude-desktop-code")));
+    CHECK(assistantRefusal(QStringLiteral("claude-ai")).isEmpty());
+    CHECK(assistantRefusal(QStringLiteral("local-agent-mode-MitCad"))
+              .contains(QStringLiteral("check Claude Desktop (Code tab) under Incoming connections")));
+    rememberAssistantRows({QStringLiteral("claude-code"), QStringLiteral("client:example-client")});
+    QSettings().sync();
+    // The restart: still blocked, still refused, the remembered rows kept
+    // (a known assistant's only).
+    {
+      const QString name = QCoreApplication::organizationName() + QLatin1Char('/') +
+                           QCoreApplication::applicationName() + QStringLiteral(".ini");
+      const QString copied = QDir(second.path()).filePath(name);
+      CHECK(QDir().mkpath(QFileInfo(copied).path()));
+      CHECK(QFile::copy(QDir(first.path()).filePath(name), copied));
+      QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, second.path());
+      CHECK(QSettings().fileName() == copied);
+    }
+    CHECK(blockedAssistantRows() == QStringList{QStringLiteral("claude-desktop-code")});
+    CHECK(!assistantRefusal(QStringLiteral("local-agent-mode-MitCad")).isEmpty());
+    CHECK(assistantRefusal(QStringLiteral("claude-ai")).isEmpty());
+    CHECK(rememberedAssistantRows() == QStringList{QStringLiteral("claude-code")});
+    // Checked again (or Connect for Claude Desktop): allowed.
+    CHECK(allowAssistantRow(QStringLiteral("claude-desktop-code")));
+    CHECK(!allowAssistantRow(QStringLiteral("claude-desktop-code")));
+    CHECK(assistantRefusal(QStringLiteral("local-agent-mode-MitCad")).isEmpty());
+    CHECK(changes == 5);
+    QCoreApplication::setOrganizationName(organization);
+    QCoreApplication::setApplicationName(application);
+    QSettings::setDefaultFormat(format);
   }
 #ifndef Q_OS_WIN
   const QString linked = directory.filePath(QStringLiteral("linked.toml"));

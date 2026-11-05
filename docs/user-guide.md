@@ -208,12 +208,13 @@ assistant indicator, or choose **Connect AI Assistant…** in
    | Reconnect MitCad in Claude Code (/mcp › mitcad › Reconnect) or start a new session | none | After a disconnect, run `/mcp` in Claude Code, choose **mitcad**, then **Reconnect**, or start a new session |
    | Restart ChatGPT or Codex, or start a new session | none | After a disconnect, restart the assistant or start a new session |
    | ✓ Connected: *assistant* | **Disconnect** | Work with the assistant; **Disconnect** keeps its setup, the design and unsaved changes |
-   | Disconnected: *assistant* cannot connect to MitCad until you connect it again | **Connect** | After **Disconnect**, MitCad refuses the assistant's new connections. **Connect** (or **Allow *assistant* to Connect Again** in the assistant indicator's menu) lets it connect again; then use the step shown |
+   | Blocked in the assistant menu | **Allow** | The assistant is unchecked under **Incoming connections** in the assistant indicator's menu, or you pressed **Disconnect**: MitCad refuses its connections, also after a restart. **Allow** (or checking it again in the menu) lets it connect again; then use the step shown |
    | A short message saying what went wrong, in red | **Try again** | Do what the message says, then try again |
 
    Connected shows for the assistant that is connected, by its name
-   (**Claude Desktop**, **Claude Code**, **Codex**; another assistant by
-   the name it gives itself). With another assistant chosen, a quiet line
+   (**Claude Desktop (chat)** and **Claude Desktop (Code tab)**, both
+   under **Claude Desktop**, **Claude Code**, **Codex**; another assistant
+   by the name it gives itself). With another assistant chosen, a quiet line
    names it (**Also connected: …**), and **Disconnect** then ends only the
    chosen assistant's connection and names it (**Disconnect Claude Code**;
    with **Other**, the assistant's own name).
@@ -256,19 +257,36 @@ assistant** with a hollow dot (the window accepts them), **Claude Code
 connected** with a colored dot (one assistant; **2 assistants connected**
 with several), or **Assistants unavailable** with a struck-through dot
 (the window cannot accept them, for example when MitCad was started with
-`--no-mcp`). It is in the title row of the Floating layout, in the status
+`--no-mcp`). When you have blocked an assistant in its menu, the indicator
+says so as well: **No assistant · 1 blocked** or **1 connected · 1
+blocked**. It is in the title row of the Floating layout, in the status
 bar of the Docked layout and in the toolbar of the native macOS window.
 Its tooltip gives the details, with the window's instance id and port.
 
 With no assistant connected, a click on the indicator opens **Connect AI
 Assistant**; its arrow, or a right click, opens its menu. Otherwise a
 click opens the menu. With assistants unavailable, the menu says why
-first. With assistants connected, it lists each (its name, the name and
-version the client gave itself, and the time it connected) and has
-**Disconnect *assistant*** (**Disconnect All** with several). It always
-has **Connect AI Assistant…** and **Folders for Designs…** (**Preferences ›
-AI Assistants**), and with several MitCad windows open **Copy Command for
-This Window** (a command that connects to this window only).
+first. The menu has two sections, with a checkmark and a state on each
+row:
+
+- **Incoming connections**: the assistants that work in MitCad, such as
+  **Claude Desktop (chat)**, **Claude Desktop (Code tab)**, **Claude
+  Code** and **Codex**: each one set up with **Connect AI Assistant**, and
+  any other assistant that connected since MitCad started. Its state is
+  **connected since** *time*, **not connected** or **blocked**. A checked
+  assistant may connect. Uncheck it to disconnect it and refuse its
+  connections; check it again to let it connect at once. The name and
+  version the assistant gives itself are in the row's tooltip.
+- **Outgoing connections**: the agents the chat panel can use (each
+  Claude Code found, Codex, and the API agents and the custom command you
+  turned on in **Preferences › AI Assistants**), with the state the chat
+  panel shows. A checked agent is offered in the chat panel. Uncheck it to
+  take it out of the panel's list: MitCad then never starts it.
+
+The checkmarks are kept when MitCad restarts. Below them are **Connect AI
+Assistant…**, with several MitCad windows open **Copy Command for This
+Window** (a command that connects to this window only), and **Folders
+Assistants May Use…** (**Preferences › AI Assistants**).
 
 ## Chat with an AI agent
 
@@ -1737,6 +1755,18 @@ class 6g. A hole gets the size whose tap drill it is and class 6H: a
 the classes of their side, and a new size or designation keeps the
 class on that side.
 
+When you thread several holes of the same size one after the other, the
+next Thread starts from the settings of your last thread. If the first
+cylindrical face has the same diameter (within 0.001 mm) and the same
+side (hole or shaft) as the last thread you made with OK, all of that
+thread's settings come back: the type, size, class, direction,
+*Modeled*, starts, *Tapered*, clearances, *Full Length*, length, offset,
+location and end chamfers. A setting that you change before you pick
+the face keeps your value. On a face of another size, Thread suggests
+the size as before, and the other settings start from their defaults.
+Editing a thread and Cancel do not change what is kept. MitCad keeps
+these settings on this computer, not in the design.
+
 A taper pipe thread (*Thread Type* NPT, or ISO Taper Pipe Threads with
 *R* sizes for shafts and *Rc* sizes for holes) is *Tapered* by default:
 1:16 on the diameter. It starts at the free end of the face: the mouth
@@ -1771,14 +1801,37 @@ crests and roots, and the standard's clearance at the roots: the
 screw's root is a little deeper than the nut's crest, and the nut's root
 a little wider than the screw's crest, so the two clear each other.
 
+A modeled thread runs out as a tap or a die does. Where its face ends
+in a cone that opens away from the thread, such as a countersink above
+a tapped hole or a chamfer at a shaft's end, the grooves go on into the
+cone by a pitch and fade out of it. No flat, unthreaded ring is left at
+the cone's root. A floor, a shoulder, or a hole or shaft that goes on
+stops the thread flat at the end.
+
 *Chamfer Ends* cuts a cone at the free ends through which the thread
 runs out. Examples are the tip of a shaft and the mouth of a hole. Thus
 the first turn starts on the cone, without a knife edge. MitCad
 chamfers an external thread to below its minor diameter. It
-countersinks an internal thread past its major diameter. Ends inside
-the face, or against more material, get no chamfer. *Ends* selects both ends, the start or
-the end. The start is the end from which the thread location measures.
-By default it is the high end.
+countersinks an internal thread past its major diameter. Ends against
+more material get no chamfer, and neither does an end that runs out
+into a cone: that cone is its chamfer already. *Ends* selects both
+ends, the start or the end. The start is the end from which the thread
+location measures. By default it is the high end.
+
+When a modeled thread is shorter than its face, an end inside the face
+with *Chamfer Ends* gets a run-out instead. The grooves go on past the
+end inside a cone at the chamfer's angle. In a hole the cone narrows
+from the major diameter to the hole's diameter; on a shaft it widens
+from the minor diameter to the shaft's diameter. So the grooves fade
+out of the face, without a flat wall. Without a chamfer there, the
+thread ends flat.
+
+A modeled thread in a design saved by an earlier version keeps the flat
+ends it had, so that chamfers and fillets on its ends stay as they
+were. Once you edit the thread, it gets the run-outs. An imported
+thread can keep flat ends where the program it comes from made them so.
+Earlier versions cannot open a design saved with this version that has
+a modeled thread.
 
 The size of the chamfer comes from the thread size. The cone is at 45
 degrees to the axis. It goes a tenth of a pitch inside the minor

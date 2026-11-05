@@ -4,7 +4,8 @@
 //! to the spacing of the dimension placed before it in the drawing and to
 //! multiples of it; the first dimension, a free place and what is no
 //! dimension stay where they are clicked; the commands then place exactly
-//! where the answer says.
+//! where the answer says. A note's drag snaps its leader to multiples of
+//! 45 degrees (mitcad#1294).
 
 use serde_json::{Value, json};
 
@@ -233,4 +234,57 @@ fn what_is_no_dimension_is_placed_as_clicked() {
         .to_string(),
     );
     assert!(wrong.is_err(), "{wrong:?}");
+}
+
+#[test]
+fn a_notes_drag_snaps_its_leader_to_45_degrees() {
+    // mitcad#1294: a note's leader runs from its arrow to its text's
+    // shoulder, `text_offset` from the arrow; a drag that leaves it 47
+    // degrees up snaps it to 45, its length kept; free, as dragged.
+    let (mut doc, names, low, _) = front_view();
+    let note = json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "note",
+                      "picks": [{"body": "F2.b0", "edge": names[0]}], "text": "A",
+                      "at": [40, low - 13.0]});
+    let id = command(&mut doc, note)["annotation"].as_u64().unwrap();
+    let offset = |doc: &Document<MockKernel>| {
+        let annotations = sheet(doc)["annotations"].clone();
+        let a = annotations
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap()
+            .clone();
+        [number(&a["text_offset"][0]), number(&a["text_offset"][1])]
+    };
+    let before = offset(&doc);
+    let r = 20.0;
+    let (s, c) = 47.0_f64.to_radians().sin_cos();
+    let delta = [r * c - before[0], r * s - before[1]];
+    let drag = json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": id,
+                      "move": delta});
+    let answer = snap(&doc, &drag, false);
+    assert_eq!(answer["snapped"], true, "{answer}");
+    assert!(near(number(&answer["angle"]), 45.0), "{answer}");
+    let (u, v) = (
+        number(&answer["text_offset"][0]),
+        number(&answer["text_offset"][1]),
+    );
+    assert!(near(u, v) && near(u.hypot(v), r), "{answer}");
+    // Free (the application's modifier held): as dragged.
+    let free = snap(&doc, &drag, true);
+    assert_eq!(free["snapped"], false, "{free}");
+    assert!(near(number(&free["move"][0]), delta[0]), "{free}");
+    assert!(near(number(&free["move"][1]), delta[1]), "{free}");
+    // Ten degrees off: as dragged.
+    let (s, c) = 55.0_f64.to_radians().sin_cos();
+    let off = json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": id,
+                     "move": [r * c - before[0], r * s - before[1]]});
+    assert_eq!(snap(&doc, &off, false)["snapped"], false);
+    // The command moves it where the answer said.
+    let mut moved = drag.clone();
+    moved["move"] = answer["move"].clone();
+    command(&mut doc, moved);
+    let after = offset(&doc);
+    assert!(near(after[0], u) && near(after[1], v), "{after:?}");
 }

@@ -599,3 +599,365 @@ fn annotations_refuse_what_they_cannot_be() {
     );
     assert!(sheet(&doc)["annotations"].as_array().unwrap().is_empty());
 }
+
+/// Where a datum label's triangle sits on the sheet: the middle of its
+/// base (its group's first fill, `A<id>`).
+fn datum_tip(doc: &Document<MockKernel>, id: u64) -> [f64; 2] {
+    let groups = sheet(doc)["groups"].clone();
+    let group = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == format!("A{id}").as_str())
+        .unwrap_or_else(|| panic!("no group of annotation {id}"))
+        .clone();
+    let fill = group["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|i| i.get("fill").cloned())
+        .unwrap_or_else(|| panic!("annotation {id} has no triangle: {group}"));
+    let (a, b) = (point(&fill[0]), point(&fill[1]));
+    [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+}
+
+#[test]
+fn a_datums_tip_keeps_its_place_along_its_edge_and_slides_along_it() {
+    // mitcad#1295: a datum on the front's left side (x 65, from y 110 at
+    // its start to 130), picked a quarter of the way along it; its square
+    // 15 mm left of the tip.
+    let (mut doc, names) = annotated();
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "datum",
+               "picks": [[65, 115]], "at": [50, 115]}),
+    );
+    let id = added["annotation"].as_u64().unwrap();
+    let datum = annotation(&doc, id);
+    assert_eq!(datum["picks"][0]["edge"], names[0].as_str(), "{datum}");
+    assert!(near(datum["tip_along"].as_f64().unwrap(), 0.25), "{datum}");
+    let tip = datum_tip(&doc, id);
+    assert!(near(tip[0], 65.0) && near(tip[1], 115.0), "{tip:?}");
+    let offset = datum["text_offset"].clone();
+
+    // Its triangle dragged 3 mm up the edge and 2 off it: the tip slides
+    // along the edge, the square keeps its offset; one undo step.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": id,
+               "slide": [2, 3]}),
+    );
+    // Named by its letter (mitcad#1294).
+    assert_eq!(undo_label(&doc), "Move datum A of Drawing1");
+    let slid = annotation(&doc, id);
+    assert!(near(slid["tip_along"].as_f64().unwrap(), 0.4), "{slid}");
+    assert_eq!(slid["text_offset"], offset, "{slid}");
+    let tip = datum_tip(&doc, id);
+    assert!(near(tip[0], 65.0) && near(tip[1], 118.0), "{tip:?}");
+    // Past the edge's end: on its line beyond it (mitcad#1296), with an
+    // extension line of its own.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": id,
+               "slide": [0, 22]}),
+    );
+    let tip = datum_tip(&doc, id);
+    assert!(near(tip[0], 65.0) && near(tip[1], 140.0), "{tip:?}");
+    assert!(near(
+        annotation(&doc, id)["tip_along"].as_f64().unwrap(),
+        1.5
+    ));
+    // Undone twice: a quarter along it again.
+    command(&mut doc, json!({"cmd": "undo"}));
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert!(near(
+        annotation(&doc, id)["tip_along"].as_f64().unwrap(),
+        0.25
+    ));
+
+    // The model changes: the edge twice as long, 40 mm up from its start.
+    // The tip keeps a quarter of the way along it.
+    doc.kernel().edge_curves.borrow_mut().insert(
+        names[0].clone(),
+        CurveGeometry::Line {
+            start: [0.0, 0.0, 0.0],
+            end: [0.0, 0.0, 40.0],
+        },
+    );
+    let tip = datum_tip(&doc, id);
+    assert!(near(tip[0], 65.0) && near(tip[1], 120.0), "{tip:?}");
+
+    // A note has no tip to slide.
+    let note = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "note",
+               "picks": [[65, 125]], "text": "DEBURR"}),
+    );
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1",
+               "annotation": note["annotation"], "slide": [0, 2]}),
+    );
+    assert!(error.contains("no tip to slide"), "{error}");
+}
+
+/// A drawn annotation's group items (`A<id>`) of one kind: its `fill`s or
+/// its `line`s, as point lists.
+fn items_of(doc: &Document<MockKernel>, id: u64, kind: &str) -> Vec<Vec<[f64; 2]>> {
+    let groups = sheet(doc)["groups"].clone();
+    let group = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == format!("A{id}").as_str())
+        .unwrap_or_else(|| panic!("no group of annotation {id}"))
+        .clone();
+    group["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i.get(kind))
+        .map(|points| points.as_array().unwrap().iter().map(point).collect())
+        .collect()
+}
+
+/// The middle of the first fill of an annotation: a datum's dot.
+fn dot_center(doc: &Document<MockKernel>, id: u64) -> [f64; 2] {
+    let fills = items_of(doc, id, "fill");
+    let dot = &fills[0];
+    let n = dot.len() as f64;
+    [
+        dot.iter().map(|p| p[0]).sum::<f64>() / n,
+        dot.iter().map(|p| p[1]).sum::<f64>() / n,
+    ]
+}
+
+/// The front of the 40 x 30 x 20 block as a planar face the kernel knows:
+/// at y 0, facing the front view, its outline from (0, 0) to (40, 20) in
+/// x and z (`size` times that); its name.
+fn front_face(doc: &Document<MockKernel>, names: &[String], size: f64) -> String {
+    use mitcad_model::datum::SurfaceGeometry;
+    use mitcad_model::kernel::Curve3;
+    let body: BodyUid = "F2.b0".parse().unwrap();
+    let faces = doc
+        .kernel()
+        .face_geometries(doc.body_shape(body).unwrap())
+        .unwrap();
+    let face = faces
+        .iter()
+        .flat_map(|(n, _)| n.iter())
+        .find(|n| n.contains(":side(c1["))
+        .unwrap_or_else(|| panic!("no front side face: {faces:?}"))
+        .clone();
+    doc.kernel().surfaces.borrow_mut().insert(
+        face.clone(),
+        SurfaceGeometry::Plane {
+            origin: [0.0, 0.0, 0.0],
+            normal: [0.0, -1.0, 0.0],
+        },
+    );
+    let (w, h) = (40.0 * size, 20.0 * size);
+    let corners = [[0.0, 0.0, 0.0], [w, 0.0, 0.0], [w, 0.0, h], [0.0, 0.0, h]];
+    let edge: mitcad_model::EdgeName = names[0].parse().unwrap();
+    doc.kernel().face_boundaries.borrow_mut().insert(
+        face.clone(),
+        (0..4)
+            .map(|i| {
+                (
+                    edge.clone(),
+                    Curve3::Line {
+                        start: corners[i],
+                        end: corners[(i + 1) % 4],
+                    },
+                )
+            })
+            .collect(),
+    );
+    face
+}
+
+#[test]
+fn datums_on_an_edges_extension_and_on_a_face_keep_their_place() {
+    // mitcad#1296, on the front view at 1:1 (the block's front 65..105 x
+    // 110..130 on the sheet).
+    let (mut doc, names) = annotated();
+
+    // On the left side's line, a quarter of the side past its end: an
+    // extension line of its own, the side still its pick.
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "datum",
+               "picks": [[65, 115]], "at": [50, 115]}),
+    );
+    let edge_datum = added["annotation"].as_u64().unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": edge_datum,
+               "slide": [0, 20]}),
+    );
+    let datum = annotation(&doc, edge_datum);
+    assert_eq!(datum["picks"][0]["edge"], names[0].as_str(), "{datum}");
+    assert!(near(datum["tip_along"].as_f64().unwrap(), 1.25), "{datum}");
+    let tip = datum_tip(&doc, edge_datum);
+    assert!(near(tip[0], 65.0) && near(tip[1], 135.0), "{tip:?}");
+    let extension = |doc: &Document<MockKernel>| {
+        items_of(doc, edge_datum, "line")
+            .into_iter()
+            .find(|l| near(l[0][0], 65.0) && near(l[1][0], 65.0))
+    };
+    let line = extension(&doc).expect("its extension line");
+    assert!(
+        near(line[0][1], 131.0) && near(line[1][1], 137.0),
+        "{line:?}"
+    );
+
+    // On the front face, clicked inside its outline: a dot there, the
+    // face its pick with the point in the face's own coordinates.
+    let face = front_face(&doc, &names, 1.0);
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "datum",
+               "picks": [[85, 120]], "at": [85, 140]}),
+    );
+    let face_datum = added["annotation"].as_u64().unwrap();
+    let datum = annotation(&doc, face_datum);
+    assert_eq!(datum["picks"][0]["face"], face.as_str(), "{datum}");
+    assert!(datum["picks"][0]["on_face"].is_array(), "{datum}");
+    assert!(datum.get("terminator").is_none(), "{datum}");
+    let fills = items_of(&doc, face_datum, "fill");
+    assert!(fills[0].len() > 3, "a dot: {fills:?}");
+    let dot = dot_center(&doc, face_datum);
+    assert!(near(dot[0], 85.0) && near(dot[1], 120.0), "{dot:?}");
+
+    // The model twice as large: the edge's datum a quarter past the
+    // longer side's end, the face's dot where it was on the face.
+    doc.kernel().edge_curves.borrow_mut().insert(
+        names[0].clone(),
+        CurveGeometry::Line {
+            start: [0.0, 0.0, 0.0],
+            end: [0.0, 0.0, 40.0],
+        },
+    );
+    front_face(&doc, &names, 2.0);
+    let tip = datum_tip(&doc, edge_datum);
+    assert!(near(tip[0], 65.0) && near(tip[1], 160.0), "{tip:?}");
+    let line = extension(&doc).expect("its extension line");
+    assert!(
+        near(line[0][1], 151.0) && near(line[1][1], 162.0),
+        "{line:?}"
+    );
+    let dot = dot_center(&doc, face_datum);
+    assert!(near(dot[0], 85.0) && near(dot[1], 120.0), "{dot:?}");
+
+    // The dot dragged slides over the face; its terminator chosen.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": face_datum,
+               "slide": [5, -2]}),
+    );
+    assert_eq!(undo_label(&doc), "Move datum B of Drawing1");
+    let dot = dot_center(&doc, face_datum);
+    assert!(near(dot[0], 90.0) && near(dot[1], 118.0), "{dot:?}");
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": face_datum,
+               "terminator": "triangle"}),
+    );
+    assert_eq!(annotation(&doc, face_datum)["terminator"], "triangle");
+    assert_eq!(items_of(&doc, face_datum, "fill")[0].len(), 3);
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": face_datum,
+               "terminator": null}),
+    );
+    assert!(items_of(&doc, face_datum, "fill")[0].len() > 3);
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": edge_datum,
+               "terminator": "dot"}),
+    );
+    assert!(items_of(&doc, edge_datum, "fill")[0].len() > 3);
+    // Only a datum label has one.
+    let note = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "note",
+               "picks": [[65, 125]], "text": "DEBURR"}),
+    );
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1",
+               "annotation": note["annotation"], "terminator": "dot"}),
+    );
+    assert!(error.contains("no terminator"), "{error}");
+}
+
+#[test]
+fn a_replaced_dimension_writes_its_text() {
+    // mitcad#1292: a drawing dimension's `format.replace` is written in
+    // place of its value and tolerance, its own texts kept; `measured`
+    // keeps what the sheet would write without it.
+    let (mut doc, names) = annotated();
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "linear",
+               "picks": [pick(&names[0]), pick(&names[1])],
+               "tolerance": {"type": "symmetric", "value": 0.1}, "format": {"before": "2 x"}}),
+    );
+    let plain = annotation(&doc, 1);
+    assert_eq!(plain["label"], "2 x 40 ±0.1", "{plain}");
+    assert_eq!(plain["measured"], "40 ±0.1", "{plain}");
+
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": 1,
+               "format": {"replace": "SEE NOTE"}}),
+    );
+    assert_eq!(undo_label(&doc), "Edit dimension 1 of Drawing1");
+    let replaced = annotation(&doc, 1);
+    assert_eq!(replaced["format"]["replace"], "SEE NOTE", "{replaced}");
+    assert_eq!(replaced["format"]["before"], "2 x", "{replaced}");
+    assert_eq!(replaced["label"], "2 x SEE NOTE", "{replaced}");
+    assert_eq!(replaced["measured"], "40 ±0.1", "{replaced}");
+    assert!(
+        near(replaced["value"].as_f64().unwrap(), 40.0),
+        "{replaced}"
+    );
+    // Drawn with the text only: no value in the dimension's group.
+    let groups = sheet(&doc)["groups"].clone();
+    let drawn: Vec<String> = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["id"] == "A1")
+        .flat_map(|g| g["items"].as_array().unwrap().clone())
+        .filter_map(|i| i["text"].as_str().map(str::to_owned))
+        .collect();
+    assert!(drawn.iter().any(|t| t.contains("SEE NOTE")), "{drawn:?}");
+    assert!(!drawn.iter().any(|t| t.contains("40")), "{drawn:?}");
+
+    // One undo step: the value back, and again.
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(annotation(&doc, 1)["label"], "2 x 40 ±0.1");
+    command(&mut doc, json!({"cmd": "redo"}));
+    assert_eq!(annotation(&doc, 1)["label"], "2 x SEE NOTE");
+
+    // `null`: the measured value again.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": 1,
+               "format": {"replace": null}}),
+    );
+    let back = annotation(&doc, 1);
+    assert!(back["format"].get("replace").is_none(), "{back}");
+    assert_eq!(back["label"], "2 x 40 ±0.1", "{back}");
+
+    // The drawing's decimals are the measured value's too.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": 1,
+               "format": {"decimals": 2, "replace": "X"}}),
+    );
+    let decimals = annotation(&doc, 1);
+    assert_eq!(decimals["label"], "2 x X", "{decimals}");
+    assert_eq!(decimals["measured"], "40.00 ±0.1", "{decimals}");
+}

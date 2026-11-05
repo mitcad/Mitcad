@@ -655,6 +655,14 @@ fn grouped_parts_list_keeps_every_components_balloon_number_and_material() {
             {"cmd": "activate_component", "component": "C0"}
         ]),
     );
+    // The view keeps what it showed when placed (mitcad#1293): PlateCopy,
+    // made after it, comes in by Update from Model, and its parts list
+    // lists what the view shows.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": {"type": "design"}}),
+    );
     let list = command(
         &mut doc,
         json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,

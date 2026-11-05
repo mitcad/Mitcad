@@ -2150,7 +2150,9 @@ fn thread_end_chamfers_default_to_the_size_and_cut_only_ends_the_thread_reaches(
     );
 
     // A partial thread chamfers only ends it reaches: measured from the
-    // high end (the start) 12 long, the start; 2 below it, none.
+    // high end (the start) 12 long, the start; 2 below it, none. At an end
+    // inside the face a modelled thread runs out along the chamfer's cone
+    // instead (mitcad#1300): the low end here.
     let partial = |extra: Value| {
         let mut value = json!({"modeled": true, "length": 12});
         for (key, field) in extra.as_object().unwrap() {
@@ -2164,18 +2166,77 @@ fn thread_end_chamfers_default_to_the_size_and_cut_only_ends_the_thread_reaches(
     };
     doc.edit_feature(uid, &partial(json!({"chamfer": "both"})))
         .unwrap();
-    assert_eq!(ends(&doc).as_deref(), Some("[(false, true)]"));
+    assert_eq!(
+        ends(&doc).as_deref(),
+        Some("[(false, true)] runouts [(true, false)]")
+    );
     doc.edit_feature(uid, &partial(json!({"chamfer": "start"})))
         .unwrap();
     assert_eq!(ends(&doc).as_deref(), Some("[(false, true)]"));
-    // The far end lies inside the face: nothing to chamfer.
+    // The far end lies inside the face: nothing to chamfer, the run-out
+    // along its cone.
     doc.edit_feature(uid, &partial(json!({"chamfer": "end"})))
         .unwrap();
-    assert_eq!(ends(&doc), None);
+    assert_eq!(
+        ends(&doc).as_deref(),
+        Some("[(false, false)] runouts [(true, false)]")
+    );
     doc.edit_feature(uid, &partial(json!({"chamfer": "both", "offset": 2})))
         .unwrap();
     assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        ends(&doc).as_deref(),
+        Some("[(false, false)] runouts [(true, true)]")
+    );
+    // Without a chamfer there, the end stays flat: no run-out.
+    doc.edit_feature(uid, &partial(json!({}))).unwrap();
     assert_eq!(ends(&doc), None);
+    // Ends cut as before (`ends` `flat`, an import's): no run-out, and the
+    // kernel told to keep the ends flat; saved and loaded as it was.
+    doc.edit_feature(uid, &partial(json!({"chamfer": "both", "ends": "flat"})))
+        .unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(ends(&doc).as_deref(), Some("[(false, true)] flat ends"));
+    let text = doc.to_json();
+    assert!(text.contains("\"ends\": \"flat\""), "{text}");
+    let loaded = Document::from_json(&text, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), text);
+    doc.edit_feature(uid, &partial(json!({"ends": "flat"})))
+        .unwrap();
+    assert!(
+        last_spec(&doc).ends_with("part Some((12.0, 0.0, true)) flat ends"),
+        "{}",
+        last_spec(&doc)
+    );
+    // Left out again, an edit runs out (a part not made before: the kernel
+    // is asked again), and the file says so.
+    doc.edit_feature(uid, &partial(json!({"chamfer": "both", "offset": 1})))
+        .unwrap();
+    let text = doc.to_json();
+    assert!(text.contains("\"ends\": \"run_out\""), "{text}");
+    assert_eq!(
+        ends(&doc).as_deref(),
+        Some("[(false, false)] runouts [(true, true)]")
+    );
+    // A design file written before `ends` existed (the field left out):
+    // its thread keeps the flat ends it was made with, written as such
+    // from now on.
+    let old_form = {
+        let field = "\"ends\": \"run_out\"";
+        let at = text.find(field).unwrap();
+        let comma = text[..at].rfind(',').unwrap();
+        format!("{}{}", &text[..comma], &text[at + field.len()..])
+    };
+    let mut old = Document::from_json(&old_form, MockKernel::default()).unwrap();
+    old.recompute();
+    assert_eq!(status(&old, uid), FeatureStatus::Ok);
+    assert!(
+        last_spec(&old).ends_with("flat ends"),
+        "{}",
+        last_spec(&old)
+    );
+    assert!(!last_spec(&old).contains("runouts"), "{}", last_spec(&old));
+    assert!(old.to_json().contains("\"ends\": \"flat\""));
     // From the low end: its start is the low end; over the whole face
     // measured from the high end, its end is the low end.
     doc.edit_feature(

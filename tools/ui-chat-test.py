@@ -2,6 +2,7 @@
 # check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp app/mcp/AssistantSetup.cpp
 # check-all sources: app/framework/FloatingLayout.cpp app/framework/TitleBar.cpp app/tests/chat_test_agent.cpp
 # check-all sources: core/mcp/src/chat core/ffi/src/chat.rs tools/cli/mcp.cpp tools/cli/mcp-connect.cpp
+# check-all sources: app/MainWindow.cpp app/framework/TestDriverAssistant.cpp
 """The chat panel (mitcad#947) through the real UI, the real live MCP server
 and bridge, with a scripted agent instead of Claude Code (no AI).
 
@@ -37,12 +38,24 @@ discovery and chat folders:
             folder's, signed in as an account, and the test home's
             .local/bin one, signed out) and a local model, each with its
             sign-in in the switcher; the second chosen starts a new
-            conversation, says how to sign in and offers the first
+            conversation, says how to sign in and offers the first; the
+            assistant menu's Outgoing connections list the three with their
+            states, and the local model unchecked there is gone from the
+            switcher (mitcad#1299)
   agents-again  the next start: the second is still chosen; Use Claude
             Code goes back to the first, whose message the first copy runs;
-            the chat's own agent is not shown as a connected assistant
+            the chat's own agent is not shown as a connected assistant; the
+            local model turned off stays off
   desktop   only Claude Desktop installed: the panel points to Connect AI
             Assistant
+  desktop-connected  a stand-in for Claude Desktop connected through the
+            real bridge (mitcad#1297) and two Claude Codes with one sign-in,
+            the clients folder's and the one Claude Desktop keeps in a build
+            folder under its version's: both entries say the sign-in is
+            shared; the account error shows the Claude Desktop line above How
+            to fix and marks both, the other is not offered instead, How to
+            fix names the shared sign-in, Open Claude Desktop opens its link,
+            and the other entry chosen shows the same error and line
   account   each agent (mitcad#1126): an account failure (a message queued
             meanwhile is not sent and says so), How to fix, Check again
             failing for the account, for the network (the account's reason
@@ -661,8 +674,14 @@ def main():
                 "expect-widget-property chatAgentChoice visible true",
                 "expect-widget-property chatAgentChoice currentText 'Claude Code'",
                 # The three entries with their sign-in states and accounts.
-                "wait-log 'Chat agents: Claude Code · signed in as first@example\\.com \\| "
-                "Claude Code \\(~/\\.local/bin\\) · not signed in \\| Ollama · ready' 60",
+                # MitCad starts every Claude Code with its own environment,
+                # so the two use one configuration folder and are shown as
+                # one sign-in (mitcad#1297), although the stand-in fakes a
+                # sign-in of each copy's own.
+                "wait-log 'Chat agents: Claude Code · signed in as first@example\\.com · same sign-in as "
+                "Claude Code \\(~/\\.local/bin\\) \\| Claude Code \\(~/\\.local/bin\\) · not signed in · same sign-in "
+                "as Claude Code \\| Ollama · ready' 60",
+                "expect-ever 'Chat: Claude Code \\(~/\\.local/bin\\) shares the sign-in of Claude Code'",
                 # The other Claude Code: a new conversation in it; signed out,
                 # its fix and the agent that is ready instead.
                 "mark",
@@ -675,6 +694,18 @@ def main():
                 "expect-widget-property chatOtherAgent visible true",
                 "expect-widget-property chatOtherAgent text 'Use Claude Code'",
                 "screenshot '" + str(out / "chat-agents.png") + "'",
+                # The assistant menu's Outgoing connections (mitcad#1299):
+                # each agent found with the panel's state; one unchecked is
+                # gone from the panel's list (and stays so after a restart).
+                "mark",
+                "agent-menu 'Ollama (chat panel)' off",
+                "expect-log 'Agent indicator menu: .*\\| Outgoing connections \\| ✓ Claude Code \\(chat panel\\) — [^|]* \\| "
+                "✓ Claude Code \\(~/\\.local/bin, chat panel\\) — not signed in[^|]* \\| ✓ Ollama \\(chat panel\\) — ready \\| "
+                "Connect AI Assistant'",
+                "wait-log 'Agent indicator: Ollama \\(chat panel\\) off' 30",
+                "wait-log 'Chat agents: Claude Code · [^|]* \\| Claude Code \\(~/\\.local/bin\\) · not signed in · same sign-in "
+                "as Claude Code$' 30",
+                "expect-no-log 'Chat agents: .*Ollama'",
             ]
             run(app, "agents", work, out, "floating", agents,
                 extra_env={"MITCAD_TEST_ASSISTANT_HOME": str(home)})
@@ -697,7 +728,13 @@ def main():
                 "wait-log 'Chat: turn ended \\(success\\)' 60",
                 "wait-log 'Agent indicator: no agent' 30",
                 "expect-no-log 'Agent indicator: connected: claude-code'",
+                # On macOS, focus-widget keeps the separate chat GlassCard
+                # as the lookup scope. The indicator belongs to the main
+                # window; inspect it there after the turn, not in the card.
+                "focus-main",
                 "expect-widget-property agentIndicator text 'No assistant'",
+                # Turned off before the restart: never listed (mitcad#1299).
+                "expect-never 'Chat agents: .*Ollama'",
             ]
             run(app, "agents-again", work, out, "floating", again,
                 extra_env={"MITCAD_TEST_ASSISTANT_HOME": str(home)})
@@ -720,6 +757,7 @@ def main():
             "expect-widget-property chatSetup text 'Install Claude Code'",
         ]
         run(app, "desktop", work, out, "floating", desktop)
+    desktop_connected_runs(app, stub, out)
     for agent_name, shown_name, error_code, reason in (
             ("claude", "Claude Code", "org-disabled", "your organization has disabled access"),
             ("codex", "Codex", "signed-out", "sign-in is missing or has expired")):
@@ -833,6 +871,134 @@ def main():
     print("PASS: chat panel: setup, approvals, one undo step per message, stop, history and resume, both layouts, "
           "Codex, the agent switcher and the model choice, the Anthropic API and a local model (phase 2), "
           "a custom command over the Agent Client Protocol")
+
+
+def bridge_program(app):
+    """mitcad-cli where the application looks for it beside itself
+    (installedBridge: installed, a build tree, a macOS bundle in one)."""
+    name = "mitcad-cli.exe" if os.name == "nt" else "mitcad-cli"
+    folder = Path(app).resolve().parent
+    for candidate in (folder / name, folder.parent / "tools" / "cli" / name,
+                      folder.parent.parent.parent.parent / "tools" / "cli" / name):
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError("mitcad-cli was not found beside " + str(app))
+
+
+def connect_client(cli, work, label, log_path):
+    """An assistant connected to the window (mitcad#1297): the real bridge,
+    initialized with `label` as its client's name, connected until its input
+    closes."""
+    env = dict(os.environ, MITCAD_MCP_DISCOVERY_DIR=str(work / "mitcad_mcp_discovery_dir"))
+    log = log_path.open("wb")
+    process = subprocess.Popen([str(cli), "mcp", "--connect"], env=env, stdin=subprocess.PIPE, stdout=log,
+                               stderr=subprocess.STDOUT)
+    for message in ({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                                "clientInfo": {"name": label, "version": "test"}}},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}):
+        process.stdin.write(json.dumps(message).encode("utf-8") + b"\n")
+    process.stdin.flush()
+    return process, log
+
+
+def desktop_connected_runs(app, stub, out):
+    """Claude Desktop connected while the chat cannot work (mitcad#1297): a
+    stand-in for Claude Desktop connects to the window through the real
+    bridge; the chat's Claude Code and the one Claude Desktop keeps (in its
+    current layout, a build folder under the version's) use one
+    configuration folder, and the organization refuses that sign-in's
+    account."""
+    cli = bridge_program(app)
+    with tempfile.TemporaryDirectory(prefix="chat-desktop-connected-", dir=out) as temporary:
+        work = Path(temporary)
+        (work / "designs").mkdir()
+        install_stub(stub, work / "clients")
+        kept = work / "local-app-data" / "Claude-Data" / "claude_test" / "claude-code" / "2.1.309" / "9078b9c1d466"
+        kept.mkdir(parents=True)
+        install_stub(stub, kept)
+        (work / "claude-signed-in").write_text("", encoding="utf-8")
+        (work / "account-blocked").write_text("", encoding="utf-8")
+        desktop_name = "Claude Code (Claude Desktop's)"
+        desktop_pattern = "Claude Code \\(Claude Desktop.s\\)"
+        connect_signal = work / "desktop-connect.png"
+        hint = ("\"Claude Desktop is connected: type your request in Claude Desktop. This chat needs Claude Code's own "
+                "sign-in.\"")
+        refused = "your organization has disabled access"
+        script = [
+            "wait-idle", "command view.chat",
+            "wait-log 'Chat panel: ready' 60",
+            # Claude Desktop's own Claude Code by its folders, and one
+            # sign-in with the first.
+            "expect-ever 'Chat: " + desktop_pattern + " shares the sign-in of Claude Code'",
+            "wait-log 'Chat agents: Claude Code · signed in · same sign-in as " + desktop_pattern + " \\| " +
+            desktop_pattern + " · signed in · same sign-in as Claude Code' 60",
+            "expect-widget-property chatDesktopRow visible false",
+            # The stand-in for Claude Desktop connects now (the harness).
+            "screenshot '" + str(connect_signal) + "'",
+            "wait-log 'Agent indicator: connected: claude-ai' 60",
+            "expect-widget-property chatDesktopRow visible false",
+            "mark",
+            *send("account failure"), "wait-log 'Chat panel: notice'",
+            "button '^Continue$' chatContinue",
+            "wait-log 'Chat: Claude Code account error: org-disabled' 60",
+            "wait-log 'Chat: the account error is " + desktop_pattern + ".s too' 10",
+            "wait-log 'Chat: turn ended' 60",
+            "wait-log 'Chat panel: account-error' 30",
+            "wait-log 'Chat: Claude Desktop connected, chat unusable: Claude Code cannot use this account: " +
+            refused + "' 30",
+            "expect-widget-property chatDesktopRow visible true",
+            "expect-widget-property chatDesktopHint text " + hint,
+            # Both entries show the shared sign-in and the error; the other
+            # one is not offered instead.
+            "wait-log 'Chat agents: Claude Code · signed in · same sign-in as " + desktop_pattern + " · " + refused +
+            " \\| " + desktop_pattern + " · signed in · same sign-in as Claude Code · " + refused + "' 30",
+            "expect-widget-property chatOtherAgent visible false",
+            "button '^How to fix$' chatSetup",
+            "expect-widget-property chatAccountHelp visible true",
+            "expect-widget-property chatAccountHelpText sharedSignIn \"" + desktop_name + "\"",
+            "screenshot '" + str(out / "chat-desktop-connected.png") + "'",
+            "button '^Open Claude Desktop$' chatOpenDesktop",
+            "wait-log 'Open URL \\(test, not opened\\): claude:' 10",
+            # The other entry: the same account error at once, and the same
+            # line about Claude Desktop.
+            "mark",
+            "qt-choice chatAgentChoice \"" + desktop_name + "\"",
+            "wait-log 'Chat: agent " + desktop_pattern + "' 30",
+            "wait-log 'Chat panel: account-error' 30",
+            "wait-log 'Chat: Claude Desktop connected, chat unusable: Claude Code cannot use this account: " +
+            refused + "' 30",
+            "expect-widget-property chatDesktopRow visible true",
+            "expect-widget-property chatAccountHelpText sharedSignIn 'Claude Code'",
+            "expect-widget-property chatOtherAgent visible false",
+            "screenshot '" + str(out / "chat-desktop-connected-other.png") + "'",
+        ]
+        client = {}
+
+        def connect_when_asked(_text):
+            if connect_signal.exists():
+                client["process"], client["log"] = connect_client(cli, work, "claude-ai",
+                                                                  out / "desktop-connected-client.log")
+                return True
+            return False
+        try:
+            run(app, "desktop-connected", work, out, "floating", script, on_log=connect_when_asked)
+        finally:
+            if "process" in client:
+                try:
+                    client["process"].stdin.close()
+                except OSError:
+                    pass
+                try:
+                    client["process"].wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    client["process"].kill()
+                    client["process"].wait()
+                client["log"].close()
+        messages = lines(work / "chat-messages.jsonl")
+        if [message["text"] for message in messages] != ["account failure"]:
+            raise RuntimeError("desktop-connected: only the one message was to reach the agent: " +
+                               repr([message["text"] for message in messages]))
 
 
 def api_runs(app, out):

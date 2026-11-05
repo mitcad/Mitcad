@@ -2692,6 +2692,14 @@ pub struct ThreadSpec<'a> {
     /// profile's included angle (30 degrees for the 60-degree profile, 15
     /// for the trapezoidal one; mitcad#893).
     pub flank_angle: f64,
+    /// The ends as threads were cut before mitcad#1300 (an import whose
+    /// source program leaves them so). Without it a modelled straight
+    /// thread's grooves also run out by a pitch through an end of the face
+    /// beyond which material lies only on the material's side of the crest
+    /// (a cone or a countersink that opens away from the thread, a shaft's
+    /// end chamfer or a neck), into that face as far as they reach it; with
+    /// it they run out only through free ends and stop flat at the others.
+    pub flat_ends: bool,
 }
 
 /// The taper of a taper pipe thread (see [`ThreadSpec`], mitcad#733).
@@ -2715,11 +2723,20 @@ pub struct ThreadTaper {
 /// where nothing of the body lies beyond it (a free end). The cones are
 /// named `<feature>:thread_chamfer_low(<face>)` and
 /// `<feature>:thread_chamfer_high(<face>)`.
+///
+/// `runouts` (mitcad#1300) holds per face whether a modelled straight
+/// thread's part ends inside the face at its low and its high end with a
+/// chamfer asked for there: the chamfer is the thread's run-out, the
+/// grooves going on past the end inside a cone at `angle`, narrowing from
+/// an internal thread's root (major) diameter at the end to the face,
+/// widening from an external thread's root (minor) diameter to the face,
+/// so that they fade out of the face. Empty: none.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadChamfer {
     pub angle: f64,
     pub diameter: f64,
     pub ends: Vec<(bool, bool)>,
+    pub runouts: Vec<(bool, bool)>,
 }
 
 /// [`Kernel::extrude_feature`] with [`Kernel::extrude`]: a prism between

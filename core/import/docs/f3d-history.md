@@ -559,7 +559,11 @@ The translation (`ops.rs`, `commands.md` *From the dump IR*):
   radius, the thread half a pitch wide at the pitch diameter) cut off by
   flat crests and roots at the class's major and minor diameters (the
   middles of the tolerances; no rounding), along the whole face and ended
-  by the planes of the face's ends. The reference model's M10x1.5 6g bolt
+  by the planes of the face's ends: a cone or countersink beyond an end
+  (a bolt's end chamfer, a countersink above a tapped hole) keeps its lip
+  unthreaded, so the import's modelled threads, a tapped hole's too, have
+  `ends` `flat` (mitcad#1302; the file's threads have no end chamfers).
+  The reference model's M10x1.5 6g bolt
   (9.85/8.141/8.928 mm) has 3.2e-5 less volume than that exact profile
   (its flanks are fitted splines), and the thread replaces the material:
   an internal M10x1.5 6H thread on a 10 mm bore in a corpus design adds

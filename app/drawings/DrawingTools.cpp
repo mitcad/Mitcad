@@ -332,6 +332,11 @@ QJsonObject datumLabel(const QString& drawing, int /*sheet*/, const ToolPicks& p
   if (!letter.isEmpty()) {
     command.insert(QStringLiteral("letter"), letter);
   }
+  // Auto: a dot on a face, a triangle on an edge (mitcad#1296).
+  const QString terminator = toolOption("drawing.datum", options, "terminator");
+  if (terminator == QStringLiteral("triangle") || terminator == QStringLiteral("dot")) {
+    command.insert(QStringLiteral("terminator"), terminator);
+  }
   return command;
 }
 
@@ -522,9 +527,16 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                 &leaderNote, true, tr("Click where the note's text goes"), &onePick, &noteType, true});
   tools.append({QStringLiteral("drawing.datum"), tr("Datum Label"), QStringLiteral("drawing-datum"),
                 tr("Labels a face or an axis as a datum"), SheetPick::Picks,
-                tr("Click the edge of the face, or the round face, that is the datum"),
-                {text(QStringLiteral("letter"), tr("Letter"))}, &datumLabel, true, tr("Click where its label goes"),
-                &onePick, &datumType, true});
+                tr("Click the edge of the face, the round face, or inside a face seen face on, that is the datum"),
+                {text(QStringLiteral("letter"), tr("Letter")),
+                 // mitcad#1296: Auto, a dot on a face and a triangle on
+                 // an edge.
+                 choice(QStringLiteral("terminator"), tr("Terminator"),
+                        {{QStringLiteral("auto"), tr("Auto")},
+                         {QStringLiteral("triangle"), tr("Triangle")},
+                         {QStringLiteral("dot"), tr("Dot")}},
+                        QStringLiteral("auto"))},
+                &datumLabel, true, tr("Click where its label goes"), &onePick, &datumType, true});
   tools.append({QStringLiteral("drawing.frame"), tr("Feature Control Frame"), QStringLiteral("drawing-frame"),
                 tr("Adds a geometric tolerance to a face or an axis"), SheetPick::Picks,
                 tr("Click the edge of the face, or the round face, to tolerance"), {}, &controlFrame, true,
@@ -795,6 +807,93 @@ QString subjectChoice(const QJsonObject& subject) {
   return QString();
 }
 
+namespace {
+
+using NamedBodies = QHash<QString, QVector<QPair<QString, QString>>>;
+
+// The rows of an occurrence tree (the `components` query's) below the
+// path `uids`: each occurrence, then its component's bodies and its own
+// occurrences one level deeper.
+void addSubjectRows(const QJsonArray& tree, const QString& uids, int depth, const NamedBodies& byComponent,
+                    QVector<SubjectRow>& out) {
+  for (const QJsonValue& value : tree) {
+    const QJsonObject occurrence = value.toObject();
+    const QString uid = occurrence.value(QStringLiteral("uid")).toString();
+    if (uid.isEmpty()) {
+      continue;
+    }
+    const QString path = uids.isEmpty() ? uid : uids + QLatin1Char('/') + uid;
+    out.append(SubjectRow{occurrence.value(QStringLiteral("name")).toString(), QString(), path, depth});
+    for (const auto& [bodyUid, bodyName] : byComponent.value(occurrence.value(QStringLiteral("component")).toString())) {
+      out.append(SubjectRow{bodyName, bodyUid, path, depth + 1});
+    }
+    addSubjectRows(occurrence.value(QStringLiteral("children")).toArray(), path, depth + 1, byComponent, out);
+  }
+}
+
+} // namespace
+
+QVector<SubjectRow> subjectRows(const QString& component, const QJsonObject& components, const QJsonArray& bodies) {
+  const bool root = component.isEmpty() || component == QStringLiteral("C0");
+  // Each component's bodies by name (the root's under "C0").
+  NamedBodies byComponent;
+  for (const QJsonValue& value : bodies) {
+    const QJsonObject body = value.toObject();
+    const QString uid = body.value(QStringLiteral("uid")).toString();
+    if (uid.isEmpty()) {
+      continue;
+    }
+    QString owner = body.value(QStringLiteral("component")).toString();
+    if (owner.isEmpty()) {
+      owner = QStringLiteral("C0");
+    }
+    const QString bodyName = body.value(QStringLiteral("name")).toString();
+    byComponent[owner].append({uid, bodyName.isEmpty() ? uid : bodyName});
+  }
+  QVector<SubjectRow> out;
+  for (const auto& [bodyUid, bodyName] : byComponent.value(root ? QStringLiteral("C0") : component)) {
+    out.append(SubjectRow{bodyName, bodyUid, QString(), 0});
+  }
+  const QJsonArray tree = components.value(QStringLiteral("occurrences")).toArray();
+  bool found = false;
+  addSubjectRows(root ? tree : childrenOf(tree, component, &found), QString(), 0, byComponent, out);
+  return out;
+}
+
+bool subjectShows(const QJsonObject& subject, const QString& body, const QString& occurrence) {
+  const QString type = subject.value(QStringLiteral("type")).toString();
+  if (type == QStringLiteral("occurrence")) {
+    const QString path = subject.value(QStringLiteral("occurrence")).toString();
+    return !path.isEmpty() && (occurrence == path || occurrence.startsWith(path + QLatin1Char('/')));
+  }
+  if (type == QStringLiteral("bodies")) {
+    for (const QJsonValue& value : subject.value(QStringLiteral("bodies")).toArray()) {
+      const QJsonObject chosen = value.toObject();
+      // Without an occurrence: wherever the design places it.
+      if (chosen.value(QStringLiteral("body")).toString() == body &&
+          (!chosen.contains(QStringLiteral("occurrence")) ||
+           chosen.value(QStringLiteral("occurrence")).toString() == occurrence)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  // The whole component, as the 3D view shows it (an unrecorded subject).
+  return true;
+}
+
+QJsonObject chosenSubject(const QVector<QPair<QString, QString>>& chosen) {
+  QJsonArray bodies;
+  for (const auto& [bodyUid, path] : chosen) {
+    QJsonObject entry{{QStringLiteral("body"), bodyUid}};
+    if (!path.isEmpty()) {
+      entry.insert(QStringLiteral("occurrence"), path);
+    }
+    bodies.append(entry);
+  }
+  return {{QStringLiteral("type"), QStringLiteral("bodies")}, {QStringLiteral("bodies"), bodies}};
+}
+
 QString optionValue(const DrawingToolDef& tool, const QHash<QString, QString>& options, const QString& id) {
   const auto found = options.constFind(id);
   if (found != options.constEnd()) {
@@ -933,6 +1032,12 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
                    QJsonObject{{field, value == QStringLiteral("auto") ? QJsonValue(QJsonValue::Null) : QJsonValue(value)}});
   } else if (field == QStringLiteral("before") || field == QStringLiteral("after")) {
     command.insert(QStringLiteral("format"), QJsonObject{{field, value.trimmed()}});
+  } else if (field == QStringLiteral("replace")) {
+    // A text in place of the value and its tolerance; empty: the measured
+    // value again (mitcad#1292).
+    const QString replace = value.trimmed();
+    command.insert(QStringLiteral("format"),
+                   QJsonObject{{field, replace.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(replace)}});
   } else if (field == QStringLiteral("letter")) {
     const QString letter = value.trimmed().toUpper();
     if (letter.isEmpty()) {
@@ -966,7 +1071,8 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
       return {};
     }
     command.insert(field, height);
-  } else if (field == QStringLiteral("pen")) {
+  } else if (field == QStringLiteral("pen") || field == QStringLiteral("terminator")) {
+    // A line's pen; a datum label's terminator (mitcad#1296).
     command.insert(field, value);
   } else if (field == QStringLiteral("length")) {
     // An edge extension's reach beyond its edge's ends, mm (mitcad#729);

@@ -114,6 +114,33 @@ double segmentDistance(const QPointF& p, const QLineF& line) {
   return distance(p, line.p1() + d * t);
 }
 
+// The middle of a datum's triangle or a frame's arrow: its corners'
+// average (mitcad#1295).
+QPointF tipCenter(const QPolygonF& tip) {
+  QPointF sum;
+  for (const QPointF& p : tip) {
+    sum += p;
+  }
+  return tip.isEmpty() ? sum : sum / static_cast<double>(tip.size());
+}
+
+// Whether a sheet point is on a datum's triangle or a frame's arrow, or
+// within `reach` (sheet mm) of its outline.
+bool onTip(const QPolygonF& tip, const QPointF& at, double reach) {
+  if (tip.size() < 3) {
+    return false;
+  }
+  if (tip.containsPoint(at, Qt::OddEvenFill)) {
+    return true;
+  }
+  for (qsizetype i = 0; i < tip.size(); ++i) {
+    if (segmentDistance(at, QLineF(tip[i], tip[(i + 1) % tip.size()])) <= reach) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // A text item's area on the sheet: from its baseline up to its height,
 // as wide as Helvetica writes it at that height (as it is painted).
 QPolygonF textArea(const QJsonObject& item) {
@@ -232,7 +259,13 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
           entry->lines.append(QLineF(points.last(), points.first()));
         }
       } else if (item.contains(QStringLiteral("fill"))) {
-        entry->areas.append(polygonOf(item.value(QStringLiteral("fill"))));
+        const QPolygonF fill = polygonOf(item.value(QStringLiteral("fill")));
+        entry->areas.append(fill);
+        // A datum's triangle, a frame's arrow: its tip (mitcad#1295).
+        const bool tipped = entry->type == QStringLiteral("datum") || entry->type == QStringLiteral("frame");
+        if (tipped && entry->tip.isEmpty()) {
+          entry->tip = fill;
+        }
       } else if (item.contains(QStringLiteral("text"))) {
         const QPolygonF text = textArea(item);
         if (!hasText.contains(entry->id)) {
@@ -536,7 +569,8 @@ void DrawingSheetView::setDragSnap(bool snapped, const QPointF& delta, const QSt
 }
 
 bool DrawingSheetView::draggedAlone() const {
-  return m_drag == Drag::Annotation && !m_dragSelection && m_dragMoved;
+  // A tip slid along its edge (mitcad#1295) does not snap.
+  return m_drag == Drag::Annotation && !m_dragSelection && !m_dragTip && m_dragMoved;
 }
 
 void DrawingSheetView::askSnap(bool freely) {
@@ -784,6 +818,14 @@ void DrawingSheetView::logPlaces() {
     if (!a.box.isNull()) {
       // A point that picks it: on its text or a line, not its box's middle.
       lines << QStringLiteral("Drawing annotation %1 at %2").arg(a.id).arg(inWindow(a.handle));
+    }
+    // Its triangle or arrow, which a drag slides along its edge
+    // (mitcad#1295).
+    if (!a.tip.isEmpty()) {
+      // A datum's triangle or dot (mitcad#1296); a frame's arrow is a
+      // triangle too.
+      const QString kind = a.tip.size() == 3 ? QStringLiteral("triangle") : QStringLiteral("dot");
+      lines << QStringLiteral("Drawing annotation %1 tip at %2 (%3)").arg(a.id).arg(inWindow(tipCenter(a.tip)), kind);
     }
   }
   const QString text = lines.join(QLatin1Char('\n'));
@@ -1169,6 +1211,7 @@ void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
   const QPointF at = toSheet(event->position());
   m_dragMoved = false;
   m_dragSnapped = false;
+  m_dragTip = false;
   if (event->button() == Qt::MiddleButton) {
     m_drag = Drag::Pan;
     m_dragFrom = event->position();
@@ -1210,6 +1253,11 @@ void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
       m_dragView = note;
       m_dragFrom = at;
       m_dragOffset = QPointF();
+      // On a datum's triangle or a frame's arrow, alone: the drag slides
+      // its tip along its edge (mitcad#1295).
+      const SheetAnnotation* pressed = annotation(note);
+      m_dragTip =
+          !ofSeveral && pressed != nullptr && onTip(pressed->tip, at, std::max(0.8, 4.0 / m_zoom));
       break;
     }
     if (ofSeveral) {
@@ -1257,9 +1305,10 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
   case Drag::Annotation:
     m_dragOffset = at - m_dragFrom;
     m_dragMoved = m_dragMoved || distance(m_dragOffset, QPointF()) * m_zoom > 3.0;
-    // Where a dimension dragged alone snaps (mitcad#1173).
+    // Where a dimension dragged alone snaps (mitcad#1173), or a leader's
+    // text (mitcad#1294); Shift or Alt held: where it is dropped.
     if (draggedAlone()) {
-      emit annotationDragged(m_dragView, m_dragOffset, event->modifiers().testFlag(Qt::AltModifier));
+      emit annotationDragged(m_dragView, m_dragOffset, dragsFreely(event->modifiers()));
     }
     update();
     return;
@@ -1413,6 +1462,21 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
                                 .arg(m_dragOffset.x(), 0, 'f', 1)
                                 .arg(m_dragOffset.y(), 0, 'f', 1);
       emit detailCircleMoved(m_dragView, center + m_dragOffset);
+    }
+    m_dragMoved = false;
+    update();
+    return;
+  }
+  if (drag == Drag::Annotation && m_dragTip) {
+    // A datum's triangle or a frame's arrow: its tip slides along its
+    // edge, the square or the frame following (mitcad#1295).
+    m_dragTip = false;
+    if (m_dragMoved) {
+      qDebug().noquote() << QStringLiteral("Drawing annotation %1 tip dragged by %2,%3")
+                                .arg(m_dragView)
+                                .arg(m_dragOffset.x(), 0, 'f', 1)
+                                .arg(m_dragOffset.y(), 0, 'f', 1);
+      emit annotationTipMoved(m_dragView, m_dragOffset);
     }
     m_dragMoved = false;
     update();
@@ -1598,6 +1662,10 @@ void DrawingSheetView::keyReleaseEvent(QKeyEvent* event) {
   if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
     askSnap(false);
   }
+  // Shift let go: a drag snaps again (mitcad#1294).
+  if (event->key() == Qt::Key_Shift && !event->isAutoRepeat() && draggedAlone()) {
+    askSnap(false);
+  }
   QWidget::keyReleaseEvent(event);
 }
 
@@ -1605,6 +1673,11 @@ void DrawingSheetView::keyPressEvent(QKeyEvent* event) {
   // Alt held: a dimension placed or dragged goes where the pointer is
   // (mitcad#1173).
   if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+    askSnap(true);
+  }
+  // Shift held: a drag goes where the pointer is (mitcad#1294); a
+  // placing click keeps Alt alone.
+  if (event->key() == Qt::Key_Shift && !event->isAutoRepeat() && draggedAlone()) {
     askSnap(true);
   }
   if (!unmodified(event)) {

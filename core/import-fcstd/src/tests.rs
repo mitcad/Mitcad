@@ -7984,3 +7984,22 @@ fn a_hole_at_circular_edges_of_a_feature_drills_at_its_sketch_s_circles() {
     assert_eq!(centre(&points[0]), [10.0, 15.0], "{def}");
     assert_eq!(centre(&points[1]), [30.0, 15.0], "{def}");
 }
+
+#[test]
+fn a_hole_s_modelled_thread_on_its_walls_runs_out() {
+    // (mitcad#1302) FreeCAD sweeps a modelled hole thread's groove from a
+    // pitch above the top face, through a countersink there: the thread
+    // MitCad puts on the walls instead runs its grooves out too (`ends`
+    // `run_out`), and a cosmetic one has no ends to cut.
+    let faces = vec![json!({"body": "F2.b0", "face": "$0:hole0.wall"})];
+    let thread = json!({"designation": "M6", "right_handed": true});
+    let modelled = features::wall_thread(faces.clone(), &thread, true);
+    assert_eq!(modelled["type"], "thread", "{modelled}");
+    assert_eq!(modelled["modeled"], true, "{modelled}");
+    assert_eq!(modelled["ends"], "run_out", "{modelled}");
+    assert_eq!(modelled["faces"], json!(faces), "{modelled}");
+    assert_eq!(modelled["thread"], thread, "{modelled}");
+    let cosmetic = features::wall_thread(faces, &thread, false);
+    assert_eq!(cosmetic["modeled"], false, "{cosmetic}");
+    assert!(cosmetic.get("ends").is_none(), "{cosmetic}");
+}

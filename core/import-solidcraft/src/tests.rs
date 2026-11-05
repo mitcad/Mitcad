@@ -644,3 +644,28 @@ fn boundary_surfaces_and_fairings_come_in() {
     assert!(fair.iterations == 3 && !fair.keep_edges && fair.faces.is_empty());
     assert_eq!(doc.parameters().value(fair.tolerance), Some(0.2));
 }
+
+/// A modelled thread runs its grooves out (mitcad#1302): SolidCraft runs
+/// its groove a pitch past an end of the face, a cone there too, and
+/// leaves no flat lip. A cosmetic thread has no ends to cut.
+#[test]
+fn a_modelled_thread_runs_out() {
+    let modelled = features::thread_def("F2.b0", "F2:side0", "M8", true, "high_end");
+    assert_eq!(modelled["type"], "thread", "{modelled}");
+    assert_eq!(modelled["modeled"], true, "{modelled}");
+    assert_eq!(modelled["ends"], "run_out", "{modelled}");
+    assert_eq!(
+        modelled["faces"],
+        json!([{"body": "F2.b0", "face": "F2:side0"}]),
+        "{modelled}"
+    );
+    assert_eq!(
+        modelled["thread"],
+        json!({"designation": "M8"}),
+        "{modelled}"
+    );
+    assert_eq!(modelled["location"], "high_end", "{modelled}");
+    let cosmetic = features::thread_def("F2.b0", "F2:side0", "M8", false, "low_end");
+    assert_eq!(cosmetic["modeled"], false, "{cosmetic}");
+    assert!(cosmetic.get("ends").is_none(), "{cosmetic}");
+}

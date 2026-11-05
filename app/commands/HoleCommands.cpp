@@ -1293,6 +1293,21 @@ CommandDef threadCommand(const CommandContext& context) {
     state.setChoice(kSide, sideOf(faces, model));
     keepClassOnSide(state, model, false);
   };
+  // The size the panel's settings are kept with (mitcad#1298): the first
+  // cylindrical face's, the one that suggests the size. A new Thread on a
+  // face of the same diameter and side starts from the last thread's
+  // settings (CommandDef::settingsKey).
+  def.settingsKey = [](const CommandState& state, const CommandContext& model) -> std::optional<PanelSizeKey> {
+    for (const SelectionItem& item : state.items(QStringLiteral("faces"))) {
+      if (const auto cylinder = cylinderOf(item, model)) {
+        PanelSizeKey key;
+        key.diameter = cylinder->first;
+        key.side = cylinder->second ? kInternal : kExternal;
+        return key;
+      }
+    }
+    return std::nullopt;
+  };
   def.inputs += threadInputs(context, {QStringLiteral("10"), QStringLiteral("M10x1.5"), QStringLiteral("6g")}, false,
                              nullptr);
   def.inputs.append(taperInput(nullptr));

@@ -5,6 +5,7 @@
 # check-all sources: app/sketch/SketchReveal.cpp app/view/ViewReveal.cpp app/files/ProjectIndicator.cpp
 # check-all sources: core/model-api/src/classes.rs tools/cli tools/ui-mcp-live.py
 # check-all sources: app/framework/TestDriverAssistant.cpp app/tests/assistant_client.cpp tools/ui-assistant-setup-test.py
+# check-all sources: app/MainWindow.cpp app/agent/MainWindowChat.cpp app/agent/ChatController.cpp app/agent/ChatSettings.cpp
 # Live MCP for debugging (mitcad#265) through the real UI on Xvfb and the
 # actual bridge, `mitcad-cli mcp --connect`: the application opens a design
 # whose sketch F4 holds a projection that no longer follows its face
@@ -16,8 +17,9 @@
 # bridge authenticates with eight idle connections held open, and 7 MiB
 # inputs neither grow the memory nor the log lines (mitcad#935). The agent indicator
 # (mitcad#710) names the initialized client while the bridge is connected;
-# with none, a click on it opens Connect AI Assistant and its menu offers
-# Connect AI Assistant and Folders for Designs. Preferences > AI Assistants'
+# with none, a click on it opens Connect AI Assistant and its menu lists
+# Incoming and Outgoing connections, then Connect AI Assistant and Folders
+# Assistants May Use (mitcad#1299). Preferences > AI Assistants'
 # Connect AI Assistant... opens the dialog over the modal Preferences, and
 # real clicks choose assistants there while Preferences is open (mitcad#760).
 # Then the shared setup-dialog flow checks isolated file and stub-CLI
@@ -83,9 +85,14 @@ ui_step "close Connect AI Assistant (Esc)" ui_key Escape
 ui_focus_main
 ui_mark
 ui_step "its menu (right click)"         ui_click_logged "Agent indicator" 3
-# One window listens: no instance line and no Copy Command for This Window
-# (those are in the tooltip, and for several windows).
-ui_expect_new "Agent indicator menu: Connect AI Assistant... | Folders for Designs..." "the menu: Connect AI Assistant, Folders for Designs"
+# Its two sections (mitcad#1299): the client that connected in this run,
+# checked and not connected now, then the chat panel's agents (those this
+# computer has). One window listens: no instance line and no Copy Command
+# for This Window (those are in the tooltip, and for several windows).
+ui_expect_new "Agent indicator menu: Incoming connections | ✓ mitcad-live-debug — not connected | Outgoing connections | " \
+  "the menu: Incoming connections with the client of this run, then Outgoing connections"
+ui_expect_new " | Connect AI Assistant... | Folders Assistants May Use..." \
+  "the menu ends with Connect AI Assistant, Folders Assistants May Use"
 ui_step "close the menu (Esc)"           ui_key Escape
 
 echo "--- Connect AI Assistant from Preferences > AI Assistants, a modal dialog (mitcad#760)"

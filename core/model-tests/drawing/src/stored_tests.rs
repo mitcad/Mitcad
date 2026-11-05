@@ -614,15 +614,29 @@ fn a_design_view_projects_only_its_shown_bodies_and_a_move_reuses_them() {
     );
     assert_eq!(sent(&doc).len(), 1, "the body's view is the design view's");
     assert_eq!(projections(&body), [(1, 1, true), (2, 1, true)], "{body}");
-    // Shown again, the design view projects both bodies.
+    // Shown again, the design view keeps the body it showed when it was
+    // placed (mitcad#1293): nothing projected again.
     command(
         &mut doc,
         json!({"cmd": "set_body_visible", "uid": "F4.b0", "visible": true}),
     );
     assert_eq!(
         projections(&drawing(&doc, "D1")),
-        [(1, 2, false), (2, 1, true)]
+        [(1, 1, true), (2, 1, true)]
     );
+    assert_eq!(sent(&doc).len(), 1, "visibility projects nothing");
+    // Updated from the model, it projects both bodies.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": {"type": "design"}}),
+    );
+    assert_eq!(undo_label(&doc), "Update view 1 of Drawing1");
+    let counts: Vec<(u64, u64)> = projections(&drawing(&doc, "D1"))
+        .into_iter()
+        .map(|(view, bodies, _)| (view, bodies))
+        .collect();
+    assert_eq!(counts, [(1, 2), (2, 1)]);
     let calls = sent(&doc);
     assert_eq!(calls.len(), 2, "{calls:?}");
     assert_eq!(calls[1].len(), 2, "{calls:?}");
@@ -1610,4 +1624,258 @@ fn the_sheet_comes_with_the_writers_pen_widths() {
             assert!(pens[pen]["width"].is_number(), "{pen}: {pens}");
         }
     }
+}
+
+/// Plate (a 40 x 30 x 5 body, F2.b0) placed twice, 50 mm apart along X,
+/// a front view of the design at 1:1 and a projected view of it
+/// (mitcad#1293): the document and the two occurrences.
+fn two_plates() -> (Document<MockKernel>, String, String) {
+    let mut doc = Document::new(MockKernel::default());
+    let first = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Plate"}),
+    )["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+        ]),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    let second = command(
+        &mut doc,
+        json!({"cmd": "copy_occurrence", "occurrence": first,
+               "transform": {"translation": [50, 0, 0]}}),
+    )["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [150, 150], "scale": "1:1"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "projected", "parent": 1,
+               "side": "right"}),
+    );
+    (doc, first, second)
+}
+
+/// The bodies each view of D1's first sheet projects, as the `drawing`
+/// query lists them (mitcad#1033).
+fn projected_bodies(doc: &Document<MockKernel>) -> Vec<(u64, u64)> {
+    projections(&drawing(doc, "D1"))
+        .into_iter()
+        .map(|(view, bodies, _)| (view, bodies))
+        .collect()
+}
+
+/// A recorded subject: Plate's body in these occurrences, in order.
+fn plates_in(occurrences: &[&str]) -> Value {
+    json!({"type": "bodies", "bodies": occurrences
+        .iter()
+        .map(|o| json!({"body": "F2.b0", "occurrence": o}))
+        .collect::<Vec<_>>()})
+}
+
+#[test]
+fn a_view_keeps_what_it_showed_when_it_was_placed() {
+    // mitcad#1293 (GitHub #144): a finished drawing changed on its own.
+    let (mut doc, first, second) = two_plates();
+    // Placed with the whole design, it records the bodies shown then; its
+    // projected view shows them too.
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        plates_in(&[&first, &second])
+    );
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2)]);
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert_eq!(
+        file["drawings"][0]["sheets"][0]["views"][0]["subject"],
+        plates_in(&[&first, &second]),
+        "the file keeps the list"
+    );
+
+    // Hidden in the 3D view: still drawn, nothing projected again.
+    let calls = |doc: &Document<MockKernel>| doc.kernel().projected.borrow().len();
+    let before = calls(&doc);
+    command(
+        &mut doc,
+        json!({"cmd": "set_occurrence_visible", "occurrence": second, "visible": false}),
+    );
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2)]);
+    assert_eq!(calls(&doc), before, "visibility projects nothing");
+    // A body hidden: the same.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F2.b0", "visible": false}),
+    );
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2)]);
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F2.b0", "visible": true}),
+    );
+
+    // A third placement added later: not in the view.
+    let third = command(
+        &mut doc,
+        json!({"cmd": "copy_occurrence", "occurrence": first,
+               "transform": {"translation": [100, 0, 0]}}),
+    )["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2)]);
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        plates_in(&[&first, &second])
+    );
+
+    // Shows edited: the third added, one undo step.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": plates_in(&[&first, &second, &third])}),
+    );
+    assert_eq!(undo_label(&doc), "Edit view 1 of Drawing1");
+    assert_eq!(projected_bodies(&doc), [(1, 3), (2, 3)]);
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2)]);
+
+    // Update from Model: what the 3D view shows now (the second hidden),
+    // one undo step; its projected view follows.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": {"type": "design"}}),
+    );
+    assert_eq!(undo_label(&doc), "Update view 1 of Drawing1");
+    assert_eq!(view(&doc, "D1", 1)["subject"], plates_in(&[&first, &third]));
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2)]);
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        plates_in(&[&first, &second])
+    );
+    // Nothing shown: refused, the view as it was.
+    for o in [&first, &third] {
+        command(
+            &mut doc,
+            json!({"cmd": "set_occurrence_visible", "occurrence": o, "visible": false}),
+        );
+    }
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": {"type": "design"}}),
+    );
+    assert!(
+        error.contains("nothing of the design is shown in the 3D view"),
+        "{error}"
+    );
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        plates_in(&[&first, &second])
+    );
+
+    // An occurrence's view shows its bodies, hidden or not.
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "top",
+               "at": [300, 100], "scale": "1:1",
+               "subject": {"type": "occurrence", "occurrence": second}}),
+    );
+    assert_eq!(projected_bodies(&doc), [(1, 2), (2, 2), (3, 1)]);
+
+    // The second placement deleted: the views draw the first and say
+    // which is gone; neither is broken.
+    command(
+        &mut doc,
+        json!({"cmd": "delete_occurrence", "occurrence": second}),
+    );
+    let front = view(&doc, "D1", 1);
+    assert!(front.get("error").is_none(), "{front}");
+    assert_eq!(
+        front["warnings"],
+        json!([format!("the occurrence {second} is gone")]),
+        "{front}"
+    );
+    assert!(view(&doc, "D1", 2).get("error").is_none());
+    let sheet = drawing(&doc, "D1")["sheets"][0].clone();
+    let warnings: Vec<String> = sheet["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| w.as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        warnings.contains(&format!("view 1: the occurrence {second} is gone")),
+        "{warnings:?}"
+    );
+    // The occurrence's own view has nothing left: not drawn, and why.
+    let own = view(&doc, "D1", 3);
+    assert!(
+        own["error"]
+            .as_str()
+            .is_some_and(|e| e.contains(&format!("the occurrence {second} is gone"))),
+        "{own}"
+    );
+    assert_eq!(projected_bodies(&doc), [(1, 1), (2, 1)]);
+}
+
+#[test]
+fn a_view_of_an_older_design_file_is_pinned_to_what_it_showed() {
+    // mitcad#1293: a design file written before views recorded their
+    // bodies (no `subject`: the whole design, as the 3D view showed it).
+    let (mut doc, first, second) = two_plates();
+    command(
+        &mut doc,
+        json!({"cmd": "set_occurrence_visible", "occurrence": second, "visible": false}),
+    );
+    let mut file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    file["drawings"][0]["sheets"][0]["views"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("subject");
+    let mut old = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    // Opened (the application's first recompute): the view keeps what the
+    // file showed, and one information says so; no undo step.
+    let opened = command(&mut old, json!({"cmd": "recompute"}));
+    let notices = opened["notices"].as_array().cloned().unwrap_or_default();
+    assert_eq!(notices.len(), 1, "{opened}");
+    assert_eq!(notices[0]["level"], "info", "{opened}");
+    let message = notices[0]["message"].as_str().unwrap();
+    assert_eq!(
+        message,
+        "Drawing1 now keeps what its views showed when the design was opened (1 body): \
+         hiding, showing or adding components no longer changes them"
+    );
+    assert_eq!(view(&old, "D1", 1)["subject"], plates_in(&[&first]));
+    assert_eq!(undo_label(&old), Value::Null, "no undo step");
+    // Shown again, the view stays as it was; saved, the file keeps it.
+    command(
+        &mut old,
+        json!({"cmd": "set_occurrence_visible", "occurrence": second, "visible": true}),
+    );
+    assert_eq!(projected_bodies(&old), [(1, 1), (2, 1)]);
+    let saved: Value = serde_json::from_str(&old.to_json()).unwrap();
+    assert_eq!(
+        saved["drawings"][0]["sheets"][0]["views"][0]["subject"],
+        plates_in(&[&first])
+    );
+    // Said once: the next recompute has nothing to say.
+    let again = command(&mut old, json!({"cmd": "recompute"}));
+    assert!(again.get("notices").is_none(), "{again}");
 }

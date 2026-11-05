@@ -10680,6 +10680,12 @@ SVG at several sizes (`themeIcon`).
   Custom's only). The descriptions name the size `custom 10x1.5, 2
   starts`. Tests: `tools/ui-create-test.sh` (Custom thread),
   `tools/ui-windows-selection-create-test.ps1` (5.).
+- **Thread: the last thread's settings** (mitcad#1298): a new Thread on a
+  face of the same diameter (within 0.001 mm) and side as the last new
+  thread's first cylindrical face starts from that thread's whole panel,
+  but for the inputs changed before the face was picked; on another size
+  the size is suggested as before and the rest start from their defaults
+  ([Panel settings kept by size](#panel-settings-kept-by-size-mitcad1298)).
   By Pick (mitcad#656) is one hole where Place On puts it ([Placement by
   picked geometry](#notes-on-particular-commands)): into a face at
   distances from two of its edges, at a point, or along a shaft's or a
@@ -11788,38 +11794,66 @@ and the agent indicator beside the project indicator (`mcp/AgentIndicator`,
 mitcad#710) names the connected assistants ("Claude Code connected" by
 `mcp::assistantDisplayName`, else the client's own label; "2 assistants
 connected"), says "No assistant" while the window accepts them and
-"Assistants unavailable" when its listener did not start; the instance id
-and port are in its tooltip. With none connected a click opens Connect AI
-Assistant (`help.connect_assistant`), and its arrow or a right click the
-menu; otherwise a click opens the menu (InstantPopup): the reason first
-when unavailable, else each client (assistant name, own label and
-version, connected since) and Disconnect *assistant* (Disconnect All,
-`disconnectAgent`), then for each assistant the user disconnected Allow
-*assistant* to Connect Again (`allowAgent`, mitcad#1289), then Connect AI Assistant…, Copy Command for This
-Window (`copyConnectCommand`, only while several windows listen) and Folders
-for Designs… (`tools.preferences.agents`). The log keeps the clients' own
-labels ("Agent indicator: connected: <label>"). The chat panel's own
-agent is not among the connected clients (mitcad#1289: the indicator
-reads "Claude Code working" while it works on a message, else as if it
-were not there; its connection cannot be disconnected from here, and it
-is not counted in "2 assistants connected" nor published to other
+"Assistants unavailable" when its listener did not start; the blocked
+rows of its menu follow, never hidden behind connected ("No assistant · 1
+blocked", "1 connected · 1 blocked", mitcad#1299). The instance id and
+port and the blocked rows' names are in its tooltip. With none connected a
+click opens Connect AI Assistant (`help.connect_assistant`), and its arrow
+or a right click the menu; otherwise a click opens the menu
+(InstantPopup): the reason first when unavailable, then two sections, each
+a heading and checkable rows with their state in the shortcut's column
+(mitcad#1299):
+
+- **Incoming connections** (`incomingAgent`): the assistants that drive
+  MitCad through MCP, one row per `mcp::assistantRowKey`: Claude Desktop
+  (chat) (`claude-ai`), Claude Desktop (Code tab) (`local-agent-mode-*`),
+  Claude Code, Codex, and any other client by its own label. Listed: the
+  known assistants set up with Connect AI Assistant or connected before
+  (`assistant/rows`, `rememberAssistantRows`), every blocked row, and the
+  clients connected in this run. State: connected since *time*, not
+  connected, or blocked. ✓ means it may connect; unchecking blocks the row
+  (`blockAssistantRow`) and ends its clients' connections, checking allows
+  it at once (`allowAssistantRow`). The clients' own labels and versions
+  are only in the row's tooltip and the log; "No assistant set up" when
+  there is none.
+- **Outgoing connections** (`outgoingAgent`): the agents the chat panel
+  runs, as it finds them (`ChatController::foundAgents`: each Claude Code,
+  Codex, the API agents and the custom command enabled in Preferences),
+  named "*agent* (chat panel)" ("Claude Code (~/.local/bin, chat panel)"),
+  with the panel's state (`menuState`: ready, signed in as *account*, not
+  signed in and the rest; "found" before the panel first looked for them;
+  "off"). ✓ means the panel offers it; unchecked (`chat/off`,
+  `agent::setChatAgentOffered`; every window's chat follows through
+  `ChatNotifier::offeredChanged`) it is not in the panel's list and never
+  started or checked. The chosen one turned off gives way to another one
+  offered; with none, the panel says to check one here. "No chat agent
+  found" when there is none.
+
+Then Connect AI Assistant…, Copy Command for This Window
+(`copyConnectCommand`, only while several windows listen) and Folders
+Assistants May Use… (`tools.preferences.agents`). The log keeps the
+clients' own labels ("Agent indicator: connected: <label>"). The chat
+panel's own agent is not among the connected clients (mitcad#1289: the
+indicator reads "Claude Code working" while it works on a message, else as
+if it were not there; its connection cannot be disconnected from here, and
+it is not counted in "2 assistants connected" nor published to other
 windows).
 
-Disconnect sticks (mitcad#1289, `mcp::disconnectAssistants`,
-`LiveServer`): the user's Disconnect (the dialog's or the indicator's)
-also keeps the labels of the clients it ended for this run of MitCad, and
-a new client whose `initialize` names one of them, or the same assistant
-(`disconnectedLabelMatches`: Claude Code, Claude Desktop, Codex by
-`assistantLabelMatches`, an Other client by its own label), gets the error
--32001 "Disconnected in MitCad: choose Connect for *assistant* in Help ›
-Connect AI Assistant, or Allow in the assistant indicator's menu, to
-connect it again" and its connection is closed (log `MCP refused: <label>
-was disconnected by the user`; Disconnect logs `MCP: <labels> disconnected
-until allowed again`). A bridge that outlives its connection (mitcad#1288)
-answers its tool calls with that reason and asks again every 10 s. Connect
-(any setup of that assistant, `connectAssistant`), the dialog's
-`disconnected` state's Connect (`allow`: only the refusal ends, the setup
-stays) and the indicator's Allow allow it again (`allowAssistant`).
+The checkmarks persist (mitcad#1289's Disconnect sticks, kept since
+mitcad#1299; `mcp::blockAssistants`, `assistantRefusal`, `LiveServer`): a
+row unchecked in the menu, or the dialog's Disconnect, blocks the row of
+each client it ended in the user's settings (`assistant/blocked`), so it
+holds after a restart, and a new client whose `initialize` names a label
+of a blocked row gets the error -32001 "Blocked in MitCad: check *row*
+under Incoming connections in MitCad's assistant menu to connect it again"
+and its connection is closed (log `MCP refused: <label> is blocked in the
+assistant menu`; Disconnect logs `MCP: <labels> disconnected until allowed
+again`). A bridge that outlives its connection (mitcad#1288) answers its
+tool calls with that reason and asks again every 10 s. The row's
+checkmark, Connect (any setup of that assistant, `connectAssistant`) and
+the dialog's `blocked` state's Allow (`allow`: only the block ends, the
+setup stays) allow it again (`allowAssistant`: each row of the assistant).
+Every window's indicator follows a change (`watchAssistantBlocks`).
 
 Save As and Open have tools of their own instead (mitcad#402):
 `document_save` with a `path` and `document_open`, into and from the
@@ -11927,7 +11961,7 @@ next screenshot.
 | `Panel Extrude tooltip distance: d5 = 2*d1 → 80 mm (Extrude2 distance)`, `Parameter labels for Extrude: Sketch1 k5 d1, Sketch1 k7 d3` (or `none`), `Parameter label Sketch1 k5 d1 at x,y`, `Parameter label Sketch1 k5 d1 drawn at x,y`, `Parameter label picked: d1 (Sketch1 k5)`, `Panel Extrude input distance: inserted d1, now 2*d1`, `Parameter labels for Extrude hidden`, `Native inline editor sketchValueEditor name: d3 =` (macOS) | a feature panel's value field whose parameter the feature owns: its tooltip; while a value field has the keyboard (when the keyboard went there by itself as the panel opened, only once the field is clicked or typed in, mitcad#587; after a pick when the selection takes more items, only once something is typed in it, mitcad#467), the labels of the shown sketches' dimensions, only those (mitcad#587 took out the earlier features' values; `framework/ParameterPicker.hpp`), where each is for the camera now and where a paint drew it (`drawn at`, not where nothing is painted, as in a Windows test session; both follow the camera, mitcad#1179), the one clicked and the name it put into the field, the labels gone a moment after the field lost the keyboard; the dimension's name beside the native inline editor (mitcad#250) |
 | `Added constraint perpendicular k6 on c1, c2` (a tangent's point after it: `Added constraint tangent k7 on c1, c5 at p2`, mitcad#783), `Constraint perpendicular refused: <reason>`, `Symmetry takes the selection as its picks: c1, c3`, `Symmetry does not take the selection: <reason>`, `Symmetry pick c7 refused: <reason>` (mitcad#865), `Fixed …`, `Construction on: [...]`, `Merged points p5 into p3 (coincident on p3, p5)` (two curve ends made one, mitcad#260), `Converted to sketch geometry: c9, p7; kept projected: p8` (mitcad#257), `Deleted c4, k2` | constraints and modify commands |
 | `MCP live instance: <id> 127.0.0.1: <port>`, `Agent connected`, `Agent disconnected`, `Agent disconnected by the user`, `MCP: an agent ran sketch.add_line in sketch F4`, `MCP: an agent ran the UI command sketch.finish`, `MCP: an agent selected 2 sketch curves`, `MCP: an agent saved <path>`, `MCP: screenshot of the view, 640 x 480, 12345 bytes`, `Agent change: Add Line (agent)`, `MCP refused: <reason>`, `MCP: closed the dialog <title> (an agent cannot answer it)` | live MCP (mitcad#265): the listener, connected agents, what an agent ran, refusals |
-| `Agent indicator: no agent` (`connected: claude-code`, `2 agents connected: claude-code, codex-mcp-client`, `unavailable`: the clients' own labels), `Agent indicator at x,y`, `Agent indicator chose help.connect_assistant` (a click with no assistant connected), `Agent indicator menu: Connect AI Assistant… \| Folders for Designs…` (with Copy Command for This Window between them while several windows listen), `Agent indicator menu chose disconnectAgent` (`help.connect_assistant`, `copyConnectCommand`, `tools.preferences.agents`), `Agent indicator: copied <command>` | the agent indicator (mitcad#710): its state when it changes (the agents by their `clientInfo` names), its place, a click, its menu (entries as shown) and what was chosen |
+| `Agent indicator: no agent` (`connected: claude-code`, `2 agents connected: claude-code, codex-mcp-client`, `unavailable`: the clients' own labels; ` · 1 blocked` after it while rows are blocked), `Agent indicator at x,y`, `Agent indicator chose help.connect_assistant` (a click with no assistant connected), `Agent indicator menu: Incoming connections \| ✓ Claude Code — connected since 14:02 \| Codex — blocked \| Outgoing connections \| ✓ Claude Code (chat panel) — ready \| Connect AI Assistant… \| Folders Assistants May Use…` (a checked row with ✓, its state after " — "; Copy Command for This Window before Folders while several windows listen), `Agent indicator: Claude Code blocked` (`allowed`; an outgoing row `Claude Code (chat panel) off`, `offered`), `Agent indicator menu chose help.connect_assistant` (`copyConnectCommand`, `tools.preferences.agents`), `Agent indicator: copied <command>` | the agent indicator (mitcad#710, its rows mitcad#1299): its state when it changes (the agents by their `clientInfo` names), its place, a click, its menu (entries as shown), a row checked or unchecked and what was chosen |
 | `Palette warning 0 at x,y` (each warning shown as a link), `Palette: warning 0 selects 8 entities: p1, p2, c3, …`, `Sketch view to the selection: pan` (or `zoom`; nothing when they were in sight), `Sketch Palette warnings: …` / `none`, `Sketch Palette redundant: k7, k9` / `none` | the Sketch Palette's warnings (mitcad#264): where to click them, what a click selects (the `Selected: …` line follows), how the view moved; their texts and the redundant constraints' ids when they change (mitcad#1171) |
 | `Palette Auto constraint: Link to first ( ), Link to last (x); Equal (x), Horizontal/Vertical alignment ( ), Concentric ( )` (or `hidden`), `Palette paletteAutoLast at x,y` (`paletteAutoFirst`, `paletteAuto_equal`, …, the section `paletteAutoConstraint`), `Auto constraint link: first`, `Auto constraint equal: on (checked: equal)`, `Auto constraint target c2`, `Auto constraint reference highlighted: c2` / `highlight off`, `Auto constraint equal k7 on c2, c4` (the reference first; the alignment as `horizontal_points`/`vertical_points` of the curves' centres), `Auto constraint equal on c2, c4 refused: <reason>`, `Auto constraint dialog: Equal: <reason>`, `Auto constraint accepted: c4 kept without them` / `cancelled: c4 taken back`, `Auto constraint entities: c2, c4` | the palette's Auto constraint section (mitcad#189): its state when it changes, its places (in the docked layout the palette scrolls, and the section is scrolled into view when it shows; every `Palette … at x,y` line is logged again when the palette scrolls, mitcad#412), the choices, the reference the preview targets, the constraints each new entity gets, a refused one's dialog and answer, the tool session's entities |
 | `Palette row paletteGrid at x,y size 276x22, hint 93x22` (each option row, `paletteDimensionText`, `paletteFinish`), `Palette size 270x512, hint 242x512, minimum hint 242x512`, `Palette scrolled to 137 of 137 (view 375 high, palette 512)` | the palette's rows against their size hints (mitcad#470): in the floating layout the palette is in a scroll area in the command card, so a card shorter than the rows scrolls them instead of squeezing them below their hints; logged with the places, again when the palette scrolls |
@@ -12615,18 +12649,21 @@ Every layout change fits the window's height to its contents, both ways;
 its width only grows (`refit`). No paragraphs of help: the explanations
 are in `docs/mcp.md`.
 
-Connected clients are named by `assistantDisplayName`: the assistant
-whose label `assistantLabelMatches` (`claude-ai` is Claude Desktop), in
-its sentence form (Codex), else the client's own label. Disconnect ends
+Connected clients are named by `assistantDisplayName`, their row's name
+in the assistant menu: the assistant whose label `assistantLabelMatches`
+(`claude-ai` is Claude Desktop (chat), `local-agent-mode-*` Claude Desktop
+(Code tab), both on the Claude Desktop choice; mitcad#1299), in its
+sentence form (Codex), else the client's own label. Disconnect ends
 the chosen assistant's clients only (`Host::disconnect` with their
 `ConnectedAgent::id`s; named "Disconnect *assistant*" while others stay
 connected, by the names Connected shows: for Other the clients' own
-labels). **Disconnect** says in its tooltip that the setup is kept.
+labels) and blocks their rows in the assistant menu, as unchecking them
+there does. **Disconnect** says in its tooltip that the setup is kept.
 `AgentIndicator::previousClients` keeps the initialized clients' labels
 for this run, even while the dialog is closed; `Host::previousClients`
 passes them into a newly opened dialog. After a client closing its
 connection, and after a user disconnect once Connect allowed the
-assistant again (until then the state is `disconnected`, mitcad#1289), the
+assistant again (until then the state is `blocked`, mitcad#1289), the
 waiting line gives the reconnect step for that assistant. Before its first connection the original next
 step remains. The settings files
 (`~/.claude.json`, the Codex TOML) are read again only when their size or
@@ -12641,7 +12678,7 @@ The state line's `assistantState` property and the button's
 | `install-extension` | Install the extension in Claude Desktop (mitcad#763): Claude Desktop was found but no application takes the extension, as with a Microsoft Store install, which registers only `claude://`; the result line below says In Claude Desktop: Settings › Extensions › Advanced settings › Install Extension…, then choose *path* (cleared once Claude Desktop connects) | `reveal` (Show in Explorer, Show in Finder on macOS: the saved `mitcad-desktop.mcpb` selected, its path in the tooltip), with the quiet **Open Claude Desktop** (`assistantOpenDesktop`, opens `claude://`; without Claude Desktop's application, or when the link does not open, the state becomes Install Claude Desktop first) |
 | `installed-not-connected` | Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, or start a new chat (mitcad#1288): MitCad's extension, starting this bridge, is in Claude Desktop's settings (`claudeDesktopExtension`) and no Claude Desktop client is connected to any window; it comes before `install-extension`, `waiting` and `ready`, and clears the installation's line | none, with the quiet **Open Claude Desktop** |
 | `busy` | Connecting *assistant*… | `connect`, disabled |
-| `disconnected` | Disconnected: *assistant* cannot connect to MitCad until you connect it again (mitcad#1289: the user disconnected it in this run and none of its clients is connected; before every state but `busy`) | `allow` (Connect: lets it connect again, tooltip "Lets *assistant* connect to MitCad again"; the setup stays as it is) |
+| `blocked` | Blocked in the assistant menu (mitcad#1289, mitcad#1299: a row of the assistant is unchecked under the menu's Incoming connections, or Disconnect blocked it, and none of its clients is connected; Claude Desktop and Other name the blocked rows after a colon; before every state but `busy`) | `allow` (Allow: lets it connect again, as its checkmark does, tooltip "Lets *assistant* connect to MitCad again (its checkmark in the assistant menu)"; the setup stays as it is) |
 | `connected` | ✓ Connected: *the chosen assistant's name* (Other: the clients' labels) | `disconnect` (Disconnect) |
 | `manual` | Copy the configuration into your assistant's settings (Other) | `copy` (Copy configuration) |
 | `unavailable` | Claude Desktop is not available for this system (Linux) | none |
@@ -12768,13 +12805,20 @@ example-client" and ends only that client (mitcad#724). The successful
 file/Floating case starts a real CLI bridge with a scripted Claude Code
 MCP client: initial waiting advice, connected, Disconnect (mitcad#1289:
 the bridge stays up and is refused, a second bridge's new Claude Code
-client gets "Disconnected in MitCad" at its initialize, the state is
-`disconnected` with Connect), reopening the dialog through the empty
-indicator with the same choice and state and the indicator's Allow Claude
-Code to Connect Again, Connect giving the reconnect advice and a new
-bridge connection, then client EOF with the same reconnect advice
+client gets "Blocked in MitCad: check Claude Code…" at its initialize, the
+state is `blocked`, "Blocked in the assistant menu" with Allow), reopening
+the dialog through the empty indicator ("No assistant · 1 blocked") with
+the same choice and state and the indicator's Claude Code row unchecked
+and blocked, Allow giving the reconnect advice and a new bridge
+connection, then client EOF with the same reconnect advice
 (`reconnect-start`, `reconnect-disconnect`, `reconnect-line`,
-`reconnect-again`, `reconnect-eof`, mitcad#1123). Its
+`reconnect-again`, `reconnect-eof`, mitcad#1123); then the menu's
+checkmarks (mitcad#1299, the driver's `agent-menu <row> on|off`): a
+scripted Claude Code client connected (`indicator-client`), its row
+unchecked: it is disconnected, a new client is refused with the row's
+name, the indicator reads "… · 1 blocked" and the dialog Blocked in the
+assistant menu (`indicator-blocked`); checked again, a new client
+connects (`indicator-allowed`). Its
 `packaged-claude` mode (Windows, mitcad#763) sets
 `MITCAD_TEST_ASSISTANT_BUNDLE_OPEN=none` (no application for the
 extension, without the registry; the other modes' `capture` records the
@@ -12952,10 +12996,33 @@ drawing commands; it computes no geometry of its own.
   and **Add Revision…**; several items selected: their names and Delete
   (`drawingSelectionDelete`). A view's
   properties, each change one `edit_drawing_view`: why it cannot be drawn
-  (red); a base view's Orientation (the tool's list; a given direction
+  (red), and the bodies and occurrences it keeps that are gone from the
+  design (amber, the query's `warnings`; in the status bar too, `View 1:
+  the occurrence O3 is gone`, mitcad#1293); a base view's Orientation (the
+  tool's list; a given direction
   shows as Given; Current View takes the 3D view's again) and what it
-  **Shows** (`drawingViewShows`: the tool's list, `subjectChoices`; a
-  subject of several bodies as Chosen Bodies); a projected view's Side; a
+  **Shows** (`drawingViewShows`, mitcad#1293: a drawing keeps what was put
+  into it, so visibility in the 3D view and components added later change
+  no view; the list is the drawing's component's own bodies and its
+  occurrences, each with its component's bodies and its occurrences below
+  it, folded, `subjectRows` from the `components` and `bodies` queries,
+  each body checked when the view's subject shows it there, an
+  occurrence's box all, some or none of its bodies'; a change, a body's
+  box or an occurrence's (all its bodies), sends the bodies checked as
+  `{"type": "bodies"}`, one `edit_drawing_view` and one undo step, logged
+  `Drawing view 1 Shows changed: 3 bodies`; the panel logs `Drawing view
+  1 shows 2 of 3 bodies` and each row in sight, `Drawing panel
+  drawingViewShows row Plate:3 at x,y`: a click selects it, Space checks
+  or clears it) and **Update from Model** (`drawingViewUpdate`: the
+  component's occurrences and bodies the 3D view shows now, `subject`
+  `{"type": "design"}`, undo step `Update view 1 of Drawing1`, logged
+  `Drawing view 1 updated from the model`; with nothing shown the model
+  refuses it and the status bar says why, the view as it was; its
+  projected, section and detail views follow; a design file written
+  before it opens with such views pinned to what the file shows, one
+  information per drawing in the status bar and the message history,
+  logged `Drawing pinned: Drawing1 now keeps what its views showed …`, from the open's `recompute`,
+  `MainWindow::reportRecompute`); a projected view's Side; a
   section's and a detail's Letter; a section's Hatching and Look the
   Other Way (`flip`); a detail's Radius (mm on the sheet, a point or a
   comma as `parsePlainNumber` takes them; sent only when its text
@@ -13078,7 +13145,7 @@ drawing commands; it computes no geometry of its own.
 
   | Tool | Picks | Options | Command |
   |---|---|---|---|
-  | Base View (`drawing.base_view`) | a click: the view's middle | Shows (mitcad#725: the drawing's component by its name, `design`; each occurrence in it by its path of names, `occurrence:O1/O4`; each of its own bodies, `body:F2.b0`; from the `components` and `bodies` queries, `subjectChoices`), Orientation (Front, Top, Right, Back, Bottom, Left, Isometric, Isometric Top Left, Isometric Bottom Right, Isometric Bottom Left, Current View: the 3D view's camera as `{"toward_eye", "up"}`), Scale (Fit the Sheet, as in the view panel, or a scale, a ratio typed too, mitcad#1169), Hidden Edges, Tangent Edges, Shaded | `add_drawing_view` `base` (with `subject` unless the whole component; `direction` the camera for Current View); then Projected View starts from it |
+  | Base View (`drawing.base_view`) | a click: the view's middle | Shows (mitcad#725: the drawing's component by its name, `design`; each occurrence in it by its path of names, `occurrence:O1/O4`; each of its own bodies, `body:F2.b0`; from the `components` and `bodies` queries, `subjectChoices`), Orientation (Front, Top, Right, Back, Bottom, Left, Isometric, Isometric Top Left, Isometric Bottom Right, Isometric Bottom Left, Current View: the 3D view's camera as `{"toward_eye", "up"}`), Scale (Fit the Sheet, as in the view panel, or a scale, a ratio typed too, mitcad#1169), Hidden Edges, Tangent Edges, Shaded | `add_drawing_view` `base` (with `subject` unless the whole component, which the model records as the bodies the 3D view shows at that moment, mitcad#1293; `direction` the camera for Current View); then Projected View starts from it |
   | Projected View (`drawing.projected_view`) | a drag out of a view, or a click beside the view picked (the selected one, or one clicked) | | `add_drawing_view` `projected` with `at`; the side follows from where it is |
   | Section View (`drawing.section_view`) | two clicks on a view: the line; a third: where it goes | Letter (the next free), Hatching, Look the Other Way | `add_drawing_view` `section` with `line`, `flip`, `at` |
   | Detail View (`drawing.detail_view`) | a click on a view (the middle), a second (the radius), a third: where it goes | Letter, Scale (Twice Its Parent's, as in the view panel, or a scale, a ratio typed too, mitcad#1169) | `add_drawing_view` `detail` with `at` |
@@ -13094,7 +13161,7 @@ drawing commands; it computes no geometry of its own.
   | Edge Extension (`drawing.edge_extension`, mitcad#729) | two straight edges, or one | Edges (Two, to Their Corner; One, Both Ways) | `edge_extension` |
   | Text (`drawing.text`) | a click on the sheet | Text (empty: the annotations' Note dialog asks), Drawn (On the Sheet, In the View Clicked; mitcad#729) | `"type": "text"` with `sheet` (or `view`), `at`, `text` |
   | Note (`drawing.note`) | a pick, then a click where the text goes | Text (as Text's) | `note` |
-  | Datum Label (`drawing.datum`) | a pick, then a click where the label goes | Letter (the next free of the model's and the drawings' letters) | `datum` |
+  | Datum Label (`drawing.datum`) | a pick (an edge, a round face, or inside a planar face seen face on, mitcad#1296), then a click where the label goes | Letter (the next free of the model's and the drawings' letters), Terminator (Auto: a dot on a face, a triangle on an edge; Triangle; Dot) | `datum` (with `terminator` unless Auto) |
   | Feature Control Frame (`drawing.frame`) | a pick, then a click where the frame goes | (the annotations' frame dialog asks for its tolerance; its datums: the `drawing` query's `datum_letters`, the model's and the drawings') | `frame` |
   | Surface Finish (`drawing.finish`) | a pick | Surface (Any Process, Material Removed, No Material Removed), Requirement (`Ra 1.6`) | `finish` |
   | Hole Table (`drawing.hole_table`) | a click on a view, then where the table goes (its upper left corner) | Origin (Lower Left Corner, Component Origin), Tags (By Size, Numbers) | `add_drawing_annotation` `hole_table` with `at` and `table` |
@@ -13143,8 +13210,18 @@ drawing commands; it computes no geometry of its own.
   dragged by 10.0,0.0`), Delete deletes it. Its panel: what it Shows (its
   words), a linear dimension's or an ordinate's Direction, a dimension's
   Tolerance (the annotations' tolerance dialog, `askAnnotationTolerance`)
-  and Decimals (`askAnnotationDecimals`), Text Before and Text After; a
-  note's Text… (`askNoteText`, opened with the note's text), a datum's
+  and Decimals (`askAnnotationDecimals`), Text Before, Text After and
+  Replace Value (`drawingAnnotationReplace`, mitcad#1292: a text in place
+  of the value and its tolerance, its placeholder the measured value as
+  the sheet writes it, the `drawing` query's `measured`; Enter or leaving
+  the field sends `edit_drawing_annotation` with `format.replace`, one
+  undo step, an empty field `null`, the measured value again; while
+  replaced the dimension is drawn with the text only, its own texts
+  before and after kept, and a Measured row, `drawingAnnotationMeasured`,
+  shows the measured value under the field, so that a text the model has
+  outgrown is seen; logged `Drawing panel Replace Value: SEE NOTE,
+  measured 60.0 beside it` or `Drawing panel Replace Value: empty,
+  placeholder 60.0`); a note's Text… (`askNoteText`, opened with the note's text), a datum's
   Letter, a frame's Tolerance… (`askFeatureControlFrame`, its datums the
   model's and the drawings'), a finish's Surface and Requirement; the
   Text Height of what writes (`drawingAnnotationHeight`, empty: the
@@ -13185,6 +13262,64 @@ drawing commands; it computes no geometry of its own.
   dimension goes where it is clicked. Tests:
   `tools/ui-drawing-dimension-spacing-test.sh`,
   `app.ui-windows-drawing-spacing`.
+- **Leader angles** (mitcad#1294; the model's side in `commands.md`,
+  *Annotations on drawing views*). A datum label's filled triangle sits
+  with its base along the picked edge (a circle's tangent, a round face's
+  outline) at the tip, on the side of its square, and its leader runs
+  from the triangle's apex to the middle of the square's side that faces
+  it (bottom, top, left or right), so it never crosses the square or the
+  letter; a feature control frame's leader leaves the end its arrow lies
+  beyond, else the middle of the frame's lower or upper side. Dragging a
+  note's text, a datum label's square or a frame alone snaps its leader
+  to 0°, 45°, 90° and their multiples when it runs within 4° of one: the
+  drag asks `drawing_snap` as a dimension's does (`snapRequested`,
+  `annotationDragged`), the outline follows the snapped drag with the
+  hint `45°`, logged `Drawing snap: leader at 45 degrees`, and the drop
+  sends the answer's `move`, logged `Drawing leader moved: datum
+  text_offset 20.74,23.54, snapped to 45 degrees` (`not snapped`,
+  `free`). **Shift** held during the drag (pressed or released during the
+  move, the preview follows) drops it where the pointer is: Alt-drags
+  move windows on many Linux desktops, so Alt is not needed, though it
+  frees a drag too where the desktop leaves it to MitCad
+  (`DrawingSheetView::dragsFreely`; a dimension's drag likewise). A
+  dimension's placing click keeps Alt alone. Test:
+  `tools/ui-drawing-dimension-spacing-test.sh` (a datum's square dragged
+  near 45°, then with Shift).
+- **Sliding a datum's triangle** (mitcad#1295; the model's side in
+  `commands.md`, *Annotations on drawing views*, `slide` and
+  `tip_along`). A drag that starts on a datum label's filled triangle or
+  on a feature control frame's arrow (the annotation's first fill,
+  `SheetAnnotation::tip`, within 4 pixels or 0.8 mm; logged `Drawing
+  annotation 5 tip at x,y` beside its `Drawing annotation 5 at x,y`)
+  slides the tip along its edge to the edge's point nearest the pointer,
+  clamped to the edge's ends, and the square or the frame follows by its
+  offset: the drop sends `edit_drawing_annotation` with `slide` (logged
+  `Drawing annotation 5 tip dragged by -20.0,3.0`), one undo step
+  (`Move datum A of Drawing1`, by its letter). It does not snap. A drag
+  that starts on the square or the frame moves it alone, as before. The
+  tip is kept as a fraction along the edge, so it keeps its place on the
+  edge when the model or the view changes. Test:
+  `tools/ui-drawing-dimension-spacing-test.sh` (the triangle dragged
+  along the edge, undone; the square dragged alone).
+- **Datum labels on an extension line and on a face** (mitcad#1296; the
+  model's side in `commands.md`, *Datum labels on an extension line and
+  on a face*). A datum's triangle dragged past its straight edge's end
+  runs on along the edge's line, and the label draws its own thin
+  extension line from 1 mm off the edge's end to 2 mm past the tip; it
+  stays the edge's label (a frame's arrow stops at the edge's end). The
+  Datum Label tool also picks a planar face the view sees face on: a
+  click inside its outline, where no edge, point or round face is near,
+  picks the face at that point (logged `Drawing picked face (1): {…,
+  "on_face":[u,v]}`; the hint says so), and the label ends in a filled
+  dot there; dragging the dot moves it over the face. The tool's
+  **Terminator** (Auto, Triangle, Dot; Auto: a dot on a face, a triangle
+  on an edge) and the label's panel's **Terminator** (Triangle, Dot,
+  `drawingAnnotationTerminator`, `edit_drawing_annotation` with
+  `terminator`) choose the end. The sheet logs a datum's terminator with
+  its tip, `Drawing annotation 6 tip at x,y (dot)`. Test:
+  `tools/ui-drawing-dimension-spacing-test.sh` (the triangle dragged past
+  the edge's end; a datum inside the front face with a dot, switched to a
+  triangle in its panel).
 - **Tables** (phase 3; the model's side in `commands.md`, *Tables on
   drawing views*). Hole Table and Bill of Materials take a click on a view and
   then one where the table goes; the table is selected, and its panel
@@ -13259,7 +13394,8 @@ drawing commands; it computes no geometry of its own.
   `drawingViewDelete`; an annotation's `drawingAnnotationValue`,
   `drawingAnnotationAlong`, `drawingAnnotationTolerance`,
   `drawingAnnotationDecimals`, `drawingAnnotationBefore`,
-  `drawingAnnotationAfter`, `drawingAnnotationText`,
+  `drawingAnnotationAfter`, `drawingAnnotationReplace`,
+  `drawingAnnotationMeasured`, `drawingAnnotationText`,
   `drawingAnnotationLetter`, `drawingAnnotationFrame`,
   `drawingAnnotationProcess`, `drawingAnnotationRequirement`,
   `drawingAnnotationPen`, `drawingAnnotationLength`,
@@ -13713,19 +13849,35 @@ the window's live MCP server.
   (`mcp::assistantExecutables`: PATH, `.local/bin`, npm's folder,
   `.cargo/bin`, the stored PATH's folders, and the Claude Code Claude
   Desktop keeps, `claudeDesktopClaudeCode`: `claude-code/<version>/claude`
-  in its settings folders, the highest version's, listed only when there),
+  in its settings folders, or `claude-code/<version>/<build id>/claude.exe`
+  in the Windows application's `Claude-Data/claude_<id>` folders, the
+  highest version's, listed only when there),
   the first one `claude` as before, another `claude-<8 hex digits of its
   path's SHA-256>`, named with its place, "Claude Code (~/.local/bin)" or
-  "Claude Code (Claude Desktop's)"; every entry's sign-in state beside its
+  "Claude Code (Claude Desktop's)" (mitcad#1297: by its path in either
+  layout, `mcp::claudeDesktopKeepsClaudeCode`); every entry's sign-in state beside its
   name in the list (the item's `kAgentStateRole`, drawn by its delegate;
   the item's text stays the name): checking, not found, needs an update,
   not signed in, needs an API key, signing in, signed in, signed in as
   *account* (Claude Code's `claude auth status` `email`), ready (an API
-  endpoint, a local model, the custom command), then "· *reason*" of a
+  endpoint, a local model, the custom command), then "· same sign-in as
+  *entry*" (mitcad#1297: the entries whose programs use one configuration
+  folder, `ChatAgent::signInFolder`: Claude Code's `CLAUDE_CONFIG_DIR` of
+  MitCad's environment, else `~/.claude`, `mcp::claudeConfigurationFolder`;
+  MitCad starts every Claude Code with its own environment, so all of them
+  share one sign-in; each names the first other one, `sameSignIn` in
+  `agent/AccountCheck.hpp`; logged once as `Chat: Claude Code (Claude
+  Desktop's) shares the sign-in of Claude Code`), then "· *reason*" of a
   known account failure; every agent found is checked when the panel opens
   (`refreshSetup(true)`), and the list's names and states are logged as
-  `Chat agents: Claude Code · signed in as someone@example.com | Claude Code
-  (~/.local/bin) · not signed in | Ollama · ready` when they change; New
+  `Chat agents: Claude Code · signed in as someone@example.com · same
+  sign-in as Claude Code (~/.local/bin) | Claude Code (~/.local/bin) · not
+  signed in · same sign-in as Claude Code | Ollama · ready` when they
+  change; an agent turned off under the assistant menu's Outgoing
+  connections (mitcad#1299, `chat/off`) is not in the list and is neither
+  checked nor started, and the chosen one turned off gives way to another
+  one offered (with none, the state `unavailable` says to check one
+  there); New
   conversation `chatNew`, the menu `chatMore`: New Conversation, Clear
   History of This Design, Chat Preferences… (`tools.preferences.agents`)),
   the line Model: `chatModelChoice` (editable: Default model, the agent's
@@ -13749,7 +13901,16 @@ the window's live MCP server.
   left); approval cards
   `chatApproval` with `chatAllowOnce`, `chatAlwaysAllow`, `chatDeny` and
   the property `cardState` open, allowed, always, denied, gone;
-  `chatNotice`), the state line `chatState`, the privacy notice
+  `chatNotice`), the state line `chatState`, below it `chatDesktopRow`
+  (mitcad#1297: while Claude Desktop is connected to the window over MCP,
+  `ChatHost::assistants` with a Claude Desktop label, and the chat cannot
+  work, `chatState` account-error, signed-out, missing or outdated: the line
+  `chatDesktopHint` "Claude Desktop is connected: type your request in
+  Claude Desktop. This chat needs Claude Code's own sign-in." (installed,
+  a newer one for missing and outdated), above How to fix, and **Open Claude
+  Desktop** `chatOpenDesktop`, which opens the `claude://` link its
+  installation registers; logged `Chat: Claude Desktop connected, chat
+  unusable: <the state line>`), the privacy notice
   `chatPrivacy` (`chatContinue`, `chatCancel`), the setup's button
   `chatSetup` (Install Claude Code, Update Claude Code, Sign in to Claude,
   Install Codex, Update Codex, Sign in to ChatGPT, Check again) with
@@ -13787,14 +13948,27 @@ the window's live MCP server.
   the state line and adds a warning notice `The account check failed:
   ...` (not kept in the history); messages queued at an account failure
   are dropped with the warning `n waiting message(s) were not sent.`
-  The duplicate assistant/result error is shown once. Logged:
+  The duplicate assistant/result error is shown once. An account error
+  marks every entry that shares the sign-in (mitcad#1297, logged `Chat: the
+  account error is Claude Code (Claude Desktop's)'s too (the same
+  sign-in)`), so none of them is offered by `chatOtherAgent`, and a passed
+  check clears it for all of them; How to fix then starts "Claude Code
+  shares one sign-in with Claude Code (Claude Desktop's): in a terminal,
+  claude auth logout and then claude auth login fix it for all of them."
+  (`chatAccountHelpText`'s property `sharedSignIn`: the other entries).
+  Logged:
   `Chat: Claude Code account error: org-disabled` (also `signed-out`,
   `invalid-key`, `limit`; Codex the same), `Chat: checking Claude Code
   account`, `Chat: Claude Code account check passed` (`failed: ...`).
   `tools/ui-chat-test.py` checks both agents' failures, help, recovery and
   fresh sessions on Linux/Windows/macOS, and a queued message at the
   failure, a probe failing for the network and Check again with the agent's
-  program removed (mitcad#1155); `app.unit` checks `AccountCheck.hpp`; `app.ui-macos-native-chat` checks
+  program removed (mitcad#1155), and its run `desktop-connected` a
+  stand-in for Claude Desktop connected through the real bridge with two
+  Claude Codes of one sign-in, the clients folder's and Claude Desktop's in
+  its build-folder layout (mitcad#1297); `app.unit` checks `AccountCheck.hpp`
+  (`sameSignIn` too) and the folder layouts
+  (`claudeDesktopKeepsClaudeCode`); `app.ui-macos-native-chat` checks
   the native buttons too. Classification tests are in
   `core/mcp/src/chat/account.rs`.
 - Preferences › AI Assistants › Chat (`agent/ChatPreferences`, below the
@@ -13921,7 +14095,9 @@ the window's live MCP server.
   with their states, the second chosen in a new conversation, signed out
   with its fix and Use Claude Code, still chosen after a restart, Use Claude
   Code back to the first, whose copy runs the message, and the indicator's
-  No assistant after the turn);
+  No assistant after the turn; mitcad#1299: the assistant menu's Outgoing
+  connections list the three with their states, Ollama unchecked there
+  leaves the list, and stays off after the restart);
   `core/mcp/src/chat/tests.rs` and `core/mcp/src/chat/codex_tests.rs`
   (cargo) and `app/tests/chat_history.cpp` (`app.unit`). The group rows
   (mitcad#983): the floating run's message "measure with several calls"
@@ -14012,6 +14188,60 @@ definition's default.
   and `app.ui-windows-remembered-values`
   (`tools/ui-windows-remembered-values-test.ps1`: Fillet and Chamfer with
   3 mm, also after a new start).
+
+### Panel settings kept by size (mitcad#1298)
+
+A command with `CommandDef::settingsKey` keeps its **whole panel** with
+the size the feature was made for, and a new panel of the same size
+starts from it. Thread is the only one: its size is the first cylindrical
+face's diameter and side (inside or outside), the face that suggests the
+size (`suggestSize`).
+
+- **What is kept** (`framework/RememberedValues`: `PanelSizeKey`,
+  `PanelSettings`, `keepPanelSettings`, `keptPanelSettings`): every value
+  (as the remembered values keep it: the expression without a parameter's
+  name), choice and check of the inputs outside lists, shown or hidden:
+  Thread's Thread Type, Size, Designation, Class, Major Diameter, Pitch,
+  Tapered, Direction, Modeled, Starts, the clearances, Full Length,
+  Length, Offset, Thread Location and the end chamfer's inputs. One set
+  per command, the last new feature's OK, whatever its size, in the local
+  settings beside the remembered values: `commands/<command
+  id>/last_settings/` with `key/diameter` (mm), `key/side` (`internal`,
+  `external`) and `values/<id>`, `choices/<id>`, `checks/<id>`; from any
+  design. An edit and Cancel keep nothing; an OK without a known size
+  neither. Logged `Panel Thread: settings kept with Ø8.5 internal`.
+- **When it is used**: once a pick or the faces selected before the
+  command (`preselected`, `preselect`) make the size known
+  (`CommandSession::considerKeptSettings`, called from `selectionChanged`
+  and `start`), and each time it changes to another size; another pick of
+  the same size changes nothing. A kept size of the same side whose
+  diameter is within 0.001 mm (`PanelSizeKey::matches`) sets every kept
+  input, in the inputs' order (a choice's options follow the ones before
+  it; a kept option the choice no longer offers is left out, a value that
+  does not evaluate in the design too), without their `onChange`. Logged
+  `Panel Thread: settings of the last Ø8.5 internal thread restored` and
+  `Panel Thread restored: direction=left, modeled=on, full_length=off,
+  length=12 mm` (what it changed). Otherwise `Panel Thread: settings of
+  the last Ø8.5 internal thread not used: Ø6.8 internal differs`, and the
+  panel goes on as without them: Thread's suggested size and the
+  defaults. A size taken back by another pick does not take the restored
+  settings back.
+- **What the user changed stays**: an input whose value, choice or check
+  differs from where the panel started (`changedSettings`, the state
+  before the pick's own `onPick`: Thread's suggested size is not the
+  user's) keeps the user's; logged `Panel Thread left as changed:
+  chamfer`.
+- `MITCAD_REMEMBER_PANEL_VALUES=0` turns it off with the remembered
+  values: nothing is kept, compared or restored.
+- Tests: `app.unit` (`app/tests/remembered_values.cpp`: the size key's
+  text and its 0.001 mm match, values, choices and checks kept on a new
+  feature's OK and read back, nothing on an edit or Cancel, the next OK
+  replacing them, the changed inputs); `tools/ui-thread-settings-test.sh`
+  (an M10x1.5 6H Left Hand, Modeled, 12 mm thread in a Ø8.5 hole, OK; on
+  the second Ø8.5 hole the panel starts from it, Chamfer Ends checked
+  before the pick stays, and OK makes the same thread; on a Ø6.8 hole the
+  size is suggested and the rest are the defaults) and its Windows
+  counterpart, the Thread part of `app.ui-windows-remembered-values`.
 
 ## Help › User Guide (mitcad#1032)
 

@@ -12,15 +12,22 @@
 //   Assistants unavailable   (a struck dot)  the listener did not start
 //
 // A connected client is named by the assistant its label matches
-// (assistantDisplayName), else by its own label. With none connected a
+// (assistantDisplayName), else by its own label. Rows blocked in its menu
+// follow: "1 connected · 1 blocked" (mitcad#1299). With none connected a
 // click opens Connect AI Assistant (the one place to set up and start a
 // connection, mitcad#682), and the arrow (or a right click) the menu; in
 // the other states a click opens the menu: the reason assistants are
-// unavailable, or each connected client (name, its own label and version,
-// connected since), then Disconnect <name> (Disconnect All), Connect AI
-// Assistant..., Copy Command for This Window (only while several Mitcad
-// windows listen) and Folders for Designs... (Preferences > AI Assistants). The listener's
-// instance id and port are in the tooltip.
+// unavailable, then two sections (mitcad#1299). Incoming connections: a
+// checkable row per assistant that drives MitCad (set up, blocked, or
+// connected in this run; assistantRowKey) with its state, connected since,
+// not connected or blocked; unchecking blocks it (and ends its
+// connections), checking allows it again. Outgoing connections: a checkable
+// row per agent the chat panel found, with the panel's state; unchecked, the
+// panel neither lists nor starts it. Then Connect AI Assistant..., Copy
+// Command for This Window (only while several MitCad windows listen) and
+// Folders Assistants May Use... (Preferences > AI Assistants). The clients'
+// own labels and versions are in the rows' tooltips; the listener's
+// instance id and port in the indicator's.
 
 #include <functional>
 
@@ -53,6 +60,27 @@ struct ConnectedAgent {
   bool operator!=(const ConnectedAgent& other) const { return !(*this == other); }
 };
 
+// An agent of the chat panel (mitcad#1299): its id, its name in the menu,
+// its state as the panel shows it, and whether the panel offers it.
+struct OutgoingAgent {
+  QString id;
+  QString name;
+  QString state;
+  bool offered = true;
+};
+
+// A row of Incoming connections (mitcad#1299): its key (assistantRowKey),
+// name and state, the labels and versions its clients gave (the tooltip),
+// whether it is blocked, and its connected clients' ids.
+struct IncomingRow {
+  QString key;
+  QString name;
+  QString state;
+  QStringList labels;
+  bool blocked = false;
+  QStringList ids;
+};
+
 class AgentIndicator : public QToolButton {
   Q_OBJECT
 
@@ -63,8 +91,11 @@ public:
     // Runs a command of the registry by its id (help.connect_assistant,
     // tools.preferences.agents).
     std::function<void(const QString& id)> trigger;
-    // Ends every agent's connection (the listener's).
-    std::function<void()> disconnectAll;
+    // Ends these clients' connections (ConnectedAgent::id): the listener's.
+    std::function<void(const QStringList& ids)> disconnect;
+    // The chat panel's agents, and turning one on or off (mitcad#1299).
+    std::function<QList<OutgoingAgent>()> outgoing;
+    std::function<void(const QString& id, bool offered)> offer;
   };
 
   explicit AgentIndicator(Host host, QWidget* parent = nullptr);
@@ -82,6 +113,13 @@ public:
   const QList<ConnectedAgent>& agents() const { return m_agents; }
   // Clients initialized in this run, also while the setup dialog was closed.
   const QStringList& previousClients() const { return m_previousClients; }
+  // The rows of Incoming connections, in the menu's order (mitcad#1299).
+  QList<IncomingRow> incomingRows() const;
+  // A row unchecked (blocked: its clients end and are refused) or checked
+  // (allowed again), as its menu entry does; logged.
+  void setIncomingAllowed(const IncomingRow& row, bool allowed);
+  // An outgoing agent turned on or off, as its menu entry does; logged.
+  void setOutgoingOffered(const OutgoingAgent& agent, bool offered);
   // The listener's instance id (empty while there is none) and why there is
   // none (the chat panel, mitcad#947).
   const QString& listenerInstance() const { return m_instance; }

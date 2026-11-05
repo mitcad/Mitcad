@@ -72,7 +72,17 @@ def main():
                         "button '^Close$'", "expect-dialog-gone '^Connect AI Assistant$'", "focus-main",
                         "click-logged 'Agent indicator at'", "focus-dialog '^Connect AI Assistant$'",
                         "expect-assistant-setup reconnect-line", "expect-assistant-setup reconnect-again",
-                        "expect-assistant-setup reconnect-eof"])
+                        "expect-assistant-setup reconnect-eof",
+                        # The assistant menu's checkmarks (mitcad#1299): a connected
+                        # client's row unchecked disconnects and blocks it (its
+                        # reconnect refused, "· 1 blocked"); checked again, it connects.
+                        "expect-assistant-setup indicator-client",
+                        "agent-menu 'Claude Code' off",
+                        "wait-log 'Agent indicator: Claude Code blocked'",
+                        "expect-assistant-setup indicator-blocked",
+                        "agent-menu 'Claude Code' on",
+                        "wait-log 'Agent indicator: Claude Code allowed'",
+                        "expect-assistant-setup indicator-allowed"])
                 if sys.platform == "win32":
                     # A Microsoft Store Claude Desktop without a .mcpb handler (mitcad#763).
                     script.append("expect-assistant-setup packaged-claude")

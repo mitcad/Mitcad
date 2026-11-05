@@ -85,6 +85,10 @@ struct SheetAnnotation {
   // A point on it that picks it (its first text's middle, else its first
   // line's): where it is logged.
   QPointF handle;
+  // A datum label's triangle or a feature control frame's arrow (its
+  // first fill; mitcad#1295): a drag that starts on it slides the tip
+  // along its edge. Empty for the others.
+  QPolygonF tip;
 };
 
 class DrawingSheetView : public QWidget {
@@ -172,11 +176,19 @@ public:
   // at the pointer.
   void setPlacingSnap(bool snapped, const QPointF& at, const QString& hint);
   // A dimension dragged alone snaps likewise: its outline moves by
-  // `delta` (sheet mm) instead of the pointer's drag.
+  // `delta` (sheet mm) instead of the pointer's drag; so does a note's
+  // text, a datum's square or a frame, its leader to 45 degrees
+  // (mitcad#1294).
   void setDragSnap(bool snapped, const QPointF& delta, const QString& hint);
   // The keyboard modifiers of the last mouse button released: with Alt a
   // dimension is placed or dragged freely, without its snap.
   Qt::KeyboardModifiers releaseModifiers() const { return m_releaseModifiers; }
+  // Whether a drag with these modifiers goes where it is dropped: Shift,
+  // or Alt where the desktop leaves Alt-drags to the application (Linux
+  // desktops move windows with them; mitcad#1294).
+  static bool dragsFreely(Qt::KeyboardModifiers modifiers) {
+    return modifiers.testFlag(Qt::ShiftModifier) || modifiers.testFlag(Qt::AltModifier);
+  }
 
   // Drops a tool's picks so far (and a placing click awaited); false when
   // there were none.
@@ -215,6 +227,9 @@ signals:
   void annotationSelected(int id);
   // An annotation dragged with the selection, by this on the sheet.
   void annotationMoved(int id, QPointF delta);
+  // A datum label's triangle or a frame's arrow dragged, by this on the
+  // sheet (mitcad#1295): its tip slides along its edge.
+  void annotationTipMoved(int id, QPointF delta);
   void annotationDeleteRequested(int id);
   // Esc: the picks so far, the tool, the selection or the drawing is done
   // (the workspace says which).
@@ -363,6 +378,9 @@ private:
   QPointF m_dragFrom;   // sheet mm (a pan: widget px)
   QPointF m_dragOffset; // a view's drag so far, mm
   bool m_dragMoved = false;
+  // An annotation's drag that started on its tip (a datum's triangle, a
+  // frame's arrow; mitcad#1295).
+  bool m_dragTip = false;
   QString m_loggedPlaces;
   QString m_loggedAnnotations;
   // A dimension's snapped place while it is placed, or its snapped drag

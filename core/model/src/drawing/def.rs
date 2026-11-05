@@ -284,7 +284,9 @@ pub struct DrawingView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// What a base view (or a section without a parent) shows; the whole
-    /// design (or component) when left out. Other views show their parent's.
+    /// design (or component) when left out, which only a design file
+    /// written before mitcad#1293 has: such a view is pinned to the bodies
+    /// it shows when the design is opened. Other views show their parent's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<Subject>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -710,18 +712,25 @@ pub struct ViewStyle {
     pub polygonal: bool,
 }
 
-/// What a base view shows, in the drawing's component.
+/// What a base view shows, in the drawing's component. Visibility in the
+/// 3D view decides nothing a view keeps (mitcad#1293): a view placed with
+/// the whole component records the bodies shown then as its `Bodies`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Subject {
-    /// Every shown body of the component and its occurrences.
+    /// Every body of the component and its occurrences shown in the 3D
+    /// view: what a command's `design` asks for, recorded as `Bodies` when
+    /// a view takes it; a view of a design file written before mitcad#1293
+    /// is pinned to it when the design is opened
+    /// ([`DrawingView::has_unrecorded_subject`]).
     #[default]
     Design,
-    /// The shown bodies of one occurrence (a path from the drawing's
-    /// component) and its occurrences.
+    /// Every body of one occurrence (a path from the drawing's component)
+    /// and its occurrences, shown in the 3D view or not.
     Occurrence { occurrence: OccurrencePath },
     /// Chosen bodies, each where an occurrence places it (a path from the
-    /// drawing's component) or wherever it is shown when left out.
+    /// drawing's component) or, when left out, wherever the design places
+    /// it; one that is gone is left out with a warning.
     Bodies { bodies: Vec<SubjectBody> },
 }
 
@@ -775,7 +784,32 @@ impl BreakDirection {
 /// as they read as digits).
 pub const LETTERS: &str = "ABCDEFGHJKLMNPRSTUVWXYZ";
 
+impl DrawingView {
+    /// Whether its subject is the whole component, worked out from what
+    /// the 3D view shows (mitcad#1293): a base view, or a laid out section
+    /// without a parent, of a design file written before views recorded
+    /// their bodies.
+    pub fn has_unrecorded_subject(&self) -> bool {
+        matches!(
+            self.kind,
+            ViewKind::Base { .. } | ViewKind::Section { parent: None, .. }
+        ) && matches!(self.subject, None | Some(Subject::Design))
+    }
+}
+
 impl Drawing {
+    /// Whether a view of it has its subject unrecorded
+    /// ([`DrawingView::has_unrecorded_subject`]); a cut sheet's parts are
+    /// its own.
+    pub fn has_unrecorded_subject(&self) -> bool {
+        self.cut_sheet.is_none()
+            && self
+                .sheets
+                .iter()
+                .flat_map(|s| &s.views)
+                .any(DrawingView::has_unrecorded_subject)
+    }
+
     /// The view of this id and its sheet.
     pub fn find_view(&self, id: u32) -> Option<(usize, &DrawingView)> {
         self.sheets

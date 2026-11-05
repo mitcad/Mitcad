@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+
+class QObject;
 
 namespace mitcad::mcp {
 
@@ -91,6 +95,15 @@ QStringList assistantExecutables(const QString& name);
 // sign-in is its own `claude auth status`'s to tell (the chat checks it as
 // any other).
 QString claudeDesktopClaudeCode(const QStringList& settingsFolders);
+// Whether an executable is one Claude Desktop keeps (mitcad#1297), by its
+// path alone: `claude-code/<version>/claude` or, as current versions keep
+// it, `claude-code/<version>/<build id>/claude` (`claude.exe` on Windows).
+bool claudeDesktopKeepsClaudeCode(const QString& program);
+// The configuration folder a Claude Code started by MitCad signs in with
+// (mitcad#1297): CLAUDE_CONFIG_DIR as MitCad's environment gives it
+// (`configured`), else `.claude` in `home`. Programs with one folder share
+// one sign-in.
+QString claudeConfigurationFolder(const QString& configured, const QString& home);
 // The Windows application's data folders, each subfolder of
 // `<localAppData>/Claude-Data` (`claude_<package family id>`), where it
 // keeps its Claude Code; none without localAppData.
@@ -136,34 +149,67 @@ QString assistantConfigurationPolicy(const QString& path);
 // Whether a connected client's display label (its clientInfo.name) is this
 // assistant, so that the dialog shows Connected for the right choice. Labels
 // are supplied by the clients: this picks a state to show, never a right.
+// Claude Desktop's chat calls itself `claude-ai`, its Code tab
+// `local-agent-mode-*` (mitcad#1299): both are Claude Desktop.
 bool assistantLabelMatches(AssistantClient client, const QString& label);
-// Assistants the user disconnected (mitcad#1289): Disconnect *assistant*
-// (and the indicator's Disconnect) keeps the clients of that assistant from
-// connecting to MitCad again until Connect, or the indicator's Allow, allows
-// them. Kept by the clients' labels (clientInfo.name) for this run of MitCad
-// (on the GUI thread); a label is disconnected when it is one of them or is
-// the same assistant as one of them (assistantLabelMatches: Claude Code,
-// Claude Desktop, Codex; an Other client by its own label only).
-bool disconnectedLabelMatches(const QStringList& disconnected, const QString& label);
-void disconnectAssistants(const QStringList& labels);
-// Allows the labels of this assistant again (Other: those of no known
-// assistant); returns whether any was disconnected.
-bool allowAssistant(AssistantClient client);
-QStringList disconnectedAssistants();
-bool assistantDisconnected(const QString& label);
-// Whether one of this assistant's labels is disconnected (Other: a label no
-// known assistant matches).
-bool assistantClientDisconnected(AssistantClient client);
 // The assistant a client's label is (Other when no known one matches).
 AssistantClient assistantClientOf(const QString& label);
+
+// The rows of the assistant menu's Incoming connections (mitcad#1299), one
+// per assistant, each by a key: `claude-desktop-chat` (`claude-ai` and
+// Claude Desktop's other labels), `claude-desktop-code` (its Code tab,
+// `local-agent-mode-*`), `claude-code`, `codex`, and `client:<label>` for a
+// client no known assistant matches.
+QString assistantRowKey(const QString& label);
+// A row's name for people: "Claude Desktop (chat)", "Claude Desktop (Code
+// tab)", "Claude Code", "Codex", or the other client's own label.
+QString assistantRowName(const QString& key);
+// The known assistants' rows, in the menu's order.
+QStringList knownAssistantRows();
+// The rows of a choice of Connect AI Assistant (Claude Desktop: its chat and
+// its Code tab); none for Other, whose rows are its clients' labels.
+QStringList assistantRows(AssistantClient client);
+// The assistant a row is (Other for a client's own row).
+AssistantClient assistantRowClient(const QString& key);
+
+// Blocked rows (mitcad#1289; kept since mitcad#1299): a row unchecked in
+// the assistant menu, or an assistant disconnected in Connect AI Assistant.
+// MitCad refuses a blocked row's clients at their `initialize` until the
+// row is checked again (or Connect allows the assistant). Kept in the
+// user's settings (`assistant/blocked`), so a block holds after a restart;
+// used on the GUI thread.
+QStringList blockedAssistantRows();
+// Each returns whether the row's state changed.
+bool blockAssistantRow(const QString& key);
+bool allowAssistantRow(const QString& key);
+// Blocks the rows of these clients' labels (Disconnect).
+void blockAssistants(const QStringList& labels);
+// Allows every row of this assistant (Other: each client's own row);
+// returns whether any was blocked.
+bool allowAssistant(AssistantClient client);
+// Whether this label's row is one of `blocked`.
+bool assistantRowBlocked(const QStringList& blocked, const QString& label);
+bool assistantBlocked(const QString& label);
+// Whether one of this assistant's rows is blocked (Other: a client's own).
+bool assistantClientBlocked(AssistantClient client);
+// Why a client of this label is refused: the row it is and how to allow it
+// again; empty while its row is not blocked.
+QString assistantRefusal(const QString& label);
+// Calls `changed` after every change of the blocked rows while `context`
+// lives (each window's indicator).
+void watchAssistantBlocks(QObject* context, std::function<void()> changed);
+// The known assistants' rows set up with Connect AI Assistant or connected
+// before (`assistant/rows`): the menu lists them after a restart too.
+QStringList rememberedAssistantRows();
+void rememberAssistantRows(const QStringList& keys);
+
 // The assistant's name on its choice ("Claude Desktop", "ChatGPT / Codex").
 QString assistantName(AssistantClient client);
 // The assistant's name in a sentence ("Ready to connect Codex"): its
 // choice's name, but "Codex" for "ChatGPT / Codex".
 QString assistantSentenceName(AssistantClient client);
-// A connected client's name for people: the assistant its label matches, in
-// a sentence's form ("Claude Desktop" for "claude-ai"), else the label as the
-// client gave it.
+// A connected client's name for people: its row's name ("Claude Desktop
+// (chat)" for "claude-ai", "Codex"), else the label as the client gave it.
 QString assistantDisplayName(const QString& label);
 
 // Claude Desktop installed from the Microsoft Store, an MSIX package

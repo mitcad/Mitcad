@@ -206,7 +206,13 @@
 //! `units`, `annotations`, `views`: `id`, `kind` {`type` `base`,
 //! `projected`, `section` or `detail` with its fields}, `place`, `scale`,
 //! `style`, `label`, `subject`, `breaks`, `aligned`), see
-//! [`crate::drawing::def`]. Their lines are not stored.
+//! [`crate::drawing::def`]. Their lines are not stored. Since mitcad#1293
+//! a base view placed with the whole component is written with the
+//! bodies it showed then (`subject` `{"type": "bodies", "bodies": [{"body",
+//! "occurrence"}]}`), which older versions read as chosen bodies; a base
+//! view (or a laid out section) without a `subject`, as older versions
+//! wrote one, is read as before and pinned to the bodies the 3D view shows
+//! at the first recompute ([`crate::Document::take_drawing_notes`]).
 //!
 //! Appearances of the document (mitcad#46), when there are any:
 //! `appearances` (`id`, `name`, `base_color`, `metalness`, `roughness`,
@@ -231,6 +237,12 @@
 //! `"origin": true` (the Origin folder shown) and `isolated` (`body` and
 //! `occurrence`, or an `occurrence` path); a favourite parameter has
 //! `"favorite": true`; timeline groups are `groups` (`name`, `features`).
+//!
+//! A modelled thread stores how its ends are cut (`ends`: `run_out` or
+//! `flat`, mitcad#1300). One without it, in a file written before it
+//! existed, is read as `flat`, the ends threads were cut with then, so
+//! that what refers to them keeps working; commands give a new or edited
+//! thread `run_out` ([`crate::features::ThreadDef::settle_ends`]).
 //!
 //! A sketch stores its entities with their last solved positions (the
 //! start of the next solve), constraints, dimensions, linked projections

@@ -2035,7 +2035,18 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::Redo => json!({"label": self.try_redo()?}),
             Command::Recompute => {
                 self.try_recompute()?;
-                json!({})
+                // The drawings of an older design file whose views now keep
+                // what they show (mitcad#1293), one information each.
+                let pinned: Vec<notice::Notice> = self
+                    .take_drawing_notes()
+                    .into_iter()
+                    .map(|note| notice::Notice::new(NoticeLevel::Info, note))
+                    .collect();
+                if pinned.is_empty() {
+                    json!({})
+                } else {
+                    json!({"notices": notice::to_json(&pinned)})
+                }
             }
             Command::SetBodyVisible {
                 uid,

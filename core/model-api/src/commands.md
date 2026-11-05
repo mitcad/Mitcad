@@ -1619,7 +1619,18 @@ numbers the positions from 0.
   to the crest where the face lies inside it (a shaft thinner than the
   major diameter, a bore wider than the minor one). The part ends in
   planes across the axis, and runs out through ends of the face with no
-  material beyond them (a shaft's free end, a hole's mouth).
+  material beyond them (a shaft's free end, a hole's mouth). A straight
+  one's grooves also run out by a pitch through an end of the face beyond
+  which material lies only on the material's side of the crest
+  (mitcad#1300): a cone or a countersink that opens away from a hole's
+  thread, a shaft's end chamfer or a neck narrowing away from its thread.
+  They cut into that face as far as they reach it and fade out of it,
+  with no flat, unthreaded lip at the face's end. Material past the end
+  on the crest's other side (a hole's floor, a hole or shaft going on, a
+  shoulder) stops them flat at the end, as does `ends` `flat`. A partial
+  thread's ends inside the face run out along a chamfer's cone where
+  `chamfer` asks for them (below). Threads of designs saved before keep
+  their flat ends (`ends`, below).
 - `diameters` (modelled, or a tapering taper pipe thread): `{"major": D, "minor": D1, "pitch": D2}`,
   the profile's diameters, e.g. a tolerance class's (the middles of its
   tolerances, as `.f3d` designs store them: M10x1.5 6g is 9.85, 8.141,
@@ -1699,15 +1710,42 @@ numbers the positions from 0.
   that the first turn starts on the cone and leaves no knife edge. The
   start is the end `location` names (`high_end` by default, also for a
   thread over the whole face), the end the other one. Only free ends get
-  one: ends the thread reaches (a partial thread's end inside the face
-  gets none) with nothing of the body beyond them (a shaft's free end, a
-  hole's mouth; not the shoulder under a bolt's head). An external
-  thread's cone widens from `chamfer_diameter` at the end into the
-  material at `chamfer_angle` to the axis, cutting off what lies outside
-  it; an internal thread's (a countersink) narrows from
+  one: ends the thread reaches with nothing of the body beyond them (a
+  shaft's free end, a hole's mouth; not the shoulder under a bolt's head,
+  nor a cone or countersink the grooves run out into: it is the chamfer
+  already). An external thread's cone widens from `chamfer_diameter` at
+  the end into the material at `chamfer_angle` to the axis, cutting off
+  what lies outside it; an internal thread's (a countersink) narrows from
   `chamfer_diameter`, cutting off what lies inside it. A cosmetic thread
   gets the same cones (its only geometry), and the `threads` query starts
   its rings where a cone meets the cylinder.
+  - At a modelled straight thread's end inside the face (a partial
+    thread's; mitcad#1300) the chamfer is the thread's run-out: the
+    grooves, and the cut of the face to the crest, go on past the end
+    inside a cone at `chamfer_angle`, for an internal thread narrowing
+    from the major diameter (the root, moved by a radial clearance) at
+    the end to the face's diameter, for an external one widening from the
+    minor diameter to the face's, so that they fade out of the face with
+    no flat wall; `chamfer_diameter` does not apply there. The run-out
+    ends at the face's end. Without a chamfer at that end, the end stays
+    flat. A cosmetic thread's end inside the face gets nothing.
+- `ends` (modelled only, mitcad#1300): `run_out` (the run-outs above)
+  or `flat`, the ends as they were cut before: the grooves stop flat at
+  every end that is not free (a cone or countersink that opens away from
+  the thread too), and no run-out along a chamfer at an end inside the
+  face. An `add_feature` or `edit_feature` of a modelled thread without
+  it gives `run_out`, and the design file stores it with every modelled
+  thread. A modelled thread in a design file written before it existed
+  (no `ends`) is read as `flat`, so that a saved design keeps its shape
+  and what refers to its threads' ends (a chamfer or fillet on an edge of
+  an end, its pieces' names) keeps working; saving writes `flat`, and an
+  edit of the thread without `ends` gives it the run-outs. An import sets
+  it to what the source program does (mitcad#1302): the `.f3d` import
+  `flat` (the file's threads end at their faces' ends and leave a cone's
+  lip), the FreeCAD and `.solidcraft` imports `run_out` (their grooves
+  run on through a countersink or cone at a face's end). Ignored on a
+  cosmetic thread. Versions before mitcad#1300 do not read a design with
+  `ends`.
 - `chamfer_angle`: the cone's angle to the axis, between 0 and 90°; 45°
   when left out (inside: a 90° countersink).
 - `chamfer_diameter`: the cone's diameter at the end. When left out it
@@ -3945,7 +3983,7 @@ results](#failed-features-in-command-results)).
 | `group_features` | `features` (uids of a run of features next to each other in the timeline, in any order, none in a group yet), `name` (default the next free `Group<n>`) | `name` |
 | `ungroup` | `name` | the features stay |
 | `rename_group` | `name`, `new_name` | |
-| `recompute` | | |
+| `recompute` | | `notices`: one information for each drawing of a design file written before mitcad#1293 whose views were pinned to the bodies shown (*Drawings in the design*), when there are any |
 | `sketch.*` | see [Sketch commands](#sketch-commands) | |
 
 - New features go in at the timeline marker, which moves after them
@@ -17913,7 +17951,8 @@ no undo step.
 view's projection: one entry per view, `{"view": 1, "bodies": 1, "ms":
 2252.7, "cached": false, "polygonal": false}`: how many bodies the view
 shows (a view of the
-design: its shown bodies only, hidden ones are never projected),
+design: the bodies it recorded, shown in the 3D view when it was placed,
+mitcad#1293),
 whether the kernel projected them (`cached` false, its milliseconds) or
 the projection came from the document's projection cache (`cached` true,
 the lookup's milliseconds), and whether the projection was made from a
@@ -17959,13 +17998,46 @@ triangulation, as every view of bodies with free-form faces or many
 B-spline edges is projected anyway, `export_drawing`'s `exact` above,
 mitcad#962, mitcad#1033) and `label` (written under the
 view; a section's `SECTION A-A` and a detail's `DETAIL B (2:1)` when left
-out). A base view's `subject`: `{"type": "design"}` (default: every shown
-body of the drawing's component and its occurrences),
-`{"type": "occurrence", "occurrence": "O2/O5"}` (a path from the
-drawing's component), `{"type": "bodies", "bodies": [{"body": "F2.b0",
+out). A base view's `subject`: `{"type": "design"}` (default: every body
+of the drawing's component and its occurrences that the 3D view shows
+now, recorded as the view's `bodies`, below),
+`{"type": "occurrence", "occurrence": "O2/O5"}` (every body of that
+occurrence, a path from the drawing's component, and of its
+occurrences), `{"type": "bodies", "bodies": [{"body": "F2.b0",
 "occurrence": "O2"}]}` (each where the occurrence places it, or wherever
-it is shown when `occurrence` is left out). Views of other types show
-their parent's subject.
+the design places it when `occurrence` is left out). Views of other
+types show their parent's subject.
+
+**A drawing keeps what was put into it** (mitcad#1293, GitHub #144).
+Visibility in the 3D view decides nothing a view draws: a view placed
+with the whole component (`design`, the default) records the bodies
+shown at that moment, each with its occurrence (none for the
+component's own bodies), so that hiding or showing in the 3D view later
+does not change it and a component added later does not appear in it;
+more comes in only by editing the view (`edit_drawing_view` with
+`subject`: the application's Shows list). `edit_drawing_view` with
+`"subject": {"type": "design"}` records what the 3D view shows then
+(the application's Update from Model; undo step `Update view 1 of
+Drawing1` when nothing else changes); with nothing of the component
+shown it is refused (`nothing of the design is shown in the 3D view: …`)
+and the view keeps its subject. Its projected, section and detail views
+follow, as they show their parent's subject. A recorded body or
+occurrence that is deleted from the design leaves the view drawing the
+rest with a warning naming it (`warnings` of the view, `the occurrence
+O3 is gone`, `the body F9.b0 is gone`, and the sheet's `view 1: …`);
+only a view with nothing of its subject left is not drawn (`error`).
+A design file written before mitcad#1293 has no `subject` on such views
+(the whole component, as the 3D view showed it): the first recompute
+after it is read pins each of them to the bodies shown then, no undo
+step and no change to save (a save writes the list), and the `recompute`
+command's answer has one `info` notice per drawing pinned (`Drawing1 now
+keeps what its views showed when the design was opened (2 bodies):
+hiding, showing or adding components no longer changes them`;
+`Document::take_drawing_notes`). The title block's material and mass are
+those of the bodies the drawing's views show (its component's shown
+bodies while it has no view). File › Export Drawing's layout records
+its bodies where the 3D view shows them (wherever the design places
+them when nowhere).
 
 `edit_drawing_view` takes `place` (the anchor's new place) or `move`
 (`[dx, dy]`, a drag), `scale` (`"parent"`: the parent's again; a base view, which has no
@@ -18015,8 +18087,11 @@ parent's, twice that for a detail, 1:1 for a base view), `style`,
 base view's `direction` and `subject`, a projected view's `side`, a
 section's `letter`, `hatch` and `span`, a detail's `letter` and `circle`
 (`center` and `radius` on the sheet). The sheet asked for is drawn: each
-view's `box` on the sheet (null when it shows nothing), or `error` (why
-it is not drawn: `the body F9.b0 is gone`, `the occurrence O3 is gone`,
+view's `box` on the sheet (null when it shows nothing), a base view's
+`warnings` (the recorded bodies and occurrences that are gone, the rest
+drawn, mitcad#1293), or `error` (why
+it is not drawn: `the body F9.b0 is gone` when nothing of its subject is
+left, `the occurrence O3 is gone`,
 `its parent, view 2, is not drawn`, a kernel failure) with `broken` and
 a 30 mm `box` about its place, so that it can be picked and deleted; the
 sheet's `scale` (the first base view's) and `warnings`, and
@@ -18061,7 +18136,12 @@ Files: `"drawings": [{"uid", "name", "component" (unless the root's),
 "scale", "style", "label", "subject", "breaks", "aligned"}]}]}]`, left
 out when there are none and each field at its default left out; the
 comparison of versions lists drawings by id with their changed fields
-(`sheets[0].views[1].place`).
+(`sheets[0].views[1].place`). Since mitcad#1293 every base view (and a
+laid out section without a parent) is written with its `subject`, a view
+placed with the whole component as `{"type": "bodies", "bodies": [{"body",
+"occurrence"}, …]}`; a view without one, which only older files have, is
+pinned when the design is read and recomputed (above), and older MitCads
+read the list as chosen bodies.
 
 Classes: the commands and both queries are the model's (`classes.rs`).
 `export_drawing` with `drawing` writes one (*Drawings*); `mitcad-cli
@@ -18078,9 +18158,15 @@ numbered and one written again as it is, mitcad#725; per-body sheets;
 hole tags
 per view and under breaks; first-angle placement; a detail of a
 section; sections and details on a broken view; the refusal to turn a
-view; a view that cannot be drawn; a made component's drawings),
+view; a view that cannot be drawn; a made component's drawings; a view
+that keeps what it showed when placed and an older file's view pinned,
+mitcad#1293),
 the tests in `core/model-drawing/src/clip.rs`; `tools/ui-drawings-test.sh`,
-`tools/ui-windows-drawings-test.ps1` (`app.ui-windows-drawings`).
+`tools/ui-windows-drawings-test.ps1` (`app.ui-windows-drawings`);
+`tools/cli/drawing-keeps-content-test.cmake` (`cli.drawing_keeps_content`),
+`tools/ui-drawing-keeps-content-test.sh`,
+`tools/ui-windows-drawing-keeps-content-test.ps1`
+(`app.ui-windows-drawing-keeps-content`).
 
 ## Annotations on drawing views
 
@@ -18136,8 +18222,8 @@ gone`.
 
 | Command | Fields | Result |
 |---|---|---|
-| `add_drawing_annotation` | `drawing`, `view`, `type` (below), `picks` (picks or sheet points), `along`, `at` (a sheet point: a dimension's line and text there, a leader's text, a symbol), `format`, `tolerance`, `text`, `letter`, `frame`, `finish`, `series`; a text note: `"type": "text"`, `sheet` (0), `at`, `text`, `height` (3.5 mm) | `annotation` (its id), `annotations` (all of a series); undo step `Add dimension 3 to Drawing1`, `Add note 4 to Drawing1`, `Add 2 dimensions to Drawing1` |
-| `edit_drawing_annotation` | `drawing`, `annotation`, and what changes: `move` (`[dx, dy]`, a drag on the sheet), `at`, `picks` (drawn afresh), `along`, `format` (the fields that change; `null` back to the default), `tolerance` (`null`: none), `text`, `letter`, `frame`, `finish`, `line_offset`, `text_offset` (`null`: the default); a text note's `text`, `at`, `move`, `height` | undo step `Move dimension 3 of Drawing1` (a move alone) or `Edit dimension 3 of Drawing1` |
+| `add_drawing_annotation` | `drawing`, `view`, `type` (below), `picks` (picks or sheet points), `along`, `at` (a sheet point: a dimension's line and text there, a leader's text, a symbol), `format`, `tolerance`, `text`, `letter`, `frame`, `finish`, `series`, `terminator` (a datum label's, mitcad#1296); a text note: `"type": "text"`, `sheet` (0), `at`, `text`, `height` (3.5 mm) | `annotation` (its id), `annotations` (all of a series); undo step `Add dimension 3 to Drawing1`, `Add note 4 to Drawing1`, `Add 2 dimensions to Drawing1` |
+| `edit_drawing_annotation` | `drawing`, `annotation`, and what changes: `move` (`[dx, dy]`, a drag on the sheet), `slide` (`[dx, dy]`, a drag of a datum label's triangle or a frame's arrow: its tip slides along its pick, below; mitcad#1295), `at`, `picks` (drawn afresh), `along`, `format` (the fields that change; `null` back to the default), `tolerance` (`null`: none), `text`, `letter`, `frame`, `finish`, `line_offset`, `text_offset` (`null`: the default); a text note's `text`, `at`, `move`, `height` | undo step `Move dimension 3 of Drawing1` (a move alone) or `Edit dimension 3 of Drawing1` |
 | `delete_drawing_annotation` | `drawing`, `annotation` or `annotations` | `deleted`; undo step `Delete annotation 3 of Drawing1` |
 
 | `type` | Picks | Shows |
@@ -18149,8 +18235,8 @@ gone`.
 | `center_mark` | a circle seen end on, or a round face from the side | crossed centre lines beyond the rim, or the face's centreline |
 | `centerline` | a round face, two circles or points, or two parallel edges | the axis; the line through the centres; the line halfway between the edges, over both |
 | `note` | one | `text` (lines split at `\n`) on a shoulder, a leader to the pick's point nearest where it was clicked |
-| `datum` | one | the letter (`letter`; the first one neither the drawing's datum labels nor the model's have) in a square on a leader ending in a filled triangle |
-| `frame` | one | `frame`'s cells (the characteristic's symbol drawn as lines, the zone, the datums) on a leader |
+| `datum` | one | the letter (`letter`; the first one neither the drawing's datum labels nor the model's have) in a square on a leader ending in a filled triangle (ISO 5459, mitcad#1294; a filled dot on a face picked face on, `terminator`, mitcad#1296): the triangle's base along the pick at the tip (an edge's direction, a circle's tangent, a round face's outline; square to the leader on a point), on the square's side of it; the leader from the triangle's apex to the middle of the square's side that faces it (bottom, top, left or right), never through the square or its letter |
+| `frame` | one | `frame`'s cells (the characteristic's symbol drawn as lines, the zone, the datums) on a leader from the end of the frame its arrow lies beyond, else from the middle of its lower or upper side, never through the frame (mitcad#1294) |
 | `finish` | one | ISO 1302's symbol on the surface: `finish` `{"process": "any" \| "removal" \| "no_removal", "text": "Ra 1.6"}` |
 
 Places are kept in millimetres of paper, relative to the picks, so an
@@ -18160,12 +18246,68 @@ of its picks, an ordinate's level from its origin, an angle's arc
 radius; when left out, a linear dimension's line goes 10 mm beyond the
 view's box on the side of its picks), `text_offset` (along and across a
 dimension line; a leader's text, a datum's square, a frame, a symbol from
-the arrow's point: 10, 8 by default; a circle's text from its centre),
-`at` (where a leader's pick was clicked, in view millimetres). `series`:
+the arrow's point: 10, 8 by default, a datum's square's lower middle 0,
+12; a circle's text from its centre), `at` (where a leader's pick was
+clicked, in view millimetres), `tip_along` (mitcad#1295: where a datum
+label's triangle or a frame's arrow sits along its pick, the fraction of
+the way from the pick's start by its own direction, 0 to 1: an edge from
+its start to its end, an arc from its first end to its second, a round
+face along its axis, a circle seen from the side across from its low
+end; set when the label is added or its picks change, so the tip keeps
+its place on the edge when the model or the view changes; left out on a
+point, a whole circle seen end on, and labels of older files, whose tip
+is the pick's point nearest `at`). `slide` moves the tip to the pick's
+point nearest where the drag takes it, clamped to the pick's ends (`at`
+and `tip_along` then that point's), the square or the frame keeping its
+`text_offset`, so it follows; a datum label on a straight edge runs on
+along the edge's line past its ends instead (mitcad#1296, below), and
+one on a face over the face's plane. One undo step, `Move datum A of
+Drawing1` (a datum label moved is named by its letter; mitcad#1294);
+refused for the other annotations (tests:
+`core/model-drawing/src/annotate.rs`, a quarter along an edge made twice
+as long, the slide and its clamp, a frame's arrow, arcs, round faces;
+`drawing_annotation_tests.rs`, the slide, its undo and a longer edge in
+the model).
+
+**Datum labels on an extension line and on a face** (mitcad#1296, ISO
+5459):
+- A datum label on a straight edge may have its tip on the edge's line
+  beyond its ends (`tip_along` below 0 or above 1, reached by `slide`):
+  it then draws its own thin extension line from 1 mm off the edge's
+  nearer end to 2 mm past the tip, as an `edge_extension` draws one. It
+  stays an annotation of the edge, its pick unchanged, and keeps its
+  fraction when the edge's length changes.
+- A Datum Label click inside a planar face's outline, where the view
+  sees the face face on and no edge, point or round face is within reach
+  (the `drawing_pick` query's `type` `datum`, or its `want` `datum`;
+  `seen` `face`), picks the face with the point: `{"body", "face",
+  "on_face": [u, v]}`, the point in the face's own coordinates
+  (millimetres from its plane's origin along axes chosen from the
+  plane's normal, in its body's coordinates), so it keeps its place on
+  the face when the model or the view changes. The face nearest the eye
+  wins. The tip is that point; `slide` moves it over the face's plane.
+  `on_face` is refused with an edge or a point.
+- `terminator`: `"triangle"` or `"dot"` (a filled dot, 1 mm radius,
+  the leader from its middle), given on `add_drawing_annotation` and
+  `edit_drawing_annotation` (`null`: back to the default); left out, a
+  dot on a face picked face on and a triangle on anything else. Only a
+  datum label has one.
+
+Tests: `core/model-drawing/src/annotate.rs` (a datum a quarter past its
+edge's end with its extension line, on an edge twice as long and before
+the start; a dot on a face, the terminator chosen, the face's axes),
+`drawing_annotation_tests.rs` (`datums_on_an_edges_extension_and_on_a_face_keep_their_place`:
+both kinds, the model twice as large, a dot slid, the terminator
+switched and refused for a note), `tools/ui-drawing-dimension-spacing-test.sh`.
+
+`series`:
 `"baseline"` makes a linear dimension from the first pick to each other
 one, their lines 7 mm apart; `"chain"` from each to the next, in a row.
 An angle's arc keeps a radius of 2 mm at least, whether dragged, placed
-or given as `line_offset`.
+or given as `line_offset`. The commands move a leader's text exactly as
+told; the application's drag of a note's text, a datum's square or a
+frame first asks `drawing_snap`, which snaps the leader to multiples of
+45 degrees (*Dimension spacing*, *Leader angles*; mitcad#1294).
 
 **Pictorial views** (an isometric view, a projected view from a
 corner, any view that does not look along an axis of its component, and
@@ -18229,7 +18371,9 @@ The `drawing` query's sheet asked for has `annotations`: each view
 annotation in its file form with `view`, `broken`, `label` (its words on
 one line: `40 ±0.1`, `Ø10 H7`, a note's lines joined by ` / `, a datum's
 letter, a frame's cells joined by ` | `), `value` (a dimension's, mm or
-radians), `warning` (a fit code out of range, a datum referred to that no
+radians), `measured` (a dimension's value as the sheet writes it without
+its own texts: its prefix, value and tolerance, `40 ±0.1`, what a
+`format.replace` stands in place of; mitcad#1292), `warning` (a fit code out of range, a datum referred to that no
 label has), `box` (on the sheet), or `error`; then the text notes
 (`"type": "text"`, `text`, `at`, `box`). Views list `center_marks`,
 `retrieved_dimensions` and their annotations' ids. Groups: `dimension`
@@ -21211,7 +21355,7 @@ to snap to.
 
 | Query | Fields | Result |
 |---|---|---|
-| `drawing_snap` | `command`: an `add_drawing_annotation` with its `at`, or an `edit_drawing_annotation` with its `move`; `free` (false): placed as given, only the result's description | `at` (a new one) or `move` (a drag): the snapped place, or the one given; `snapped`; `line_offset` and `text_offset` that place gives; `family` and `beyond` (its distance as its family measures it, when it has one); when snapped `spacing`, `multiple` and `from` (the dimension the spacing came from). What is no dimension (a note, a table, a line drawn outside the model) gets the place given and `"snapped": false`. Another command is refused |
+| `drawing_snap` | `command`: an `add_drawing_annotation` with its `at`, or an `edit_drawing_annotation` with its `move`; `free` (false): placed as given, only the result's description | `at` (a new one) or `move` (a drag): the snapped place, or the one given; `snapped`; `line_offset` and `text_offset` that place gives; `family` and `beyond` (its distance as its family measures it, when it has one); when snapped `spacing`, `multiple` and `from` (the dimension the spacing came from). A note's, a datum label's or a frame's drag (*Leader angles*, below): `move`, `snapped`, `text_offset`, and when snapped `angle`. What else is no dimension (a table, a line drawn outside the model; a note's placing click) gets the place given and `"snapped": false`. Another command is refused |
 
 The logic is `core/model-drawing/src/spacing.rs` (`gauge`, `spacing`,
 `snap_place`, `snap_move`); the query `model-api/src/drawing_spacing.rs`.
@@ -21223,8 +21367,24 @@ radius and a leader's reach),
 `core/model-tests/drawing-views/src/spacing_tests.rs` (the first
 dimension, the second at the first's spacing, free, two and three
 spacings with the step of stacked ones, between multiples, a drag, a
-note, a wrong command), `tools/ui-drawing-dimension-spacing-test.sh` and
+note, a wrong command, a note's drag to 45 degrees),
+`tools/ui-drawing-dimension-spacing-test.sh` and
 `app.ui-windows-drawing-spacing` (`tools/ui-windows-drawing-spacing-test.ps1`).
+
+**Leader angles** (mitcad#1294). A drag of a note's text, a datum
+label's square or a feature control frame (`edit_drawing_annotation`
+with `move`) snaps in `drawing_snap` so that its leader runs at a
+multiple of 45 degrees (0, 45, 90, … 315, counter-clockwise from the
+sheet's x) when it would run within 4 degrees of one, its length kept:
+a note's leader from its arrow to its shoulder, a frame's from its
+arrow to the side of the frame it leaves, a datum's from its triangle's
+apex to the side of its square it meets (*Annotations on drawing
+views*). `free`: as dragged. The answer's `angle` is the snapped one.
+The logic is `core/model-drawing/src/annotate.rs` (`leader_line`,
+`snap_leader`, `datum_label`); tests there (a datum on a horizontal edge
+with its square below left, above, left and right; a frame left, right,
+above and below its arrow; drags near 45, 90 and 180 degrees and ten
+degrees off) and in `spacing_tests.rs`.
 
 ## Read-only BOM grouping (mitcad#1176)
 

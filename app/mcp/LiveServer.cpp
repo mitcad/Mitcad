@@ -254,8 +254,9 @@ struct LiveServer::State {
     }
   }
 
-  // The user's Disconnect: these clients end, and their assistants' new
-  // clients are refused until Connect allows them again (mitcad#1289).
+  // The user's Disconnect (or a row unchecked in the assistant menu): these
+  // clients end, and their rows' new clients are refused until the row is
+  // checked again or Connect allows the assistant (mitcad#1289, mitcad#1299).
   void disconnectClients(const QStringList& ids) {
     QStringList labels;
     for (const auto& client : clients) {
@@ -265,14 +266,15 @@ struct LiveServer::State {
       }
     }
     if (!labels.isEmpty()) {
-      disconnectAssistants(labels);
+      blockAssistants(labels);
       qInfo().noquote() << QStringLiteral("MCP: %1 disconnected until allowed again").arg(labels.join(QStringLiteral(", ")));
     }
     updateAgents();
   }
 
-  // An initialize of an assistant the user disconnected: refused with why
-  // and how to allow it, and the connection closed.
+  // An initialize of a blocked assistant: refused with why and how to allow
+  // it, and the connection closed. The blocks are in the settings: they hold
+  // after a restart (mitcad#1299).
   bool refusedAsDisconnected(Client& client, const QByteArray& message) {
     if (!client.chat.isEmpty() || client.initializeAccepted) return false;
     const QJsonObject request = QJsonDocument::fromJson(message).object();
@@ -282,16 +284,14 @@ struct LiveServer::State {
     }
     const QString label = request.value(QStringLiteral("params")).toObject().value(QStringLiteral("clientInfo"))
         .toObject().value(QStringLiteral("name")).toString().simplified().left(80);
-    if (!assistantDisconnected(label)) return false;
-    const QString reason = QObject::tr("Disconnected in MitCad: choose Connect for %1 in Help › Connect AI Assistant, "
-                                       "or Allow in the assistant indicator's menu, to connect it again")
-                               .arg(assistantDisplayName(label));
+    const QString reason = assistantRefusal(label);
+    if (reason.isEmpty()) return false;
     write(client, QJsonDocument(QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
                                             {QStringLiteral("id"), request.value(QStringLiteral("id"))},
                                             {QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), -32001},
                                                                                  {QStringLiteral("message"), reason}}}})
                           .toJson(QJsonDocument::Compact) + '\n');
-    qInfo().noquote() << QStringLiteral("MCP refused: %1 was disconnected by the user").arg(label.left(80));
+    qInfo().noquote() << QStringLiteral("MCP refused: %1 is blocked in the assistant menu").arg(label.left(80));
     if (client.socket) client.socket->disconnectFromHost();
     return true;
   }
@@ -492,6 +492,9 @@ struct LiveServer::State {
                    request.value(QStringLiteral("method")).toString() == QStringLiteral("notifications/initialized")) {
           client.initialized = true;
           client.since = QDateTime::currentDateTime();
+          // A known assistant that connected stays in the assistant menu
+          // after a restart (mitcad#1299); the chat's own agent is not one.
+          if (client.chat.isEmpty()) rememberAssistantRows({assistantRowKey(client.displayName)});
           updateAgents();
         }
         return;

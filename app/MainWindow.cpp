@@ -480,9 +480,18 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // project's menu.
   m_indicator = new ProjectIndicator([this](const QString& id) { trigger(id); }, this);
   // Beside it, the agents connected through live MCP (mitcad#710).
-  m_agentIndicator = new mcp::AgentIndicator({[this](const QString& id) { trigger(id); },
-                                              [this] { disconnectAllMcpAgents(); }},
-                                             this);
+  // Its menu's Outgoing connections are the chat panel's agents
+  // (mitcad#1299, chatOutgoingAgents).
+  m_agentIndicator = new mcp::AgentIndicator(
+      {[this](const QString& id) { trigger(id); },
+       [this](const QStringList& ids) {
+         if (m_mcpDisconnect) {
+           m_mcpDisconnect(ids);
+         }
+       },
+       [this] { return chatOutgoingAgents(); },
+       [this](const QString& id, bool offered) { offerChatAgent(id, offered); }},
+      this);
   createRemote();
   createLocks();
   // The level's icon before the status line's text (mitcad#1040).
@@ -2997,6 +3006,16 @@ bool MainWindow::reportRecompute(const QJsonObject& result, double milliseconds)
   m_statusLabel->setText(tr("Recomputed %n feature(s) in %1 ms", nullptr, recomputed)
                              .arg(milliseconds, 0, 'f', 1));
   qDebug().noquote() << m_statusLabel->text();
+  // The drawings of an older design file whose views now keep the bodies
+  // they showed (mitcad#1293): one information each, in the history too.
+  for (const QJsonValue& value : result.value(QStringLiteral("notices")).toArray()) {
+    const QJsonObject notice = value.toObject();
+    if (notice.value(QStringLiteral("level")).toString() == QStringLiteral("info")) {
+      const QString message = notice.value(QStringLiteral("message")).toString();
+      qInfo().noquote() << QStringLiteral("Drawing pinned: %1").arg(message);
+      showStatus(message, NoticeLevel::Information);
+    }
+  }
   return true;
 }
 

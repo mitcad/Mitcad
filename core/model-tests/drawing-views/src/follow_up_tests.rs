@@ -518,6 +518,9 @@ fn a_copied_components_drawing_keeps_its_tables_and_takes_free_datum_letters() {
         }
     }
     let mut shared = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    // Evaluated, as a design is when it opens: the views draw the bodies
+    // they keep (mitcad#1293), which an unevaluated document has not.
+    command(&mut shared, json!({"cmd": "recompute"}));
     command(
         &mut shared,
         json!({"cmd": "edit_drawing_annotation", "drawing": copy, "annotation": datum,

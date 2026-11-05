@@ -36,7 +36,7 @@ use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::{Document, SUMMARY_SET};
 use mitcad_model_drawing::compose::TitleInfo;
-use mitcad_model_drawing::def::{Drawing, Subject};
+use mitcad_model_drawing::def::Drawing;
 use mitcad_model_drawing::template::{self, Filled, Revision, SheetTemplate, next_revision_letter};
 use mitcad_model_drawing::{Projection, Units, scale_text, today};
 
@@ -486,9 +486,8 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
     }
 
     fn shown_materials(&self, drawing: &Drawing) -> String {
-        let Ok(shown) = self.subject_bodies(drawing.component, &Subject::Design) else {
-            return String::new();
-        };
+        // What its views show (mitcad#1293), not what the 3D view shows.
+        let shown = self.drawing_shown(drawing);
         let mut names: Vec<String> = Vec::new();
         for s in &shown {
             let name = self
@@ -504,9 +503,7 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
     }
 
     fn shown_mass(&self, drawing: &Drawing) -> String {
-        let Ok(shown) = self.subject_bodies(drawing.component, &Subject::Design) else {
-            return String::new();
-        };
+        let shown = self.drawing_shown(drawing);
         let mut kg = 0.0;
         let mut measured = 0;
         for s in &shown {

@@ -4,6 +4,7 @@
 # check-all sources: app/mcp/ConnectAssistantDialog.cpp app/framework/FloatingLayout.cpp app/framework/TitleBar.cpp
 # check-all sources: app/tests/chat_test_agent.cpp core/mcp/src/chat core/ffi/src/chat.rs tools/cli tools/ui-chat-test.py
 # check-all sources: app/MainWindowMcp.cpp app/mcp/AgentFolders.cpp core/mcp/src/catalog.rs
+# check-all sources: app/MainWindow.cpp app/framework/TestDriverAssistant.cpp
 # The chat panel (mitcad#947) on a hidden Xvfb display: tools/ui-chat-test.py
 # runs the application with the scripted test agent (app/tests/
 # chat_test_agent.cpp) in place of Claude Code and Codex, through the real
@@ -12,7 +13,8 @@
 # approval cards, a user's change during a turn, Stop, the tool calls'
 # group rows, the history of a
 # reopened design and its resumed session, the Docked layout, Claude
-# Desktop only, the model choice, and Codex through its app server chosen
+# Desktop only, Claude Desktop connected while the chat's shared sign-in
+# fails (mitcad#1297), the model choice, and Codex through its app server chosen
 # in the agent switcher (kept as the last used one); the API endpoints and
 # local models (phase 2) against a scripted service of the script's own on
 # localhost: the Anthropic API with its key typed in the panel, its

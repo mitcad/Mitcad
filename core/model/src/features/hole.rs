@@ -1178,6 +1178,7 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
                 }),
                 starts,
                 flank_angle,
+                flat_ends: false,
             };
             let cut = ctx
                 .kernel

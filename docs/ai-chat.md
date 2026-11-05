@@ -57,9 +57,17 @@ in `~/.local/bin`, npm's, each separately, with its folder beside its
 name: **Claude Code (~/.local/bin)**), Codex, and every API endpoint or
 local model and the custom command turned on in Preferences. The Claude
 Code that Claude Desktop keeps for itself (in its settings folder's
-`claude-code`) is listed as **Claude Code (Claude Desktop's)** when it is
+`claude-code`, a version's folder and, in current versions, a build folder
+inside it) is listed as **Claude Code (Claude Desktop's)** when it is
 there; whether it runs on its own and with which sign-in is what its own
 check says beside it.
+
+Every Claude Code the chat starts signs in with the same configuration
+folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`), so all of them are one
+sign-in, and each entry says so: **same sign-in as Claude Code**. An
+account failure of one is the failure of all of them, and choosing another
+of them does not help; signing in again (`claude auth logout`, then `claude
+auth login` in a terminal) fixes it for all of them.
 
 Each entry in the list shows its state, so that a wrong account is seen
 before you send: **Claude Code · signed in as someone@example.com**,
@@ -72,6 +80,11 @@ Choosing another one starts a new conversation in it (the agents do not
 share what was said), and MitCad uses it from then on, also after a
 restart. **Preferences › AI Assistants › Chat › Agent** chooses it too.
 
+The assistant indicator's menu lists the same agents under **Outgoing
+connections**, each with its state and a checkmark. Uncheck one to take it
+out of the list: MitCad then never starts or checks it, also after a
+restart, and another agent is chosen instead. Check it again to offer it.
+
 When the chosen agent cannot be used (it is not signed in, its account
 fails, it is missing), its line says how to fix it: for Claude Code, sign
 in here or run `claude` in a terminal and type `/login`; for Codex, sign in
@@ -81,12 +94,17 @@ ready is offered beside it (**Use Codex**).
 Claude Desktop itself is not an agent of the chat: it has no program the
 chat can start. Where it is the only assistant installed, the panel says
 so and points to **Connect AI Assistant**, through which Claude Desktop
-works with MitCad.
+works with MitCad. While Claude Desktop is connected to the window and the
+chat cannot work (an account failure, not signed in, not found), the panel
+says so above **How to fix**: "Claude Desktop is connected: type your
+request in Claude Desktop. This chat needs Claude Code's own sign-in.", with
+**Open Claude Desktop** to bring it forward.
 
 The chat's own agent is not one of the assistants connected to the window:
 the assistant indicator says **Claude Code working** while it works on a
 message, and its connection cannot be disconnected there. **Disconnect**
-in Connect AI Assistant concerns the assistants connected from outside.
+in Connect AI Assistant, and the menu's **Incoming connections**, concern
+the assistants connected from outside.
 
 ### Choosing the model
 

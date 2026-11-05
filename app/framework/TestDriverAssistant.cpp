@@ -5,6 +5,7 @@
 #include "../mcp/AgentFolders.hpp"
 #include "../mcp/ConnectAssistantDialog.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -20,6 +21,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
@@ -51,6 +53,39 @@ QList<QAbstractButton*> assistantChoices(QWidget* dialog) {
   return choices;
 }
 
+// A scripted MCP client through the real bridge (mitcad#1123): it
+// initializes as `label`, and its answers gather in its "answered" property
+// (readAnswers).
+QProcess* startScriptedClient(QObject* parent, const QString& name, const QString& label, const QString& version) {
+  auto* bridge = new QProcess(parent);
+  bridge->setObjectName(name);
+  const QByteArray hello = QJsonDocument(QJsonObject{
+      {QStringLiteral("jsonrpc"), QStringLiteral("2.0")}, {QStringLiteral("id"), 1},
+      {QStringLiteral("method"), QStringLiteral("initialize")},
+      {QStringLiteral("params"), QJsonObject{{QStringLiteral("protocolVersion"), QStringLiteral("2025-11-25")},
+                                             {QStringLiteral("capabilities"), QJsonObject{}},
+                                             {QStringLiteral("clientInfo"), QJsonObject{{QStringLiteral("name"), label},
+                                                                                        {QStringLiteral("version"), version}}}}}})
+      .toJson(QJsonDocument::Compact);
+  QObject::connect(bridge, &QProcess::started, bridge, [bridge, hello] {
+    bridge->write(hello + "\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n");
+  });
+  bridge->start(mcp::bundledBridge(), {QStringLiteral("mcp"), QStringLiteral("--connect")});
+  return bridge;
+}
+
+QByteArray readAnswers(QProcess* bridge) {
+  const QByteArray more = bridge->readAllStandardOutput();
+  if (!more.isEmpty()) bridge->setProperty("answered", bridge->property("answered").toByteArray() + more);
+  return bridge->property("answered").toByteArray();
+}
+
+bool clientConnected(const mcp::AgentIndicator* indicator, const QString& label) {
+  if (indicator == nullptr) return false;
+  const QList<mcp::ConnectedAgent>& agents = indicator->agents();
+  return std::any_of(agents.cbegin(), agents.cend(), [&label](const mcp::ConnectedAgent& agent) { return agent.name == label; });
+}
+
 // Picks an assistant as a click does; a click on the chosen one refreshes it.
 void chooseAssistant(QWidget* dialog, mcp::AssistantClient client) {
   for (QAbstractButton* button : assistantChoices(dialog)) {
@@ -77,6 +112,26 @@ int spareHeight(QWidget* dialog) {
                           dialog->minimumSizeHint().height());
   return dialog->height() - needed;
 }
+}
+
+void TestDriver::agentMenuChoice(const QString& row, const QString& state) {
+  auto* indicator = m_main ? m_main->findChild<mcp::AgentIndicator*>(QStringLiteral("agentIndicator")) : nullptr;
+  if (!indicator || !indicator->agentMenu()) { fail(m_line, QStringLiteral("the agent indicator is missing")); return; }
+  if (state != QStringLiteral("on") && state != QStringLiteral("off")) {
+    fail(m_line, QStringLiteral("agent-menu takes on or off")); return;
+  }
+  // As the menu opens: filled, then the row's checkmark clicked when it
+  // differs (mitcad#1299).
+  emit indicator->agentMenu()->aboutToShow();
+  for (QAction* action : indicator->agentMenu()->actions()) {
+    if (action->isCheckable() && action->property("agentRow").toString() == row) {
+      const bool on = state == QStringLiteral("on");
+      if (action->isChecked() != on) action->trigger();
+      qInfo().noquote() << QStringLiteral("Agent menu: %1 %2").arg(row, state);
+      return;
+    }
+  }
+  fail(m_line, QStringLiteral("no row '%1' in the agent indicator's menu").arg(row));
 }
 
 void TestDriver::testAssistantSetup(const QString& mode) {
@@ -337,11 +392,11 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
     const bool again = mode == QStringLiteral("reconnect-again");
     if (again) {
-      // Disconnect stuck (mitcad#1289): Connect allows Claude Code again,
-      // and the reconnect step follows.
-      if (stateOf(status) != QStringLiteral("disconnected") || actionOf(setup) != QStringLiteral("allow") ||
-          setup->text() != QStringLiteral("Connect")) {
-        fail(m_line, QStringLiteral("the disconnected Claude Code did not offer Connect: ") + status->text()); return;
+      // Disconnect stuck (mitcad#1289, blocked since mitcad#1299): Allow
+      // allows Claude Code again, and the reconnect step follows.
+      if (stateOf(status) != QStringLiteral("blocked") || actionOf(setup) != QStringLiteral("allow") ||
+          setup->text() != QStringLiteral("Allow") || status->text() != QStringLiteral("Blocked in the assistant menu")) {
+        fail(m_line, QStringLiteral("the blocked Claude Code did not offer Allow: ") + status->text()); return;
       }
       setup->click();
     }
@@ -375,7 +430,8 @@ void TestDriver::testAssistantSetup(const QString& mode) {
       setup->click();
       // Disconnect sticks (mitcad#1289): the bridge stays up (mitcad#1288)
       // and is refused when it connects again, and a new Claude Code client
-      // is refused at its initialize, until Connect allows Claude Code.
+      // is refused at its initialize, until Allow allows Claude Code
+      // (mitcad#1299: the row blocked in the assistant menu).
       auto* refused = new QProcess(dialog);
       refused->setObjectName(QStringLiteral("assistantRefusedClient"));
       connect(refused, &QProcess::started, refused, [refused] {
@@ -387,10 +443,10 @@ void TestDriver::testAssistantSetup(const QString& mode) {
       whenReady([bridge, refused, status, setup] {
         const QByteArray more = refused->readAllStandardOutput();
         if (!more.isEmpty()) refused->setProperty("answered", refused->property("answered").toByteArray() + more);
-        return bridge->state() != QProcess::NotRunning && stateOf(status) == QStringLiteral("disconnected") &&
-            actionOf(setup) == QStringLiteral("allow") && setup->text() == QStringLiteral("Connect") &&
-            status->text().contains(QStringLiteral("Claude Code")) &&
-            refused->property("answered").toByteArray().contains("Disconnected in MitCad");
+        return bridge->state() != QProcess::NotRunning && stateOf(status) == QStringLiteral("blocked") &&
+            actionOf(setup) == QStringLiteral("allow") && setup->text() == QStringLiteral("Allow") &&
+            status->text() == QStringLiteral("Blocked in the assistant menu") &&
+            refused->property("answered").toByteArray().contains("Blocked in MitCad: check Claude Code");
       }, 15, QStringLiteral("Disconnect did not keep Claude Code's clients out"), [bridge, refused] {
         // Both clients go away; the dialog stays disconnected.
         bridge->closeWriteChannel();
@@ -415,23 +471,72 @@ void TestDriver::testAssistantSetup(const QString& mode) {
         claudeChosen = true;
       }
     }
-    // Still disconnected (mitcad#1289), and the indicator's menu offers to
-    // allow it again.
+    // Still blocked (mitcad#1289), and the indicator's menu shows its row
+    // unchecked, blocked (mitcad#1299), and the block beside "No assistant".
     auto* indicator = m_main ? m_main->findChild<mcp::AgentIndicator*>(QStringLiteral("agentIndicator")) : nullptr;
     bool allowOffered = false;
     if (indicator && indicator->agentMenu()) {
       emit indicator->agentMenu()->aboutToShow(); // fills it, as when it opens
       for (QAction* action : indicator->agentMenu()->actions()) {
-        if (action->objectName() == QStringLiteral("allowAgent") &&
-            action->text().remove(QLatin1Char('&')) == QStringLiteral("Allow Claude Code to Connect Again")) {
+        if (action->objectName() == QStringLiteral("incomingAgent") &&
+            action->property("agentRow").toString() == QStringLiteral("Claude Code") && action->isCheckable() &&
+            !action->isChecked() && action->text().endsWith(QStringLiteral("\tblocked"))) {
           allowOffered = true;
         }
       }
+      allowOffered = allowOffered && indicator->shownText() == QStringLiteral("No assistant · 1 blocked");
     }
-    if (!claudeChosen || stateOf(status) != QStringLiteral("disconnected") || !allowOffered) {
+    if (!claudeChosen || stateOf(status) != QStringLiteral("blocked") || !allowOffered) {
       fail(m_line, QStringLiteral("reopening setup lost the selected assistant or its disconnected state: ") +
                        status->text()); return;
     }
+  } else if (mode == QStringLiteral("indicator-client") || mode == QStringLiteral("indicator-allowed")) {
+    // The assistant menu's checkmarks (mitcad#1299): a scripted Claude Code
+    // client connects; once its row is checked again, a new one connects.
+    chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
+    auto* indicator = m_main ? m_main->findChild<mcp::AgentIndicator*>(QStringLiteral("agentIndicator")) : nullptr;
+    const bool again = mode == QStringLiteral("indicator-allowed");
+    startScriptedClient(dialog, again ? QStringLiteral("assistantIndicatorAgain") : QStringLiteral("assistantIndicatorClient"),
+                        QStringLiteral("claude-code"), mode);
+    whenReady([indicator, status, setup] {
+      return clientConnected(indicator, QStringLiteral("claude-code")) && stateOf(status) == QStringLiteral("connected") &&
+          actionOf(setup) == QStringLiteral("disconnect") && !indicator->shownText().contains(QStringLiteral("blocked"));
+    }, 15, QStringLiteral("the scripted Claude Code client did not connect"), [this, dialog, again, mode] {
+      if (again) {
+        // Every scripted client goes away (the first one's bridge too, which
+        // may have connected again on its own).
+        for (QProcess* process : dialog->findChildren<QProcess*>()) {
+          if (process->objectName().startsWith(QStringLiteral("assistantIndicator"))) {
+            process->closeWriteChannel();
+            connect(process, &QProcess::finished, process, &QObject::deleteLater);
+          }
+        }
+      }
+      qInfo().noquote() << QStringLiteral("Assistant setup UI: %1").arg(mode);
+    });
+    return;
+  } else if (mode == QStringLiteral("indicator-blocked")) {
+    // Unchecked in the menu (agent-menu 'Claude Code' off): the client was
+    // disconnected, a new one is refused at its initialize with the row's
+    // name, the indicator says the block, and Connect AI Assistant reads
+    // Blocked in the assistant menu with Allow (mitcad#1299).
+    auto* indicator = m_main ? m_main->findChild<mcp::AgentIndicator*>(QStringLiteral("agentIndicator")) : nullptr;
+    chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
+    QProcess* refused = startScriptedClient(dialog, QStringLiteral("assistantIndicatorRefused"), QStringLiteral("claude-code"),
+                                            QStringLiteral("refused"));
+    whenReady([indicator, refused, status, setup] {
+      return indicator && !clientConnected(indicator, QStringLiteral("claude-code")) &&
+          indicator->shownText().endsWith(QStringLiteral(" · 1 blocked")) &&
+          indicator->loggedText().endsWith(QStringLiteral(" · 1 blocked")) && stateOf(status) == QStringLiteral("blocked") &&
+          status->text() == QStringLiteral("Blocked in the assistant menu") && actionOf(setup) == QStringLiteral("allow") &&
+          setup->text() == QStringLiteral("Allow") &&
+          readAnswers(refused).contains("Blocked in MitCad: check Claude Code under Incoming connections");
+    }, 15, QStringLiteral("unchecking Claude Code did not disconnect and block it"), [refused, mode] {
+      refused->closeWriteChannel();
+      QObject::connect(refused, &QProcess::finished, refused, &QObject::deleteLater);
+      qInfo().noquote() << QStringLiteral("Assistant setup UI: %1").arg(mode);
+    });
+    return;
   } else if (mode == QStringLiteral("bundle")) {
     auto* anyway = dialog->findChild<QPushButton*>(QStringLiteral("assistantConnectAnyway"));
     chooseAssistant(dialog, mcp::AssistantClient::ClaudeDesktop);

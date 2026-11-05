@@ -1546,6 +1546,11 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         if let FeatureDef::Helix(helix) = &mut def {
             helix.settle_construction(HelixConstruction::Freecad);
         }
+        // A modelled thread of a file written before mitcad#1300 keeps its
+        // flat ends, so that what refers to them keeps working.
+        if let FeatureDef::Thread(thread) = &mut def {
+            thread.settle_ends(crate::features::thread::ThreadEnds::Flat);
+        }
         if let FeatureDef::SheetFace(face) = &mut def {
             face.settle(None);
         }

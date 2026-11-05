@@ -5,7 +5,8 @@
 // readiness change will come; Checking waits for one; an unfinished sign-in
 // waits (the controller's timeout bounds it) but one that starts during the
 // check ends it; Ready goes on to the probe. Check again is offered only for
-// an account error while the agent can be used and no check runs.
+// an account error while the agent can be used and no check runs. Entries
+// with one configuration folder share one sign-in (mitcad#1297).
 #include "agent/AccountCheck.hpp"
 
 #include <cstdio>
@@ -64,5 +65,30 @@ int chatAccountCheckTests() {
   CHECK(!accountCheckOffered(true, Readiness::Ready, true));
   CHECK(!accountCheckOffered(true, Readiness::Missing, false));
   CHECK(!accountCheckOffered(true, Readiness::Outdated, false));
+
+  // One sign-in shared by the entries with one configuration folder
+  // (mitcad#1297): a Claude Code on PATH, Claude Desktop's, a third one with a
+  // CLAUDE_CONFIG_DIR of its own, and agents with a sign-in of their own.
+  using mitcad::agent::sameSignIn;
+  const QStringList folders{QStringLiteral("/home/someone/.claude"), QStringLiteral("/home/someone/.claude/"),
+                            QStringLiteral("/srv/other-claude"), QString(), QString(),
+                            QStringLiteral("/home/someone/./.claude")};
+  CHECK(sameSignIn(folders, 0) == (QList<int>{1, 5}));
+  CHECK(sameSignIn(folders, 1) == (QList<int>{0, 5}));
+  CHECK(sameSignIn(folders, 5) == (QList<int>{0, 1}));
+  CHECK(sameSignIn(folders, 2).isEmpty());
+  // An empty folder shares with none, not with another empty one.
+  CHECK(sameSignIn(folders, 3).isEmpty());
+  CHECK(sameSignIn(folders, 4).isEmpty());
+  CHECK(sameSignIn(folders, -1).isEmpty());
+  CHECK(sameSignIn(folders, 6).isEmpty());
+  CHECK(sameSignIn({QStringLiteral("/home/someone/.claude")}, 0).isEmpty());
+#ifdef Q_OS_WIN
+  // Windows compares folders in any case and with either separator.
+  CHECK(sameSignIn({QStringLiteral("C:/Users/Someone/.claude"), QStringLiteral("c:\\users\\someone\\.claude")}, 0) ==
+        (QList<int>{1}));
+#else
+  CHECK(sameSignIn({QStringLiteral("/home/Someone/.claude"), QStringLiteral("/home/someone/.claude")}, 0).isEmpty());
+#endif
   return failures;
 }

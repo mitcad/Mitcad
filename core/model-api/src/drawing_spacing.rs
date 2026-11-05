@@ -6,7 +6,9 @@
 //! application asks it with the very command the click or the drag would
 //! run, shows the answer while the dimension is placed or dragged, and
 //! runs the command with the snapped place; the commands themselves place
-//! exactly where they are told.
+//! exactly where they are told. A note's, a datum label's or a frame's
+//! drag snaps its leader to multiples of 45 degrees instead (mitcad#1294,
+//! `mitcad_model_drawing::annotate::snap_leader`).
 
 use std::collections::HashMap;
 
@@ -14,18 +16,20 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::ApiError;
+use super::annotations::{Units as WordUnits, frame_words};
 use super::drawing_annotations::{AddAnnotationCommand, Asked, EditAnnotationCommand};
 use super::drawings::Evaluated;
 use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::kernel::Kernel;
-use mitcad_model_drawing::P2;
 use mitcad_model_drawing::annotate::{self, AnnotationType, Frame, Seen, ViewAnnotation};
 use mitcad_model_drawing::def::Drawing;
 use mitcad_model_drawing::spacing::{self, Family, Gauge, Snap};
+use mitcad_model_drawing::{P2, Units};
 
 /// `drawing_snap`: the command a placing click or a drag would run, and
-/// whether it is placed freely (the application's Alt).
+/// whether it is placed freely (the application's Alt; Shift or Alt for a
+/// drag).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SnapQuery {
@@ -46,6 +50,40 @@ fn spaced(kind: AnnotationType) -> bool {
             | AnnotationType::Radius
             | AnnotationType::Diameter
     )
+}
+
+/// The kinds of annotation whose drag snaps their leader to multiples of
+/// 45 degrees (mitcad#1294): a note's text, a datum's square, a frame.
+fn led(kind: AnnotationType) -> bool {
+    matches!(
+        kind,
+        AnnotationType::Note | AnnotationType::Datum | AnnotationType::Frame
+    )
+}
+
+/// A feature control frame's cells as the sheet draws them (their widths
+/// decide where its leader leaves it); none for the others.
+fn frame_cells<K: Kernel>(
+    doc: &Document<K>,
+    drawing: &Drawing,
+    si: usize,
+    annotation: &ViewAnnotation,
+) -> Vec<String> {
+    let Some(tolerance) = annotation
+        .frame
+        .as_ref()
+        .filter(|_| annotation.kind == AnnotationType::Frame)
+    else {
+        return Vec::new();
+    };
+    let units = drawing.sheets[si]
+        .units
+        .as_deref()
+        .and_then(Units::by_symbol)
+        .unwrap_or_else(|| Units::of(doc.parameters().context().default_length_unit));
+    let letters = doc.all_datum_letters();
+    let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
+    frame_words(tolerance, WordUnits::new(units.symbol, units.mm), &datums).0
 }
 
 /// Whether a dimension's place was given (clicked, dragged or set): a
@@ -288,7 +326,7 @@ fn snap_moved<K: Kernel>(
     let Some(annotation) = drawing.sheets[si]
         .view(view_id)
         .and_then(|v| v.annotations.iter().find(|a| a.id == id))
-        .filter(|a| spaced(a.kind))
+        .filter(|a| spaced(a.kind) || led(a.kind))
     else {
         return Ok(unsnapped);
     };
@@ -300,6 +338,28 @@ fn snap_moved<K: Kernel>(
     let Ok(seen) = doc.annotation_seen(&view, annotation) else {
         return Ok(unsnapped);
     };
+    if led(annotation.kind) {
+        // Laid out with its own letters' height, as it is drawn.
+        let frame = view.frame_with(drawing.defaults.text(annotation.height));
+        let cells = frame_cells(doc, drawing, si, annotation);
+        let snap = if free {
+            None
+        } else {
+            annotate::snap_leader(annotation, &seen, &frame, &cells, delta)
+        };
+        let to = snap.map_or(delta, |s| s.to);
+        let mut placed = annotation.clone();
+        annotate::moved(&mut placed, &seen, &frame, to);
+        let mut value = json!({
+            "move": to,
+            "snapped": snap.is_some(),
+            "text_offset": placed.text_offset,
+        });
+        if let Some(snap) = snap {
+            value["angle"] = json!(snap.angle);
+        }
+        return Ok(value);
+    }
     let frame = view.frame();
     let mut from = None;
     let snap = if free {

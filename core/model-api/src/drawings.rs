@@ -17,7 +17,7 @@
 //! commands turn them into the view's coordinates through its place,
 //! scale and breaks, so the application keeps no geometry of its own.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -390,6 +390,10 @@ pub(super) struct Evaluated {
     pub(super) shown: Vec<Shown>,
     /// The bodies each view drawn shows (indices into `shown`).
     pub(super) view_shown: BTreeMap<u32, Vec<usize>>,
+    /// The chosen bodies and occurrences of each view that are gone
+    /// (`the body F9.b0 is gone`, mitcad#1293): the view's warnings, and
+    /// the sheet's.
+    pub(super) missing: BTreeMap<u32, Vec<String>>,
 }
 
 /// A sheet drawn.
@@ -455,6 +459,17 @@ pub(super) fn along_an_axis(spec: &ViewSpec) -> bool {
 }
 
 /// Whether the occurrences of a path lead down from a component.
+/// Whether an edit changed nothing of a drawing but the subject of its
+/// view `id` on sheet `si`.
+fn only_subject(old: &Drawing, changed: &Drawing, si: usize, id: u32) -> bool {
+    let mut probe = old.clone();
+    let subject = changed.sheets[si].view(id).map(|v| v.subject.clone());
+    if let (Some(i), Some(subject)) = (probe.sheets[si].view_index(id), subject) {
+        probe.sheets[si].views[i].subject = subject;
+    }
+    probe == *changed
+}
+
 fn path_from(assembly: &Assembly, component: ComponentUid, path: &[OccurrenceUid]) -> bool {
     let mut at = component;
     for o in path {
@@ -970,14 +985,41 @@ pub(super) trait DrawingsOps<K: Kernel> {
     /// A drawing command alone.
     fn drawing_command_now(&mut self, command: DrawingCommand) -> Result<Value, ApiError>;
 
-    /// The bodies a subject shows in a drawing's component: the shown
-    /// bodies of the component or of an occurrence below it, or chosen
-    /// bodies where they are shown (or wherever they are, when nowhere).
+    /// The bodies a subject shows in a drawing's component: the bodies of
+    /// the component shown in the 3D view now (`design`), every body of an
+    /// occurrence below it, or chosen bodies where their occurrences place
+    /// them (wherever the design places them, when none is given); a
+    /// chosen body or occurrence that is gone is an error.
     fn subject_bodies(
         &self,
         component: ComponentUid,
         subject: &Subject,
     ) -> Result<Vec<Shown>, String>;
+
+    /// [`DrawingsOps::subject_bodies`] with the chosen bodies and
+    /// occurrences that are gone left out, each named once (mitcad#1293);
+    /// an error only when nothing of the subject is left.
+    fn subject_shown(
+        &self,
+        component: ComponentUid,
+        subject: &Subject,
+    ) -> Result<(Vec<Shown>, Vec<String>), String>;
+
+    /// The bodies a drawing's views show (mitcad#1293: what its base views
+    /// recorded, each body where it is placed once), or, with no view,
+    /// those its component shows in the 3D view; for its title block's
+    /// material and mass.
+    fn drawing_shown(&self, drawing: &Drawing) -> Vec<Shown>;
+
+    /// What a view records as its subject when it is placed (or updated)
+    /// with the whole component (mitcad#1293): the bodies the 3D view
+    /// shows now, refused when it shows none (`refuse_empty`).
+    fn recorded_subject(
+        &self,
+        component: ComponentUid,
+        subject: &Subject,
+        refuse_empty: bool,
+    ) -> Result<Subject, ApiError>;
 
     /// The shapes of the bodies where a view shows them.
     fn placed_shapes(&self, shown: &[Shown]) -> Result<Vec<K::Shape>, String>;
@@ -1217,6 +1259,18 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         component: ComponentUid,
         subject: &Subject,
     ) -> Result<Vec<Shown>, String> {
+        let (shown, gone) = self.subject_shown(component, subject)?;
+        match gone.into_iter().next() {
+            Some(first) => Err(first),
+            None => Ok(shown),
+        }
+    }
+
+    fn subject_shown(
+        &self,
+        component: ComponentUid,
+        subject: &Subject,
+    ) -> Result<(Vec<Shown>, Vec<String>), String> {
         let all = self.placements_in(component)?;
         let assembly = self.assembly();
         let shown = |p: &Placement| Shown {
@@ -1226,51 +1280,72 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             path: p.path.clone(),
         };
         let mut out: Vec<Shown> = Vec::new();
+        let mut gone: Vec<String> = Vec::new();
         match subject {
+            // What the 3D view shows now: a command's `design` (mitcad#1293;
+            // a view records it as its bodies).
             Subject::Design => {
                 out.extend(all.iter().filter(|(_, s)| *s).map(|(p, _)| shown(p)));
             }
+            // Visibility in the 3D view decides nothing here (mitcad#1293).
             Subject::Occurrence { occurrence } => {
                 let path = &occurrence.0;
                 if path.is_empty() || !path_from(assembly, component, path) {
                     return Err(format!("the occurrence {occurrence} is gone"));
                 }
-                let below = |p: &Placement| {
-                    p.path.starts_with(path)
-                        && self.body_attributes(p.body).visible
-                        && p.path[path.len()..]
-                            .iter()
-                            .all(|o| assembly.occurrence(*o).is_some_and(|o| o.visible))
-                };
-                out.extend(all.iter().filter(|(p, _)| below(p)).map(|(p, _)| shown(p)));
+                out.extend(
+                    all.iter()
+                        .filter(|(p, _)| p.path.starts_with(path))
+                        .map(|(p, _)| shown(p)),
+                );
             }
             Subject::Bodies { bodies } => {
+                // The placements by body, for lists of many (a view of a
+                // whole assembly records each of its bodies).
+                let mut by_body: HashMap<BodyUid, Vec<&Placement>> = HashMap::new();
+                for (p, _) in &all {
+                    by_body.entry(p.body).or_default().push(p);
+                }
+                let mut note = |text: String| {
+                    if !gone.contains(&text) {
+                        gone.push(text);
+                    }
+                };
                 for b in bodies {
-                    let mine: Vec<&(Placement, bool)> = all
-                        .iter()
-                        .filter(|(p, _)| {
-                            p.body == b.body && b.occurrence.as_ref().is_none_or(|o| p.path == o.0)
+                    let mine: Vec<&Placement> = by_body
+                        .get(&b.body)
+                        .map(|placed| {
+                            placed
+                                .iter()
+                                .filter(|p| b.occurrence.as_ref().is_none_or(|o| p.path == o.0))
+                                .copied()
+                                .collect()
                         })
-                        .collect();
-                    if mine.is_empty() {
+                        .unwrap_or_default();
+                    if !mine.is_empty() {
+                        out.extend(mine.into_iter().map(shown));
+                        continue;
+                    }
+                    match &b.occurrence {
                         // A body no occurrence places is drawn where it is.
-                        if b.occurrence.is_none() && self.body_shape(b.body).is_some() {
-                            out.push(Shown {
-                                body: b.body,
-                                name: self.body_name(b.body),
-                                transform: Transform::IDENTITY,
-                                path: Vec::new(),
-                            });
-                            continue;
+                        None if self.body_shape(b.body).is_some() => out.push(Shown {
+                            body: b.body,
+                            name: self.body_name(b.body),
+                            transform: Transform::IDENTITY,
+                            path: Vec::new(),
+                        }),
+                        // Its occurrence deleted (mitcad#1293): named once.
+                        Some(o) if !o.is_empty() && !path_from(assembly, component, &o.0) => {
+                            note(format!("the occurrence {o} is gone"));
                         }
-                        return Err(format!("the body {} is gone", b.body));
+                        _ => note(format!("the body {} is gone", b.body)),
                     }
-                    let visible: Vec<_> = mine.iter().filter(|(_, s)| *s).collect();
-                    if visible.is_empty() {
-                        out.extend(mine.iter().map(|(p, _)| shown(p)));
-                    } else {
-                        out.extend(visible.iter().map(|(p, _)| shown(p)));
-                    }
+                }
+                // Nothing of it left: the view is not drawn.
+                if out.is_empty()
+                    && let Some(first) = gone.first()
+                {
+                    return Err(first.clone());
                 }
             }
         }
@@ -1280,7 +1355,60 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 .body_shape(s.body)
                 .is_some_and(|shape| matches!(self.kernel().body_kind(shape), Ok(BodyKind::Empty)))
         });
-        Ok(out)
+        Ok((out, gone))
+    }
+
+    fn drawing_shown(&self, drawing: &Drawing) -> Vec<Shown> {
+        let subjects: Vec<&Subject> = drawing
+            .sheets
+            .iter()
+            .flat_map(|s| &s.views)
+            .filter_map(|v| v.subject.as_ref())
+            .collect();
+        if subjects.is_empty() {
+            return self
+                .subject_shown(drawing.component, &Subject::Design)
+                .map(|(shown, _)| shown)
+                .unwrap_or_default();
+        }
+        let mut out: Vec<Shown> = Vec::new();
+        let mut seen: std::collections::HashSet<(BodyUid, Vec<OccurrenceUid>)> =
+            std::collections::HashSet::new();
+        for subject in subjects {
+            if let Ok((shown, _)) = self.subject_shown(drawing.component, subject) {
+                for s in shown {
+                    if seen.insert((s.body, s.path.clone())) {
+                        out.push(s);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn recorded_subject(
+        &self,
+        component: ComponentUid,
+        subject: &Subject,
+        refuse_empty: bool,
+    ) -> Result<Subject, ApiError> {
+        if *subject != Subject::Design {
+            return Ok(subject.clone());
+        }
+        // A component not placed in the design shows nothing.
+        let bodies = self.shown_subject_bodies(component).unwrap_or_default();
+        if refuse_empty && bodies.is_empty() {
+            let what = if component.is_root() {
+                "the design".to_owned()
+            } else {
+                self.assembly().name(component)
+            };
+            return Err(ApiError(format!(
+                "nothing of {what} is shown in the 3D view: show what the view is to draw, \
+                 or choose its bodies"
+            )));
+        }
+        Ok(Subject::Bodies { bodies })
     }
 
     fn placed_shapes(&self, shown: &[Shown]) -> Result<Vec<K::Shape>, String> {
@@ -1360,6 +1488,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             errors: BTreeMap::new(),
             shown: Vec::new(),
             view_shown: BTreeMap::new(),
+            missing: BTreeMap::new(),
         };
         let mut ids: Vec<String> = Vec::new();
         // Threads drawn by ISO 6410 (mitcad#1112).
@@ -1375,7 +1504,13 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 // enlarges looks, and cut to its circle.
                 let spec = sheet.spec(view.id)?;
                 let style = sheet.style(view.id);
-                let shown = self.subject_bodies(drawing.component, &sheet.subject(view.id))?;
+                let (shown, gone) =
+                    self.subject_shown(drawing.component, &sheet.subject(view.id))?;
+                // What of its subject is gone, said by the view that keeps
+                // it (mitcad#1293).
+                if view.subject.is_some() && !gone.is_empty() {
+                    out.missing.insert(view.id, gone);
+                }
                 let mut own: Vec<usize> = Vec::new();
                 for s in &shown {
                     let i = match out.shown.iter().position(|o| o == s) {
@@ -1553,6 +1688,12 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             .iter()
             .map(|(id, e)| format!("view {id}: {e}"))
             .collect();
+        warnings.extend(
+            evaluated
+                .missing
+                .iter()
+                .flat_map(|(id, gone)| gone.iter().map(move |g| format!("view {id}: {g}"))),
+        );
         // The sections' lines and the details' circles.
         let mut sections = Vec::new();
         let mut details = Vec::new();
@@ -1819,6 +1960,11 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                                 let h = BROKEN_BOX / 2.0;
                                 view["box"] = json!([[p[0] - h, p[1] - h], [p[0] + h, p[1] + h]]);
                             }
+                            // What of its chosen bodies is gone
+                            // (mitcad#1293).
+                            if let Some(gone) = evaluated.missing.get(&id) {
+                                view["warnings"] = json!(gone);
+                            }
                             if let Some(i) = evaluated.index_of.get(&id) {
                                 let b = evaluated.views[*i].sheet_box();
                                 view["box"] = if b.is_empty() {
@@ -2049,7 +2195,14 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                     middle = Some([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]);
                     away = Some([1.0, 0.0]);
                 }
-                (ViewKind::Base { direction }, c.subject.clone())
+                // The whole component: the bodies shown now, recorded
+                // (mitcad#1293), so that hiding, showing or adding
+                // components later leaves the view as it is.
+                let subject = c.subject.clone().unwrap_or_default();
+                (
+                    ViewKind::Base { direction },
+                    Some(self.recorded_subject(old.component, &subject, false)?),
+                )
             }
             ViewType::Projected => {
                 let parent = parent_of(c.parent)?;
@@ -2264,6 +2417,14 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         let mut changed = old.clone();
         let mut moved = false;
         let mut fit = false;
+        // The whole component: what the 3D view shows now, recorded
+        // (Update from Model, mitcad#1293); nothing shown is refused.
+        let subject = c
+            .subject
+            .as_ref()
+            .map(|s| self.recorded_subject(old.component, s, true))
+            .transpose()?;
+        let update = c.subject == Some(Subject::Design);
         // Turned on the sheet (mitcad#729): about the middle of its box,
         // which stays where it is (its box's middle on the sheet and in
         // the view's coordinates, before).
@@ -2339,11 +2500,11 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             if let Some(label) = &c.label {
                 view.label = (!label.trim().is_empty()).then(|| label.trim().to_owned());
             }
-            if let Some(subject) = &c.subject {
+            if let Some(subject) = subject {
                 if !matches!(view.kind, ViewKind::Base { .. }) {
                     return Err(ApiError("only a base view has a subject".to_owned()));
                 }
-                view.subject = Some(subject.clone());
+                view.subject = Some(subject);
             }
             if let Some(aligned) = c.aligned {
                 view.aligned = aligned;
@@ -2503,6 +2664,9 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             && turn.is_none()
         {
             format!("Move view {id} of {}", old.name)
+        } else if update && only_subject(&old, &changed, si, id) {
+            // Nothing else changed: Update from Model (mitcad#1293).
+            format!("Update view {id} of {}", old.name)
         } else {
             format!("Edit view {id} of {}", old.name)
         };

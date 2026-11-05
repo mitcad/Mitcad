@@ -224,6 +224,27 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_state->setTextFormat(Qt::PlainText);
   column->addWidget(m_state);
 
+  // Claude Desktop connected while this chat cannot work (mitcad#1297): the
+  // requests go there; above How to fix.
+  m_desktopRow = new QWidget;
+  m_desktopRow->setObjectName(QStringLiteral("chatDesktopRow"));
+  auto* desktopColumn = new QVBoxLayout(m_desktopRow);
+  desktopColumn->setContentsMargins(0, 0, 0, 0);
+  desktopColumn->setSpacing(4);
+  m_desktopHint = wrapped(QStringLiteral("chatDesktopHint"));
+  m_desktopHint->setTextFormat(Qt::PlainText);
+  desktopColumn->addWidget(m_desktopHint);
+  auto* desktopLine = new QHBoxLayout;
+  desktopLine->setContentsMargins(0, 0, 0, 0);
+  m_openDesktop = new QPushButton(tr("Open Claude Desktop"));
+  m_openDesktop->setObjectName(QStringLiteral("chatOpenDesktop"));
+  desktopLine->addWidget(m_openDesktop);
+  desktopLine->addStretch(1);
+  desktopColumn->addLayout(desktopLine);
+  m_desktopRow->hide();
+  column->addWidget(m_desktopRow);
+  connect(m_openDesktop, &QPushButton::clicked, this, [this] { m_chat.openClaudeDesktop(); });
+
   // The privacy notice, once per agent, before its first message.
   m_notice = new QFrame;
   m_notice->setObjectName(QStringLiteral("chatPrivacy"));
@@ -1027,9 +1048,51 @@ void ChatPanel::updateState() {
   if (!accountProblem || unusable) {
     m_accountHelp->hide();
   }
-  m_accountHelpText->setText(!agent->accountHelp().isEmpty() ? agent->accountHelp()
+  // Claude Desktop connected while the chat cannot work (mitcad#1297): the
+  // requests are typed there; this chat needs the agent's own setup.
+  QString desktop;
+  if (m_chat.claudeDesktopConnected()) {
+    if (key == QStringLiteral("account-error") || key == QStringLiteral("signed-out")) {
+      desktop = agent->asksForKey()
+                    ? tr("Claude Desktop is connected: type your request in Claude Desktop. This chat needs %1's API key.")
+                          .arg(name)
+                    : tr("Claude Desktop is connected: type your request in Claude Desktop. This chat needs %1's own "
+                         "sign-in.")
+                          .arg(name);
+    } else if (key == QStringLiteral("missing")) {
+      desktop = tr("Claude Desktop is connected: type your request in Claude Desktop. This chat needs %1 installed.")
+                    .arg(name);
+    } else if (key == QStringLiteral("outdated")) {
+      desktop = tr("Claude Desktop is connected: type your request in Claude Desktop. This chat needs a newer %1.")
+                    .arg(name);
+    }
+  }
+  m_desktopHint->setText(desktop);
+  m_desktopRow->setVisible(!desktop.isEmpty());
+  m_openDesktop->setEnabled(activity == ChatController::Activity::Idle);
+  const QString desktopLogged = desktop.isEmpty() ? QString() : agent->id() + QLatin1Char('\n') + text;
+  if (desktopLogged != m_loggedDesktop) {
+    m_loggedDesktop = desktopLogged;
+    if (!desktop.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Chat: Claude Desktop connected, chat unusable: %1").arg(text);
+    }
+  }
+  // One sign-in shared by several entries (mitcad#1297): signing in again
+  // fixes it for all of them.
+  QStringList sharing;
+  for (const ChatAgent* other : m_chat.sharingSignIn(agent)) {
+    sharing << ChatController::choiceName(other);
+  }
+  const QString shared =
+      sharing.isEmpty() || !agent->id().startsWith(QStringLiteral("claude"))
+          ? QString()
+          : tr("%1 shares one sign-in with %2: in a terminal, claude auth logout and then claude auth login fix it "
+               "for all of them. ")
+                .arg(ChatController::choiceName(agent), sharing.join(QStringLiteral(", ")));
+  m_accountHelpText->setProperty("sharedSignIn", sharing.join(QStringLiteral(", ")));
+  m_accountHelpText->setText(!agent->accountHelp().isEmpty() ? shared + agent->accountHelp()
       : agent->id().startsWith(QStringLiteral("claude"))
-      ? tr("Sign in again with an account allowed to use Claude Code: in a terminal run claude, then type /logout and /login. "
+      ? shared + tr("Sign in again with an account allowed to use Claude Code: in a terminal run claude, then type /logout and /login. "
            "Alternatively set ANTHROPIC_API_KEY for MitCad and restart it, or ask your organization's administrator to enable access. "
            "For a credit or rate limit, check the account's billing or wait for the limit to reset. "
            "Then choose Check again. The check sends one short request without your design or conversation; account usage may apply. "
@@ -1077,8 +1140,12 @@ void ChatPanel::updateState() {
     m_poll->stop();
   }
   setProperty("chatState", key);
-  if (key != m_loggedState) {
+  // Logged per agent: a newly chosen one's state is said even when it equals
+  // the previous agent's. The others are checked when the panel opens
+  // (mitcad#1289), so the chosen one's state may be known before the choice.
+  if (key != m_loggedState || agent->id() != m_loggedAgent) {
     m_loggedState = key;
+    m_loggedAgent = agent->id();
     qInfo().noquote() << QStringLiteral("Chat panel: %1").arg(key);
   }
   emit contentChanged();

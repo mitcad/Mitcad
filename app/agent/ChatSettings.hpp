@@ -87,6 +87,14 @@ void setCustomAgentCommand(const QString& command);
 QString customAgentArguments();
 void setCustomAgentArguments(const QString& arguments);
 
+// Whether the chat panel offers an agent it found (mitcad#1299: the assistant
+// menu's checkmark under Outgoing connections); an agent turned off is not
+// listed in the panel and never started. Kept as the ids of the agents
+// turned off (chat/off). Setting it tells the open panels
+// (ChatNotifier::offeredChanged); returns whether it changed.
+bool chatAgentOffered(const QString& agent);
+bool setChatAgentOffered(const QString& agent, bool offered);
+
 // Tells the open panels that Preferences cleared every history or reset
 // what was allowed always.
 class ChatNotifier : public QObject {
@@ -102,6 +110,8 @@ signals:
   // Preferences changed the API agents' settings (offered, address, key,
   // timeout) or the custom command's (offered, command, arguments).
   void apiSettingsChanged();
+  // An agent was turned on or off in the assistant menu (chatAgentOffered).
+  void offeredChanged();
 };
 
 } // namespace mitcad::agent

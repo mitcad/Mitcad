@@ -45,14 +45,14 @@ use mitcad_model::features::OccurrencePath;
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::internal::drawing::DIMENSION_TEXT;
 use mitcad_model::internal::fingerprint::Fingerprint;
-use mitcad_model::kernel::{Kernel, KernelError};
+use mitcad_model::kernel::{Curve3, Kernel, KernelError};
 use mitcad_model::notice::Notice;
 use mitcad_model::topo::{EdgeName, FaceName};
 use mitcad_model::transform::Transform;
 use mitcad_model::{AnnotationFormat, Document, GeometricTolerance, MeasureKind, Tolerance};
 use mitcad_model_drawing::annotate::{
     self, Along, AnnotationType, BodyGeometry, FlatFace, Frame, PickPoint, RoundFace, Seen,
-    SheetNote, SketchItem, SketchPen, SurfaceFinish, ViewAnnotation, ViewPick, Want,
+    SheetNote, SketchItem, SketchPen, SurfaceFinish, Terminator, ViewAnnotation, ViewPick, Want,
 };
 use mitcad_model_drawing::clip::ViewMap;
 use mitcad_model_drawing::compose::{Bounds, PlacedView, SketchDimension, ViewRole, view_bounds};
@@ -160,6 +160,9 @@ pub(super) struct AddAnnotationCommand {
     /// A line's or an arc's pen.
     #[serde(default)]
     pen: Option<SketchPen>,
+    /// A datum label's terminator (mitcad#1296); left out: by its pick.
+    #[serde(default)]
+    terminator: Option<Terminator>,
 }
 
 /// `edit_drawing_annotation`: what is given changes; `null` sets a field
@@ -172,6 +175,11 @@ pub(super) struct EditAnnotationCommand {
     /// A drag on the sheet: its line or text moves.
     #[serde(default, rename = "move")]
     pub(super) shift: Option<P2>,
+    /// A drag of a datum label's triangle or a frame's arrow on the sheet
+    /// (mitcad#1295): its tip slides along its pick, the square or the
+    /// frame following.
+    #[serde(default)]
+    slide: Option<P2>,
     /// Its dimension line or text through this sheet point; a text note's
     /// new place.
     #[serde(default)]
@@ -207,6 +215,9 @@ pub(super) struct EditAnnotationCommand {
     points: Option<Vec<P2>>,
     #[serde(default)]
     pen: Option<SketchPen>,
+    /// A datum label's terminator (mitcad#1296); `null`: by its pick.
+    #[serde(default, deserialize_with = "present")]
+    terminator: Option<Option<Terminator>>,
 }
 
 /// The `drawing_pick` query: what a click at a sheet point (mm) picks on
@@ -858,6 +869,114 @@ fn cut_line(
     })
 }
 
+/// A planar face's plane where an occurrence places it (mitcad#1296): its
+/// origin and unit normal, and the images of the face's own axes
+/// (`annotate::face_axes`, in its body's coordinates).
+struct WorldPlane {
+    origin: Vec3,
+    normal: Vec3,
+    x: Vec3,
+    y: Vec3,
+}
+
+impl WorldPlane {
+    /// The model point of a point in the face's own coordinates.
+    fn point(&self, on: [f64; 2]) -> Vec3 {
+        mitcad_vec3::add(
+            self.origin,
+            mitcad_vec3::add(
+                mitcad_vec3::scale(self.x, on[0]),
+                mitcad_vec3::scale(self.y, on[1]),
+            ),
+        )
+    }
+
+    /// A model point's coordinates along the face's own axes.
+    fn coordinates(&self, p: Vec3) -> [f64; 2] {
+        let d = sub3(p, self.origin);
+        let along = |axis: Vec3| {
+            let length = mitcad_vec3::dot(axis, axis);
+            if length > 1e-24 {
+                mitcad_vec3::dot(d, axis) / length
+            } else {
+                0.0
+            }
+        };
+        [along(self.x), along(self.y)]
+    }
+}
+
+fn world_plane(face: &FlatFace, transform: &Transform) -> Option<WorldPlane> {
+    let (x, y) = annotate::face_axes(face.normal);
+    Some(WorldPlane {
+        origin: transform.apply_point(face.origin),
+        normal: mitcad_vec3::unit(transform.apply_vector(face.normal))?,
+        x: transform.apply_vector(x),
+        y: transform.apply_vector(y),
+    })
+}
+
+/// Points along a face's boundary curve, closely enough to tell a click
+/// inside the face from one outside (mitcad#1296): a line's ends, a
+/// circle's or an ellipse's points every 7.5 degrees, a B-spline's control
+/// polygon.
+fn curve3_points(curve: &Curve3) -> Vec<Vec3> {
+    match curve {
+        Curve3::Point(_) => Vec::new(),
+        Curve3::Line { start, end } => vec![*start, *end],
+        Curve3::Conic {
+            center,
+            normal,
+            x_axis,
+            major,
+            minor,
+            start,
+            end,
+            closed,
+        } => {
+            let (from, to) = if *closed {
+                (*start, *start + TAU)
+            } else {
+                (*start, *end)
+            };
+            let y_axis = mitcad_vec3::cross(*normal, *x_axis);
+            let n = (((to - from).abs() / (TAU / 48.0)).ceil() as usize).max(2);
+            (0..=n)
+                .map(|i| {
+                    let t = from + (to - from) * i as f64 / n as f64;
+                    mitcad_vec3::add(
+                        *center,
+                        mitcad_vec3::add(
+                            mitcad_vec3::scale(*x_axis, major * t.cos()),
+                            mitcad_vec3::scale(y_axis, minor * t.sin()),
+                        ),
+                    )
+                })
+                .collect()
+        }
+        Curve3::BSpline { poles, .. } => poles.clone(),
+        Curve3::Helix { .. } => Vec::new(),
+    }
+}
+
+/// Whether a view point lies inside an outline of polylines (its loops in
+/// any order and direction; a hole's loop takes its area out).
+fn inside_outline(q: P2, outline: &[Vec<P2>]) -> bool {
+    let mut inside = false;
+    for line in outline {
+        for pair in line.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (a[1] > q[1]) != (b[1] > q[1]) {
+                let x = a[0] + (q[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]);
+                if x > q[0] {
+                    inside = !inside;
+                }
+            }
+        }
+    }
+    inside
+}
+
 /// Its name in undo steps: a dimension, a centre mark, a note, ….
 fn noun(kind: AnnotationType) -> &'static str {
     match kind {
@@ -944,6 +1063,30 @@ fn pictorial_refusal(kind: AnnotationType, along: Option<Along>) -> Option<Strin
          angles would be foreshortened; an aligned dimension measures the true length"
             .to_owned()
     })
+}
+
+/// A dimension's measured value as the sheet writes it without its own
+/// texts: its prefix, value and tolerance, what a `format.replace` takes
+/// the place of (mitcad#1292: the panel's Replace Value shows it).
+fn measured_text(
+    annotation: &ViewAnnotation,
+    value: f64,
+    units: WordUnits,
+    defaults: &DrawingDefaults,
+) -> String {
+    let format = AnnotationFormat {
+        decimals: annotation.format.decimals.or(defaults.decimals),
+        prefix: annotation.format.prefix.clone(),
+        ..AnnotationFormat::default()
+    };
+    let (words, _) = value_text(
+        annotation.kind.measure_kind(),
+        &format,
+        annotation.tolerance.as_ref(),
+        value,
+        units,
+    );
+    words.text
 }
 
 /// The document's methods of this module used across the api, as an
@@ -1360,6 +1503,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         template.tolerance = c.tolerance.clone();
         template.text = c.text.clone();
         template.frame = c.frame.clone();
+        template.terminator = c.terminator;
         template.finish = match kind {
             AnnotationType::Finish => Some(c.finish.clone().unwrap_or_default()),
             _ => c.finish.clone(),
@@ -1458,6 +1602,9 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             {
                 annotate::placed_at(&mut annotation, &own, &frame, at);
             }
+            // A datum's or a frame's tip kept as its place along its edge
+            // (mitcad#1295).
+            annotate::keep_tip_along(&mut annotation, &own);
             if c.series.is_some() {
                 match base {
                     None => {
@@ -1553,7 +1700,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             && c.frame.is_none()
             && c.finish.is_none()
             && c.height.is_none()
-            && c.table.is_none();
+            && c.table.is_none()
+            && c.terminator.is_none();
         let Some(view_id) = view_id else {
             // A text note.
             let note = changed.sheets[si]
@@ -1571,6 +1719,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 || c.line_offset.is_some()
                 || c.text_offset.is_some()
                 || c.table.is_some()
+                || c.slide.is_some()
+                || c.terminator.is_some()
             {
                 return Err(ApiError(
                     "a text note has a text, a place and a height only".to_owned(),
@@ -1631,6 +1781,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             // Drawn afresh about the new picks.
             annotation.line_offset = None;
             annotation.text_offset = None;
+            annotation.tip_along = None;
         }
         if let Some(along) = c.along {
             if along != annotation.along.unwrap_or(along) {
@@ -1688,6 +1839,11 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             // Its own letters' height; `null`: the drawing's (mitcad#729).
             annotation.height = height;
         }
+        if let Some(terminator) = c.terminator {
+            // A datum label's (mitcad#1296; the others refuse it in their
+            // check); `null`: by its pick.
+            annotation.terminator = terminator;
+        }
         if let Some(edit) = &c.table {
             let table = annotation
                 .table
@@ -1701,6 +1857,13 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         {
             return Err(ApiError(why));
         }
+        if c.slide.is_some() && !matches!(kind, AnnotationType::Datum | AnnotationType::Frame) {
+            return Err(ApiError(format!(
+                "a {} has no tip to slide along its edge: a datum label's triangle and a \
+                 feature control frame's arrow slide",
+                noun(kind)
+            )));
+        }
         if kind.is_table() {
             // A table is placed on the sheet, whatever its picks.
             if let Some(at) = c.at {
@@ -1709,7 +1872,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             if let Some(d) = c.shift {
                 annotate::moved(annotation, &[], &view.frame(), d);
             }
-        } else if c.at.is_some() || c.shift.is_some() {
+        } else if c.at.is_some() || c.shift.is_some() || c.slide.is_some() || c.picks.is_some() {
             let points = view.true_distance(kind, annotation.along, &annotation.picks);
             let seen: Vec<Seen> = annotation
                 .picks
@@ -1718,22 +1881,44 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 .collect::<Result<_, _>>()
                 .map_err(|e| ApiError(format!("annotation {id} is broken: {e}")))?;
             let frame = view.frame();
+            // New picks: the tip's place along the new one (mitcad#1295).
+            if c.picks.is_some() {
+                annotate::keep_tip_along(annotation, &seen);
+            }
             if let Some(at) = c.at {
                 annotate::placed_at(annotation, &seen, &frame, at);
+            }
+            if let Some(d) = c.slide {
+                // A dot on a face slides over the face's plane (mitcad#1296).
+                let on_face = annotation
+                    .picks
+                    .first()
+                    .and_then(|p| self.slid_on_face(&view, p, d));
+                match on_face {
+                    Some(on) => annotation.picks[0].on_face = Some(on),
+                    None => annotate::slid(annotation, &seen, &frame, d),
+                }
             }
             if let Some(d) = c.shift {
                 annotate::moved(annotation, &seen, &frame, d);
             }
         }
         annotation.check().map_err(ApiError)?;
-        let verb = if only_moved && (c.at.is_some() || c.shift.is_some()) {
+        let verb = if only_moved && (c.at.is_some() || c.shift.is_some() || c.slide.is_some()) {
             "Move"
         } else {
             "Edit"
         };
+        // A datum label moved (its square dragged, its tip slid) is named
+        // by its letter (mitcad#1294, mitcad#1295: `Move datum A of
+        // Drawing1`).
+        let what = match (&annotation.letter, kind, verb) {
+            (Some(letter), AnnotationType::Datum, "Move") => format!("datum {letter}"),
+            _ => format!("{} {id}", noun(kind)),
+        };
         self.set_drawing_relettered(
             old.uid,
-            format!("{verb} {} {id} of {}", noun(kind), old.name),
+            format!("{verb} {what} of {}", old.name),
             changed,
             &relettered,
         )?;
@@ -1865,6 +2050,12 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 };
                 ("axis", vec![edge(1.0), edge(-1.0)])
             }
+        };
+        // A point on a planar face seen face on (mitcad#1296): the face.
+        let what = if found.pick.on_face.is_some() {
+            "face"
+        } else {
+            what
         };
         Ok(json!({
             "view": id,
@@ -2050,6 +2241,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                         entry["broken"] = json!(false);
                         if let Some(value) = value {
                             entry["value"] = json!(value);
+                            entry["measured"] =
+                                json!(measured_text(annotation, value, words_units, defaults));
                         }
                         entry["label"] = json!(text);
                         if let Some(warning) = warning {
@@ -2243,6 +2436,17 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// the view draws as a visible line, then the one nearest the eye.
     fn pick_at(&self, view: &ViewAt<'_>, at: P2, want: Want) -> Option<Candidate>;
 
+    /// A planar face the view sees face on with the view point `q` inside
+    /// its outline (the one nearest the eye), picked at `q`: its pick the
+    /// face with the point in the face's own coordinates (mitcad#1296, a
+    /// datum label on the face).
+    fn face_on_at(&self, view: &ViewAt<'_>, q: P2) -> Option<Candidate>;
+
+    /// Where a drag by `delta` (sheet) takes a point picked on a planar
+    /// face (`on_face`), in the face's own coordinates: on the face's
+    /// plane (mitcad#1296); None for another pick.
+    fn slid_on_face(&self, view: &ViewAt<'_>, pick: &ViewPick, delta: P2) -> Option<[f64; 2]>;
+
     /// How a view sees a pick now, found again by its name; why not, when
     /// it is gone (or, on a section, in front of its plane).
     fn resolve_found(&self, view: &ViewAt<'_>, pick: &ViewPick) -> Result<Found, String>;
@@ -2399,6 +2603,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 edge: edge.cloned(),
                 face: face.cloned(),
                 point,
+                on_face: None,
             };
             for (edge, curve) in &geometry.edges {
                 let curve = placed_curve(curve, &s.transform);
@@ -2534,7 +2739,136 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             Want::Line => nearest(&is_line, reach),
             Want::Circle => nearest(&is_round, reach),
             Want::Snap => nearest(&is_point, point_reach.max(reach)),
+            // A datum label (mitcad#1296): as Any, else a planar face seen
+            // face on under the click.
+            Want::Datum => nearest(&is_point, point_reach)
+                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach))
+                .or_else(|| self.face_on_at(view, q)),
         }
+    }
+
+    fn face_on_at(&self, view: &ViewAt<'_>, q: P2) -> Option<Candidate> {
+        if !view.sees(q) {
+            return None;
+        }
+        let spec = &view.placed.spec;
+        let eye = spec.toward_eye;
+        let mut best: Option<(f64, Candidate)> = None;
+        for s in &view.shown {
+            let Some(shape) = self.body_shape(s.body) else {
+                continue;
+            };
+            // The kernel's planar faces as they are now (a click inside a
+            // face is rarer than one on an edge: not worth a cache).
+            let Ok(surfaces) = self.kernel().face_geometries(shape) else {
+                continue;
+            };
+            let planes = surfaces.into_iter().filter_map(|(names, surface)| {
+                let SurfaceGeometry::Plane { origin, normal } = surface else {
+                    return None;
+                };
+                let face = names.first()?.parse::<FaceName>().ok()?;
+                Some(FlatFace {
+                    names: vec![face.clone()],
+                    face,
+                    origin,
+                    normal: mitcad_vec3::unit(normal)?,
+                })
+            });
+            for face in planes {
+                let face = &face;
+                let Some(plane) = world_plane(face, &s.transform) else {
+                    continue;
+                };
+                if mitcad_vec3::dot(plane.normal, eye).abs() < 1.0 - 1e-6 {
+                    continue;
+                }
+                let depth = mitcad_vec3::dot(plane.origin, eye);
+                if best.as_ref().is_some_and(|(d, _)| *d >= depth) {
+                    continue;
+                }
+                let Ok(boundary) = self.kernel().face_boundary(shape, &face.face) else {
+                    continue;
+                };
+                let outline: Vec<Vec<P2>> = boundary
+                    .iter()
+                    .map(|(_, curve)| {
+                        curve3_points(curve)
+                            .into_iter()
+                            .map(|p| spec.project(s.transform.apply_point(p)))
+                            .collect()
+                    })
+                    .collect();
+                if !inside_outline(q, &outline) {
+                    continue;
+                }
+                // The click on the face's plane, in the face's own
+                // coordinates.
+                let at = mitcad_vec3::add(
+                    mitcad_vec3::add(
+                        mitcad_vec3::scale(spec.x_axis, q[0]),
+                        mitcad_vec3::scale(spec.y_axis(), q[1]),
+                    ),
+                    mitcad_vec3::scale(eye, depth),
+                );
+                let on = plane.coordinates(at);
+                let occurrence = (!s.path.is_empty()).then(|| OccurrencePath(s.path.clone()));
+                best = Some((
+                    depth,
+                    Candidate {
+                        pick: ViewPick {
+                            body: s.body,
+                            occurrence,
+                            edge: None,
+                            face: Some(face.face.clone()),
+                            point: None,
+                            on_face: Some(on),
+                        },
+                        found: Found {
+                            seen: Seen::Point(spec.project(at)),
+                            at,
+                        },
+                    },
+                ));
+            }
+        }
+        best.map(|(_, c)| c)
+    }
+
+    fn slid_on_face(&self, view: &ViewAt<'_>, pick: &ViewPick, delta: P2) -> Option<[f64; 2]> {
+        let on = pick.on_face?;
+        let face = pick.face.as_ref()?;
+        let s = view
+            .shown
+            .iter()
+            .find(|s| s.body == pick.body && s.path.as_slice() == pick.path())?;
+        let shape = self.body_shape(s.body)?;
+        let SurfaceGeometry::Plane { origin, normal } =
+            self.kernel().face_geometry(shape, face).ok()?
+        else {
+            return None;
+        };
+        let flat = FlatFace {
+            face: face.clone(),
+            names: vec![face.clone()],
+            origin,
+            normal: mitcad_vec3::unit(normal)?,
+        };
+        let plane = world_plane(&flat, &s.transform)?;
+        let spec = &view.placed.spec;
+        // The drag on the sheet, in the model: along the view's axes, at
+        // the paper's scale, onto the face's plane.
+        let scale = view.placed.map.scale;
+        let shift = mitcad_vec3::add(
+            mitcad_vec3::scale(spec.x_axis, delta[0] / scale),
+            mitcad_vec3::scale(spec.y_axis(), delta[1] / scale),
+        );
+        let moved = mitcad_vec3::add(plane.point(on), shift);
+        let off = mitcad_vec3::dot(sub3(moved, plane.origin), plane.normal);
+        Some(plane.coordinates(mitcad_vec3::add(
+            moved,
+            mitcad_vec3::scale(plane.normal, -off),
+        )))
     }
 
     fn resolve_found(&self, view: &ViewAt<'_>, pick: &ViewPick) -> Result<Found, String> {
@@ -2568,6 +2902,27 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             .kernel()
             .face_geometry(shape, face)
             .map_err(|_| format!("the face {face} of {} is gone", s.name))?;
+        // A point on a planar face (mitcad#1296: a datum label on it): where
+        // the face's own coordinates put it now, seen as a point.
+        if let Some(on) = pick.on_face {
+            let SurfaceGeometry::Plane { origin, normal } = surface else {
+                return Err(format!("the face {face} of {} is not planar", s.name));
+            };
+            let flat = FlatFace {
+                face: face.clone(),
+                names: vec![face.clone()],
+                origin,
+                normal: mitcad_vec3::unit(normal)
+                    .ok_or_else(|| format!("the face {face} has no normal"))?,
+            };
+            let plane = world_plane(&flat, &s.transform)
+                .ok_or_else(|| format!("the face {face} of {} has no plane", s.name))?;
+            let at = plane.point(on);
+            return Ok(Found {
+                seen: Seen::Point(view.placed.spec.project(at)),
+                at,
+            });
+        }
         let geometry = self.body_geometry(s.body)?;
         let found = match surface {
             SurfaceGeometry::Cylinder {
@@ -2916,6 +3271,8 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             || c.line_offset.is_some()
             || c.text_offset.is_some()
             || c.table.is_some()
+            || c.slide.is_some()
+            || c.terminator.is_some()
         {
             return Err(ApiError(
                 "a line, an arc or a text drawn outside the model has its points (a text its \

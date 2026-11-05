@@ -372,11 +372,154 @@ void CommandSession::setRowDefaults() {
   }
 }
 
+PanelSettings CommandSession::panelSettings(bool kept) const {
+  PanelSettings settings;
+  for (const InputDef& input : m_def.inputs) {
+    switch (input.type) {
+    case InputDef::Type::Value:
+      settings.values.insert(input.id, kept ? rememberedText(m_state.text(input.id), m_state.expression(input.id))
+                                            : m_state.text(input.id));
+      break;
+    case InputDef::Type::Choice:
+      settings.choices.insert(input.id, m_state.choice(input.id));
+      break;
+    case InputDef::Type::Check:
+    case InputDef::Type::Flip:
+      settings.checks.insert(input.id, m_state.checked(input.id));
+      break;
+    default:
+      break;
+    }
+  }
+  return settings;
+}
+
+QSet<QString> CommandSession::changedSinceStart() const {
+  QSet<QString> changed;
+  for (const QString& id : changedSettings(m_startSettings, panelSettings(false))) {
+    changed.insert(id);
+  }
+  return changed;
+}
+
+bool CommandSession::evaluatesHere(const QString& text, const InputDef& input) {
+  try {
+    const QJsonObject answer = m_host.queryObject({{QStringLiteral("query"), QStringLiteral("evaluate")},
+                                                   {QStringLiteral("expression"), text},
+                                                   {QStringLiteral("printed_fits"), !input.printedFitFeature.isEmpty()},
+                                                   {QStringLiteral("kind"), kindKey(input.valueKind)}});
+    return std::isfinite(answer.value(QStringLiteral("value")).toDouble(std::numeric_limits<double>::quiet_NaN()));
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+void CommandSession::considerKeptSettings(const QSet<QString>& changed) {
+  if (!m_def.settingsKey || isEditing() || !m_analysis.isEmpty() || !panelValuesRemembered()) {
+    return;
+  }
+  m_settingsKey = m_def.settingsKey(m_state, m_host);
+  const QString now = m_settingsKey ? m_settingsKey->text() : QString();
+  // Once per size: another pick of the same size changes nothing.
+  if (now == m_consideredKey) {
+    return;
+  }
+  m_consideredKey = now;
+  if (!m_settingsKey) {
+    return;
+  }
+  const std::optional<PanelSettings> kept = keptPanelSettings(m_def.id);
+  if (!kept) {
+    return;
+  }
+  const QString kind = m_def.featureType.isEmpty() ? m_def.name.toLower() : m_def.featureType;
+  if (!kept->key.matches(*m_settingsKey)) {
+    qDebug().noquote() << QStringLiteral("Panel %1: settings of the last %2 %3 not used: %4 differs")
+                              .arg(m_def.name, kept->key.text(), kind, now);
+    return;
+  }
+  // In the inputs' order, so that a choice's options follow the ones
+  // before it (Thread's sizes follow its Thread Type).
+  QStringList restored;
+  QStringList left;
+  for (const InputDef& input : m_def.inputs) {
+    const QString& id = input.id;
+    switch (input.type) {
+    case InputDef::Type::Value: {
+      const QString text = kept->values.value(id).trimmed();
+      if (text.isEmpty() || text == m_state.text(id).trimmed()) {
+        break;
+      }
+      if (changed.contains(id)) {
+        left << id;
+      } else if (!evaluatesHere(text, input)) {
+        qDebug().noquote() << QStringLiteral("Panel %1 %2: kept %3 does not evaluate here").arg(m_def.name, id, text);
+      } else {
+        m_state.setText(id, text);
+        // (Before the panel is there, setPresenter evaluates every value.)
+        if (m_presenter) {
+          evaluate(id);
+        } else {
+          m_state.setValue(id, std::numeric_limits<double>::quiet_NaN());
+        }
+        restored << QStringLiteral("%1=%2").arg(id, text);
+      }
+      break;
+    }
+    case InputDef::Type::Choice: {
+      if (!kept->choices.contains(id) || kept->choices.value(id) == m_state.choice(id)) {
+        break;
+      }
+      const QString value = kept->choices.value(id);
+      const QVector<QPair<QString, QString>> options = input.choicesIn(m_state);
+      if (changed.contains(id)) {
+        left << id;
+      } else if (options.isEmpty() || std::any_of(options.cbegin(), options.cend(), [&value](const auto& option) {
+                   return option.first == value;
+                 })) {
+        m_state.setChoice(id, value);
+        restored << QStringLiteral("%1=%2").arg(id, value);
+      }
+      break;
+    }
+    case InputDef::Type::Check:
+    case InputDef::Type::Flip: {
+      if (!kept->checks.contains(id) || kept->checks.value(id) == m_state.checked(id)) {
+        break;
+      }
+      if (changed.contains(id)) {
+        left << id;
+      } else {
+        const bool on = kept->checks.value(id);
+        m_state.setChecked(id, on);
+        restored << QStringLiteral("%1=%2").arg(id, on ? QStringLiteral("on") : QStringLiteral("off"));
+      }
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  qDebug().noquote() << QStringLiteral("Panel %1: settings of the last %2 %3 restored").arg(m_def.name, now, kind);
+  if (!restored.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 restored: %2").arg(m_def.name, restored.join(QStringLiteral(", ")));
+  }
+  if (!left.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 left as changed: %2").arg(m_def.name, left.join(QStringLiteral(", ")));
+  }
+  if (m_presenter) {
+    m_presenter->refresh(m_state);
+  }
+}
+
 bool CommandSession::start(const Selection& preselection, QString& error) {
   for (const InputDef& input : m_def.inputs) {
     setDefaults(input, input.id);
   }
   setRowDefaults();
+  // Where the panel starts: an input that differs from it later was changed
+  // (mitcad#1298, considerKeptSettings).
+  m_startSettings = panelSettings(false);
 
   if (isEditing()) {
     QJsonObject feature;
@@ -474,6 +617,7 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
     setRowDefaults();
   } else if (m_def.preselect) {
     m_def.preselect(preselection, m_state, m_host);
+    considerKeptSettings({});
     if (m_def.init) {
       m_def.init(m_state, m_host);
     }
@@ -505,6 +649,9 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
     if (m_def.preselected) {
       m_def.preselected(preselection, m_state, m_host);
     }
+    // The faces selected before Thread give its size (mitcad#1298): a match
+    // starts the panel from the last thread's settings.
+    considerKeptSettings({});
     if (m_def.init) {
       m_def.init(m_state, m_host);
     }
@@ -1334,6 +1481,12 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   // edit split is part of the entry that means the whole region: a click
   // takes just that piece out (mitcad#410).
   const ItemResolver resolve = resolver();
+  // What the user changed before the pick, not what the pick's own
+  // reaction sets (Thread's suggested size): the kept settings leave only
+  // those as they are (mitcad#1298, selectionChanged).
+  if (m_def.settingsKey) {
+    m_changedBeforePick = changedSinceStart();
+  }
   if (window) {
     // A window keeps one kind, and adds to what is there. Through a
     // selection filter context (mitcad#217) it keeps every kind the
@@ -1378,6 +1531,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
     // A click on an item of the input's kinds that it does not take: what
     // to click instead, in the status bar (InputDef::refusedHint,
     // mitcad#857). A click on nothing changes nothing in a command.
+    m_changedBeforePick.reset();
     if (!window && input->refusedHint) {
       const std::optional<SelectionItem> refused =
           !items.isEmpty() ? std::optional<SelectionItem>(items.first()) : m_host.viewer().takeRefusedClick();
@@ -1443,6 +1597,14 @@ void CommandSession::advanceIfFull() {
 
 void CommandSession::selectionChanged(const QString& key) {
   autoOperationOverruled(key);
+  // A new size from the picks (mitcad#1298): the last settings of the same
+  // size, before the selection's own reaction (Thread's side keeps the
+  // class on it).
+  if (m_def.settingsKey) {
+    const QSet<QString> changed = m_changedBeforePick ? *m_changedBeforePick : changedSinceStart();
+    m_changedBeforePick.reset();
+    considerKeptSettings(changed);
+  }
   if (const auto slot = slotOf(key); slot && slot->def->onChange) {
     slot->def->onChange(m_state, m_host);
     // Values it set (made NaN) are evaluated again, as after a pick or a
@@ -4732,6 +4894,15 @@ void CommandSession::finish(bool committed) {
       kept.append(qMakePair(input.id, rememberedText(m_state.text(slot.key), m_state.expression(slot.key))));
     }
     rememberPanelValues(m_def.id, kept, committed, isEditing());
+  }
+  // And the whole panel's settings with the size it was made for
+  // (mitcad#1298): Thread's, for the next thread of that size.
+  if (committed && m_def.settingsKey && m_settingsKey && !isEditing() && m_analysis.isEmpty() &&
+      panelValuesRemembered()) {
+    PanelSettings settings = panelSettings(true);
+    settings.key = *m_settingsKey;
+    keepPanelSettings(m_def.id, settings, committed, isEditing());
+    qDebug().noquote() << QStringLiteral("Panel %1: settings kept with %2").arg(m_def.name, settings.key.text());
   }
   m_pendingNumbers.clear();
   m_previewTimer.stop();

@@ -34,6 +34,7 @@
 
 #include "DragProxy.hpp"
 #include "NoticeLevel.hpp"
+#include "RememberedValues.hpp"
 #include "Selection.hpp"
 #include "mitcad/geometry/shape.hpp"
 
@@ -1162,6 +1163,15 @@ struct CommandDef {
   // with whether it was committed: what it opened beside its panel goes
   // with it (BUILD's part picker, mitcad#418).
   std::function<void(bool committed)> ended;
+  // The size a new feature's panel settings are kept with (mitcad#1298,
+  // framework/RememberedValues.hpp, app/COMMANDS.md "Remembered values":
+  // Thread's first cylindrical face, its diameter and side), none while it
+  // is not known. When set, a new feature's OK keeps every value, choice
+  // and check of the panel with it, and once a pick or the selection made
+  // before the command makes the size known, a panel whose size matches the
+  // kept one starts from those settings, but for the inputs the user
+  // changed before. Editing a feature and Cancel keep nothing.
+  std::function<std::optional<PanelSizeKey>(const CommandState&, const CommandContext&)> settingsKey;
   // Items drawn in a colour of their own while the panel is open, besides
   // the inputs' picks (3D Print's print bed faces to choose from,
   // mitcad#857); a click on one picks it as on the item. Asked whenever

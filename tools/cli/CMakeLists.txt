@@ -1339,9 +1339,16 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
             "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/drawing_cross_holes.json"
             "-DWORK=${drawing}/hidden-holes" -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-hidden-holes-test.cmake")
+  # A drawing keeps what was put into it: neither visibility in the 3D view
+  # nor a new placement changes a view, a deleted one is named, an older
+  # file's view is pinned to what it showed (mitcad#1293).
+  add_test(NAME cli.drawing_keeps_content
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/drawing_keeps_content.json"
+            "-DWORK=${drawing}/keeps-content" -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-keeps-content-test.cmake")
   if(WIN32)
-    set_property(TEST cli.drawing_design cli.export_drawing cli.drawing_hidden_holes APPEND PROPERTY
-      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    set_property(TEST cli.drawing_design cli.export_drawing cli.drawing_hidden_holes cli.drawing_keeps_content
+      APPEND PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()
 
