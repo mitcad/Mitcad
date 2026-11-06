@@ -83,19 +83,10 @@ constexpr bool kMacKeys = true;
 constexpr bool kMacKeys = false;
 #endif
 
-// +1 for Up, -1 for Down with modifiers that step (none, Shift, the fine
-// one); 0 for any other key.
-int stepDirection(const QKeyEvent& key) {
-  if (valueStepFactor(key.modifiers(), kMacKeys) <= 0.0) {
-    return 0;
-  }
-  return key.key() == Qt::Key_Up ? 1 : key.key() == Qt::Key_Down ? -1 : 0;
-}
-
 // "Up", "Shift+Up", "Ctrl+Down" ("Alt+Down" for Option on macOS), for the log.
-QString stepKeyName(const QKeyEvent& key) {
-  const Qt::KeyboardModifiers held = key.modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier);
-  return QKeySequence(QKeyCombination(held, static_cast<Qt::Key>(key.key()))).toString(QKeySequence::PortableText);
+QString stepKeyName(int key, Qt::KeyboardModifiers modifiers) {
+  const Qt::KeyboardModifiers held = modifiers & ~Qt::KeyboardModifiers(Qt::KeypadModifier);
+  return QKeySequence(QKeyCombination(held, static_cast<Qt::Key>(key))).toString(QKeySequence::PortableText);
 }
 
 // The window's parameter source, kept as a child of the window.
@@ -926,34 +917,109 @@ void ParameterField::logFx() {
   }
 }
 
-void ParameterField::stepValue(double by, const QString& how) {
-  const QString before = m_edit->text();
+double ParameterField::keyStep(int key, Qt::KeyboardModifiers modifiers, QString* name) {
+  const double factor = valueStepFactor(modifiers, kMacKeys);
+  const int direction = key == Qt::Key_Up ? 1 : key == Qt::Key_Down ? -1 : 0;
+  if (factor <= 0.0 || direction == 0) {
+    return 0.0;
+  }
+  if (name != nullptr) {
+    *name = stepKeyName(key, modifiers);
+  }
+  return direction * factor;
+}
+
+std::optional<double> ParameterField::wheelStep(int angle, Qt::KeyboardModifiers modifiers, int& pending) {
+  const double factor = valueStepFactor(modifiers, kMacKeys);
+  if (factor <= 0.0 || angle == 0) {
+    return std::nullopt;
+  }
+  // A notch is 120; a touchpad's smaller turns add up to one.
+  pending += angle;
+  const int notches = pending / 120;
+  pending -= notches * 120;
+  return notches * factor;
+}
+
+bool ParameterField::stepText(const QString& before, const ParameterFieldOptions& options, double by,
+                              const QString& how, const QWidget* within,
+                              const std::function<void(const QString&)>& apply) {
   // A bare length is in the design's unit, which a minimum in mm is read in.
+  const QString what = options.label.isEmpty() ? QStringLiteral("value") : options.label;
   double bareUnit = 1.0;
-  if (m_options.kind == ParameterKind::Length) {
-    if (const ParameterSource* source = parameterSourceOf(m_edit); source != nullptr && source->lengthUnit) {
-      bareUnit = lengthUnitSize(source->lengthUnit());
+  if (options.kind == ParameterKind::Length && within != nullptr) {
+    if (const ParameterSource* source = parameterSourceOf(within); source != nullptr && source->lengthUnit) {
+      // A source that cannot answer now (ModelBusy while a job computes
+      // the model, mitcad#1360): the key does nothing, as with the field's
+      // other reads of the model; out of the key's handling the exception
+      // ended the application.
+      try {
+        bareUnit = lengthUnitSize(source->lengthUnit());
+      } catch (const std::exception& error) {
+        qDebug().noquote() << QStringLiteral("Value field %1: %2 not stepped: %3")
+                                  .arg(what, how, QString::fromUtf8(error.what()));
+        return false;
+      }
     }
   }
-  const QString what = m_options.label.isEmpty() ? QStringLiteral("value") : m_options.label;
-  const std::optional<QString> after = steppedValue(before, m_options.kind, by, m_options.stepLimit, bareUnit);
+  const std::optional<QString> after = steppedValue(before, options.kind, by, options.stepLimit, bareUnit);
   if (!after) {
     // An expression or a parameter's name keeps what it says.
     qDebug().noquote() << QStringLiteral("Value field %1: %2 not stepped: %3 is not a plain value")
                               .arg(what, how, before);
-    return;
+    return false;
   }
   if (*after == before) {
     qDebug().noquote() << QStringLiteral("Value field %1: %2 not stepped: %3 is at its minimum").arg(what, how, before);
-    return;
+    return false;
   }
-  // As typed: textEdited (the panel's value and its preview, a sketch
-  // tool's value), and the field's own undo; no suggestions for the unit.
-  m_inserting = true;
-  m_edit->selectAll();
-  m_edit->insert(*after);
-  m_inserting = false;
+  if (apply) {
+    apply(*after);
+  }
   qDebug().noquote() << QStringLiteral("Value field %1: %2 stepped %3 to %4").arg(what, how, before, *after);
+  return true;
+}
+
+QString ParameterField::stepTooltip(const QString& tooltip) {
+  const QString hint = valueStepHint(kMacKeys);
+  return tooltip.isEmpty()              ? hint
+         : Qt::mightBeRichText(tooltip) ? QStringLiteral("%1<br>%2").arg(tooltip, hint.toHtmlEscaped())
+                                        : QStringLiteral("%1\n%2").arg(tooltip, hint);
+}
+
+bool ParameterField::nativeStepKey(int key, Qt::KeyboardModifiers modifiers) {
+  QString how;
+  const double by = m_options.steps && !isOpen() ? keyStep(key, modifiers, &how) : 0.0;
+  if (by == 0.0) {
+    return false;
+  }
+  stepValue(by, how);
+  return true;
+}
+
+bool ParameterField::nativeStepWheel(int angle, Qt::KeyboardModifiers modifiers) {
+  if (!m_options.steps || isOpen()) {
+    return false;
+  }
+  const std::optional<double> by = wheelStep(angle, modifiers, m_wheel);
+  if (!by) {
+    return false;
+  }
+  if (*by != 0.0) {
+    stepValue(*by, QStringLiteral("wheel"));
+  }
+  return true;
+}
+
+void ParameterField::stepValue(double by, const QString& how) {
+  stepText(m_edit->text(), m_options, by, how, m_edit, [this](const QString& after) {
+    // As typed: textEdited (the panel's value and its preview, a sketch
+    // tool's value), and the field's own undo; no suggestions for the unit.
+    m_inserting = true;
+    m_edit->selectAll();
+    m_edit->insert(after);
+    m_inserting = false;
+  });
 }
 
 void ParameterField::move(int step) {
@@ -1352,12 +1418,7 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
     // with a line on how its value steps (mitcad#1254). Added as it shows:
     // the field's owner sets its tooltip again as its parameter changes.
     if (m_options.steps) {
-      const QString own = m_edit->toolTip();
-      const QString hint = valueStepHint(kMacKeys);
-      const QString tip = own.isEmpty()            ? hint
-                          : Qt::mightBeRichText(own) ? QStringLiteral("%1<br>%2").arg(own, hint.toHtmlEscaped())
-                                                     : QStringLiteral("%1\n%2").arg(own, hint);
-      QToolTip::showText(help->globalPos(), tip, m_edit);
+      QToolTip::showText(help->globalPos(), stepTooltip(m_edit->toolTip()), m_edit);
       return true;
     }
     break;
@@ -1369,7 +1430,7 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
     if (!isOpen()) {
       // With the list closed, the step keys are the field's (mitcad#1254),
       // not a window's shortcut (the 3D view's arrow keys, mitcad#1211).
-      if (m_options.steps && stepDirection(*offered) != 0) {
+      if (m_options.steps && keyStep(offered->key(), offered->modifiers()) != 0.0) {
         event->accept();
         return true;
       }
@@ -1388,8 +1449,9 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
     if (!isOpen()) {
       // Up and Down step a plain value (mitcad#1254); with an expression
       // they do nothing (stepValue logs why).
-      if (const int direction = m_options.steps ? stepDirection(*key) : 0; direction != 0) {
-        stepValue(direction * valueStepFactor(key->modifiers(), kMacKeys), stepKeyName(*key));
+      QString how;
+      if (const double by = m_options.steps ? keyStep(key->key(), key->modifiers(), &how) : 0.0; by != 0.0) {
+        stepValue(by, how);
         return true;
       }
       break;
@@ -1461,19 +1523,14 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
       break;
     }
     auto* wheel = static_cast<QWheelEvent*>(event);
-    const double factor = valueStepFactor(wheel->modifiers(), kMacKeys);
     const QPoint turned = wheel->angleDelta();
     // Shift with a mouse wheel comes sideways on some systems (macOS).
-    const int amount = turned.y() != 0 ? turned.y() : turned.x();
-    if (factor <= 0.0 || amount == 0) {
+    const std::optional<double> by = wheelStep(turned.y() != 0 ? turned.y() : turned.x(), wheel->modifiers(), m_wheel);
+    if (!by) {
       break;
     }
-    // A notch is 120; a touchpad's smaller turns add up to one.
-    m_wheel += amount;
-    const int notches = m_wheel / 120;
-    m_wheel -= notches * 120;
-    if (notches != 0) {
-      stepValue(notches * factor, QStringLiteral("wheel"));
+    if (*by != 0.0) {
+      stepValue(*by, QStringLiteral("wheel"));
     }
     wheel->accept();
     return true;

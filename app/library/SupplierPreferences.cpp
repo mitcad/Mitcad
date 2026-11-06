@@ -28,7 +28,7 @@ QString listText(const QStringList& items) {
 } // namespace
 
 SupplierPreferencesBox::SupplierPreferencesBox(QWidget* parent)
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     : QWidget(parent),
 #else
     : QGroupBox(tr("Suppliers"), parent),

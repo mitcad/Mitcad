@@ -888,7 +888,12 @@ candidates against the next state:
   size and 1e-3 mm), and the edge's
   midpoint is as far from the state as that size leaves at its corner
   angle (within 10 %). Edges between faces that meet tangentially are
-  no dressup's. Tried in order: all those edges at once; one tangent
+  no dressup's. Tried in order: first, where there are such edges, all
+  those edges with the concave ones whose dressup the state has at any
+  distance (a rounding of a concave edge whose face beside it is a strip
+  narrower than the ball rolls on the strip's far edge and leaves the
+  edge much nearer the state than the ball's depth: a fin's side strips,
+  mitcad#1388); all those edges at once; one tangent
   chain after another (sets and edges in order); those edges with the
   gone edges that continue them tangentially (a rounding that ends where
   its edge runs on tangentially takes the next edge's middle away too,

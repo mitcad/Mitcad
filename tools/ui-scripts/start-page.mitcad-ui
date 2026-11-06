@@ -20,6 +20,10 @@
 #   7. The Start tab again: New Design gives an empty design in inches.
 # Run with MITCAD_START_PAGE=1 by tools/ui-start-page-test.sh (Linux) and
 # tools/ui-windows-start-page-test.ps1 (Windows).
+# tools/ui-macos-start-page-test.sh runs it in both macOS frontends; for
+# AppKit it replaces the three steps that read the Qt ribbon's Start tab
+# place (the 'Ribbon tab START at ' lines) with the native workspace
+# selector (mitcad#1381): keep those steps as they are.
 expect-ever '^Start page at launch: shown$' 30
 expect-ever '^Start page shown$' 30
 wait-idle

@@ -1172,7 +1172,7 @@ Three generators make the library with `mitcad-cli`:
 
 ```
 tools/libraries/make-parts-library.py --cli <mitcad-cli> --source <folder of the supplier's files>
-    --out <clone of the parts repository> [--groups <folder>] [--version 2.10.0] [--work <folder>]
+    --out <clone of the parts repository> [--groups <folder>] [--version 2.11.0] [--work <folder>]
     [--render-worker <mitcad-render>] [--no-render] [--rerender] [--commit]
 tools/libraries/make-fastener-library.py --cli <mitcad-cli> --out <folder> [--sizes M3,M5]
     [--standards iso4762,iso4032] [--version 1.0.0] [--render-worker <mitcad-render>] [--no-render]
@@ -1182,6 +1182,7 @@ tools/libraries/make-profile-library.py --cli <mitcad-cli> --source <folder of t
     [--render-worker <mitcad-render>] [--no-render] [--rerender] [--merge] [--commit]
 tools/libraries/profiles/*.json       the BUILD parts, one file per group
 tools/libraries/library_previews.py   the fasteners' studio and finishes (both generators use it)
+tools/libraries/library_tags.py       the version tags: a tag the --out repository has is refused
 ```
 
 - `make-parts-library.py` makes the library: first the fasteners, then
@@ -1189,7 +1190,17 @@ tools/libraries/library_previews.py   the fasteners' studio and finishes (both g
   `LICENSE`, `README.md` and `SOURCES.md`. Then it checks the folder.
   `--out` is a clone of the components repository, so that its versions
   stay. `--commit` records the result on top of them and tags it. The
-  default tag is `v2.10.0`, the next version to publish.
+  default tag is `v2.11.0`, the next version to publish. 2.11.0 adds the
+  square and rectangular steel tubes to ASTM A500 (HSS) in inch sizes and
+  the square and rectangular steel tubes of a typed size; the library's
+  `README.md` lists what each recent version added.
+- A version is tagged once. With `--commit`, each of the three
+  generators refuses a `--version` whose tag (`v<version>`) the
+  repository in `--out` already has. It names the tag and stops before
+  it makes anything, so a published version never gets other contents.
+  Fetch the clone's tags first, and give the next version. A folder that
+  is no git repository of its own has no tags
+  (`tools/libraries/library_tags.py`; test `cli.library-tags`).
 - `make-fastener-library.py` builds the fasteners from the standards'
   dimension tables. Each fastener has its finish as its appearance and
   a rendered preview ([Previews](#previews)).
@@ -1327,7 +1338,8 @@ python tools\libraries\make-parts-library.py --cli build\dev\tools\cli\mitcad-cl
 
 It prints `preview <id>: rendered|kept|drawn (<finish>)` for every
 fastener. It ends with the library check. `--commit` records and tags
-the result. To publish a version is the maintainers' step.
+the result; a version the clone has already tagged is refused before
+the build starts. To publish a version is the maintainers' step.
 
 ### The Build components
 
@@ -1746,7 +1758,9 @@ times its larger side long. Thus the tiles show the sections
 Then the generator writes the manifest, an MIT `LICENSE`, `README.md`
 and `SOURCES.md` (the source file, supplier, part number and URL of each
 component). It checks the folder with `library check`. Errors stop it. With
-`--commit`, it records and tags the result (`v<version>`).
+`--commit`, it records and tags the result (`v<version>`); a version
+whose tag the folder's repository already has is refused before it
+makes anything.
 
 A component that the generator cannot make is reported by id on one line
 (`left out <id>: <reason>`) and left out. The causes:

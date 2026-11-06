@@ -36,6 +36,7 @@
 #include "files/CloudAddress.hpp"
 #include "files/Print3d.hpp"
 #include "framework/Cursors.hpp"
+#include "framework/Application.hpp"
 #include "framework/AtomicCopy.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/WorkerThreadStart.hpp"
@@ -2867,9 +2868,15 @@ int orbitWrapTests();
 int startBrowserTests();
 int noticePlacesTests();
 int drawingPreferencesTests();
+int busyInputTests();
+int sketchTextPickTests();
+int ribbonFitTests();
+int updateOfferTests();
+int lineArcsTests();
 
 int main(int argc, char* argv[]) {
-  QApplication app(argc, argv);
+  // The application's own class: its notify() is tested (busy_input.cpp).
+  mitcad::Application app(argc, argv);
   const bool renderDevicesOnly = app.arguments().contains(QStringLiteral("--render-devices"));
   if (renderDevicesOnly) {
     renderDeviceChoiceTests();
@@ -3011,6 +3018,11 @@ int main(int argc, char* argv[]) {
     failures += startBrowserTests();
     failures += noticePlacesTests();
     failures += drawingPreferencesTests();
+    failures += busyInputTests();
+    failures += sketchTextPickTests();
+    failures += ribbonFitTests();
+    failures += updateOfferTests();
+    failures += lineArcsTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

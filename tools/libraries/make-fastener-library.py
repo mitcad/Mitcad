@@ -12,7 +12,8 @@ fasteners are CC0-1.0 (each component's own licence), the library MIT.
 With --merge the library's other parts already in the manifest (the
 profile generator's; tools/libraries/make-parts-library.py runs both) stay.
 With --commit the folder becomes a git repository with the version recorded
-and tagged.
+and tagged; a version whose tag the repository already has is refused
+before anything is made (library_tags.py, mitcad#1372).
 
     python3 make-fastener-library.py --cli build/dev/tools/cli/mitcad-cli \
         --out ../libraries/mitcad-parts [--sizes M3,M5] \
@@ -46,6 +47,7 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import library_previews as previews  # noqa: E402
 import fastener_suppliers  # noqa: E402
+import library_tags  # noqa: E402
 
 LIBRARY_ID = "mitcad-parts"
 LIBRARY_NAME = "Mitcad parts"
@@ -912,6 +914,9 @@ def main():
     if not items:
         sys.exit("no standards to make")
     out = os.path.abspath(args.out)
+    if args.commit:
+        # A version is tagged once (mitcad#1372).
+        library_tags.refuse_existing_tag(out, args.version, "make-fastener-library")
     os.makedirs(out, exist_ok=True)
     if not os.path.isfile(os.path.join(out, ".mitcad", "project.json")):
         run([args.cli, "project", "init", out, "--no-history"])
@@ -1020,7 +1025,7 @@ def main():
         status = run(["git", "-C", out, "status", "--porcelain"])
         if status.strip():
             run(["git", "-C", out] + identity + ["commit", "-q", "-m", f"{LIBRARY_NAME} {args.version}"])
-        run(["git", "-C", out] + identity + ["tag", "-a", "-f", f"v{args.version}", "-m",
+        run(["git", "-C", out] + identity + ["tag", "-a", library_tags.tag_of(args.version), "-m",
                                               f"{LIBRARY_NAME} {args.version}"])
     print(f"{LIBRARY_ID} {args.version}: {made} components in {out}")
     previews.strict_exit(args.strict, "make-fastener-library")

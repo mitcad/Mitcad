@@ -4,6 +4,7 @@
 #include <functional>
 #include <utility>
 
+#include <QColor>
 #include <QHash>
 #include <QPair>
 #include <QPoint>
@@ -104,8 +105,13 @@ public:
   // details (the feature details provider) and state, or a folded group's
   // name and size; empty for an unknown feature.
   QString featureToolTip(const QString& uid);
-  // Renames a feature in place.
+  // Renames a feature in place, or in another presentation of the timeline
+  // when one is set (mitcad#1356: the AppKit timeline's Rename Feature
+  // dialog, which its F2 opens too).
   void startRename(const QString& uid);
+  void setPresentationRenamer(std::function<void(const QString& uid)> renamer) {
+    m_presentationRenamer = std::move(renamer);
+  }
   // Closes an open rename editor without renaming; false when none is open.
   bool cancelEditing();
   // Logs where the features and the marker are, for UI tests (when changed).
@@ -124,6 +130,15 @@ public:
   QString searchCountText() const;
   QStringList searchMatches() const { return m_matches; }
   int currentSearchMatch() const { return m_match; }
+  // A match's tooltip in the results: its name, then its level word,
+  // Suppressed or Rolled back (mitcad#1040, mitcad#1104); the AppKit
+  // results show the same (mitcad#1358).
+  QString searchResultToolTip(const QString& uid) const;
+  // A match's component colour in the results, its swatch beside the
+  // component's name: the band colour the strip draws under the feature
+  // (mitcad#1104); invalid for a feature of the root, which has no band and
+  // no swatch. The AppKit results draw the same (mitcad#1380).
+  QColor searchResultColor(const QString& uid) const;
   void stepSearch(int delta);
   void goToMatch(int index);
   void showSearchMenu(const QPoint& globalPosition);
@@ -202,6 +217,7 @@ private:
   void wheelStrip(QWheelEvent* event);
 
   std::function<QString(const QString&)> m_featureDetails;
+  std::function<void(const QString&)> m_presentationRenamer; // setPresentationRenamer
   QStringList m_hoveredFeatures;
   const CommandContext& m_model;
   DocumentSnapshot m_snapshot; // the last rebuild's

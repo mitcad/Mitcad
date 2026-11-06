@@ -5,33 +5,18 @@
 // points that snapped onto geometry are constrained there.
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 #include <QObject>
 #include <QtLogging>
 
+#include "LineArcs.hpp"
 #include "SketchController.hpp"
 #include "SketchTool.hpp"
 #include "ToolSupport.hpp"
 
 namespace mitcad::sketch {
-
-std::optional<Curve2> tangentArc(const V2& start, const V2& direction, const V2& end) {
-  const V2 t = unit(direction);
-  const V2 n = perp(t);
-  const V2 d = end - start;
-  const double side = dot(n, d);
-  if (std::abs(side) < 1e-9 * std::max(1.0, norm(d))) {
-    return std::nullopt;
-  }
-  const double k = dot(d, d) / (2.0 * side);
-  const V2 center = start + n * k;
-  const double radius = std::abs(k);
-  const double a0 = angleOf(start - center);
-  const double a1 = angleOf(end - center);
-  // Leaving along t: counter-clockwise when the centre is on the left.
-  return k > 0 ? Curve2::arc(center, radius, a0, a1) : Curve2::arc(center, radius, a1, a0);
-}
 
 std::optional<Curve2> arcThrough(const V2& a, const V2& m, const V2& b) {
   const auto center = circumcenter(a, m, b);
@@ -236,9 +221,33 @@ void takenBack(SketchController& c, SketchOp& op, const QString& what) {
   c.hint(QObject::tr("%1 taken back: its auto constraints were refused.").arg(what));
 }
 
+// The curve a `sketch.arc` from the end point `point` leaves, as the model
+// finds it (the first open curve that ends there, a construction curve
+// only for a construction arc), and the direction it leaves `point` with.
+std::optional<V2> arcSource(const SketchModel& model, const QString& point, bool construction, QString* curve) {
+  for (const CurveData& c : model.curves) {
+    if (!c.curve.isOpen() || !c.axis.isEmpty() || (c.construction && !construction)) {
+      continue;
+    }
+    if (c.end == point || c.start == point) {
+      if (curve != nullptr) {
+        *curve = c.id;
+      }
+      return c.end == point ? unit(c.curve.tangent(c.curve.t1())) : -unit(c.curve.tangent(c.curve.t0()));
+    }
+  }
+  return std::nullopt;
+}
+
 // ---------------------------------------------------------------------------
 // Line
 
+// A drag from the chain's end, or from the end of a line or an arc pressed
+// to start a chain (mitcad#1393), draws an arc instead of a line: tangent
+// to the curve when the drag leaves along it, normal to it when it leaves
+// across (LineArcs.hpp); the choice is made once the drag is 8 px from the
+// point, and made again when it comes back within them. Radius and Sweep
+// fields place the arc; a typed radius becomes its radius dimension.
 class LineTool : public SketchTool {
 public:
   using SketchTool::SketchTool;
@@ -254,9 +263,12 @@ public:
       return;
     }
     if (m_arcPress && m_state == State::Chain && screenDistance(snap.screen, m_arcPressAt) > 4.0) {
-      m_state = State::Arc;
-      m_c.clearFields();
-      m_c.hint(QObject::tr("Line: release where the tangent arc ends."));
+      startArc();
+    }
+    if (m_state == State::Arc) {
+      chooseArc();
+      updateArc();
+      return;
     }
     // The line the cursor passed last: parallel and perpendicular to it.
     if (m_state == State::Chain) {
@@ -279,7 +291,14 @@ public:
       m_end = m_start;
       m_c.setFields(fields());
       m_c.hint(QObject::tr("Line: click the end point, or type the length (Tab: angle). "
-                           "Drag from the end for a tangent arc; a right-click ends the chain."));
+                           "Drag from the end for an arc; a right-click ends the chain."));
+      // On the end of a line or an arc (mitcad#1393): a drag draws an arc
+      // from that curve, a click starts the chain there as before.
+      if (snap.atPoint() && arcSource(m_c.model(), snap.point, m_c.construction(), nullptr)) {
+        m_arcPress = true;
+        m_arcFromFirst = true;
+        m_arcPressAt = snap.screen;
+      }
       return;
     }
     if (m_state != State::Chain) {
@@ -300,8 +319,13 @@ public:
     }
     m_arcPress = false;
     if (m_state == State::Arc) {
+      m_snap = snap;
+      updateArc();
       m_state = State::Chain;
       commitArc(snap);
+    } else if (m_arcFromFirst) {
+      // A click on a curve's end: the chain starts there.
+      m_arcFromFirst = false;
     } else {
       endChain();
     }
@@ -313,6 +337,14 @@ public:
   }
 
   bool confirm() override {
+    if (m_state == State::Arc) {
+      // Enter with the button still down: the arc of the typed values.
+      m_arcPress = false;
+      updateArc();
+      m_state = State::Chain;
+      commitArc(m_snap);
+      return true;
+    }
     if (m_state != State::Chain) {
       return false;
     }
@@ -331,11 +363,25 @@ public:
     if (m_state == State::First) {
       return false;
     }
+    if (m_state == State::Arc && !m_arcFromFirst) {
+      // Esc during the drag: no arc; the chain goes on.
+      m_arcPress = false;
+      m_state = State::Chain;
+      m_c.setFields(fields());
+      m_c.hint(QObject::tr("Line: click the end point; double-click, Esc or a right-click ends the chain."));
+      return true;
+    }
     endChain();
     return true;
   }
 
-  void fieldsEdited() override { update(); }
+  void fieldsEdited() override {
+    if (m_state == State::Arc) {
+      updateArc();
+      return;
+    }
+    update();
+  }
 
   void paint(ToolPreview& preview) const override {
     if (m_state == State::Chain && dist(m_start, m_end) > 0.0) {
@@ -359,9 +405,14 @@ public:
         preview.glyphAt = (m_start + m_end) / 2.0;
       }
     } else if (m_state == State::Arc) {
-      if (const auto arc = tangentArc(m_start, m_prevDir, m_snap.at)) {
+      const LineArcKind kind = arcKind();
+      if (const auto arc = lineArc(kind, m_start, m_prevDir, m_arcEnd)) {
         preview.curve(*arc, 2.0 * m_c.pixel());
-        preview.glyph = QStringLiteral("tangent");
+        preview.glyph = kind == LineArcKind::Normal ? QStringLiteral("perpendicular") : QStringLiteral("tangent");
+        preview.glyphAt = m_start;
+        preview.points.push_back(m_arcEnd);
+        fieldRadius(preview, m_c, QStringLiteral("radius"), arc->center, arc->radius, m_arcEnd - arc->center);
+        fieldSweep(preview, m_c, *arc, m_c.fieldValue(QStringLiteral("angle")).value_or(sweep(arc->start, arc->end)));
       }
     } else if (m_state == State::First) {
       previewReference(preview, m_c, m_c.autoPlan());
@@ -382,6 +433,89 @@ private:
   static QVector<FieldSpec> fields() {
     return {{QStringLiteral("length"), QObject::tr("Length"), FieldSpec::Kind::Length},
             {QStringLiteral("angle"), QObject::tr("Angle"), FieldSpec::Kind::Angle}};
+  }
+
+  // The arc's values (mitcad#1393): its radius, then its sweep.
+  static QVector<FieldSpec> arcFields() {
+    return {{QStringLiteral("radius"), QObject::tr("Radius"), FieldSpec::Kind::Length, 0.0, true},
+            {QStringLiteral("angle"), QObject::tr("Sweep"), FieldSpec::Kind::Angle, 0.0, true}};
+  }
+
+  // The drag left the point: an arc from it. Pressed on a curve's end to
+  // start a chain, the arc leaves that curve.
+  void startArc() {
+    if (m_arcFromFirst) {
+      QString curve;
+      const auto direction = arcSource(m_c.model(), m_startSnap.point, m_c.construction(), &curve);
+      if (!direction) {
+        m_arcPress = false;
+        m_arcFromFirst = false;
+        return;
+      }
+      m_startPoint = m_startSnap.point;
+      if (const auto p = m_c.model().pointAt(m_startPoint)) {
+        m_start = *p;
+      }
+      m_prevDir = *direction;
+      m_previous = curve;
+      const CurveData* source = m_c.model().curve(curve);
+      m_prevArc = source == nullptr || !source->isLine();
+      qDebug().noquote() << QStringLiteral("Line: an arc from the end %1 of %2").arg(m_startPoint, curve);
+    }
+    m_state = State::Arc;
+    m_arcKind.reset();
+    m_arcEnd = m_snap.at;
+    m_c.setFields(arcFields());
+    m_c.hint(QObject::tr("Line: release where the arc ends, or type the radius (Tab: sweep). "
+                         "Along the curve: a tangent arc; across it: a normal arc."));
+  }
+
+  // Whether the curve the arc leaves takes a normal arc: a line or an arc.
+  bool normalAllowed() const {
+    const CurveData* source = m_c.model().curve(m_previous);
+    return source != nullptr && (source->isLine() || source->isArc());
+  }
+
+  // The kind chosen, or the one the drag gives now while it is still near
+  // the point.
+  LineArcKind arcKind() const { return m_arcKind.value_or(dragKind()); }
+
+  // The kind the pointer's way from the point gives, on the screen: the
+  // snapped position (a grid point, mitcad#1393's first UI run) can lie
+  // in another direction than the drag's first pixels.
+  LineArcKind dragKind() const {
+    const QPointF at = m_c.toScreen(m_start);
+    const QPointF along = m_c.toScreen(m_start + m_prevDir * (20.0 * m_c.pixel())) - at;
+    const QPointF drag = m_snap.screen - at;
+    return lineArcKind(V2{along.x(), along.y()}, V2{drag.x(), drag.y()}, normalAllowed());
+  }
+
+  // Chosen once the drag is 8 px from the point; chosen again after it
+  // comes back within them.
+  void chooseArc() {
+    if (screenDistance(m_snap.screen, m_c.toScreen(m_start)) <= 8.0) {
+      m_arcKind.reset();
+      return;
+    }
+    if (!m_arcKind) {
+      m_arcKind = dragKind();
+      qDebug().noquote() << QStringLiteral("Line arc: %1")
+                                .arg(*m_arcKind == LineArcKind::Normal ? QStringLiteral("normal")
+                                                                        : QStringLiteral("tangent"));
+    }
+  }
+
+  // The arc's end from the cursor and the typed values, and the values it
+  // has shown in the fields.
+  void updateArc() {
+    const LineArcKind kind = arcKind();
+    const V2 direction = lineArcDirection(kind, m_prevDir, m_start, m_snap.at);
+    m_arcEnd = lineArcEnd(m_start, direction, m_snap.at, m_c.fieldValue(QStringLiteral("radius")),
+                          m_c.fieldValue(QStringLiteral("angle")));
+    if (const auto arc = lineArc(kind, m_start, m_prevDir, m_arcEnd)) {
+      m_c.setLive(QStringLiteral("radius"), arc->radius);
+      m_c.setLive(QStringLiteral("angle"), sweep(arc->start, arc->end));
+    }
   }
 
   // The direction of a typed angle: from the sketch x axis for the first
@@ -649,21 +783,45 @@ private:
     m_end = m_start;
   }
 
+  // A refused or straight arc (released straight ahead of the curve, or
+  // straight across for a normal arc): the chain goes on from where it
+  // was; one an arc from a curve's end was to start starts with a line
+  // from that point, as after a click there.
+  void arcNotMade() {
+    qDebug().noquote() << QStringLiteral("Line: no arc from %1").arg(m_startPoint);
+    if (m_arcFromFirst) {
+      m_arcFromFirst = false;
+      m_startPoint.clear();
+      m_previous.clear();
+      m_prevArc = false;
+      m_prevDir = V2{1.0, 0.0};
+      m_end = m_start;
+    }
+    m_arcKind.reset();
+    m_c.setFields(fields());
+    m_c.hint(QObject::tr("Line: click the end point; double-click, Esc or a right-click ends the chain."));
+  }
+
   void commitArc(const Snap& snap) {
-    const auto preview = tangentArc(m_start, m_prevDir, snap.at);
+    const LineArcKind kind = arcKind();
+    const bool normal = kind == LineArcKind::Normal;
+    const auto preview = lineArc(kind, m_start, m_prevDir, m_arcEnd);
     if (!preview) {
+      arcNotMade();
       return;
     }
+    // Moved by typed values: no longer on what it snapped to.
+    const Snap endSnap = at(snap, m_arcEnd);
     SketchOp op(m_c);
     QJsonObject cmd = op.command(QStringLiteral("sketch.arc"));
-    cmd.insert(QStringLiteral("mode"), QStringLiteral("tangent"));
+    cmd.insert(QStringLiteral("mode"), normal ? QStringLiteral("normal") : QStringLiteral("tangent"));
     cmd.insert(QStringLiteral("from"), m_startPoint);
-    cmd.insert(QStringLiteral("end"), op.pointInput(snap));
+    cmd.insert(QStringLiteral("end"), op.pointInput(endSnap));
     cmd.insert(QStringLiteral("construction"), m_c.construction());
     QJsonObject result;
     if (!op.run(cmd, &result)) {
-      refuse(m_c, op, QObject::tr("Tangent arc"));
-      m_c.setFields(fields());
+      refuse(m_c, op, normal ? QObject::tr("Normal arc") : QObject::tr("Tangent arc"));
+      arcNotMade();
       return;
     }
     const QString arc = made(result).value(0);
@@ -671,11 +829,19 @@ private:
     if (const CurveData* c = op.model().curve(arc)) {
       chainEnd = c->start == m_startPoint ? c->end : c->start;
     }
-    if (!shares(snap)) {
-      op.constrain(chainEnd, snap);
+    if (!shares(endSnap)) {
+      op.constrain(chainEnd, endSnap);
+    }
+    const bool dimensioned = m_c.typed(QStringLiteral("radius"));
+    if (dimensioned) {
+      op.addDimension({{QStringLiteral("type"), QStringLiteral("radius")}, {QStringLiteral("curve"), arc}},
+                      m_c.fieldExpression(QStringLiteral("radius")));
     }
     op.addTangents(arc);
     op.commit();
+    if (m_chainStart.isEmpty()) {
+      m_chainStart = m_startPoint;
+    }
     if (const auto p = m_c.model().pointAt(chainEnd)) {
       m_start = *p;
     }
@@ -683,11 +849,19 @@ private:
     if (const auto dir = leavingDirection(m_c.model(), chainEnd, &curve)) {
       m_prevDir = *dir;
     }
-    qDebug().noquote() << QStringLiteral("Added tangent arc %1 to %2").arg(arc, text(m_start));
+    double radius = preview->radius;
+    if (const CurveData* c = m_c.model().curve(arc)) {
+      radius = c->curve.radius;
+    }
+    qDebug().noquote() << QStringLiteral("Added %1 arc %2 to %3, radius %4 mm%5")
+                              .arg(normal ? QStringLiteral("normal") : QStringLiteral("tangent"), arc, text(m_start))
+                              .arg(radius, 0, 'f', 3)
+                              .arg(dimensioned ? QStringLiteral(", dimensioned") : QString());
     m_previous = arc;
     m_prevArc = true;
+    m_arcFromFirst = false;
     m_startPoint = chainEnd;
-    m_startAxes = axesAt(m_c.model(), snap);
+    m_startAxes = axesAt(m_c.model(), endSnap);
     m_end = m_start;
     m_c.setFields(fields());
     m_c.hint(QObject::tr("Line: click the end point; double-click, Esc or a right-click ends the chain."));
@@ -705,6 +879,8 @@ private:
     m_chainStart.clear();
     m_reference.clear();
     m_arcPress = false;
+    m_arcFromFirst = false;
+    m_arcKind.reset();
     m_inference.reset();
     m_c.clearFields();
     m_c.hint(QObject::tr("Line: click the start point."));
@@ -726,6 +902,10 @@ private:
   std::optional<AutoPlan> m_plan; // the auto constraints of the next line
   bool m_arcPress = false;
   QPointF m_arcPressAt;
+  // Pressed on the end of a line or an arc to start the chain (mitcad#1393).
+  bool m_arcFromFirst = false;
+  std::optional<LineArcKind> m_arcKind; // chosen once the drag left the point
+  V2 m_arcEnd;                          // where the arc ends
 };
 
 // ---------------------------------------------------------------------------
@@ -822,6 +1002,168 @@ protected:
 
   std::vector<Snap> m_clicks;
   Snap m_snap;
+};
+
+// ---------------------------------------------------------------------------
+// Midpoint Line (mitcad#1393)
+
+// The first click is the line's middle, the second one end; the line runs
+// as far on the other side, and its middle is a sketch point held there by
+// a midpoint constraint (`sketch.add_line` with `midpoint`). Length and
+// Angle fields as the Line tool's first line has; horizontal, vertical and
+// the snapped points held as the Line tool holds them.
+class MidpointLineTool : public StepTool {
+public:
+  using StepTool::StepTool;
+
+  QString name() const override { return QObject::tr("Midpoint Line"); }
+
+  void paint(ToolPreview& preview) const override {
+    if (clicked() == 0) {
+      return;
+    }
+    const V2 middle = click(0);
+    const V2 end = cursor();
+    if (dist(middle, end) <= 0.0) {
+      return;
+    }
+    const V2 start = middle * 2.0 - end;
+    preview.line(start, end);
+    preview.points = {start, middle, end};
+    fieldLength(preview, m_c, QStringLiteral("length"), start, end);
+    const double angle = m_c.fieldValue(QStringLiteral("angle")).value_or(normalizeAngle(angleOf(end - middle)));
+    if (std::abs(angle) > 1e-9) {
+      fieldSweep(preview, m_c, Curve2::arc(middle, dist(middle, end) * 0.4, 0.0, angleOf(end - middle)), angle);
+    }
+    const QString inferred = inference(m_snap.at);
+    if (!inferred.isEmpty()) {
+      preview.glyph = inferred;
+      preview.glyphAt = (middle + end) / 2.0;
+    }
+  }
+
+protected:
+  int clicks() const override { return 2; }
+
+  QString prompt(int clicked) const override {
+    return clicked == 0 ? QObject::tr("Midpoint Line: click the midpoint.")
+                        : QObject::tr("Midpoint Line: click an end, or type the length (Tab: angle).");
+  }
+
+  QVector<FieldSpec> fields(int clicked) const override {
+    if (clicked == 0) {
+      return {};
+    }
+    return {{QStringLiteral("length"), QObject::tr("Length"), FieldSpec::Kind::Length, 0.0, true},
+            {QStringLiteral("angle"), QObject::tr("Angle"), FieldSpec::Kind::Angle}};
+  }
+
+  // Horizontal or vertical: the end within 6 px of level (or plumb) with
+  // the middle, while no angle is typed and the end snapped onto nothing
+  // (or the grid), as the Line tool infers.
+  QString inference(const V2& p) const {
+    if (clicked() == 0 || m_c.fieldValue(QStringLiteral("angle"))) {
+      return QString();
+    }
+    const bool free = m_snap.kind == Snap::Kind::None || m_snap.kind == Snap::Kind::Grid;
+    const V2 d = p - click(0);
+    const double px = m_c.pixel();
+    if (norm(d) < 4.0 * px) {
+      return QString();
+    }
+    const double tolerance = (free || m_c.fieldValue(QStringLiteral("length")) ? 6.0 : 1e-6) * px;
+    if (std::abs(d.y) <= tolerance && std::abs(d.y) <= std::abs(d.x)) {
+      return QStringLiteral("horizontal");
+    }
+    if (std::abs(d.x) <= tolerance) {
+      return QStringLiteral("vertical");
+    }
+    return QString();
+  }
+
+  V2 cursor() const override {
+    V2 p = m_snap.at;
+    if (clicked() == 0) {
+      return p;
+    }
+    const V2 middle = click(0);
+    const auto length = m_c.fieldValue(QStringLiteral("length"));
+    V2 direction = unit(p - middle);
+    if (const auto angle = m_c.fieldValue(QStringLiteral("angle"))) {
+      // The end on the cursor's side of the middle.
+      direction = polar(*angle);
+      if (dot(p - middle, direction) < 0.0) {
+        direction = -direction;
+      }
+      p = middle + direction * std::max(0.0, dot(p - middle, direction));
+    } else {
+      const QString inferred = inference(p);
+      if (inferred == QStringLiteral("horizontal")) {
+        p.y = middle.y;
+      } else if (inferred == QStringLiteral("vertical")) {
+        p.x = middle.x;
+      }
+      direction = unit(p - middle);
+    }
+    if (length) {
+      p = middle + direction * (*length / 2.0);
+    }
+    return p;
+  }
+
+  void live() override {
+    if (clicked() != 1) {
+      return;
+    }
+    const V2 end = cursor();
+    m_c.setLive(QStringLiteral("length"), 2.0 * dist(click(0), end));
+    m_c.setLive(QStringLiteral("angle"), normalizeAngle(angleOf(end - click(0))));
+  }
+
+  void commit() override {
+    const V2 middle = click(0);
+    const V2 end = click(1);
+    if (dist(middle, end) <= 1e-9) {
+      return;
+    }
+    SketchOp op(m_c);
+    QJsonObject cmd = op.command(QStringLiteral("sketch.add_line"));
+    cmd.insert(QStringLiteral("mode"), QStringLiteral("midpoint"));
+    cmd.insert(QStringLiteral("center"), op.pointInput(snapOf(0)));
+    cmd.insert(QStringLiteral("end"), op.pointInput(snapOf(1)));
+    cmd.insert(QStringLiteral("construction"), m_c.construction());
+    QJsonObject result;
+    if (!op.run(cmd, &result)) {
+      refuse(m_c, op, name());
+      return;
+    }
+    const QString line = made(result).value(0);
+    V2 drawnStart = middle * 2.0 - end;
+    V2 drawnEnd = end;
+    if (const CurveData* c = op.model().curve(line)) {
+      drawnStart = c->curve.a;
+      drawnEnd = c->curve.b;
+    }
+    // The points that snapped onto geometry held there: the middle (a new
+    // point unless it snapped to one) and the end.
+    holdPoint(op, result, middle, snapOf(0), true);
+    holdPoint(op, result, end, snapOf(1), true);
+    if (m_c.typed(QStringLiteral("length"))) {
+      op.addDimension({{QStringLiteral("type"), QStringLiteral("length")}, {QStringLiteral("line"), line}},
+                      m_c.fieldExpression(QStringLiteral("length")));
+    }
+    // Exactly level or plumb as drawn, a typed angle included: only when
+    // safe (SketchOp::addAuto).
+    const QString inferred = axisAlignment(drawnStart, drawnEnd);
+    if (!inferred.isEmpty()) {
+      op.addAuto({{QStringLiteral("type"), inferred}, {QStringLiteral("line"), line}});
+    }
+    op.addTangents(line);
+    op.commit();
+    qDebug().noquote() << QStringLiteral("Added midpoint line %1 from %2 to %3 about %4%5")
+                              .arg(line, text(drawnStart), text(drawnEnd), text(middle),
+                                   inferred.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(inferred));
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -2897,6 +3239,8 @@ private:
 } // namespace
 
 std::unique_ptr<SketchTool> lineTool(SketchController& c) { return std::make_unique<LineTool>(c); }
+
+std::unique_ptr<SketchTool> midpointLineTool(SketchController& c) { return std::make_unique<MidpointLineTool>(c); }
 
 std::unique_ptr<SketchTool> rectangleTool(SketchController& c, const QString& mode) {
   return std::make_unique<RectangleTool>(c, mode);

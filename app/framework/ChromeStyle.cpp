@@ -60,7 +60,7 @@ void setGlassRequested(bool requested) { g_glass = requested; }
 bool glassActive() { return g_glass && g_style == ChromeStyle::Floating && mac::glassAvailable(); }
 
 bool floatingTopCards() {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   return false;
 #else
   return true;

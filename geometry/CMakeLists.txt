@@ -838,3 +838,84 @@ if(BUILD_TESTING)
   add_test(NAME geometry.fillet_fin_end COMMAND test_fillet_fin_end)
   set_tests_properties(geometry.fillet_fin_end PROPERTIES TIMEOUT 600)
 endif()
+
+if(BUILD_TESTING)
+  # A plate's sides rounded along an earlier rounding that vanishes into the
+  # side, on a case of MITCAD_GEOMETRY_CASES, with the port's patch 1320
+  # (mitcad#1346).
+  add_executable(test_fillet_vanishing_side tests/test_fillet_vanishing_side.cpp)
+  target_link_libraries(test_fillet_vanishing_side PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_vanishing_side COMMAND test_fillet_vanishing_side)
+  set_tests_properties(geometry.fillet_vanishing_side PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # Roundings that end where a boss's cylinder meets a plate's flat side
+  # tangentially, on synthetic bodies and on a case of MITCAD_GEOMETRY_CASES,
+  # with the port's patches 1330 to 1332 (mitcad#1359); the plate's top edge
+  # and the boss's foot rounded together, with 1400 to 1402 (mitcad#1374).
+  add_executable(test_fillet_boss_tangent tests/test_fillet_boss_tangent.cpp)
+  target_link_libraries(test_fillet_boss_tangent PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_boss_tangent COMMAND test_fillet_boss_tangent)
+  set_tests_properties(geometry.fillet_boss_tangent PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A pocket's floor rounded with twice the radius of its concave corner
+  # arcs, on a synthetic body and on a case of MITCAD_GEOMETRY_CASES, with
+  # the port's patch 1390 (mitcad#1368).
+  add_executable(test_fillet_ball_twice_arc tests/test_fillet_ball_twice_arc.cpp)
+  target_link_libraries(test_fillet_ball_twice_arc PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_ball_twice_arc COMMAND test_fillet_ball_twice_arc)
+  set_tests_properties(geometry.fillet_ball_twice_arc PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A boss's foot and rim rounded together with half the boss's height, the
+  # foot's contact along part of the rim's, on synthetic bodies, with the
+  # port's patch 1340 (mitcad#1392).
+  add_executable(test_fillet_boss_foot_rim tests/test_fillet_boss_foot_rim.cpp)
+  target_link_libraries(test_fillet_boss_foot_rim PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_boss_foot_rim COMMAND test_fillet_boss_foot_rim)
+  set_tests_properties(geometry.fillet_boss_foot_rim PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A concave rounding along a wall's foot on a rod past concave arcs of the
+  # wall tighter than the ball, on synthetic bodies and on cases of
+  # MITCAD_GEOMETRY_CASES, with the port's patches 1380 and 1381
+  # (mitcad#1371).
+  add_executable(test_fillet_three_face_corner tests/test_fillet_three_face_corner.cpp)
+  target_link_libraries(test_fillet_three_face_corner PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_three_face_corner COMMAND test_fillet_three_face_corner)
+  set_tests_properties(geometry.fillet_three_face_corner PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A fin's side strips, narrower than the ball, rounded against its root's
+  # chamfer, the ball rolled on along their edges past the transition pieces
+  # of the arcs' chamfer, on a case of MITCAD_GEOMETRY_CASES, with the port's
+  # patch 1420 (mitcad#1388).
+  add_executable(test_fillet_fin_end_strips tests/test_fillet_fin_end_strips.cpp)
+  target_link_libraries(test_fillet_fin_end_strips PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_fin_end_strips COMMAND test_fillet_fin_end_strips)
+  set_tests_properties(geometry.fillet_fin_end_strips PROPERTIES TIMEOUT 600)
+  # A concave rounding along an acute corner whose edge turns towards the
+  # ball, walked along the balls' centres, with the port's patch 1440
+  # (mitcad#1396); a case of MITCAD_GEOMETRY_CASES too.
+  add_executable(test_fillet_acute_turn tests/test_fillet_acute_turn.cpp)
+  target_link_libraries(test_fillet_acute_turn PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_acute_turn COMMAND test_fillet_acute_turn)
+  set_tests_properties(geometry.fillet_acute_turn PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A plate's side edge rounded down to a sloped face past a groove beside
+  # the slot's wall, on pieces of the stored body and of the import's body
+  # (the same faces parametrised otherwise) of a case of
+  # MITCAD_GEOMETRY_CASES, with the port's patch 1460 (mitcad#1395).
+  add_executable(test_fillet_end_reversed_faces tests/test_fillet_end_reversed_faces.cpp)
+  target_link_libraries(test_fillet_end_reversed_faces PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_end_reversed_faces COMMAND test_fillet_end_reversed_faces)
+  set_tests_properties(geometry.fillet_end_reversed_faces PROPERTIES TIMEOUT 600)
+endif()

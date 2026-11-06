@@ -91,6 +91,11 @@ public:
   void showTab(const QString& tab);
   // The same full/collapsed group geometry for other native presentations.
   std::pair<int, int> groupWidths(const QString& tab, const QString& group) const;
+  // A group's width with its own buttons and its first k pinned buttons,
+  // k = 0 .. its pins (the last one is its full width), for the AppKit
+  // ribbon's fit of the same rule (framework/RibbonFit, mitcad#1357);
+  // empty for a group without buttons.
+  std::vector<int> pinnedGroupWidths(const QString& tab, const QString& group) const;
 
   // The commands pinned to the toolbar (mitcad#1001): each a button in its
   // own group (the command's tab and group), after the group's own

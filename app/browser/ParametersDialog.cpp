@@ -390,7 +390,7 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_filter->setAccessibleName(tr("Search parameters"));
   m_filter->setPlaceholderText(tr("Search"));
   m_filter->setClearButtonEnabled(true);
-#ifndef Q_OS_MACOS
+#ifndef MITCAD_MAC_UI
   top->addWidget(m_add);
   top->addWidget(m_delete);
 #endif
@@ -447,7 +447,7 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   layout->addWidget(m_message);
 
   auto* bottom = new QHBoxLayout;
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* controls = new QHBoxLayout;
   controls->setSpacing(0);
   controls->addWidget(m_add);

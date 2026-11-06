@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/view/ViewController.cpp app/files/RemotePreferences.cpp app/files/RemotePreferences.hpp
 # check-all sources: app/files/Print3d.cpp core/vcs/src/remote/cli.rs
+# check-all sources: app/view/NavigationPreferences.hpp app/framework/PreferencesPageLayout.hpp
 # Preferences on a low screen (mitcad#690), with git and without it, on a
 # test screen 768 pixels high:
 #   1. git found on PATH: the Cloud page names it.
@@ -13,8 +14,15 @@
 # bar and a taskbar, it is resizable, its frame lies within the screen's
 # available area, and the page list is as wide as its entries; on its
 # General page (Home in the page list) the minimum is that page's, and it
-# fits too. tools/ui-windows-preferences-test.ps1 does the same in the
-# Windows VM.
+# fits too. Once, Preferences on its Navigation page and on its Cloud page
+# (mitcad#1394), each made as low as it goes, then 160 pixels taller: the
+# page fills the window's height (its last line ends within
+# the bottom margin of the area the window gives it), and its list (the
+# bindings table, the known brokers) takes the height the page has to
+# spare, at least its 138 or 110 pixels in the lowest window; pictures of
+# both heights (navigation-tall.png, navigation-min.png, cloud-tall.png,
+# cloud-min.png) in preferences-shots of MITCAD_UI_LOG_DIR.
+# tools/ui-windows-preferences-test.ps1 does the same in the Windows VM.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-preferences-test.sh
@@ -93,12 +101,85 @@ preferences_fit() {
   ui_focus_main
 }
 
+# page_layout "window" "line": the page's last layout line since the mark,
+# "<line> N high, its last line G above the bottom of its area A high"
+# (PAGE_LIST, the list's height; PAGE_GAP; PAGE_AREA), its last line within
+# that area's bottom margin.
+page_layout() {
+  read -r PAGE_LIST PAGE_GAP PAGE_AREA <<< "$(since \
+    "s/^$2 \([0-9]*\) high, its last line \(-*[0-9]*\) above the bottom of its area \([0-9]*\) high$/\1 \2 \3/p")"
+  [ -n "${PAGE_AREA:-}" ] || ui_fail "'$2' in the $1 window is not logged"
+  [ "$PAGE_GAP" -ge 0 ] && [ "$PAGE_GAP" -le 32 ] ||
+    ui_fail "$2: in the $1 window the page ends $PAGE_GAP pixels above the bottom of its $PAGE_AREA pixels"
+  echo "ok   $2: in the $1 window the page ends $PAGE_GAP pixels above the bottom of its $PAGE_AREA pixels, the list $PAGE_LIST high"
+}
+
+# page_shot shot "window": the picture the app saved of the window at the
+# page area's height PAGE_AREA (MITCAD_TEST_PREFERENCES_SHOTS), kept as
+# <shot>-<window>.png for the ticket.
+page_shot() {
+  [ -s "$SHOTS/$1-$PAGE_AREA.png" ] || ui_fail "no picture $SHOTS/$1-$PAGE_AREA.png"
+  cp "$SHOTS/$1-$PAGE_AREA.png" "$SHOTS/$1-$2.png"
+  echo "ok   picture $SHOTS/$1-$2.png"
+}
+
+# page_fills Page "line" shot least: Preferences opened on the page, made
+# as low as it goes (its minimum), then 160 pixels taller (mitcad#1394),
+# then closed: the page's list ("line") takes the height the page has to
+# spare, at least `least` pixels in the lowest window, and the page fills
+# the area the window gives it; pictures <shot>-min.png and <shot>-tall.png.
+page_fills() {
+  local width low dialog low_list low_area
+  ui_mark
+  ui_step "Preferences: $1 (search)"         ui_command "Preferences: $1"
+  ui_expect_new "Preferences opened: $1, " "Preferences on its $1 page"
+  ui_expect_new "Preferences minimum " "Preferences shown"
+  ui_expect_new "$2 " "the $1 page laid out"
+  read -r width <<< "$(since 's/^Preferences frame \([0-9]*\) x [0-9]* at .*$/\1/p')"
+  read -r low <<< "$(since 's/^Preferences minimum [0-9]* x \([0-9]*\), [a-z]*$/\1/p')"
+  [ -n "${width:-}" ] && [ -n "${low:-}" ] || ui_fail "Preferences' frame or minimum size is not logged"
+  ui_focus_dialog '^Preferences$'
+  dialog=$(xdotool search --onlyvisible --name '^Preferences$' 2> /dev/null | head -1)
+  [ -n "$dialog" ] || ui_fail "no Preferences window"
+  # The page logs a new line only when the height changed (not when
+  # Preferences opened at its minimum): the last one since it opened is the
+  # lowest window's, once the sync has waited for the page's watched timer.
+  ui_step "Preferences as low as it goes"    xdotool windowsize "$dialog" $((width * UI_SCALE)) $((low * UI_SCALE))
+  ui_sync
+  page_layout lowest "$2"
+  page_shot "$3" min
+  low_list=$PAGE_LIST
+  low_area=$PAGE_AREA
+  ui_mark
+  ui_step "Preferences 160 pixels taller"    \
+    xdotool windowsize "$dialog" $((width * UI_SCALE)) $(((low + 160) * UI_SCALE))
+  ui_expect_new "$2 " "the $1 page laid out in the taller window"
+  ui_sync
+  page_layout taller "$2"
+  page_shot "$3" tall
+  [ "$PAGE_AREA" -gt "$low_area" ] ||
+    ui_fail "the $1 page's area is $PAGE_AREA pixels high in the taller window, $low_area in the lowest"
+  [ "$low_list" -ge "$4" ] || ui_fail "$2 is $low_list pixels high in the lowest window, less than $4"
+  [ "$PAGE_LIST" -gt "$low_list" ] && [ $((PAGE_LIST - low_list)) -ge $((PAGE_AREA - low_area - 2)) ] ||
+    ui_fail "$2 grew from $low_list to $PAGE_LIST pixels while its page grew from $low_area to $PAGE_AREA"
+  echo "ok   $2 takes the page's spare height: $low_list pixels lowest, $PAGE_LIST in the taller window"
+  ui_step "close it (Esc)"                   ui_key Escape
+  ui_focus_main
+}
+
 ui_start_display
 
 echo "--- 1. git found on PATH"
 command -v git > /dev/null || ui_fail "git is not installed on this machine"
+# The pictures of the pages that fill the window's height (mitcad#1394).
+SHOTS=${MITCAD_UI_LOG_DIR:-$WORK}/preferences-shots
+mkdir -p "$SHOTS"
+export MITCAD_TEST_PREFERENCES_SHOTS=$SHOTS
 ui_start_app
+unset MITCAD_TEST_PREFERENCES_SHOTS
 preferences_fit "git [0-9][^ ]* at " "the Cloud page names the git program found"
+page_fills Navigation "Navigation page: bindings table" navigation 138
+page_fills Cloud "Cloud page: known brokers list" cloud 110
 ui_stop_app
 
 echo "--- 2. MITCAD_GIT naming a file that is not there"

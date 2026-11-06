@@ -35,7 +35,7 @@ namespace mitcad {
 // False unless AppKit is active and the popover actually opens. On an
 // opening failure the presenter retains its normal Qt display attributes
 // so the caller can show its Qt fallback.
-#if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
+#if defined(MITCAD_MAC_UI) && defined(MITCAD_MACOS_NATIVE_UI)
 bool showNativePicker(QWidget* presenter, QLineEdit* search, QListWidget* list, const QString& anchor);
 #else
 inline bool showNativePicker(QWidget*, QLineEdit*, QListWidget*, const QString&) { return false; }

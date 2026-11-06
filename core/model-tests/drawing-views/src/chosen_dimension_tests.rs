@@ -7,12 +7,13 @@
 //! one pick and never gives 0 mm; `drawing_snap` says what a placing click
 //! makes; a centerline of a curved slot's two sides is its centre arc; and
 //! a line or an arc drawn outside the model snaps to ends, middles and
-//! centres (`"want": "snap"`).
+//! centres (`"want": "snap"`); a section's cut edge alone is the length of
+//! the piece of its cut line under the click (mitcad#1361).
 
 use serde_json::{Value, json};
 
 use mitcad_model::Document;
-use mitcad_model::datum::CurveGeometry;
+use mitcad_model::datum::{CurveGeometry, SurfaceGeometry};
 use mitcad_model::ids::BodyUid;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::testing::MockKernel;
@@ -616,4 +617,188 @@ fn the_corners_of_a_view_are_its_visible_edge_ends() {
         .query(&json!({"query": "drawing_corners", "drawing": "D1", "sheet": 3}).to_string())
         .expect_err("no sheet 3");
     assert!(error.to_string().contains("no sheet 3"), "{error}");
+}
+
+/// The bottom face of the plate (F2.b0's start), z 0.
+fn bottom() -> String {
+    format!("F2:start({R})")
+}
+
+/// The plate cut by a section at y 15 of its top view, seen from the
+/// front (its x the model's x, its y the model's z, at 1:1), with the cut
+/// faces of a stepped part with a hole as the kernel gives them
+/// (mitcad#1361): a base 40 wide and 10 high, a boss 20 wide and 10 high
+/// on its left half, and a hole across both from x 6 to x 10, so that the
+/// bottom's cut is two pieces, x 0..6 and 10..40. The section's id and
+/// where the model's x 0, z 0 is on the sheet (its box's low corner).
+fn stepped_section(doc: &mut Document<MockKernel>) -> (u64, [f64; 2]) {
+    doc.kernel().cuts_sections.set(true);
+    doc.kernel().surfaces.borrow_mut().insert(
+        bottom(),
+        SurfaceGeometry::Plane {
+            origin: [0.0, 0.0, 0.0],
+            normal: [0.0, 0.0, -1.0],
+        },
+    );
+    let at = |x: f64, z: f64| [x, 15.0, z];
+    *doc.kernel().drawn_cuts.borrow_mut() = vec![
+        vec![vec![
+            at(0.0, 0.0),
+            at(6.0, 0.0),
+            at(6.0, 20.0),
+            at(0.0, 20.0),
+        ]],
+        vec![vec![
+            at(10.0, 0.0),
+            at(40.0, 0.0),
+            at(40.0, 10.0),
+            at(20.0, 10.0),
+            at(20.0, 20.0),
+            at(10.0, 20.0),
+        ]],
+    ];
+    let line = [on_top(&*doc, [-5.0, 15.0]), on_top(&*doc, [45.0, 15.0])];
+    let section = command(
+        doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "section", "parent": 2,
+               "line": line, "flip": true, "at": [300, 200]}),
+    )["view"]
+        .as_u64()
+        .unwrap();
+    let shown = sheet(&*doc)["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == section)
+        .cloned()
+        .expect("the section");
+    (section, point(&shown["box"][0]))
+}
+
+/// How long a pick's line is on the sheet (its first item's).
+fn line_length(picked: &Value) -> f64 {
+    let ends = &picked["items"][0]["line"];
+    let (a, b) = (point(&ends[0]), point(&ends[1]));
+    (b[0] - a[0]).hypot(b[1] - a[1])
+}
+
+#[test]
+fn a_sections_cut_edge_alone_is_the_length_of_the_piece_under_the_click() {
+    let (mut doc, _) = plate();
+    let (section, lo) = stepped_section(&mut doc);
+    let on = |x: f64, z: f64| [lo[0] + x, lo[1] + z];
+    let hover = |doc: &Document<MockKernel>, at: [f64; 2]| {
+        query(
+            doc,
+            json!({"query": "drawing_pick", "drawing": "D1", "view": section, "at": at}),
+        )
+    };
+    // The bottom's cut beside the hole: the piece under the click, 30
+    // long, not the line across the hole (40); a dimension alone.
+    let long = hover(&doc, on(25.0, 0.2));
+    assert_eq!(long["pick"]["face"], bottom().as_str(), "{long}");
+    assert!(long["pick"]["on_cut"].is_array(), "{long}");
+    assert_eq!(long["seen"], "line", "{long}");
+    assert!(near(line_length(&long), 30.0), "{long}");
+    assert_eq!(long["alone"], true, "{long}");
+    // The piece left of the hole: 6 long.
+    let short = hover(&doc, on(3.0, 0.2));
+    assert!(near(line_length(&short), 6.0), "{short}");
+    assert_ne!(long["pick"], short["pick"]);
+    // A corner alone waits for a second pick, and says why.
+    let corner = hover(&doc, on(10.0, 0.0));
+    assert_eq!(corner["seen"], "point", "{corner}");
+    assert_eq!(corner["alone"], false, "{corner}");
+    assert!(
+        corner["next"].as_str().unwrap().contains("a point alone"),
+        "{corner}"
+    );
+
+    // Picked alone: its length, from the piece's start to its end, 30.
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": section,
+               "type": "dimension", "picks": [on(25.0, 0.2)], "at": on(25.0, -15.0)}),
+    );
+    let entry = annotation(&doc, &added["annotation"]);
+    assert_eq!(entry["broken"], false, "{entry}");
+    assert_eq!(entry["type"], "linear", "{entry}");
+    assert_eq!(entry["along"], "horizontal", "{entry}");
+    assert!((value(&entry) - 30.0).abs() < 1e-9, "{entry}");
+    assert_eq!(entry["label"], "30", "{entry}");
+    let picks = entry["picks"].as_array().unwrap();
+    assert_eq!(picks.len(), 2, "{entry}");
+    for (pick, end) in picks.iter().zip(["start", "end"]) {
+        assert_eq!(pick["face"], bottom().as_str(), "{entry}");
+        assert_eq!(pick["on_cut"], long["pick"]["on_cut"], "{entry}");
+        assert_eq!(pick["point"], end, "{entry}");
+    }
+
+    // The piece's corners are its ends: picked as points, the same 30
+    // between them; the hole's corner and the plate's left one, 10.
+    for (clicks, length) in [
+        ([on(10.0, 0.3), on(40.0, 0.3)], 30.0),
+        ([on(10.0, 0.3), on(0.0, 0.3)], 10.0),
+    ] {
+        let added = command(
+            &mut doc,
+            json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": section,
+                   "type": "dimension", "picks": clicks, "at": on(20.0, -25.0)}),
+        );
+        let entry = annotation(&doc, &added["annotation"]);
+        assert_eq!(entry["broken"], false, "{entry}");
+        assert!(near(value(&entry), length), "{clicks:?}: {entry}");
+        for pick in entry["picks"].as_array().unwrap() {
+            assert!(pick["on_cut"].is_array(), "{entry}");
+            assert!(
+                pick["point"] == "start" || pick["point"] == "end",
+                "{entry}"
+            );
+        }
+    }
+    // The section's corners show them (mitcad#1338), the hole's too.
+    let corners = query(&doc, json!({"query": "drawing_corners", "drawing": "D1"}));
+    let points: Vec<[f64; 2]> = corners["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["view"] == section)
+        .unwrap_or_else(|| panic!("no section: {corners}"))["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(point)
+        .collect();
+    for x in [0.0, 6.0, 10.0, 40.0] {
+        assert!(
+            points.iter().any(|p| same(*p, on(x, 0.0))),
+            "{x} is not among {points:?}"
+        );
+    }
+
+    // The face picked whole spans the hole: no length of its own.
+    let whole = json!({"body": "F2.b0", "face": bottom()});
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": section,
+               "type": "dimension", "picks": [whole], "at": on(25.0, -15.0)}),
+    );
+    assert!(error.contains("spans its gaps"), "{error}");
+    // A point on the cut line in the hole lies on no piece: why it is
+    // refused. The face's own coordinates go along the line as the model's
+    // x does: x 8 lies 17/22 of the way from the long piece's middle (25)
+    // to the short one's (3).
+    let (a, b) = (
+        point(&long["pick"]["on_cut"]),
+        point(&short["pick"]["on_cut"]),
+    );
+    let f = 17.0 / 22.0;
+    let gap = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": section,
+               "type": "dimension", "at": on(25.0, -15.0),
+               "picks": [{"body": "F2.b0", "face": bottom(), "on_cut": gap}]}),
+    );
+    assert!(error.contains("lies on no piece"), "{error}");
 }

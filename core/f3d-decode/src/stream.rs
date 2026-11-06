@@ -13,6 +13,22 @@ use std::fmt;
 
 use super::unicode;
 
+// How many references `Segment::ref_at` read on this thread. Only with the
+// `scan-count` feature, which the tests turn on: other builds carry no
+// counter (mitcad#1348).
+#[cfg(feature = "scan-count")]
+thread_local! {
+    static REF_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many references [`Segment::ref_at`] has read on this thread: the
+/// work a scan does, for the tests that keep the sketch scans linear in
+/// the size of the data (mitcad#934, mitcad#1348).
+#[cfg(feature = "scan-count")]
+pub fn ref_reads() -> u64 {
+    REF_READS.with(std::cell::Cell::get)
+}
+
 /// Little-endian reads at a byte position; `None` past the end.
 pub fn u32_at(d: &[u8], p: usize) -> Option<u32> {
     let b = d.get(p..p.checked_add(4)?)?;
@@ -723,6 +739,8 @@ impl Segment {
     /// `01 id [str8 guid] 01 key 00 str8 guid 00`. The id must be an object
     /// of this segment and the GUIDs must name its class.
     pub fn ref_at(&self, d: &[u8], p: usize) -> Option<Ref> {
+        #[cfg(feature = "scan-count")]
+        REF_READS.with(|n| n.set(n.get() + 1));
         if p + 11 > d.len() || d[p] != 1 {
             return None;
         }

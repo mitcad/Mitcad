@@ -163,13 +163,12 @@ ssh <user>@<guest> "cd ~/src/mitcad && cmake --preset dev && cmake --build --pre
 ```
 
 The application is `build/dev/app/mitcad.app`. Packaging as a disk image:
-[docs/development.md](docs/development.md#macos-bundle-and-native-ui).
-The macOS presets also build the experimental AppKit frontend
-(`MITCAD_MACOS_NATIVE_UI=ON`): a native window, toolbar, browser, inspector
-and dialogs. Qt stays the default; Settings › General › Native macOS
-interface (experimental) chooses AppKit for the next starts, and
-`--ui=native|qt` chooses for one run. Details and validation:
-[native macOS UI](docs/native-macos-ui.md).
+[docs/development.md](docs/development.md#macos-bundle-and-ui).
+macOS uses the same Qt interface as Linux and Windows; what stays native
+there (the Metal renderer, the system menu bar, the Settings window, system
+keys, trackpad navigation) and the macOS release check:
+[macOS with the shared Qt UI](docs/macos-shared-qt.md). The AppKit frontend
+is paused and not built ([native macOS UI](docs/native-macos-ui.md)).
 
 ## Tests
 

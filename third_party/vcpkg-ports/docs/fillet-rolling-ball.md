@@ -1,9 +1,10 @@
-# The blend rolling on an edge as a true rolling ball: 0170–0172, 0390, 0391, 0500–0503, 1230
+# The blend rolling on an edge as a true rolling ball: 0170–0172, 0390, 0391, 0500–0503, 1230, 1370
 
 The blend OCCT's fillet rolls on an edge, where a rounding's face is
 narrower than the radius, made a true rolling ball, as
 [0075](fillet-edge-overflow.md#0075-blendfunc-constrad-rolling-ball-section)
-did for the blend between two faces (mitcad#237, mitcad#378, mitcad#1215).
+did for the blend between two faces (mitcad#237, mitcad#378, mitcad#1215,
+mitcad#1370).
 `geometry/tests/test_fillet_rolling_ball.cpp` checks the cases with OCCT
 alone. Back to the [port's README](../README.md).
 
@@ -23,6 +24,8 @@ alone. Back to the [port's README](../README.md).
 - **1230** lets a rounding whose contact runs off a narrow face onto an
   earlier blend of its radius roll on that face's far edges, the ball
   passing over slivers there (mitcad#1215).
+- **1370** lets that ball's turn over a sliver carry its other contact past
+  the seam of a face closed round its periodic surface (mitcad#1370).
 
 ## 0170 to 0172: the rolling ball and its pivot
 
@@ -244,6 +247,47 @@ On item 36's bodies of two versions of the design: valid, 343 and 358
 faces, the faces of each body round the rim on the other's within 2 µm both
 ways (OCCT's walked blends against the file's); each rounding takes 0.2 s.
 
+## 1370: the turn over a sliver past a seam
+
+### 1370-chfi3d-roll-over-a-sliver-past-the-seam-of-the-other-contacts-face
+
+Ticket: mitcad#1370, a regression of mitcad#1215.
+
+1230's case after mitcad#1261, which joins the faces on one surface after
+each feature: the body before the rounding has the ring's top as one face,
+the inner cylinder as one face closed round its axis, its seam under a
+crest at one of the eight mouths, and the inner rim as one closed edge
+whose vertex lies at that mouth. Before, the cylinder was cut into faces of
+their own at that mouth, and 1230 moved the other contact onto the next
+face at the edge between them. Now the ball reaches the end of the far edge
+it rolled on with its contact on the cylinder 0.15 µm short of the seam,
+and its turn about that end over the 6.5 µm sliver carries that contact
+across the seam: the surface/edge walk found the contact outside its
+face's parameters past the seam, refused each step, and the rounding
+failed. Taking that contact past the seam, a second fault showed: the
+walk of the turn gave two points, so `ChFi3d_Builder::ComputeData` walked
+it again with a quarter of the step, and that walk kept the turn the first
+one had found without solving its start again with the ball pinned at the
+edge's end. It began from the start's free section, tens of nanometres off
+the turn's, and each of its first steps was refused as too large.
+
+- `PerformSetOfSurfOnElSpine`: 1230's change of face for the other contact
+  takes the seam of a face closed round its periodic surface too (an edge
+  used both ways in the face; two faces on one surface also share an edge
+  with two curves on it, each using it once). The contact goes on in the
+  same face on the seam's other curve, where the point a little ahead lies
+  nearer that curve than the contact does; the piece before ends on the
+  seam, its use on the side the contact leaves, with the walk's direction
+  as its vector (`ChangeTransition` takes the next piece's start by it).
+  The walk then starts there as on its face, with nothing to find on the
+  face's boundary.
+- `BRepBlend_SurfRstLineBuilder::Perform`: a turn about the restriction's
+  end found by an earlier `Perform` of the same walk is found again from
+  the start; one found by `PerformFirstSection` is kept as before.
+
+On item 36's bodies of the two versions of the design, as the replay
+builds them: valid, 244 and 261 faces; 1230's bodies as before.
+
 ## Reports and tests
 
 - 0170 to 0179, 0390 to 0399 and 0500 to 0509: mitcad#237 (0503:
@@ -256,3 +300,8 @@ ways (OCCT's walked blends against the file's); each rounding takes 0.2 s.
   `geometry/tests/test_fillet_roll_over_blend.cpp`: the inner rim rounded
   with OCCT alone, valid, of the expected volume and faces, within 2 µm of
   the stored body round the rim (failing without the patch).
+- 1370: mitcad#1370 and the cases `fillet-roll-over-seam` and
+  `fillet-roll-over-seam-2` of `MITCAD_GEOMETRY_CASES` (`body.brep`, the
+  replay's body before the rounding, its faces on one surface joined, in
+  the design's two versions; `after.brep`, the stored body after it) in
+  the same test (failing without the patch).

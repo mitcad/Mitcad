@@ -182,7 +182,7 @@ QImage fontPreview(const QString& choice) {
 }
 
 FontPreferencesBox::FontPreferencesBox(QWidget* parent)
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     : QWidget(parent) {
 #else
     : QGroupBox(tr("Fonts"), parent) {
@@ -216,7 +216,7 @@ FontPreferencesBox::FontPreferencesBox(QWidget* parent)
     button->setAutoDefault(false);
   }
   auto* controls = new QHBoxLayout;
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   controls->setSpacing(0);
 #endif
   controls->addWidget(m_add);

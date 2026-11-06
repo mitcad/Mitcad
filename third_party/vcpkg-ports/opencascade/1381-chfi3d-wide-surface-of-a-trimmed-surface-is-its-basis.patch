@@ -1,0 +1,72 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: 0940's surfaces unbounded through a trimmed surface, and their
+curves in the period of the face (mitcad#1371).
+
+The case: a key's top edge rounded with 2 over its narrow side, where the
+key's end roundings meet the bore's wall, a torus (0940, mitcad#343). On a
+body whose torus face lies on a Geom_RectangularTrimmedSurface of the torus
+(the replay's own, where the stored body has the torus itself), 0940 found
+no run-on of the junction of the torus and the end rounding past their
+vertex: ChFi3d_WideSurface gave the trimmed surface back as it was, and the
+run-on's points past the trim projected onto it 48 mm off. The corners at
+both ends then went to PerformIntersectionAtEnd, which failed ("Failed to
+find edge"). With the run-on found, its curve on the torus, projected on
+the torus itself, lay a period off the face's, and the torus faces came
+out unorientable.
+
+- ChFi3d_WideSurface: a Geom_RectangularTrimmedSurface is unbounded to its
+  basis (the parameters are the basis's) before a B-spline is widened.
+- ChFi3d_IntoPeriodOfFace: a face on a trimmed periodic surface takes its
+  basis's period, so that a curve projected on the basis is shifted into
+  the face's own range.
+
+Before mitcad#1371 the case did not arise in the reported design: the item
+before (a rounding past a concave corner tighter than its ball) fell back
+to the file's stored body, whose torus is a plain torus. On the replay's
+body before the item: valid, as on the stored body; before, the fillet
+failed.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index e2415548..a51fcdc7 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -58,6 +58,7 @@
+ #include <Geom2d_Curve.hxx>
+ #include <Geom_BSplineSurface.hxx>
+ #include <Geom_Plane.hxx>
++#include <Geom_RectangularTrimmedSurface.hxx>
+ #include <Geom_Surface.hxx>
+ #include <gce_MakeCirc.hxx>
+ #include <GeomAdaptor_Surface.hxx>
+@@ -13256,7 +13257,12 @@ static occ::handle<Geom_Surface> ChFi3d_WideSurface(const TopoDS_Face& F)
+ {
+   TopoDS_Face FF = F;
+   FF.Orientation(TopAbs_FORWARD);
+-  const occ::handle<Geom_Surface>        S  = BRep_Tool::Surface(FF);
++  occ::handle<Geom_Surface> S = BRep_Tool::Surface(FF);
++  // (A trimmed surface unbounded: its basis, the parameters the same.)
++  while (S->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface)))
++  {
++    S = occ::down_cast<Geom_RectangularTrimmedSurface>(S)->BasisSurface();
++  }
+   const occ::handle<Geom_BSplineSurface> BS = occ::down_cast<Geom_BSplineSurface>(S);
+   if (BS.IsNull())
+   {
+@@ -13942,7 +13948,13 @@ static void ChFi3d_IntoPeriodOfFace(const TopoDS_Face& F, occ::handle<Geom2d_Cur
+   }
+   TopoDS_Face FF = F;
+   FF.Orientation(TopAbs_FORWARD);
+-  const occ::handle<Geom_Surface> S = BRep_Tool::Surface(FF);
++  occ::handle<Geom_Surface> S = BRep_Tool::Surface(FF);
++  // (A trimmed periodic surface: the period of its basis, which the curves
++  // ChFi3d_WideSurface gives are projected on.)
++  while (!S.IsNull() && S->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface)))
++  {
++    S = occ::down_cast<Geom_RectangularTrimmedSurface>(S)->BasisSurface();
++  }
+   if (S.IsNull() || (!S->IsUPeriodic() && !S->IsVPeriodic()))
+   {
+     return;

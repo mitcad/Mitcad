@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: MIT
+# tools/ui-macos-native-make-card-test.sh (mitcad#1353).
+wait-idle
+window-resize 1280 820
+focus-main
+expect-ever '^Native UI: AppKit shell with embedded OCCT viewport'
+expect-model-bodies 1 4000
+capture-undo-depth baseline
+
+# Property Sets' process list groups the processes under their printers
+# (addComboHeading): the native pop-up shows the headings bold and not
+# choosable, and a process is chosen from it as before.
+command view.property_sets
+focus-dialog '^Property Sets$'
+expect-log '^Property Sets opened for C0'
+expect-log '^Native choice native\.properties\.C0\.Print Process\.profile\.value: .*Any printer \(heading\)'
+expect-native-text 'native.properties.C0.Print Process.profile.value' '^Standard$'
+mark
+native-choice 'native.properties.C0.Print Process.profile.value' Draft
+expect-log '^Property print Print Process/profile set: Draft' 30
+expect-undo-depth ${baseline} 1
+native-action edit.undo
+expect-undo-depth ${baseline} 0
+native-pointer-button '^Close$'
+focus-main
+
+# The Make tab's card of the selected body.
+mark
+native-choice native.workspaces Make
+expect-log '^Ribbon tab shown: MAKE$'
+native-expand native.modelTree
+native-select native.model.body:F1.b0@
+expect-log '^Make card: Body1: .*printer Slicer default \(default\); process Standard \(component Root\)'
+# The card in the native inspector: its Printer, Process and Material
+# controls (MakeBodyCard::places, which logs "Make card rows", reads the Qt
+# layout and logs nothing while the hidden presenter is not on the screen).
+expect-native-present makeCardPrinter true
+expect-native-present makeCardProcess true
+expect-native-present makeCardMaterial true
+expect-native-text makeCardPrinter '^Slicer default$'
+expect-native-text makeCardProcess '^Standard'
+
+# Printer opens the searchable picker under the field, with the printers
+# under their vendors; a printer chosen there is the design's.
+mark
+native-pointer-click makeCardPrinter
+focus-dialog '^Printer Picker$'
+expect-log '^Native picker libraryPicker at makeCardPrinter: '
+expect-log '^Printer picker sections: .*Acme Lab 2'
+expect-native-focus libraryPickerSearch '^$'
+type 'Acme Lab P1S'
+expect-log '^Printer picker search: Acme Lab P1S, first '
+key Return
+focus-main
+expect-log '^Make card Printer set: Acme Lab P1S 0\.4 nozzle$'
+expect-undo-depth ${baseline} 1
+expect-native-text makeCardPrinter 'P1S'
+command edit.undo
+expect-undo-depth ${baseline} 0
+expect-native-text makeCardPrinter '^Slicer default$'
+
+# Add Print Value… is a sheet on the window, not a Qt window; Walls found
+# by its search and added to the body at the value it prints with now.
+mark
+native-pointer-click makeCardAddValue
+expect-log '^Native sheet shown: Add Print Value \(printValuePicker\)$'
+expect-log '^Add print value opened for Body1: '
+focus-dialog '^Add Print Value$'
+native-type printValueSearch Walls
+expect-log '^Add print value search: Walls: .*, current perimeters$'
+native-pointer-button '^Add$'
+focus-main
+expect-log '^Add print value chose perimeters$'
+expect-log '^Make card Walls added: 2$'
+expect-undo-depth ${baseline} 1
+expect-native-present makeCardValue_perimeters true
+command edit.undo
+expect-undo-depth ${baseline} 0
+expect-model-bodies 1 4000

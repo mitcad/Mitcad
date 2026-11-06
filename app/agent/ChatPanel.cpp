@@ -152,6 +152,8 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_agentChoice->setObjectName(QStringLiteral("chatAgentChoice"));
   m_agentChoice->setToolTip(tr("The agent; another one starts a new conversation"));
   m_agentChoice->setItemDelegate(new AgentChoiceDelegate(m_agentChoice));
+  // The AppKit popup shows the state under each name (mitcad#1358).
+  m_agentChoice->setProperty("nativeItemDetailRole", kAgentStateRole);
   m_agentChoice->hide();
   m_modelChoice = new QComboBox;
   m_modelChoice->setObjectName(QStringLiteral("chatModelChoice"));

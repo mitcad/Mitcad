@@ -2,6 +2,8 @@
 #pragma once
 
 #include "Navigation.hpp"
+#include "../framework/PreferencesPageLayout.hpp"
+#include "../framework/TestSync.hpp"
 #include "../platform/MacDialogs.hpp"
 
 #include <algorithm>
@@ -19,7 +21,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QShowEvent>
+#include <QSize>
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QSlider>
@@ -181,6 +185,16 @@ private:
   quint64 m_artworkRevision = 0;
 };
 
+// The bindings table: it asks for no more than its minimum height, so that
+// the page's natural height stays one a low screen shows (mitcad#951), and
+// takes what the page has to spare (mitcad#1394).
+class NavigationBindingsTable : public QTableWidget {
+public:
+  static constexpr int kMinimumHeight = 138;
+  using QTableWidget::QTableWidget;
+  QSize sizeHint() const override { return {QTableWidget::sizeHint().width(), minimumHeight()}; }
+};
+
 class NavigationPreferences : public QWidget {
 public:
   // `buttonCommands`: the commands a 3D mouse's button can run, by id and
@@ -226,7 +240,7 @@ public:
     layout->addLayout(top);
     m_guide = new NavigationGuide;
     layout->addWidget(m_guide);
-    m_table = new QTableWidget;
+    m_table = new NavigationBindingsTable;
     m_table->setObjectName(QStringLiteral("navigationBindings"));
     mac::styleListTable(m_table);
     m_table->setColumnCount(2);
@@ -235,9 +249,11 @@ public:
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_table->verticalHeader()->hide();
     m_table->setSelectionMode(QAbstractItemView::NoSelection);
-    m_table->setFixedHeight(138);
+    // The page's spare height goes to the table (mitcad#1394); the rest of
+    // the tab keeps its natural height under it.
+    m_table->setMinimumHeight(NavigationBindingsTable::kMinimumHeight);
     m_table->setAccessibleName(tr("Navigation bindings"));
-    layout->addWidget(m_table);
+    layout->addWidget(m_table, 1);
     auto* reserved = new QLabel(tr("Left drags used for selection and component movement are reserved. "
                                   "The orientation cube keeps its own gestures."));
     reserved->setObjectName(QStringLiteral("navigationConflicts"));
@@ -274,11 +290,11 @@ public:
     addFlag(flags, 1, 0, tr("Constrained orbit (Z stays up)"), "navigationConstrainedOrbit", &NavigationSettings::constrainedOrbit);
     addFlag(flags, 1, 1, tr("Smooth view transitions"), "navigationAnimate", &NavigationSettings::animate);
     layout->addLayout(flags);
-    auto* hint = new QLabel(tr("Constrained orbit keeps Z upright. Zoom follows the cursor when enabled. "
-                              "The wheel zooms; pinch zooms, rotation rolls, and a two-finger double tap fits."));
-    hint->setObjectName(QStringLiteral("navigationGuideExplanation"));
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
+    m_hint = new QLabel(tr("Constrained orbit keeps Z upright. Zoom follows the cursor when enabled. "
+                           "The wheel zooms; pinch zooms, rotation rolls, and a two-finger double tap fits."));
+    m_hint->setObjectName(QStringLiteral("navigationGuideExplanation"));
+    m_hint->setWordWrap(true);
+    layout->addWidget(m_hint);
     tabs->addTab(mousePage, tr("Mouse and Trackpad"));
     auto* spacePage = new QWidget;
     auto* spaceLayout = new QVBoxLayout(spacePage);
@@ -313,8 +329,27 @@ protected:
     // The table's real viewport geometry is available after the page is
     // shown, including when Settings switches to this previously hidden pane.
     QTimer::singleShot(0, m_table, [this] { revealFirstBinding(); });
+    logGeometry();
+  }
+  void resizeEvent(QResizeEvent* event) override {
+    QWidget::resizeEvent(event);
+    logGeometry();
   }
 private:
+  // Once the layout has settled after a show or a resize (UI tests,
+  // mitcad#1394): the bindings table's height and how far the page's last
+  // line (the hint) ends above the bottom of the area its window gives the
+  // page, with a picture when the tests ask for one.
+  void logGeometry() {
+    if (m_geometryLogPending) return;
+    m_geometryLogPending = true;
+    TestSync::singleShot(0, this, [this] {
+      m_geometryLogPending = false;
+      if (!isVisible() || !m_hint->isVisible()) return;
+      logPreferencesPageLayout(this, QStringLiteral("Navigation page: bindings table"), m_table, m_hint,
+                               QStringLiteral("navigation"));
+    });
+  }
   void revealFirstBinding() {
     int firstEditable = -1;
     for (int row = 0; row < m_bindings.size(); ++row) {
@@ -565,6 +600,8 @@ private:
   QComboBox* m_seed = nullptr;
   QTableWidget* m_table = nullptr;
   NavigationGuide* m_guide = nullptr;
+  QLabel* m_hint = nullptr;
+  bool m_geometryLogPending = false;
 };
 
 } // namespace mitcad

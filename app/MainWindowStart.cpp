@@ -81,6 +81,12 @@ void MainWindow::createStartPage() {
   host.bottomBar = [this]() -> QWidget* {
     return m_floating != nullptr ? m_floating->findChild<QWidget*>(QStringLiteral("messageBandCard")) : nullptr;
   };
+  // The AppKit message band is no Qt widget: the room the view's overlays
+  // keep free at its bottom, which counts the band while it shows
+  // (NativeMacWindow's layoutOverlays, mitcad#1358).
+  if (m_nativeUi) {
+    host.bottomInset = [this] { return m_viewer->overlayInsets().bottom(); };
+  }
   // The projects' browser (mitcad#1301): the projects read with this run's
   // edit-lock session, their state icons as the Projects panel's (the
   // current project's remote as the remote work knows it).

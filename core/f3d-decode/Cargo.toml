@@ -22,3 +22,9 @@ mitcad-f3d-names = { path = "../f3d-names" }
 mitcad-vec3 = { path = "../vec3" }
 # Sketch texts, NURBS curves and the learning dump's records are JSON.
 serde_json.workspace = true
+
+[features]
+# A per-thread count of the references read (`stream::ref_reads`), for the
+# tests that keep the sketch scans linear (mitcad#1348). Only the tests
+# turn it on.
+scan-count = []

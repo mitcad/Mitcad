@@ -1,0 +1,260 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where the mid-point of a rolling ball's contacts lies on the
+guide's polar axis, the walk's section condition is taken on the ball's
+centre, so that it still picks a ball (mitcad#1368).
+
+The walked constant-radius blend (BlendFunc_ConstRad, and
+BlendFunc_ConstRadInv for its ends on restrictions) picks the ball for the
+guide's parameter by the mid-point of its contact points lying in the
+guide's normal plane (patch 0075). Where that mid-point lies on the guide's
+polar axis (the line through its centre of curvature square to its
+osculating plane), the condition holds the ball no more: a pocket's floor
+square to a concave wall arc of radius R, rounded with exactly 2 R, puts
+the ball's floor contact R from the arc's axis on its far side and its
+wall contact R from it on the near side, so the mid-point of every ball
+round the arc lies on the axis, which every normal plane of the arc holds.
+The solver returned the start section at every step (its Jacobian
+singular, the tangents not found) and the walk halved its step to nothing;
+at 0.79999 and 0.80001 for R = 0.4 it built. The inverse function lost its
+hold on the guide's parameter the same way.
+
+Both functions now test |1 - k (M - P).n| (M the mid-point, P the guide's
+point, k its curvature, n its principal normal: the derivative of the
+condition by the guide's arc length) and below 1e-6 take the condition on
+the ball's centre (the mean of the centres seen from both contacts), with
+its first and second derivatives. Where the ball's section lies in the
+guide's normal plane, as between surfaces of revolution about the axis of
+a circular guide, both conditions pick the same ball; elsewhere the
+mid-point stays the condition, unchanged.
+
+Test: geometry/tests/test_fillet_ball_twice_arc.cpp, a pocket whose floor
+meets concave arcs of 0.4, rounded with 0.8 (and 0.79999, 0.80001) by
+OCCT's fillet alone and by MitCad's, and the reported body (a case of
+MITCAD_GEOMETRY_CASES): the rounding builds at exactly 0.8, valid, without
+MitCad's 0.1 % smaller retry, and on the pocket it lies within 1e-4 mm of
+the roundings at 0.79999 and 0.80001 (6e-6 mm measured). Without the
+patch OCCT's fillet is not done at 0.8 (one faulty contour).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+index af8cceba..351eb1cd 100644
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+@@ -46,8 +46,29 @@
+ // both contact normals (the normal plane of the curve the centre runs along). The guide only
+ // says which ball: the mid-point of the contact points lies in the guide's normal plane. Where
+ // the normals are square to the guide this is the guide's normal plane itself.
++//
++// Where the mid-point lies on the guide's polar axis (the line through its centre of curvature
++// square to its osculating plane), the mid-point's condition picks no ball: between surfaces of
++// revolution about the axis of a circular guide, a concave arc of radius R and a face square to
++// it rounded with 2 R, the mid-point of every ball round the arc lies on the axis, which every
++// normal plane of the guide holds, and the walk cannot leave its first section. There the
++// condition is taken on the ball's centre instead (SingularMidPoint). Where the ball's section
++// lies in the guide's normal plane, as between surfaces of revolution about the guide's axis,
++// both pick the same ball; the mid-point stays the condition everywhere else.
+ namespace
+ {
++//! Below this, |1 - k (M - P).n| (M the mid-point of the contact points, P the guide's point,
++//! k its curvature and n its principal normal: the guide's parameter's hold on the mid-point's
++//! condition, per unit length) says that the mid-point lies on the guide's polar axis.
++constexpr double SingularMidPoint = 1.e-6;
++
++//! True where the mid-point Mid of the contact points lies on the polar axis of the guide at
++//! Pgui (dnplan: the derivative of its unit tangent by its parameter, invnormtg: 1 / its speed).
++bool OnPolarAxis(const gp_XYZ& Mid, const gp_Pnt& Pgui, const gp_Vec& dnplan, const double invnormtg)
++{
++  return std::abs(dnplan.XYZ().Dot(Mid - Pgui.XYZ()) * invnormtg - 1.) < SingularMidPoint;
++}
++
+ //! Second derivative n_ab of the unit normal n = N/|N| from the derivatives of N
+ //! (na, nb: first derivatives of n; invnorm = 1/|N|).
+ gp_Vec UnitNormalD2(const gp_Vec& n,
+@@ -274,6 +295,12 @@ bool BlendFunc_ConstRad::ComputeValues(const math_Vector& X,
+       case 0: {
+         tcurv->D1(T, ptgui, d1gui);
+         nplan = d1gui.Normalized();
++        // The guide's curvature as well, for the section's point (OnPolarAxis).
++        gp_Pnt ptd2;
++        gp_Vec d1d2;
++        tcurv->D2(T, ptd2, d1d2, d2gui);
++        invnormtg = ((double)1) / d1gui.Magnitude();
++        dnplan.SetLinearForm(invnormtg, d2gui, -invnormtg * (nplan.Dot(d2gui)), nplan);
+       }
+       break;
+ 
+@@ -412,6 +439,16 @@ bool BlendFunc_ConstRad::ComputeValues(const math_Vector& X,
+   E(3) = resul.Y();
+   E(4) = resul.Z();
+ 
++  // The section's point: the contact points' mid-point, or where that lies on the guide's
++  // polar axis the ball's centre (the mean of the centres seen from both contacts).
++  gp_XYZ     secpt    = (pts1.XYZ() + pts2.XYZ()) / 2;
++  const bool oncentre = OnPolarAxis(secpt, ptgui, dnplan, invnormtg);
++  if (oncentre)
++  {
++    secpt = (pts1.XYZ() + ray1 * cdir1.XYZ() + pts2.XYZ() + ray2 * cdir2.XYZ()) / 2;
++    E(1)  = nplan.XYZ().Dot(secpt) + theD;
++  }
++
+   // -------------------- Positioning of order 1 ---------------------
+   if (Order >= 1)
+   {
+@@ -450,11 +487,21 @@ bool BlendFunc_ConstRad::ComputeValues(const math_Vector& X,
+     DEDX(3, 4) = resul.Y();
+     DEDX(4, 4) = resul.Z();
+ 
++    if (oncentre)
++    {
++      // The centre moves by half each centre's move: rows 2 to 4 are centre 1 less centre 2.
++      for (int j = 1; j <= 4; j++)
++      {
++        const double s = j <= 2 ? 0.5 : -0.5;
++        DEDX(1, j)     = s * (nplan.X() * DEDX(2, j) + nplan.Y() * DEDX(3, j) + nplan.Z() * DEDX(4, j));
++      }
++    }
++
+     if (byParam)
+     {
+       // Only the plane's equation depends on the guide.
+       gp_Vec temp;
+-      temp.SetXYZ((pts1.XYZ() + pts2.XYZ()) / 2 - ptgui.XYZ());
++      temp.SetXYZ(secpt - ptgui.XYZ());
+       dn1w.SetCoord(0., 0., 0.);
+       dn2w.SetCoord(0., 0., 0.);
+ 
+@@ -524,6 +571,22 @@ bool BlendFunc_ConstRad::ComputeValues(const math_Vector& X,
+       D2EDX2(3, 4, 4) = resul.Y();
+       D2EDX2(4, 4, 4) = resul.Z();
+ 
++      if (oncentre)
++      {
++        // As for the first derivatives; the two centres share no parameter.
++        for (int i = 1; i <= 4; i++)
++        {
++          for (int j = 1; j <= 4; j++)
++          {
++            const bool   same = (i <= 2) == (j <= 2);
++            const double s    = !same ? 0. : (i <= 2 ? 0.5 : -0.5);
++            D2EDX2(1, i, j)   = s
++                              * (nplan.X() * D2EDX2(2, i, j) + nplan.Y() * D2EDX2(3, i, j)
++                                 + nplan.Z() * D2EDX2(4, i, j));
++          }
++        }
++      }
++
+       if (byParam)
+       {
+         //  ---------- Derivation double in t, X --------------------------
+@@ -532,6 +595,14 @@ bool BlendFunc_ConstRad::ComputeValues(const math_Vector& X,
+         D2EDXDT(1, 2) = dnplan.Dot(d1v1) / 2;
+         D2EDXDT(1, 3) = dnplan.Dot(d1u2) / 2;
+         D2EDXDT(1, 4) = dnplan.Dot(d1v2) / 2;
++        if (oncentre)
++        {
++          for (int j = 1; j <= 4; j++)
++          {
++            const double s = j <= 2 ? 0.5 : -0.5;
++            D2EDXDT(1, j)  = s * (dnplan.X() * DEDX(2, j) + dnplan.Y() * DEDX(3, j) + dnplan.Z() * DEDX(4, j));
++          }
++        }
+         d2ndtu1.SetCoord(0., 0., 0.);
+         d2ndtv1.SetCoord(0., 0., 0.);
+         d2ndtu2.SetCoord(0., 0., 0.);
+@@ -541,7 +612,7 @@ bool BlendFunc_ConstRad::ComputeValues(const math_Vector& X,
+ 
+         //  ---------- Derivation double in t -----------------------------
+         gp_Vec temp;
+-        temp.SetXYZ((pts1.XYZ() + pts2.XYZ()) / 2 - ptgui.XYZ());
++        temp.SetXYZ(secpt - ptgui.XYZ());
+         D2EDT2(1) = d2nplan.Dot(temp) - 2 * dnplan.Dot(d1gui) - nplan.Dot(d2gui);
+         D2EDT2(2) = 0.;
+         D2EDT2(3) = 0.;
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx
+index 8af84caa..f00a950c 100644
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx
+@@ -22,6 +22,22 @@
+ 
+ #define Eps 1.e-15
+ 
++namespace
++{
++//! As in BlendFunc_ConstRad: below this, |1 - k (M - P).n| (M the mid-point of the contact
++//! points, P the guide's point, k its curvature and n its principal normal) says that the
++//! mid-point lies on the guide's polar axis, where its condition does not hold the guide's
++//! parameter, and the condition is taken on the ball's centre instead.
++constexpr double SingularMidPoint = 1.e-6;
++
++//! True where the mid-point Mid of the contact points lies on the polar axis of the guide at
++//! Pgui (dnplan: the derivative of its unit tangent by its parameter, normtg: its speed).
++bool OnPolarAxis(const gp_XYZ& Mid, const gp_Pnt& Pgui, const gp_Vec& dnplan, const double normtg)
++{
++  return std::abs(dnplan.XYZ().Dot(Mid - Pgui.XYZ()) / normtg - 1.) < SingularMidPoint;
++}
++} // namespace
++
+ BlendFunc_ConstRadInv::BlendFunc_ConstRadInv(const occ::handle<Adaptor3d_Surface>& S1,
+                                              const occ::handle<Adaptor3d_Surface>& S2,
+                                              const occ::handle<Adaptor3d_Curve>&   C)
+@@ -154,8 +170,8 @@ bool BlendFunc_ConstRadInv::IsSolution(const math_Vector& Sol, const double Tol)
+ 
+ // The equations are those of BlendFunc_ConstRad (a ball rolling on both surfaces, its centre
+ // at the radius along both unit normals, the mid-point of the contact points in the guide's
+-// normal plane), with the contact on one surface held on a curve of it and the guide's
+-// parameter free.
++// normal plane, or the ball's centre where the mid-point lies on the guide's polar axis), with
++// the contact on one surface held on a curve of it and the guide's parameter free.
+ bool BlendFunc_ConstRadInv::Value(const math_Vector& X, math_Vector& F)
+ {
+   gp_Pnt ptcur;
+@@ -233,6 +249,20 @@ bool BlendFunc_ConstRadInv::Value(const math_Vector& X, math_Vector& F)
+   F(3) = resul.Y();
+   F(4) = resul.Z();
+ 
++  // The guide's curvature, for the section's point.
++  gp_Pnt ptd2;
++  gp_Vec d1d2, d2cur;
++  curv->D2(X(2), ptd2, d1d2, d2cur);
++  const double normtg = d1cur.Magnitude();
++  gp_Vec       dnplan;
++  dnplan.SetLinearForm(-nplan.Dot(d2cur), nplan, d2cur);
++  dnplan /= normtg;
++  if (OnPolarAxis((pts1.XYZ() + pts2.XYZ()) / 2., ptcur, dnplan, normtg))
++  {
++    const gp_XYZ centre = (pts1.XYZ() + ray1 * ns1.XYZ() + pts2.XYZ() + ray2 * ns2.XYZ()) / 2.;
++    F(1)                = nplan.XYZ().Dot(centre) + theD;
++  }
++
+   return true;
+ }
+ 
+@@ -394,5 +424,25 @@ bool BlendFunc_ConstRadInv::Values(const math_Vector& X, math_Vector& F, math_Ma
+     D(3, 4) = resul2.Y();
+     D(4, 4) = resul2.Z();
+   }
++
++  if (OnPolarAxis((pts1.XYZ() + pts2.XYZ()) / 2., ptcur, dnplan, normtgcur))
++  {
++    // The section's point is the ball's centre: it moves by half each centre's move, and rows
++    // 2 to 4 are centre 1 less centre 2. X(1) is on surface 1 when first, X(3) and X(4) on the
++    // other surface.
++    const gp_XYZ centre = (pts1.XYZ() - ray1 * ns1.XYZ() + pts2.XYZ() - ray2 * ns2.XYZ()) / 2.;
++    F(1)                = nplan.XYZ().Dot(centre) + theD;
++    for (int j = 1; j <= 4; j++)
++    {
++      if (j == 2)
++      {
++        D(1, 2) = dnplan.XYZ().Dot(centre - ptcur.XYZ()) - normtgcur;
++        continue;
++      }
++      const bool   onfirst = (j == 1) == first;
++      const double s       = onfirst ? 0.5 : -0.5;
++      D(1, j)              = s * (nplan.X() * D(2, j) + nplan.Y() * D(3, j) + nplan.Z() * D(4, j));
++    }
++  }
+   return true;
+ }

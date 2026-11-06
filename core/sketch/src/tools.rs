@@ -84,6 +84,10 @@ pub enum ArcMode {
     },
     /// From the end point `from` of a curve, tangent to it, to `end`.
     Tangent { from: EntityUid, end: PointInput },
+    /// From the end point `from` of a line or a circular arc, square to it
+    /// (normal, mitcad#1393), to `end`: the arc's centre on the line, or on
+    /// the arc's tangent at `from`.
+    Normal { from: EntityUid, end: PointInput },
 }
 
 /// Slot tools; `width` is the slot's width. A centre given as an existing
@@ -193,6 +197,31 @@ impl SketchEdit<'_> {
         );
         entity.construction = construction;
         Ok(self.push(entity))
+    }
+
+    /// A line through its middle `center` to `end` and as far on the other
+    /// side (mitcad#1393): `center` (a new point, or the existing point
+    /// given) held at the line's middle by a midpoint constraint. Returns
+    /// the line and its middle point.
+    pub fn midpoint_line(
+        &mut self,
+        center: PointInput,
+        end: PointInput,
+        construction: bool,
+        centerline: bool,
+    ) -> Result<(EntityUid, EntityUid), String> {
+        let (c, e) = (self.input_position(center)?, self.input_position(end)?);
+        if dist(c, e) == 0.0 {
+            return Err("a midpoint line needs its middle and an end apart".to_owned());
+        }
+        let middle = self.point(center)?;
+        let start = self.new_point(sub(scale(c, 2.0), e));
+        let line = self.add_line(PointInput::Existing(start), end, construction, centerline)?;
+        self.add_constraint(ConstraintKind::Midpoint {
+            point: middle,
+            curve: line,
+        });
+        Ok((line, middle))
     }
 
     /// Four lines with shared corners; returns the lines in order around
@@ -393,6 +422,60 @@ impl SketchEdit<'_> {
         }
     }
 
+    /// The curve that ends at `from` and the direction it leaves `from`
+    /// with (outwards); construction curves only for a construction arc.
+    fn leaving(&self, from: EntityUid, construction: bool) -> Result<(EntityUid, P2), String> {
+        let solved = self.solved()?;
+        self.def
+            .entities
+            .iter()
+            .filter(|e| !e.construction || construction)
+            .find_map(|e| {
+                let (s, t) = e.kind.ends()?;
+                let c = solved.curves.get(&e.id)?;
+                let (lo, hi) = c.domain();
+                if t == from {
+                    Some((e.id, c.eval(hi)[1]))
+                } else if s == from {
+                    Some((e.id, scale(c.eval(lo)[1], -1.0)))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| format!("no curve ends at p{}", from.0))
+    }
+
+    /// The arc from the point `from` at `p` leaving along the unit
+    /// direction `t` to the point `end` at `pe` (not straight ahead): a new
+    /// centre point, and the arc counter-clockwise either way round.
+    fn leaving_arc(
+        &mut self,
+        from: EntityUid,
+        end: EntityUid,
+        t: P2,
+        p: P2,
+        pe: P2,
+    ) -> (EntityUid, EntityKind) {
+        let n = perp(t);
+        let chord = sub(pe, p);
+        let r = dot(chord, chord) / (2.0 * dot(chord, n));
+        let center = self.new_point(add(p, scale(n, r)));
+        let kind = if r > 0.0 {
+            EntityKind::Arc {
+                center,
+                start: from,
+                end,
+            }
+        } else {
+            EntityKind::Arc {
+                center,
+                start: end,
+                end: from,
+            }
+        };
+        (center, kind)
+    }
+
     pub fn arc(&mut self, mode: ArcMode, construction: bool) -> Result<EntityUid, String> {
         let id = self.id();
         // An existing point the arc passes through (mitcad#1269).
@@ -451,51 +534,57 @@ impl SketchEdit<'_> {
             }
             ArcMode::Tangent { from, end } => {
                 let p = self.at(from)?;
-                // The curve that ends at `from` and its direction there.
-                let solved = self.solved()?;
-                let (curve, direction) = self
-                    .def
-                    .entities
-                    .iter()
-                    .filter(|e| !e.construction || construction)
-                    .find_map(|e| {
-                        let (s, t) = e.kind.ends()?;
-                        let c = solved.curves.get(&e.id)?;
-                        let (lo, hi) = c.domain();
-                        if t == from {
-                            Some((e.id, c.eval(hi)[1]))
-                        } else if s == from {
-                            Some((e.id, scale(c.eval(lo)[1], -1.0)))
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| format!("no curve ends at p{}", from.0))?;
+                let (curve, direction) = self.leaving(from, construction)?;
                 let e = self.point(end)?;
                 let pe = self.at(e)?;
                 let d = unit(direction);
-                let n = perp(d);
                 let chord = sub(pe, p);
-                let along = dot(chord, n);
-                if along.abs() <= 1e-12 * norm(chord).max(1e-300) {
+                if dot(chord, perp(d)).abs() <= 1e-12 * norm(chord).max(1e-300) {
                     return Err("the end is straight ahead; draw a line".to_owned());
                 }
-                let r = dot(chord, chord) / (2.0 * along);
-                let center = self.new_point(add(p, scale(n, r)));
+                let (_, kind) = self.leaving_arc(from, e, d, p, pe);
                 self.add_constraint(ConstraintKind::tangent(curve, id));
-                if r > 0.0 {
-                    EntityKind::Arc {
-                        center,
-                        start: from,
-                        end: e,
+                kind
+            }
+            ArcMode::Normal { from, end } => {
+                let p = self.at(from)?;
+                let (curve, direction) = self.leaving(from, construction)?;
+                // What holds the arc square to the curve: its centre on the
+                // line, or a construction radius of the arc it leaves that
+                // the new arc is tangent to at `from`.
+                let previous_center = match self.def.entity(curve).map(|c| &c.kind) {
+                    Some(EntityKind::Line { .. }) => None,
+                    Some(EntityKind::Arc { center, .. }) => Some(*center),
+                    _ => {
+                        return Err(format!(
+                            "a normal arc starts from a line or a circular arc; c{} is neither",
+                            curve.0
+                        ));
                     }
-                } else {
-                    EntityKind::Arc {
-                        center,
-                        start: e,
-                        end: from,
-                    }
+                };
+                let e = self.point(end)?;
+                let pe = self.at(e)?;
+                let d = unit(direction);
+                let chord = sub(pe, p);
+                let across = dot(chord, perp(d));
+                if dot(chord, d).abs() <= 1e-12 * norm(chord).max(1e-300) {
+                    return Err("the end is straight across; draw a line".to_owned());
                 }
+                // It leaves `from` across the curve, toward the end's side.
+                let t = scale(perp(d), if across < 0.0 { -1.0 } else { 1.0 });
+                let (center, kind) = self.leaving_arc(from, e, t, p, pe);
+                let hold = match previous_center {
+                    None => ConstraintKind::Coincident {
+                        point: center,
+                        entity: super::Ref::Curve(curve),
+                    },
+                    Some(c) => {
+                        let radius = self.curve_entity(line(c, from), true);
+                        ConstraintKind::tangent(radius, id)
+                    }
+                };
+                self.add_constraint(hold);
+                kind
             }
         };
         let mut e = Entity::new(id, entity);

@@ -25,6 +25,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../sketch/FontFiles.hpp"
 #include "../sketch/SketchController.hpp"
+#include "../sketch/SketchModel.hpp"
 #include "../sketch/SketchTool.hpp"
 #include "CommandSupport.hpp"
 #include "PatternOptions.hpp"
@@ -910,6 +911,16 @@ std::function<bool(const SelectionItem&)> editable(SketchController& c, Lookup l
   };
 }
 
+// A text's input also takes a region its contours bound, selected before
+// the command (the context menu's or a double-click's Edit Text inside a
+// letter or its counter, mitcad#1369), as the text's curve; clicks in the
+// panel still pick its outline.
+InputDef textInputFor(InputDef input, SketchController& c) {
+  return input.withAlsoTakes(SelectKind::Profile).withConvert([&c](const SelectionItem& item) {
+    return sketch::textSelectionItem(c.model(), item);
+  });
+}
+
 void addEditPattern(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.edit_pattern", QObject::tr("Edit Pattern"), "circular-pattern", "MODIFY",
                                  CommandDef::Kind::Feature);
@@ -1151,8 +1162,9 @@ void addEditCode(CommandRegistry& registry, SketchController& c) {
     return t != nullptr && t->code ? t : nullptr;
   };
   def.inputs = {
-      selectionInput(QStringLiteral("code"), QObject::tr("QR Code"), SelectKind::SketchCurve, 1, 1)
-          .withAccepts(editable(c, lookup)),
+      textInputFor(selectionInput(QStringLiteral("code"), QObject::tr("QR Code"), SelectKind::SketchCurve, 1, 1)
+                       .withAccepts(editable(c, lookup)),
+                   c),
       textInput(QStringLiteral("content"), QObject::tr("Content")),
       valueInput(QStringLiteral("module"), QObject::tr("Module Size"), ValueKind::Length, QStringLiteral("1 mm")),
       choiceInput(QStringLiteral("ecc"), QObject::tr("Error Correction"), kCodeLevels, QStringLiteral("M")),
@@ -1209,8 +1221,9 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
   };
   const auto onPath = [](const CommandState& s) { return !s.items(QStringLiteral("path")).isEmpty(); };
   def.inputs = {
-      selectionInput(QStringLiteral("text"), QObject::tr("Text"), SelectKind::SketchCurve, 1, 1)
-          .withAccepts(editable(c, lookup)),
+      textInputFor(selectionInput(QStringLiteral("text"), QObject::tr("Text"), SelectKind::SketchCurve, 1, 1)
+                       .withAccepts(editable(c, lookup)),
+                   c),
       textInput(QStringLiteral("content"), QObject::tr("Text")),
       // The text from a text parameter or expression (mitcad#664).
       textInput(QStringLiteral("value"), QObject::tr("Text Parameter"))
@@ -1388,7 +1401,12 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   // Arcs, Other Geometry, Text, Patterns, References; a pinned command is
   // its submenu's split button default. Offset is in MODIFY.
   add({"sketch.line", QObject::tr("Line"), "line", "CREATE/Lines", [&c] { c.startTool(sketch::lineTool(c)); },
-       QKeySequence(Qt::Key_L), true, QObject::tr("Lines end to end; drag from the end for a tangent arc")});
+       QKeySequence(Qt::Key_L), true,
+       QObject::tr("Lines end to end; drag from an end for an arc, tangent along the curve or normal across it")});
+  // Lines is a split button with Line its default (mitcad#1393).
+  add({"sketch.line_midpoint", QObject::tr("Midpoint Line"), "line-midpoint", "CREATE/Lines",
+       [&c] { c.startTool(sketch::midpointLineTool(c)); }, none, false,
+       QObject::tr("A line from its midpoint and an end, symmetric about the midpoint")});
   add({"sketch.rectangle", QObject::tr("2-Point Rectangle"), "rectangle", "CREATE/Rectangles",
        draw(sketch::rectangleTool, "two_point"), QKeySequence(Qt::Key_R), true,
        QObject::tr("A rectangle from two opposite corners")});

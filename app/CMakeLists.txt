@@ -108,6 +108,8 @@ qt_add_executable(mitcad
   framework/SettingsWindow.hpp
   framework/Ribbon.cpp
   framework/Ribbon.hpp
+  framework/RibbonFit.cpp
+  framework/RibbonFit.hpp
   framework/Selection.cpp
   framework/Selection.hpp
   framework/ShortcutDialog.cpp
@@ -269,6 +271,8 @@ qt_add_executable(mitcad
   update/UpdateInstaller.hpp
   update/UpdateNotice.cpp
   update/UpdateNotice.hpp
+  update/UpdateOffer.cpp
+  update/UpdateOffer.hpp
   update/UpdatePreferences.cpp
   update/UpdatePreferences.hpp
   update/UpdateSettings.cpp
@@ -1504,6 +1508,13 @@ if(BUILD_TESTING)
   # geometry.
   target_sources(test_app PRIVATE tests/sketch_axes.cpp sketch/SketchAxes.cpp)
 endif()
+# The text a pick inside a letter or its counter stands for (mitcad#1369):
+# Edit Text and Edit QR Code from a text's region.
+target_sources(mitcad PRIVATE sketch/SketchTextPicks.cpp)
+if(BUILD_TESTING)
+  # On the sketch model's data: plain Qt Core.
+  target_sources(test_app PRIVATE tests/sketch_text_picks.cpp sketch/SketchTextPicks.cpp)
+endif()
 # Mount frames of any part and Place Part (mitcad#525, app/COMMANDS.md
 # "Component libraries"): a library part placed by its frame on a face, a
 # hole or a grid; the frames a manifest lists.
@@ -1733,6 +1744,9 @@ if(BUILD_TESTING)
     # processHasAdministratorRights (mitcad#921).
     target_link_libraries(test_app PRIVATE advapi32)
   endif()
+  # The update notice's text and buttons for a release with or without a
+  # download for this platform (mitcad#1390): plain Qt Core.
+  target_sources(test_app PRIVATE tests/update_offer.cpp update/UpdateOffer.cpp update/UpdateOffer.hpp)
 endif()
 
 # The updates' test hooks (mitcad#921, docs/updates.md#the-test-hooks): the
@@ -2256,6 +2270,11 @@ if(BUILD_TESTING)
   # (also an earlier version's per-tab lists): plain Qt Core.
   target_sources(test_app PRIVATE tests/toolbar_pins.cpp framework/ToolbarPins.cpp framework/ToolbarPins.hpp)
 endif()
+# How a ribbon page's groups fit a narrow window (mitcad#1111, mitcad#1357):
+# the rule the Qt ribbon and the AppKit ribbon share; plain C++.
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/ribbon_fit.cpp framework/RibbonFit.cpp framework/RibbonFit.hpp)
+endif()
 # Dogbone in the SOLID tab's MODIFY group (mitcad#1011): relief cuts at a
 # body's inside corners.
 target_sources(mitcad PRIVATE commands/DogboneCommands.cpp)
@@ -2665,4 +2684,31 @@ if(BUILD_TESTING)
   # Its load and save: plain Qt Core.
   target_sources(test_app PRIVATE tests/drawing_preferences.cpp drawings/DrawingPreferences.cpp
                                   drawings/DrawingPreferences.hpp)
+endif()
+
+# A read of the model while a job computes it, out of an event handler
+# (mitcad#1360, GitHub mitcad/Mitcad#156, app/COMMANDS.md "Background
+# computation"): the application's notify() logs the ModelBusy and drops
+# the event instead of ending the application.
+target_sources(mitcad PRIVATE framework/Application.cpp framework/Application.hpp framework/ModelBusy.hpp)
+if(BUILD_TESTING)
+  # A filter's ModelBusy dropped and logged, a close kept open: plain Qt
+  # Widgets (test_app runs as the application's own class).
+  target_sources(test_app PRIVATE tests/busy_input.cpp framework/Application.cpp framework/Application.hpp
+                                  framework/ModelBusy.hpp)
+endif()
+
+# The layout and pictures of the Preferences pages whose list takes the
+# page's height, for the UI tests (mitcad#1394).
+target_sources(mitcad PRIVATE framework/PreferencesPageLayout.hpp)
+
+# The arcs the sketch Line tool draws by a drag from a curve's end
+# (mitcad#1393, app/COMMANDS.md "The line tool's arcs and Midpoint Line"):
+# tangent or normal by the drag, placed by the cursor and the typed radius
+# and sweep.
+target_sources(mitcad PRIVATE sketch/LineArcs.cpp sketch/LineArcs.hpp)
+if(BUILD_TESTING)
+  # The choice and the arcs: plain plane geometry.
+  target_sources(test_app PRIVATE tests/line_arcs.cpp sketch/LineArcs.cpp sketch/LineArcs.hpp
+                                  sketch/SketchGeometry.cpp)
 endif()

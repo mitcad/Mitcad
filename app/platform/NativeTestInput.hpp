@@ -13,6 +13,7 @@ class QOpenGLWidget;
 class QPointF;
 class QJsonObject;
 class QRect;
+class QRectF;
 
 namespace mitcad { class CommandHost; }
 
@@ -20,7 +21,7 @@ namespace mitcad::mac::test {
 
 // In-process AppKit input for MITCAD_TEST_INPUT. There is no Accessibility
 // API, system event injection, permission prompt or second application loop.
-#if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
+#if defined(MITCAD_MAC_UI) && defined(MITCAD_MACOS_NATIVE_UI)
 bool active();
 bool nativeFocused();
 bool applicationDelegate(QString& error);
@@ -83,6 +84,10 @@ bool setFileDirectory(const QString& directory, QString& error);
 QString filePanelDiagnostic();
 bool cancelFilePanel(QString& error);
 void focusMain();
+// Mouse input needs application activation, including in a transient
+// popover whose owning window can remain the key window.
+void requestPointerEventActivation();
+bool pointerEventActivationReady();
 void requestKeyEventFocus();
 bool keyEventFocusReady();
 QString keyEventFocusDiagnostic();
@@ -100,7 +105,9 @@ bool screenshot(const QString& path, QOpenGLWidget* viewport = nullptr);
 // Native tables (mitcad#814): what a cell or label shows (comma-separated
 // states: error, warning, normal, bold, regular, editable, readonly,
 // editing, not-editing, selectable, selected, single-line, truncated, in-view; "<table>/<row>/
-// <column>" addresses a cell without an identifier), whether the columns
+// <column>" addresses a cell without an identifier; a Browser row's
+// eye=<icon>, icon=<icon>, badged-icon=<icon> and make-marker, mitcad#1352),
+// whether the columns
 // keep the shared header's sizes and stretching (fit, scroll or any), and
 // the focused native dialog's content size.
 bool nativeStyle(const QString& identifier, const QStringList& states, QString& detail);
@@ -213,6 +220,17 @@ bool cardHeight(const QString& card, int minimum, int maximum, QString& detail);
 // points), within a point of `expected` (mitcad#1317: the cube's arrows at
 // the hidden Qt arrows' places). Read only.
 bool viewportFrame(const QString& identifier, const QRect& expected, QString& detail);
+// A visible native view's frame in the 3D view's host (top-left origin,
+// logical points); native.window.content is the window's content area
+// (mitcad#1358: the Start page's place). Read only.
+bool viewportRect(const QString& identifier, QRectF& frame, QString& detail);
+// The mouse wheel turned `notches` notches (positive away from you) with
+// `modifiers` over a native control's centre, given to the AppKit view hit
+// there, which passes it up its responder chain as the system's wheel does
+// (mitcad#1350: a command form's or a sketch's value field steps while it
+// has the keyboard, the panel scrolls otherwise). In-process: no system
+// input.
+bool wheel(const QString& identifier, int notches, Qt::KeyboardModifiers modifiers, QString& error);
 #else
 inline bool active() { return false; }
 inline bool nativeFocused() { return false; }
@@ -267,6 +285,8 @@ inline bool setFileDirectory(const QString&, QString&) { return false; }
 inline QString filePanelDiagnostic() { return {}; }
 inline bool cancelFilePanel(QString&) { return false; }
 inline void focusMain() {}
+inline void requestPointerEventActivation() {}
+inline bool pointerEventActivationReady() { return false; }
 inline void requestKeyEventFocus() {}
 inline bool keyEventFocusReady() { return false; }
 inline QString keyEventFocusDiagnostic() { return {}; }
@@ -320,6 +340,8 @@ inline bool toolTipOf(const QString&, QString&) { return false; }
 inline bool dragColumnSplit(const QString&, int, QString&) { return false; }
 inline bool cardHeight(const QString&, int, int, QString&) { return false; }
 inline bool viewportFrame(const QString&, const QRect&, QString&) { return false; }
+inline bool viewportRect(const QString&, QRectF&, QString&) { return false; }
+inline bool wheel(const QString&, int, Qt::KeyboardModifiers, QString&) { return false; }
 #endif
 
 } // namespace mitcad::mac::test

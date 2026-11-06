@@ -44,9 +44,10 @@ public:
     // Analysis' thinnest wall, mitcad#620).
     std::function<void(const QString&)> resultLinkActivated;
     // The pointer came over the panel's message (true) or left it
-    // (mitcad#1327): the places its notices name are painted meanwhile. A
-    // frontend that cannot tell leaves it uncalled (the AppKit form, for
-    // now).
+    // (mitcad#1327): the places its notices name are painted meanwhile.
+    // The Qt panel's CommandMessage and the AppKit form's message
+    // (mitcad#1333) call it; a frontend that cannot tell leaves it
+    // uncalled.
     std::function<void(bool)> messageHovered;
   };
 

@@ -1014,6 +1014,15 @@ if(BUILD_TESTING)
               --work "${CMAKE_CURRENT_BINARY_DIR}/library-previews")
     set_tests_properties(cli.library-previews PROPERTIES TIMEOUT 600
       SKIP_REGULAR_EXPRESSION "library previews: skipped")
+    # A library version is tagged once (mitcad#1372): each generator with
+    # --commit refuses a --version whose tag its --out repository already
+    # has, naming the tag, before it makes anything; tools/libraries'
+    # library_tags.py on a throwaway repository of the build tree.
+    add_test(NAME cli.library-tags
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/library-tags-test.py"
+              --libraries "${PROJECT_SOURCE_DIR}/tools/libraries" --git "${GIT_EXECUTABLE}"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/library-tags")
+    set_tests_properties(cli.library-tags PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
   # The fastener generator's dimension tables (mitcad#900): sizes, pitches,
   # length series, each standard's rows and the earlier versions' rows;

@@ -126,7 +126,7 @@ private:
 WindowColors windowColors(const QPalette& palette) {
   WindowColors colors;
   colors.dark = isDarkPalette(palette);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   // The chrome's selection and focus follow the system's accent on macOS
   // (mitcad#852 C3); the 3D view keeps its fixed blue.
   colors.accent = palette.color(QPalette::Accent);

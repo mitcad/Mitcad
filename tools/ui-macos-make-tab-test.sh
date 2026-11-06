@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/Ribbon.cpp app/MainWindowMake.cpp app/MainWindowNative.cpp app/print/MakeBodyCard.cpp
+# check-all sources: app/browser/BrowserPanel.cpp app/platform/macos/NativeMacWindow.mm
 # The Make tab (mitcad#1049) on macOS, in Qt and in AppKit: the tabs Solid,
 # Build and Make; the moved commands started from it (Qt: the Make tab's
 # buttons; AppKit: the native actions of its toolbar) and cancelled: Print
 # Analysis, Send to Slicer (once 3D Print) and the Annotate group's
 # Dimension; Edit Materials…, Printers… and Processes… open their
 # windows. Qt: Body2 selected on the Make tab shows its card with Walls 5
-# set on the body, and the Browser marks Body2.
+# set on the body, and the Browser marks Body2. AppKit: the outline's row
+# of Body2 has the Make marker after its name, with its tooltip, Body1's
+# none, and back on Solid Body2's goes (mitcad#1352).
 # tools/ui-make-tab-test.sh (Linux) and tools/ui-windows-make-tab-test.ps1
 # do the rest of the Make tab.
 # Usage: tools/ui-macos-make-tab-test.sh <app> <cli> <output> [qt|native|both]
@@ -69,6 +72,14 @@ for frontend in $frontends; do
       echo "native-appearance '\${MITCAD_TEST_COLOR_SCHEME}'"
       echo 'native-resize 1280 820'
       echo 'native-choice native.workspaces Make'
+      # The Make marker in the outline (mitcad#1049, mitcad#1352).
+      echo "expect-ever 'Browser Make markers: Root/Bodies/Body2: Own print settings: Walls'"
+      echo 'native-expand native.modelTree'
+      echo 'mark'
+      echo "expect-native-style 'native.model.make.body:F4.b0@' make-marker"
+      echo "expect-log '^Native Make marker native\.model\.make\.body:F4\.b0@: Own print settings: Walls\$'"
+      echo "expect-native-tooltip 'native.model.make.body:F4.b0@' '^Own print settings: Walls\$'"
+      echo "expect-native-visible 'native.model.make.body:F2.b0@' false"
     else
       echo 'window-resize 1280 820'
     fi
@@ -105,6 +116,14 @@ for frontend in $frontends; do
     fi
     # The picture for the ticket (light and dark, Qt and AppKit).
     echo "screenshot '$MITCAD_TEST_WORK/make-tab-$frontend-$scheme.png'"
+    if [ "$frontend" = native ]; then
+      # No markers on the other tabs.
+      echo 'focus-main'
+      echo 'mark'
+      echo 'native-choice native.workspaces Solid'
+      echo "expect-log 'Browser Make markers: none'"
+      echo "expect-native-visible 'native.model.make.body:F4.b0@' false"
+    fi
   } > "$script"
   rm -rf "$MITCAD_SETTINGS_DIR"
   mkdir -p "$MITCAD_SETTINGS_DIR"

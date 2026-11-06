@@ -1,0 +1,282 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: an OnSame end whose opposite contact ends on the prolonged edge
+itself, short of the corner's vertex, cuts that edge there instead of
+adding a prolongation along it; the prolonged edge is the face at the
+end's edge with the opposite face, and a seam of the face at the end that
+starts at the vertex runs on to the cut (mitcad#1359).
+
+A plate's top edge rounded up to a boss whose cylinder the plate's flat
+side goes on into tangentially, along their common vertical edge below the
+corner's vertex: the rounding's contact on the top meets the boss's foot
+short of the vertex (an OnSame end, the cylinder the face at the end, the
+side the opposite face), and the contact on the side, at the plate's
+height less the radius, touches the cylinder on that vertical edge (at 12
+for a radius of 3). PerformOneCorner took that point for the end of the
+edge's prolongation past the vertex and added the curve from the vertex
+down to it (VARIANT1), the edge's own piece there again, and the edge was
+not cut: the side's and the cylinder's wires ran along it twice, an
+invalid result (self-intersecting wires, or an unorientable face). Now, where
+the opposite contact's end lies on the prolonged edge (within 10 tolapp3d)
+inside it and away from the vertex, no curve is added and the edge is cut
+there, its part from the vertex lying under the blend, as an arc the
+opposite contact ends on is cut (cutArcop).
+
+Where the face at the end has a seam that ends at the vertex on the
+prolonged edge's line (the cylinder's seam running up from the vertex, the
+edge left from it), the face goes on across that line from the vertex to
+the cut: the seam runs on along its line from the vertex to the cut, on
+both of its sides, as patch 0931 runs it on to a cap's crossing (a curve on
+the face's iso-line through the seam, here run the way the seam's curve
+runs and used on each side as the seam is there, which is how the faces'
+builder chains the pieces of a seam), and the seam itself is kept from the
+vertex on, where every other edge is cut away.
+
+The prolonged edge was the first edge of the face at the end at the vertex
+other than the arc the blend's contact ends on; at the vertex where the
+cylinder's seam starts that was the seam, and the end was built along it.
+The edge the face at the end shares with the opposite face is taken first
+(at a vertex of three edges it is the only other one).
+
+Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
+rounded with 1, 3 and 6 with the cylinder's seam at either vertex and on
+the body MitCad's sketch and extrusions build (MITCAD_GEOMETRY_CASES):
+valid, the material removed as the exact one within 1e-6 of it.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -1827,6 +1827,178 @@ static bool ChFi3d_ProlongTangentEdgeAlongIso(const TopoDS_Edge&
+   return true;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_ContactEndsOnProlongedEdge
++// purpose  : Whether P, the end of an OnSame stripe's opposite contact on
++//            the face at the end, lies on the prolonged edge E itself,
++//            inside it and away from its vertex V at the corner (the face
++//            at the end tangent to the opposite face along E, which runs
++//            from V the way the opposite face goes on, so that the contact
++//            touches the face at the end on E short of V): E's parameter
++//            there in W.
++//=======================================================================
++
++static bool ChFi3d_ContactEndsOnProlongedEdge(const TopoDS_Edge&   E,
++                                              const TopoDS_Vertex& V,
++                                              const gp_Pnt&        P,
++                                              const double         Tol,
++                                              double&              W)
++{
++  if (E.IsNull() || V.IsNull() || BRep_Tool::Degenerated(E))
++  {
++    return false;
++  }
++  double                        f = 0., l = 0.;
++  const occ::handle<Geom_Curve> C = BRep_Tool::Curve(E, f, l);
++  if (C.IsNull() || P.Distance(BRep_Tool::Pnt(V)) <= Tol)
++  {
++    return false;
++  }
++  GeomAPI_ProjectPointOnCurve aProj(P, C, f, l);
++  if (aProj.NbPoints() == 0 || aProj.LowerDistance() > Tol)
++  {
++    return false;
++  }
++  W = aProj.LowerDistanceParameter();
++  return C->Value(W).Distance(C->Value(f)) > Tol && C->Value(W).Distance(C->Value(l)) > Tol;
++}
++
++//=======================================================================
++// function : ChFi3d_SeamRunOnAlongEdge
++// purpose  : Where E, cut at W where an OnSame stripe's opposite contact
++//            ends on it (its part from the corner's vertex V dropped), lies
++//            along the line of a seam of the face at the end F that ends at
++//            V (E bounding F there, with F's curve on one side of the seam
++//            or on both: an edge left from the seam), F goes on across that
++//            line from V to the cut: the seam runs on along its line from V
++//            to the point Ip of the cut, on both of its sides, and stays.
++//=======================================================================
++
++static void ChFi3d_SeamRunOnAlongEdge(TopOpeBRepDS_DataStructure& DStr,
++                                      const TopoDS_Face&          F,
++                                      const int                   IF,
++                                      const TopoDS_Edge&          E,
++                                      const double                W,
++                                      const TopoDS_Vertex&        V,
++                                      const int                   Ip,
++                                      const double                Tol)
++{
++  TopoDS_Face FF = F;
++  FF.Orientation(TopAbs_FORWARD);
++  TopoDS_Edge aSeam;
++  for (TopExp_Explorer ex(FF, TopAbs_EDGE); ex.More() && aSeam.IsNull(); ex.Next())
++  {
++    const TopoDS_Edge& Es = TopoDS::Edge(ex.Current());
++    TopoDS_Vertex      V1, V2;
++    TopExp::Vertices(Es, V1, V2);
++    if (!Es.IsSame(E) && !BRep_Tool::Degenerated(Es) && BRep_Tool::IsClosed(Es, FF)
++        && (V.IsSame(V1) || V.IsSame(V2)))
++    {
++      aSeam = Es;
++    }
++  }
++  if (aSeam.IsNull())
++  {
++    return;
++  }
++  double                          f2 = 0., l2 = 0.;
++  const occ::handle<Geom2d_Curve> aSeam2d = BRep_Tool::CurveOnSurface(aSeam, FF, f2, l2);
++  const occ::handle<Geom2d_Curve> aE2d    = BRep_Tool::CurveOnSurface(E, FF, f2, l2);
++  if (aSeam2d.IsNull() || aE2d.IsNull())
++  {
++    return;
++  }
++  TopoDS_Vertex aV1, aV2;
++  TopExp::Vertices(aSeam, aV1, aV2);
++  const TopoDS_Vertex& aOther = V.IsSame(aV1) ? aV2 : aV1;
++  const gp_Pnt2d       uvV    = aSeam2d->Value(BRep_Tool::Parameter(V, aSeam, FF));
++  const gp_Pnt2d       uvO    = aSeam2d->Value(BRep_Tool::Parameter(aOther, aSeam, FF));
++  const gp_Pnt2d       uvX    = aE2d->Value(W);
++  const bool           isU    = std::abs(uvV.X() - uvO.X()) <= Precision::PConfusion();
++  const bool           isV    = std::abs(uvV.Y() - uvO.Y()) <= Precision::PConfusion();
++  const double         cV = isU ? uvV.Y() : uvV.X(), cO = isU ? uvO.Y() : uvO.X();
++  const double         cX = isU ? uvX.Y() : uvX.X();
++  if (isU == isV || (cX - cV) * (cV - cO) <= 0.)
++  {
++    return;
++  }
++  // (E along the seam's line: its point at the cut on that line, a whole
++  // number of periods off where the face is periodic.)
++  {
++    BRepAdaptor_Surface aBs(FF, false);
++    double              dOff = isU ? uvX.X() - uvV.X() : uvX.Y() - uvV.Y();
++    if (isU ? aBs.IsUPeriodic() : aBs.IsVPeriodic())
++    {
++      const double T = isU ? aBs.UPeriod() : aBs.VPeriod();
++      dOff           = ElCLib::InPeriod(dOff, -0.5 * T, 0.5 * T);
++    }
++    if (std::abs(dOff) > Precision::PConfusion())
++    {
++      return;
++    }
++  }
++  // As where a corner's cut crosses the seam's line past its end (the seam
++  // run on there): the line from V to the cut on F on both sides of the
++  // seam. Here the line is a curve of its own, run the way the seam's
++  // curve runs and used on each side as the seam is there: the faces'
++  // builder chains the pieces of a seam's line by their orientation.
++  const occ::handle<Geom_Surface> aSurf  = BRep_Tool::Surface(FF);
++  const double                    aConst = isU ? uvV.X() : uvV.Y();
++  occ::handle<Geom_Curve>         aIso   = isU ? aSurf->UIso(aConst) : aSurf->VIso(aConst);
++  double                          fs = 0., ls = 0.;
++  BRep_Tool::CurveOnSurface(aSeam, FF, fs, ls);
++  const gp_Pnt2d aSf = aSeam2d->Value(fs), aSl = aSeam2d->Value(ls);
++  // (The seam's curve running down the iso-line's parameter: the iso-line
++  // reversed, whose parameter is A - t at the iso-line's t.)
++  const bool   isReversed = (isU ? aSl.Y() - aSf.Y() : aSl.X() - aSf.X()) < 0.;
++  const double A          = isReversed ? aIso->ReversedParameter(0.) : 0.;
++  if (isReversed)
++  {
++    aIso = aIso->Reversed();
++  }
++  const auto   onCurve = [&](const double c) { return isReversed ? A - c : c; };
++  const double pV = onCurve(cV), pX = onCurve(cX);
++  const double c1 = std::min(pV, pX), c2 = std::max(pV, pX);
++  const int    IS = DStr.AddCurve(
++    TopOpeBRepDS_Curve(new Geom_TrimmedCurve(aIso, c1, c2), std::max(BRep_Tool::Tolerance(aSeam), Tol)));
++  for (TopExp_Explorer ex(FF, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    if (!ex.Current().IsSame(aSeam))
++    {
++      continue;
++    }
++    const TopoDS_Edge&              aUse   = TopoDS::Edge(ex.Current());
++    double                          fu = 0., lu = 0.;
++    const occ::handle<Geom2d_Curve> aUse2d = BRep_Tool::CurveOnSurface(aUse, FF, fu, lu);
++    if (aUse2d.IsNull())
++    {
++      continue;
++    }
++    const gp_Pnt2d a     = aUse2d->Value(fu);
++    const double   aSide = isU ? a.X() : a.Y();
++    // (At the curve's t, the line's coordinate along it: t, or A - t.)
++    const double                    d = isReversed ? -1. : 1.;
++    const occ::handle<Geom2d_Curve> aLine =
++      isU ? new Geom2d_Line(gp_Pnt2d(aSide, A), gp_Dir2d(0., d)) : new Geom2d_Line(gp_Pnt2d(A, aSide), gp_Dir2d(d, 0.));
++    DStr.ChangeShapeInterferences(IF).Append(
++      ChFi3d_FilCurveInDS(IS, IF, new Geom2d_TrimmedCurve(aLine, c1, c2), aUse.Orientation()));
++  }
++  const int IVs = DStr.AddShape(V);
++  DStr.ChangeCurveInterferences(IS).Append(pV < pX ? ChFi3d_FilVertexInDS(TopAbs_FORWARD, IS, IVs, c1)
++                                                   : ChFi3d_FilPointInDS(TopAbs_FORWARD, IS, Ip, c1));
++  DStr.ChangeCurveInterferences(IS).Append(pV < pX ? ChFi3d_FilPointInDS(TopAbs_REVERSED, IS, Ip, c2)
++                                                   : ChFi3d_FilVertexInDS(TopAbs_REVERSED, IS, IVs, c2));
++  // (The seam itself kept from V on: past the parts cut away at V it is
++  // the only edge left there.)
++  TopoDS_Edge aSeamF = aSeam;
++  aSeamF.Orientation(TopAbs_FORWARD);
++  const int ISeam = DStr.AddShape(aSeamF);
++  DStr.ChangeShapeInterferences(ISeam).Append(ChFi3d_FilVertexInDS(V.IsSame(aV1) ? TopAbs_FORWARD : TopAbs_REVERSED,
++                                                                   ISeam,
++                                                                   IVs,
++                                                                   BRep_Tool::Parameter(V, aSeam)));
++}
++
+ //=======================================================================
+ // function : ChFi3d_CutSeamAlongCurve
+ // purpose  : Where the curve C on [U1, U2], from the corner's vertex V to
+@@ -6558,7 +6730,10 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+     Fop.Orientation(TopAbs_FORWARD);
+ 
+     // The edge that will be extended is returned (not one of the face the
+-    // blend consumes).
++    // blend consumes). An edge of the face at the end with the opposite
++    // face first: where the face at the end has more edges at the vertex (a
++    // seam ending there), the one it shares with the opposite face.
++    for (int needFop = 1; needFop >= 0 && Arcprol.IsNull(); needFop--)
+     for (int pass = Fconsumed.IsNull() ? 1 : 0; pass < 2 && Arcprol.IsNull(); pass++)
+     {
+       for (It.Initialize(myVEMap(Vtx)); It.More() && Arcprol.IsNull(); It.Next())
+@@ -6581,7 +6756,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+         }
+         // (Rolled past the edge's vertex: the edge of the face at the end
+         // with the opposite face, if they share one at the vertex.)
+-        bool onFop = !isRolledPast;
++        bool onFop = !isRolledPast && needFop == 0;
+         for (ex.Init(Fop, TopAbs_EDGE); ex.More() && !onFop; ex.Next())
+         {
+           onFop = It.Value().IsSame(ex.Current());
+@@ -8100,6 +8275,9 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+ #endif
+     const ChFiDS_FaceInterference& Fiop = Fd->Interference(IFopArc);
+     gp_Pnt2d                       pop1, pop2, pv1, pv2;
++    // (Where the opposite contact ends on the prolonged edge, its parameter
++    // there.)
++    double wOnProl = 0.;
+     if (FopBeyond)
+     {
+       ChFi3d_CapAcrossFaceBeyond(DStr,
+@@ -8121,6 +8299,20 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+                                  tol2d,
+                                  IFopArc == 1 ? box1 : box2);
+     }
++    else if (ChFi3d_ContactEndsOnProlongedEdge(Arcprol,
++                                               VtxProl,
++                                               Fd->Vertex(isfirst, IFopArc).Point(),
++                                               10 * tolapp3d,
++                                               wOnProl))
++    {
++      // The opposite contact ends on the prolonged edge itself, short of
++      // the corner's vertex: no end of the edge is missing, the edge is cut
++      // there, its part from the vertex lying under the blend.
++      const int IArcprol = DStr.AddShape(Arcprol);
++      const int icc      = stripe->IndexPoint(isfirst, IFopArc);
++      DStr.ChangeShapeInterferences(IArcprol).Append(ChFi3d_FilPointInDS(OVtx, IArcprol, icc, wOnProl));
++      ChFi3d_SeamRunOnAlongEdge(DStr, Fv, IShape, Arcprol, wOnProl, Vtx, icc, tolapp3d);
++    }
+     else
+     {
+     // The face the prolonged edge's missing end lies on: the opposite face,

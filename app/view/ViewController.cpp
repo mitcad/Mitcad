@@ -75,6 +75,7 @@
 #include "../platform/MacChrome.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/QuickAccess.hpp"
+#include "../DocumentFrame.hpp"
 // 3D Print's slicer (mitcad#13).
 #include "../files/Print3d.hpp"
 #include "../update/UpdatePreferences.hpp"
@@ -264,11 +265,13 @@ const PreferencePage kPreferencePages[] = {
      "supplier suppliers shop shops region country product link links part number filter buy"},
 };
 
-// The pages whose folder list takes the page's height (mitcad#727,
-// mitcad#732); the others keep their natural height at the top.
+// The pages whose list takes the page's height: the folder lists
+// (mitcad#727, mitcad#732), Navigation's bindings table and Cloud's known
+// brokers (mitcad#1394); the others keep their natural height at the top.
 bool pageFills(const char* id) {
   const QLatin1String page(id);
-  return page == QLatin1String("textures") || page == QLatin1String("agents") || page == QLatin1String("fonts");
+  return page == QLatin1String("textures") || page == QLatin1String("agents") || page == QLatin1String("fonts") ||
+         page == QLatin1String("navigation") || page == QLatin1String("cloud");
 }
 
 QString onOff(bool on) { return on ? QStringLiteral("on") : QStringLiteral("off"); }
@@ -362,6 +365,7 @@ ViewSettings ViewSettings::load() {
   s.perspective = flag("perspective", s.perspective);
   s.componentColors = flag("componentColors", s.componentColors);
 #ifdef Q_OS_MACOS
+  // macOS applications follow the system's light or dark appearance.
   s.background = Background::Automatic; // unless the settings name another
 #endif
   s.background = static_cast<Background>(
@@ -1176,6 +1180,8 @@ void ViewController::showPreferences(const QString& page) {
   std::unique_ptr<QDialog> dialog;
   QWidget* host = nullptr;
 #ifdef Q_OS_MACOS
+  // macOS: the Settings window, without OK, a change applied as it is made
+  // (in the shared Qt UI with the shared page list, docs/macos-shared-qt.md).
   if (auto* open = qobject_cast<SettingsWindow*>(m_settingsWindow.data())) {
     if (!page.isEmpty()) {
       open->showPane(wantedIndex);
@@ -1190,7 +1196,11 @@ void ViewController::showPreferences(const QString& page) {
     }
     return;
   }
+#ifdef MITCAD_MAC_UI
   window = new SettingsWindow(m_window);
+#else
+  window = new SettingsWindow(m_window, SettingsWindow::Selector::PageList);
+#endif
   m_settingsWindow = window;
   host = window;
 #else
@@ -1305,7 +1315,7 @@ void ViewController::showPreferences(const QString& page) {
   openDesignsIn->addItem(tr("Tabs"), QStringLiteral("tabs"));
   openDesignsIn->addItem(tr("Windows"), QStringLiteral("windows"));
   openDesignsIn->setCurrentIndex(openDesignsIn->findData(general->openDesignsIn));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   // The system supplies tabs for macOS windows; never add Qt document tabs.
   openDesignsIn->setEnabled(false);
 #endif
@@ -1789,6 +1799,26 @@ void ViewController::showPreferences(const QString& page) {
               quickAccess->setChecked(visible);
             });
   }
+#if defined(Q_OS_MACOS) && !defined(MITCAD_MAC_UI)
+  // The window's own File, Edit, ... menu bar (experiment/macos-shared-qt-ui):
+  // the system menu bar shows the same menus, so it is off by default.
+  auto* windowMenuBar = new QCheckBox(tr("Show the &menu bar in the window"));
+  windowMenuBar->setObjectName(QStringLiteral("windowMenuBarVisible"));
+  windowMenuBar->setChecked(DocumentFrame::windowMenuBarShown());
+  windowMenuBar->setToolTip(tr("File, Edit, View, Tools, Window and Help under the title bar too"));
+  control(display, windowMenuBar);
+  const auto applyWindowMenuBar = [windowMenuBar] {
+    if (DocumentFrame::setWindowMenuBarShown(windowMenuBar->isChecked())) {
+      qDebug().noquote() << QStringLiteral("Preferences: window menu bar %1")
+                                .arg(windowMenuBar->isChecked() ? QStringLiteral("shown") : QStringLiteral("hidden"));
+    }
+  };
+  if (window != nullptr) {
+    connect(windowMenuBar, &QCheckBox::toggled, host, applyWindowMenuBar);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, windowMenuBar, applyWindowMenuBar);
+  }
+#endif
   // The layout chosen when the window opened or last applied.
   const auto layoutApplied = std::make_shared<int>(layoutChoice != nullptr ? layoutChoice->currentData().toInt() : -1);
   // The Browser's background in the Floating layout (mitcad#419): its card,

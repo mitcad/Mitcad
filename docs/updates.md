@@ -106,6 +106,18 @@ start-up offers nothing. *Check for Updates* announces the release
 without *Install* and gives the day the update information expired, so
 that a computer whose date is wrong is told why.
 
+**A release out for other platforms first:** a release can be published
+for one platform days before another (mitcad#1390). Its manifest then
+has no download for the later platform. On that platform the check at
+start-up offers nothing (`Update check: MitCad <version> has no download
+for <platform> yet` in the log), so that the notice comes once the
+platform's download is in the manifest. *Check for Updates* says that
+the release is out but has no download for this platform yet, by its
+name (Windows, Linux or macOS), with *Release Notes* and *Later*: no *Install*, and no *Skip This
+Version*, as skipping the version would also hide its download when it
+comes out. "Download it from its release page" is said only to an
+installation that announces only, for a release with its download.
+
 The notice shows every text that comes from the network as plain text:
 an error that carries a server's answer cannot add markup to the bar
 (mitcad#938).
@@ -314,8 +326,9 @@ folders stay the system's.
   sha256 <64 hex digits>
   ```
 
-  If a platform has no asset, MitCad shows the notice without
-  *Install*.
+  If a platform has no asset, the release has no download for it yet:
+  only *Check for Updates* announces it, without *Install* and *Skip
+  This Version* (mitcad#1390).
 - Keys, signatures and digests are lowercase hex. `format` is 1. MitCad
   refuses a manifest of another format.
 
@@ -455,6 +468,12 @@ MitCad at their own server only in a test build
   apart. An installation for all users only announces an update from a
   test's source, unless MitCad has administrator rights already
   (mitcad#921).
+- `app.unit` (`app/tests/update_offer.cpp`, every platform): the
+  notice's text and buttons (mitcad#1390). An installation that
+  announces only, for a release with its download, is sent to the
+  release page. A release without a download for the platform says so
+  in the platform's name, without *Install* and *Skip This Version*, and
+  an automatic check shows nothing of it.
 - `app.update_source_release` and `app.update_source_hooks`
   (`app/tests/update_source.cpp`, every platform): the update source
   built as a release and as a test build, whatever the build's own
@@ -490,7 +509,8 @@ MitCad at their own server only in a test build
   It checks the three ways to set checks off: the setting, the
   administrator's switch and a build without a release key. It checks
   the notice, what the requests send, skip and later, refused manifests,
-  an HTTP redirect and the pre-release channel. It checks a per-user
+  an HTTP redirect, an expired manifest, a release without a download
+  for Linux (mitcad#1390) and the pre-release channel. It checks a per-user
   AppImage (a script stands for one) that refuses a tampered download
   and then updates itself after it saves the changed design. It checks a
   read-only AppImage that only announces.

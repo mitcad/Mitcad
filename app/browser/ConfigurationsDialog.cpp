@@ -129,6 +129,13 @@ public:
   RowsSheet(std::function<void()> copy, std::function<void()> paste, std::function<void()> clear)
       : m_copy(std::move(copy)), m_paste(std::move(paste)), m_clear(std::move(clear)) {
     setProperty(NativeEmptyTextProperty, QString::fromUtf8(kNoRows));
+    // The AppKit frontend (mitcad#1355): its table selects ranges of cells
+    // and sends these keys, and the Edit menu's Copy and Paste, here.
+    setProperty(NativeCellSelectionProperty, true);
+    setProperty(NativeModelKeysProperty,
+                QVariantList{QKeySequence(QKeySequence::Copy)[0].toCombined(),
+                             QKeySequence(QKeySequence::Paste)[0].toCombined(), int(Qt::Key_Delete),
+                             int(Qt::Key_Backspace)});
   }
 
 protected:

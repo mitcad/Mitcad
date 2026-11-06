@@ -21,7 +21,7 @@ namespace mitcad {
 
 // A group with a frame and a title, except on macOS, where the settings
 // window's panes have none: a plain widget.
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 using SupplierPreferencesBase = QWidget;
 #else
 using SupplierPreferencesBase = QGroupBox;

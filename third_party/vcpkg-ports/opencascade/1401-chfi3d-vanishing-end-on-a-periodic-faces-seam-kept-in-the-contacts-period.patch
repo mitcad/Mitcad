@@ -1,0 +1,67 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a vanishing end moved to its vertex on a periodic face keeps the
+contact's p-curve in its period where the vertex lies on the face's seam
+(mitcad#1374).
+
+ChFi3d_ShrinkVanishingEnd (patch 0130) moves the end of a rounding that
+vanishes at its spine's end vertex to that vertex, setting the last pole
+of each contact's p-curve to the vertex's parameters on its face,
+BRep_Tool::Parameters. On a periodic face whose seam passes through the
+vertex, those are the parameters on one side of the seam, a period from
+the other. A boss's foot rounded with 1 on a plate's top whose side's top
+edge was rounded first: the foot's tangent chain runs on along the side's
+blend's cut on the boss's cylinder to the vertex where that blend ends, on
+the cylinder's seam. The walk ended there at u = pi/2, the contact on the
+cylinder coming from u > pi/2, but the moved pole took the vertex's
+u = 5 pi/2, from the seam's other side: the p-curve ran across the whole
+period at its last span, and the cylinder's wire crossed itself (an
+invalid result). The vertex's parameters are now taken in the period of
+the contact's end, a whole number of periods from the face's own.
+
+Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
+and the boss's foot rounded together with 1 (the convex one first, the
+concave one on its result, as MitCad's fillet and OCCT's fillet one after
+the other build them) on the synthetic bodies and on the case of
+MITCAD_GEOMETRY_CASES: valid, the volume the one after the other gives;
+36 checks fail without the patch.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -91,6 +91,7 @@
+ #include <GCPnts_AbscissaPoint.hxx>
+ #include <BRepAdaptor_Curve.hxx>
+ #include <utility>
++#include <cmath>
+ 
+ #ifdef OCCT_DEBUG
+   #include <OSD_Chronometer.hxx>
+@@ -4334,7 +4335,23 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+       aPole2d[k] = aPole2d[k] == 1 ? 1 : aC2d[k]->NbPoles();
+     }
+     aC3d[k]->SetPole(aPole3d[k], PV);
+-    aC2d[k]->SetPole(aPole2d[k], BRep_Tool::Parameters(Vtx, aFace));
++    // (The vertex's parameters on the face nearest the contact's end: where
++    // the face is periodic and the vertex lies on its seam, they are those
++    // of either side of the seam, a period apart.)
++    gp_Pnt2d                  aVUV = BRep_Tool::Parameters(Vtx, aFace);
++    const gp_Pnt2d            aEnd = aC2d[k]->Pole(aPole2d[k]);
++    const BRepAdaptor_Surface aPS(aFace, false);
++    if (aPS.IsUPeriodic())
++    {
++      const double T = aPS.UPeriod();
++      aVUV.SetX(aVUV.X() + T * std::round((aEnd.X() - aVUV.X()) / T));
++    }
++    if (aPS.IsVPeriodic())
++    {
++      const double T = aPS.VPeriod();
++      aVUV.SetY(aVUV.Y() + T * std::round((aEnd.Y() - aVUV.Y()) / T));
++    }
++    aC2d[k]->SetPole(aPole2d[k], aVUV);
+     TopOpeBRepDS_Curve& aCurve = DStr.ChangeCurve(aFi.LineIndex());
+     if (aSurf.IsNull())
+     {

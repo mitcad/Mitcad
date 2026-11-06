@@ -1239,6 +1239,10 @@ fn a_sub_chunk_offset_past_the_object_is_skipped() {
 /// the last 65 535 references no such count can be filled, so every
 /// candidate list there fails, and reading each one afresh took about
 /// 2 × 10^9 reference reads. Each offset is now read once (mitcad#934).
+/// The test counts the references read instead of timing the scan, which
+/// a loaded machine slows down (mitcad#1348): a linear scan reads each
+/// offset of the data at most once, then the list it returns, so at most
+/// two reads per byte; the quadratic scan read about 2 000 per byte.
 #[test]
 fn entity_list_of_many_references_is_linear() {
     const N: usize = 100_000;
@@ -1258,19 +1262,25 @@ fn entity_list_of_many_references_is_linear() {
         doc.obj_sub(40, SKETCH, vec![0, 0], cat(&[&u32b(count), &refs]));
         doc.segment()
     };
+    // The list and the references read for it (at most two per byte).
+    let scan = |seg: &stream::Segment| -> (Vec<u64>, u64) {
+        let s = seg.object(40).unwrap();
+        let bytes: u64 = seg.data(s).len() as u64;
+        let before: u64 = stream::ref_reads();
+        let list: Vec<u64> = sketch::entity_list(seg, s);
+        let reads: u64 = stream::ref_reads() - before;
+        let limit: u64 = 2 * (bytes + 1);
+        assert!(reads <= limit, "{reads} references read, at most {limit}");
+        (list, reads)
+    };
     // A count of zero first: no list starts before the references.
-    let seg = sketch_with(0);
-    let s = seg.object(40).unwrap();
-    let started = std::time::Instant::now();
-    assert!(sketch::entity_list(&seg, s).is_empty());
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed < std::time::Duration::from_millis(100),
-        "{elapsed:?}"
-    );
+    let (list, reads) = scan(&sketch_with(0));
+    assert!(list.is_empty());
+    // The scan did walk the tail once (the counter counts).
+    assert!(reads >= TAIL as u64, "{reads}");
     // With the count of 100 000 first, the whole run is the list.
-    let seg = sketch_with(N as u32);
-    assert_eq!(sketch::entity_list(&seg, seg.object(40).unwrap()), ids);
+    let (list, _) = scan(&sketch_with(N as u32));
+    assert_eq!(list, ids);
 }
 
 /// A driven dimension (mitcad#178): a null reference (one zero byte)

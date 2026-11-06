@@ -4,6 +4,7 @@
 #include "../NativeForms.hpp"
 #include "../NativeDialogs.hpp"
 #include "NativeControls.hpp"
+#include "NativeKeys.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,7 @@
 #include "../../framework/CutTargetsPanel.hpp"
 #include "../../framework/Icons.hpp"
 #include "../../framework/NoticeLevel.hpp"
+#include "../../framework/ResultRows.hpp"
 #include "../../framework/Theme.hpp"
 #include "NativeColors.hpp"
 #include "../../framework/TestSync.hpp"
@@ -34,11 +36,37 @@ namespace mitcad {
 class AppKitCommandForm;
 }
 
-@interface MitcadCommandFormTarget : NSObject <NSTextFieldDelegate> {
+@interface MitcadCommandFormTarget : NSObject <NSTextFieldDelegate, NSMenuDelegate> {
 @public
   mitcad::AppKitCommandForm* form;
 }
 - (void)performAction:(id)sender;
+// A result row's Copy (mitcad#1354): its menu item's represented object is
+// the row's key and value.
+- (void)copyResult:(id)sender;
+// The pointer came over the panel's message or left it (mitcad#1333).
+- (void)messageHovered:(BOOL)on;
+// The wheel over a value field (mitcad#1350): YES when it stepped the value.
+- (BOOL)valueField:(NSTextField*)field wheel:(NSEvent*)event;
+@end
+
+// A command form's value field (mitcad#1350): the wheel over it while it
+// has the keyboard steps its value, as the shared panel's field does;
+// otherwise the wheel is the panel's, which scrolls.
+@interface MitcadCommandValueField : NSTextField {
+@public
+  MitcadCommandFormTarget* __weak target;
+}
+@end
+
+// The command panel's message (mitcad#1333): the pointer over it paints the
+// places its notices name until it leaves, as the shared panel's
+// CommandMessage does, through the same presenter action
+// (CommandPresenter::Actions::messageHovered).
+@interface MitcadCommandMessageField : NSTextField {
+@public
+  MitcadCommandFormTarget* __weak target;
+}
 @end
 
 namespace mitcad {
@@ -191,8 +219,9 @@ void addFullWidth(NSStackView* parent, NSView* child) {
                                       constant:-parent.edgeInsets.right].active = YES;
 }
 
-NSTextField* label(const QString& text, bool secondary = false) {
-  NSTextField* field = [NSTextField wrappingLabelWithString:nativeString(text)];
+// A wrapping label; `kind` an NSTextField subclass (the panel's message).
+NSTextField* label(const QString& text, bool secondary = false, Class kind = nil) {
+  NSTextField* field = [(kind != nil ? kind : NSTextField.class) wrappingLabelWithString:nativeString(text)];
   field.font = secondary ? [NSFont systemFontOfSize:[NSFont smallSystemFontSize]]
                          : [NSFont systemFontOfSize:[NSFont systemFontSize]];
   field.textColor = secondary ? NSColor.secondaryLabelColor : NSColor.labelColor;
@@ -320,6 +349,34 @@ public:
     addFullWidth(m_root, m_header);
     m_fields = column();
     addFullWidth(m_root, m_fields);
+    // An inspection's answer as rows of names and values right under the
+    // picks (mitcad#1354), as the shared panel's ResultRows: in a rounded,
+    // lightly tinted box, hidden while there are none.
+    m_resultBox = [[NSView alloc] initWithFrame:NSZeroRect];
+    m_resultBox.translatesAutoresizingMaskIntoConstraints = NO;
+    m_resultBox.accessibilityIdentifier = @"commandResultRows";
+    m_resultBox.hidden = YES;
+    NSBox* tint = [[NSBox alloc] initWithFrame:NSZeroRect];
+    tint.boxType = NSBoxCustom;
+    tint.borderWidth = 0;
+    tint.cornerRadius = 8;
+    tint.fillColor = NSColor.quaternaryLabelColor;
+    tint.translatesAutoresizingMaskIntoConstraints = NO;
+    [m_resultBox addSubview:tint];
+    m_resultRows = column();
+    m_resultRows.spacing = 4;
+    [m_resultBox addSubview:m_resultRows];
+    [NSLayoutConstraint activateConstraints:@[
+      [tint.leadingAnchor constraintEqualToAnchor:m_resultBox.leadingAnchor],
+      [tint.trailingAnchor constraintEqualToAnchor:m_resultBox.trailingAnchor],
+      [tint.topAnchor constraintEqualToAnchor:m_resultBox.topAnchor],
+      [tint.bottomAnchor constraintEqualToAnchor:m_resultBox.bottomAnchor],
+      [m_resultRows.leadingAnchor constraintEqualToAnchor:m_resultBox.leadingAnchor constant:8],
+      [m_resultRows.trailingAnchor constraintEqualToAnchor:m_resultBox.trailingAnchor constant:-8],
+      [m_resultRows.topAnchor constraintEqualToAnchor:m_resultBox.topAnchor constant:6],
+      [m_resultRows.bottomAnchor constraintEqualToAnchor:m_resultBox.bottomAnchor constant:-6]
+    ]];
+    addFullWidth(m_root, m_resultBox);
     m_sections = column();
     m_sections.accessibilityIdentifier = @"commandSections";
     m_sections.hidden = YES;
@@ -328,7 +385,9 @@ public:
     m_result.accessibilityIdentifier = @"commandResult";
     m_result.hidden = YES;
     addFullWidth(m_root, m_result);
-    m_message = label(QString(), true);
+    // The pointer over it paints the places its notices name (mitcad#1333).
+    m_message = (MitcadCommandMessageField*)label(QString(), true, MitcadCommandMessageField.class);
+    m_message->target = m_target;
     m_message.accessibilityIdentifier = @"commandMessage";
     m_message.hidden = YES;
     addFullWidth(m_root, m_message);
@@ -471,9 +530,10 @@ public:
         // What the feature's own parameter is, as a sketch dimension's
         // tooltip says (mitcad#250).
         if (input.type == InputDef::Type::Value && !scope.parameterTooltip(input.id).isEmpty()) {
-          row.edit.toolTip = nativeString(scope.parameterTooltip(input.id) + QLatin1Char('\n') +
-                                          QObject::tr("Type name = value to rename it; a click on a dimension "
-                                                      "or a value in the view inserts its name"));
+          row.edit.toolTip = nativeString(ParameterField::stepTooltip(
+              scope.parameterTooltip(input.id) + QLatin1Char('\n') +
+              QObject::tr("Type name = value to rename it; a click on a dimension "
+                          "or a value in the view inserts its name")));
         }
         break;
       case InputDef::Type::Choice:
@@ -617,6 +677,8 @@ public:
       m_message.textColor = NSColor.secondaryLabelColor;
     }
     m_message.hidden = text.isEmpty();
+    // A message taken away is no longer under the pointer (mitcad#1333).
+    if (text.isEmpty()) { messageHovered(false); }
     // Refresh the appearance above, but log and lay out only a changed
     // message, as the shared Qt panel does.
     if (!changed) return;
@@ -628,12 +690,26 @@ public:
   }
 
   void setResult(const QString& text) override {
+    Inspection result;
+    result.text = text;
+    setInspection(result);
+  }
+
+  // An inspection's answer (mitcad#1354): its rows of names and values
+  // where it has them (Measure's Distance, Δx, Δy, Δz, then a group for
+  // each pick), as the shared panel's ResultRows shows them, else its text.
+  void setInspection(const Inspection& result) override {
+    const bool rows = !result.values.empty() || !result.groups.empty();
     // The command definitions return simple HTML. AppKit labels preserve
     // readable paragraphs without routing the result through a Qt widget.
+    // The text all the same: the panel's state for live MCP (shownState).
     QTextDocument document;
-    document.setHtml(text);
+    document.setHtml(result.text);
     m_result.stringValue = nativeString(document.toPlainText());
-    m_result.hidden = text.isEmpty();
+    m_result.hidden = rows || result.text.isEmpty();
+    if (rows || !m_resultBox.hidden) {
+      setResultRows(result);
+    }
     requestLayout();
   }
 
@@ -651,7 +727,7 @@ public:
     }
     return {{QStringLiteral("message"), m_message.hidden ? QString() : m_messageText},
             {QStringLiteral("message_level"), noticeLevelName(m_messageLevel)},
-            {QStringLiteral("result"), m_result.hidden ? QString() : qtString(m_result.stringValue)},
+            {QStringLiteral("result"), qtString(m_result.stringValue)},
             {QStringLiteral("ok_enabled"), static_cast<bool>(m_ok.enabled)},
             {QStringLiteral("notes"), notes}};
   }
@@ -749,6 +825,63 @@ public:
                                   .arg(shown(row) ? QString() : QStringLiteral(" (hidden)"));
       }
     }
+    logColumns();
+    // The result rows' places, as the shared rows log them (mitcad#1354).
+    NSView* content = m_root.window.contentView;
+    const auto place = [content](NSView* view) {
+      const NSPoint at = [view convertPoint:NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds)) toView:nil];
+      return QStringLiteral("%1,%2")
+          .arg(static_cast<int>(at.x))
+          .arg(static_cast<int>(content.bounds.size.height - at.y));
+    };
+    if (!m_resultBox.hidden) {
+      for (const ResultView& row : m_resultViews) {
+        const QString name = QStringLiteral("Panel %1 result %2").arg(m_def.name, row.key);
+        qDebug().noquote() << (row.value.hiddenOrHasHiddenAncestor ? name + QStringLiteral(" out of sight")
+                                                                   : QStringLiteral("%1 at %2").arg(name, place(row.value)));
+      }
+      for (std::size_t g = 0; g < m_resultHeaders.size(); ++g) {
+        qDebug().noquote() << QStringLiteral("Panel %1 result group %2 at %3%4")
+                                  .arg(m_def.name)
+                                  .arg(g + 1)
+                                  .arg(place(m_resultHeaders[g]),
+                                       g < m_resultFolded.size() && m_resultFolded[g] ? QStringLiteral(" (folded)")
+                                                                                      : QString());
+      }
+    }
+  }
+
+  // The captions' column (mitcad#1354): as wide as its widest shown
+  // caption; a check box with its text beside it (InputDef::textBeside)
+  // has none there but a row across the form, which does not widen it.
+  void logColumns() const {
+    CGFloat column = -1;
+    CGFloat widest = 0;
+    QString widestKey;
+    for (const Row& row : m_rows) {
+      if (!row.list.isEmpty() || !shown(row)) {
+        continue;
+      }
+      if (row.caption != nil) {
+        // The controls' column starts after the captions' and the gap.
+        column = std::max(column, NSMinX(row.box.frame) - m_grid.columnSpacing);
+        if (NSWidth(row.caption.frame) > widest) {
+          widest = NSWidth(row.caption.frame);
+          widestKey = row.key;
+        }
+      } else if (row.check != nil && row.check.title.length > 0 && row.input->type == InputDef::Type::Check) {
+        qDebug().noquote() << QStringLiteral("Panel %1 input %2: a check box with its text across the form, %3 wide")
+                                  .arg(m_def.name, row.key)
+                                  .arg(static_cast<int>(std::lround(NSWidth(row.check.frame))));
+      }
+    }
+    if (!widestKey.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Panel %1 captions column: %2 wide, its widest caption %3 %4 wide")
+                                .arg(m_def.name)
+                                .arg(static_cast<int>(std::lround(column)))
+                                .arg(widestKey)
+                                .arg(static_cast<int>(std::lround(widest)));
+    }
   }
 
   void action(NSControl* sender) {
@@ -768,6 +901,20 @@ public:
         if (!header.isNull() && header->isEnabled()) {
           header->trigger();
         }
+      }
+      return;
+    }
+    if (kind == QStringLiteral("resultGroup")) {
+      // A result group's header folds or unfolds it (mitcad#1354).
+      const int index = key.toInt();
+      if (index >= 0 && static_cast<std::size_t>(index) < m_resultFolded.size()) {
+        const bool open = m_resultFolded[static_cast<std::size_t>(index)];
+        foldResultGroup(index, !open);
+        qDebug().noquote() << QStringLiteral("Panel %1 result group %2 %3")
+                                  .arg(m_def.name)
+                                  .arg(index + 1)
+                                  .arg(open ? QStringLiteral("unfolded") : QStringLiteral("folded"));
+        requestLayout();
       }
       return;
     }
@@ -839,6 +986,27 @@ public:
     }
   }
 
+  // The pointer came over the message or left it (mitcad#1333): while it
+  // stays over a message, the session paints the places its notices name,
+  // as the shared panel's CommandMessage::hovered does; an empty message
+  // is never hovered.
+  void messageHovered(bool on) {
+    on = on && !m_message.hidden && !m_messageText.isEmpty();
+    if (on == m_messageHovered) { return; }
+    m_messageHovered = on;
+    auto call = actions().messageHovered;
+    if (call) { call(on); }
+  }
+
+  // A result row's Copy (mitcad#1354): its value, number and unit, on the
+  // clipboard, as the shared panel's row menu does.
+  void copyResult(const QString& key, const QString& value) {
+    NSPasteboard* board = NSPasteboard.generalPasteboard;
+    [board clearContents];
+    [board setString:nativeString(value) forType:NSPasteboardTypeString];
+    qDebug().noquote() << QStringLiteral("Panel %1 result copied %2: %3").arg(m_def.name, key, value);
+  }
+
   void textChanged(NSTextField* field) {
     if (!inputEnabled(qtString(field.identifier))) { return; }
     // AppKit tells of a field's editing as it is typed in: the first edit
@@ -857,12 +1025,18 @@ public:
 
   // A value field took the keyboard or lost it (mitcad#250).
   void editing(QString key, bool focused) {
+    if (m_editingKey != key || !focused) {
+      m_wheel = 0; // a touchpad's turns add up in one field only
+    }
     m_editingKey = focused ? key : QString();
     auto call = actions().valueFocused;
     if (call) { call(key, focused); }
   }
 
   bool textCommand(NSTextField* field, SEL command) {
+    if (stepKey(field, command)) {
+      return true;
+    }
     if (command == @selector(insertNewline:)) {
       valueCommitted(field);
       auto call = actions().accepted;
@@ -887,6 +1061,57 @@ public:
       }
     }
     return nil;
+  }
+
+  // Up and Down in a value field step its plain value (mitcad#1350), by
+  // the shared panel's rules (ParameterField::keyStep, ValueStep.hpp): 1 in
+  // the unit it shows, Shift 10, Option 0.1, down to the input's minimum;
+  // an expression is left as it is. AppKit gives the arrow keys to the
+  // field as move commands, Option's as two of them (moveBackward: and
+  // moveToBeginningOfParagraph:): one key event is one step. Other
+  // modifiers keep AppKit's own moves (Cmd+Up to the start).
+  bool stepKey(NSTextField* field, SEL command) {
+    NSEvent* event = NSApp.currentEvent;
+    const Row* row = valueRow(field);
+    if (row == nullptr || event.type != NSEventTypeKeyDown || ![NSStringFromSelector(command) hasPrefix:@"move"]) {
+      return false;
+    }
+    if (event == m_steppedKey) {
+      return true;
+    }
+    const QKeySequence pressed = mac::keySequence(event);
+    if (pressed.isEmpty()) {
+      return false;
+    }
+    QString how;
+    const double by = ParameterField::keyStep(pressed[0].key(), pressed[0].keyboardModifiers(), &how);
+    if (by == 0.0) {
+      return false;
+    }
+    m_steppedKey = event;
+    stepValue(*row, by, how);
+    return true;
+  }
+
+  // The wheel over a value field while it has the keyboard steps its value
+  // (mitcad#1350), a notch a step, a touchpad's turns adding up, with the
+  // keys' modifiers (ParameterField::wheelStep); over any other field it is
+  // the panel's, which scrolls, and no value changes.
+  bool wheel(NSTextField* field, NSEvent* event) {
+    const Row* row = valueRow(field);
+    NSText* editor = field.currentEditor;
+    if (row == nullptr || editor == nil || field.window.firstResponder != editor) {
+      return false;
+    }
+    const std::optional<double> by =
+        ParameterField::wheelStep(mac::qtWheelAngle(event), mac::qtKeyModifiers(event.modifierFlags), m_wheel);
+    if (!by) {
+      return false;
+    }
+    if (*by != 0.0) {
+      stepValue(*row, *by, QStringLiteral("wheel"));
+    }
+    return true;
   }
 
 private:
@@ -1139,6 +1364,11 @@ private:
     options.own = scope.parameterName(input.id);
     options.label = QStringLiteral("%1 %2").arg(m_def.name, input.label);
     options.naming = true;
+    // Up, Down and the wheel step a plain value (mitcad#1254, mitcad#1350),
+    // down to the input's minimum, as CommandPanel::createRow sets them.
+    options.steps = input.type == InputDef::Type::Value;
+    options.stepLimit.minimum = input.stepMinimum;
+    options.stepLimit.above = input.stepAboveMinimum;
     return options;
   }
 
@@ -1162,7 +1392,14 @@ private:
     switch (input.type) {
     case InputDef::Type::Value:
     case InputDef::Type::Text: {
-      row.edit = [[NSTextField alloc] initWithFrame:NSZeroRect];
+      if (input.type == InputDef::Type::Value) {
+        // Its wheel steps the value while it has the keyboard (mitcad#1350).
+        MitcadCommandValueField* value = [[MitcadCommandValueField alloc] initWithFrame:NSZeroRect];
+        value->target = m_target;
+        row.edit = value;
+      } else {
+        row.edit = [[NSTextField alloc] initWithFrame:NSZeroRect];
+      }
       row.edit.editable = YES;
       row.edit.selectable = YES;
       row.edit.bezeled = YES;
@@ -1172,9 +1409,11 @@ private:
       row.edit.accessibilityIdentifier = nativeString(QStringLiteral("input_") + key);
       row.edit.accessibilityLabel = nativeString(input.label);
       row.edit.delegate = m_target;
-      row.edit.toolTip = nativeString(input.tooltip.isEmpty() && input.type == InputDef::Type::Value
-                                         ? QObject::tr("A value or an expression, such as 20, 2 in or d1 * 2")
-                                         : input.tooltip);
+      // A value field's says how Up and Down step it (mitcad#1350).
+      row.edit.toolTip = nativeString(input.type != InputDef::Type::Value ? input.tooltip
+                                      : ParameterField::stepTooltip(input.tooltip.isEmpty()
+                                            ? QObject::tr("A value or an expression, such as 20, 2 in or d1 * 2")
+                                            : input.tooltip));
       if (input.type == InputDef::Type::Value && input.autoText) {
         // Empty: the model works it out (mitcad#656).
         row.edit.placeholderString = nativeString(QObject::tr("Auto"));
@@ -1339,6 +1578,22 @@ private:
         [row.check.widthAnchor constraintGreaterThanOrEqualToConstant:32].active = YES;
         [row.check.heightAnchor constraintGreaterThanOrEqualToConstant:28].active = YES;
         [controls addArrangedSubview:row.check];
+      } else if (input.type == InputDef::Type::Check && input.textBeside && list.isEmpty() && !input.fxToggle) {
+        // The box carries its label, a row across the panel, none in the
+        // captions' column (InputDef::textBeside, mitcad#1162, mitcad#1354):
+        // a long label does not widen that column and narrow every field;
+        // a click on the text toggles it too. It wraps rather than widening
+        // the card. A list's row keeps its caption, as the shared panel's.
+        row.check.identifier = nativeString(QStringLiteral("check|%1|text").arg(key));
+        [row.check setButtonType:NSButtonTypeSwitch];
+        row.check.title = nativeString(input.label);
+        row.check.cell.wraps = YES;
+        row.check.cell.lineBreakMode = NSLineBreakByWordWrapping;
+        row.check.toolTip = nativeString(input.tooltip);
+        [row.check setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [controls addArrangedSubview:row.check];
+        spanning = true;
       } else {
         // The caption names it; the box alone takes the click, as the
         // shared panel's check box.
@@ -1836,6 +2091,155 @@ private:
     return row == m_rows.cend() ? nullptr : &*row;
   }
 
+  // The shown, enabled value input whose field `field` is.
+  const Row* valueRow(NSTextField* field) const {
+    for (const Row& row : m_rows) {
+      if (row.edit == field && field != nil && row.input->type == InputDef::Type::Value) {
+        return inputEnabled(row.key) && shown(row) ? &row : nullptr;
+      }
+    }
+    return nullptr;
+  }
+
+  // The value field's text stepped by `by` (ParameterField::stepText: the
+  // shared rules and log line), in its field editor as typed: the field's
+  // own undo, and the text notification that carries it to the session
+  // (textChanged), which evaluates it and previews at once.
+  void stepValue(const Row& row, double by, const QString& how) {
+    NSText* current = row.edit.currentEditor;
+    NSTextView* editor = [current isKindOfClass:NSTextView.class] ? (NSTextView*)current : nil;
+    if (editor == nil) {
+      return;
+    }
+    ParameterField::stepText(qtString(editor.string), expressionOptions(row.key), by, how, m_expressionHost.data(),
+                             [editor](const QString& after) {
+                               NSString* text = nativeString(after);
+                               const NSRange all = NSMakeRange(0, editor.string.length);
+                               if ([editor shouldChangeTextInRange:all replacementString:text]) {
+                                 [editor replaceCharactersInRange:all withString:text];
+                                 [editor didChangeText];
+                               }
+                             });
+  }
+
+  // An inspection's rows (mitcad#1354), as the shared panel's ResultRows
+  // shows them: the pair's values first, the main one (Distance) bold in a
+  // larger type, then a group for each pick under a header that folds it
+  // (kept folded for the next answers); each row its name in its group's
+  // column and its value beside it, a value too long for the panel's width
+  // wrapping under it rather than being cut; a row's tooltip says what does
+  // not fit (the points a distance is measured between), its menu has
+  // Copy. Logged as the shared rows are (ResultRows::logRows).
+  void setResultRows(const Inspection& result) {
+    for (NSView* child in [m_resultRows.arrangedSubviews copy]) {
+      [m_resultRows removeArrangedSubview:child];
+      [child removeFromSuperview];
+    }
+    m_resultViews.clear();
+    m_resultHeaders.clear();
+    m_resultBodies.clear();
+    if (result.values.empty() && result.groups.empty()) {
+      m_resultBox.hidden = YES;
+      return;
+    }
+    if (!result.values.empty()) {
+      addFullWidth(m_resultRows, resultGrid(result.values, -1));
+    }
+    for (std::size_t g = 0; g < result.groups.size(); ++g) {
+      const Inspection::Group& group = result.groups[g];
+      const int index = static_cast<int>(g);
+      if (m_resultFolded.size() <= g) {
+        m_resultFolded.resize(g + 1, false);
+      }
+      // The header: its title in bold beside an arrow; a click anywhere on
+      // it folds or unfolds the group.
+      NSButton* header = button(QString(), QStringLiteral("resultGroup|%1").arg(index));
+      header.bordered = NO;
+      header.imagePosition = NSImageLeading;
+      header.alignment = NSTextAlignmentLeft;
+      header.attributedTitle = [[NSAttributedString alloc]
+          initWithString:nativeString(group.title)
+              attributes:@{NSFontAttributeName : [NSFont boldSystemFontOfSize:[NSFont systemFontSize]],
+                           NSForegroundColorAttributeName : NSColor.labelColor}];
+      header.accessibilityIdentifier = nativeString(QStringLiteral("commandResultGroup%1").arg(index + 1));
+      header.accessibilityLabel = nativeString(group.title);
+      [header setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+      [m_resultRows addArrangedSubview:header];
+      // Indented under its header's arrow.
+      NSStackView* body = column();
+      body.edgeInsets = NSEdgeInsetsMake(0, 18, 0, 0);
+      addFullWidth(body, resultGrid(group.values, index));
+      addFullWidth(m_resultRows, body);
+      m_resultHeaders.push_back(header);
+      m_resultBodies.push_back(body);
+      foldResultGroup(index, m_resultFolded[g]);
+    }
+    m_resultBox.hidden = NO;
+    ResultRows::logRows(m_def.name, result);
+  }
+
+  // Rows of names and values, the names in one column (group -1: the pair's
+  // values; a group's rows are keyed "<n> <name>" as the shared rows').
+  NSGridView* resultGrid(const std::vector<Inspection::Value>& values, int group) {
+    NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    grid.translatesAutoresizingMaskIntoConstraints = NO;
+    grid.rowSpacing = 2;
+    grid.columnSpacing = 12;
+    grid.yPlacement = NSGridCellPlacementTop;
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementLeading;
+    [grid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
+    for (const Inspection::Value& value : values) {
+      const QString key = group < 0 ? value.name : QStringLiteral("%1 %2").arg(group + 1).arg(value.name);
+      const int number = static_cast<int>(m_resultViews.size()) + 1;
+      NSTextField* name = [NSTextField labelWithString:nativeString(value.name)];
+      NSTextField* text = [NSTextField wrappingLabelWithString:nativeString(value.value)];
+      NSFont* font = [NSFont systemFontOfSize:[NSFont systemFontSize]];
+      name.font = value.main ? [NSFont boldSystemFontOfSize:[NSFont systemFontSize]] : font;
+      // The main value in a larger type.
+      text.font = value.main ? [NSFont boldSystemFontOfSize:std::round([NSFont systemFontSize] * 1.35)] : font;
+      text.lineBreakMode = NSLineBreakByCharWrapping;
+      [text setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+      [name setContentHuggingPriority:NSLayoutPriorityDefaultHigh forOrientation:NSLayoutConstraintOrientationHorizontal];
+      name.accessibilityIdentifier = nativeString(QStringLiteral("commandResultName%1").arg(number));
+      text.accessibilityIdentifier = nativeString(QStringLiteral("commandResultValue%1").arg(number));
+      text.accessibilityLabel = nativeString(value.name);
+      // Copy in the row's menu (its value's number and unit).
+      NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+      menu.delegate = m_target;
+      NSMenuItem* copy = [menu addItemWithTitle:nativeString(QObject::tr("Copy"))
+                                         action:@selector(copyResult:)
+                                  keyEquivalent:@""];
+      copy.target = m_target;
+      copy.representedObject = @[ nativeString(key), nativeString(value.value) ];
+      for (NSTextField* part in @[ name, text ]) {
+        part.selectable = NO;
+        part.menu = menu;
+        part.translatesAutoresizingMaskIntoConstraints = NO;
+        if (!value.tip.isEmpty()) {
+          part.toolTip = nativeString(value.tip);
+        }
+      }
+      [grid addRowWithViews:@[ name, text ]];
+      m_resultViews.push_back({key, text});
+    }
+    return grid;
+  }
+
+  // A result group's rows shown or folded away under its header.
+  void foldResultGroup(int group, bool folded) {
+    const auto index = static_cast<std::size_t>(group);
+    if (index >= m_resultHeaders.size() || index >= m_resultFolded.size()) {
+      return;
+    }
+    m_resultFolded[index] = folded;
+    m_resultHeaders[index].image = symbolImage(folded ? @"chevron.right" : @"chevron.down",
+                                               folded ? QObject::tr("Unfold") : QObject::tr("Fold"));
+    m_resultHeaders[index].accessibilityValue = nativeString(folded ? QObject::tr("Collapsed") : QObject::tr("Expanded"));
+    m_resultBodies[index].hidden = folded;
+  }
+
   QPointer<CommandSession> m_session;
   const CommandDef m_def;
   CommandState m_state;
@@ -1848,10 +2252,24 @@ private:
   NSStackView* __strong m_sections;
   NSGridView* __strong m_grid = nil;
   NSTextField* __strong m_result;
-  NSTextField* __strong m_message;
+  // An inspection's rows (mitcad#1354): their box, its column, each row's
+  // key and value, the groups' headers and rows, folded by group.
+  NSView* __strong m_resultBox;
+  NSStackView* __strong m_resultRows;
+  struct ResultView {
+    QString key; // "Distance", or "1 Radius" in the first pick's group
+    NSTextField* __strong value = nil;
+  };
+  std::vector<ResultView> m_resultViews;
+  std::vector<NSButton* __strong> m_resultHeaders;
+  std::vector<NSStackView* __strong> m_resultBodies;
+  std::vector<bool> m_resultFolded;
+  MitcadCommandMessageField* __strong m_message;
   // The message as given and its level (mitcad#1040).
   QString m_messageText;
   NoticeLevel m_messageLevel = NoticeLevel::Hint;
+  // The pointer is over the message (mitcad#1333).
+  bool m_messageHovered = false;
   NSStackView* __strong m_footer;
   NSButton* __strong m_ok;
   std::vector<Row> m_rows;
@@ -1871,6 +2289,10 @@ private:
   QHash<QString, QPair<QString, QString>> m_notes;
   QString m_active;
   QString m_editingKey; // the value field AppKit edits (mitcad#250)
+  // The key event that stepped a value last, whose further move commands
+  // are the same key's (mitcad#1350), and the wheel's turn not yet a step.
+  NSEvent* __strong m_steppedKey = nil;
+  int m_wheel = 0;
   QTimer m_logTimer;
 };
 
@@ -1885,6 +2307,28 @@ std::unique_ptr<NativeCommandForm> createNativeCommandForm(CommandSession& sessi
   if (form != nullptr && [sender isKindOfClass:[NSControl class]]) {
     form->action(static_cast<NSControl*>(sender));
   }
+}
+- (void)messageHovered:(BOOL)on {
+  if (form != nullptr) {
+    form->messageHovered(on);
+  }
+}
+- (BOOL)valueField:(NSTextField*)field wheel:(NSEvent*)event {
+  return form != nullptr && form->wheel(field, event);
+}
+- (void)copyResult:(id)sender {
+  if (form == nullptr || ![sender isKindOfClass:NSMenuItem.class]) {
+    return;
+  }
+  NSArray* row = ((NSMenuItem*)sender).representedObject;
+  if ([row isKindOfClass:NSArray.class] && row.count == 2) {
+    form->copyResult(mitcad::qtString(row[0]), mitcad::qtString(row[1]));
+  }
+}
+// A result row's menu opens (mitcad#1354), as the shared row's logs it.
+- (void)menuWillOpen:(NSMenu*)menu {
+  (void)menu;
+  qDebug().noquote() << QStringLiteral("Context menu: Copy");
 }
 - (void)controlTextDidChange:(NSNotification*)notification {
   if (form != nullptr) {
@@ -1917,5 +2361,44 @@ std::unique_ptr<NativeCommandForm> createNativeCommandForm(CommandSession& sessi
     *index = names.count > 0 ? 0 : -1;
   }
   return names;
+}
+@end
+
+@implementation MitcadCommandMessageField {
+  NSTrackingArea* hoverTracking;
+}
+// The pointer's coming and going over the shown message (mitcad#1333).
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (hoverTracking == nil) {
+    hoverTracking = [[NSTrackingArea alloc]
+        initWithRect:NSZeroRect
+             options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+               owner:self
+            userInfo:nil];
+    [self addTrackingArea:hoverTracking];
+  }
+}
+- (void)mouseEntered:(NSEvent*)event {
+  (void)event;
+  [target messageHovered:YES];
+}
+- (void)mouseExited:(NSEvent*)event {
+  (void)event;
+  [target messageHovered:NO];
+}
+// A message cleared ends the hover (AppKitCommandForm::setMessage); the
+// command's end takes its places away (MainWindow::updateIdleView).
+@end
+
+@implementation MitcadCommandValueField
+// The wheel steps the value while the field has the keyboard (mitcad#1350);
+// AppKit's field editor passes the wheel up to the field it edits.
+- (void)scrollWheel:(NSEvent*)event {
+  MitcadCommandFormTarget* owner = target;
+  if (owner != nil && [owner valueField:self wheel:event]) {
+    return;
+  }
+  [super scrollWheel:event];
 }
 @end

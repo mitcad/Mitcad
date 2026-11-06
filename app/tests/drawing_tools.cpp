@@ -694,5 +694,43 @@ int drawingToolsTests() {
   CHECK(lines.value(2) ==
         QStringLiteral("Drawing projection of view 3: 1 bodies, 1640.9 ms, projected from a triangulation"));
   CHECK(projectionLines(QJsonArray()).isEmpty());
+
+  // A section's line turned onto 0°, 45°, 90° and their multiples within
+  // 4°, its length kept (mitcad#1362).
+  {
+    const QPointF from(100.0, 50.0);
+    const auto samePoint = [](const QPointF& a, const QPointF& b) {
+      return std::abs(a.x() - b.x()) < 1e-9 && std::abs(a.y() - b.y()) < 1e-9;
+    };
+    // 87.1°: straight up, exactly, as long as it was.
+    const std::optional<LineAngleSnap> up = snapLineAngle(from, QPointF(101.0, 70.0));
+    CHECK(up.has_value());
+    if (up) {
+      CHECK(up->angle == 90.0);
+      CHECK(up->to.x() == 100.0);
+      CHECK(std::abs(up->to.y() - (50.0 + std::hypot(1.0, 20.0))) < 1e-9);
+    }
+    // 46.4°: 45°.
+    const std::optional<LineAngleSnap> diagonal = snapLineAngle(from, QPointF(120.0, 71.0));
+    CHECK(diagonal.has_value());
+    if (diagonal) {
+      CHECK(diagonal->angle == 45.0);
+      const double r = std::hypot(20.0, 21.0) / std::sqrt(2.0);
+      CHECK(samePoint(diagonal->to, QPointF(100.0 + r, 50.0 + r)));
+    }
+    // Leftwards and downwards: 180° and 270°, not -90°; -0.5° is 0°.
+    const std::optional<LineAngleSnap> left = snapLineAngle(from, QPointF(70.0, 51.0));
+    CHECK(left.has_value() && left->angle == 180.0 && left->to.y() == 50.0);
+    const std::optional<LineAngleSnap> down = snapLineAngle(from, QPointF(99.0, 20.0));
+    CHECK(down.has_value() && down->angle == 270.0 && down->to.x() == 100.0);
+    const std::optional<LineAngleSnap> right = snapLineAngle(from, QPointF(140.0, 49.65));
+    CHECK(right.has_value() && right->angle == 0.0 && !std::signbit(right->angle) && right->to.y() == 50.0);
+    // 4.4° and 30° off every multiple: as clicked.
+    CHECK(!snapLineAngle(from, QPointF(126.0, 52.0)));
+    CHECK(!snapLineAngle(from, QPointF(100.0 + 20.0 * std::sqrt(3.0), 70.0)));
+    // A tolerance of its own; the same point twice: nothing.
+    CHECK(snapLineAngle(from, QPointF(126.0, 52.0), 5.0).has_value());
+    CHECK(!snapLineAngle(from, from));
+  }
   return failures;
 }

@@ -29,3 +29,8 @@ mitcad-vec3 = { path = "../vec3" }
 # The design dump IR is JSON.
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# The count of references read, for the linear sketch scan test
+# (mitcad#1348).
+mitcad-f3d-decode = { path = "../f3d-decode", features = ["scan-count"] }

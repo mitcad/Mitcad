@@ -44,7 +44,7 @@ LinkButton replaced createNativeCommandForm: a note's link in the Qt Command pan
 ManipulatorOverlay shared the command's handles over the 3D view
 MeasurementOverlay shared the measurements over the 3D view
 MaterialsPanel native renderWidget: the Materials manager's place/class outline, appearance swatches and actions, own-place header and full settings; shared keyboard actions and retained split sizes (mitcad#1158)
-MiddleElideComboBox replaced createNativeCommandForm: a choice with icons in the Qt Command panel; searchable choices use NativePicker with short labels, groups, source tags and current checks
+MiddleElideComboBox replaced createNativeCommandForm: a choice with icons in the Qt Command panel; searchable choices use NativePicker with short labels, groups, source tags and current checks, in command forms and, as the generic bridge presents a PickerComboBox (choicePicker: a field that opens PickerComboBox::showPopup's picker), on the Make card (mitcad#1353)
 ModeBanner shared the mode's banner over the 3D view
 NavigationBar replaced setNavigationBar: the native capsule's shared View commands, including Comment Pins with its name and checked state
 NavigationGuide native createNativeNavigationGuide: the Navigation settings' mouse pictures

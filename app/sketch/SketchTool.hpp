@@ -107,6 +107,8 @@ protected:
 
 // Drawing tools.
 std::unique_ptr<SketchTool> lineTool(SketchController& c);
+// A line from its midpoint and an end (mitcad#1393).
+std::unique_ptr<SketchTool> midpointLineTool(SketchController& c);
 // mode: two_point, three_point, center
 std::unique_ptr<SketchTool> rectangleTool(SketchController& c, const QString& mode);
 // mode: two_point, center; the corners rounded (mitcad#867)

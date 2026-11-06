@@ -139,7 +139,7 @@ QToolButton* smallButton(const QString& text, const QString& tip) {
 void styleToggle(QToolButton* button, const QColor& accent) {
   button->setAutoRaise(true);
   button->setFixedSize(30, 26);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   Q_UNUSED(accent);
   setFlatCardButton(button);
 #else
@@ -642,7 +642,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     if (input.ordered) {
       // The picks in order, with buttons that move them.
       auto* ordered = new QWidget;
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
       auto* orderedBox = new QVBoxLayout(ordered);
 #else
       auto* orderedBox = new QHBoxLayout(ordered);
@@ -652,7 +652,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       row.order->setFocusPolicy(Qt::NoFocus);
       row.order->setMaximumHeight(90);
       row.order->setObjectName(QStringLiteral("order_") + key);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
       auto* moves = new QHBoxLayout;
 #else
       auto* moves = new QVBoxLayout;

@@ -303,7 +303,7 @@ void WindowManager::installWindowMenu(MainWindow* window) {
       action->setProperty("mitcadNativeActionId", QStringLiteral("window.activate.") + handle(document));
       connect(action, &QAction::triggered, this, [this, document] { present(document); });
     }
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     if (!window->usesNativeUi()) mac::addDocumentWindowTabActions(menu, window);
 #endif
 #ifdef MITCAD_MACOS_NATIVE_UI

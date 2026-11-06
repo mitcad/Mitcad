@@ -26,14 +26,30 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.48.0
+  VERSION 0.49.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
 if(APPLE)
   # app/platform/macos: the parts that need AppKit.
   enable_language(OBJCXX)
-  option(MITCAD_MACOS_NATIVE_UI "Build the native AppKit macOS frontend" OFF)
+  # Branch experiment/macos-shared-qt-ui: the shared Qt UI is the only macOS
+  # frontend; the AppKit frontend (app/platform/macos/Native*) is not built.
+  option(MITCAD_MACOS_NATIVE_UI "Build the native AppKit macOS frontend (not supported here)" OFF)
+  if(MITCAD_MACOS_NATIVE_UI)
+    message(FATAL_ERROR "MITCAD_MACOS_NATIVE_UI: the AppKit frontend is not built in this branch; macOS uses the shared Qt UI only")
+  endif()
+  # MITCAD_MACOS_SHARED_QT_UI ON: the same Qt presentation as Linux and
+  # Windows. Only system services stay native (OpenGL context, Metal render
+  # service, thread quality, paths, updates, system keys). OFF builds the
+  # 0.48 Qt presentation for macOS (SF Symbols, glass cards, Mac tool
+  # buttons, sheets, window tabs), for comparison only (MITCAD_MAC_UI).
+  option(MITCAD_MACOS_SHARED_QT_UI "Use the shared Qt presentation on macOS" ON)
+  if(MITCAD_MACOS_SHARED_QT_UI)
+    add_compile_definitions(MITCAD_MACOS_SHARED_QT_UI=1)
+  else()
+    add_compile_definitions(MITCAD_MAC_UI=1)
+  endif()
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -275,6 +291,11 @@ include(cmake/MesaRuntime.cmake)
 include(cmake/MacUiTests.cmake)
 include(cmake/SelectionUiTests.cmake)
 include(cmake/TimberUiTests.cmake)
+# After every macOS UI test registration: the Qt workflows that run
+# headless (cmake/MacTestScheduling.cmake).
+if(COMMAND mitcad_macos_headless_tests)
+  mitcad_macos_headless_tests()
+endif()
 include(cmake/Packaging.cmake)
 include(cmake/AppImage.cmake)
 # A user's own OptiX render worker (mitcad#1332): the target optix-worker.
@@ -309,8 +330,10 @@ if(BUILD_TESTING)
   # (tools/tree-indentation-check).
   add_subdirectory(tools/tree-indentation-check)
   # Every widget of the app that paints itself names its AppKit
-  # presentation (tools/native-coverage).
-  add_subdirectory(tools/native-coverage)
+  # presentation (tools/native-coverage). Not in this branch: the AppKit
+  # frontend is not built, macOS uses the shared Qt UI
+  # (docs/macos-shared-qt.md).
+  # add_subdirectory(tools/native-coverage)
   # The hypothesis tester of the .f3d import's learning dump (mitcad#96) and
   # the comparison with the API reference dumps (apiref.py).
   find_package(Python3 COMPONENTS Interpreter QUIET)

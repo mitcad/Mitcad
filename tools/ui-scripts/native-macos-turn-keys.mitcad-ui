@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# The arrow keys in the AppKit frontend (mitcad#1351, after mitcad#1211),
+# as view-arrow-keys.mitcad-ui checks the Qt frontend's: the turn commands'
+# keys belong to the 3D view only. On two boxes (Box1 F1.b0, Box2 F2.b0):
+#   1. Down in the focused Browser outline selects the next row; the
+#      camera stays;
+#   2. Left in the focused timeline selects the feature before; the camera
+#      stays;
+#   3. with the 3D view focused, Left still turns the view.
+# Every key goes through the document window's own key dispatch, no
+# system input: in the Browser and the timeline `key` (the window's key
+# equivalents, then its sendEvent:); in the 3D view `native-key-event`,
+# NSApp's own event dispatch, since `key` hands a key to Qt directly while
+# a Qt view (the embedded CAD view) is the first responder.
+# Run by tools/ui-macos-native-turn-keys-test.sh.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle 30
+native-resize 1280 820
+native-appearance light
+command view.fit
+command view.front
+wait-idle
+native-expand native.modelTree
+
+# 1. The Browser outline keeps Down: the next body row, the view stays.
+mark
+native-select native.model.body:F1.b0@
+expect-log '^Native Browser selection: body:F1[.]b0@$'
+expect-native-focus native.modelTree
+capture-view-orientation in_browser
+mark
+key Down
+expect-log '^Native Browser selection: body:F2[.]b0@$'
+expect-native-focus native.modelTree
+expect-view-orientation ${in_browser} unchanged
+expect-no-log '^View turned'
+
+# 2. The timeline keeps Left: the feature before, the view stays.
+native-select native.history.F2
+expect-native-history F2
+capture-view-orientation in_timeline
+mark
+key Left
+expect-native-history F1
+expect-view-orientation ${in_timeline} unchanged
+expect-no-log '^View turned'
+
+# 3. The 3D view with the keyboard: Left turns it.
+native-focus native.viewportHost
+expect-native-focus native.viewportHost
+capture-view-orientation in_view
+mark
+native-key-event Left
+expect-log '^Native application key event: key=16777234 .* responder=QNS[A-Za-z]*$'
+expect-log '^View turned left by 15 degrees$'
+expect-view-orientation ${in_view} changed

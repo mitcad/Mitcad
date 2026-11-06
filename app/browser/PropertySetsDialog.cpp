@@ -400,7 +400,7 @@ public:
     for (QPushButton* button : {define, remove, close}) {
       button->setAutoDefault(false);
     }
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     auto* controls = new QHBoxLayout;
     controls->setSpacing(0);
     controls->addWidget(define);
@@ -553,7 +553,7 @@ PropertySetsDialog::PropertySetsDialog(DocumentHost& host, QWidget* parent) : QD
   for (QPushButton* button : {m_add, m_remove, m_types, m_close}) {
     button->setAutoDefault(false);
   }
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* controls = new QHBoxLayout;
   controls->setSpacing(0);
   controls->addWidget(m_add);

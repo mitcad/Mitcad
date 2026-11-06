@@ -28,7 +28,7 @@ namespace mitcad::agent {
 
 // A group with a frame and a title, except on macOS, where the settings
 // window's panes have none (as AgentPreferencesBox).
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 using ChatPreferencesBase = QWidget;
 #else
 using ChatPreferencesBase = QGroupBox;

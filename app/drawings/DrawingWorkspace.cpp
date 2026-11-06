@@ -182,10 +182,12 @@ bool leaderType(const QString& type) {
   return type == QStringLiteral("note") || type == QStringLiteral("datum") || type == QStringLiteral("frame");
 }
 
-// A line or an arc drawn outside the model (mitcad#729), whose clicks snap
-// to a view's points (mitcad#1272).
-bool sketchTool(const DrawingToolDef* tool) {
-  return tool != nullptr && (tool->pick == SheetPick::Segment || tool->pick == SheetPick::ArcPoints);
+// A tool whose clicks snap to a view's points (mitcad#1272): a line or an
+// arc drawn outside the model (mitcad#729), a section's line or a break's
+// sides (mitcad#1362).
+bool snapsToPoints(const DrawingToolDef* tool) {
+  return tool != nullptr && (tool->pick == SheetPick::Segment || tool->pick == SheetPick::ArcPoints ||
+                             tool->pick == SheetPick::Line);
 }
 
 QString millimetres(double value) { return QString::number(value, 'f', 2); }
@@ -203,7 +205,7 @@ QString snapHint(const QJsonObject& answer) {
 
 // What a `drawing_snap` answer says of the place, for the log: "line_offset
 // -24.00, beyond 12.00 mm, snapped to 12.00 mm x2 of annotation 1" (or
-// "free" with Alt, "not snapped").
+// "free" with Shift or Alt, "not snapped").
 QString placedText(const QJsonObject& answer, bool freely) {
   QStringList parts;
   const QJsonValue offset = answer.value(QStringLiteral("line_offset"));
@@ -475,7 +477,7 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
       // pick still comes.
       m_sheetView->setHint(picksWhilePlacing()
                                ? tr("Click where the dimension goes, or a second edge, circle or corner "
-                                    "(Alt: no snap)")
+                                    "(Shift: no snap)")
                                : m_tool->placeHint);
     }
   });
@@ -1468,12 +1470,12 @@ void DrawingWorkspace::picked(ToolPicks picks) {
   }
   QJsonObject command = m_tool->command(m_drawing, m_sheet, picks, options);
   // A dimension goes where it snaps to the spacing of the one before, or
-  // with Alt where it is clicked (mitcad#1173).
+  // with Shift or Alt where it is clicked (mitcad#1173, mitcad#1362).
   if (m_tool->pick == SheetPick::Picks && command.contains(QStringLiteral("at")) &&
       m_tool->annotationType != nullptr && spacedType(m_tool->annotationType(options))) {
     m_snapTimer->stop();
     m_snapPending = false;
-    const bool freely = m_sheetView->releaseModifiers().testFlag(Qt::AltModifier);
+    const bool freely = DrawingSheetView::dragsFreely(m_sheetView->releaseModifiers());
     QJsonObject placed;
     if (askSnap(command, freely, &placed)) {
       command.insert(QStringLiteral("at"), placed.value(QStringLiteral("at")));
@@ -1673,8 +1675,12 @@ void DrawingWorkspace::hoverRequested(int view, QPointF at) {
 void DrawingWorkspace::hoverPick() {
   QString seen = QStringLiteral("nothing");
   QJsonArray items;
-  // A line's or an arc's clicks snap on the view under each (mitcad#1272).
-  const bool snaps = sketchTool(m_tool);
+  bool lone = false;
+  // A line's or an arc's clicks snap on the view under each (mitcad#1272);
+  // a section's line's or a break's on the view of its first click, which
+  // the sheet gives (mitcad#1362), not once the section is placed.
+  const bool snaps =
+      snapsToPoints(m_tool) && !(m_tool->pick == SheetPick::Line && m_sheetView->isPlacing());
   const int on = m_pickView != 0 && !snaps ? m_pickView : m_hoverView;
   // Nothing while what was picked is placed (mitcad#725), unless a click
   // there may still pick (the Dimension tool's Auto, mitcad#1272).
@@ -1709,12 +1715,25 @@ void DrawingWorkspace::hoverPick() {
           seen = QStringLiteral("center line");
         }
         items = answer.value(QStringLiteral("items")).toArray();
+        // A pick the Dimension tool's Auto cannot dimension alone
+        // (mitcad#1361): the model says so.
+        lone = answer.contains(QStringLiteral("alone")) && !answer.value(QStringLiteral("alone")).toBool();
       }
     } catch (const std::exception&) {
       // Nothing to show: the click says why when it comes.
     }
   }
   m_sheetView->setHoverMarks(items);
+  // Before the first pick of the Dimension tool's Auto (mitcad#1361): over
+  // a pick that makes no dimension alone the hint says what comes after
+  // it; elsewhere the tool's own.
+  if (picksAuto() && m_toolPicks.isEmpty() && !m_sheetView->isPlacing()) {
+    if (lone) {
+      m_sheetView->setHint(tr("Click it, then a second edge, circle or corner to dimension it from"));
+    } else {
+      showHint();
+    }
+  }
   if (seen != m_loggedHover) {
     m_loggedHover = seen;
     // Where it was asked (sheet mm, the view under it; mitcad#1272: what
@@ -1728,7 +1747,7 @@ void DrawingWorkspace::hoverPick() {
 }
 
 void DrawingWorkspace::addWanted(QJsonObject& query, const QHash<QString, QString>& options) const {
-  if (sketchTool(m_tool)) {
+  if (snapsToPoints(m_tool)) {
     // A line's or an arc's click snaps to a point (mitcad#1272).
     query.insert(QStringLiteral("want"), QStringLiteral("snap"));
     return;
@@ -1743,9 +1762,13 @@ void DrawingWorkspace::addWanted(QJsonObject& query, const QHash<QString, QStrin
   }
 }
 
-bool DrawingWorkspace::picksWhilePlacing() const {
+bool DrawingWorkspace::picksAuto() const {
   return m_tool != nullptr && m_tool->pick == SheetPick::Picks && m_tool->pickCount != nullptr &&
-         m_tool->pickCount(m_options.value(m_tool->id)) == kAutoPicks && m_toolPicks.size() == 1;
+         m_tool->pickCount(m_options.value(m_tool->id)) == kAutoPicks;
+}
+
+bool DrawingWorkspace::picksWhilePlacing() const {
+  return picksAuto() && m_toolPicks.size() == 1;
 }
 
 std::optional<QJsonObject> DrawingWorkspace::askPick(int view, QPointF at) {
@@ -1793,7 +1816,7 @@ void DrawingWorkspace::placePicks() {
 }
 
 bool DrawingWorkspace::secondPick(QPointF at) {
-  if (!picksWhilePlacing() || m_sheetView->releaseModifiers().testFlag(Qt::AltModifier)) {
+  if (!picksWhilePlacing() || DrawingSheetView::dragsFreely(m_sheetView->releaseModifiers())) {
     return false;
   }
   const std::optional<QJsonObject> answer = askPick(m_pickView, at);
@@ -1812,7 +1835,7 @@ bool DrawingWorkspace::secondPick(QPointF at) {
 
 std::optional<QPointF> DrawingWorkspace::snapPoint(int view, const QPointF& at) {
   // Not while a job computes the model (mitcad#753): as clicked.
-  if (!sketchTool(m_tool) || view <= 0 || !isOpen() || m_host.modelBusy()) {
+  if (!snapsToPoints(m_tool) || view <= 0 || !isOpen() || m_host.modelBusy()) {
     return std::nullopt;
   }
   const std::optional<QJsonObject> answer = askPick(view, at);
@@ -1877,10 +1900,16 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
   addPick(*answer, on, at);
   if (needed == kAutoPicks) {
     // The picks choose (mitcad#1272): a circle, an arc or a straight edge
-    // is placed at once, a corner waits for a second pick.
+    // is placed at once, a corner waits for a second pick. The model says
+    // which pick makes a dimension alone (mitcad#1361: a section's cut
+    // edge does, a point does not).
     const bool point = answer->value(QStringLiteral("seen")).toString() == QStringLiteral("point");
-    if (m_toolPicks.size() >= 2 || !point) {
+    const bool alone = answer->value(QStringLiteral("alone")).toBool(!point);
+    if (m_toolPicks.size() >= 2 || alone) {
       placePicks();
+    } else {
+      // What to pick next, not a leader's preview.
+      m_sheetView->setHint(tr("Click a second edge, circle or corner to dimension it from (Esc: start again)"));
     }
     return;
   }
@@ -1940,7 +1969,7 @@ void DrawingWorkspace::annotationMoved(int annotation, QPointF delta) {
                       {QStringLiteral("drawing"), m_drawing},
                       {QStringLiteral("annotation"), annotation},
                       {QStringLiteral("move"), QJsonArray{delta.x(), delta.y()}}};
-  // A dimension dragged snaps as one placed (mitcad#1173); with Alt it
+  // A dimension dragged snaps as one placed (mitcad#1173); with Shift or Alt it
   // goes where it is dropped.
   m_snapTimer->stop();
   m_snapPending = false;

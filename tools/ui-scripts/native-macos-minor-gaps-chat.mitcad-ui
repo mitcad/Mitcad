@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Minor AppKit gaps (mitcad#1358), run by tools/ui-macos-native-minor-gaps-test.sh
+# with two Claude Codes (the chat's scripted test agent): the first signed
+# in as first@example.com, the one in the test home's .local/bin signed
+# out (named by its full path, the test home not being the user's). The Chat
+# card's agent pop-up shows each one's sign-in state under its name and in
+# its tooltip, as the Qt list shows it beside the name (mitcad#1289); the
+# closed pop-up shows the name.
+# Input is the TestDriver's in-process native commands; no system input.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle 30
+native-resize 1280 820
+native-appearance light
+mark
+native-action view.chat
+wait-log 'Native chat card shown: [0-9]+ x [0-9]+' 30
+wait-log 'Chat panel: ready' 60
+wait-log 'Chat agents: Claude Code . signed in as first@example[.]com.* [|] Claude Code [(][^)]*[.]local/bin[)] . not signed in' 60
+expect-native-visible chatAgentChoice true
+expect-native-text chatAgentChoice '^Claude Code$'
+expect-native-text chatAgentChoice/items '^Claude Code . signed in as first@example[.]com.* [|] Claude Code [(][^)]*[.]local/bin[)] . not signed in'
+expect-native-text chatAgentChoice/item-tips '^Claude Code . signed in as first@example[.]com.* [|] Claude Code [(][^)]*[.]local/bin[)] . not signed in'
+screenshot '${MITCAD_TEST_SHOTS}/native-minor-gaps-chat.png'

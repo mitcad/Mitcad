@@ -319,6 +319,15 @@ bool SketchModel::load(const QJsonObject& sketch) {
     }
     texts.push_back(text);
   }
+  // The regions a text's contours bound, letters and counters (mitcad#1369).
+  regionTexts.clear();
+  for (const QJsonValue& value : sketch.value(QStringLiteral("regions")).toArray()) {
+    const QJsonObject r = value.toObject();
+    const QString text = r.value(QStringLiteral("text")).toString();
+    if (!text.isEmpty()) {
+      regionTexts.insert(r.value(QStringLiteral("key")).toString(), text);
+    }
+  }
 
   patterns.clear();
   for (const QJsonValue& value : sketch.value(QStringLiteral("patterns")).toArray()) {

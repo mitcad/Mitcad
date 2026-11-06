@@ -658,7 +658,9 @@ void MainWindow::closeDocument() {
   }
 #ifdef Q_OS_MACOS
   // The native menu receives Cmd+W even while a non-modal tool window is key.
-  if (QWidget* active = QApplication::activeWindow(); active != nullptr && active != this && !active->isModal()) {
+  // window(): a design in a document frame (the shared Qt UI) is not a
+  // window of its own; its frame is.
+  if (QWidget* active = QApplication::activeWindow(); active != nullptr && active != window() && !active->isModal()) {
     active->close();
     return;
   }

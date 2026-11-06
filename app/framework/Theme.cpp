@@ -462,7 +462,7 @@ QColor errorColor(const QPalette& palette) {
 QColor warningColor(const QPalette& palette) { return themeColor(ColorRole::WarningText, palette); }
 
 QColor accentColor(const QPalette& palette) {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   return palette.color(QPalette::Accent);
 #else
   return actionColor(palette);

@@ -718,8 +718,8 @@ Decisions made while implementing the command UI and the DXF export:
   diffs do not list them (left from mitcad#208; done in the mitcad#125 gap
   notes); the command panels have no
   manipulators; Fold and Bend previews show the result, not the bend line's
-  arrows of the contract. The native macOS presentation uses the same command
-  definitions and browser rows, unchecked on this machine (no macOS VM here).
+  arrows of the contract. macOS uses the same Qt panels
+  ([macos-shared-qt.md](macos-shared-qt.md)).
 
 ### Implementation notes (mitcad#125 gaps)
 

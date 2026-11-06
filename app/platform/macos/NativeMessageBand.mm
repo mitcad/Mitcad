@@ -72,14 +72,29 @@ NSAttributedString* titled(const QString& text, NSColor* color) {
   }];
 }
 
-NSButton* plainButton(id target, SEL action) {
-  NSButton* button = [NSButton buttonWithTitle:@"" target:target action:action];
+NSButton* plainButton(id target, SEL action, Class kind = nil) {
+  NSButton* button = [(kind != nil ? kind : NSButton.class) buttonWithTitle:@"" target:target action:action];
   button.bordered = NO;
   button.imagePosition = NSImageLeading;
   button.alignment = NSTextAlignmentLeft;
   button.lineBreakMode = NSLineBreakByTruncatingTail;
   button.translatesAutoresizingMaskIntoConstraints = YES;
   return button;
+}
+
+// A tracking area of its own over the visible part of a view, whose
+// pointer's coming, moves and going the band hears (mitcad#1379), as
+// MitcadCommandMessageField's in NativeForms.mm; the moves as the Qt band's
+// mouse moves, which take a message shown under a still pointer.
+NSTrackingArea* hoverTracking(NSView* view) {
+  NSTrackingArea* area = [[NSTrackingArea alloc]
+      initWithRect:NSZeroRect
+           options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInActiveApp |
+                   NSTrackingInVisibleRect
+             owner:view
+          userInfo:nil];
+  [view addTrackingArea:area];
+  return area;
 }
 
 } // namespace
@@ -92,16 +107,81 @@ NSButton* plainButton(id target, SEL action) {
 - (BOOL)isFlipped { return YES; }
 @end
 
+@interface MITCADMessageBand ()
+// The pointer came over the text or the stub, or left it (mitcad#1379).
+- (void)pointerOver:(NSView*)view entered:(BOOL)entered;
+@end
+
+// The message shown in full.
+@interface MITCADMessageText : NSTextField {
+@public
+  MITCADMessageBand* __weak band;
+}
+@end
+
+@implementation MITCADMessageText {
+  NSTrackingArea* _hover;
+}
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (_hover == nil) _hover = hoverTracking(self);
+}
+- (void)mouseEntered:(NSEvent*)event {
+  (void)event;
+  [band pointerOver:self entered:YES];
+}
+- (void)mouseMoved:(NSEvent*)event {
+  (void)event;
+  [band pointerOver:self entered:YES];
+}
+- (void)mouseExited:(NSEvent*)event {
+  (void)event;
+  [band pointerOver:self entered:NO];
+}
+@end
+
+// The stub, the latest message on one line.
+@interface MITCADMessageStub : NSButton {
+@public
+  MITCADMessageBand* __weak band;
+}
+@end
+
+@implementation MITCADMessageStub {
+  NSTrackingArea* _hover;
+}
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (_hover == nil) _hover = hoverTracking(self);
+}
+- (void)mouseEntered:(NSEvent*)event {
+  [super mouseEntered:event];
+  [band pointerOver:self entered:YES];
+}
+- (void)mouseMoved:(NSEvent*)event {
+  [super mouseMoved:event];
+  [band pointerOver:self entered:YES];
+}
+- (void)mouseExited:(NSEvent*)event {
+  [super mouseExited:event];
+  [band pointerOver:self entered:NO];
+}
+@end
+
 @implementation MITCADMessageBand {
   const mitcad::MessageLog* _log;
   NSImageView* _icon;
-  NSTextField* _text;
+  MITCADMessageText* _text;
   NSButton* _close;
-  NSButton* _stub;
+  MITCADMessageStub* _stub;
   NSPopover* _history;
   NSBox* _backdrop;
   std::vector<QString> _rowFeatures;
   QString _logged;
+  // The text or the stub under the pointer, and whether noticeHovered was
+  // last called with a feature (mitcad#1379).
+  NSView* __weak _hovered;
+  BOOL _noticeHovered;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -117,7 +197,8 @@ NSButton* plainButton(id target, SEL action) {
   [self addSubview:_backdrop];
   _icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
   _icon.imageScaling = NSImageScaleProportionallyUpOrDown;
-  _text = [NSTextField wrappingLabelWithString:@""];
+  _text = [MITCADMessageText wrappingLabelWithString:@""];
+  _text->band = self;
   _text.font = bandFont();
   _text.maximumNumberOfLines = 2;
   _text.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -129,7 +210,8 @@ NSButton* plainButton(id target, SEL action) {
   _close.bordered = NO;
   _close.toolTip = ns(QObject::tr("Close the message"));
   _close.accessibilityIdentifier = @"native.messageBand.close";
-  _stub = plainButton(self, @selector(toggleHistory:));
+  _stub = (MITCADMessageStub*)plainButton(self, @selector(toggleHistory:), MITCADMessageStub.class);
+  _stub->band = self;
   _stub.accessibilityIdentifier = @"native.messageBand.stub";
   _stub.accessibilityLabel = ns(QObject::tr("Message history"));
   for (NSView* view in @[ _icon, _text, _close, _stub ]) {
@@ -194,7 +276,32 @@ NSButton* plainButton(id target, SEL action) {
     _logged = shown;
     qDebug().noquote() << QStringLiteral("Native message band: %1").arg(shown);
   }
+  // A message taken from under the pointer no longer paints its places, as
+  // the Qt band's hidden text or stub (mitcad#1379).
+  NSView* hovered = _hovered;
+  if (hovered != nil && hovered.hidden) [self pointerOver:hovered entered:NO];
   self.needsLayout = YES;
+}
+
+// The pointer over the text shown in full or the stub (mitcad#1379): the
+// message's feature, as the Qt band's eventFilter takes it; a message
+// about no feature paints nothing.
+- (void)pointerOver:(NSView*)view entered:(BOOL)entered {
+  if (entered) {
+    _hovered = view;
+    const mitcad::MessageEntry* entry = nullptr;
+    if (_log != nullptr && !view.hidden) entry = view == _text ? _log->full() : _log->stub();
+    if (entry != nullptr && !entry->feature.isEmpty() && !_noticeHovered) {
+      _noticeHovered = YES;
+      if (noticeHovered) noticeHovered(entry->feature);
+    }
+    return;
+  }
+  if (view == _hovered) _hovered = nil;
+  if (_noticeHovered) {
+    _noticeHovered = NO;
+    if (noticeHovered) noticeHovered(QString());
+  }
 }
 
 - (void)layout {

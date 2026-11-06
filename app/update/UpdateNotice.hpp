@@ -23,10 +23,12 @@ class UpdateNotice : public QWidget {
 public:
   explicit UpdateNotice(QWidget* parent = nullptr);
 
-  // A newer release; `installable`: Install, else the release page only.
-  // `html` is rich text: the caller escapes every value in it
-  // (toHtmlEscaped), as values come from the network (mitcad#938).
-  void showOffer(const QString& html, bool installable);
+  // A newer release; `installable`: Install, else the release page only;
+  // `skippable`: Skip This Version (not for a release without a download
+  // for this platform, mitcad#1390). `html` is rich text: the caller
+  // escapes every value in it (toHtmlEscaped), as values come from the
+  // network (mitcad#938).
+  void showOffer(const QString& html, bool installable, bool skippable);
   // A download or check under way; total 0: no percentage. Plain text.
   void showProgress(const QString& plain, qint64 received, qint64 total);
   // Plain text, shown as it is: an error may carry a server's text. Its

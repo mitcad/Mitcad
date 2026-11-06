@@ -63,7 +63,7 @@ QImage fontPreview(const QString& choice);
 
 // A group with a frame and a title, except on macOS, where the settings
 // window's panes have none: a plain widget.
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 using FontPreferencesBase = QWidget;
 #else
 using FontPreferencesBase = QGroupBox;

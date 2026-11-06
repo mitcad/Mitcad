@@ -135,6 +135,12 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_list->setSelectionMode(QAbstractItemView::SingleSelection);
   m_list->setMinimumWidth(300);
   m_list->installEventFilter(this);
+  // The AppKit frontend (mitcad#1355): Up and Down reach the group
+  // headings, and these keys on a heading reach eventFilter.
+  m_list->setProperty(NativeHeadingRowsProperty, true);
+  m_list->setProperty(NativeModelKeysProperty, QVariantList{int(Qt::Key_Space), int(Qt::Key_Return),
+                                                            int(Qt::Key_Enter), int(Qt::Key_Left),
+                                                            int(Qt::Key_Right)});
   m_pages->addWidget(m_list);
   // The groups the user collapsed (mitcad#1133).
   m_collapsed =
@@ -256,7 +262,7 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   for (QPushButton* button : {m_new, m_delete, m_close}) {
     button->setAutoDefault(false);
   }
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* controls = new QHBoxLayout;
   controls->setSpacing(0);
   controls->addWidget(m_new);

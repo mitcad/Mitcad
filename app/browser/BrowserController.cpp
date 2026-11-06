@@ -397,9 +397,12 @@ void BrowserController::showSelection(const Selection& items) {
   // A command's input still clears/replaces its temporary row selection.
   // The rows of the picked items are selected beside them (a feature's
   // body, mitcad#177), and the shown selection stays current for a refresh
-  // after Collapse All (mitcad#312).
+  // after Collapse All (mitcad#312). Also in Sketch mode and a read-only
+  // design, where Delete still removes the Center of Mass marker, a row
+  // without a view item (mitcad#1094, mitcad#1358): only a command's input
+  // or a pending plane pick clears it.
   const bool fromTree = m_picking && m_fromTree;
-  m_browser->showSelection(items, m_shownFeatures, !fromTree, fromTree && m_host.canChangeModel());
+  m_browser->showSelection(items, m_shownFeatures, !fromTree, fromTree && m_host.canChangeModel(true));
 }
 
 bool BrowserController::cancelEditing() {

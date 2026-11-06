@@ -2555,15 +2555,19 @@ bool SketchController::viewerEvent(QEvent* event) {
     // take the item out again (Edit QR Code then has no code to preview).
     m_host.deliverPendingPicks();
     const Selection& selected = m_host.selection();
+    // A region a text's contours bound (inside a letter or its counter,
+    // mitcad#1369) opens its text's panel too.
+    const SelectKind kind = selected.size() == 1 ? selected.first().kind : SelectKind::None;
     if (selected.size() == 1 && selected.first().owner == m_uid &&
-        (selected.first().kind == SelectKind::SketchCurve || selected.first().kind == SelectKind::SketchPoint)) {
-      const QString id = selected.first().name;
-      const sketch::TextData* text = m_model.text(id);
+        (kind == SelectKind::SketchCurve || kind == SelectKind::SketchPoint || kind == SelectKind::Profile)) {
+      const sketch::TextData* text = m_model.textOfPick(selected.first());
+      const QString id = text != nullptr ? text->id : selected.first().name;
+      const bool entity = kind != SelectKind::Profile;
       const char* command = text != nullptr && text->code ? "sketch.edit_code"
                             : text != nullptr             ? "sketch.edit_text"
-                            : m_model.offsetOf(id) != nullptr ? "sketch.edit_offset"
-                            : m_model.patternOf(id) != nullptr ? "sketch.edit_pattern"
-                                                               : nullptr;
+                            : entity && m_model.offsetOf(id) != nullptr ? "sketch.edit_offset"
+                            : entity && m_model.patternOf(id) != nullptr ? "sketch.edit_pattern"
+                                                                         : nullptr;
       if (command != nullptr) {
         m_pressed = false;
         m_dragEntity.clear();

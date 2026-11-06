@@ -19,6 +19,15 @@
 //   arc's torus rolled on the top's crease, convex though OCCT took it for
 //   concave, and failed; without 1301 a walk stopped a few micrometres
 //   short of the next torus and its piece left the result open.
+// - The same rounding at the top's six transitions from an arc to a
+//   stretch (mitcad#1349): the crease between the root's chamfer and the
+//   piece of the arc's chamfer beside it is concave by about 5 degrees,
+//   which OCCT takes for tangent. The result has the stored body's faces,
+//   the arc's torus and the stretch's rounding each cut by that piece,
+//   which grows round their ends, and about each transition the result and
+//   the stored body lie on each other within 0.001 mm. Without the port's
+//   patches 1350 to 1352 the ball rolled on the crease: 14 faces more, the
+//   stored body 0.013 mm off the result.
 //
 // OCCT's own solids cannot model the fin's spline profile with its
 // creases, so the case is the reported body.
@@ -26,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <sstream>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -93,8 +103,10 @@ std::vector<std::pair<int, int>> read_indices(const std::string& path) {
   std::ifstream                    in(path);
   std::string                      line;
   while (std::getline(in, line)) {
-    int index = -1, mark = 0;
-    if (std::sscanf(line.c_str(), "%d %d", &index, &mark) >= 1 && index >= 0) {
+    std::istringstream fields(line);
+    int                index = -1, mark = 0;
+    if (fields >> index && index >= 0) {
+      fields >> mark;
       out.emplace_back(index, mark);
     }
   }
@@ -159,6 +171,40 @@ double farthest(const TopoDS_Shape& from, const TopoDS_Shape& to, const Bnd_Box&
     }
   }
   return worst;
+}
+
+// The top's edges in `list` rounded with 0.2 as MitCad's dressup calls the
+// fillet: chains stopped at turns, carried across notches. `region` gets
+// the edges' box. Null where the fillet fails.
+TopoDS_Shape round_top(const TopoDS_Shape& body, const std::vector<std::pair<int, int>>& list, Bnd_Box& region) {
+  ShapeIndex edges;
+  TopExp::MapShapes(body, TopAbs_EDGE, edges);
+  BRepFilletAPI_MakeFillet                               fillet(body);
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> selected;
+  for (const auto& item : list) {
+    selected.Add(edges(item.first + 1));
+  }
+  fillet.StopChainsAtTurns(selected);
+  for (const auto& item : list) {
+    const TopoDS_Edge& edge = TopoDS::Edge(edges(item.first + 1));
+    BRepBndLib::Add(edge, region);
+    if (fillet.Contour(edge) == 0) {
+      fillet.Add(0.2, edge);
+    }
+  }
+  fillet.CarryChainsAcrossNotches();
+  fillet.Build();
+  if (!fillet.IsDone()) {
+    std::printf("the rounding failed: %d faulty contours\n", fillet.NbFaultyContours());
+    return TopoDS_Shape();
+  }
+  return fillet.Shape();
+}
+
+int face_count(const TopoDS_Shape& shape) {
+  ShapeIndex faces;
+  TopExp::MapShapes(shape, TopAbs_FACE, faces);
+  return faces.Extent();
 }
 
 void test_chamfer_faces_are_generated_by_their_edges() {
@@ -250,32 +296,12 @@ void test_rounding_across_the_creases() {
   if (body.IsNull() || after.IsNull() || list.size() != 12) {
     return;
   }
-  ShapeIndex edges;
-  TopExp::MapShapes(body, TopAbs_EDGE, edges);
-  // As MitCad's dressup calls the fillet: chains stopped at turns, carried
-  // across notches.
-  BRepFilletAPI_MakeFillet                               fillet(body);
-  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> selected;
-  for (const auto& item : list) {
-    selected.Add(edges(item.first + 1));
-  }
-  fillet.StopChainsAtTurns(selected);
-  Bnd_Box region;
-  for (const auto& item : list) {
-    const TopoDS_Edge& edge = TopoDS::Edge(edges(item.first + 1));
-    BRepBndLib::Add(edge, region);
-    if (fillet.Contour(edge) == 0) {
-      fillet.Add(0.2, edge);
-    }
-  }
-  fillet.CarryChainsAcrossNotches();
-  fillet.Build();
-  CHECK(fillet.IsDone());
-  if (!fillet.IsDone()) {
-    std::printf("the rounding failed: %d faulty contours\n", fillet.NbFaultyContours());
+  Bnd_Box            region;
+  const TopoDS_Shape result = round_top(body, list, region);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
     return;
   }
-  const TopoDS_Shape result = fillet.Shape();
   CHECK(closed(result));
   // The stored body on the result round the fin's top (the rounded edges'
   // box, above the root's roundings).
@@ -288,12 +314,58 @@ void test_rounding_across_the_creases() {
   CHECK(back <= 0.01);
 }
 
+void test_transitions_cut_by_their_pieces() {
+  const std::string cases = geometry_cases();
+  if (cases.empty()) {
+    std::printf("test_transitions_cut_by_their_pieces: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  const std::string  dir   = cases + "/fin-top-chamfer-rounding/";
+  const TopoDS_Shape body  = read(dir + "body.brep");
+  const TopoDS_Shape after = read(dir + "after.brep");
+  const auto         list  = read_indices(dir + "edges.txt");
+  CHECK(!body.IsNull() && !after.IsNull() && list.size() == 12);
+  if (body.IsNull() || after.IsNull() || list.size() != 12) {
+    return;
+  }
+  Bnd_Box            region;
+  const TopoDS_Shape result = round_top(body, list, region);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(closed(result));
+  // One face at each transition, the piece of the chamfer grown round the
+  // roundings' ends: the stored body's faces.
+  const int faces = face_count(result), stored = face_count(after);
+  std::printf("the rounding: %d faces, the stored body %d\n", faces, stored);
+  CHECK(faces == stored);
+  // The fin's six transitions from an arc to a stretch (three a side, at
+  // the same heights), each both ways within 0.001 mm.
+  const double boxes[3][4] = {{-24.5, -22., 180., 184.}, {-20., -18., 189., 192.}, {-7.5, -5.5, 198., 200.}};
+  for (const auto& b : boxes) {
+    Bnd_Box box;
+    box.Update(-0.8, b[0], b[2], 0.8, b[1], b[3]);
+    const double out  = farthest(result, after, box);
+    const double back = farthest(after, result, box);
+    std::printf("transitions at y %.1f..%.1f: the result on the stored body within %.6f mm, the stored body on it "
+                "within %.6f mm\n",
+                b[0],
+                b[1],
+                out,
+                back);
+    CHECK(out <= 0.001);
+    CHECK(back <= 0.001);
+  }
+}
+
 } // namespace
 } // namespace test
 
 int main() {
   test::guarded("test_chamfer_faces_are_generated_by_their_edges", test::test_chamfer_faces_are_generated_by_their_edges);
   test::guarded("test_rounding_across_the_creases", test::test_rounding_across_the_creases);
+  test::guarded("test_transitions_cut_by_their_pieces", test::test_transitions_cut_by_their_pieces);
   if (test::failures == 0) {
     std::puts("test_fillet_fin_top_creases: all checks passed");
   }

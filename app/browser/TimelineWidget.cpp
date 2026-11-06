@@ -1484,6 +1484,10 @@ void TimelineWidget::selectFeature(const QString& uid) {
 QString TimelineWidget::selectedFeature() const { return m_strip->selected(); }
 
 void TimelineWidget::startRename(const QString& uid) {
+  if (m_presentationRenamer) {
+    m_presentationRenamer(uid);
+    return;
+  }
   const int i = m_strip->indexOf(uid);
   if (i < 0) {
     return;
@@ -1781,11 +1785,6 @@ void TimelineWidget::fillSearchList() {
     return; // made when first shown
   }
   m_searchList->clear();
-  // The component colours of the strip's bands.
-  QHash<QString, int> colours;
-  for (int i = 1; i < m_snapshot.components.size(); ++i) {
-    colours.insert(m_snapshot.components[i].uid, i - 1);
-  }
   for (const QString& uid : std::as_const(m_matches)) {
     const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
     if (feature == nullptr) {
@@ -1793,18 +1792,10 @@ void TimelineWidget::fillSearchList() {
     }
     auto* row = new QTreeWidgetItem(m_searchList, {feature->name, m_snapshot.componentName(feature->component)});
     row->setIcon(0, themeIcon(featureIcon(feature->type)));
-    const int colour = colours.value(feature->component, -1);
-    row->setIcon(1, swatchIcon(colour >= 0 ? componentColor(colour) : QColor(Qt::transparent)));
+    const QColor colour = searchResultColor(uid);
+    row->setIcon(1, swatchIcon(colour.isValid() ? colour : QColor(Qt::transparent)));
     row->setData(0, Qt::UserRole, uid);
-    QString state;
-    if (feature->status == QStringLiteral("error") || feature->status == QStringLiteral("warning")) {
-      state = noticeLevelText(featureStateLevel(featureState(feature->status)), feature->error);
-    } else if (feature->suppressed) {
-      state = feature->error.isEmpty() ? tr("Suppressed") : tr("Suppressed: %1").arg(feature->error);
-    } else if (feature->index >= m_snapshot.marker) {
-      state = tr("Rolled back");
-    }
-    row->setToolTip(0, state.isEmpty() ? feature->name : QStringLiteral("%1: %2").arg(feature->name, state));
+    row->setToolTip(0, searchResultToolTip(uid));
     if (feature->status == QStringLiteral("error")) {
       row->setForeground(0, errorColor(palette()));
     }
@@ -1818,6 +1809,29 @@ void TimelineWidget::fillSearchList() {
     placeSearchList();
     QTimer::singleShot(0, this, &TimelineWidget::logSearchList);
   }
+}
+
+QColor TimelineWidget::searchResultColor(const QString& uid) const {
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+  // The strip's bands (ComponentColors.hpp): none for the root.
+  const int index = feature != nullptr ? componentColorIndex(m_snapshot.components, feature->component) : -1;
+  return index >= 0 ? componentColor(index) : QColor();
+}
+
+QString TimelineWidget::searchResultToolTip(const QString& uid) const {
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+  if (feature == nullptr) {
+    return QString();
+  }
+  QString state;
+  if (feature->status == QStringLiteral("error") || feature->status == QStringLiteral("warning")) {
+    state = noticeLevelText(featureStateLevel(featureState(feature->status)), feature->error);
+  } else if (feature->suppressed) {
+    state = feature->error.isEmpty() ? tr("Suppressed") : tr("Suppressed: %1").arg(feature->error);
+  } else if (feature->index >= m_snapshot.marker) {
+    state = tr("Rolled back");
+  }
+  return state.isEmpty() ? feature->name : QStringLiteral("%1: %2").arg(feature->name, state);
 }
 
 void TimelineWidget::showSearchList() {

@@ -27,9 +27,9 @@ def main():
         headless = "macos_headless" in props.get("LABELS", [])
         if headless:
             assert not harness, name
-            assert name.removeprefix("app.ui-macos-") in {
-                "settings", "dialogs", "naming", "configuration-tables-parity",
-                "filament-variants", "make-tab", "dialog-gallery"}, name
+            # The audited list is mitcad_macos_headless_tests(); AppKit
+            # workflows always need the window server.
+            assert "native" not in name, name
             assert "macos_desktop" not in props.get("RESOURCE_LOCK", []), name
             assert "QT_QPA_PLATFORM=offscreen" in props.get("ENVIRONMENT", []), name
             assert "MITCAD_TEST_HEADLESS=1" in props.get("ENVIRONMENT", []), name

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "platform/MacChrome.hpp"
+#include "platform/MacTestApplication.hpp"
 
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
@@ -35,6 +36,7 @@
 #include <QVariant>
 #include <QWidget>
 
+#ifdef MITCAD_MAC_UI
 @interface MITCADDocumentVisibilityObserver : NSObject {
 @public
   QPointer<QWidget> presenter;
@@ -49,8 +51,10 @@
 }
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 @end
+#endif // MITCAD_MAC_UI
 
 namespace mitcad::mac {
+#ifdef MITCAD_MAC_UI
 namespace {
 
 NSView* viewOf(QWidget* widget) {
@@ -209,7 +213,37 @@ void applyImageHiding(NSMenu* menu) {
 }
 
 } // namespace
+#endif // MITCAD_MAC_UI
 
+bool headlessTestApplicationIsolated(QString& error) {
+  if (NSApp == nil || NSApp.activationPolicy != NSApplicationActivationPolicyProhibited || NSApp.active) {
+    error = QStringLiteral("headless macOS application must prohibit activation and remain inactive (policy=%1 active=%2)")
+        .arg(NSApp != nil ? int(NSApp.activationPolicy) : -1).arg(bool(NSApp.active));
+    return false;
+  }
+  for (NSWindow* window in NSApp.windows) {
+    if (window.visible) {
+      error = QStringLiteral("headless macOS application presented a native window");
+      return false;
+    }
+  }
+  qInfo("Headless macOS application verified: activation prohibited, inactive, no visible native windows");
+  return true;
+}
+
+bool prepareHeadlessTestApplication(QString& error) {
+  // A bundled executable otherwise has the Regular policy even with Qt's
+  // offscreen platform. Accessory is not enough: it can still activate.
+  NSApplication* application = NSApplication.sharedApplication;
+  if ([application activationPolicy] != NSApplicationActivationPolicyProhibited &&
+      ![application setActivationPolicy:NSApplicationActivationPolicyProhibited]) {
+    error = QStringLiteral("could not prohibit activation for the headless macOS application");
+    return false;
+  }
+  return headlessTestApplicationIsolated(error);
+}
+
+#ifdef MITCAD_MAC_UI
 QIcon symbolIcon(const QString& symbol, const QIcon& fallback) {
   if (symbol.isEmpty() || [NSImage imageWithSystemSymbolName:symbol.toNSString() accessibilityDescription:nil] == nil) {
     return fallback;
@@ -487,6 +521,8 @@ void attachGlassWindow(QWidget* card, QWidget* mainWindow, qreal cornerRadius) {
   }
 }
 
+#endif // MITCAD_MAC_UI
+
 bool captureOwnWindows(const QString& path, QRectF* capturedBounds) {
   // Obsoleted in the macOS 15 SDK (screen capture moved to ScreenCaptureKit,
   // which needs the user's permission), still there and enough for the
@@ -542,6 +578,7 @@ bool captureOwnWindows(const QString& path, QRectF* capturedBounds) {
   return saved;
 }
 
+#ifdef MITCAD_MAC_UI
 bool chooseTestPopup(const QString& title, const std::function<void()>& open,
                      const std::function<bool()>& qtPopupVisible, QString& error,
                      const std::function<void()>& nativeClosed) {
@@ -631,4 +668,5 @@ documentAttributes:nil];
   [NSApp orderFrontStandardAboutPanelWithOptions:options];
 }
 
+#endif // MITCAD_MAC_UI
 } // namespace mitcad::mac

@@ -445,28 +445,21 @@ completed successfully. No dependency, allocator, out-of-memory policy
 or package signature was changed. These are synthetic workload results,
 not a corpus, viewport-meshing or rendering speedup claim.
 
-## macOS: bundle and native UI
+## macOS: bundle and UI
 
-- The macOS presets (`macos-debug`, so the VM's `dev`, and
-  `macos-release`) build the AppKit frontend beside Qt
-  (`MITCAD_MACOS_NATIVE_UI=ON`, mitcad#1056); `-DMITCAD_MACOS_NATIVE_UI=OFF`
-  builds Qt alone. Qt is the default frontend in every build; Settings ›
-  General › Native macOS interface (experimental) chooses AppKit for the
-  next starts, and `--ui=native|qt` overrides it for one run. The start-up
-  logs `Frontend: qt|native (default|preference|--ui|--chrome)`. The
-  native sources are confined to `app/platform/macos/` and compiled
-  with ARC. Shared command/session changes also build without this option.
-- UI tests pass `--ui=native` or `--ui=qt` explicitly. The tests of the
-  AppKit frontend carry the label `app.ui-macos-native-smoke` (the
-  release's subset) or `app.ui-macos-native-full` (the rest, left out of
-  the release's run); merge checks run both
-  ([native-macos-ui.md](native-macos-ui.md#releases-and-the-preference)).
-- `app.ui-macos-native` drives real native menu items, fields, buttons,
-  history and command search in process, verifies model volumes and saves
-  a composed screenshot. The older `app.ui-macos` and
-  `app.ui-macos-workflow` explicitly use `--ui=qt` to cover retained
-  workflows. Run GUI tests sequentially in the isolated VM. See
-  [native-macos-ui.md](native-macos-ui.md) for rollout and manual checks.
+- macOS uses the shared Qt UI only (owner 6.11.2026,
+  [macos-shared-qt.md](macos-shared-qt.md)): the macOS presets
+  (`macos-debug`, so the VM's `dev`, and `macos-release`) set
+  `MITCAD_MACOS_SHARED_QT_UI=ON`, and `MITCAD_MACOS_NATIVE_UI=ON` is a
+  configure error: the AppKit frontend is not built until native UI work
+  resumes ([native-macos-ui.md](native-macos-ui.md) keeps its design and
+  state). `#ifdef Q_OS_MACOS` is for behaviour the system or the keyboard
+  needs; the 0.48 macOS presentation is under `MITCAD_MAC_UI`, built only
+  with `-DMITCAD_MACOS_SHARED_QT_UI=OFF` for comparison.
+- The macOS UI tests (`app.ui-macos*`) run the Qt frontend; run GUI tests
+  in the isolated VM, where `macos_desktop` lets one at a time hold the
+  window server. The macOS release check is `tools/release-check-macos.sh`
+  ([macos-shared-qt.md](macos-shared-qt.md#release-check)).
 - The app is a `MACOSX_BUNDLE` (`mitcad.app`) with
   `app/packaging/macos/Info.plist.in`. `MITCAD_BUNDLE_ID` (default
   `fi.nocodo.mitcad`) is a placeholder: fix it before the first release,
@@ -494,10 +487,11 @@ not a corpus, viewport-meshing or rendering speedup claim.
 - `app/platform/macos/*.mm` is Objective-C++ with ARC, linked with AppKit,
   as warning-free as C++ (`mitcad_warnings`); AppKit calls newer than 14.4
   are guarded with `@available`.
-- `--chrome=docked|floating` and `--no-glass` try both layouts; the log's
+- `--chrome=docked|floating` tries both layouts; the log's
   start-up lines say which was chosen. In the VM, look with the test
   driver (`MITCAD_TEST_INPUT`, `TestDriver.hpp`): `screenshot` and
-  `screenshot-dialog` grab widgets without the card windows or glass;
+  `screenshot-dialog` grab widgets, `screenshot-screen` the composed
+  windows;
   `screenshot-screen` saves the app's own windows as the window server
   shows them (no Screen Recording permission; software GL may be blank
   there, so glass is checked on hardware:
@@ -1038,6 +1032,14 @@ inherit old desktop-contention restrictions. Normal memory and CPU
 admission still apply. Each harness owns its settings, files and a virtual
 screen configuration. `MITCAD_MACOS_HEADLESS_TESTS=OFF` at configure time
 runs these same commands and assertions in the normal GUI for comparison.
+The hidden view still logs its laid-out `View area`, so scripts that wait
+for the window's layout run; any pointer step in the view fails there.
+`screenshot-screen` composes the visible Qt windows instead of asking the
+window server. The list is `mitcad_macos_headless_tests()` in
+`cmake/MacTestScheduling.cmake`: a Qt workflow joins it once it passes
+unchanged headless. What still needs the desktop does so for a reason the
+offscreen platform cannot give: the 3D view (`expect-viewport`, picks,
+sketch and profile hits), or window-server bounds (two Projects cases keep these).
 
 The remaining Aqua tests share `macos_desktop` and the shell's per-user
 GUI lock, protecting focus, menus and native input across checkouts.
@@ -1098,6 +1100,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_MOSQUITTO` | The mosquitto program for the live updates' tests, when it is not on `PATH` or in the usual places. |
 | `MITCAD_TEST_LIVE_CA` | A PEM file of certificate authorities the app's live updates trust besides the system's (the test broker's, `tools/ui-live-test.sh`). |
 | `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables, read only by a build with `MITCAD_UPDATE_TEST_HOOKS`: [updates.md](updates.md#the-test-hooks). |
+| `MITCAD_TEST_PREFERENCES_SHOTS` | A folder where the Preferences pages whose list takes the page's height (Navigation, Cloud) save a picture of their window each time they log their layout, `navigation-<area height>.png`, `cloud-<area height>.png` (mitcad#1394, `tools/ui-preferences-test.sh`, `app.ui-windows-preferences`). |
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
 | `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)), and no Thread starting from the last thread's settings on a face of its size (mitcad#1298); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
 | `MITCAD_START_PAGE=0`, `MITCAD_START_PAGE=1` | `0`: MitCad never starts on the Start tab (mitcad#1258, [app/COMMANDS.md](../app/COMMANDS.md#the-start-tab)); the UI test libraries set it, so that every test starts on an empty design. `1`: the Start tab at launch by its *Show start page at launch*, also in a UI test script's run (`MITCAD_TEST_INPUT`), which without the variable starts without it. |
@@ -1584,8 +1587,10 @@ scoped and fast; an occasional miss is accepted:
 3. Commit in steps that build and pass the tests.
 
 Before a release build, the full check: `tools/check-all.sh --full` on
-Linux, and warning-free builds with `ctest` in the Windows VM (with
-`MITCAD_MESA_DIR`) and the macOS VM (with `app.ui-macos`).
+Linux, a warning-free build with `ctest` in the Windows VM (with
+`MITCAD_MESA_DIR`), and `tools/release-check-macos.sh` on macOS (build,
+no AppKit, every ctest, the package;
+[macos-shared-qt.md](macos-shared-qt.md#release-check)).
 
 ### The check script
 
@@ -1882,14 +1887,11 @@ runs one step after another. Build and lint use half the cores unless
   `tools/check-guide-contents.py --write`, never by hand: after adding,
   renaming or moving a `##` or `###` heading, run it; check-all's step
   `guide` fails until the table matches.
-- New UI keeps working in the AppKit frontend
-  ([coverage](native-macos-ui.md#coverage)): a widget class that paints
-  itself (overrides `paintEvent`) gets a line in
-  `app/platform/macos/native-coverage.txt` saying how that frontend shows
-  it, and dialogs, message boxes and menus go through
-  `app/framework/Dialogs.hpp` (`execDialog`, `sheetWarning`, `execMenu`,
-  ...), never Qt's own `exec()` or static dialog functions. The ctest
-  `repo.native-coverage` checks both.
+- Dialogs, message boxes and menus go through `app/framework/Dialogs.hpp`
+  (`execDialog`, `openDialog`, `sheetWarning`, `execMenu`, ...), never Qt's
+  own `exec()`, `open()` or static dialog functions. (With the AppKit
+  frontend paused, `repo.native-coverage` and `native-coverage.txt` are not
+  checked; they return with it, [coverage](native-macos-ui.md#coverage).)
 - Metric defaults everywhere ([architecture](architecture.md#units)).
 - A dialog that holds its form in a scroll area uses `FittingScrollArea`
   and sizes itself with `fitWindowToContents`

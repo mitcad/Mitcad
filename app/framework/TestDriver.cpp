@@ -63,8 +63,10 @@
 #include <QtLogging>
 
 #include "../platform/MacChrome.hpp"
+#include "../platform/MacTestApplication.hpp"
 #include "../platform/NativeTestInput.hpp"
 #include "../OcctViewer.hpp"
+#include "../DocumentFrame.hpp"
 #include "../MainWindow.hpp"
 #include "../WindowManager.hpp"
 #include "../view/SpaceMouseController.hpp"
@@ -85,6 +87,26 @@
 
 namespace mitcad {
 namespace {
+
+// The design's tabs: the system window tabs of the 0.48 macOS presentation,
+// else the document frame's own (the shared Qt UI; one design, one tab).
+int documentTabCount(MainWindow* window) {
+#ifdef MITCAD_MAC_UI
+  return mac::documentWindowTabCount(window);
+#else
+  const DocumentFrame* frame = DocumentFrame::containing(window);
+  return frame != nullptr ? int(frame->documents().size()) : 1;
+#endif
+}
+
+bool documentTabSelected(MainWindow* window) {
+#ifdef MITCAD_MAC_UI
+  return mac::documentWindowTabSelected(window);
+#else
+  const DocumentFrame* frame = DocumentFrame::containing(window);
+  return frame != nullptr ? frame->activeDocument() == window : window->isActiveWindow();
+#endif
+}
 
 std::atomic<TestDriver*> g_driver{nullptr};
 QtMessageHandler g_previousHandler = nullptr;
@@ -390,6 +412,11 @@ const StepSpec kSpecs[] = {
     {"expect-widget-theme", 2, 2, kIdle},
     // The wheel over a logged place, a panel's value field (mitcad#1254).
     {"wheel-logged", 2, 3, kInputOfMain},
+    // A Qt widget over the AppKit frontend's 3D view against an AppKit view
+    // of the window: above it, or at its top (mitcad#1358).
+    {"expect-native-qt-place", 3, 3, kIdle},
+    // The wheel over a native control, an AppKit value field (mitcad#1350).
+    {"native-wheel", 2, 3, kInputOfTarget},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -565,6 +592,9 @@ int keyFromName(const QString& name) {
       {QStringLiteral("home"), Qt::Key_Home},          {QStringLiteral("end"), Qt::Key_End},
       {QStringLiteral("pageup"), Qt::Key_PageUp},      {QStringLiteral("pagedown"), Qt::Key_PageDown},
       {QStringLiteral("insert"), Qt::Key_Insert},
+      // Shift on its own: the view's selection scope widens (mitcad#217;
+      // tools/ui-scripts/paste-busy-keys.mitcad-ui, mitcad#1360).
+      {QStringLiteral("shift"), Qt::Key_Shift},
   };
   const QString lower = name.toLower();
   const auto named = names.constFind(lower);
@@ -1053,6 +1083,11 @@ void TestDriver::finish() {
     if (QGuiApplication::platformName() != QStringLiteral("offscreen") || !window ||
         window->usesNativeUi() || window->viewer().context() != nullptr) {
       fail(m_line, QStringLiteral("headless workflow requires Qt offscreen without an OpenGL context"));
+      return;
+    }
+    QString platformError;
+    if (!mac::headlessTestApplicationIsolated(platformError)) {
+      fail(m_line, platformError);
       return;
     }
     qInfo("Headless UI test verified: Qt offscreen without an OpenGL context");
@@ -1573,6 +1608,36 @@ bool TestDriver::saveScreenshot(const QString& path, bool viewOnly, QWidget* cro
   return shot.save(path);
 }
 
+bool TestDriver::saveHeadlessScreen(const QString& path) const {
+  // The visible top-level Qt windows at their places on the offscreen
+  // screen: the main window first, then tool windows and dialogs, popups
+  // last, as the window server would stack them.
+  QList<QWidget*> windows;
+  for (QWidget* widget : QApplication::topLevelWidgets()) {
+    if (widget->isVisible() && !widget->size().isEmpty()) windows << widget;
+  }
+  const auto rank = [this](const QWidget* widget) {
+    if (widget == m_main.data()) return 0;
+    if (widget->windowType() == Qt::Popup || widget->windowType() == Qt::ToolTip) return 2;
+    return 1;
+  };
+  std::stable_sort(windows.begin(), windows.end(),
+                   [&rank](const QWidget* a, const QWidget* b) { return rank(a) < rank(b); });
+  QRect bounds;
+  for (const QWidget* window : windows) bounds |= window->frameGeometry();
+  if (windows.isEmpty() || bounds.isEmpty()) return false;
+  QImage image(bounds.size(), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  for (QWidget* window : windows) {
+    painter.drawPixmap(window->geometry().topLeft() - bounds.topLeft(), window->grab());
+  }
+  painter.end();
+  qDebug().noquote() << QStringLiteral("TestDriver: headless screen capture of %1 Qt windows, %2x%3")
+                            .arg(windows.size()).arg(bounds.width()).arg(bounds.height());
+  return image.save(path);
+}
+
 // ---------------------------------------------------------------------------
 // The steps
 
@@ -1692,7 +1757,7 @@ void TestDriver::run(const Step& step) {
     if (!valid || expected < 1 || !window) {
       fail(line, QStringLiteral("expected a positive native document tab count")); return;
     }
-    whenReady([window, expected] { return window && mac::documentWindowTabCount(window) == expected; }, 5,
+    whenReady([window, expected] { return window && documentTabCount(window) == expected; }, 5,
               QStringLiteral("expected %1 actual native document tabs").arg(expected));
   } else if (name == QLatin1String("expect-document-tab-selected")) {
     const QPointer<MainWindow> captured = qobject_cast<MainWindow*>(m_documentWindows.value(a.at(0)).data());
@@ -1702,7 +1767,7 @@ void TestDriver::run(const Step& step) {
     }
     whenReady([manager, captured] {
       return manager && captured && manager->windows().contains(captured.data()) &&
-          manager->activeWindow() == captured.data() && mac::documentWindowTabSelected(captured);
+          manager->activeWindow() == captured.data() && documentTabSelected(captured);
     }, 5, QStringLiteral("document window '%1' is not both the logical active document and actual selected native tab").arg(a.at(0)));
   } else if (name == QLatin1String("expect-document-window-active")) {
     const QPointer<QWidget> captured = m_documentWindows.value(a.at(0));
@@ -3038,6 +3103,46 @@ void TestDriver::run(const Step& step) {
       }
       return true;
     }, 6, QStringLiteral("the cube's AppKit arrows are not at the Qt arrows' places"));
+  } else if (name == QLatin1String("expect-native-qt-place")) {
+    // A Qt widget over the embedded 3D view and an AppKit view, both in the
+    // 3D view's host (mitcad#1358): "above", the widget's bottom at or above
+    // the view's top (the Start page's footer over the message band); "top",
+    // the widget's top at the view's top (the Start page right below the
+    // toolbar, native.window.content).
+    if (!mac::test::active()) {
+      fail(line, QStringLiteral("'%1' requires the native macOS UI").arg(name));
+      return;
+    }
+    if (a.at(1) != QLatin1String("above") && a.at(1) != QLatin1String("top")) {
+      fail(line, QStringLiteral("expect-native-qt-place <widget> above|top <native view>"));
+      return;
+    }
+    const QString widgetName = a.at(0);
+    const bool above = a.at(1) == QLatin1String("above");
+    const QString nativeView = a.at(2);
+    whenReady([this, widgetName, above, nativeView] {
+      QWidget* view = viewer();
+      QWidget* widget = view != nullptr ? namedWidget(view, widgetName) : nullptr;
+      if (widget == nullptr || !widget->isVisible()) {
+        m_waitDetail = QStringLiteral("no visible widget %1 over the 3D view").arg(widgetName);
+        return false;
+      }
+      QRectF frame;
+      if (!mac::test::viewportRect(nativeView, frame, m_waitDetail)) return false;
+      const QRect place(widget->mapTo(view->window(), QPoint(0, 0)), widget->size());
+      m_waitDetail = QStringLiteral("%1 at %2,%3 %4x%5, native '%6' at %7,%8 %9x%10 in the 3D view's host")
+                         .arg(widgetName)
+                         .arg(place.x())
+                         .arg(place.y())
+                         .arg(place.width())
+                         .arg(place.height())
+                         .arg(nativeView)
+                         .arg(frame.x())
+                         .arg(frame.y())
+                         .arg(frame.width())
+                         .arg(frame.height());
+      return above ? place.y() + place.height() <= frame.top() + 0.5 : std::abs(place.y() - frame.top()) <= 1;
+    }, 6, QStringLiteral("widget %1 is not %2 native '%3'").arg(widgetName, a.at(1), nativeView));
   } else if (name == QLatin1String("expect-native-style") || name == QLatin1String("expect-native-columns") ||
              name == QLatin1String("native-dialog-size")) {
     // Native table semantics and sizing (mitcad#814).
@@ -3291,12 +3396,22 @@ void TestDriver::run(const Step& step) {
         if (!ok) fail(line, detail.isEmpty() ? QStringLiteral("native pointer input failed for '%1'").arg(target) : detail);
         if (heldDrag && !m_finished) m_timer->start();
       };
+      // Wait for real application activation before pointer delivery. A
+      // transient popover can leave its owner key, so the keyboard event's
+      // exact key-window identity is not a mouse readiness condition.
+      mac::test::requestPointerEventActivation();
       if (byTitle) {
-        whenReady([re] { return mac::test::buttonExists(re); }, 6,
-                  QStringLiteral("no native button matching '%1'").arg(target), [this, perform] { queue(perform); });
+        whenReady([this, re] {
+          if (!mac::test::pointerEventActivationReady()) { m_waitDetail = mac::test::keyEventFocusDiagnostic(); return false; }
+          return mac::test::buttonExists(re);
+        }, 6, QStringLiteral("no active native button matching '%1'").arg(target),
+                  [this, perform] { queue(perform); });
       } else {
-        whenReady([this, target] { return mac::test::controlExists(target, &m_waitDetail); }, 6,
-                  QStringLiteral("no native control '%1'").arg(target), [this, perform] { queue(perform); });
+        whenReady([this, target] {
+          if (!mac::test::pointerEventActivationReady()) { m_waitDetail = mac::test::keyEventFocusDiagnostic(); return false; }
+          return mac::test::controlExists(target, &m_waitDetail);
+        }, 6, QStringLiteral("no active native control '%1'").arg(target),
+                  [this, perform] { queue(perform); });
       }
     }
   } else if (name == QLatin1String("native-system-pointer")) {
@@ -3304,8 +3419,11 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("native-system-pointer requires the native macOS UI")); return;
     }
     const QString identifier = a.at(0);
-    whenReady([this, identifier] { return mac::test::controlExists(identifier, &m_waitDetail); }, 6,
-        QStringLiteral("no visible native system pointer target '%1'").arg(identifier), [this, identifier, line] {
+    mac::test::requestPointerEventActivation();
+    whenReady([this, identifier] {
+      if (!mac::test::pointerEventActivationReady()) { m_waitDetail = mac::test::keyEventFocusDiagnostic(); return false; }
+      return mac::test::controlExists(identifier, &m_waitDetail);
+    }, 6, QStringLiteral("no active visible native system pointer target '%1'").arg(identifier), [this, identifier, line] {
       queue([this, identifier, line] {
         QString error;
         if (!mac::test::sendSystemPointer(identifier, error)) fail(line, error);
@@ -3352,7 +3470,13 @@ void TestDriver::run(const Step& step) {
       else if (a.at(1) == QStringLiteral("ctrl")) modifiers = Qt::ControlModifier;
       else { fail(line, QStringLiteral("native-select <id> [shift|ctrl]")); return; }
     }
-    const auto perform = [this, line, name, identifier, a, modifiers] {
+    // native-wheel <id> <notches> [mods] (mitcad#1350).
+    double notches = 0;
+    if (name == QLatin1String("native-wheel") &&
+        (!toNumber(a.at(1), notches) || qRound(notches) == 0 || (a.size() > 2 && !parseModifiers(a.at(2), modifiers)))) {
+      fail(line, QStringLiteral("native-wheel <id> <notches> [mods]")); return;
+    }
+    const auto perform = [this, line, name, identifier, a, modifiers, notches] {
       QString error;
       const bool ok = (name == QLatin1String("native-click") || name == QLatin1String("native-click-now")) ? mac::test::click(identifier, error) :
                       name == QLatin1String("native-focus") ? mac::test::focusControl(identifier, error) :
@@ -3362,6 +3486,7 @@ void TestDriver::run(const Step& step) {
                       name == QLatin1String("native-activate") ? mac::test::activate(identifier, error) :
                       name == QLatin1String("native-select") ? mac::test::select(identifier, error, modifiers) :
                       name == QLatin1String("native-expand") ? mac::test::expand(identifier, error) :
+                      name == QLatin1String("native-wheel") ? mac::test::wheel(identifier, qRound(notches), modifiers, error) :
                       mac::test::triggerAction(identifier, error);
       if (!ok) fail(line, error.isEmpty() ? QStringLiteral("native input failed for '%1'").arg(identifier) : error);
     };
@@ -4971,7 +5096,15 @@ void TestDriver::run(const Step& step) {
     });
   } else if (name == QLatin1String("focus-main")) {
     m_dialog = nullptr;
-    if (mac::test::active()) mac::test::focusMain();
+    if (mac::test::active()) {
+      mac::test::focusMain();
+      mac::test::requestKeyEventFocus();
+      whenReady([this] {
+        if (mac::test::keyEventFocusReady()) return true;
+        m_waitDetail = mac::test::keyEventFocusDiagnostic();
+        return false;
+      }, 6, QStringLiteral("native main window did not become the active input target"));
+    }
     m_notBefore = std::max(m_notBefore, m_clock.elapsed() + 300);
 
     // --- The log
@@ -5148,16 +5281,26 @@ void TestDriver::run(const Step& step) {
       return;
     }
   } else if (name == QLatin1String("screenshot-screen")) {
+    if (headlessUiTest()) {
+      // No window server: the visible Qt windows as the offscreen screen
+      // shows them, without native chrome, glass or the 3D scene.
+      QDir().mkpath(QFileInfo(a.at(0)).absolutePath());
+      if (!saveHeadlessScreen(a.at(0))) {
+        fail(line, QStringLiteral("could not save the screenshot %1 (no visible Qt window)").arg(a.at(0)));
+        return;
+      }
+    } else {
 #ifdef Q_OS_MACOS
-    QDir().mkpath(QFileInfo(a.at(0)).absolutePath());
-    if (!mac::captureOwnWindows(a.at(0))) {
-      fail(line, QStringLiteral("could not save the screenshot %1 (no window on the screen?)").arg(a.at(0)));
-      return;
-    }
+      QDir().mkpath(QFileInfo(a.at(0)).absolutePath());
+      if (!mac::captureOwnWindows(a.at(0))) {
+        fail(line, QStringLiteral("could not save the screenshot %1 (no window on the screen?)").arg(a.at(0)));
+        return;
+      }
 #else
-    fail(line, QStringLiteral("screenshot-screen is available on macOS only"));
-    return;
+      fail(line, QStringLiteral("screenshot-screen is available on macOS only"));
+      return;
 #endif
+    }
   } else if (name == QLatin1String("screenshot-dialog")) {
     QWidget* window = targetWindow();
     QDir().mkpath(QFileInfo(a.at(0)).absolutePath());

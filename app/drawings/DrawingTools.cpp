@@ -465,12 +465,12 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                          {QStringLiteral("radius"), tr("Radius")},
                          {QStringLiteral("diameter"), tr("Diameter")}},
                         QStringLiteral("auto"))},
-                &dimension, true, tr("Click where the dimension goes (Alt: no snap)"), &dimensionPicks, &dimensionType, true});
+                &dimension, true, tr("Click where the dimension goes (Shift: no snap)"), &dimensionPicks, &dimensionType, true});
   tools.append({QStringLiteral("drawing.ordinate"), tr("Ordinate"), QStringLiteral("drawing-ordinate"),
                 tr("Dimensions a point from an origin along the view"), SheetPick::Picks,
                 tr("Click the origin, then the point to dimension"),
                 {choice(QStringLiteral("along"), tr("Direction"), axes, QStringLiteral("horizontal"))}, &ordinate,
-                true, tr("Click where the value goes (Alt: no snap)"), &twoPicks, &ordinateType, true});
+                true, tr("Click where the value goes (Shift: no snap)"), &twoPicks, &ordinateType, true});
   tools.append({QStringLiteral("drawing.baseline"), tr("Baseline"), QStringLiteral("drawing-baseline"),
                 tr("Dimensions several points from the first, or each from the last"), SheetPick::Picks,
                 tr("Click the points to dimension, then a free place for the dimension lines"),
@@ -602,7 +602,7 @@ QVector<DrawingToolDef> makeTools() {
                 &projectedView, false, QString(), nullptr, nullptr, false});
   tools.append({QStringLiteral("drawing.section_view"), tr("Section View"), QStringLiteral("drawing-section-view"),
                 tr("Cuts a view along a line drawn on it"), SheetPick::Line,
-                tr("Click the two ends of the section line on a view"),
+                tr("Click the two ends of the section line on a view (Shift: no snap)"),
                 {text(QStringLiteral("letter"), tr("Letter")), check(QStringLiteral("hatch"), tr("Hatching"), true),
                  check(QStringLiteral("flip"), tr("Look the Other Way"), false)},
                 &sectionView, true, tr("Click where the section view goes"), nullptr, nullptr, false});
@@ -614,7 +614,7 @@ QVector<DrawingToolDef> makeTools() {
                 &detailView, true, tr("Click where the detail view goes"), nullptr, nullptr, false});
   tools.append({QStringLiteral("drawing.break"), tr("Break"), QStringLiteral("drawing-break"),
                 tr("Shortens a view by taking a band out"), SheetPick::Line,
-                tr("Click the two sides of the band on a view"),
+                tr("Click the two sides of the band on a view (Shift: no snap)"),
                 {choice(QStringLiteral("direction"), tr("Direction"),
                         {{QStringLiteral("horizontal"), tr("Horizontal")}, {QStringLiteral("vertical"), tr("Vertical")}},
                         QStringLiteral("horizontal"))},
@@ -1214,6 +1214,31 @@ QStringList projectionLines(const QJsonArray& projections) {
                  .arg(how);
   }
   return lines;
+}
+
+std::optional<LineAngleSnap> snapLineAngle(const QPointF& from, const QPointF& to, double within) {
+  const double dx = to.x() - from.x();
+  const double dy = to.y() - from.y();
+  const double length = std::hypot(dx, dy);
+  if (!(length > 1e-9)) {
+    return std::nullopt;
+  }
+  constexpr double kStep = 45.0;
+  constexpr double kDegrees = 57.29577951308232; // 180 / pi
+  const double angle = std::atan2(dy, dx) * kDegrees;
+  const double snapped = std::round(angle / kStep) * kStep;
+  if (std::abs(angle - snapped) > within) {
+    return std::nullopt;
+  }
+  const double radians = snapped / kDegrees;
+  LineAngleSnap out;
+  // Exactly along the axes: no rounding off them.
+  const double c = std::abs(std::fmod(snapped, 180.0)) == 90.0 ? 0.0 : std::cos(radians);
+  const double s = std::abs(std::fmod(snapped, 180.0)) == 0.0 ? 0.0 : std::sin(radians);
+  out.to = QPointF(from.x() + length * c, from.y() + length * s);
+  // 0 to 315, no -0 along the x axis.
+  out.angle = std::fmod(snapped + 360.0, 360.0) + 0.0;
+  return out;
 }
 
 } // namespace mitcad::drawings

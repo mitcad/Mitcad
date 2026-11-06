@@ -14,7 +14,8 @@
 //! shape version in the projection cache), each is projected as the view
 //! sees it, and the one nearest the click is taken. A view sees what it
 //! shows (mitcad#717): a section what lies behind its plane (and a planar
-//! face where its plane cuts it), a detail what lies in its circle, a
+//! face where its plane cuts it, the piece of its cut line under the click,
+//! mitcad#1361), a detail what lies in its circle, a
 //! broken view what lies beside its bands; of picks as near as one
 //! another, one the view draws as a visible line goes first, then the one
 //! nearest the eye. When the sheet is drawn each pick is looked up again
@@ -824,19 +825,100 @@ fn draws_outline(view: &ViewAt<'_>, a: P2, b: P2, radius: f64) -> bool {
     })
 }
 
+/// How far apart along their line two cut edges' ends may lie and still be
+/// joined end to end into one piece of a cut line (mitcad#1361), view mm.
+const CUT_JOIN: f64 = 1e-4;
+
 /// Where a section's plane cuts a planar face, as the view draws it: the
-/// edges of the cut faces that lie in the face's plane, as one line from
-/// the first to the last (mitcad#717: the cut edges are picked as the
-/// faces they cut). `cuts`: the cut faces of the face's own body as the
-/// view shows them (mitcad#718: another body's coplanar cut faces made the
-/// line longer). None off a section, for a face parallel to the plane or
-/// one it does not cut.
+/// edges of the cut faces that lie in the face's plane, along one line
+/// (mitcad#717: the cut edges are picked as the faces they cut), joined end
+/// to end into pieces (mitcad#1361: a face the plane cuts beside a hole is
+/// cut in two, and a piece is picked alone).
+struct CutLine {
+    /// A view point of the line and its unit direction (view): the line's
+    /// points are `first + along * t`.
+    first: P2,
+    along: P2,
+    /// The pieces as ranges of `t`, each from its lower to its higher, in
+    /// order along the line, with gaps between them.
+    pieces: Vec<(f64, f64)>,
+    /// The section's plane along the view's eye.
+    depth: f64,
+}
+
+impl CutLine {
+    fn at(&self, t: f64) -> P2 {
+        [
+            self.first[0] + self.along[0] * t,
+            self.first[1] + self.along[1] * t,
+        ]
+    }
+
+    /// How far along the line a view point lies.
+    fn t(&self, p: P2) -> f64 {
+        (p[0] - self.first[0]) * self.along[0] + (p[1] - self.first[1]) * self.along[1]
+    }
+
+    /// A view point of the cut, in the model: on the section's plane, which
+    /// the view looks at square on.
+    fn lift(&self, spec: &ViewSpec, p: P2) -> Vec3 {
+        mitcad_vec3::add(
+            mitcad_vec3::add(
+                mitcad_vec3::scale(spec.x_axis, p[0]),
+                mitcad_vec3::scale(spec.y_axis(), p[1]),
+            ),
+            mitcad_vec3::scale(spec.toward_eye, self.depth),
+        )
+    }
+
+    /// The line from `low` to `high` as the view sees it.
+    fn found(&self, spec: &ViewSpec, low: f64, high: f64) -> Found {
+        let (a, b) = (self.at(low), self.at(high));
+        Found {
+            seen: Seen::Line(a, b),
+            at: self.lift(spec, [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]),
+        }
+    }
+
+    /// The point `t` along the line as the view sees it.
+    fn point(&self, spec: &ViewSpec, t: f64) -> Found {
+        let p = self.at(t);
+        Found {
+            seen: Seen::Point(p),
+            at: self.lift(spec, p),
+        }
+    }
+
+    /// The whole line, from its first piece's start to its last piece's
+    /// end across its gaps: a pick of the face alone (`{"body", "face"}`,
+    /// mitcad#717).
+    fn span(&self, spec: &ViewSpec) -> Option<Found> {
+        let low = self.pieces.first()?.0;
+        let high = self.pieces.last()?.1;
+        Some(self.found(spec, low, high))
+    }
+
+    /// The piece a view point lies on (within `CUT_JOIN` along the line).
+    fn piece_at(&self, p: P2) -> Option<(f64, f64)> {
+        let t = self.t(p);
+        self.pieces
+            .iter()
+            .copied()
+            .find(|(low, high)| t >= low - CUT_JOIN && t <= high + CUT_JOIN)
+    }
+}
+
+/// Where a section's plane cuts a planar face as the view draws it
+/// ([`CutLine`]). `cuts`: the cut faces of the face's own body as the view
+/// shows them (mitcad#718: another body's coplanar cut faces made the line
+/// longer). None off a section, for a face parallel to the plane or one it
+/// does not cut.
 fn cut_line(
     view: &ViewAt<'_>,
     cuts: &[CutFace],
     face: &FlatFace,
     transform: &Transform,
-) -> Option<Found> {
+) -> Option<CutLine> {
     let cut = view.cut()?;
     let spec = &view.placed.spec;
     let n = mitcad_vec3::unit(transform.apply_vector(face.normal))?;
@@ -845,46 +927,43 @@ fn cut_line(
     if mitcad_vec3::norm(direction) < 1e-9 {
         return None;
     }
-    // A view point of the cut, in the model: on the plane, which the view
-    // looks at square on.
-    let depth = mitcad_vec3::dot(cut.origin, spec.toward_eye);
-    let y = spec.y_axis();
-    let lift = |p: P2| {
-        mitcad_vec3::add(
-            mitcad_vec3::add(
-                mitcad_vec3::scale(spec.x_axis, p[0]),
-                mitcad_vec3::scale(y, p[1]),
-            ),
-            mitcad_vec3::scale(spec.toward_eye, depth),
-        )
-    };
-    let on = |p: P2| mitcad_vec3::dot(sub3(lift(p), o), n).abs() <= PLANE_TOLERANCE;
     let along = spec.project(direction);
     let length = (along[0] * along[0] + along[1] * along[1]).sqrt();
     if length < 1e-12 {
         return None;
     }
-    let along = [along[0] / length, along[1] / length];
-    let mut points: Vec<P2> = Vec::new();
+    let mut line = CutLine {
+        first: [0.0, 0.0],
+        along: [along[0] / length, along[1] / length],
+        pieces: Vec::new(),
+        depth: mitcad_vec3::dot(cut.origin, spec.toward_eye),
+    };
+    let on = |p: P2| mitcad_vec3::dot(sub3(line.lift(spec, p), o), n).abs() <= PLANE_TOLERANCE;
+    let mut edges: Vec<(P2, P2)> = Vec::new();
     for lp in cuts.iter().flatten() {
         for i in 0..lp.len() {
             let (a, b) = (lp[i], lp[(i + 1) % lp.len()]);
             if (a[0] - b[0]).hypot(a[1] - b[1]) > 1e-9 && on(a) && on(b) {
-                points.push(a);
-                points.push(b);
+                edges.push((a, b));
             }
         }
     }
-    let first = *points.first()?;
-    let t = |p: &P2| (p[0] - first[0]) * along[0] + (p[1] - first[1]) * along[1];
-    let low = points.iter().map(t).fold(f64::INFINITY, f64::min);
-    let high = points.iter().map(t).fold(f64::NEG_INFINITY, f64::max);
-    let at = |s: f64| [first[0] + along[0] * s, first[1] + along[1] * s];
-    let (a, b) = (at(low), at(high));
-    Some(Found {
-        seen: Seen::Line(a, b),
-        at: lift([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]),
-    })
+    line.first = edges.first()?.0;
+    let mut ranges: Vec<(f64, f64)> = edges
+        .iter()
+        .map(|(a, b)| {
+            let (ta, tb) = (line.t(*a), line.t(*b));
+            (ta.min(tb), ta.max(tb))
+        })
+        .collect();
+    ranges.sort_by(|x, y| x.0.total_cmp(&y.0));
+    for (low, high) in ranges {
+        match line.pieces.last_mut() {
+            Some(last) if low <= last.1 + CUT_JOIN => last.1 = last.1.max(high),
+            _ => line.pieces.push((low, high)),
+        }
+    }
+    Some(line)
 }
 
 /// A planar face's plane where an occurrence places it (mitcad#1296): its
@@ -2103,6 +2182,17 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             "at": map.at(seen.point()),
             "items": items,
         });
+        // For a dimension whose picks choose its type (no type or want
+        // asked): whether this pick makes one alone (mitcad#1361), else
+        // what a second pick is wanted for.
+        if query.want.is_none() && query.kind.is_none() {
+            let alone =
+                self.chosen_dimension(&view, vec![found.pick.clone()], vec![found.found], None);
+            answer["alone"] = json!(alone.is_ok());
+            if let Err(why) = alone {
+                answer["next"] = json!(why);
+            }
+        }
         // A centre picked on its centre mark's line (mitcad#1338): the line
         // shown with it.
         if let Some([a, b]) = found.line {
@@ -2511,8 +2601,10 @@ trait DrawingAnnotationsLocal<K: Kernel> {
 
     /// Everything a click on a view can pick: each shown body's named
     /// edges (and their ends and a circle's centre), its round faces seen
-    /// from the side or end on, and on a section the planar faces its
-    /// plane cuts; what the section takes away left out.
+    /// from the side or end on, and on a section the pieces of the cut
+    /// lines of the planar faces its plane cuts (and their ends where no
+    /// edge's end is seen, mitcad#1361); what the section takes away left
+    /// out.
     fn candidates(&self, view: &ViewAt<'_>) -> Vec<Candidate>;
 
     /// The pick nearest a sheet point on a view, of what is wanted: a
@@ -2540,8 +2632,9 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// The dimension picks choose (`"type": "dimension"`, mitcad#1272),
     /// `at` its placing click on the sheet: the same pick twice is one;
     /// one circle a diameter, one arc a radius, one round face seen from
-    /// the side a diameter, one straight edge its length (from its start
-    /// to its end); two straight edges that are not parallel an angle,
+    /// the side a diameter, one straight edge or one piece of a section's
+    /// cut line (mitcad#1361) its length (from its start to its end); two
+    /// straight edges that are not parallel an angle,
     /// any other two a linear dimension, horizontal, vertical or aligned
     /// as the placing click chooses ([`annotate::placed_along`]; aligned
     /// on a pictorial view, where an angle is a linear one too). Refused
@@ -2688,6 +2781,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
 
     fn candidates(&self, view: &ViewAt<'_>) -> Vec<Candidate> {
         let mut out = Vec::new();
+        let mut ends = Vec::new();
         for s in &view.shown {
             let Ok(geometry) = self.body_geometry(s.body) else {
                 continue;
@@ -2700,6 +2794,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 face: face.cloned(),
                 point,
                 on_face: None,
+                on_cut: None,
             };
             for (edge, curve) in &geometry.edges {
                 let curve = placed_curve(curve, &s.transform);
@@ -2747,16 +2842,55 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 }
             }
             if view.cut().is_some() {
+                // Each piece of a planar face's cut line, picked at its
+                // middle (mitcad#1361), and its ends.
                 let cuts = self.own_cuts(view, s);
+                let spec = &view.placed.spec;
                 for face in &geometry.planes {
-                    if let Some(found) = cut_line(view, &cuts, face, &s.transform) {
+                    let (Some(line), Some(plane)) = (
+                        cut_line(view, &cuts, face, &s.transform),
+                        world_plane(face, &s.transform),
+                    ) else {
+                        continue;
+                    };
+                    for &(low, high) in &line.pieces {
+                        let found = line.found(spec, low, high);
+                        let piece = ViewPick {
+                            on_cut: Some(plane.coordinates(found.at)),
+                            ..pick(None, Some(&face.face), None)
+                        };
+                        for (point, t) in [(PickPoint::Start, low), (PickPoint::End, high)] {
+                            ends.push(Candidate {
+                                pick: ViewPick {
+                                    point: Some(point),
+                                    ..piece.clone()
+                                },
+                                found: line.point(spec, t),
+                                line: None,
+                            });
+                        }
                         out.push(Candidate {
-                            pick: pick(None, Some(&face.face), None),
+                            pick: piece,
                             found,
                             line: None,
                         });
                     }
                 }
+            }
+        }
+        // A cut line's ends where no edge's end is seen (mitcad#1361: the
+        // corners of a section's cut faces, beside a hole too), each once;
+        // an edge's end there stays the pick it was.
+        for end in ends {
+            let p = end.found.seen.point();
+            let taken = out.iter().any(|c| {
+                let Seen::Point(q) = c.found.seen else {
+                    return false;
+                };
+                (q[0] - p[0]).hypot(q[1] - p[1]) <= 1e-6
+            });
+            if !taken {
+                out.push(end);
             }
         }
         out
@@ -2841,6 +2975,32 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             centre.line = Some([map.view_point(a), map.view_point(b)]);
             Some(centre)
         };
+        // A section's line through a hole (mitcad#1362): a snap that finds
+        // no point within reach goes onto the nearest centre line within
+        // reach, a round face's axis seen from the side or a centre mark's
+        // line, at the click's foot on it (the line shown with it).
+        let on_centre_line = || {
+            let axes = candidates.iter().filter_map(|c| match c.found.seen {
+                Seen::Axis { a, b, .. } if c.pick.point.is_none() => {
+                    Some((c, [map.at(a), map.at(b)]))
+                }
+                _ => None,
+            });
+            let (_, hit, [a, b], foot) = axes
+                .chain(self.center_mark_lines(view, &candidates))
+                .map(|(c, [a, b])| {
+                    let foot = Seen::Line(a, b).nearest(at);
+                    (annotate::segment_distance(at, a, b), c, [a, b], foot)
+                })
+                .filter(|(d, .., foot)| {
+                    *d <= annotate::PICK_REACH && view.sees(map.view_point(*foot))
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0))?;
+            let mut hit = hit.clone();
+            hit.found.seen = Seen::Point(map.view_point(foot));
+            hit.line = Some([map.view_point(a), map.view_point(b)]);
+            Some(hit)
+        };
         match want {
             Want::Any => nearest(&is_point, point_reach)
                 .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach))
@@ -2857,7 +3017,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 .or_else(center_line),
             Want::Line => nearest(&is_line, reach),
             Want::Circle => nearest(&is_round, reach),
-            Want::Snap => nearest(&is_point, point_reach.max(reach)),
+            Want::Snap => nearest(&is_point, point_reach.max(reach)).or_else(on_centre_line),
             // A datum label (mitcad#1296): as Any, else a planar face seen
             // face on under the click.
             Want::Datum => nearest(&is_point, point_reach)
@@ -2942,6 +3102,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                             face: Some(face.face.clone()),
                             point: None,
                             on_face: Some(on),
+                            on_cut: None,
                         },
                         found: Found {
                             seen: Seen::Point(spec.project(at)),
@@ -3077,12 +3238,36 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     origin,
                     normal: mitcad_vec3::unit(normal).unwrap_or([0.0, 0.0, 1.0]),
                 };
-                cut_line(view, &self.own_cuts(view, s), &flat, &s.transform).ok_or_else(|| {
+                let not_cut = || {
                     format!(
                         "the section's plane does not cut the face {face} of {}",
                         s.name
                     )
-                })?
+                };
+                let line = cut_line(view, &self.own_cuts(view, s), &flat, &s.transform)
+                    .ok_or_else(not_cut)?;
+                let spec = &view.placed.spec;
+                let Some(on) = pick.on_cut else {
+                    return line.span(spec).ok_or_else(not_cut);
+                };
+                // The piece of the cut line its point lies on (mitcad#1361),
+                // or one of its ends.
+                let plane = world_plane(&flat, &s.transform)
+                    .ok_or_else(|| format!("the face {face} of {} has no plane", s.name))?;
+                let (low, high) =
+                    line.piece_at(spec.project(plane.point(on)))
+                        .ok_or_else(|| {
+                            format!(
+                                "the point picked on the cut of the face {face} of {} lies on no \
+                             piece of it",
+                                s.name
+                            )
+                        })?;
+                match pick.point {
+                    Some(PickPoint::Start) => return Ok(line.point(spec, low)),
+                    Some(PickPoint::End) => return Ok(line.point(spec, high)),
+                    _ => line.found(spec, low, high),
+                }
             }
             _ => return Err(format!("the face {face} of {} is not round", s.name)),
         };
@@ -3149,6 +3334,10 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             1 => {
                 let pick = kept[0].clone();
                 let first = seen[0].seen;
+                // A straight edge, or a piece of a section's cut line
+                // (mitcad#1361).
+                let has_length =
+                    (pick.edge.is_some() || pick.on_cut.is_some()) && pick.point.is_none();
                 match first {
                     Seen::Circle { arc: Some(_), .. } => {
                         Ok(alone(AnnotationType::Radius, kept, seen))
@@ -3156,7 +3345,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     Seen::Circle { .. } | Seen::Axis { .. } => {
                         Ok(alone(AnnotationType::Diameter, kept, seen))
                     }
-                    Seen::Line(..) if pick.edge.is_some() && pick.point.is_none() => {
+                    Seen::Line(..) if has_length => {
                         // Its length: from its start to its end.
                         let ends: Vec<ViewPick> = [PickPoint::Start, PickPoint::End]
                             .into_iter()
@@ -3171,9 +3360,11 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                             .collect::<Result<Vec<_>, _>>()?;
                         linear(ends, found)
                     }
+                    // A cut face picked whole (no point on its cut line):
+                    // its line runs across its gaps.
                     Seen::Line(..) => Err(
-                        "a cut face has no length of its own: pick a second edge or point to \
-                         dimension it from"
+                        "a cut face picked whole spans its gaps: pick one piece of its cut \
+                         line, or a second edge or point to dimension it from"
                             .to_owned(),
                     ),
                     Seen::Point(_) => Err(

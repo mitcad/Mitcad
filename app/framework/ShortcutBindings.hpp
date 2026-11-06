@@ -179,6 +179,8 @@ inline QList<ShortcutBinding> fixedShortcutBindings() {
   add("command.accept", QObject::tr("OK"), QKeySequence(Qt::Key_Return));
   add("command.accept", QObject::tr("OK"), QKeySequence(Qt::Key_Enter));
   add("command.cancel", QObject::tr("Cancel"), QKeySequence(Qt::Key_Escape));
+// System keys of every macOS application (the application menu and the
+// window), whatever the presentation: reserved so that no command takes them.
 #ifdef Q_OS_MACOS
   add("window.minimize", QObject::tr("Minimize"), QKeySequence(Qt::CTRL | Qt::Key_M));
   add("application.hide", QObject::tr("Hide MitCad"), QKeySequence(Qt::CTRL | Qt::Key_H));

@@ -131,7 +131,7 @@ void NavigationBar::styleButton(QToolButton* button) const {
   }
   button->setIconSize(QSize(18, 18));
   setFlatCardButton(button);
-#ifndef Q_OS_MACOS
+#ifndef MITCAD_MAC_UI
   // Checked as the Sketch Palette's buttons are: tinted and outlined in the
   // accent colour (Layout Grid and Snap to Grid on). Set again when the
   // palette changes (changeEvent).

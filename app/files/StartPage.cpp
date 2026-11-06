@@ -1013,6 +1013,9 @@ void StartPage::place() {
       below = m_viewer->height() - bandTop;
     }
   }
+  if (m_host.bottomInset) {
+    below = std::max(below, m_host.bottomInset());
+  }
   const QMargins margins(16, top + 12, 16, std::max(16, below + 8));
   if (m_column->contentsMargins() != margins) {
     m_column->setContentsMargins(margins);

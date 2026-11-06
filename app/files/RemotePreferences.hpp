@@ -19,6 +19,8 @@ class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QResizeEvent;
+class QShowEvent;
 class QSpinBox;
 class QTreeWidget;
 
@@ -36,7 +38,15 @@ public:
   // The default author with the box's choices.
   VersionSettings chosenAuthor() const;
 
+protected:
+  void showEvent(QShowEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
+
 private:
+  // Once the layout has settled after a show or a resize (UI tests,
+  // mitcad#1394): the known brokers list's height and how far it ends
+  // above the bottom of the area its window gives the page.
+  void logGeometry();
   // Shows the git program the field names (or the one found) and its
   // version.
   void detect();
@@ -58,6 +68,7 @@ private:
   QTreeWidget* m_brokers = nullptr;
   QPushButton* m_signOut = nullptr;
   QPushButton* m_forget = nullptr;
+  bool m_geometryLogPending = false;
 };
 
 } // namespace mitcad

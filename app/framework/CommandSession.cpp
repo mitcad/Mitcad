@@ -4516,6 +4516,12 @@ bool CommandSession::cycleChoice() {
       if (picks.isEmpty()) {
         continue;
       }
+      if (m_host.modelBusy()) {
+        // As a pick from the view: once the job is done, not reading the
+        // document from the key's handling now (mitcad#1360).
+        inputAction([this] { cycleChoice(); });
+        return true;
+      }
       const Selection& now = m_state.items(slot.key);
       const qsizetype at = now.isEmpty() ? -1 : picks.indexOf(now.first());
       const SelectionItem next = picks.at((at + 1) % picks.size());

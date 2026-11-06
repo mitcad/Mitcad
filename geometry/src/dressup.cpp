@@ -1001,10 +1001,12 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
 // and OCCT keeps the vertex where the contour stopped between the two
 // pieces of that edge. The roundings in the files have one edge there: the
 // pieces are joined (ShapeUpgrade_UnifySameDomain on edges, every other
-// vertex kept; it joins lines and circles, not two different splines along
-// one line), the faces keeping their names.
+// vertex kept; it joins lines and circles, and with `splines` also two
+// splines that continue each other, concatenated into one), the faces
+// keeping their names.
 ShapePtr join_at_turn_stops(const ShapePtr& rounded,
-                            const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& stops) {
+                            const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& stops,
+                            bool splines = false) {
   if (stops.IsEmpty()) {
     return rounded;
   }
@@ -1022,7 +1024,7 @@ ShapePtr join_at_turn_stops(const ShapePtr& rounded,
   if (!any) {
     return rounded;
   }
-  ShapeUpgrade_UnifySameDomain unify(rounded->occt(), true, false, false);
+  ShapeUpgrade_UnifySameDomain unify(rounded->occt(), true, false, splines);
   unify.KeepShapes(keep);
   unify.Build();
   ShapeMap edges;
@@ -1048,7 +1050,12 @@ ShapePtr join_at_turn_stops(const ShapePtr& rounded,
 // between the same two faces. The chamfers in the files have one edge there
 // (and OCCT's later roundings of the edges beside them fail at those
 // vertices): the result's vertices that are not the input's and where only
-// two edges meet, for join_at_turn_stops to join.
+// two edges meet, for join_at_turn_stops to join. Contacts on a face beyond
+// a narrow one are splines (a fin's side strip under its top's chamfer,
+// whose transition piece meets the strip in two edges where the files have
+// one; the ball of a later rounding rolling on the strip's edge took the
+// short one for the edge it rolls on, and the corner at the strip's end
+// left the piece out, mitcad#1388): they are concatenated.
 NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> piece_vertices(const Shape& result, const Shape& input) {
   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> pieces;
   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edges_of;
@@ -2349,7 +2356,7 @@ ShapePtr bevel(const std::string& feature, const Shape& body, const std::vector<
     throw std::runtime_error("chamfer failed; the distance may be too large for the edges");
   }
   ShapePtr result = join_at_turn_stops(name_result(maker, feature, "chamfer", body), maker.ChainTurnStops());
-  result = join_at_turn_stops(result, piece_vertices(*result, body));
+  result = join_at_turn_stops(result, piece_vertices(*result, body), true);
   if (!setbacks.empty()) {
     return detail::setback_corners(feature, "chamfer", body, *result, setbacks);
   }

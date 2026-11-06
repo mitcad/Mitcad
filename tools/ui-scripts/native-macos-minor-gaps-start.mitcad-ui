@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Minor AppKit gaps (mitcad#1358), run by tools/ui-macos-native-minor-gaps-test.sh
+# with the Start tab at launch (MITCAD_START_PAGE=1) on an empty design:
+#   1. The Start tab has no groups: its empty row takes no room, the Start
+#      page begins right below the toolbar, as in Qt (mitcad#1258).
+#   2. A message shown over the Start page: the page's footer (Show start
+#      page at launch, Preferences…, Report an Issue) stays above the
+#      message band. The Solid tab brings the row of groups back.
+#   3. Import STEP Assembly in the native alert: the Components and One base
+#      feature answers keep their tooltips (mitcad#1277); Cancel.
+# Input is the TestDriver's in-process native commands; no system input.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-log '^Start page shown$' 30
+wait-log '^Native cards: none [(]the Start page is shown[)]$' 30
+wait-idle 30
+native-resize 1280 820
+native-appearance light
+
+# 1. No empty row above the page.
+expect-native-visible native.ribbon false
+expect-native-qt-place startPage top native.window.content
+
+# 2. The footer above a shown message.
+mark
+# The band may already show the launch's hint in the same place, so no
+# new placement is logged; the warning replaces its text.
+test-status-message warning 'A warning over the Start page'
+wait-log '^Native message band: full warning A warning over the Start page$' 10
+expect-native-visible native.messageBand true
+expect-native-qt-place startPageFooter above native.messageBand
+screenshot '${MITCAD_TEST_SHOTS}/native-minor-gaps-start.png'
+mark
+native-choice native.workspaces Solid
+wait-log '^Start page hidden$' 10
+expect-native-visible native.ribbon true
+wait-idle
+
+# 3. The STEP assembly question's tooltips.
+mark
+open-file '${MITCAD_TEST_WORK}/pins.step'
+wait-log '^Import STEP Assembly dialog opened: pins[.]step$' 30
+expect-native-text native.alert.response.0 '^Components [(]keep the assembly[)]$'
+expect-native-tooltip native.alert.response.0 '^Repeated parts share one body'
+expect-native-text native.alert.response.1 '^One base feature$'
+expect-native-tooltip native.alert.response.1 '^Every placed part a body of its own'
+screenshot '${MITCAD_TEST_SHOTS}/native-minor-gaps-step.png'
+native-click native.alert.response.2
+wait-log '^Import STEP Assembly: cancelled$' 20
+wait-idle

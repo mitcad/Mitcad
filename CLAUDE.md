@@ -39,8 +39,9 @@ and [docs/development.md](docs/development.md) before larger changes.
   Windows machine the warning-free build and the affected ctests in its
   Windows environment, on a Mac its build and the affected ctests. An
   occasional miss is accepted: every platform is checked in full by the
-  release build (`check-all.sh --full` plus the Windows and macOS builds
-  with the full `ctest`).
+  release build (`check-all.sh --full`, the Windows build with the full
+  `ctest`, and on macOS `tools/release-check-macos.sh`: build, no AppKit,
+  the full `ctest`, the package).
 
 ## Key design constraints
 
@@ -55,18 +56,19 @@ and [docs/development.md](docs/development.md) before larger changes.
 - The app talks to the model only through JSON commands and queries
   ([commands.md](core/model-api/src/commands.md)); UI commands are
   declarative definitions ([app/COMMANDS.md](app/COMMANDS.md)).
-- Platform code: few `Q_OS_MACOS` branches (GL format, menus, shortcuts)
-  and AppKit only in `app/platform/macos/`, behind the public interfaces
-  in `app/platform/` (`MacChrome`, `NativeMacWindow`, `NativeForms`,
-  `NativeDialogs` and related adapters, with stubs where applicable).
-  Native presentation preserves the shared UI's command locations, order,
-  CAD artwork and workflow capabilities; platform integration is not a
-  reason to omit interactions or replace a content-rich view with a less
-  capable generic control. See `docs/native-macos-ui.md` for the design
-  contract. The retained Qt layout is
-  chosen at run time (`chromeStyle()`: Floating by default everywhere
-  since mitcad#429, Docked by the preference or `--chrome=docked`); Docked
-  must keep working everywhere.
+- Platform code: macOS uses the shared Qt UI only (owner 6.11.2026,
+  [macos-shared-qt.md](docs/macos-shared-qt.md)): the AppKit frontend
+  (`MITCAD_MACOS_NATIVE_UI`) is not built until native UI work resumes.
+  `#ifdef Q_OS_MACOS` is for behaviour the system or keyboard needs (the GL
+  context, the Metal render service, menu roles, the Settings window,
+  system keys, Backspace, trackpad), not for presentation; the 0.48 macOS
+  presentation is under `MITCAD_MAC_UI` (built only with
+  `MITCAD_MACOS_SHARED_QT_UI=OFF`, for comparison). New UI is shared Qt on
+  every platform. AppKit code stays in `app/platform/macos/`, behind the
+  public interfaces in `app/platform/` (`MacChrome` and the rest, with
+  stubs). The Qt layout is chosen at run time (`chromeStyle()`: Floating by
+  default everywhere since mitcad#429, Docked by the preference or
+  `--chrome=docked`); Docked must keep working everywhere.
 - Face and edge references are topological names (`F2:side(c1[c4,c2])`,
   `E{…|…}`) carried through OCCT's history.
 - Geometry operations must not modify their input shapes.

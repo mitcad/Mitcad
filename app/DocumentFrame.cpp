@@ -186,7 +186,7 @@ void DocumentFrame::install(WindowManager& manager) {
           [](MainWindow* document, MainWindow*, bool separate) {
     document->setProperty("mitcadSeparateWindow", separate);
   });
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   // Exercise the portable frame in a focused Qt test without changing the
   // macOS product default or introducing a user-facing alternate tab bar.
   if (qEnvironmentVariableIntValue("MITCAD_TEST_DOCUMENT_FRAMES") != 1 ||
@@ -301,7 +301,28 @@ void DocumentFrame::updateChrome() {
   m_tabs->setVisible(tabs);
   menuBar()->setVisible(tabs);
   const MainWindow* shown = activeDocument();
-  for (MainWindow* page : documents()) page->menuBar()->setVisible(!tabs && page == shown);
+  // The system menu bar holds the frame's menus (a native menu bar); the
+  // document's in-window copy then follows the preference.
+  const bool inWindow = !menuBar()->isNativeMenuBar() || windowMenuBarShown();
+  for (MainWindow* page : documents()) page->menuBar()->setVisible(!tabs && page == shown && inWindow);
+}
+namespace {
+QString windowMenuBarKey() { return QStringLiteral("view/windowMenuBar"); }
+} // namespace
+bool DocumentFrame::windowMenuBarShown() {
+#ifdef Q_OS_MACOS
+  return QSettings().value(windowMenuBarKey(), false).toBool();
+#else
+  return true;
+#endif
+}
+bool DocumentFrame::setWindowMenuBarShown(bool shown) {
+  if (windowMenuBarShown() == shown) return false;
+  QSettings().setValue(windowMenuBarKey(), shown);
+  for (QWidget* top : QApplication::topLevelWidgets()) {
+    if (auto* frame = qobject_cast<DocumentFrame*>(top)) frame->updateChrome();
+  }
+  return true;
 }
 void DocumentFrame::moveDocument(MainWindow* document, DocumentFrame* destination, int index) {
   if (!m_manager || !document || containing(document) != this) return;

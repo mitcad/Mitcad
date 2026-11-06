@@ -65,7 +65,7 @@ QIcon drawnChevron(bool collapsed, const QPalette& palette, qreal ratio) {
 
 void setFlatCardButton(QToolButton* button) {
   button->setAutoRaise(true);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   styleMacToolButton(button);
 #else
   button->setStyleSheet(QStringLiteral(

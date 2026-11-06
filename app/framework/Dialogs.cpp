@@ -156,6 +156,20 @@ void showDialog(QWidget* widget) {
   widget->show();
 }
 
+void openDialog(QDialog* dialog) {
+#ifdef MITCAD_MACOS_NATIVE_UI
+  if (nativeDialogsActive()) {
+    // As QDialog::open: window modal, no result yet. The AppKit presenter
+    // hangs a window-modal presenter from its window as a sheet.
+    dialog->setWindowModality(Qt::WindowModal);
+    dialog->setResult(0);
+    showNativeWidget(dialog);
+    return;
+  }
+#endif
+  dialog->open();
+}
+
 void waitDialogUntil(const std::function<bool()>& completed) {
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (nativeDialogsActive()) {
@@ -347,7 +361,7 @@ QColor dialogColor(const QColor& initial, QWidget* parent, const QString& title,
 }
 
 void prepareModal(QDialog* dialog) {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   const QWidget* parent = dialog != nullptr && dialog->parentWidget() != nullptr ? dialog->parentWidget()->window()
                                                                                  : nullptr;
   if (parent != nullptr && parent->isVisible() && qobject_cast<const QDialog*>(parent) == nullptr) {

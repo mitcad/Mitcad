@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# Keys while a pasted component is still computed (mitcad#1360, GitHub
+# mitcad/Mitcad#156), on paste-busy-keys.json (Component1:1 placed 40 mm
+# along X): Copy and Paste New open Move/Copy on the copy; while the
+# preview of its X Distance computes (held by the test's worker gate),
+# Shift and Up reach the panel's field. Up read the design's length unit
+# from the document then and ended the application (Windows 0.47.0); now it
+# steps 10 mm to 11 mm with the unit the window read before, the value
+# waits for the job and is previewed next, and OK places the copy 11 mm
+# from the original.
+# Run by tools/ui-paste-busy-keys-test.sh (Linux) and
+# tools/ui-windows-paste-busy-keys-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Copy and Paste New: Move/Copy opens on the copy (P9).
+mark
+context-menu-logged '^Browser Root/Component1:1 at ' 'Copy'
+wait-log '^Copied Component1:1$'
+mark
+context-menu-logged '^Browser Root at ' 'Paste New'
+wait-log '^Pasted Component1:1 [(]new component[)] as ' 30
+wait-log '^Command Move/Copy started'
+wait-log '^Panel Move/Copy input tx at '
+wait-idle 30
+
+# A distance whose preview the worker holds: the keys come while the model
+# computes.
+mark
+hold-model-preview true
+qt-type-now input_tx '10 mm'
+wait-log '^Computing preview started' 30
+expect-model-busy true
+key-now shift
+key-now Up
+expect-log '^Value field Move/Copy X Distance: Up stepped 10 mm to 11 mm$'
+expect-model-busy true
+hold-model-preview false
+wait-log '^Move/Copy X Distance: 11 mm = ' 30
+wait-idle 30
+expect-input-text tx '^11 mm$'
+
+# The move works once the job has ended: OK places the copy.
+mark
+button '^OK$'
+wait-log '^Placed .* at [(]51, 0, 0[)]$' 30
+wait-idle
+expect-never 'The document was read while a job computes it|Input dropped while the model computes|TestDriver: FAIL'

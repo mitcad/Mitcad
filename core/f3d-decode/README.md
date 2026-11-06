@@ -17,3 +17,9 @@ does not rebuild this crate. Until mitcad#779 these modules were part of
 `mitcad-f3d-design`, which re-exports them under their old paths
 (`mitcad_f3d_design::stream`, `mitcad_f3d::design::stream`, ...).
 `unicode.rs` is written by `core/f3d/tools/gen_unicode_tables.py`.
+
+The feature `scan-count`, which only the tests turn on (as a
+dev-dependency of `mitcad-f3d-design`), counts the references
+`Segment::ref_at` reads on each thread (`stream::ref_reads`): the tests
+check with it that the sketch scans stay linear in the size of the data
+instead of timing them (mitcad#1348). Other builds carry no counter.

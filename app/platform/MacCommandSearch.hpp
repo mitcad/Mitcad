@@ -8,7 +8,7 @@ class QLineEdit;
 class QTreeWidget;
 class QVBoxLayout;
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 #include <algorithm>
 
 #include <QApplication>
@@ -28,7 +28,7 @@ class QVBoxLayout;
 
 namespace mitcad::mac {
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 namespace command_search {
 
 // Leave the search field and selection to the native Qt style. Only row

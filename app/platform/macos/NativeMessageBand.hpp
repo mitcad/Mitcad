@@ -17,6 +17,13 @@
 // (1: the newest), a row about a feature also native.messageHistory.<uid>
 // (the newest such row first).
 //
+// The pointer over the message shown (the text in full or the stub) about
+// a feature paints the places of that feature's notices in the view until
+// it leaves (mitcad#1379), as the Qt band's noticeHovered does: the text
+// and the stub track the pointer's coming and going and the band calls
+// noticeHovered with the feature's uid, then with an empty one when the
+// pointer leaves or the message under it is taken away.
+//
 // Logged: `Native message band: full|stub <level> <text>` when what it
 // shows changes; `Message history: <n> entries` when the history opens,
 // `Message history row <i>: <level> <text>` (the first 50 rows),
@@ -39,6 +46,9 @@ class MessageLog;
   std::function<void()> closed;
   // A history row about a feature: its uid.
   std::function<void(const QString&)> featureChosen;
+  // The pointer came over the message shown about a feature (its uid) or
+  // left it (empty; mitcad#1379).
+  std::function<void(const QString&)> noticeHovered;
 }
 // What the log shows now; the band keeps the log for its history.
 - (void)showLog:(const mitcad::MessageLog*)log;

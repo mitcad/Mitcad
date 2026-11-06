@@ -15,7 +15,7 @@ class QStyleOptionViewItem;
 class QTreeWidget;
 class QTreeWidgetItem;
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 #include <algorithm>
 
 #include <QApplication>
@@ -38,7 +38,7 @@ class QTreeWidgetItem;
 // selection colours while giving the parameter sheet the system's spacing.
 namespace mitcad::mac {
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 namespace parameters {
 
 // The shared role, so that the AppKit table shows the same state.

@@ -11,6 +11,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "LineArcs.hpp"
 #include "SketchController.hpp"
 #include "SketchModel.hpp"
 
@@ -58,9 +59,7 @@ inline QString pointNear(const SketchModel& model, const QJsonObject& result, co
   return best;
 }
 
-// The arc from `start` leaving along `direction` to `end`; none when it
-// would be straight.
-std::optional<Curve2> tangentArc(const V2& start, const V2& direction, const V2& end);
+// tangentArc: LineArcs.hpp.
 // The arc from `a` through `m` to `b`.
 std::optional<Curve2> arcThrough(const V2& a, const V2& m, const V2& b);
 // The direction a curve leaves its end point `point` with (outwards).

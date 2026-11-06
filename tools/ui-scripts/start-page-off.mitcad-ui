@@ -3,7 +3,9 @@
 # it off): MitCad starts on an empty design on the Solid tab, as before the
 # Start tab; the Start tab is still there. Run with MITCAD_START_PAGE=1 by
 # tools/ui-start-page-test.sh (Linux) and tools/ui-windows-start-page-test.ps1
-# (Windows).
+# (Windows). For AppKit, tools/ui-macos-start-page-test.sh replaces the two
+# "expect-ever '^Ribbon tab ... at ' 10" steps with the native workspace
+# selector (mitcad#1381): keep them as they are.
 expect-ever '^Start page at launch: off \(Show start page at launch\)$' 30
 expect-ever 'View area' 30
 wait-idle

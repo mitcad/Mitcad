@@ -61,6 +61,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPersistentModelIndex>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -95,6 +96,7 @@
 
 #include "../../report/ReportDialogs.hpp"
 #include "../../framework/SettingsWindow.hpp"
+#include "../../framework/PickerComboBox.hpp"
 
 namespace mitcad {
 class AppKitWidgetView;
@@ -124,6 +126,7 @@ class NativeMenuPopup;
 @interface MitcadNativeComboItem : NSObject {
 @public
   QPersistentModelIndex index;
+  int kind; // ComboItemKind: how the shared drop-down shows the item (mitcad#1353)
 }
 @end
 @implementation MitcadNativeComboItem
@@ -174,6 +177,13 @@ class NativeMenuPopup;
   NSImage* selectedImage;
   NSAttributedString* aligned;
   NSColor* alignedColor;
+  // A cell of a table that selects cells (NativeCellSelectionProperty,
+  // mitcad#1355): selected (tinted) and the current one (framed).
+  BOOL cellSelected;
+  BOOL cellCurrent;
+  // Its edit was asked for (a double press, F2, Tab: beginCellEdit), not
+  // begun by the window for a press on the field.
+  BOOL editRequested;
 }
 - (void)checked:(id)sender;
 // Ends this cell's text edit: commits it or discards it, keeping the table
@@ -364,6 +374,43 @@ QString plain(const QString& text) {
   QTextDocument document;
   document.setHtml(text);
   return document.toPlainText();
+}
+// How the shared drop-down shows an item (mitcad#1353): a line
+// (QComboBox::insertSeparator, or a choice's separator value), a heading
+// (not enabled, in bold, as addComboHeading's), an item that cannot be
+// chosen, a choice in bold, or a choice.
+enum ComboItemKind : int { ComboChoice, ComboBold, ComboDisabled, ComboHeading, ComboLine };
+int comboItemKind(const QComboBox* combo, int row) {
+  const QModelIndex index = combo->model()->index(row, combo->modelColumn(), combo->rootModelIndex());
+  if (index.data(Qt::AccessibleDescriptionRole).toString() == QLatin1String("separator") ||
+      isChoiceSeparator(index.data(Qt::UserRole).toString())) {
+    return ComboLine;
+  }
+  const QVariant font = index.data(Qt::FontRole);
+  const bool bold = font.canConvert<QFont>() && font.value<QFont>().bold();
+  if (!index.flags().testFlag(Qt::ItemIsEnabled)) { return bold ? ComboHeading : ComboDisabled; }
+  return bold ? ComboBold : ComboChoice;
+}
+// The AppKit item of a shared drop-down's item: a separator line; a heading
+// small, bold and not choosable, as a command form's (NativeForms); an item
+// the shared one does not enable, not choosable either.
+NSMenuItem* comboMenuItem(const QString& text, int kind) {
+  if (kind == ComboLine) { return [NSMenuItem separatorItem]; }
+  NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(text) action:nil keyEquivalent:@""];
+  item.enabled = kind != ComboDisabled && kind != ComboHeading;
+  if (kind == ComboHeading || kind == ComboBold) {
+    const CGFloat size = kind == ComboHeading ? [NSFont smallSystemFontSize] : [NSFont systemFontSize];
+    NSMutableDictionary* attributes = [NSMutableDictionary dictionaryWithObject:[NSFont boldSystemFontOfSize:size]
+                                                                         forKey:NSFontAttributeName];
+    if (kind == ComboHeading) { attributes[NSForegroundColorAttributeName] = NSColor.secondaryLabelColor; }
+    item.attributedTitle = [[NSAttributedString alloc] initWithString:ns(text) attributes:attributes];
+  }
+  return item;
+}
+// A drop-down that opens a searchable picker instead of its list
+// (PickerComboBox: the Make card's Printer and Process, mitcad#1353).
+const PickerComboBox* choicePicker(const QComboBox* combo) {
+  return combo->isEditable() ? nullptr : dynamic_cast<const PickerComboBox*>(combo);
 }
 bool richLabelText(const QLabel* caption) {
   return caption->textFormat() == Qt::RichText ||
@@ -1022,7 +1069,11 @@ public:
           items.clear();
           for (int j = 0; j < combo->count(); ++j) { items.append(combo->itemText(j)); }
         }
-        if (combo->isEditable()) {
+        if (const PickerComboBox* picker = choicePicker(combo)) {
+          // Its field shows the chosen row's short label; a press opens the
+          // searchable picker (action).
+          NATIVE_STRING(((NSButton*)binding.control), title, picker->shownText());
+        } else if (combo->isEditable()) {
           NSComboBox* native = (NSComboBox*)binding.control;
           if (items != binding.items) {
             [native removeAllItems];
@@ -1036,17 +1087,51 @@ public:
           for (int j = 0; same && j < combo->count(); ++j) {
             NSMenuItem* item = [native itemAtIndex:j];
             MitcadNativeComboItem* value = item.representedObject;
-            same = sameText(item.title, items[j]) && value != nil &&
+            const int kind = comboItemKind(combo, j);
+            same = (kind == ComboLine || sameText(item.title, items[j])) && value != nil && value->kind == kind &&
                    value->index == combo->model()->index(j, combo->modelColumn(), combo->rootModelIndex());
           }
           if (!same) {
+            // One AppKit item per shared one, so that the indices stay the
+            // same: its lines, headings and items it does not enable as the
+            // shared drop-down shows them (mitcad#1353).
             [native removeAllItems];
+            QStringList shown;
+            bool marked = false;
             for (int j = 0; j < combo->count(); ++j) {
-              NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(items[j]) action:nil keyEquivalent:@""];
+              const int kind = comboItemKind(combo, j);
+              NSMenuItem* item = comboMenuItem(items[j], kind);
               MitcadNativeComboItem* value = [MitcadNativeComboItem new];
               value->index = combo->model()->index(j, combo->modelColumn(), combo->rootModelIndex());
+              value->kind = kind;
               item.representedObject = value;
               [native.menu addItem:item];
+              marked = marked || kind != ComboChoice;
+              shown << (item.separatorItem ? QStringLiteral("---")
+                        : kind == ComboHeading ? QStringLiteral("%1 (heading)").arg(qt(item.title))
+                        : !item.enabled        ? QStringLiteral("%1 (disabled)").arg(qt(item.title))
+                                               : qt(item.title));
+            }
+            if (marked) {
+              qDebug().noquote() << QStringLiteral("Native choice %1: %2")
+                                        .arg(combo->objectName(), shown.join(QStringLiteral(" | ")));
+            }
+          }
+          // Each choice's tooltip, and its detail under its name where the
+          // combo names a role for it (nativeItemDetailRole: the Chat's
+          // agents' sign-in states, which the Qt delegate draws beside the
+          // name, mitcad#1289); the closed popup shows the name (mitcad#1358).
+          if (choicesDirty || !same) {
+            const QVariant role = combo->property("nativeItemDetailRole");
+            const int detailRole = role.isValid() ? role.toInt() : -1;
+            for (int j = 0; j < combo->count() && j < native.numberOfItems; ++j) {
+              NSMenuItem* item = [native itemAtIndex:j];
+              const QString tip = combo->itemData(j, Qt::ToolTipRole).toString();
+              if (!sameText(item.toolTip, tip)) { item.toolTip = tip.isEmpty() ? nil : ns(tip); }
+              if (@available(macOS 14.4, *)) {
+                const QString detail = detailRole >= 0 ? combo->itemData(j, detailRole).toString() : QString();
+                if (!sameText(item.subtitle, detail)) { item.subtitle = detail.isEmpty() ? nil : ns(detail); }
+              }
             }
           }
           if (combo->currentIndex() >= 0 && combo->currentIndex() < native.numberOfItems &&
@@ -1367,6 +1452,10 @@ public:
       const int index = static_cast<int>([(NSPopUpButton*)sender indexOfSelectedItem]);
       if (index >= 0 && index < bar->count() && bar->isTabEnabled(index) && bar->isTabVisible(index))
         bar->setCurrentIndex(index);
+    } else if (comboSource != nullptr && choicePicker(comboSource) != nullptr) {
+      // The shared picker, under this field; its choice is the drop-down's
+      // (mitcad#1353).
+      qobject_cast<QComboBox*>(widget)->showPopup();
     } else if (auto* combo = qobject_cast<QComboBox*>(widget)) {
       int index = -1;
       if (combo->isEditable()) { index = static_cast<int>([(NSComboBox*)sender indexOfSelectedItem]); }
@@ -1660,7 +1749,9 @@ public:
   }
   void updateCurrentRows(NSTableView* table) {
     auto* view = currentRowPresenter(table);
-    if (view == nullptr) return;
+    // A heading list frames its current heading (mitcad#1355).
+    auto* headings = view == nullptr ? headingPresenter(table) : nullptr;
+    if (view == nullptr && headings == nullptr) return;
     NSResponder* focus = table.window.firstResponder;
     for (NSInteger row = 0; row < table.numberOfRows; ++row) {
       NSTableRowView* native = [table rowViewAtRow:row makeIfNecessary:NO];
@@ -1668,8 +1759,9 @@ public:
       MitcadNativeModelNode* node = nodeAt(table, row);
       const bool focused = focus == table || ([focus isKindOfClass:NSView.class] &&
           [(NSView*)focus isDescendantOf:native]);
-      const bool current = node != nil && view->currentIndex().isValid() &&
-          view->currentIndex().siblingAtColumn(0) == node->index && focused;
+      const bool current = headings != nullptr ? headingCurrent(table, headings, node)
+          : node != nil && view->currentIndex().isValid() &&
+              view->currentIndex().siblingAtColumn(0) == node->index && focused;
       auto* cursor = (MitcadNativeCurrentRowView*)native;
       if (cursor.currentFocus != current) { cursor.currentFocus = current; cursor.needsDisplay = YES; }
     }
@@ -1780,14 +1872,16 @@ public:
   }
   NSTableRowView* currentRowView(NSTableView* table, MitcadNativeModelNode* node) {
     auto* view = currentRowPresenter(table);
+    auto* headings = view == nullptr ? headingPresenter(table) : nullptr;
     const bool spanning = modelSpansRow(table, node);
     const QModelIndex index = node != nil ? QModelIndex(node->index) : QModelIndex();
     const QString accessible = index.data(Qt::AccessibleTextRole).toString();
-    if (view == nullptr && !spanning && accessible.isEmpty()) return nil;
+    if (view == nullptr && headings == nullptr && !spanning && accessible.isEmpty()) return nil;
     MitcadNativeCurrentRowView* row = spanning ? [MitcadNativeSpannedRowView new] : [MitcadNativeCurrentRowView new];
     row.groupRowStyle = spanning;
-    row.currentFocus = view != nullptr && table.window.firstResponder == table && node != nil &&
-        view->currentIndex().siblingAtColumn(0) == node->index;
+    row.currentFocus = headings != nullptr ? headingCurrent(table, headings, node)
+        : view != nullptr && table.window.firstResponder == table && node != nil &&
+            view->currentIndex().siblingAtColumn(0) == node->index;
     if (!accessible.isEmpty()) {
       row.accessibilityLabel = ns(accessible);
       row.accessibilityHelp = ns(index.data(Qt::AccessibleDescriptionRole).toString());
@@ -2013,7 +2107,136 @@ public:
         field.toolTip = field.stringValue; // a section row's whole name
       }
     }
+    if (cellSelecting(view) && view->selectionModel() != nullptr) {
+      cell->cellSelected = view->selectionModel()->isSelected(index);
+      cell->cellCurrent = view->currentIndex() == index;
+    }
     return cell;
+  }
+  bool cellSelectingTable(NSTableView* table) const {
+    const int id = modelBinding(table);
+    return id >= 0 && static_cast<std::size_t>(id) < m_bindings.size() &&
+        cellSelecting(qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget));
+  }
+  // A table that selects cells rather than rows (mitcad#1355).
+  static bool cellSelecting(const QAbstractItemView* view) {
+    return view != nullptr && view->property(NativeCellSelectionProperty).toBool() &&
+        view->selectionBehavior() == QAbstractItemView::SelectItems &&
+        view->selectionMode() != QAbstractItemView::NoSelection;
+  }
+  // Each shown cell's tint and frame follow the shared selection and
+  // current cell; the native rows are not highlighted (renderModel).
+  void updateSelectedCells(NSTableView* table, QAbstractItemView* view) {
+    if (!cellSelecting(view) || view->selectionModel() == nullptr) return;
+    const QModelIndex current = view->currentIndex();
+    for (NSInteger row = 0; row < table.numberOfRows; ++row) {
+      for (NSInteger column = 0; column < table.numberOfColumns; ++column) {
+        NSView* native = [table viewAtColumn:column row:row makeIfNecessary:NO];
+        if (![native isKindOfClass:MitcadNativeModelCell.class]) continue;
+        auto* cell = (MitcadNativeModelCell*)native;
+        const BOOL selected = cell->index.isValid() && view->selectionModel()->isSelected(cell->index);
+        const BOOL isCurrent = cell->index.isValid() && cell->index == current;
+        if (cell->cellSelected == selected && cell->cellCurrent == isCurrent) continue;
+        cell->cellSelected = selected;
+        cell->cellCurrent = isCurrent;
+        cell.needsDisplay = YES;
+        ++g_widgetPropertyWrites;
+      }
+    }
+  }
+  void logCellSelection(QAbstractItemView* view) {
+    if (qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") || view->selectionModel() == nullptr) return;
+    QModelIndexList cells = view->selectionModel()->selectedIndexes();
+    std::sort(cells.begin(), cells.end());
+    QStringList places;
+    for (const QModelIndex& cell : cells) places << QStringLiteral("%1,%2").arg(cell.row()).arg(cell.column());
+    const QModelIndex current = view->currentIndex();
+    qInfo().noquote() << QStringLiteral("Native cell selection: %1 current=%2,%3 selected=%4")
+        .arg(view->objectName()).arg(current.row()).arg(current.column())
+        .arg(places.isEmpty() ? QStringLiteral("none") : places.join(QLatin1Char(' ')));
+  }
+  // A press on a cell of a cell-selecting table: the shared view's own
+  // mouse handling selects it, extends the range (Shift) or toggles it
+  // (Command), as a press on the Qt table does; a double press edits it.
+  // The pointer's place is the cell's in the shared view, whose viewport
+  // need not be laid out as the native table is.
+  bool modelCellPointer(NSTableView* table, NSEvent* event) {
+    const int id = modelBinding(table);
+    if (m_refreshing || event.type != NSEventTypeLeftMouseDown || id < 0 ||
+        static_cast<std::size_t>(id) >= m_bindings.size()) return false;
+    QPointer<QAbstractItemView> view = qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget);
+    if (!cellSelecting(view) || view->selectionModel() == nullptr) return false;
+    const NSPoint at = [table convertPoint:event.locationInWindow fromView:nil];
+    const NSInteger row = [table rowAtPoint:at];
+    const NSInteger column = [table columnAtPoint:at];
+    if (row < 0 || column < 0 || mac::isNativeRowHeader(table.tableColumns[static_cast<NSUInteger>(column)])) return false;
+    // A pending edit ends first, as a press elsewhere ends the Qt editor.
+    QPointer<AppKitWidgetView> alive(this);
+    if (table.window.firstResponder != table && ![table.window makeFirstResponder:table]) return true;
+    if (!alive || !view) return true;
+    const QModelIndex index = modelIndex(table, row, modelColumn(table, column));
+    if (!index.isValid() || !index.flags().testFlag(Qt::ItemIsEnabled)) return true;
+    if (event.clickCount >= 2) {
+      beginCellEdit(table, row, column);
+      return true;
+    }
+    const Qt::KeyboardModifiers modifiers =
+        mac::qtKeyModifiers(event.modifierFlags) & (Qt::ShiftModifier | Qt::ControlModifier);
+    const QRect place = view->visualRect(index);
+    if (place.isEmpty()) {
+      view->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect);
+    } else {
+      // Not the shared viewport's scroll: the native table keeps its own.
+      const bool autoScroll = view->hasAutoScroll();
+      view->setAutoScroll(false);
+      QWidget* viewport = view->viewport();
+      const QPointF point = QRectF(place).center();
+      QMouseEvent press(QEvent::MouseButtonPress, point, viewport->mapToGlobal(point), Qt::LeftButton,
+                        Qt::LeftButton, modifiers);
+      QCoreApplication::sendEvent(viewport, &press);
+      if (view) {
+        QMouseEvent release(QEvent::MouseButtonRelease, point, viewport->mapToGlobal(point), Qt::LeftButton,
+                            Qt::NoButton, modifiers);
+        QCoreApplication::sendEvent(viewport, &release);
+      }
+      if (view) view->setAutoScroll(autoScroll);
+    }
+    if (!alive || !view) return true;
+    logCellSelection(view);
+    updateSelectedCells(table, view);
+    scheduleRefresh();
+    return true;
+  }
+  // The arrows, with or without Shift, in a cell-selecting table: the
+  // shared view moves its current cell and extends its range from the
+  // anchor, as its own keys do; the native table shows that cell.
+  bool modelCellKey(NSTableView* table, QKeyCombination combination) {
+    const int id = modelBinding(table);
+    if (m_refreshing || id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) return false;
+    QPointer<QAbstractItemView> view = qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget);
+    const int key = combination.key();
+    if (!cellSelecting(view) || view->selectionModel() == nullptr ||
+        (combination.keyboardModifiers() != Qt::NoModifier && combination.keyboardModifiers() != Qt::ShiftModifier) ||
+        (key != Qt::Key_Up && key != Qt::Key_Down && key != Qt::Key_Left && key != Qt::Key_Right)) return false;
+    QPointer<AppKitWidgetView> alive(this);
+    const bool autoScroll = view->hasAutoScroll();
+    view->setAutoScroll(false);
+    QKeyEvent press(QEvent::KeyPress, key, combination.keyboardModifiers());
+    QCoreApplication::sendEvent(view.data(), &press);
+    if (view) view->setAutoScroll(autoScroll);
+    if (!alive || !view) return true;
+    const QModelIndex current = view->currentIndex();
+    for (NSInteger row = 0; current.isValid() && row < table.numberOfRows; ++row) {
+      if (modelIndex(table, row, 0) != current.siblingAtColumn(0)) continue;
+      [table scrollRowToVisible:row];
+      const NSInteger column = [table columnWithIdentifier:ns(QString::number(current.column()))];
+      if (column >= 0) [table scrollColumnToVisible:column];
+      break;
+    }
+    logCellSelection(view);
+    updateSelectedCells(table, view);
+    scheduleRefresh();
+    return true;
   }
   void modelEdit(int id, const QPersistentModelIndex& index, const QVariant& value, int role) {
     if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size() || !index.isValid()) { return; }
@@ -2065,6 +2288,10 @@ public:
         [live isKindOfClass:NSTableCellView.class] && ((NSTableCellView*)live).textField != nil) {
       field = ((NSTableCellView*)live).textField;
     }
+    const auto requested = [](NSTextField* edited) {
+      if ([edited.delegate isKindOfClass:MitcadNativeModelCell.class]) ((MitcadNativeModelCell*)edited.delegate)->editRequested = YES;
+    };
+    requested(field);
     if (field.window != nil && [table.window makeFirstResponder:field]) {
       mac::selectEditedText(field);
       return true;
@@ -2072,6 +2299,7 @@ public:
     // AppKit's own cell editing finds the view the table shows.
     [table editColumn:column row:row withEvent:nil select:YES];
     NSView* edited = [table viewAtColumn:column row:row makeIfNecessary:NO];
+    if ([edited isKindOfClass:NSTableCellView.class]) requested(((NSTableCellView*)edited).textField);
     return [edited isKindOfClass:NSTableCellView.class] && ((NSTableCellView*)edited).textField.currentEditor != nil;
   }
   // F2 on a focused table edits its current cell, as in the shared view;
@@ -2094,15 +2322,127 @@ public:
     QCoreApplication::sendEvent(view.data(), &press);
     return true;
   }
-  bool modelSharedKey(NSTableView* table, int key) {
+  // A key the item view lists in NativeModelKeysProperty, with its
+  // modifiers, goes to the shared view's own key handling; a heading list
+  // (NativeHeadingRowsProperty) takes them only on a current heading.
+  bool modelSharedKey(NSTableView* table, QKeyCombination combination, bool perform = true) {
     const int id = modelBinding(table);
     if (m_refreshing || id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) return false;
     QPointer<QWidget> source = m_bindings[static_cast<std::size_t>(id)].widget;
     if (!source || !source->isEnabled() ||
-        !source->property(NativeModelKeysProperty).toList().contains(key)) return false;
-    QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        !source->property(NativeModelKeysProperty).toList().contains(QVariant(combination.toCombined()))) return false;
+    if (const auto* view = qobject_cast<QAbstractItemView*>(source.data());
+        view != nullptr && view->property(NativeHeadingRowsProperty).toBool()) {
+      const QModelIndex current = view->currentIndex();
+      if (!current.isValid() || current.flags().testFlag(Qt::ItemIsSelectable)) return false;
+    }
+    if (!perform) return true;
+    QKeyEvent press(QEvent::KeyPress, combination.key(), combination.keyboardModifiers());
     QCoreApplication::sendEvent(source, &press);
+    if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT"))
+      qInfo().noquote() << QStringLiteral("Native shared key: %1 %2")
+          .arg(source ? source->objectName() : QString(), QKeySequence(combination).toString(QKeySequence::PortableText));
     return true;
+  }
+  // Copy and Paste of the Edit menu on a focused table whose view lists
+  // their keys (mitcad#1355): its own Copy and Paste.
+  bool modelSharedAction(NSTableView* table, SEL action, bool perform) {
+    const QKeySequence::StandardKey standard = action == @selector(copy:) ? QKeySequence::Copy
+                                               : action == @selector(paste:) ? QKeySequence::Paste
+                                                                             : QKeySequence::UnknownKey;
+    const QKeySequence sequence(standard);
+    return !sequence.isEmpty() && modelSharedKey(table, sequence[0], perform);
+  }
+  // A focused table's keys before the window's key equivalents: a
+  // cell-selecting table's arrows, a heading list's Up and Down, then the
+  // keys its view lists.
+  bool modelTableKey(NSTableView* table, QKeyCombination combination) {
+    return modelCellKey(table, combination) || modelHeadingKey(table, combination) ||
+        modelSharedKey(table, combination);
+  }
+  // The list that keeps its headings in reach of the keyboard
+  // (NativeHeadingRowsProperty), when it is one.
+  QAbstractItemView* headingPresenter(NSTableView* table) const {
+    const int id = modelBinding(table);
+    if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) return nullptr;
+    auto* view = qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget);
+    return view != nullptr && view->isEnabled() && view->selectionMode() != QAbstractItemView::NoSelection &&
+        view->property(NativeHeadingRowsProperty).toBool() ? view : nullptr;
+  }
+  // A heading list's current heading, framed while the list has the keys.
+  bool headingCurrent(NSTableView* table, QAbstractItemView* view, MitcadNativeModelNode* node) const {
+    if (node == nil || !node->index.isValid() || table.window.firstResponder != table) return false;
+    const QModelIndex current = view->currentIndex();
+    return current.isValid() && current.siblingAtColumn(0) == QModelIndex(node->index) &&
+        !current.flags().testFlag(Qt::ItemIsSelectable);
+  }
+  // Up and Down in a heading list: the next enabled row the native list
+  // shows, a heading too, as the shared view's cursor moves. A row that can
+  // be selected is selected as AppKit selects it; a heading becomes the
+  // shared current row, which clears the selection as in the shared view.
+  bool modelHeadingKey(NSTableView* table, QKeyCombination combination) {
+    QPointer<QAbstractItemView> view = m_refreshing ? nullptr : headingPresenter(table);
+    const int key = combination.key();
+    if (!view || combination.keyboardModifiers() != Qt::NoModifier || (key != Qt::Key_Up && key != Qt::Key_Down))
+      return false;
+    const QModelIndex current = view->currentIndex().siblingAtColumn(0);
+    NSInteger row = -1;
+    for (NSInteger candidate = 0; current.isValid() && candidate < table.numberOfRows; ++candidate) {
+      if (liveIndex(table, nodeAt(table, candidate)) == current) { row = candidate; break; }
+    }
+    if (row < 0) row = table.selectedRow;
+    const NSInteger direction = key == Qt::Key_Up ? -1 : 1;
+    if (row < 0) row = direction > 0 ? -1 : table.numberOfRows;
+    QPointer<AppKitWidgetView> alive(this);
+    for (NSInteger target = row + direction; target >= 0 && target < table.numberOfRows; target += direction) {
+      MitcadNativeModelNode* node = nodeAt(table, target);
+      const QModelIndex next = liveIndex(table, node);
+      if (!next.isValid() || !next.flags().testFlag(Qt::ItemIsEnabled)) continue;
+      const bool selectable = modelSelectable(table, node);
+      if (selectable) {
+        if ([table.selectedRowIndexes isEqualToIndexSet:[NSIndexSet indexSetWithIndex:static_cast<NSUInteger>(target)]]) {
+          modelSelection(table); // AppKit sends no change for the same row
+        } else {
+          [table selectRowIndexes:[NSIndexSet indexSetWithIndex:static_cast<NSUInteger>(target)] byExtendingSelection:NO];
+        }
+      } else {
+        view->setCurrentIndex(next);
+      }
+      if (!alive || !view) return true;
+      [table scrollRowToVisible:target];
+      if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT"))
+        qInfo().noquote() << QStringLiteral("Native %1 row: %2 key=%3 row=%4 text=%5")
+            .arg(selectable ? QStringLiteral("selected") : QStringLiteral("heading"))
+            .arg(view->objectName()).arg(key).arg(target).arg(next.data().toString());
+      updateCurrentRows(table);
+      scheduleRefresh();
+      return true;
+    }
+    return true; // past the first or the last row, as AppKit stays
+  }
+  // A press on a row that cannot be selected, such as a heading, in a view
+  // that selects: the shared view's press makes it current and its click
+  // is the view's clicked, as on the Qt view (mitcad#1355). A row that can
+  // be selected publishes its click with the selection (modelSelection).
+  void modelRowPressed(NSTableView* table, NSInteger row, NSInteger column) {
+    const int id = modelBinding(table);
+    if (m_refreshing || row < 0 || id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) return;
+    QPointer<QAbstractItemView> view = qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget);
+    MitcadNativeModelNode* node = nodeAt(table, row);
+    if (!view || !view->isEnabled() || view->selectionModel() == nullptr || node == nil ||
+        view->selectionMode() == QAbstractItemView::NoSelection || modelSelectable(table, node)) return;
+    const QModelIndex index = modelIndex(table, row, modelColumn(table, column));
+    if (!index.isValid() || !index.flags().testFlag(Qt::ItemIsEnabled)) return;
+    QPointer<AppKitWidgetView> alive(this);
+    view->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+    if (!alive || !view) return;
+    if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT"))
+      qInfo().noquote() << QStringLiteral("Native row clicked: %1 row=%2 text=%3")
+          .arg(view->objectName()).arg(row).arg(index.data().toString());
+    QMetaObject::invokeMethod(view.data(), "clicked", Qt::DirectConnection, Q_ARG(QModelIndex, index));
+    if (!alive) return;
+    updateCurrentRows(table);
+    scheduleRefresh();
   }
   // Tab and Shift+Tab in a cell editor: commit, then edit the next editable
   // cell of the row; past the last one the table keeps the focus.
@@ -2849,11 +3189,32 @@ private:
     }
     if (auto* combo = qobject_cast<QComboBox*>(widget)) {
       NSControl* view;
-      if (combo->isEditable()) {
+      if (choicePicker(combo) != nullptr) {
+        // A searchable choice (mitcad#1353): a field with the chosen row's
+        // short label that opens the shared picker (PickerComboBox::
+        // showPopup, presented by NativePicker under this field), as a
+        // command form's choice picker (NativeForms).
+        NSButton* field = [[MitcadNativeActionButton alloc] initWithFrame:NSZeroRect];
+        field.bezelStyle = NSBezelStyleRounded;
+        NSImage* chevron = [NSImage imageWithSystemSymbolName:@"chevron.down" accessibilityDescription:nil];
+        field.image = [chevron imageWithSymbolConfiguration:
+            [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightRegular]];
+        field.imagePosition = NSImageTrailing;
+        field.alignment = NSTextAlignmentLeft;
+        field.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+        view = field;
+      } else if (combo->isEditable()) {
         NSComboBox* field = [[NSComboBox alloc] initWithFrame:NSZeroRect];
         field.delegate = m_target;
         view = field;
-      } else { view = [[MitcadNativePopup alloc] initWithFrame:NSZeroRect pullsDown:NO]; }
+      } else {
+        NSPopUpButton* popup = [[MitcadNativePopup alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        // Each item enabled as the shared one is (comboMenuItem).
+        popup.autoenablesItems = NO;
+        view = popup;
+      }
       target(view);
       bind(widget, view, view);
       return view;
@@ -3273,6 +3634,8 @@ private:
       table.autoresizingMask = NSViewWidthSizable;
     }
     table.allowsMultipleSelection = view->selectionMode() == QAbstractItemView::ExtendedSelection || view->selectionMode() == QAbstractItemView::MultiSelection;
+    // Its cells, not its rows, show the selection (mitcad#1355).
+    if (cellSelecting(view)) table.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
     // Qt's spanned headings scroll with their rows, rather than floating
     // over later content as AppKit group rows otherwise may do.
     table.floatsGroupRows = NO;
@@ -3589,6 +3952,8 @@ private:
         [binding.table selectRowIndexes:selected byExtendingSelection:NO];
         ++g_widgetPropertyWrites;
       }
+      // Within those rows, the selected cells of a cell-selecting table.
+      updateSelectedCells(binding.table, view);
       // Source-list reloads rebuild native nodes when a project opens or
       // refreshes. Keep its restored selection inside the bounded viewport.
       if (view->property("nativeSourceList").toBool() && binding.table.selectedRow >= 0)
@@ -3880,6 +4245,9 @@ public:
     if (m_presentAsSheet && host != nil) {
       fitNativeWindowToScreen(m_window, host);
       [host beginSheet:m_window completionHandler:nil];
+      // UI tests: a window-modal presenter hangs from its window (mitcad#1353).
+      qDebug().noquote() << QStringLiteral("Native sheet shown: %1 (%2)")
+                                .arg(m_widget->windowTitle(), m_widget->objectName());
     } else if ([m_window isKindOfClass:MitcadNativeUtilityPanel.class]) {
       // In its kept place, in front, without taking the keyboard (mitcad#819).
       mac::restoreNativeUtilityFrame(m_window, m_widget, host);
@@ -4032,6 +4400,9 @@ int messageBox(QMessageBox* box) {
     }
     NSButton* native = [alert addButtonWithTitle:ns(title(button->text()))];
     native.accessibilityIdentifier = ns(QStringLiteral("native.alert.response.%1").arg(buttons.size()));
+    // What each answer does, as the Qt button's tooltip says (Import STEP
+    // Assembly's Components and One base feature, mitcad#1358).
+    if (!button->toolTip().isEmpty()) { native.toolTip = ns(button->toolTip()); }
     buttons.append(button);
     native.enabled = button->isEnabled();
     if (implicitDefault == nil && (role == QMessageBox::AcceptRole || role == QMessageBox::YesRole)) { implicitDefault = native; }
@@ -5013,6 +5384,18 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
 - (void)mouseDown:(NSEvent*)event {
   MitcadNativeModelField* field = self;
   NSWindow* window = self.window;
+  // A table that selects cells: the press selects this cell, and only a
+  // double press edits it, as the shared view's triggers say (mitcad#1355).
+  // The window may already have begun this field's editor for the press
+  // (it makes a clicked editable field first responder before mouseDown);
+  // only an edit asked for keeps its presses for the caret.
+  if ([self.delegate isKindOfClass:MitcadNativeModelCell.class]) {
+    auto* cell = (MitcadNativeModelCell*)self.delegate;
+    NSTableView* table = mitcad::mac::owningTable(self);
+    if (self.currentEditor == nil) cell->editRequested = NO;
+    if (cell->owner != nullptr && table != nil && !(self.currentEditor != nil && cell->editRequested) &&
+        cell->owner->modelCellPointer(table, event)) return;
+  }
   const NSEventModifierFlags modifiers = event.modifierFlags &
       (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift);
   if (event.type == NSEventTypeLeftMouseDown && self.enabled && self.editable &&
@@ -5052,6 +5435,7 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
   mitcad::mac::logNativeCellEdit("an untouched editor follows its model value", field);
 }
 - (void)controlTextDidEndEditing:(NSNotification*)notification {
+  editRequested = NO;
   if (!finishing) { mitcad::mac::logNativeCellEdit("an edit ends without Return, Escape or Tab", self); }
   // A read-only cell's text is only selected, and a discarded edit is not
   // the model's (mitcad#814).
@@ -5139,6 +5523,18 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
     [fill setFill];
     NSRectFillUsingOperation(NSIntersectionRect(self.bounds, dirty), NSCompositingOperationSourceOver);
   }
+  // A selected cell of a cell-selecting table, over its own fill, so a
+  // refused value's red stays visible (mitcad#1355).
+  if (cellSelected) {
+    [[NSColor.selectedContentBackgroundColor colorWithAlphaComponent:0.3] setFill];
+    NSRectFillUsingOperation(NSIntersectionRect(self.bounds, dirty), NSCompositingOperationSourceOver);
+  }
+  if (cellCurrent) {
+    [NSColor.controlAccentColor setStroke];
+    NSBezierPath* frame = [NSBezierPath bezierPathWithRect:NSInsetRect(self.bounds, 0.5, 0.5)];
+    frame.lineWidth = 1;
+    [frame stroke];
+  }
   [super drawRect:dirty];
 }
 - (void)checked:(id)sender {
@@ -5198,11 +5594,11 @@ namespace {
 BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
   const NSEventModifierFlags modifiers = event.modifierFlags &
       (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift);
-  if (event.type != NSEventTypeKeyDown || modifiers != 0) { return NO; }
+  if (event.type != NSEventTypeKeyDown) { return NO; }
   NSResponder* responder = window.firstResponder;
   const unsigned short key = event.keyCode;
-  if (key == 36 || key == 76 || key == 53) { // Return, keypad Enter, Escape
-    if (![responder isKindOfClass:NSTextView.class] || !((NSTextView*)responder).isFieldEditor) { return NO; }
+  if (modifiers == 0 && (key == 36 || key == 76 || key == 53) && // Return, keypad Enter, Escape
+      [responder isKindOfClass:NSTextView.class] && ((NSTextView*)responder).isFieldEditor) {
     id edited = ((NSTextView*)responder).delegate;
     if (![edited isKindOfClass:NSTextField.class]) { return NO; }
     id cell = ((NSTextField*)edited).delegate;
@@ -5212,22 +5608,22 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
     }
     return [cell isKindOfClass:MitcadNativeModelCell.class] && [(MitcadNativeModelCell*)cell finishEditing:key != 53];
   }
-  if (key == 120 && [responder isKindOfClass:NSTableView.class]) { // F2
-    id target = ((NSTableView*)responder).delegate;
-    if ([target isKindOfClass:MitcadNativeWidgetTarget.class]) {
-      MitcadNativeWidgetTarget* widgets = (MitcadNativeWidgetTarget*)target;
-      return widgets->owner != nullptr && widgets->owner->modelEditKey((NSTableView*)responder);
-    }
+  if (![responder isKindOfClass:NSTableView.class]) { return NO; }
+  id target = ((NSTableView*)responder).delegate;
+  if (![target isKindOfClass:MitcadNativeWidgetTarget.class]) { return NO; }
+  MitcadNativeWidgetTarget* widgets = (MitcadNativeWidgetTarget*)target;
+  if (widgets->owner == nullptr) { return NO; }
+  if (modifiers == 0 && key == 120) { // F2
+    return widgets->owner->modelEditKey((NSTableView*)responder);
   }
-  if ([responder isKindOfClass:NSTableView.class]) {
-    const QKeySequence sequence = mitcad::mac::keySequence(event);
-    id target = ((NSTableView*)responder).delegate;
-    if (!sequence.isEmpty() && [target isKindOfClass:MitcadNativeWidgetTarget.class]) {
-      MitcadNativeWidgetTarget* widgets = (MitcadNativeWidgetTarget*)target;
-      return widgets->owner != nullptr && widgets->owner->modelSharedKey((NSTableView*)responder, sequence[0].key());
-    }
-  }
-  return NO;
+  // The keys the shared view handles itself, with their modifiers, such
+  // as Copy and Paste (mitcad#1355); Return when the view lists it.
+  const QKeySequence sequence = mitcad::mac::keySequence(event);
+  if (sequence.isEmpty()) { return NO; }
+  const QKeyCombination combination(sequence[0].keyboardModifiers() & (Qt::ShiftModifier | Qt::ControlModifier |
+                                                                      Qt::AltModifier | Qt::MetaModifier),
+                                     sequence[0].key());
+  return widgets->owner->modelTableKey((NSTableView*)responder, combination);
 }
 } // namespace
 
@@ -5309,6 +5705,53 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 - (NSInteger)presenterSelectedRows {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
   return target != nil && target->owner != nullptr ? target->owner->presenterSelectedRows(self) : -1;
+}
+// A cell-selecting table's presses select cells; a press on a row that
+// cannot be selected, such as a heading, is the shared view's click
+// (mitcad#1355).
+- (void)mouseDown:(NSEvent*)event {
+  const auto owner = [self] {
+    id target = self.delegate;
+    return [target isKindOfClass:MitcadNativeWidgetTarget.class] ? ((MitcadNativeWidgetTarget*)target)->owner : nullptr;
+  };
+  if (owner() != nullptr && owner()->modelCellPointer(self, event)) return;
+  const NSPoint at = [self convertPoint:event.locationInWindow fromView:nil];
+  const NSInteger row = [self rowAtPoint:at];
+  const NSInteger column = [self columnAtPoint:at];
+  [super mouseDown:event];
+  // The press's tracking may have closed the window and its presenter.
+  if (event.clickCount == 1 && owner() != nullptr) owner()->modelRowPressed(self, row, column);
+}
+// A press on a cell of a cell-selecting table selects it and does not hand
+// its field the keyboard: only a double press, F2 or Tab edit (mitcad#1355).
+- (BOOL)validateProposedFirstResponder:(NSResponder*)responder forEvent:(NSEvent*)event {
+  id target = self.delegate;
+  if (responder != self && event.type == NSEventTypeLeftMouseDown &&
+      [target isKindOfClass:MitcadNativeWidgetTarget.class] && ((MitcadNativeWidgetTarget*)target)->owner != nullptr &&
+      ((MitcadNativeWidgetTarget*)target)->owner->cellSelectingTable(self)) return NO;
+  return [super validateProposedFirstResponder:responder forEvent:event];
+}
+// The Edit menu's Copy and Paste reach a view that handles their keys
+// itself (NativeModelKeysProperty), such as the Rows sheet's (mitcad#1355).
+- (BOOL)respondsToSelector:(SEL)selector {
+  if (selector == @selector(copy:) || selector == @selector(paste:)) {
+    MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
+    if ([target isKindOfClass:MitcadNativeWidgetTarget.class] && target->owner != nullptr &&
+        target->owner->modelSharedAction(self, selector, false)) return YES;
+    // NSObject would answer for this class, which implements them.
+    return [NSTableView instancesRespondToSelector:selector];
+  }
+  return [super respondsToSelector:selector];
+}
+- (void)copy:(id)sender {
+  (void)sender;
+  MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
+  if (target != nil && target->owner != nullptr) target->owner->modelSharedAction(self, @selector(copy:), true);
+}
+- (void)paste:(id)sender {
+  (void)sender;
+  MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
+  if (target != nil && target->owner != nullptr) target->owner->modelSharedAction(self, @selector(paste:), true);
 }
 - (void)rightMouseDown:(NSEvent*)event {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;

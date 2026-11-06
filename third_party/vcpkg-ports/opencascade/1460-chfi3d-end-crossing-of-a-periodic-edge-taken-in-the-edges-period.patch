@@ -1,0 +1,54 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where a rounding's end crosses an edge of the faces round the end
+vertex whose curve is periodic, PerformIntersectionAtEnd takes the crossing
+in the edge's own period before it evaluates the edge's p-curves there
+(mitcad#1395).
+
+The end of a rounding over several faces is cut face by face: the blend is
+intersected with the curve of each edge between two of them, and the
+crossing's parameter on that curve gives the cut's ends on both faces
+through the edge's p-curves. The crossing was taken on the curve's edge by
+its distance to the edge's range in the edge's period, but its parameter
+was used as the intersection gave it, in the curve's first period. An edge
+whose range runs on past the end of that period (an ellipse from 5.75 to
+6.82, where the period ends at 6.28) was crossed at 6.81 and the parameter
+came as 0.53. A p-curve that is itself periodic (the ellipse's on a plane)
+gives the same point there; a p-curve that is not (the ellipse's on a
+cylinder, a B-spline) is evaluated far outside its range: the cut on the
+cylinder started 195 mm off along its axis, and the face was rebuilt with
+a wire running there (the result invalid, 0.5 mm3 of 7 lost).
+
+The same faces parametrised otherwise (the stored body's cylinder on a
+right-handed axis, its ellipse from 2.61 to 3.68) gave the right point.
+The case: a plate's side edge rounded with 0.3 down to a sloped face, past
+a 0.12 mm edge, where a groove of radius 13.5 cuts the slot's wall beside
+it (mitcad#1395, a reported design's item replayed). Now the crossing's
+parameter is moved into the edge's period, as the choice of the crossing
+already does, wherever the curve is the edge's own; the cut on the
+cylinder runs along the groove between the sloped face and the groove's
+top, and the result is valid with the stored body's volume.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index c3e27686..bf1d6071 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -11008,6 +11008,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           gp_Pnt2d pt2d(inters.Point(nbp).U(), inters.Point(nbp).V());
+           pfil2    = pt2d;
+           paredge2 = inters.Point(nbp).W();
++          // On an edge whose curve is periodic, the crossing is taken in
++          // the edge's own period, where its p-curves are evaluated: they
++          // need not be periodic (an ellipse's p-curve on a cylinder), and
++          // the edge's range may run on past the end of the curve's first
++          // period (an ellipse from 5.75 to 6.82, crossed at 6.81 and found
++          // at 0.53).
++          if (!extend && C->IsPeriodic())
++          {
++            const double aMid = 0.5 * (aFirstE2 + aLastE2);
++            paredge2 = ElCLib::InPeriod(paredge2, aMid - 0.5 * C->Period(), aMid + 0.5 * C->Period());
++          }
+           if (!extend && gapmin > 0.)
+           {
+             // The fillet crosses the curve of the edge beyond the edge's end:

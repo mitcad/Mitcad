@@ -11,7 +11,7 @@
 namespace mitcad {
 
 void TestDriver::testMacToolButtons() {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   QWidget* window = m_main.data();
   if (window == nullptr) {
     fail(m_line, QStringLiteral("no window for macOS tool button audit"));

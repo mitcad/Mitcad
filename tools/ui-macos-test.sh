@@ -64,7 +64,9 @@ elif [ -n "${MITCAD_UI_RENDERER:-}" ] && ! printf '%s' "$renderer" | grep -Eq --
 else
   ui_pass "OpenGL renderer: $renderer"
 fi
-ui_expect_log 'Style: macos Chrome:' "Qt's native macOS style"
+# The shared Qt UI (docs/macos-shared-qt.md): Qt's portable style, not macos.
+ui_expect_log 'Style: [a-z]+ Chrome:' "the Qt style is logged"
+ui_expect_no_log 'Style: macos Chrome:' "the shared style, not Qt's macOS style"
 ui_expect_no_log 'OCCT could not' 'OCCT attached to the OpenGL context'
 ui_check_shot demo
 

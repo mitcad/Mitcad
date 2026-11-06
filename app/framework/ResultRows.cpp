@@ -186,6 +186,10 @@ void ResultRows::set(const Inspection& result) {
   }
   static_cast<QVBoxLayout*>(layout())->addWidget(m_content);
   setVisible(true);
+  logRows(m_command, result);
+}
+
+void ResultRows::logRows(const QString& command, const Inspection& result) {
   // What the rows say, for the UI tests.
   const auto listed = [](const std::vector<Inspection::Value>& values) {
     QStringList entries;
@@ -195,10 +199,10 @@ void ResultRows::set(const Inspection& result) {
     return entries.join(QStringLiteral(", "));
   };
   if (!result.values.empty()) {
-    qDebug().noquote() << QStringLiteral("Panel %1 result values: %2").arg(m_command, listed(result.values));
+    qDebug().noquote() << QStringLiteral("Panel %1 result values: %2").arg(command, listed(result.values));
   }
   for (const Inspection::Group& group : result.groups) {
-    qDebug().noquote() << QStringLiteral("Panel %1 result %2: %3").arg(m_command, group.title, listed(group.values));
+    qDebug().noquote() << QStringLiteral("Panel %1 result %2: %3").arg(command, group.title, listed(group.values));
   }
 }
 

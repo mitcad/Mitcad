@@ -64,7 +64,8 @@
 //                           focus of the target window (see focus-dialog),
 //                           or for the open popup menu. <key> is a portable
 //                           key text: r, F6, Return, Escape, Tab, Down,
-//                           ctrl+z, ctrl+shift+s, alt+r, ... A key with a
+//                           ctrl+z, ctrl+shift+s, alt+r, shift (Shift
+//                           alone), ... A key with a
 //                           shortcut (a QAction, a QShortcut, a button's
 //                           mnemonic) triggers it unless the focused widget
 //                           takes the key as text.
@@ -233,10 +234,15 @@
 //                           exact control in the target window
 //   native-action <id>      dispatch the native AppKit menu command
 //   native-click <id>       click a native control by accessibilityIdentifier
-//   native-focus <id>       focus a native control without invoking/selecting it
+//   native-focus <id>       focus a native control without invoking/selecting it;
+//                           native.viewportHost: the embedded CAD view in it
 //   native-hover <id> enter|leave send an AppKit tracking event through the
 //                           control's registered hover owner
 //   native-type <id> <text> replace an AppKit field editor's text
+//   native-wheel <id> <notches> [mods] the mouse wheel over a native
+//                           control's centre, to the AppKit view there
+//                           (mitcad#1350: a value field with the keyboard
+//                           steps); positive: away from you
 //   native-choice <id> <title> choose a native popup item or workspace segment
 //   expect-native-spanned-heading <table id> <caption regex>
 //                           verify a visible full-row caption and selection
@@ -369,6 +375,10 @@
 //                           AppKit control or model cell's VoiceOver label
 //                           native.file.name/directory read the focused
 //                           file panel's public filename/folder properties.
+//                           native.window.title the document window's title;
+//                           <popup>/items a popup's choices, "title · subtitle"
+//                           joined by " | ", <popup>/item-tips their tooltips
+//                           (mitcad#1358).
 //   expect-native-enabled <id> true|false assert native control state (6 s)
 //   expect-native-visible <id> true|false assert native document view state
 //   expect-native-present <id> true|false assert document view membership, including hidden views
@@ -380,6 +390,12 @@
 //                           card is at its hidden Qt arrow's place, inset
 //                           by 2 points: the view's place in the window
 //                           plus the arrow's in the view (mitcad#1317, 6 s)
+//   expect-native-qt-place <widget> above|top <native id> a visible Qt
+//                           widget over the 3D view against a visible AppKit
+//                           view, both in the 3D view's host: above, the
+//                           widget's bottom at or above the view's top; top,
+//                           both tops within a point (native.window.content:
+//                           the window's content area; mitcad#1358, 6 s)
 //   expect-native-style <id> <state,...> what a native table cell or label
 //                           shows: error (red text, and a red fill in a
 //                           cell), warning, normal, bold, regular, editable,
@@ -390,6 +406,14 @@
 //                           caption checks an NSButton's displayed single-line
 //                           title mode and full native title bounds, including
 //                           text-only and text-with-icon buttons (6 s)
+//                           A Browser row (mitcad#1352): eye=<icon> its
+//                           light bulb's artwork is that shared icon
+//                           (eye, eye-half, eye-off); icon=<icon> the row's
+//                           icon is it, badged-icon=<icon> it with a corner
+//                           badge (a warning's); make-marker the Make tab's
+//                           dot after the name, with a tooltip (logged
+//                           "Native bulb <id>: <icon>", "Native row icon
+//                           <id>: <icon>", "Native Make marker <id>: <tip>")
 //   native-header-resize <id> <logical column> <delta points> drag the actual native header divider
 //   expect-native-header-resize-retained <id> <logical column> compare the last dragged width
 //   expect-native-split-retained <divider id> compare its live position after a real pointer drag
@@ -536,6 +560,8 @@
 //                           windows and their glass included (the others
 //                           grab widgets; the 3D view of a session without a
 //                           GPU may be blank in it)
+//                           (headless tests: the visible Qt windows composed,
+//                           without native chrome, glass or the 3D view)
 //   screenshot-dialog <png> the window focus-dialog chose (the main window
 //                           when none), as its widgets draw it
 //   screenshot-widget <name> <png>  `screenshot` cut to the visible widget
@@ -671,6 +697,8 @@ private:
   void sendWheel(const QPoint& windowPos, int notches, Qt::KeyboardModifiers modifiers);
   // The main window (or the 3D view only), cut to `crop` when given.
   bool saveScreenshot(const QString& path, bool viewOnly, QWidget* crop = nullptr);
+  // screenshot-screen in a headless test: the visible Qt windows composed.
+  bool saveHeadlessScreen(const QString& path) const;
   // Card widths and windows within the screen (mitcad#818,
   // TestDriverWindowFit.cpp): runs the step if it is one of those.
   bool runWindowFitStep(const QString& name, const QStringList& a, int line);

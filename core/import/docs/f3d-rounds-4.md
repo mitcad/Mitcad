@@ -1007,7 +1007,10 @@ stored body (a probe outside the repository).
   file's: those patches are 13 % of the item's new area each side, beyond
   the 2 % a corner patch may be off. Needed: that corner's construction,
   which the stored body shows only as fitted surfaces; building a
-  look-alike would be a substitute construction.
+  look-alike would be a substitute construction. (Built since mitcad#1371:
+  the corner is the concave arc's own rolling ball, rolled on between the
+  roundings; see *A rounding past a concave corner tighter than its ball*
+  below.)
 
 | Item | Achieved / target | Cause of the gap |
 |---|---|---|
@@ -2292,3 +2295,506 @@ The design imported alone (release build, its reference folder): 90 / 1 /
 items allowed the retry on the exact state. Test: `geometry.fillet_fin_end`
 on the cases `fin-top-chamfer-rounding` and `fin-end-rounding` of
 `MITCAD_GEOMETRY_CASES` (each patch's part fails without it).
+
+## A plate's sides rounded on the replay's body (mitcad#1346)
+
+After mitcad#1345, `5ef2dbd5` item 91 (Fillet20, radius 0.3 round the
+outlines of the plate's two sides, x = -7 and x = 7) built only through the
+retry on the file's exact state (state 61). Traced with OCCT's fillet alone
+on the replay's body and the stored states.
+
+- **The first deviation: the walk's vanishing end got a wrong parameter.**
+  Each side's chain runs along an earlier rounding of the plate's top edge
+  that comes tangent to the side at a vertex, (±7, 0.513, 45.99), and
+  vanishes into it. On the replay that rounding is exactly tangent to the
+  side there, and the walk reaches the vertex with no width left, stopping
+  on the side's edge; the walk then set the other contact's end with the
+  overload meant for a point on a restriction, which took that contact's V
+  on the earlier rounding (-0.034, and 15.42 on the other side) for its
+  parameter on the guide (36.96 and 0). The contact's end was then looked
+  for at that parameter, far outside its curve, and the end's degenerated
+  edge was made across the blend: the blend's wire crossed itself and the
+  earlier rounding's was left open, on both sides. The faces there lie
+  within 2 µm of the file's; the file's state 61 misses tangency at the
+  vertex by 0.4 degrees and 2.6 µm, so its walk stopped 0.04 short with a
+  section 0.0095 wide and `ChFi3d_ShrinkVanishingEnd` bent the blend's end
+  to the vertex: the same operation built there.
+  Port patch 1320 (`third_party/vcpkg-ports/docs/fillet-replay-1320.md`):
+  that end keeps the walk's parameter. On the replay's body item 91 builds,
+  valid, and its faces about the two vanishing ends lie on state 62 within
+  0.0063 mm both ways; the import's check finds its new faces and the
+  file's on each other within 0.01 mm.
+- **Item 92 (Fillet21, radius 0.3), exposed.** It ran on the file's state
+  while item 91 was retried there; now it runs on the replay's body. On
+  the file's state 62 its result lies on state 63 within 0.0034 mm; on the
+  replay's body it lies within 0.01 mm but at the corners where it meets
+  item 88's roundings beside the plate's face at y = 11.75 (between
+  z = 12 and 22 on both sides), up to 0.12 mm off state 63 there (the
+  import's check: eight of its new faces, 1.4 % of their area, up to
+  0.062 mm off; two of the file's up to 0.097 mm). The replay's body before
+  it lies on state 62 within 1e-4 mm there but for that face, 0.0043 mm
+  off (an earlier item's input beyond 0.001 mm). Its edges are now taken
+  from the history (inferred).
+- **Item 95 (Fillet24), exposed.** One of its edges, the file's edge at
+  x = 7, y = 11.75 from z = 15.8 to 21 of item 92's corner there, is not in
+  the replay: it builds only through the retry on the file's exact state
+  (state 65).
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 87 to 89 | 3 / 3 parametric, verified, edges read by their names, on the replay's body, as after mitcad#1345 | |
+| `5ef2dbd5` 90 Fillet25 | 1 / 1 parametric, verified, inputs inferred as before, on the replay's body | |
+| `5ef2dbd5` 91 Fillet20 | 1 / 1 parametric, verified, edges read by their names, on the replay's body (1320) | |
+| `5ef2dbd5` 92 Fillet21 | 1 / 1 parametric, verified; edges inferred (read before, on the file's state) | its corners beside the face at y = 11.75 up to 0.12 mm off the file's on the replay's body; within 0.0034 mm on state 62 |
+| `5ef2dbd5` 95 Fillet24 | 1 / 1 parametric, verified, on the file's exact state (state 65) | an edge of item 92's corner in the file, not in the replay |
+| `5ef2dbd5` 30 Fillet4 | 0 / 1, as before | the file kernel's own corner (round 19) |
+
+The design imported alone (release build, its reference folder): 90 / 1 /
+7 of 98 as before; `f3d.corpus_designs` names #91 among the items
+parametric, #92 among the inferred and #95 (no longer #91) among those
+allowed the retry on the exact state. Test: `geometry.fillet_vanishing_side`
+on the case `plate-side-vanishing-rounding` of `MITCAD_GEOMETRY_CASES`
+(invalid, 0.36 mm off, without 1320).
+
+## The inner rim rounded past the cylinder's seam (mitcad#1370)
+
+After mitcad#1261, item 36 of `49ccc315` and `e41d24ac` (Fillet10, 2.5,
+the inner rim of mitcad#1215 above) fell back again: the rounding along
+the rim stopped part of the way, the walk between the two faces failing.
+
+- **The cause: the faces on one surface joined after item 35.** mitcad#1261
+  joins the faces of one surface after each feature, so item 36's input is
+  no longer the body 1230 was made on: 208 faces against 304, the ring's
+  top one face with 30 edges, the inner cylinder one face closed round its
+  axis with its seam at -90 degrees under a fin's crest (where item 35
+  leaves a sliver edge of 6.5 µm), the inner rim one closed edge. 1230's
+  re-walk is reached: the ball rolls on the top's far edges all round and
+  fails at -90 degrees, where its turn over the sliver carries its contact
+  on the cylinder past that face's seam and the walk refuses each step. On
+  mitcad#1215's body the seam lay between two faces of the cylinder, where
+  1230 changed the contact's face. The time the trace gave ("cut short after
+  25.6 s") is the fillet's share running out on its worker, not a budget
+  that stops 1230. The geometry cases of mitcad#1215 hold the bodies before
+  mitcad#1261, which is why `geometry.fillet_roll_over_blend` still passed.
+- **The fix: port patch 1370**
+  (`third_party/vcpkg-ports/docs/fillet-rolling-ball.md`), in two parts,
+  neither enough alone. 1230's change of face also takes the seam of a
+  face closed round its periodic surface: the contact goes on in the same
+  face on the seam's other curve, and the piece before ends on the seam
+  with the walk's direction as its vector. And a turn about the
+  restriction's end that an earlier walk found is found again when that
+  walk is made again with a quarter of the step. 1230's bodies round as
+  before.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `49ccc315` 36 Fillet10 | 1 / 1 parametric, verified, edges read by their names, on the replay's body (1370) | |
+| `e41d24ac` 36 Fillet10 | 1 / 1 parametric, verified, edges read by their names, on the replay's body (1370) | |
+| `49ccc315`, `e41d24ac` 34, 35 | 2 / 2 parametric each, as before | |
+| `49ccc315`, `e41d24ac` 30, 31 | 0 / 2 each, as before | #30's three edges give a self-intersecting wire; #31's circular pattern of it removes none of the file's material |
+
+The designs imported alone (release build): `49ccc315` 42 / 1 / 2 (before
+the fix 41 / 1 / 3), `e41d24ac` 48 / 0 / 2 (before 47 / 0 / 3), both as
+after mitcad#1215. `f3d.corpus_designs` now names `49ccc315` with #34 to
+#36 parametric and #30 and #31 falling back. Test:
+`geometry.fillet_roll_over_blend` on the cases `fillet-roll-over-seam` and
+`fillet-roll-over-seam-2` of `MITCAD_GEOMETRY_CASES` (the replay's bodies
+before item 36, the fillet failing without 1370).
+
+## The final body's extra faces traced item by item (mitcad#1349)
+
+After mitcad#1347, `5ef2dbd5` imports with no item on the exact retry, and
+its final Body9 has 238 faces against the file's 229 (volume -0.0019 %).
+Traced with the dressup dump of every item of the bar's component
+(`MITCAD_IMPORT_DRESSUPS_ITEMS`), each result's faces matched against the
+stored state after it (surface type, area, centre), and OCCT's fillet alone
+on the replay's bodies and on the stored states (OCCT built from the port).
+Nothing is fixed here; the causes, for the follow-ups:
+
+| Item | Faces, replay / file (new faces) | Cause |
+|---|---|---|
+| 37 Fillet11 (radius 0.8) | +10 / +10 | built 0.1 % smaller (the dressup's shrink retry): OCCT fails at 0.8 exactly |
+| 38 Fillet12, 39 Fillet13 | +1 / +2, +2 / +1 | the file's two ends of item 38 differ (round 15); even again after 39 |
+| 87 Fillet27 (radius 0.2) | +23 / +10 | the fin top's arc-to-stretch transitions: 13 faces more |
+| 88, 89 | +7 / +7, +4 / +4 | |
+| 90 Fillet25 (radius 0.86) | +3 / +7 | the file's own definition fails on the replay's body; an inferred smaller set is taken |
+| 91 to 95 | as the file's | |
+
+So the 9 faces are item 87's 13 less item 90's 4.
+
+- **Item 87, the first and largest.** The fin's top runs as arcs (cylinders)
+  and spline stretches; item 86 chamfers the arcs' edges (cones), with a
+  small transition piece of the chamfer (a B-spline face 0.35 to 0.43 mm²)
+  between each cone and the root's chamfer beside the stretch, three per
+  side. Item 87 rounds the top's edges with 0.2 along the whole chain. At
+  each transition OCCT's walk along the stretch rolls its side contact over
+  the transition piece: two walked pieces between the top and that piece
+  (F119 and F120 by the dump's indices: 0.015 and 0.069 mm², split at a
+  section of the same two faces) and the piece's trimmed remainder, then the
+  arc's torus from the arc's crease on; at one transition a sliver of
+  0.0008 mm² more. The file has one face there: the transition piece itself,
+  on its own surface (every sample of the file's face within 1e-6 mm of the
+  piece's surface before the item), grown round the roundings' ends; the
+  stretch's rounding (on the root's chamfer, extended) and the arc's torus
+  (run on past the crease) are both cut by that surface, and the top keeps
+  its edge with the piece along x = ±0.237 (where the chamfer meets it)
+  up to the cut. The replay's faces there lie within 0.012 mm of the
+  file's (0.058 mm from the piece's surface). OCCT gives the same 147 faces
+  on the file's own state 57, so the operation is the cause, not the replay
+  before it. Needed: the rounding at such a transition cut by the transition
+  piece's surface, the piece extended over the gap (as 0531 and 0940 do for
+  a chamfer or a rounding wider than a narrow face), instead of the ball
+  rolled over it.
+- **Item 90, a knock-on.** The file's own definition (six edges between the
+  fin's narrow side strips and the root's chamfer, radius 0.86) rounds those
+  strips into tori over the same transitions and changes the transition
+  pieces again; on the replay's body (with item 87's extra faces) OCCT fails
+  it (one contour in error, one walk failing on an edge), on the stored
+  state 60 it builds (153 faces, which the checker finds invalid). The
+  import takes the edges state 61 shows gone near the fin's end instead
+  (inferred), 3 new faces against the file's 7. To be tried again once item
+  87's transitions are the file's.
+- **Item 37, the largest deviation (0.064 mm), not a face count.** The pocket
+  floor's outline rounded with 0.8 passes the concave wall arc c31 of radius
+  0.4 (the floor square to its axis). With the radius exactly twice the
+  arc's, the walk along that arc cannot leave its first section: its section
+  condition (the contacts' midpoint on the plane normal to the guide) holds
+  for every ball round the arc, as that midpoint lies on the arc's axis,
+  which every normal plane of the circular guide contains. The solver
+  returns the start section at every step, whose contact on the wall lies on
+  the wall's boundary, and the walk halves its step to nothing (at 0.79999
+  and 0.80001 it builds). The same on the stored state 21. The dressup's
+  shrink retry builds it at 0.7992; its corner faces at the arc lie 0.024 mm
+  (x = 7) and 0.064 mm (x = -7) off the file's, the walk near that
+  singularity not being symmetric, and the cylinder and torus beside them
+  end shorter (1.829 against 1.926 mm², 2.396 against 2.455 mm²). The
+  file's corner faces there are not rolling-ball envelopes of the floor
+  (sample points offset by the radius along the normal lie up to 0.2 mm
+  from the radius above the floor), so the walk's own result at 0.8 is not
+  known to be the file's either.
+
+Re-checked, unchanged: item 88 (the file makes four of its faces analytic,
+cylinders and tori of 1, where OCCT walks them), item 90's corners, item
+94's corners at (±6.6, -11.8, 9.0). The design's fields in
+`tools/cli/f3d-designs.cmake` are unchanged.
+
+### Item 87's transitions cut by their pieces (port patches 1350 to 1352)
+
+- **Item 87.** The crease between the root's chamfer and each transition
+  piece is concave by 5.1 degrees, under the tenth of a radian OCCT takes
+  for tangent, so the walk crossed it as smooth: a piece over the
+  transition piece, the ball rolled on the crease, then the stretch's
+  rounding. Port patch 1350 (`third_party/vcpkg-ports/docs/fillet-replay-1350-1352.md`)
+  cuts such a walk by the transition piece instead: the arc's torus runs on
+  past its end, cut by the stretch's top and by the piece up to where those
+  cuts meet (on the top's line with the piece, x = ±0.237); the stretch's
+  rounding is cut by the piece from where its contact on the root's chamfer
+  crosses the crease up to where its contact on the top leaves the piece's
+  material; the pieces between are dropped and the piece grows over the gap
+  up to the top. On one side the last arc's torus at the fin's end was
+  walked (its analytic pieces were dropped at the spine's last end, unlike
+  at the first): patch 1351 keeps them, so that its transition is made too;
+  patch 1352 makes the piece 1310 adds past the fin's end one face with the
+  torus, as in the file. On the replay's body item 87 gives the file's 10
+  new faces (124 to 134; 23 before); on the file's state 57 too (134
+  faces), its grown pieces and tori within 1e-4 mm of state 58's faces, the
+  stretches' walked roundings within 0.0005 mm. Items 88 and 89 follow with
+  the file's counts (141 and 145 faces after them, as the file's states).
+- **Item 90, retried: still inferred, its own definition fails.** Its six
+  edges are those of the fin's side strips (x = ±0.5) with the root's
+  chamfer, which is concave there, radius 0.86. Beside the end arc
+  (y = -8 to 9.4) the strip is a band of about 0.05 mm under the arc's
+  chamfer cone, so the rounding's contact on the strip runs past the
+  strip's convex edge with the cone at once; OCCT fails both such contours
+  (one in error, the other's walk failing), on the replay's body, which now
+  has state 60's faces, and on state 60 itself, where it builds a result
+  of 153 faces that the checker finds invalid. So the cause is item 90's own
+  rounding over those strips, not item 87 any more; it needs its own
+  construction (the file rounds the strips into tori over the transitions
+  and changes the transition pieces again). The import takes the edges
+  state 61 shows gone near the fin's end, as before: 3 new faces against
+  the file's 7.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 87 Fillet27 | 10 / 10 new faces on the replay's body (23 / 10 before); parametric, verified, edges read by their names | |
+| `5ef2dbd5` 88, 89 | 7 / 7, 4 / 4 new faces, as before | |
+| `5ef2dbd5` 90 Fillet25 | 3 / 7 new faces; parametric, verified, inputs inferred | its own definition fails over the side strips beside the end arc, also on the file's state 60 |
+| `5ef2dbd5` 91 to 93, 95 | 22 / 22, 16 / 16, 7 / 7, 6 / 6 new faces | |
+| `5ef2dbd5` 94 Fillet23 | 24 / 26 new faces (26 / 26 before, by chance) | its corners at (±6.6, -11.8, 9.0): 2 faces each where the file has 3, as noted above; its ends at z = 15 to 20 are now one cylinder each, as the file's (patch 1352; two faces each before) |
+| `5ef2dbd5` final Body9 | 223 / 229 faces (238 before) | item 90's 4, item 94's corners' 2 |
+
+The design imported alone (release build, OCCT with the port's patches):
+91 / 1 / 6 of 98 as before (parametric / fallback / skipped). Test:
+`geometry.fillet_fin_top_creases` (`test_transitions_cut_by_their_pieces`)
+on the case `fin-top-chamfer-rounding` of `MITCAD_GEOMETRY_CASES`.
+
+## A rounding past a concave corner tighter than its ball (mitcad#1371)
+
+`5ef2dbd5` item 30 (Fillet4, radius 3 along a wall's foot on the bar's rod,
+the wall's plan arcs of 0.4, 1.25, 12, 1.25 and 0.4, the arcs of 1.25
+concave, round 19 above) and the same chain in `99ef321f` (item 14):
+traced on the stored bodies before and after the item, with OCCT's fillet
+alone and through the import.
+
+- **The file's corner is the concave arc's own rolling ball.** Every
+  section of the file's strip and triangle is a circle of radius 1.25 whose
+  centre lies 1.75 = 3 - 1.25 from the balls of both roundings (within
+  5e-5 mm, the stored faces' fitting): the arc of 1.25 is itself the ball
+  of 1.25 rolling between the walls of 12 and 0.4, and the file rolls that
+  ball on down, first between the wall of 12 and the rounding along the
+  arc of 0.4 (the strip), then between the two roundings (the triangle),
+  until the two roundings touch where the ball of 3 touches the rod and
+  both walls (P), and its section vanishes. The triangle's curves on the
+  roundings are that ball's contacts; the circle between the strip and the
+  triangle is its section where its contact on the wall of 12 crosses the
+  other rounding's contact there. Round 19's "a look-alike would be a
+  substitute" no longer holds: the construction is exact.
+- **Port patch 1380** builds it
+  (`third_party/vcpkg-ports/docs/fillet-three-face-corner-1380.md`): the
+  contour is split at the concave arc, both roundings walk on to the arc's
+  edges, and the ball's sections are solved on the walls' and the
+  roundings' surfaces. On the stored body before the item the result lies
+  on the stored body after it within 0.0012 mm both ways about the chain,
+  the change of volume 15.038258 against the file's 15.038261 mm³.
+- **Item 30 (`5ef2dbd5`) and item 14 (`99ef321f`): parametric and
+  verified, inputs inferred.** The file's edge along the rod is two edges
+  (split at x = 0, the mirror's plane), the replay's one, so the edges are
+  taken from the history's state; item 31 (Fillet5), which now runs on the
+  replay, likewise.
+- **Item 38 (Fillet12, 0940's key top) on the replay's body:** its torus
+  face lies on a trimmed surface of the torus (the stored body's on the
+  torus), where 0940 found no run-on of the torus's junction with an end
+  rounding and then put its curve a period off. Port patch 1381;
+  parametric on the replay's body, as before on the stored state.
+- **`99ef321f` item 22 (Fillet32) on the replay's body:** the sweep's
+  join (item 12, `5ef2dbd5` item 28) left an internal edge on the bore's
+  cylinder at y = 0, z = 41 from x = ±4.58 to ±7: the sweep's edge lies on
+  the cylinder, and OCCT's fuse keeps it in the merged face, bounding
+  nothing (the stored bodies have none; the face merge after the boolean
+  keeps it too). The outline's rounding over the bore's rim then gave
+  self-intersecting wires on the bore's cylinder and the plane beside it.
+  The join now takes such edges out of its result (an internal edge that
+  bounds no face of the result; `geometry/src/boolean.cpp`): item 22 is
+  parametric and verified again on the replay's body.
+- **Item 92 (Fillet21, radius 0.3) on the replay's body:** another
+  cause. Its body is the file's state 62 within 1e-6 mm (no internal
+  edges), but on surfaces parametrized otherwise (cylinders and a torus on
+  left-handed axes, planes facing the other way). The rounding of the edge
+  at x = 7, y = -11.6155 from z = 20 to 24 ends over the sloped plane and
+  the cylinder of 13.5 below, past a 0.12 mm edge: OCCT builds the same
+  rounding face, then rebuilds the sloped plane and the cylinder wrong
+  (the cylinder's new wire runs to z = -175), with or without 1380; the
+  same rounding builds valid on the file's faces, and making the
+  replay's faces direct (`ShapeCustom::DirectFaces`) does not help. The
+  same edge at x = -7 builds. A 12-face piece of each body about the end
+  reproduces it. Before, item 30's fallback had brought back the file's
+  bodies. Item 92 builds on the file's state 62 (the exact retry, allowed
+  in `f3d.corpus_designs`). Left for a follow-up (mitcad#1395 below:
+  port patch 1460).
+- **`3fe35ae9` item 23** (Fillet6, a chain of 13 edges): parametric,
+  verified, edges read by their names (was a fallback in the walk); its
+  state within 8.6e-7 mm. Sketch9 after it now keeps 4 of its 20 linked
+  curves (splines along the new rounding's edges) as fixed reference
+  geometry, where they followed the stored state's edges before.
+- **The other items of the ticket's table** fail as before, the faulty
+  contour's faces probed on OCCT's fillet alone with the patch (the faces'
+  smallest radii of curvature at each chain edge, against the ball's):
+  - `7dab3af4` 26 (radius 1.5): a chain over a cylinder of 2 and two arcs
+    of 1.2, tighter than the ball, with a line of 0.85 between them: two
+    such corners a short line apart, which 1380 does not split (a
+    neighbour of an arc must be the next arc's wall). Possibly this class;
+    a follow-up. (Not this class: the arcs of 1.2 are convex, the walk's
+    guide folds in the acute corner; built since mitcad#1396, *A rounding
+    along an acute corner whose edge turns towards the ball* below.)
+  - `7dab3af4` 29 (radius 3): an edge between two earlier roundings of
+    1.5, then a line, then an edge between two of 2.5: the rounded edge's
+    own faces tighter than the ball, not a corner of a chain.
+  - `d498ea9d`, `eecf90bd` 63 (radius 1): a chain on a cylinder of 22.75
+    past a torus of 0.5 and B-spline faces of 0.496 (earlier roundings
+    tighter than the ball, not cylinders): 1380 takes a cylinder only.
+  - `0b758b01` 156 (radius 5): a line and an edge of 1 to a torus of 10,
+    no face tighter than the ball; not this class, not traced further.
+  - `f2365b3e` 15 and `6f05020f` 8 (radius 1): chains along earlier
+    roundings of the same radius 1; not this class.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 30 Fillet4 | 1 / 1 parametric, verified, inputs inferred; new faces within 0.0012 mm of the file's (1380) | inputs inferred: the file's rod edge is split at x = 0 |
+| `99ef321f` 14 Fillet4 | 1 / 1 parametric, verified, inputs inferred (1380) | as above |
+| `5ef2dbd5` 31; `99ef321f` 15 | 2 / 2 parametric, verified, inputs inferred (read before, on the stored state) | as above |
+| `5ef2dbd5` 38 Fillet12 | 1 / 1 parametric on the replay's body (1381) | |
+| `5ef2dbd5` 92 Fillet21 | 1 / 1 parametric, on the file's state 62 (on the replay's before) | OCCT rebuilds the faces at the rounding's end wrong on the replay's faces (follow-up) |
+| `99ef321f` 22 Fillet32 | 1 / 1 parametric, verified, on the replay's body (the join without internal edges) | |
+| `3fe35ae9` 23 Fillet6 | 1 / 1 parametric, verified, inputs read (1380) | |
+| `3fe35ae9` 24 Sketch9 | 16 / 20 linked curves following edges (20 / 20 before) | 4 splines along item 23's new edges find no single edge |
+| the table's other items | 0 / 7 | above: `7dab3af4` 26 two tight arcs a short line apart (follow-up), the others other classes |
+
+The designs, each imported alone (release build, OCCT with the port's
+patches; parametric / fallback / skipped, before → after): `5ef2dbd5`
+91 / 1 / 6 → 92 / 0 / 6 of 98 (history items matched 65 → 66; Body9's
+volume -0.0021 % → +0.0001 % of the file's, 223 → 227 faces against
+229); `99ef321f` 19 / 3 / 1 → 20 / 2 / 1 (+1 partial, as before; item
+14 parametric; Body1 -0.0021 % of the file's as before, 153 faces against
+150); `3fe35ae9` 25 / 3 / 0 → 26 / 2 / 0. Tests:
+`geometry.fillet_three_face_corner` (synthetic, and the cases
+`three-face-corner` and `fillet-trimmed-torus` of
+`MITCAD_GEOMETRY_CASES`); `geometry.suite.boolean`
+(`test_join_leaves_no_internal_edge_on_a_face`, synthetic);
+`f3d.corpus_designs` (`5ef2dbd5`).
+
+## The fin's side strips rounded past their edges (mitcad#1388)
+
+`5ef2dbd5` item 90 (Fillet25, radius 0.86), the remainder of mitcad#1349.
+The fin's sides keep strips about 0.05 high (the planes x = ±0.5) between
+the arcs' chamfer (cones, item 86) and the root's chamfer (item 85: a cone
+in the file, a spline 0.003 mm off it in the replay). Each strip's far edge
+is its edge with the arc's cone (a circle) and, at each end, its edge with
+a transition piece of that chamfer, tangent to the cone there, narrowing to
+the strip's point; beside the fin's end arc the strip's other end is the
+fin's end face.
+
+- **The file's construction.** State 61's new faces were matched against
+  state 60 by surface, area and centre: at each strip a torus of minor
+  radius 0.86 coaxial with the cones (major radius 23.986, its centre
+  circle at x = ±1.285), the ball rolling on the strip's edge with the
+  arc's cone (ρ 24.337 at x = ±0.5) and touching the root's chamfer along
+  the circle x = ±0.626, past the edge's ends on along its circle up to
+  where the transition piece, grown down to that contact, cuts it. Beside
+  the end face the ball rolls on the strip's edges with that face (four
+  walked faces, down to the strip's point). The rim round the fin's end
+  (seven edges) is rounded too. Net 7 new faces: 10 new, the 3 strips
+  gone.
+- **The definition cannot give state 61.** The file's decoded definition
+  names six edges: both strips beside the middle arc and both beside the
+  end arc. State 61 leaves the strip beside the end arc at x = 0.5 sharp
+  and rounds the rim, which the definition does not name (round 11 of
+  mitcad#343 found the same). So the item can only be the inferred set,
+  as before.
+- **First deviation: item 86's chamfer.** On the replay the transition
+  piece met each strip in two spline edges (a vertex of the chamfer's
+  pieces, 0.026 mm from the cone), where the file has one edge. The
+  ball's end piece then rolled on the short edge and the corner at the
+  strip's point left the piece out (an open result), or the stripe's ends
+  failed. The dressup joined such piece vertices of a chamfer for lines
+  and circles only; it now concatenates two splines too
+  (`join_at_turn_stops` with `piece_vertices`, `geometry/src/dressup.cpp`).
+- **Then the walk itself (port patch 1420).** On the file's state 60
+  OCCT's fillet of the eleven edges state 61 lost gives the file's 152
+  faces: the walk coming along the arc's edge fails past its end on the
+  transition piece's edge, and 0904's roll-on past the end makes the
+  file's torus. On the replay's body (the root's chamfer a spline) the
+  walk of the strip beside the end arc started beside the strip's point
+  or rolled on along the transition piece's edge into it, and failed in
+  both orders of its edges. Patch 1420
+  (`third_party/vcpkg-ports/docs/fillet-fin-end-strips-1420.md`) takes
+  such a start only where there is no other, drops the pieces rolled on
+  the transition piece's edge (it goes on tangentially from the cone; the
+  end face does not, and keeps its pieces) and rolls the blend on along
+  the circle, and does not complete the first end's walk back forward.
+- **The import's guess.** The edges state 61 lost were tried with the
+  rim's edges alone first (those whose midpoint lies as far from the
+  state as the ball's depth leaves): 3 new faces, the strips' absence
+  within the corner allowance (up to 0.044 mm), accepted. The strips' own
+  edges lie only 0.022 to 0.053 mm from state 61, the ball rolling on the
+  strip's far edge. The guesses now try first, where there are such edges,
+  those edges with the concave ones whose dressup the state has at any
+  distance (`core/import-replay/src/features.rs`): the eleven edges, the
+  file's state within 2.2e-5 (3.0e-5 with the rim alone).
+
+Every new face of item 90 lies on the file's within 0.003 mm (the
+transition piece grown at one strip's end 0.0055 mm off, the root's spline
+deviation), and the file's new faces on it within 0.0026 mm.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 90 Fillet25 | 7 / 7 new faces, within 0.003 mm of the file's (3 / 7 before); parametric, verified, inputs inferred | its definition names the strip at x = 0.5 that state 61 leaves sharp and not the rim it rounds |
+| `5ef2dbd5` final Body9 | 227 / 229 faces (223 before), volume 5.7e-7 relative | item 94's corners (mitcad#1389) |
+
+The design imported alone (release build, OCCT with the port's patches and
+1420, after mitcad#1371): 92 / 0 / 6 of 98 (parametric / fallback / skipped), items
+84 to 95 parametric. Test: `geometry.fillet_fin_end_strips` on the case
+`fin-end-strips` of `MITCAD_GEOMETRY_CASES`.
+
+## A rounding along an acute corner whose edge turns towards the ball (mitcad#1396)
+
+`7dab3af4` item 26 (Fillet14, radius 1.5), left by mitcad#1371 as two
+concave arcs of 1.2 a short line apart. Traced on the stored bodies before
+and after the item (history states 17 and 18) with OCCT's fillet alone.
+
+- **The chain.** A plate with two rails on it, both sides of a mirror, run
+  into end walls standing at 45 degrees to the rails. Each rail is 3 wide,
+  its foot rounded with 2 on its inner side and its top with 1.2 on both
+  sides, a flat of 0.6 between (0.85 along the wall). The item rounds each
+  wall's foot over the plate and up round the rail's profile: seven edges a
+  side, all concave. The arcs of 1.2 are the rail's top roundings, convex:
+  not 1380's class.
+- **The file's construction.** The ball of 1.5 rolling all along: cylinders
+  over the plane faces, walked faces over the foot rounding and the top
+  roundings, the two sides mitred where the walls meet. State 18 has 14 new
+  faces.
+- **The fault.** OCCT's walk failed past the rail's inner side, over the
+  foot rounding, also on the stored body. The walk's guide is the edge on
+  the wall, which turns round the foot rounding with a radius of curvature
+  of 1.41 at the rail's side, while in the corner of 45 degrees the ball
+  lies 2.6 radii from it: its normal planes turned back past the ball, and
+  every step went back up the rail's side (from radius 1 up; at 0.5 the
+  walk went through).
+- **Port patch 1440**
+  (`third_party/vcpkg-ports/docs/fillet-acute-turn-1440.md`): such a walk
+  between two pieces is guided along the balls' centres, a cubic from the
+  ball before it to the ball after it. On the stored body before the item
+  the result lies on the stored body within 0.001 mm and the stored body on
+  it within 0.0046 mm (its foot faces' own fit), along both chains.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `7dab3af4` 26 Fillet14 | 1 / 1 parametric, verified, edges read by their names (1440) | |
+| `7dab3af4` 29 Fillet17 | 0 / 1, fallback as before | another class (mitcad#1371's list): the rounded edge's own faces tighter than the ball |
+
+The design imported alone (release build, OCCT with the port's patches and
+1440): 30 / 0 / 2 / 0 → 31 / 0 / 1 / 0 of 32 (parametric / partial /
+fallback / skipped). Test: `geometry.fillet_acute_turn` (synthetic, and the
+case `acute-concave-turn` of `MITCAD_GEOMETRY_CASES`).
+
+## A rounding's end over a groove on faces parametrised otherwise (mitcad#1395)
+
+`5ef2dbd5` item 92 (Fillet21, radius 0.3), the follow-up of mitcad#1371:
+on the replay's body its rounding of the edge at x = 7, y = -11.6155 from
+z = 20 to 24 gave an invalid body (350 mm³ short), and the item built only
+through the retry on the file's exact state (state 62). Traced with OCCT's
+fillet alone on the replay's body and on state 62, then on a piece of each
+about the rounding's end (the body's common with one box, 9 faces).
+
+- **The end.** Beside the slot's wall a groove of radius 13.5 (a cylinder
+  about the z axis) is cut from z = 20 to 22, 0.12 mm short of the plate's
+  side: the rounding's contact on the wall (x = 6.7) lies in the groove
+  there, and its lower end is cut by the sloped face, the groove's
+  cylinder and the groove's top in turn (`PerformIntersectionAtEnd`).
+- **The first deviation.** The cut along the groove started from the
+  crossing of the rounding with the sloped face's edge with the groove (an
+  ellipse), evaluated on the edge's p-curve on the cylinder. On the
+  replay's body that ellipse runs from 5.75 to 6.82 on its curve, past the
+  end of its first period (state 62's from 2.61 to 3.68, its cylinder on a
+  right-handed axis): the crossing came at 0.53 for 6.81, and the
+  p-curve, a B-spline, was evaluated outside its range, 195 mm down the
+  cylinder's axis. Port patch 1460
+  (`third_party/vcpkg-ports/docs/fillet-end-periodic-edge-1460.md`) takes
+  the crossing in the edge's period. Both pieces then round alike, valid,
+  7.067254 mm³ each; on the whole replay's body the rounding is valid, 182
+  faces as on state 62.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 92 Fillet21 | 1 / 1 parametric, verified, inputs read, on the replay's body without the retry (1460) | |
+
+The design imported alone (release build in the Windows VM, OCCT with the
+port's patches and 1460): 92 / 0 / 6 of 98 as before, no item through the
+retry on the exact state; item 92's change of volume as the file's
+(difference 0). The final Body3 is now 1.0e-5 below the file's volume
+(5.7e-7 above before), 227 faces against 229 as before: the replay's body
+before item 92 lies 0.0043 mm off state 62 on one face (an earlier item's
+input, mitcad#1346 above), which the retry had hidden. `f3d.corpus_designs`
+no longer allows the retry for #92. Test:
+`geometry.fillet_end_reversed_faces` on the case
+`fillet-end-on-reversed-faces` of `MITCAD_GEOMETRY_CASES`.

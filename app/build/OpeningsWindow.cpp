@@ -106,7 +106,7 @@ OpeningsWindow::OpeningsWindow(QWidget* parent) : QDialog(parent) {
   buttons->addButton(m_remove, QDialogButtonBox::ResetRole);
   buttons->addButton(m_close, QDialogButtonBox::RejectRole);
   mac::styleListButtons(m_addWindow, m_remove);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* addMenu = new QMenu(m_addWindow);
   addMenu->addAction(tr("Window"), this, [this] { addRow(OpeningRow::Kind::Window); });
   addMenu->addAction(tr("Door"), this, [this] { addRow(OpeningRow::Kind::Door); });
@@ -117,7 +117,7 @@ OpeningsWindow::OpeningsWindow(QWidget* parent) : QDialog(parent) {
   mac::styleIconToggle(m_addOpening, QStringLiteral("plus"));
   mac::styleDialogButtons(buttons, m_close);
   layout->addWidget(buttons);
-#ifndef Q_OS_MACOS
+#ifndef MITCAD_MAC_UI
   connect(m_addWindow, &QPushButton::clicked, this, [this] { addRow(OpeningRow::Kind::Window); });
 #endif
   connect(m_addDoor, &QPushButton::clicked, this, [this] { addRow(OpeningRow::Kind::Door); });
@@ -158,7 +158,7 @@ void OpeningsWindow::open(const Target& target) {
   m_bearing->setVisible(!target.floor);
   m_bearingLabel->setVisible(!target.floor);
   m_addWindow->setVisible(!target.floor);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_addDoor->hide(); // the adjacent + menu contains both wall opening kinds
 #else
   m_addDoor->setVisible(!target.floor);

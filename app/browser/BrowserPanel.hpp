@@ -2,6 +2,7 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 
 #include <QHash>
 #include <QIcon>
@@ -142,6 +143,12 @@ public:
     // `eyeBound`: the row's own condition, the bulb's fx mark.
     QString eyeTip;
     bool eyeBound = false;
+    // The Make tab's marker after the name (mitcad#1049): its tooltip,
+    // empty without one.
+    QString makeTip;
+    // A shown transparent body or component (mitcad#1093): the half-open
+    // eye. Hidden, its bulb is the closed eye as any other.
+    bool transparent = false;
   };
   QVector<PresentationRow> presentationRows() const;
   void setPresentationExpanded(const QString& key, bool expanded);
@@ -195,8 +202,15 @@ public:
   // height, before its first layout, falls back to the viewport).
   int availableHeight() const;
   void setAvailableHeight(std::function<int()> height);
-  // Renames a row in place.
+  // Renames a row in place: in these rows' editor, or in another
+  // presentation's when one is set (mitcad#1356: the AppKit outline). The
+  // presentation gets the row's presentation key (PresentationRow::key) and
+  // returns false when it shows no such editable row. Logged "Renaming
+  // <path>" when an editor opens.
   void startRename(const BrowserNode& node);
+  void setPresentationRenamer(std::function<bool(const QString& key)> renamer) {
+    m_presentationRenamer = std::move(renamer);
+  }
   // Closes an open rename editor without renaming; false when none is open.
   bool cancelEditing();
   // Logs where the rows are, for UI tests (when it changed): "Browser <path>
@@ -296,6 +310,10 @@ signals:
   // (`pinned` false) or it was clicked; `anchor` is the badge in global
   // coordinates. The controller shows the row's bindings card.
   void bindingsRequested(const mitcad::BrowserNode& node, const QRect& anchor, bool pinned);
+  // The rows' looks changed in place, without a rebuild (mitcad#1352): the
+  // Make markers (setMakeMarkers) or an analysis row's note
+  // (setAnalysisNotes). Another presentation reads presentationRows again.
+  void rowsRestyled();
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -396,6 +414,7 @@ private:
   bool m_fitPending = false; // designOpened, until the panel showed with its size
   bool m_fitQueued = false;
   std::function<int()> m_availableHeight; // setAvailableHeight
+  std::function<bool(const QString&)> m_presentationRenamer; // setPresentationRenamer
   // The joint row under the pointer (mitcad#523): jointHovered when it
   // changes ("uid@occurrence", empty: none).
   void hoverJoint(const BrowserNode& node);

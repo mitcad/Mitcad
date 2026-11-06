@@ -1,0 +1,1056 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose walk crosses a slight concave crease rolling on
+it is cut by the face beyond the crease instead, that face growing up to
+it (mitcad#1349).
+
+A fin's top runs as arcs and spline stretches; the arcs' edges are
+chamfered (cones), the stretches' sides are a chamfer of the fin's root,
+and a small transition piece of the arcs' chamfer (C, a ruled B-spline
+face) lies between each cone and the root's chamfer (B). The crease between
+B and C is concave by about 5 degrees, under the tenth of a radian
+ChFi3d::IsTangentFaces takes for tangent. Rounding the top's edges with
+0.2, the walk from the arc's torus (A) onto the stretch walked a piece over
+C, rolled the ball on the crease and walked on over B (W): three faces
+where the stored body has none. There the material the roundings take away
+is kept outside C's material: A runs on past its end, cut by the stretch's
+top (T) and by C up to the point Q where those cuts meet; W is cut by C from
+P, where its contact on B crosses the crease, up to K, where its other
+contact (on T) leaves C's material; and C grows over the gap up to T
+between Q and K.
+
+RoundingOverSlightCreases does so after a fillet's stripe is computed
+(PerformSetOfSurf), for each piece rolling on an edge E that is no edge of
+the spine, whose faces are tangent for OCCT but whose outward normals lie
+more than a hundredth of a radian apart at E's middle, across a concave
+crease: W is the walked piece beside it on B, ending on E, and A the first
+piece on the other side whose faces are neither C nor T, analytic, its
+contacts ending on its faces' edges with C and with T. Q is where the line
+of T and C (their surfaces extended, ChFi3d_WideSurface) meets A's surface
+past its end between its contacts, refined so that it lies on both faces'
+surfaces; A's cuts by T and C are ChFi3d_KPartCutCurve's (T's surface, an
+extrusion of a profile's stretch ending at the arc, run on past that end by
+ChFi3d_RunOnExtrusionCurve), on A's own surface (one face with A). W's cut
+is ChFi3d_NarrowCutPiece's (0531's), ending in a point at P, and the rest
+of W is trimmed from K. The pieces between A and W are dropped, and the
+stripe is split there into parts ending in points, stripes of their own
+after the first (myNarrowParts, as 0531's), the last one taking over the
+stripe's end at the spine's last vertex. C's growth is the curve of T and C
+from Q to K (ChFi3d_FacesCurve). Where any of this fails, that transition
+is left as the walk made it.
+
+ChFi3d_KPartCutCurve gives a cut whose projection onto a surface fails (a
+cut starting on the boundary of a walked blend's surface, at its end
+section) the p-curve through its points' projections, the surface's bounds
+widened a little (ChFi3d_PCurveByPoints).
+
+On the fin's top (six transitions), on the design's own stored state before
+the rounding (with 1351 and 1352): the result has the stored body's 134
+faces (147 before); the grown pieces and the arcs' tori lie on the stored
+body's faces within 1e-4 mm, the stretches' walked roundings within 0.0005
+mm.
+
+Test: geometry/tests/test_fillet_fin_top_creases.cpp,
+test_transitions_cut_by_their_pieces, on the case `fin-top-chamfer-rounding`
+of MITCAD_GEOMETRY_CASES (with 1351 and 1352).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 92d42534..7baf0056 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1178,6 +1178,19 @@ private:
+                                                const int                         ons,
+                                                const TopoDS_Face&                B);
+ 
++  //! A rounding whose walk crossed a slight concave crease E (its faces'
++  //! normals between a hundredth and a tenth of a radian apart, which the
++  //! walk takes for tangent) by rolling on E between the analytic blend A of
++  //! the edge before E's face C and the piece W walked on E's other face B:
++  //! the material the blends take away is kept outside C's material
++  //! instead. A runs on past its end, cut by C and by W's other face T up to
++  //! where those cuts meet; W is cut by C from where its contact crosses E
++  //! up to where its other contact leaves C's material; the pieces between
++  //! are dropped, and C grows up to T between the two cuts. The stripe is
++  //! split there into parts ending in points (stripes of their own after
++  //! the first, myNarrowParts). Returns true when the stripe was changed.
++  Standard_EXPORT bool RoundingOverSlightCreases(const occ::handle<ChFiDS_Stripe>& Stripe);
++
+   //! A walked blend whose contact on one face leaves it across an edge into
+   //! the face at an end of the spine before that end: the blend is walked
+   //! on over that face's surface and cut by the face at the end up to where
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index a7569a0d..a6f9b5be 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -119,6 +119,7 @@
+ #include <ElSLib.hxx>
+ #include <GeomAPI_IntCS.hxx>
+ #include <GeomAPI_PointsToBSpline.hxx>
++#include <Geom2dAPI_PointsToBSpline.hxx>
+ #include <GeomAPI_IntSS.hxx>
+ #include <GeomLProp_SLProps.hxx>
+ #include <Geom_BSplineCurve.hxx>
+@@ -6664,6 +6665,86 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+ 
+ //=================================================================================================
+ 
++//=======================================================================
++// function : ChFi3d_PCurveByPoints
++// purpose  : The p-curve of curve C (from f to l) on surface S through the
++//            projections of points along it, each within Tol of S, with
++//            C's parameters; null where a point lies off S. (Where
++//            GeomProjLib cannot project a curve ending on the boundary of
++//            a walked blend's surface, a cut from a point of its end
++//            section.)
++//=======================================================================
++
++static occ::handle<Geom2d_Curve> ChFi3d_PCurveByPoints(const occ::handle<Geom_Curve>&   C,
++                                                       const double                     f,
++                                                       const double                     l,
++                                                       const occ::handle<Geom_Surface>& S,
++                                                       const double                     Tol)
++{
++  const int                    nb = 40;
++  NCollection_Array1<gp_Pnt2d> aUV(1, nb + 1);
++  NCollection_Array1<double>   aPar(1, nb + 1);
++  // (The surface's bounds widened a little, so that a point on a boundary
++  // is found as a projection: past them a B-spline runs on along its end
++  // spans' polynomials.)
++  double u1 = 0., u2 = 0., v1 = 0., v2 = 0.;
++  S->Bounds(u1, u2, v1, v2);
++  if (!S->IsUPeriodic() && !Precision::IsInfinite(u1) && !Precision::IsInfinite(u2))
++  {
++    const double du = 0.05 * (u2 - u1);
++    u1 -= du;
++    u2 += du;
++  }
++  if (!S->IsVPeriodic() && !Precision::IsInfinite(v1) && !Precision::IsInfinite(v2))
++  {
++    const double dv = 0.05 * (v2 - v1);
++    v1 -= dv;
++    v2 += dv;
++  }
++  GeomAPI_ProjectPointOnSurf aPr;
++  aPr.Init(S, u1, u2, v1, v2, Precision::Confusion());
++  for (int k = 0; k <= nb; k++)
++  {
++    const double t = f + (l - f) * k / nb;
++    aPr.Perform(C->Value(t));
++    if (!aPr.IsDone() || aPr.NbPoints() == 0 || aPr.LowerDistance() > Tol)
++    {
++      return occ::handle<Geom2d_Curve>();
++    }
++    double u = 0., v = 0.;
++    aPr.LowerDistanceParameters(u, v);
++    if (k > 0)
++    {
++      // (Periodic parameters kept next to the previous point's.)
++      const gp_Pnt2d& p = aUV.Value(k);
++      if (S->IsUPeriodic())
++      {
++        u = ElCLib::InPeriod(u, p.X() - 0.5 * S->UPeriod(), p.X() + 0.5 * S->UPeriod());
++      }
++      if (S->IsVPeriodic())
++      {
++        v = ElCLib::InPeriod(v, p.Y() - 0.5 * S->VPeriod(), p.Y() + 0.5 * S->VPeriod());
++      }
++    }
++    aUV.SetValue(k + 1, gp_Pnt2d(u, v));
++    aPar.SetValue(k + 1, t);
++  }
++  try
++  {
++    OCC_CATCH_SIGNALS
++    Geom2dAPI_PointsToBSpline anApp(aUV, aPar, 3, 8, GeomAbs_C2, 1.e-9);
++    if (!anApp.IsDone())
++    {
++      return occ::handle<Geom2d_Curve>();
++    }
++    return anApp.Curve();
++  }
++  catch (Standard_Failure const&)
++  {
++    return occ::handle<Geom2d_Curve>();
++  }
++}
++
+ //=======================================================================
+ // function : ChFi3d_KPartCutCurve
+ // purpose  : The cut of an analytic blend S by the face beyond B, from P1
+@@ -7136,6 +7217,16 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+       // periods of the parameters given at its start.
+       occ::handle<Geom2d_Curve> aP1 = GeomProjLib::Curve2d(aC, uf, ul, S);
+       occ::handle<Geom2d_Curve> aP2 = GeomProjLib::Curve2d(aC, uf, ul, SB);
++      // (A cut from a point of a walked blend's end section, on its
++      // surface's boundary: through its points' projections.)
++      if (aP1.IsNull())
++      {
++        aP1 = ChFi3d_PCurveByPoints(aC, uf, ul, S, aTolP);
++      }
++      if (aP2.IsNull())
++      {
++        aP2 = ChFi3d_PCurveByPoints(aC, uf, ul, SB, aTolP);
++      }
+       if (aP1.IsNull() || aP2.IsNull())
+       {
+         continue;
+@@ -15188,6 +15279,843 @@ bool ChFi3d_Builder::ChamferCutByFacesBeyond(const occ::handle<ChFiDS_Stripe>& S
+   return true;
+ }
+ 
++//=======================================================================
++// function : RoundingOverSlightCreases
++// purpose  : See the header.
++//=======================================================================
++
++namespace
++{
++// A rounding's transition over a slight concave crease E between faces B
++// and C (RoundingOverSlightCreases): the analytic blend A of the edge
++// before C, the pieces over C and on E between them (dropped), and the
++// walked piece W on B; side r is on C (in A on the face before C) and on
++// B (in W), the other side on T (W's other face) and on the face A's other
++// contact reaches T from.
++struct ChFi3d_SlightCrease
++{
++  int         iA = 0, iW = 0;
++  int         r  = 0;
++  TopoDS_Edge E;
++  TopoDS_Face B, C, T;
++  // (Made from them.)
++  occ::handle<ChFiDS_SurfData> RunOn; // A run on past its end, cut by T and C
++  occ::handle<ChFiDS_SurfData> Cut;   // W from the crossing on E to K, cut by C
++  double                       tP = 0., tK = 0.;
++  TopoDS_Vertex                VQ, VK;
++};
++} // namespace
++
++// The angle between the outward normals of faces F1 and F2 (as they lie
++// in the solid) at the middle of their edge E.
++static bool ChFi3d_CreaseAngle(const TopoDS_Edge& E, const TopoDS_Face& F1, const TopoDS_Face& F2, double& theAngle)
++{
++  gp_Dir aN[2];
++  int    k = 0;
++  for (const TopoDS_Face& F : {F1, F2})
++  {
++    double                          f = 0., l = 0.;
++    const occ::handle<Geom2d_Curve> aPC = BRep_Tool::CurveOnSurface(E, F, f, l);
++    if (aPC.IsNull())
++    {
++      return false;
++    }
++    const gp_Pnt2d      uv = aPC->Value(0.5 * (f + l));
++    BRepAdaptor_Surface aS(F, false);
++    BRepLProp_SLProps   aP(aS, uv.X(), uv.Y(), 1, 1.e-9);
++    if (!aP.IsNormalDefined())
++    {
++      return false;
++    }
++    gp_Dir aD = aP.Normal();
++    if (F.Orientation() == TopAbs_REVERSED)
++    {
++      aD.Reverse();
++    }
++    aN[k++] = aD;
++  }
++  theAngle = aN[0].Angle(aN[1]);
++  return true;
++}
++
++static occ::handle<Geom_Surface> ChFi3d_RunOnExtrusionCurve(const occ::handle<Geom_Surface>& S,
++                                                            const double                     U,
++                                                            const double                     L);
++
++namespace
++{
++// ChFi3d_SignedDistance to one face for many points: its surface extended
++// (ChFi3d_WideSurface) and the projector made once.
++class ChFi3d_FaceDistance
++{
++public:
++  explicit ChFi3d_FaceDistance(const TopoDS_Face& F)
++      : mySurf(ChFi3d_WideSurface(F)),
++        myReversed(F.Orientation() == TopAbs_REVERSED)
++  {
++    if (!mySurf.IsNull())
++    {
++      double u1 = 0., u2 = 0., v1 = 0., v2 = 0.;
++      mySurf->Bounds(u1, u2, v1, v2);
++      myProj.Init(mySurf, u1, u2, v1, v2, Precision::Confusion());
++    }
++  }
++
++  bool operator()(const gp_Pnt& P, double& D)
++  {
++    if (mySurf.IsNull())
++    {
++      return false;
++    }
++    myProj.Perform(P);
++    if (!myProj.IsDone() || myProj.NbPoints() == 0)
++    {
++      return false;
++    }
++    double u = 0., v = 0.;
++    myProj.LowerDistanceParameters(u, v);
++    gp_Pnt Q;
++    gp_Vec Du, Dv;
++    mySurf->D1(u, v, Q, Du, Dv);
++    gp_Vec N = Du.Crossed(Dv);
++    if (N.Magnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    if (myReversed)
++    {
++      N.Reverse();
++    }
++    D = gp_Vec(Q, P).Dot(N.Normalized());
++    return true;
++  }
++
++private:
++  occ::handle<Geom_Surface>  mySurf;
++  bool                       myReversed;
++  GeomAPI_ProjectPointOnSurf myProj;
++};
++} // namespace
++
++// Analytic blend A run on past its end (its last end where isLast) over
++// its surface continued, its side o cut by face T and its side r by face C
++// (both surfaces extended), up to the point Q where the cuts meet: the
++// piece from A's end to Q, which ends in a point there (vertex VQ, made
++// here). Null where it cannot be made.
++static occ::handle<ChFiDS_SurfData> ChFi3d_RunOnCutByTwoFaces(TopOpeBRepDS_DataStructure&         DStr,
++                                                              const occ::handle<ChFiDS_SurfData>& A,
++                                                              const bool                          isLast,
++                                                              const int                           r,
++                                                              const TopoDS_Face&                  T,
++                                                              const TopoDS_Face&                  C,
++                                                              const double                        tol3d,
++                                                              TopoDS_Vertex&                      VQ)
++{
++  const int                        o  = 3 - r;
++  const occ::handle<Geom_Surface>& S  = DStr.Surface(A->Surf()).Surface();
++  const ChFiDS_FaceInterference&   FO = A->Interference(o);
++  const ChFiDS_FaceInterference&   FR = A->Interference(r);
++  if (S.IsNull() || FO.PCurveOnSurf().IsNull() || FR.PCurveOnSurf().IsNull())
++  {
++    return occ::handle<ChFiDS_SurfData>();
++  }
++  // (The coordinate of the blend's surface along the spine, and the
++  // contacts' ends across it.)
++  const gp_Pnt2d a = FO.PCurveOnSurf()->Value(FO.FirstParameter()), b = FO.PCurveOnSurf()->Value(FO.LastParameter());
++  const int      aCoord = std::abs(b.X() - a.X()) >= std::abs(b.Y() - a.Y()) ? 1 : 2;
++  const int      across = 3 - aCoord;
++  double         aDir   = b.Coord(aCoord) > a.Coord(aCoord) ? 1. : -1.;
++  if (!isLast)
++  {
++    aDir = -aDir;
++  }
++  const gp_Pnt2d uvO = FO.PCurveOnSurf()->Value(isLast ? FO.LastParameter() : FO.FirstParameter());
++  const gp_Pnt2d uvR = FR.PCurveOnSurf()->Value(isLast ? FR.LastParameter() : FR.FirstParameter());
++  const double   c0 = 0.5 * (uvO.Coord(aCoord) + uvR.Coord(aCoord));
++  const double   xO = uvO.Coord(across), xR = uvR.Coord(across);
++  const auto     at = [&](const double c, const double x) {
++    return aCoord == 1 ? S->Value(c, x) : S->Value(x, c);
++  };
++  // (Signed distances to T and C, positive outside the solid.)
++  ChFi3d_FaceDistance aDT(T), aDC(C);
++  const auto          dist = [&](const gp_Pnt& P, double& dT, double& dC) { return aDT(P, dT) && aDC(P, dC); };
++  // (The band's width at the end.)
++  const double aWidth = at(c0, xO).Distance(at(c0, xR));
++  if (aWidth <= Precision::Confusion())
++  {
++    return occ::handle<ChFiDS_SurfData>();
++  }
++  // Q: where the line of T and C (their surfaces extended) meets the
++  // blend's surface past A's end, between its contacts, nearest that end.
++  // (The parameters across in the band, along in the period after the
++  // end.)
++  const double aLo0 = std::min(xO, xR), aHi0 = std::max(xO, xR);
++  const auto   periodOf = [&](const int theCoord) {
++    if (theCoord == 1)
++    {
++      return S->IsUPeriodic() ? S->UPeriod() : 0.;
++    }
++    return S->IsVPeriodic() ? S->VPeriod() : 0.;
++  };
++  const double aPerAlong = periodOf(aCoord), aPerAcross = periodOf(across);
++  // (Along: within the period from a quarter of it before the end; across:
++  // within the period about the band.)
++  const auto inPeriod = [](const double p, const double thePer, const double theRef) {
++    return thePer > 0. ? ElCLib::InPeriod(p, theRef - 0.5 * thePer, theRef + 0.5 * thePer) : p;
++  };
++  double cBest = 0., xBest = 0., aNearest = RealLast();
++  {
++    TopoDS_Face TF = T, CF = C;
++    TF.Orientation(TopAbs_FORWARD);
++    CF.Orientation(TopAbs_FORWARD);
++    GeomInt_IntSS anInter;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      anInter.Perform(ChFi3d_WideSurface(TF), ChFi3d_WideSurface(CF), 1.e-7, true, false, false);
++    }
++    catch (Standard_Failure const&)
++    {
++      return occ::handle<ChFiDS_SurfData>();
++    }
++    for (int il = 1; anInter.IsDone() && il <= anInter.NbLines(); il++)
++    {
++      GeomAPI_IntCS anIntCS(anInter.Line(il), S);
++      for (int ip = 1; anIntCS.IsDone() && ip <= anIntCS.NbPoints(); ip++)
++      {
++        double u = 0., v = 0., w = 0.;
++        anIntCS.Parameters(ip, u, v, w);
++        const double cp = inPeriod(aCoord == 1 ? u : v, aPerAlong, c0 + aDir * 0.25 * aPerAlong);
++        const double xp = inPeriod(aCoord == 1 ? v : u, aPerAcross, 0.5 * (aLo0 + aHi0));
++        const double dAlong = (cp - c0) * aDir;
++        if (dAlong > 0. && xp >= aLo0 && xp <= aHi0 && dAlong < aNearest)
++        {
++          aNearest = dAlong;
++          cBest    = cp;
++          xBest    = xp;
++        }
++      }
++    }
++  }
++  if (aNearest == RealLast())
++  {
++    return occ::handle<ChFiDS_SurfData>();
++  }
++  // (Both distances nought there, refined by Newton's method.)
++  double c = cBest, x = xBest;
++  bool   aConv = false;
++  for (int it = 0; it < 50 && !aConv; it++)
++  {
++    double dT = 0., dC = 0., dTc = 0., dCc = 0., dTx = 0., dCx = 0.;
++    const double ec = 1.e-7 * std::max(1., std::abs(c)), ex = 1.e-7 * std::max(1., std::abs(x));
++    if (!dist(at(c, x), dT, dC) || !dist(at(c + ec, x), dTc, dCc) || !dist(at(c, x + ex), dTx, dCx))
++    {
++      return occ::handle<ChFiDS_SurfData>();
++    }
++    aConv = std::abs(dT) <= 1.e-3 * tol3d && std::abs(dC) <= 1.e-3 * tol3d;
++    if (aConv)
++    {
++      break;
++    }
++    const double j11 = (dTc - dT) / ec, j12 = (dTx - dT) / ex, j21 = (dCc - dC) / ec, j22 = (dCx - dC) / ex;
++    const double det = j11 * j22 - j12 * j21;
++    if (std::abs(det) <= gp::Resolution())
++    {
++      return occ::handle<ChFiDS_SurfData>();
++    }
++    c -= (dT * j22 - dC * j12) / det;
++    x -= (dC * j11 - dT * j21) / det;
++  }
++  // (Past the end, between the contacts.)
++  if (!aConv || (c - c0) * aDir <= 0. || (x - xO) * (x - xR) > 0.)
++  {
++    return occ::handle<ChFiDS_SurfData>();
++  }
++  const gp_Pnt   Q = at(c, x);
++  const gp_Pnt2d uvQ(aCoord == 1 ? c : x, aCoord == 1 ? x : c);
++  BRep_Builder().MakeVertex(VQ, Q, tol3d);
++  // The cuts: by T from the end of side o, by C from the end of side r,
++  // each running in the order of the spine.
++  occ::handle<Geom_Curve>   aCc[2];
++  occ::handle<Geom2d_Curve> aPs[2], aPc[2];
++  double                    aTolR[2] = {tol3d, tol3d};
++  const double              aLo = std::min(xO, xR) - 1.e-6, aHi = std::max(xO, xR) + 1.e-6;
++  for (int s = 1; s <= 2; s++)
++  {
++    const TopoDS_Face& F  = s == o ? T : C;
++    const gp_Pnt2d&    uv = s == o ? uvO : uvR;
++    const gp_Pnt       PE = S->Value(uv.X(), uv.Y());
++    TopoDS_Face        FF = F;
++    FF.Orientation(TopAbs_FORWARD);
++    // (The face's surface run on past the contact's end, where it ends
++    // there: an extrusion of a profile's stretch, as a fin's top beside the
++    // arc whose blend runs on.)
++    occ::handle<Geom_Surface> SF = ChFi3d_WideSurface(FF);
++    {
++      GeomAPI_ProjectPointOnSurf aPrE(PE, SF);
++      if (aPrE.NbPoints() > 0)
++      {
++        double u = 0., v = 0.;
++        aPrE.LowerDistanceParameters(u, v);
++        SF = ChFi3d_RunOnExtrusionCurve(SF, u, 4. * aWidth);
++      }
++    }
++    const TopoDS_Face CF = BRepLib_MakeFace(SF, Precision::Confusion());
++    const gp_Pnt      P1 = isLast ? PE : Q;
++    const gp_Pnt      P2 = isLast ? Q : PE;
++    GeomAPI_ProjectPointOnSurf aPr(P1, BRep_Tool::Surface(CF));
++    if (aPr.NbPoints() == 0)
++    {
++      return occ::handle<ChFiDS_SurfData>();
++    }
++    double u = 0., v = 0.;
++    aPr.LowerDistanceParameters(u, v);
++    bool computed = false;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      computed = ChFi3d_KPartCutCurve(S, CF, P1, isLast ? uv : uvQ, gp_Pnt2d(u, v), P2, aCoord, aLo, aHi, tol3d,
++                                      aCc[s - 1], aPs[s - 1], aPc[s - 1], aTolR[s - 1]);
++    }
++    catch (Standard_Failure const&)
++    {
++      computed = false;
++    }
++    if (!computed)
++    {
++      return occ::handle<ChFiDS_SurfData>();
++    }
++  }
++  occ::handle<ChFiDS_SurfData> G = new ChFiDS_SurfData();
++  G->ChangeSurf(A->Surf());
++  G->ChangeOrientation() = A->Orientation();
++  G->ChangeIndexOfS1(DStr.AddShape(o == 1 ? T : C));
++  G->ChangeIndexOfS2(DStr.AddShape(o == 1 ? C : T));
++  for (int s = 1; s <= 2; s++)
++  {
++    const ChFiDS_FaceInterference& FI = A->Interference(s);
++    const TopoDS_Face              N  = TopoDS::Face(DStr.Shape(A->Index(s)));
++    const TopoDS_Face&             F  = s == o ? T : C;
++    const TopAbs_Orientation aTr = TopAbs::Compose(FI.Transition(), TopAbs::Compose(N.Orientation(), F.Orientation()));
++    const occ::handle<Geom_Curve>& Cc = aCc[s - 1];
++    ChFiDS_FaceInterference&       GI = G->ChangeInterference(s);
++    GI.SetInterference(DStr.AddCurve(TopOpeBRepDS_Curve(Cc, aTolR[s - 1])), aTr, aPc[s - 1], aPs[s - 1]);
++    GI.SetFirstParameter(Cc->FirstParameter());
++    GI.SetLastParameter(Cc->LastParameter());
++    for (const bool aFirst : {true, false})
++    {
++      ChFiDS_CommonPoint& CP = G->ChangeVertex(aFirst, s);
++      if (aFirst != isLast)
++      {
++        // (At the run on's end: Q.)
++        gp_Pnt P;
++        gp_Vec V;
++        Cc->D1(aFirst ? Cc->FirstParameter() : Cc->LastParameter(), P, V);
++        CP.Reset();
++        CP.SetPoint(Q);
++        CP.SetVector(V);
++        CP.SetVertex(VQ);
++        CP.SetTolerance(std::max(aTolR[0], aTolR[1]));
++      }
++      else
++      {
++        // (At A's end: A's point there.)
++        CP = A->Vertex(!isLast, s);
++      }
++    }
++  }
++  const double W0 = isLast ? A->LastSpineParam() : A->FirstSpineParam();
++  G->FirstSpineParam(isLast ? W0 : W0 - 1.e-3);
++  G->LastSpineParam(isLast ? W0 + 1.e-3 : W0);
++  return G;
++}
++
++bool ChFi3d_Builder::RoundingOverSlightCreases(const occ::handle<ChFiDS_Stripe>& Stripe)
++{
++  const occ::handle<ChFiDS_Spine>& Spine = Stripe->Spine();
++  if (occ::down_cast<ChFiDS_FilSpine>(Spine).IsNull() || Spine->IsPeriodic() || Stripe->SetOfSurfData().IsNull())
++  {
++    return false;
++  }
++  TopOpeBRepDS_DataStructure&                         DStr = myDS->ChangeDS();
++  NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Seq  = Stripe->ChangeSetOfSurfData()->ChangeSequence();
++  const int                                           n    = Seq.Length();
++  const double                                        aTol = std::max(100. * tolapp3d, 1.e-4);
++  const auto isAnalytic = [&](const occ::handle<ChFiDS_SurfData>& SD) {
++    const GeomAdaptor_Surface aGS(DStr.Surface(SD->Surf()).Surface());
++    return aGS.GetType() != GeomAbs_BSplineSurface && aGS.GetType() != GeomAbs_BezierSurface
++           && aGS.GetType() != GeomAbs_OtherSurface;
++  };
++  const auto faceOf = [&](const occ::handle<ChFiDS_SurfData>& SD, const int s) {
++    if (SD->IsOnCurve(s) || SD->Index(s) <= 0)
++    {
++      return TopoDS_Face();
++    }
++    return TopoDS::Face(DStr.Shape(SD->Index(s)));
++  };
++  // 1. The transitions: a piece rolling on a slight concave crease E (its
++  // faces' normals between a hundredth and a tenth of a radian apart,
++  // which OCCT takes for tangent), W beside it walked on one of E's faces
++  // B up to E, and on its other side the pieces over E's other face C up
++  // to an edge's analytic blend A, whose contacts end on the edges of its
++  // faces with C and with W's other face T.
++  NCollection_Sequence<ChFi3d_SlightCrease> X;
++  for (int i = 1; i <= n; i++)
++  {
++    const occ::handle<ChFiDS_SurfData>& R = Seq.Value(i);
++    for (int r = 1; r <= 2; r++)
++    {
++      if (!R->IsOnCurve(r) || R->IndexOfC(r) <= 0)
++      {
++        continue;
++      }
++      const TopoDS_Shape& aRst = DStr.Shape(R->IndexOfC(r));
++      if (aRst.ShapeType() != TopAbs_EDGE || !myEFMap.Contains(aRst) || onSpineEdge(Spine, aRst))
++      {
++        continue;
++      }
++      const TopoDS_Edge E = TopoDS::Edge(aRst);
++      TopoDS_Face       F1, F2;
++      ChFi3d_conexfaces(E, F1, F2, myEFMap);
++      double anAngle = 0.;
++      if (F1.IsNull() || F2.IsNull() || F1.IsSame(F2) || !ChFi3d::IsTangentFaces(E, F1, F2)
++          || !ChFi3d_CreaseAngle(E, F1, F2, anAngle) || anAngle <= 1.e-2
++          || ChFi3d::DefineConnectType(E, F1, F2, 1.e-4, false) != ChFiDS_Concave)
++      {
++        continue;
++      }
++      for (const int d : {-1, 1})
++      {
++        const int iW = i + d;
++        if (iW < 1 || iW > n)
++        {
++          continue;
++        }
++        const occ::handle<ChFiDS_SurfData>& W = Seq.Value(iW);
++        const TopoDS_Face                   B = faceOf(W, r);
++        const TopoDS_Face                   T = faceOf(W, 3 - r);
++        if (B.IsNull() || T.IsNull() || (!B.IsSame(F1) && !B.IsSame(F2)) || isAnalytic(W))
++        {
++          continue;
++        }
++        const ChFiDS_CommonPoint& CPW = W->Vertex(d > 0, r);
++        if (!CPW.IsOnArc() || !CPW.Arc().IsSame(E))
++        {
++          continue;
++        }
++        const TopoDS_Face C  = B.IsSame(F1) ? F2 : F1;
++        int               iA = 0;
++        for (int k = i - d; k >= 1 && k <= n && iA == 0; k -= d)
++        {
++          const occ::handle<ChFiDS_SurfData>& P = Seq.Value(k);
++          if (P->IsOnCurve(1) || P->IsOnCurve(2))
++          {
++            break;
++          }
++          if (!faceOf(P, r).IsSame(C) && !faceOf(P, 3 - r).IsSame(T))
++          {
++            iA = k;
++          }
++        }
++        if (iA == 0 || !isAnalytic(Seq.Value(iA)))
++        {
++          continue;
++        }
++        // (A's contacts end on its faces' edges with C and T.)
++        const occ::handle<ChFiDS_SurfData>& A     = Seq.Value(iA);
++        const bool                          aLast = iA < i;
++        const ChFiDS_CommonPoint&           CAr   = A->Vertex(!aLast, r);
++        const ChFiDS_CommonPoint&           CAo   = A->Vertex(!aLast, 3 - r);
++        const TopoDS_Face                   NAr = faceOf(A, r), NAo = faceOf(A, 3 - r);
++        if (NAr.IsNull() || NAo.IsNull() || !CAr.IsOnArc() || !CAo.IsOnArc()
++            || !otherFace(myEFMap, CAr.Arc(), NAr).IsSame(C) || !otherFace(myEFMap, CAo.Arc(), NAo).IsSame(T))
++        {
++          continue;
++        }
++        ChFi3d_SlightCrease x;
++        x.iA = iA;
++        x.iW = iW;
++        x.r  = r;
++        x.E  = E;
++        x.B  = B;
++        x.C  = otherFace(myEFMap, E, B);
++        x.T  = otherFace(myEFMap, CAo.Arc(), NAo);
++        X.Append(x);
++      }
++    }
++  }
++  if (X.IsEmpty())
++  {
++    return false;
++  }
++  // 2. Each transition made: A run on past its end, cut by T and C up to
++  // their meeting point Q; W cut by C from its crossing P on E up to K,
++  // where its other contact leaves C's material; C grows up to T between Q
++  // and K.
++  NCollection_Sequence<ChFi3d_GrowthCurve> aGrowth;
++  for (int j = X.Length(); j >= 1; j--)
++  {
++    ChFi3d_SlightCrease&                x = X.ChangeValue(j);
++    const occ::handle<ChFiDS_SurfData>& A = Seq.Value(x.iA);
++    const occ::handle<ChFiDS_SurfData>& W = Seq.Value(x.iW);
++    const int                           o = 3 - x.r;
++    const bool                          aWAfter = x.iW > x.iA;
++    x.RunOn = ChFi3d_RunOnCutByTwoFaces(DStr, A, aWAfter, x.r, x.T, x.C, tolapp3d, x.VQ);
++    if (x.RunOn.IsNull())
++    {
++      X.Remove(j);
++      continue;
++    }
++    // P and K along W.
++    const ChFiDS_FaceInterference& FN = W->Interference(x.r);
++    const ChFiDS_FaceInterference& FO = W->Interference(o);
++    const ChFiDS_CommonPoint&      CP = W->Vertex(aWAfter, x.r);
++    const occ::handle<Geom_Curve>& CN = DStr.Curve(FN.LineIndex()).Curve();
++    const occ::handle<Geom_Curve>& CO = DStr.Curve(FO.LineIndex()).Curve();
++    x.tP                           = aWAfter ? FN.FirstParameter() : FN.LastParameter();
++    const double tEnd              = aWAfter ? FO.LastParameter() : FO.FirstParameter();
++    double              D = 0., Dp = 0.;
++    ChFi3d_FaceDistance aDC(x.C);
++    if (!aDC(CO->Value(x.tP), Dp) || Dp >= 0.)
++    {
++      X.Remove(j);
++      continue;
++    }
++    double tIn = x.tP, tOut = x.tP;
++    bool   found = false;
++    for (int k = 1; k <= 100 && !found; k++)
++    {
++      const double t = x.tP + (tEnd - x.tP) * k / 100.;
++      if (!aDC(CO->Value(t), D))
++      {
++        break;
++      }
++      (D > 0. ? tOut : tIn) = t;
++      found = D > 0.;
++    }
++    if (!found)
++    {
++      X.Remove(j);
++      continue;
++    }
++    for (int it = 0; it < 60; it++)
++    {
++      const double m = 0.5 * (tIn + tOut);
++      if (!aDC(CO->Value(m), D))
++      {
++        break;
++      }
++      (D > 0. ? tOut : tIn) = m;
++    }
++    x.tK          = 0.5 * (tIn + tOut);
++    const gp_Pnt K = CO->Value(x.tK);
++    BRep_Builder().MakeVertex(x.VK, K, aTol);
++    // (E's kept side at P: toward W's contact on B.)
++    double                        f = 0., l = 0.;
++    const occ::handle<Geom_Curve> aCE = BRep_Tool::Curve(x.E, f, l);
++    gp_Pnt                        PE;
++    gp_Vec                        TE;
++    aCE->D1(CP.ParameterOnArc(), PE, TE);
++    const double             dt  = 1.e-2 * (FN.LastParameter() - FN.FirstParameter());
++    const gp_Pnt             PW  = CN->Value(aWAfter ? x.tP + dt : x.tP - dt);
++    const TopAbs_Orientation aTr = gp_Vec(PE, PW).Dot(TE) > 0. ? TopAbs_FORWARD : TopAbs_REVERSED;
++    x.Cut = ChFi3d_NarrowCutPiece(DStr, W, o, x.C, aWAfter ? x.tP : x.tK, aWAfter ? x.tK : x.tP, aWAfter, CP.Point(),
++                                  x.E, CP.ParameterOnArc(), aTr, x.VK, K, W->Surf(), tolapp3d);
++    if (x.Cut.IsNull())
++    {
++      X.Remove(j);
++      continue;
++    }
++    // C's growth up to T, from Q to K.
++    ChFi3d_GrowthCurve g;
++    if (!ChFi3d_FacesCurve(x.T, x.C, x.VQ, x.VK, aTol, g) && !ChFi3d_FacesCurveByPoints(x.T, x.C, x.VQ, x.VK, aTol, g))
++    {
++      X.Remove(j);
++      continue;
++    }
++    g.Concave = false;
++    for (TopExp_Explorer ex(x.T, TopAbs_EDGE); ex.More(); ex.Next())
++    {
++      if (otherFace(myEFMap, TopoDS::Edge(ex.Current()), x.T).IsSame(x.C))
++      {
++        g.Concave = ChFi3d::DefineConnectType(TopoDS::Edge(ex.Current()), x.T, x.C, 1.e-4, false) == ChFiDS_Concave;
++        break;
++      }
++    }
++    aGrowth.Append(g);
++  }
++  if (X.IsEmpty())
++  {
++    return false;
++  }
++  // 3. The sides each growth curve keeps of its faces: across a concave
++  // crease each the part outside the other's material, across a convex
++  // one the part inside it (as ChamferCutByFacesBeyond). (A face's normal
++  // points out of the solid where its orientation in the solid is FORWARD,
++  // as the distances to C above take it.)
++  {
++    for (int k = 1; k <= aGrowth.Length(); k++)
++    {
++      ChFi3d_GrowthCurve& g  = aGrowth.ChangeValue(k);
++      const double        s1 = g.F1.Orientation() == TopAbs_REVERSED ? -1. : 1.;
++      const double        s2 = g.F2.Orientation() == TopAbs_REVERSED ? -1. : 1.;
++      const double tm = 0.5 * (g.First + g.Last);
++      for (int side = 1; side <= 2; side++)
++      {
++        const TopoDS_Face&               F  = side == 1 ? g.F1 : g.F2;
++        const TopoDS_Face&               Fo = side == 1 ? g.F2 : g.F1;
++        const double                     sO = side == 1 ? s2 : s1;
++        const occ::handle<Geom2d_Curve>& PC = side == 1 ? g.PC1 : g.PC2;
++        TopoDS_Face                      FF = F;
++        FF.Orientation(TopAbs_FORWARD);
++        const occ::handle<Geom_Surface> SF = BRep_Tool::Surface(FF);
++        gp_Pnt2d                        uv;
++        gp_Vec2d                        duv;
++        PC->D1(tm, uv, duv);
++        if (duv.Magnitude() <= gp::Resolution())
++        {
++          return false;
++        }
++        gp_Vec2d aLeft(-duv.Y(), duv.X());
++        aLeft.Normalize();
++        double aStep = 1.e-3;
++        {
++          gp_Pnt P;
++          gp_Vec Du, Dv;
++          SF->D1(uv.X(), uv.Y(), P, Du, Dv);
++          const double aSpeed = (Du * aLeft.X() + Dv * aLeft.Y()).Magnitude();
++          if (aSpeed > gp::Resolution())
++          {
++            aStep = 10. * aTol / aSpeed;
++          }
++        }
++        const gp_Pnt2d uvL = uv.Translated(aLeft * aStep);
++        const gp_Pnt   Pl  = SF->Value(uvL.X(), uvL.Y());
++        TopoDS_Face    FoF = Fo;
++        FoF.Orientation(TopAbs_FORWARD);
++        const occ::handle<Geom2d_Curve>& PCo = side == 1 ? g.PC2 : g.PC1;
++        const gp_Pnt2d                   uvo = PCo->Value(tm);
++        gp_Pnt                           Qo;
++        gp_Vec                           Duo, Dvo;
++        BRep_Tool::Surface(FoF)->D1(uvo.X(), uvo.Y(), Qo, Duo, Dvo);
++        const bool out  = gp_Vec(Qo, Pl).Dot(Duo.Crossed(Dvo)) * sO > 0.;
++        const bool keep = g.Concave ? out : !out;
++        (side == 1 ? g.Or1 : g.Or2) = keep ? TopAbs_FORWARD : TopAbs_REVERSED;
++      }
++    }
++  }
++  // 4. The stripe's pieces in parts: each transition ends a part with A
++  // and its run on (or starts one with them) and starts the next with W's
++  // cut (or ends one with it); the pieces between A and W are dropped.
++  NCollection_Array1<int> aRole(1, n); // 0 kept, 1 dropped
++  aRole.Init(0);
++  NCollection_Array1<occ::handle<ChFiDS_SurfData>> aRunBefore(1, n), aRunAfter(1, n), aCutBefore(1, n),
++    aCutAfter(1, n);
++  NCollection_Array1<double>        aTrimFrom(1, n), aTrimTo(1, n);
++  NCollection_Array1<TopoDS_Vertex> aVFrom(1, n), aVTo(1, n);
++  NCollection_Array1<int>           aOFrom(1, n), aOTo(1, n);
++  aOFrom.Init(0);
++  aOTo.Init(0);
++  NCollection_Array1<bool> aSplitAfter(1, n);
++  aSplitAfter.Init(false);
++  for (int i = 1; i <= n; i++)
++  {
++    aTrimFrom(i) = RealFirst();
++    aTrimTo(i)   = RealLast();
++  }
++  for (int j = 1; j <= X.Length(); j++)
++  {
++    const ChFi3d_SlightCrease& x       = X.Value(j);
++    const bool                 aWAfter = x.iW > x.iA;
++    for (int k = std::min(x.iA, x.iW) + 1; k < std::max(x.iA, x.iW); k++)
++    {
++      aRole(k) = 1;
++    }
++    aSplitAfter(std::min(x.iA, x.iW)) = true;
++    if (aWAfter)
++    {
++      aRunAfter(x.iA)  = x.RunOn;
++      aCutBefore(x.iW) = x.Cut;
++      aTrimFrom(x.iW)  = x.tK;
++      aVFrom(x.iW)     = x.VK;
++      aOFrom(x.iW)     = 3 - x.r;
++    }
++    else
++    {
++      aRunBefore(x.iA) = x.RunOn;
++      aCutAfter(x.iW)  = x.Cut;
++      aTrimTo(x.iW)    = x.tK;
++      aVTo(x.iW)       = x.VK;
++      aOTo(x.iW)       = 3 - x.r;
++    }
++  }
++  NCollection_Sequence<NCollection_Sequence<occ::handle<ChFiDS_SurfData>>> aParts;
++  NCollection_Sequence<occ::handle<ChFiDS_SurfData>>                     aCur;
++  for (int i = 1; i <= n; i++)
++  {
++    if (aRole(i) == 1)
++    {
++      continue;
++    }
++    const occ::handle<ChFiDS_SurfData>& SD = Seq.Value(i);
++    if (!aRunBefore(i).IsNull())
++    {
++      aCur.Append(aRunBefore(i));
++    }
++    if (!aCutBefore(i).IsNull())
++    {
++      aCur.Append(aCutBefore(i));
++    }
++    if (aTrimFrom(i) != RealFirst() || aTrimTo(i) != RealLast())
++    {
++      const ChFiDS_FaceInterference& FI = SD->Interference(1);
++      const double ta = aTrimFrom(i) != RealFirst() ? aTrimFrom(i) : FI.FirstParameter();
++      const double tb = aTrimTo(i) != RealLast() ? aTrimTo(i) : FI.LastParameter();
++      occ::handle<ChFiDS_SurfData> aT = ChFi3d_TrimWalkedPiece(DStr, SD, ta, tb, SD->Surf());
++      if (aT.IsNull())
++      {
++        return false;
++      }
++      if (aOFrom(i) != 0)
++      {
++        ChFi3d_SetCutStartAtVertex(aT, aOFrom(i), true, BRep_Tool::Pnt(aVFrom(i)), aVFrom(i), aTol);
++      }
++      if (aOTo(i) != 0)
++      {
++        ChFi3d_SetCutStartAtVertex(aT, aOTo(i), false, BRep_Tool::Pnt(aVTo(i)), aVTo(i), aTol);
++      }
++      aCur.Append(aT);
++    }
++    else
++    {
++      aCur.Append(SD);
++    }
++    if (!aCutAfter(i).IsNull())
++    {
++      aCur.Append(aCutAfter(i));
++    }
++    if (!aRunAfter(i).IsNull())
++    {
++      aCur.Append(aRunAfter(i));
++    }
++    if (aSplitAfter(i))
++    {
++      aParts.Append(aCur);
++      aCur.Clear();
++    }
++  }
++  aParts.Append(aCur);
++  // 5. The stripe keeps the first part; the others are stripes of their
++  // own, the last one taking over the stripe's end at the spine's last
++  // vertex (its corner there, or its free end).
++  const int nParts = aParts.Length();
++  occ::handle<ChFiDS_Stripe> aLastSt;
++  for (int p = 2; p <= nParts; p++)
++  {
++    occ::handle<ChFiDS_Stripe> st = new ChFiDS_Stripe();
++    st->ChangeSpine()             = Spine;
++    st->OrientationOnFace1(Stripe->OrientationOnFace1());
++    st->OrientationOnFace2(Stripe->OrientationOnFace2());
++    st->Choix(Stripe->Choix());
++    st->SetSolidIndex(Stripe->SolidIndex());
++    st->ChangeSetOfSurfData() = new NCollection_HSequence<occ::handle<ChFiDS_SurfData>>();
++    st->ChangeSetOfSurfData()->ChangeSequence() = aParts.Value(p);
++    ChFi3d_SingularExtremity(st, DStr, TopoDS_Vertex(), tolapp3d, tol2d, 1);
++    if (p < nParts)
++    {
++      ChFi3d_SingularExtremity(st, DStr, TopoDS_Vertex(), tolapp3d, tol2d, 2);
++    }
++    else
++    {
++      // (The stripe's last end as it was made.)
++      double pd = 0., pf = 0.;
++      Stripe->Parameters(false, pd, pf);
++      st->SetParameters(false, pd, pf);
++      st->SetCurve(Stripe->Curve(false), false);
++      st->ChangePCurve(false) = Stripe->PCurve(false);
++      st->SetOrientation(Stripe->Orientation(false), false);
++      st->SetIndexPoint(Stripe->IndexPoint(false, 1), false, 1);
++      st->SetIndexPoint(Stripe->IndexPoint(false, 2), false, 2);
++      aLastSt = st;
++    }
++    myNarrowParts.Append(st);
++  }
++  Seq = aParts.Value(1);
++  {
++    occ::handle<ChFiDS_Stripe> aSt = Stripe;
++    ChFi3d_SingularExtremity(aSt, DStr, TopoDS_Vertex(), tolapp3d, tol2d, 2);
++  }
++  if (!aLastSt.IsNull())
++  {
++    const TopoDS_Vertex VL = Spine->LastVertex();
++    for (int iv = 1; iv <= myVDataMap.Extent(); iv++)
++    {
++      if (!myVDataMap.FindKey(iv).IsSame(VL))
++      {
++        continue;
++      }
++      NCollection_List<occ::handle<ChFiDS_Stripe>>& aL =
++        const_cast<NCollection_List<occ::handle<ChFiDS_Stripe>>&>(myVDataMap.FindFromIndex(iv));
++      for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(aL); it.More(); it.Next())
++      {
++        if (it.Value() == Stripe)
++        {
++          it.ChangeValue() = aLastSt;
++        }
++      }
++    }
++  }
++  // 6. The pieces as faces generated by the spine's edges they run along
++  // (OCCT's history, myEVIMap).
++  for (int p = 1; p <= nParts; p++)
++  {
++    for (int k = 1; k <= aParts.Value(p).Length(); k++)
++    {
++      const occ::handle<ChFiDS_SurfData>& SD = aParts.Value(p).Value(k);
++      const double                        fp = SD->FirstSpineParam(), lp = SD->LastSpineParam();
++      for (int ie = 1; ie <= Spine->NbEdges(); ie++)
++      {
++        if (lp < Spine->FirstParameter(ie) - tolesp || fp > Spine->LastParameter(ie) + tolesp
++            || (lp - fp > tolesp
++                && (lp < Spine->FirstParameter(ie) + tolesp || fp > Spine->LastParameter(ie) - tolesp)))
++        {
++          continue;
++        }
++        const TopoDS_Edge& Ej = Spine->Edges(ie);
++        if (!myEVIMap.IsBound(Ej))
++        {
++          myEVIMap.Bind(Ej, NCollection_List<int>());
++        }
++        NCollection_List<int>& aList = myEVIMap.ChangeFind(Ej);
++        bool                    seen  = false;
++        for (NCollection_List<int>::Iterator it(aList); it.More() && !seen; it.Next())
++        {
++          seen = it.Value() == SD->Surf();
++        }
++        if (!seen)
++        {
++          aList.Append(SD->Surf());
++        }
++      }
++    }
++  }
++  // 7. The growth curves, on T and C.
++  for (int k = 1; k <= aGrowth.Length(); k++)
++  {
++    ChFi3d_GrowthCurve g = aGrowth.Value(k);
++    ChFi3d_IntoPeriodOfFace(g.F1, g.PC1, g.First, g.Last);
++    ChFi3d_IntoPeriodOfFace(g.F2, g.PC2, g.First, g.Last);
++    const int ic = DStr.AddCurve(TopOpeBRepDS_Curve(new Geom_TrimmedCurve(g.C, g.First, g.Last), aTol));
++    DStr.ChangeCurveInterferences(ic).Append(
++      ChFi3d_FilPointInDS(TopAbs_FORWARD, ic, DStr.AddShape(g.V1), g.First, true));
++    DStr.ChangeCurveInterferences(ic).Append(
++      ChFi3d_FilPointInDS(TopAbs_REVERSED, ic, DStr.AddShape(g.V2), g.Last, true));
++    DStr.ChangeShapeInterferences(DStr.AddShape(g.F1)).Append(ChFi3d_FilCurveInDS(ic, DStr.AddShape(g.F1), g.PC1, g.Or1));
++    DStr.ChangeShapeInterferences(DStr.AddShape(g.F2)).Append(ChFi3d_FilCurveInDS(ic, DStr.AddShape(g.F2), g.PC2, g.Or2));
++  }
++  return true;
++}
++
+ //=======================================================================
+ // function : ChamferEndPastTurnStop
+ // purpose  : A chamfer's contour stopped at the vertex V at an end of the
+@@ -21640,6 +22568,12 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+     ChFi3d_JoinStandingEnd(DStr, Stripe, tolapp3d);
+     ChFi3d_ExtensionOnNeighbourSurface(DStr, Stripe, tolapp3d);
+     ChFi3d_MakeExtremities(Stripe, DStr, myEFMap, tolapp3d, tol2d);
++    // Roundings walked over slight concave creases: cut by the face beyond
++    // the crease instead, the stripe split there (RoundingOverSlightCreases).
++    if (!aCutToPoints && !aNarrowCut)
++    {
++      RoundingOverSlightCreases(Stripe);
++    }
+   }
+ }
+ 

@@ -442,7 +442,8 @@ the same refusals.
 means that model commands run now. After connecting or creating a window,
 wait for that document to become editable before sending model commands;
 the process listener can be ready before native presentation finishes.
-A blocked document includes `blocked_reason`. In native macOS builds,
+A blocked document includes `blocked_reason`. In AppKit builds (not built at
+present, [macos-shared-qt.md](macos-shared-qt.md)),
 `native_blockers`, when present, distinguishes `command_form`,
 `closing_command`, `modal_dialog` and `window_modal`. These fields describe
 the existing command and modal guards; they do not bypass them.
@@ -653,8 +654,7 @@ start (or MitCad was started with `--no-mcp`). A client is named by the
 assistant its `clientInfo` name matches ("Claude Code connected" for
 `claude-code`), else by that name; blocked assistants follow ("No
 assistant · 1 blocked", "1 connected · 1 blocked"). It is in the status
-bar of the Docked layout, in the title row of the Floating layout and in
-the toolbar of the native macOS window; its tooltip adds the window's
+bar of the Docked layout and in the title row of the Floating layout; its tooltip adds the window's
 instance id and port. With no assistant connected, a click on it opens
 Connect AI Assistant; otherwise a click opens its menu. The menu says
 first why assistants are unavailable, then has two sections of checkable
@@ -802,8 +802,7 @@ gets the same cut line.
 
 **`ui_screenshot`** returns the image that the user sees, with the
 sketch overlay. By default, it shows the 3D view. With `window`, it
-shows the whole window. In the native macOS window, this is the window
-as the window server composes it. MitCad scales the image to fit
+shows the whole window. MitCad scales the image to fit
 `max_size`. Then it scales the image further until the encoded image
 (the PNG or JPEG file, the result's `bytes`) takes at most `max_bytes`
 (mitcad#1188).

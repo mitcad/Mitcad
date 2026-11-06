@@ -694,13 +694,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
                               }
                               return false;
                             },
-                            [this] {
-                              return queryObject({{QStringLiteral("query"), QStringLiteral("document")}})
-                                  .value(QStringLiteral("units"))
-                                  .toObject()
-                                  .value(QStringLiteral("length"))
-                                  .toString();
-                            },
+                            // The unit the window last read while a job
+                            // computes: Up or Down in a panel's length field
+                            // during its preview read the document here
+                            // and ended the application (mitcad#1360).
+                            [this] { return lengthUnit(); },
                             [this](const QJsonObject& query) {
                               if (modelBusy()) throw ModelBusy();
                               return queryObject(query);
@@ -1056,7 +1054,7 @@ void MainWindow::registerCommands() {
   m_registry->add(undoDef);
   CommandDef redoDef =
       action("edit.redo", tr("Redo"), "redo", CommandDef::Mode::Any, [this] { redo(); });
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   redoDef.shortcut = QKeySequence::Redo; // Shift+Cmd+Z
 #else
   // Ctrl+Y (Windows' standard key) stays; Ctrl+Shift+Z (the standard key of
@@ -1353,7 +1351,7 @@ void MainWindow::createMenus() {
     }
     qDebug().noquote() << QStringLiteral("Tools menu: %1").arg(entries.join(QStringLiteral(" | ")));
   });
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   createWindowMenu();
 #endif
   QMenu* help = menuBar()->addMenu(tr("&Help"));
@@ -1398,7 +1396,7 @@ void MainWindow::createMenus() {
   }
 }
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 // The standard Window menu of macOS applications.
 void MainWindow::createWindowMenu() {
   QMenu* window = menuBar()->addMenu(tr("&Window"));
@@ -1536,7 +1534,7 @@ void MainWindow::createRibbon() {
   }
 
   if (floating) {
-#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+#if defined(MITCAD_MAC_UI) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
     // The content goes under the native title bar, which the title bar row
     // replaces (the traffic lights stay). Before the window is shown.
     setWindowFlag(Qt::ExpandedClientAreaHint, true);
@@ -5342,6 +5340,16 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
         }
       }
       addFitting();
+      menu.addSeparator();
+    } else if (const sketch::TextData* text = m_selection.size() == 1 && m_selection.first().kind == SelectKind::Profile
+                                                   ? m_sketch->model().textOfPick(m_selection.first())
+                                                   : nullptr;
+               text != nullptr) {
+      // A region a text's contours bound, inside a letter or its counter
+      // (the hole of an 'o'), stands for the text (mitcad#1369): zoomed in,
+      // a click there picks the region, not the outline. Edit Text's input
+      // takes the region as the text.
+      add(m_registry->action(text->code ? QStringLiteral("sketch.edit_code") : QStringLiteral("sketch.edit_text")));
       menu.addSeparator();
     } else if (!m_selection.isEmpty()) {
       // The model's faces, edges and vertices go into the sketch: Project,

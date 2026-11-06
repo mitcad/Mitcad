@@ -38,6 +38,7 @@ fn pattern_provenance_marks_only_omitted_dressup_inputs() {
         components: components::Components::default(),
         component: ComponentUid::ROOT,
         sketch_copies: HashMap::new(),
+        part_sketches: HashMap::new(),
         stopped_at: Cell::new(None),
         trying: false,
         alternatives: HashMap::new(),

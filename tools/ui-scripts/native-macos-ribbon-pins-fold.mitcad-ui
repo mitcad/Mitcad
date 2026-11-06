@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: MIT
+# check-all sources: app/framework/Ribbon.cpp app/framework/RibbonFit.cpp app/platform/macos/NativeMacWindow.mm
+# check-all sources: app/platform/NativeMacWindow.hpp app/MainWindowNative.cpp
+# The AppKit ribbon in a narrow window (mitcad#1357, after the Qt
+# ribbon's mitcad#1111): Sweep pinned into Create from its menu's Pin to
+# Toolbar submenu, then the window narrowed in steps of 8 points (the
+# in-process native resize, no system input) down to its narrowest. The
+# groups on the right collapse first; Sweep's pinned button folds before
+# Create collapses (tools/ui-macos-native-ribbon-pins-fold-test.sh reads
+# the order from the log); wide again, it is back.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+sleep 800
+native-resize 1400 820
+expect-native-visible native.ribbon.solid.extrude true
+mark
+native-popup native.ribbon.group.create 'Pin to Toolbar/Sweep'
+expect-log 'Pinned to toolbar: Sweep \(Solid\)'
+expect-log 'Ribbon group SOLID/CREATE pinned: solid\.sweep$'
+expect-native-visible native.ribbon.pinned.solid.sweep true
+expect-native-visible native.ribbon.solid.extrude true
+expect-native-layout
+mark
+native-resize 1392 820
+native-resize 1384 820
+native-resize 1376 820
+native-resize 1368 820
+native-resize 1360 820
+native-resize 1352 820
+native-resize 1344 820
+native-resize 1336 820
+native-resize 1328 820
+native-resize 1320 820
+native-resize 1312 820
+native-resize 1304 820
+native-resize 1296 820
+native-resize 1288 820
+native-resize 1280 820
+native-resize 1272 820
+native-resize 1264 820
+native-resize 1256 820
+native-resize 1248 820
+native-resize 1240 820
+native-resize 1232 820
+native-resize 1224 820
+native-resize 1216 820
+native-resize 1208 820
+native-resize 1200 820
+native-resize 1192 820
+native-resize 1184 820
+native-resize 1176 820
+native-resize 1168 820
+native-resize 1160 820
+native-resize 1152 820
+native-resize 1144 820
+native-resize 1136 820
+native-resize 1128 820
+native-resize 1120 820
+native-resize 1112 820
+native-resize 1104 820
+native-resize 1096 820
+native-resize 1088 820
+native-resize 1080 820
+native-resize 1072 820
+native-resize 1064 820
+native-resize 1056 820
+native-resize 1048 820
+native-resize 1040 820
+native-resize 1032 820
+native-resize 1024 820
+native-resize 1016 820
+native-resize 1008 820
+native-resize 1000 820
+native-resize 992 820
+native-resize 984 820
+native-resize 976 820
+native-resize 968 820
+native-resize 960 820
+native-resize 952 820
+native-resize 944 820
+native-resize 936 820
+native-resize 928 820
+native-resize 920 820
+native-resize 912 820
+native-resize 904 820
+native-resize 896 820
+native-resize 888 820
+native-resize 880 820
+native-resize 872 820
+native-resize 864 820
+native-resize 856 820
+native-resize 848 820
+native-resize 840 820
+native-resize 832 820
+native-resize 824 820
+native-resize 820 820
+# At its narrowest Sweep's button is out of the row (folded, or Create
+# collapsed with it).
+expect-native-visible native.ribbon.pinned.solid.sweep false
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/ribbon-pins-fold-narrow.png'
+mark
+native-resize 1400 820
+expect-log '^Ribbon pinned folded SOLID/CREATE: none$'
+expect-native-visible native.ribbon.pinned.solid.sweep true
+expect-native-visible native.ribbon.solid.extrude true
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/ribbon-pins-fold-wide.png'

@@ -21,7 +21,7 @@
 namespace mitcad {
 
 TexturePreferencesBox::TexturePreferencesBox(QWidget* parent)
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     : QWidget(parent),
 #else
     : QGroupBox(tr("Textures"), parent),
@@ -59,7 +59,7 @@ TexturePreferencesBox::TexturePreferencesBox(QWidget* parent)
     button->setAutoDefault(false);
   }
   auto* controls = new QHBoxLayout;
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   controls->setSpacing(0);
 #endif
   controls->addWidget(m_add);

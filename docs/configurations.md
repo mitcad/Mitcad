@@ -447,7 +447,7 @@ decision 7):
   Configuration and Browser from the top, shown while the design has
   options or rows, collapsible (the state kept), and sharing the left
   column's height with the others, the boundaries between them dragged
-  (Floating, Docked and the AppKit frontend's Configuration card, see
+  (Floating and Docked; the paused AppKit frontend's Configuration card is in
   `docs/native-macos-ui.md`).
 - The choosers show only allowed values (from the `configure` query),
   and a notice lists the cascade's moves.

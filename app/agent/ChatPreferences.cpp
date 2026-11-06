@@ -22,7 +22,7 @@
 namespace mitcad::agent {
 
 ChatPreferencesBox::ChatPreferencesBox(QWidget* parent)
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     : QWidget(parent)
 #else
     : QGroupBox(tr("Chat"), parent)

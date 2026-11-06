@@ -136,6 +136,7 @@
   CGFloat dx;
   CGFloat dy;
   BOOL precise;
+  NSEventModifierFlags heldFlags; // the keys held (mitcad#1350: Shift, Option)
 }
 @end
 
@@ -151,7 +152,7 @@
 - (BOOL)hasPreciseScrollingDeltas { return precise; }
 - (NSEventPhase)phase { return precise ? NSEventPhaseChanged : NSEventPhaseNone; }
 - (NSEventPhase)momentumPhase { return NSEventPhaseNone; }
-- (NSEventModifierFlags)modifierFlags { return 0; }
+- (NSEventModifierFlags)modifierFlags { return heldFlags; }
 - (NSTimeInterval)timestamp { return NSProcessInfo.processInfo.systemUptime; }
 @end
 
@@ -739,6 +740,35 @@ bool textOf(const QString& identifier, QString& value) {
     if (!panel) return false;
     value = qt(identifier == QStringLiteral("native.file.name") ? panel.nameFieldStringValue : panel.directoryURL.path);
     return true;
+  }
+  // The document window's title as the Window menu and the Dock show it
+  // (mitcad#1358).
+  if (identifier == QStringLiteral("native.window.title")) {
+    NSWindow* window = documentWindow();
+    if (!window) return false;
+    value = qt(window.title);
+    return true;
+  }
+  // "<popup>/items": a popup's choices as its open menu shows them, each
+  // "title · subtitle" (the subtitle under the title), joined by " | ";
+  // "<popup>/item-tips": their tooltips, joined the same way (mitcad#1358).
+  if (identifier.endsWith(QStringLiteral("/items")) || identifier.endsWith(QStringLiteral("/item-tips"))) {
+    const bool tips = identifier.endsWith(QStringLiteral("/item-tips"));
+    NSView* base = findControl(identifier.left(identifier.lastIndexOf(QLatin1Char('/'))));
+    if ([base isKindOfClass:NSPopUpButton.class]) {
+      QStringList shown;
+      for (NSMenuItem* item in ((NSPopUpButton*)base).itemArray) {
+        if (item.separatorItem) continue;
+        if (tips) { shown.append(qt(item.toolTip)); continue; }
+        QString text = qt(item.title);
+        if (@available(macOS 14.4, *)) {
+          if (item.subtitle.length > 0) text += QStringLiteral(" · ") + qt(item.subtitle);
+        }
+        shown.append(text);
+      }
+      value = shown.join(QStringLiteral(" | "));
+      return true;
+    }
   }
   // An identifier, else a positional cell locator <table>/<row>/<column>
   // (a bridged table or outline, as expect-native-style takes it).
@@ -1742,6 +1772,13 @@ bool choose(const QString& identifier, const QString& title, QString& error) {
   NSPopUpButton* popup = (NSPopUpButton*)view;
   const NSInteger index = [popup indexOfItemWithTitle:title.toNSString()];
   if (index < 0) { error = QStringLiteral("native choice '%1' has no '%2' item").arg(identifier, title); return false; }
+  // As the pointer: an item that is not enabled (a heading, mitcad#1353)
+  // cannot be chosen.
+  NSMenuItem* item = [popup itemAtIndex:index];
+  if (item.separatorItem || (!popup.autoenablesItems && !item.enabled)) {
+    error = QStringLiteral("native choice '%1': '%2' cannot be chosen").arg(identifier, title);
+    return false;
+  }
   if (popup.pullsDown) {
     [popup.menu performActionForItemAtIndex:index];
     return true;
@@ -2729,6 +2766,13 @@ bool contextMenu(const QString& identifier, const QString& choice, QString& erro
 bool focusControl(const QString& identifier, QString& error) {
   NSView* view = findControl(identifier);
   if ([view isKindOfClass:NSScrollView.class]) view = ((NSScrollView*)view).documentView;
+  // The 3D view's host takes no keyboard itself: the embedded CAD view in
+  // it does, as a click in the view gives it the keyboard (mitcad#1351).
+  if (view && !view.acceptsFirstResponder && identifier == QStringLiteral("native.viewportHost")) {
+    for (NSView* embedded in view.subviews) {
+      if (embedded.acceptsFirstResponder && viewVisible(embedded)) { view = embedded; break; }
+    }
+  }
   if (!view || !viewVisible(view) || !view.acceptsFirstResponder) {
     error = QStringLiteral("no visible focusable native control '%1'").arg(identifier);
     return false;
@@ -2911,6 +2955,17 @@ void focusMain() {
     return isQtResponder(view) && view.acceptsFirstResponder;
   });
   if (canvas) [window makeFirstResponder:canvas];
+}
+
+void requestPointerEventActivation() {
+  // Do not reorder a transient popover or its owner for pointer input.
+  // AppKit can leave the owner key while routing mouse events to either.
+  if (active() && !NSApp.active) [NSApp activateIgnoringOtherApps:YES];
+  qInfo().noquote() << QStringLiteral("Native application pointer activation requested: %1").arg(keyEventFocusDiagnostic());
+}
+
+bool pointerEventActivationReady() {
+  return active() && NSApp.active;
 }
 
 void requestKeyEventFocus() {
@@ -3412,6 +3467,78 @@ bool searchResultIcon(NSView* view, const QStringList& states, QString& detail) 
   return artwork && apart && matches && viewVisible(cell);
 }
 
+// A timeline search result's component swatch (mitcad#1380), as
+// `result-swatch,none` where the shared results draw none, else
+// `result-swatch,rrggbb`: the colour the swatch's
+// picture is filled with at its centre, the swatch wholly in the row
+// between the name and the component's name, which is not empty. Logs
+// "Native search swatch <id>: #rrggbb|none" when it holds.
+bool searchResultSwatch(NSView* view, const QString& identifier, const QString& expected, QString& detail) {
+  NSTableCellView* cell = [view isKindOfClass:NSTableCellView.class] ? (NSTableCellView*)view : nil;
+  NSImageView* swatch = nil;
+  NSTextField* component = nil;
+  for (NSView* child in cell.subviews) {
+    if ([child.identifier isEqualToString:@"nativeListSwatch"]) swatch = (NSImageView*)child;
+    if ([child.identifier isEqualToString:@"nativeListDetail"]) component = (NSTextField*)child;
+  }
+  if (cell == nil || swatch == nil || component == nil || cell.textField == nil) {
+    detail = QStringLiteral("no native result row with a swatch and a component");
+    return false;
+  }
+  [cell layoutSubtreeIfNeeded];
+  NSImage* picture = swatch.image;
+  QString shown = QStringLiteral("none");
+  NSColor* centre = nil;
+  if (picture != nil) {
+    // Drawn into an sRGB bitmap and read as its bytes (below).
+    const int side = 24;
+    NSBitmapImageRep* bitmap = [[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nil
+        pixelsWide:side pixelsHigh:side bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+        colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:side * 4 bitsPerPixel:32]
+        bitmapImageRepByRetaggingWithColorSpace:NSColorSpace.sRGBColorSpace];
+    if (bitmap != nil) {
+      [NSGraphicsContext saveGraphicsState];
+      NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+      [picture drawInRect:NSMakeRect(0, 0, side, side)];
+      [NSGraphicsContext restoreGraphicsState];
+    }
+    // The centre's bytes as drawn: colorAtX: on this bitmap (and on one
+    // made from CGImageForProposedRect) converts them as if they were in
+    // another space; the VM read #e0892a's bytes back as #e89b36.
+    if (bitmap != nil && bitmap.bitmapData != nullptr) {
+      const unsigned char* pixel = bitmap.bitmapData + (side / 2) * bitmap.bytesPerRow + (side / 2) * 4;
+      centre = [NSColor colorWithSRGBRed:pixel[0] / 255.0 green:pixel[1] / 255.0 blue:pixel[2] / 255.0 alpha:1.0];
+    }
+    shown = centre != nil ? QColor::fromRgbF(float(centre.redComponent), float(centre.greenComponent),
+                                             float(centre.blueComponent)).name()
+                          : QStringLiteral("unreadable");
+  }
+  const NSRect bounds = cell.bounds;
+  const NSRect swatchFrame = swatch.frame;
+  const NSRect nameFrame = cell.textField.frame;
+  const NSRect componentFrame = component.frame;
+  const bool placed = NSContainsRect(NSInsetRect(bounds, -0.5, -0.5), swatchFrame) && NSWidth(swatchFrame) >= 10 &&
+                      NSMinX(swatchFrame) >= NSMaxX(nameFrame) && NSMaxX(swatchFrame) <= NSMinX(componentFrame) &&
+                      component.stringValue.length > 0 && NSContainsRect(NSInsetRect(bounds, -0.5, -0.5), componentFrame);
+  bool matches = false;
+  if (expected == QLatin1String("none")) {
+    matches = picture == nil;
+  } else {
+    const QColor colour = QColor::fromString(QString(QStringLiteral("#") + expected));
+    matches = colour.isValid() && centre != nil && sameColor(centre, srgbColor(colour), cell.effectiveAppearance) &&
+              picture.size.width >= 10 && picture.size.height >= 10;
+  }
+  detail = QStringLiteral("row '%1' of '%2': swatch %3 (%4x%5 pt) at %6, name at %7, component at %8, cell %9, visible %10")
+               .arg(qt(cell.textField.stringValue), qt(component.stringValue), shown)
+               .arg(picture != nil ? picture.size.width : 0).arg(picture != nil ? picture.size.height : 0)
+               .arg(qt(NSStringFromRect(swatchFrame)), qt(NSStringFromRect(nameFrame)),
+                    qt(NSStringFromRect(componentFrame)), qt(NSStringFromRect(bounds)))
+               .arg(viewVisible(cell));
+  const bool ready = matches && placed && viewVisible(cell);
+  if (ready) qInfo().noquote() << QStringLiteral("Native search swatch %1: %2").arg(identifier, shown);
+  return ready;
+}
+
 // The cell's own drawing at its leading edge, left of any text or icon:
 // its alpha, and whether it is a red tint.
 CGFloat cellFill(NSView* cell, bool* red) {
@@ -3555,11 +3682,141 @@ bool paneIcons(NSView* view, const QString& chosen, QString& detail) {
   return index >= 1 && selected == 1 && complete && matches;
 }
 
+// A native image's bitmap pixels (Retina pixels included), premultiplied;
+// null without a bitmap representation.
+QImage nativeBitmap(NSImage* image) {
+  for (NSImageRep* representation in image.representations) {
+    if (![representation isKindOfClass:NSBitmapImageRep.class]) continue;
+    NSData* png = [(NSBitmapImageRep*)representation representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    return QImage::fromData(static_cast<const uchar*>(png.bytes), int(png.length), "PNG")
+        .convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+  }
+  return QImage();
+}
+
+// A Browser row's artwork as the shared CAD icon `name` draws it
+// (mitcad#1352): the whole picture, or, `badged`, the icon with a corner
+// badge over its lower right 3/5, as the shared rows' LinkedIconEngine
+// draws a warning's or a failure's (the rest of the picture is the icon's,
+// the corner is not).
+bool rowArtwork(NSImage* image, const QString& name, bool badged, QString& detail) {
+  const QImage actual = nativeBitmap(image);
+  if (actual.isNull()) {
+    detail = QStringLiteral("no native bitmap for '%1'").arg(name);
+    return false;
+  }
+  const QImage expected = mitcad::themeIcon(name).pixmap(actual.size(), 1.0).toImage()
+                              .convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+  if (expected.size() != actual.size()) {
+    detail = QStringLiteral("'%1' is %2x%3 pixels, the native artwork %4x%5")
+                 .arg(name).arg(expected.width()).arg(expected.height()).arg(actual.width()).arg(actual.height());
+    return false;
+  }
+  const int side = std::max(6, actual.height() * 3 / 5);
+  const QRect corner(actual.width() - side - 1, actual.height() - side - 1, side + 1, side + 1);
+  int outside = 0, outsideSame = 0, inside = 0, insideOther = 0;
+  for (int y = 0; y < actual.height(); ++y) {
+    const uchar* a = actual.constScanLine(y);
+    const uchar* e = expected.constScanLine(y);
+    for (int x = 0; x < actual.width(); ++x) {
+      int difference = 0;
+      for (int channel = 0; channel < 4; ++channel) {
+        difference = std::max(difference, std::abs(int(a[x * 4 + channel]) - int(e[x * 4 + channel])));
+      }
+      if (corner.contains(x, y)) {
+        ++inside;
+        if (difference > 24) ++insideOther;
+      } else {
+        ++outside;
+        if (difference <= 8) ++outsideSame;
+      }
+    }
+  }
+  detail = QStringLiteral("'%1' at %2x%3 pixels: %4 of %5 pixels outside the corner the same, %6 of %7 in it "
+                          "different")
+               .arg(name).arg(actual.width()).arg(actual.height())
+               .arg(outsideSame).arg(outside).arg(insideOther).arg(inside);
+  if (badged) return outsideSame >= outside * 98 / 100 && insideOther >= std::max(1, inside / 20);
+  return outsideSame >= outside * 99 / 100 && insideOther <= inside / 100;
+}
+
+// A Browser row's own looks in the AppKit outline (mitcad#1352): its light
+// bulb's artwork (eye=<name>), its icon (icon=<name>, badged-icon=<name>)
+// and the Make tab's marker after its name (make-marker). False for other
+// states.
+bool browserRowLooks(NSView* view, const QString& identifier, const QStringList& states, bool& handled,
+                     QString& detail) {
+  handled = true;
+  const QString state = states.size() == 1 ? states.front() : QString();
+  if (state.startsWith(QStringLiteral("eye="))) {
+    NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
+    const QString name = state.mid(4);
+    if (button == nil || !viewVisible(button)) {
+      detail = QStringLiteral("no visible native light bulb '%1'").arg(identifier);
+      return false;
+    }
+    QString artwork;
+    const bool ready = rowArtwork(button.image, name, false, artwork);
+    const id value = button.accessibilityValue;
+    detail = QStringLiteral("bulb '%1': %2, tip '%3', value '%4'")
+                 .arg(identifier, artwork, qt(button.toolTip),
+                      [value isKindOfClass:NSString.class] ? qt((NSString*)value) : QString());
+    if (ready) qInfo().noquote() << QStringLiteral("Native bulb %1: %2").arg(identifier, name);
+    return ready;
+  }
+  if (state.startsWith(QStringLiteral("icon=")) || state.startsWith(QStringLiteral("badged-icon="))) {
+    NSTableCellView* cell = [view isKindOfClass:NSTableCellView.class] ? (NSTableCellView*)view : nil;
+    const bool badged = state.startsWith(QStringLiteral("badged-icon="));
+    const QString name = state.section(QLatin1Char('='), 1);
+    if (cell == nil || cell.imageView.image == nil || !viewVisible(cell.imageView)) {
+      detail = QStringLiteral("no native row with an icon '%1'").arg(identifier);
+      return false;
+    }
+    const bool ready = rowArtwork(cell.imageView.image, name, badged, detail);
+    if (ready) {
+      qInfo().noquote() << QStringLiteral("Native row icon %1: %2%3")
+                               .arg(identifier, name, badged ? QStringLiteral(" with a badge") : QString());
+    }
+    return ready;
+  }
+  if (state == QLatin1String("make-marker")) {
+    NSTableCellView* cell = nil;
+    for (NSView* up = view.superview; up != nil && cell == nil; up = up.superview) {
+      if ([up isKindOfClass:NSTableCellView.class]) cell = (NSTableCellView*)up;
+    }
+    NSTextField* name = cell.textField;
+    if (view == nil || cell == nil || name == nil || !viewVisible(view)) {
+      detail = QStringLiteral("no visible native Make marker '%1'").arg(identifier);
+      return false;
+    }
+    [cell layoutSubtreeIfNeeded];
+    const NSRect mark = [view convertRect:view.bounds toView:cell];
+    const NSRect text = [name convertRect:name.bounds toView:cell];
+    const QString tip = qt(view.toolTip);
+    // A round dot after the name, wholly in the row, with its tooltip.
+    const bool dot = NSWidth(mark) >= 6 && std::abs(NSWidth(mark) - NSHeight(mark)) < 0.5 &&
+                     NSMinX(mark) >= NSMaxX(text) - 0.5 && NSContainsRect(NSInsetRect(cell.bounds, -0.5, -0.5), mark);
+    detail = QStringLiteral("Make marker '%1': %2 after the name %3, tip '%4'")
+                 .arg(identifier, qt(NSStringFromRect(mark)), qt(NSStringFromRect(text)), tip);
+    const bool ready = dot && !tip.isEmpty();
+    if (ready) {
+      qInfo().noquote() << QStringLiteral("Native Make marker %1: %2")
+                               .arg(identifier, QString(tip).replace(QLatin1Char('\n'), QStringLiteral(" | ")));
+    }
+    return ready;
+  }
+  handled = false;
+  return false;
+}
+
 } // namespace
 
 bool nativeStyle(const QString& identifier, const QStringList& states, QString& detail) {
   NSView* view = tableCell(identifier);
   if (states.value(0) == QLatin1String("pane-icons")) return paneIcons(view, states.value(1), detail);
+  bool rowLooks = false;
+  const bool looks = browserRowLooks(view, identifier, states, rowLooks, detail);
+  if (rowLooks) return looks;
   // A Browser row's name as the shared row colours it (mitcad#1079):
   // row-failed, row-warning, row-dimmed or row-plain.
   // Row selection has its own AppKit state assertion below; it is not a
@@ -3582,8 +3839,10 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
   // its tooltip, which the test log shows ("Native bulb <id>: fx, <tip>").
   if (states == QStringList{QStringLiteral("fx-bulb")} || states == QStringList{QStringLiteral("bulb")}) {
     NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
+    // The value also says a transparent row's half-open eye (mitcad#1352).
     const id value = button.accessibilityValue;
-    const bool bound = [value isKindOfClass:NSString.class] && ((NSString*)value).length > 0;
+    const bool bound = [value isKindOfClass:NSString.class] &&
+                       [(NSString*)value containsString:QObject::tr("follows a condition").toNSString()];
     const QString tip = qt(button.toolTip);
     detail = QStringLiteral("bulb '%1': fx %2, tip '%3'").arg(identifier).arg(bound).arg(tip);
     const bool conditioned = button != nil && viewVisible(button) && !tip.isEmpty() &&
@@ -3656,6 +3915,9 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
     return viewVisible(picture);
   }
   if (states.value(0) == QLatin1String("result-icon")) return searchResultIcon(view, states, detail);
+  if (states.size() == 2 && states.front() == QLatin1String("result-swatch")) {
+    return searchResultSwatch(view, identifier, states.at(1), detail);
+  }
   if (states.contains(QStringLiteral("current-row"))) {
     NSTableView* table = mac::owningTable(view);
     const NSInteger row = table != nil ? [table rowForView:view] : -1;
@@ -4609,9 +4871,11 @@ bool commandLayout(const QStringList& required, QString& error) {
     return false;
   }
   // Compact clear and flip controls, as the shared panel's: icons, not text.
+  // A check box with its text beside it (InputDef::textBeside, "check|<key>|
+  // text", mitcad#1354) is a row across the form, not a compact control.
   NSMutableArray<NSView*>* compact = [NSMutableArray array];
   collectViews(root, [](NSView* view) {
-    return [view isKindOfClass:NSButton.class] &&
+    return [view isKindOfClass:NSButton.class] && ![view.identifier hasSuffix:@"|text"] &&
            ([view.identifier hasPrefix:@"clear|"] || [view.identifier hasPrefix:@"check|"]);
   }, compact);
   for (NSView* view in compact) {
@@ -6124,7 +6388,17 @@ bool pointerClickAt(const QString& identifier, QString& error, const NSPoint* fr
                     NSMinY(view.bounds) + NSHeight(view.bounds) * fraction->y);
   NSPoint point = NSZeroPoint;
   if (!aimPointer(view, fraction != nullptr ? &requested : nullptr, point, error)) return false;
-  return pointerEvents(view, point, point, error);
+  const bool bindingBadge = identifier.startsWith(QLatin1String("native.model.fx."));
+  if (bindingBadge)
+    qInfo().noquote() << QStringLiteral("Native binding pointer before: %1 window=%2 key=%3 current=%4 point=%5")
+        .arg(identifier).arg(qlonglong(view.window.windowNumber)).arg(bool(view.window.keyWindow))
+        .arg(int(NSApp.currentEvent.type)).arg(qt(NSStringFromPoint(point)));
+  const bool delivered = pointerEvents(view, point, point, error);
+  if (bindingBadge)
+    qInfo().noquote() << QStringLiteral("Native binding pointer after: %1 delivered=%2 window=%3 key=%4 current=%5")
+        .arg(identifier).arg(delivered).arg(qlonglong(view.window.windowNumber))
+        .arg(bool(view.window.keyWindow)).arg(int(NSApp.currentEvent.type));
+  return delivered;
 }
 
 } // namespace
@@ -7224,6 +7498,64 @@ bool viewportFrame(const QString& identifier, const QRect& expected, QString& de
                .arg(expected.height());
   return std::abs(NSMinX(rect) - expected.x()) <= 1 && std::abs(NSMinY(rect) - expected.y()) <= 1 &&
          std::abs(NSWidth(rect) - expected.width()) <= 1 && std::abs(NSHeight(rect) - expected.height()) <= 1;
+}
+
+bool viewportRect(const QString& identifier, QRectF& frame, QString& detail) {
+  NSWindow* window = documentWindow();
+  NSView* content = window.contentView;
+  [content layoutSubtreeIfNeeded];
+  NSView* host = content != nil ? identifiedView(content, QStringLiteral("native.viewportHost")) : nil;
+  NSView* view = identifier == QStringLiteral("native.window.content") ? content
+                 : content != nil                                       ? identifiedView(content, identifier)
+                                                                        : nil;
+  if (host == nil || !viewVisible(view)) {
+    detail = QStringLiteral("no visible native view '%1' in the document window").arg(identifier);
+    return false;
+  }
+  NSRect rect = [view convertRect:view.bounds toView:host];
+  if (!host.flipped) rect.origin.y = NSHeight(host.bounds) - NSMaxY(rect);
+  frame = QRectF(NSMinX(rect), NSMinY(rect), NSWidth(rect), NSHeight(rect));
+  return true;
+}
+
+bool wheel(const QString& identifier, int notches, Qt::KeyboardModifiers modifiers, QString& error) {
+  NSView* view = findControl(identifier);
+  NSWindow* window = view.window;
+  if (view == nil || window == nil || !viewVisible(view) || notches == 0) {
+    error = QStringLiteral("native-wheel needs a visible native control '%1' and a turn").arg(identifier);
+    return false;
+  }
+  [window layoutIfNeeded];
+  [window.contentView layoutSubtreeIfNeeded];
+  // The view the system's wheel would go to: the one under the pointer at
+  // the control's centre (a field being edited: its field editor).
+  const NSPoint point = [view convertPoint:NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds)) toView:nil];
+  NSView* hit = [window.contentView hitTest:[window.contentView.superview convertPoint:point fromView:nil]];
+  if (hit == nil || (hit != view && ![hit isDescendantOf:view])) {
+    error = QStringLiteral("native control '%1' is covered at its centre").arg(identifier);
+    return false;
+  }
+  NSEventModifierFlags flags = 0;
+  if (modifiers.testFlag(Qt::ControlModifier)) flags |= NSEventModifierFlagCommand;
+  if (modifiers.testFlag(Qt::MetaModifier)) flags |= NSEventModifierFlagControl;
+  if (modifiers.testFlag(Qt::AltModifier)) flags |= NSEventModifierFlagOption;
+  if (modifiers.testFlag(Qt::ShiftModifier)) flags |= NSEventModifierFlagShift;
+  // A mouse wheel's notches, one event each, as the line deltas a mouse
+  // without pixel scrolling sends.
+  for (int i = 0; i < std::abs(notches); ++i) {
+    MITCADTestScrollEvent* event = [MITCADTestScrollEvent new];
+    event->target = window;
+    event->point = point;
+    event->dx = 0;
+    event->dy = notches > 0 ? 1 : -1;
+    event->precise = NO;
+    event->heldFlags = flags;
+    [hit scrollWheel:event];
+  }
+  qInfo().noquote() << QStringLiteral("Native wheel: %1 notches over %2 (%3)")
+                           .arg(notches)
+                           .arg(identifier, qt(NSStringFromClass(hit.class)));
+  return true;
 }
 
 } // namespace mitcad::mac::test

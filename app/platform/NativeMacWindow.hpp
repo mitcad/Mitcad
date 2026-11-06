@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include <QColor>
 #include <QList>
 #include <QIcon>
 #include <QMargins>
@@ -94,12 +95,16 @@ struct NativeMacRibbonGroup {
   QString title;
   int fullWidth = 0;
   int collapsedWidth = 0;
+  // Its width with its own buttons and its first k pinned buttons, k = 0 ..
+  // its pins (Ribbon::pinnedGroupWidths): the pins fold first, the last one
+  // first, before the group collapses (mitcad#1357, after mitcad#1111).
+  QList<int> pinnedWidths;
   QList<NativeMacRibbonButton> buttons;
   QList<NativeMacMenuItem> menu;
   bool operator==(const NativeMacRibbonGroup& other) const {
     return workspace == other.workspace && name == other.name && title == other.title &&
            fullWidth == other.fullWidth && collapsedWidth == other.collapsedWidth &&
-           buttons == other.buttons && menu == other.menu;
+           pinnedWidths == other.pinnedWidths && buttons == other.buttons && menu == other.menu;
   }
 };
 
@@ -128,6 +133,11 @@ struct NativeMacTreeItem {
   // rows: its tooltip in place of Hide / Show; `eyeBound` its fx mark.
   QString eyeTip;
   bool eyeBound = false;
+  // The Make tab's marker (mitcad#1049, mitcad#1352): a dot in the accent
+  // colour after the name with this tooltip; none when empty.
+  QString makeTip;
+  // Shown and transparent (mitcad#1093): the half-open eye.
+  bool transparent = false;
 };
 
 struct NativeMacHistoryItem {
@@ -148,6 +158,11 @@ struct NativeMacHistoryItem {
   QString group;
   QString groupFirst; // Canonical shared group head for hover and tooltip callbacks.
   bool groupCollapsed = false;
+  // A timeline search result's tooltip, the shared one (mitcad#1358).
+  QString toolTip;
+  // A timeline search result's component swatch, the shared colour
+  // (TimelineWidget::searchResultColor, mitcad#1380); invalid: none.
+  QColor swatch;
 };
 
 // An arrow of the orientation cube (GlassButton in the Qt view): a round
@@ -297,9 +312,13 @@ struct NativeMacWindowCallbacks {
   // a history row about a feature was clicked (the feature's uid).
   std::function<void()> messageClosed;
   std::function<void(const QString&)> messageFeatureChosen;
+  // The pointer came over the band's message about a feature (its uid) or
+  // left it (empty; mitcad#1379): the view paints the places of the
+  // feature's notices meanwhile, as over the Qt band.
+  std::function<void(const QString&)> messageNoticeHovered;
 };
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 
 struct NativeMacWindowState;
 
@@ -350,6 +369,12 @@ public:
   bool editProjectsRow(const QString& identifier, const QString& text,
                        std::function<void(const QString&, bool)> finished);
   void closeProjectsEditor();
+  // Names a Browser row in place (mitcad#1356), as F2 does: the shown
+  // outline's row of `key` (NativeMacTreeItem::id) edits its name in its
+  // own text field, selected first, and the name goes to
+  // NativeMacCallbacks::rename. False when the row is not shown or cannot
+  // be renamed. Logged "Native Browser editor: <key>".
+  bool editModelRow(const QString& key);
   // The message band above the timeline (mitcad#1098, NativeMessageBand.hpp):
   // what the window's shared MessageLog shows, called again whenever it
   // changes; its times are the log's (MessageCenter). The window keeps the

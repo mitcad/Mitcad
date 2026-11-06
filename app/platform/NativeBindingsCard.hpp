@@ -22,7 +22,7 @@ public:
   virtual bool contains(const QPoint& screenPoint) const = 0;
 };
 
-#if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
+#if defined(MITCAD_MAC_UI) && defined(MITCAD_MACOS_NATIVE_UI)
 std::unique_ptr<NativeBindingsCardView> createNativeBindingsCardView(QWidget* source,
                                                                   std::function<void()> closed);
 #else

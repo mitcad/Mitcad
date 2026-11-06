@@ -261,7 +261,11 @@ native-select native.model.body:F1.b0@O1
 expect-log 'Measure Body 1: 1 body' 30
 expect-log 'Computing inspection started' 30
 expect-log 'Inspect Measure: volume 10000' 30
-expect-native-text commandResult 'Volume: 10000 mm'
+# The answer as the shared panel's rows (mitcad#1354): the body's group
+# with its Volume, in place of the text.
+expect-log '^Panel Measure result Body 1: [^:]*: .*Volume = 10000 mm' 30
+expect-native-visible commandResultRows true
+expect-native-visible commandResultGroup1 true
 focus-main
 key Return
 expect-log 'Closed Measure' 30

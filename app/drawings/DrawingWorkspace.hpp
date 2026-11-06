@@ -49,7 +49,7 @@
 // (mitcad#1173) "Drawing snap: 12.00 mm x2" (the snap shown while a
 // dimension is placed or dragged), "Drawing dimension placed: line_offset
 // -24.00, beyond 12.00 mm, snapped to 12.00 mm x2 of annotation 1" (or
-// "free" with Alt, "not snapped") and "Drawing dimension moved: …".
+// "free" with Shift or Alt, "not snapped") and "Drawing dimension moved: …".
 //
 // A cut sheet (mitcad#853) opens here too: its parts are the sheet's views
 // (dragged to move them, turned from their menu or their panel's Rotation),
@@ -221,16 +221,22 @@ private:
   // The picks are there: the sheet waits for the click that places what
   // they make, its preview following the pointer.
   void placePicks();
+  // Whether the tool's picks choose what they make (the Dimension tool's
+  // Auto, mitcad#1272).
+  bool picksAuto() const;
   // Whether the placing click may still pick (mitcad#1272): one pick of
   // the Dimension tool's Auto.
   bool picksWhilePlacing() const;
   // A placing click on another edge, circle or corner while one pick of
-  // the Dimension tool's Auto is placed (without Alt): picked as its
+  // the Dimension tool's Auto is placed (without Shift or Alt): picked as its
   // second, the placing click awaited again; false when it places.
   bool secondPick(QPointF at);
-  // Where a line's or an arc's click on a view snaps (mitcad#1272): the
-  // nearest end, straight edge's middle or centre the model finds there
-  // (`"want": "snap"`), logged "Drawing point snapped to …"; none.
+  // Where a line's or an arc's click on a view snaps (mitcad#1272), and a
+  // section's line's or a break's side's (mitcad#1362): the nearest end,
+  // straight edge's middle or centre the model finds there, else the
+  // nearest point of a centre line near it (a round face's axis seen from
+  // the side, a centre mark's line; `"want": "snap"`), logged "Drawing
+  // point snapped to …"; none.
   std::optional<QPointF> snapPoint(int view, const QPointF& at);
   // The preview of what a placing click makes, from its `drawing_snap`
   // answer (mitcad#1272: `type`, `along`, a linear dimension's `ends` and

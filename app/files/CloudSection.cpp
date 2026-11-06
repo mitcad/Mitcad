@@ -115,7 +115,7 @@ void CloudSection::build() {
   m_details->setCheckable(true);
   m_details->setAutoRaise(true);
   m_details->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_details->setIcon(mac::symbolIcon(QStringLiteral("chevron.right")));
 #else
   m_details->setArrowType(Qt::RightArrow);
@@ -284,7 +284,7 @@ QWidget* CloudSection::firstField() const {
 void CloudSection::showFields() {
   const CloudService service = m_address.service;
   const bool known = knownService(service);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_details->setIcon(mac::symbolIcon(m_detailsOpen ? QStringLiteral("chevron.down") : QStringLiteral("chevron.right")));
 #else
   m_details->setArrowType(m_detailsOpen ? Qt::DownArrow : Qt::RightArrow);

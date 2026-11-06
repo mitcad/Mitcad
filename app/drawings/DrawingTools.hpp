@@ -115,7 +115,12 @@ struct DrawingToolDef {
 // view under their first click (their Drawn option), which they then move,
 // scale and turn with; Text does too (on the sheet unless chosen). Their
 // clicks on a view snap to its edges' ends, straight edges' middles and
-// circles' and arcs' centres (mitcad#1272; Alt: as clicked).
+// circles' and arcs' centres (mitcad#1272), else onto a centre line near
+// them (a round face's axis seen from the side, a centre mark's line;
+// mitcad#1362); so do Section View's and Break's clicks, a section's
+// second near none of them to 0°, 45°, 90° or a multiple from its first
+// (snapLineAngle). Shift, or Alt where the desktop leaves it to MitCad:
+// as clicked.
 //
 // Dimension's Type is Auto unless chosen (mitcad#1272): its picks choose
 // the model's `"type": "dimension"` (a diameter, a radius, an edge's
@@ -258,5 +263,18 @@ QString annotationName(const QString& type);
 // path, the polygonal style), "…, from the cache" when it did not project
 // them.
 QStringList projectionLines(const QJsonArray& projections);
+
+// A section's line (mitcad#1362): its second point `to` turned about its
+// first `from` onto 0°, 45°, 90° or one of their multiples, its length
+// kept, when the line runs within `within` degrees of one (the leaders'
+// 4°, mitcad#1294), and that angle (degrees counter-clockwise from the
+// sheet's x axis, 0 to 315); nothing when it runs further from all of
+// them or the points are one.
+struct LineAngleSnap {
+  QPointF to;
+  double angle = 0.0;
+};
+constexpr double kLineAngleSnap = 4.0;
+std::optional<LineAngleSnap> snapLineAngle(const QPointF& from, const QPointF& to, double within = kLineAngleSnap);
 
 } // namespace mitcad::drawings

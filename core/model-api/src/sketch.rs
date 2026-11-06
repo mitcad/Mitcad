@@ -78,7 +78,14 @@ named_enum! {
         },
         "sketch.add_line" => AddLine {
             sketch: FeatureUid,
-            start: Value,
+            /// `two_point` (the default: `start`, `end`) or `midpoint`
+            /// (`center`, `end`; mitcad#1393).
+            #[serde(default)]
+            mode: Option<String>,
+            #[serde(default)]
+            start: Option<Value>,
+            #[serde(default)]
+            center: Option<Value>,
             end: Value,
             #[serde(default)]
             construction: bool,
@@ -2049,14 +2056,37 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     edit.def.entity_mut(p).expect("added").fixed = fixed;
                 }
                 C::AddLine {
+                    mode,
                     start,
+                    center,
                     end,
                     construction,
                     centerline,
                     ..
                 } => {
-                    let l =
-                        edit.add_line(point(&start)?, point(&end)?, construction, centerline)?;
+                    let m = mode.as_deref().unwrap_or("two_point");
+                    let l = match m {
+                        "two_point" => edit.add_line(
+                            point(&need(start, "start", m)?)?,
+                            point(&end)?,
+                            construction,
+                            centerline,
+                        )?,
+                        "midpoint" => {
+                            edit.midpoint_line(
+                                point(&need(center, "center", m)?)?,
+                                point(&end)?,
+                                construction,
+                                centerline,
+                            )?
+                            .0
+                        }
+                        other => {
+                            return Err(format!(
+                                "unknown line mode “{other}” (two_point, midpoint)"
+                            ));
+                        }
+                    };
                     made_ref.push(Ref::Curve(l).to_string());
                 }
                 C::Rectangle {
@@ -2191,9 +2221,16 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             .map_err(|e| e.to_string())?,
                             end: point(&need(end, "end", m)?)?,
                         },
+                        "normal" => ArcMode::Normal {
+                            from: mitcad_model::sketch::internal::point_serde::parse(&need(
+                                from, "from", m,
+                            )?)
+                            .map_err(|e| e.to_string())?,
+                            end: point(&need(end, "end", m)?)?,
+                        },
                         other => {
                             return Err(format!(
-                                "unknown arc mode “{other}” (three_point, center, tangent)"
+                                "unknown arc mode “{other}” (three_point, center, tangent, normal)"
                             ));
                         }
                     };

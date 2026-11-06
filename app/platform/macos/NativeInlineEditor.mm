@@ -22,6 +22,7 @@
 
 #include "platform/NativeDialogs.hpp"
 #include "NativeControls.hpp"
+#include "NativeKeys.hpp"
 
 namespace mitcad { class NativeInlineController; }
 
@@ -35,6 +36,14 @@ namespace mitcad { class NativeInlineController; }
 @interface MITCADInlineEditorTarget : NSObject <NSTextFieldDelegate> {
 @public
   mitcad::NativeInlineController* owner;
+}
+@end
+
+// The editor's field: the wheel over it while it has the keyboard steps
+// the presenter's value (mitcad#1350), as the Qt field's does.
+@interface MITCADInlineField : NSTextField {
+@public
+  MITCADInlineEditorTarget* __weak target;
 }
 @end
 
@@ -60,7 +69,9 @@ public:
       : QObject(source), m_source(source), m_key(source), m_viewport(source->parentWidget()) {
     m_target = [[MITCADInlineEditorTarget alloc] init];
     m_target->owner = this;
-    m_field = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    MITCADInlineField* field = [[MITCADInlineField alloc] initWithFrame:NSZeroRect];
+    field->target = m_target;
+    m_field = field;
     m_field.editable = YES;
     m_field.selectable = YES;
     m_field.bezeled = YES;
@@ -260,6 +271,37 @@ public:
     if (m_source && !m_refreshing) emit m_source->editingFinished();
   }
 
+  // Up and Down step the presenter's plain value through its shared field
+  // (mitcad#1350, ParameterField::nativeStepKey: Shift ×10, Option ×0.1,
+  // an expression left as it is), never a window's shortcut such as the 3D
+  // view's arrow keys. AppKit gives the arrows as move commands, Option's
+  // as two of them: one key event is one step. Other modifiers keep
+  // AppKit's own moves.
+  bool stepKey(SEL command) {
+    NSEvent* event = NSApp.currentEvent;
+    if (!m_tools || !m_source || event.type != NSEventTypeKeyDown ||
+        ![NSStringFromSelector(command) hasPrefix:@"move"]) {
+      return false;
+    }
+    if (event == m_steppedKey) return true;
+    const QKeySequence pressed = mac::keySequence(event);
+    if (pressed.isEmpty()) return false;
+    // The step's text change can close the editor: nothing of it is used
+    // after the step.
+    m_steppedKey = event;
+    if (m_tools->nativeStepKey(pressed[0].key(), pressed[0].keyboardModifiers())) return true;
+    m_steppedKey = nil;
+    return false;
+  }
+
+  // The wheel over the field while it has the keyboard steps the value as
+  // the Qt field's does (ParameterField::nativeStepWheel); otherwise it is
+  // the view's.
+  bool wheel(NSEvent* event) {
+    if (!m_tools || !m_source || !focused()) return false;
+    return m_tools->nativeStepWheel(mac::qtWheelAngle(event), mac::qtKeyModifiers(event.modifierFlags));
+  }
+
   NSArray<NSString*>* completions(NSTextView* text, NSRange range) {
     return m_expression ? m_expression->completions(QString::fromNSString(text.string),
                                                     static_cast<int>(NSMaxRange(range))) : nil;
@@ -341,7 +383,10 @@ private:
       const QString name = m_source->property("nativeInlineName").toString();
       if (QString::fromNSString(m_label.stringValue) != name) { m_label.stringValue = name.toNSString(); }
     }
-    if (QString::fromNSString(m_field.toolTip) != m_source->toolTip()) { m_field.toolTip = m_source->toolTip().toNSString(); }
+    // A field that steps says how, as the Qt field's tooltip does (mitcad#1350).
+    QString tip = m_source->toolTip();
+    if (m_tools && m_tools->options().steps) tip = ParameterField::stepTooltip(tip);
+    if (QString::fromNSString(m_field.toolTip) != tip) { m_field.toolTip = tip.toNSString(); }
     if (bool(m_field.enabled) != m_source->isEnabled()) { m_field.enabled = m_source->isEnabled(); }
     if (m_expression) {
       NSButton* fx = m_expression->button();
@@ -381,6 +426,7 @@ private:
   bool m_retired = false;
   MITCADInlineEditorTarget* __strong m_target = nil;
   NSTextField* __strong m_field = nil;
+  NSEvent* __strong m_steppedKey = nil; // the key event that stepped last (mitcad#1350)
   NSTextField* __strong m_label = nil; // the parameter's name, "d3 =" (mitcad#250)
   MITCADInlinePanel* __strong m_panel = nil;
   NSWindow* __weak m_host = nil;
@@ -429,6 +475,7 @@ void hideNativeInlineEditor(QLineEdit* presenter) {
 - (BOOL)control:(NSControl*)control textView:(NSTextView*)view doCommandBySelector:(SEL)command {
   (void)control; (void)view;
   if (!owner) return NO;
+  if (owner->stepKey(command)) return YES;
   if (command == @selector(insertNewline:) || command == @selector(insertNewlineIgnoringFieldEditor:)) {
     const NSEventModifierFlags flags = NSApp.currentEvent.modifierFlags;
     Qt::KeyboardModifiers modifiers = Qt::NoModifier;
@@ -442,5 +489,14 @@ void hideNativeInlineEditor(QLineEdit* presenter) {
   if (command == @selector(insertTab:)) return owner->key(Qt::Key_Tab);
   if (command == @selector(insertBacktab:)) return owner->key(Qt::Key_Backtab, Qt::ShiftModifier);
   return NO;
+}
+@end
+
+@implementation MITCADInlineField
+// AppKit's field editor passes the wheel up to the field it edits.
+- (void)scrollWheel:(NSEvent*)event {
+  MITCADInlineEditorTarget* handler = target;
+  if (handler != nil && handler->owner != nullptr && handler->owner->wheel(event)) return;
+  [super scrollWheel:event];
 }
 @end

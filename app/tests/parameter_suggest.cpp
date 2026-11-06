@@ -7,8 +7,10 @@
 // list), the fx browser searching comments, and `name = …`; Edit
 // Formula… keeping the `name =` (mitcad#755), and the context menu acting
 // on the field's caret and selection (mitcad#756); Up and Down stepping a
-// plain value with the list closed (mitcad#1254).
+// plain value with the list closed (mitcad#1254), and not while the model
+// computes (mitcad#1360).
 #include "framework/FormulaEditor.hpp"
+#include "framework/ModelBusy.hpp"
 #include "framework/ParameterField.hpp"
 #include "framework/ParameterSuggest.hpp"
 #include "framework/ValueStep.hpp"
@@ -40,6 +42,7 @@
 #include <QToolTip>
 #include <QWheelEvent>
 #include <QWidget>
+#include <QtLogging>
 
 namespace {
 
@@ -775,6 +778,20 @@ void tableTests() {
 
 } // namespace
 
+namespace {
+
+// What the field logs while a step is tried.
+QStringList& stepLog() {
+  static QStringList messages;
+  return messages;
+}
+
+void keepStepLog(QtMsgType, const QMessageLogContext&, const QString& message) {
+  stepLog() << message;
+}
+
+} // namespace
+
 // A key with modifiers, as press() sends one: whether the field took its
 // shortcut override.
 bool pressWith(QLineEdit& edit, int key, Qt::KeyboardModifiers modifiers) {
@@ -863,6 +880,36 @@ void stepTests() {
   length->setText(QStringLiteral("10 mm"));
   CHECK(pressWith(*length, Qt::Key_Up, Qt::ShiftModifier));
   CHECK(length->text() == QStringLiteral("20 mm"));
+
+  // A length while a job computes the model (mitcad#1360): the source's
+  // unit cannot be read, Up does nothing and says why; nothing escapes the
+  // key's handling (it ended the application on Windows).
+  {
+    QWidget busyWindow;
+    setParameterSource(&busyWindow, {[]() -> QJsonArray { throw ModelBusy(); },
+                                     [](const QJsonObject&, QString*) { return false; },
+                                     []() -> QString { throw ModelBusy(); }});
+    auto* busy = new QLineEdit(&busyWindow);
+    ParameterFieldOptions busyOptions;
+    busyOptions.label = QStringLiteral("test busy distance");
+    busyOptions.create = false;
+    busyOptions.steps = true;
+    ParameterField::attach(busy, busyOptions);
+    busy->setText(QStringLiteral("10 mm"));
+    stepLog().clear();
+    const QtMessageHandler previous = qInstallMessageHandler(keepStepLog);
+    bool escaped = false;
+    try {
+      CHECK(pressWith(*busy, Qt::Key_Up, Qt::NoModifier)); // still the field's key
+    } catch (...) {
+      escaped = true;
+    }
+    qInstallMessageHandler(previous);
+    CHECK(!escaped);
+    CHECK(busy->text() == QStringLiteral("10 mm"));
+    CHECK(stepLog().contains(
+        QStringLiteral("Value field test busy distance: Up not stepped: the model is busy computing")));
+  }
 
   // A field that does not step (a table's cell): Up leaves its value.
   ParameterFieldOptions plainOptions;

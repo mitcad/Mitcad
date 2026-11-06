@@ -6,6 +6,10 @@ window-resize 1280 900
 expect-viewport
 click-logged 'Orientation cube front-top'
 command view.fit
+# On a low screen (the macOS VM) the fit leaves edges under the floating
+# top cards: a little room around the body.
+wheel 50 55 -2
+wait-idle
 expect-viewport
 mark
 command solid.fillet

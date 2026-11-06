@@ -4,6 +4,7 @@
 #include <algorithm>
 
 #include <QCheckBox>
+#include <QDebug>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -15,6 +16,10 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QShowEvent>
+#include <QSize>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -28,6 +33,8 @@
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/PanelTree.hpp"
+#include "../framework/PreferencesPageLayout.hpp"
+#include "../framework/TestSync.hpp"
 #include "../platform/NativeDialogs.hpp"
 
 namespace mitcad {
@@ -72,6 +79,15 @@ private:
     return margins.left() + margins.right() + 2 * margin() + 2;
   }
   int charsWide(int count) const { return fontMetrics().averageCharWidth() * count + extraWidth(); }
+};
+
+// The known brokers: the list asks for no more than its minimum height, so
+// that the page's natural height stays the one it had (at most 110 pixels
+// for the list), and takes what the page has to spare (mitcad#1394).
+class KnownBrokersList : public QTreeWidget {
+public:
+  static constexpr int kMinimumHeight = 110;
+  QSize sizeHint() const override { return {QTreeWidget::sizeHint().width(), minimumHeight()}; }
 };
 
 } // namespace
@@ -138,14 +154,19 @@ RemotePreferencesBox::RemotePreferencesBox(QWidget* parent)
   form->addRow(brokerLabel, m_broker);
   connect(m_live, &QCheckBox::toggled, m_broker, &QWidget::setEnabled);
   // The brokers answered for (mitcad#89): the trust question's answer and
-  // the user signed in as; the buttons act at once.
-  m_brokers = new QTreeWidget;
+  // the user signed in as; the buttons act at once. The page's spare height
+  // goes to the list (mitcad#1394).
+  m_brokers = new KnownBrokersList;
   panel::setCompactIndentation(m_brokers, panel::Indent::Flat);
   m_brokers->setObjectName(QStringLiteral("cloudKnownBrokers"));
   m_brokers->setColumnCount(3);
   m_brokers->setHeaderLabels({tr("Broker"), tr("User"), tr("Answer")});
   m_brokers->setRootIsDecorated(false);
-  m_brokers->setMaximumHeight(110);
+  m_brokers->setMinimumHeight(KnownBrokersList::kMinimumHeight);
+  QSizePolicy brokersPolicy = m_brokers->sizePolicy();
+  brokersPolicy.setVerticalPolicy(QSizePolicy::Expanding);
+  brokersPolicy.setVerticalStretch(1);
+  m_brokers->setSizePolicy(brokersPolicy);
   m_brokers->setToolTip(tr("The brokers you answered the trust question for, with the user you signed in as"));
   m_signOut = new QPushButton(tr("Si&gn Out"));
   m_forget = new QPushButton(tr("&Forget"));
@@ -181,6 +202,32 @@ RemotePreferencesBox::RemotePreferencesBox(QWidget* parent)
   });
   connect(m_git, &QLineEdit::editingFinished, this, &RemotePreferencesBox::detect);
   detect();
+}
+
+void RemotePreferencesBox::showEvent(QShowEvent* event) {
+  QGroupBox::showEvent(event);
+  logGeometry();
+}
+
+void RemotePreferencesBox::resizeEvent(QResizeEvent* event) {
+  QGroupBox::resizeEvent(event);
+  logGeometry();
+}
+
+void RemotePreferencesBox::logGeometry() {
+  if (m_geometryLogPending) {
+    return;
+  }
+  m_geometryLogPending = true;
+  TestSync::singleShot(0, this, [this] {
+    m_geometryLogPending = false;
+    if (!isVisible() || !m_brokers->isVisible()) {
+      return;
+    }
+    // The list is the page's last line.
+    logPreferencesPageLayout(this, QStringLiteral("Cloud page: known brokers list"), m_brokers, m_brokers,
+                             QStringLiteral("cloud"));
+  });
 }
 
 void RemotePreferencesBox::detect() {

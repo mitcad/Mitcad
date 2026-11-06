@@ -229,6 +229,13 @@ pub struct ViewPick {
     /// it keeps its place on the face when the model or the view changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_face: Option<[f64; 2]>,
+    /// A point of a planar face a section's plane cuts, on its cut line
+    /// (mitcad#1361), in the face's own coordinates as `on_face`: the pick
+    /// is then the piece of the cut line under it (the cut edges joined end
+    /// to end that it lies on), not the line across the face's gaps; its
+    /// `point` that piece's start, end or middle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_cut: Option<[f64; 2]>,
 }
 
 impl ViewPick {
@@ -246,9 +253,19 @@ impl ViewPick {
                 return Err("a point on a face is two numbers".to_owned());
             }
         }
+        if let Some(on) = self.on_cut {
+            if self.face.is_none() || self.edge.is_some() || self.on_face.is_some() {
+                return Err("a point on a cut line is a pick of the face it cuts".to_owned());
+            }
+            if on.iter().any(|v| !v.is_finite()) {
+                return Err("a point on a cut line is two numbers".to_owned());
+            }
+        }
         match (&self.edge, &self.face, self.point) {
             (Some(_), None, _) => Ok(()),
             (None, Some(_), None | Some(PickPoint::Center)) => Ok(()),
+            // A piece of a section's cut line has ends (mitcad#1361).
+            (None, Some(_), Some(_)) if self.on_cut.is_some() => Ok(()),
             (None, Some(_), Some(_)) => Err("a face's point is its center".to_owned()),
             _ => Err("a pick is a body's edge or face".to_owned()),
         }

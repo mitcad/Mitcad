@@ -5116,10 +5116,10 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.add_rectangle` | `corner` [x, y] (a position only: the corner is a new fixed point; `sketch.rectangle` takes point ids), `width`, `height` (values) | a dimensioned rectangle: fixed first corner, horizontal and vertical constraints, `width` and `height` dimensions; result also `curves`, `region` |
 | `sketch.add_circle` | `center` [x, y] (a position only: the centre is a new fixed point; `sketch.circle` takes a point id), `diameter` (value) | fixed centre and a diameter dimension; result also `curves`, `region` |
 | `sketch.add_point` | `at` [x, y] (a position: the new point), `fixed` | |
-| `sketch.add_line` | `start`, `end` (point inputs), `construction`, `centerline` | |
+| `sketch.add_line` | `start`, `end` (point inputs), `construction`, `centerline`; `mode` (optional): `two_point` (the default: `start`, `end`) or `midpoint` (`center`, `end`: the line runs through `center` to `end` and as far on the other side; mitcad#1393) | `midpoint` makes a point at `center` (or takes the existing point given) and holds it at the line's middle with a `midpoint` constraint; `made`: the line |
 | `sketch.rectangle` | `mode`: `two_point` (`a`, `b` corners), `three_point` (side `a`–`b`, `c` on the opposite side: a position [x, y] only), `center` (`center`, `corner`); `a`, `b`, `center` and `corner` are point inputs (an existing point is that corner, or the centre point held at the diagonal's middle, mitcad#1269); `construction`; `radius` (value, optional: rounded corners, [Rounded rectangles and fillets of several corners](#rounded-rectangles-and-fillets-of-several-corners)) | four joined lines (counter-clockwise), horizontal and vertical (perpendicular for `three_point`), a construction diagonal with the centre at its midpoint for `center`; with `radius` also four arcs (`made`: the lines, then the arcs) |
 | `sketch.circle` | `mode`: `center` (`center` point input, `radius`), `two_point` (`a`, `b`: a diameter), `three_point` (`a`, `b`, `c`), `two_tangent` (`lines` [2], `radius`, `near`: a position [x, y] only), `three_tangent` (`lines` [3]); `construction`; `a`, `b` and `c` are point inputs: an existing point is held on the circle with a `coincident` (mitcad#1269) | tangent constraints for the tangent modes |
-| `sketch.arc` | `mode`: `three_point` (`start`, `through`, `end`), `center` (`center`, `start`, `end`: the direction of the end, a position [x, y] only, `clockwise`), `tangent` (`from`: an end point of a curve, `end`); `construction`; the other points are point inputs: `start` and `end` are the arc's ends, `center` its centre point, and an existing point as `through` is held on the arc with a `coincident` (mitcad#1269) | `tangent` adds a tangent constraint |
+| `sketch.arc` | `mode`: `three_point` (`start`, `through`, `end`), `center` (`center`, `start`, `end`: the direction of the end, a position [x, y] only, `clockwise`), `tangent` (`from`: an end point of a curve, `end`), `normal` (`from`: an end point of a line or a circular arc, `end`: the arc leaves `from` square to that curve, toward the side `end` is on; mitcad#1393); `construction`; the other points are point inputs: `start` and `end` are the arc's ends, `center` its centre point, and an existing point as `through` is held on the arc with a `coincident` (mitcad#1269) | `tangent` adds a tangent constraint; `normal` holds the arc's centre on the line with a `coincident`, or adds a construction line from the circular arc's centre to `from` that the new arc is tangent to |
 | `sketch.polygon` | `center`, `vertex` (point inputs, mitcad#1269: an existing point as `center` is the polygon's centre point, no new one is made; as the `vertex` of an inscribed polygon it is the first corner; a circumscribed polygon's `vertex` is a position [x, y] only), `sides` (3–256), `inscribed` (default true; false: `vertex` is a side's middle), `construction` | joined lines that stay a regular polygon (four degrees of freedom: placement, orientation, size; mitcad#303): inscribed, equal sides with the corners on a construction circle; circumscribed, the sides tangent to a construction circle and the corners on a second construction circle around the same centre point (the first circle is the one through `vertex`). Polygons stored earlier keep their constraints |
 | `sketch.slot` | `mode`: `center_to_center` (`a`, `b`), `center_point` (`center`, `end`: an end's centre), `arc` (`center`, `start`, `end`: the direction of the far end, a position [x, y] only); `width`; the other points are point inputs: an existing point is that end arc's centre, the slot's middle (held at its centre line's middle) or the arc slot's centre (mitcad#1269) | two end arcs, two tangent sides, a construction centre line or arc with the arc centres at its ends, equal end arcs |
 | `sketch.ellipse` | `center` (point input), `major` (end of the major axis; a point input, mitcad#1269), `minor_radius`, `start` and `end` (point inputs; an elliptical arc), `construction` | |
@@ -18403,8 +18403,19 @@ must lie inside a detail's circle and outside a break's band (a long edge
 across a band or into a detail is picked where it shows); a section sees
 what lies behind its plane (an edge in front of it is no pick, one across
 it is cut there) and picks a planar face where its plane cuts it (the
-cut face's edge in the face's plane, `{"body", "face"}`, found again on
-every draw among the projection's cut faces). Picks as near as one
+cut face's edge in the face's plane, found again on every draw among the
+projection's cut faces). The cut edges in the face's plane, joined end to
+end, are that face's cut line in pieces (mitcad#1361: a face cut beside a
+hole is cut in two); a click picks the piece under it, `{"body", "face",
+"on_cut": [u, v]}`, its middle in the face's own coordinates (as
+`on_face`'s below), found again on every draw as the piece that point
+lies on (one it lies on no piece of makes the annotation broken: `the
+point picked on the cut of the face … lies on no piece of it`), and its
+ends (`"point": "start"` or `"end"`, the piece's ends along the line,
+picked as corners where no edge's end is seen) and middle (`"center"`).
+A face picked without `on_cut` (older files) is its whole cut line, from
+its first piece's start to its last piece's end across the gaps; no
+`point` but `center` goes with it. Picks as near as one
 another (within 0.25 mm of paper) are told apart by the view: the one
 the projection draws as a visible line first, then the one nearest the
 eye. An arc is where it is (seen end on its range of angles, from the
@@ -22175,6 +22186,7 @@ Dimension tool sends it with its Type Auto, the default):
 | one circle (whole) seen end on or from the side, or one round face seen from the side | `diameter` |
 | one arc | `radius` |
 | one straight edge | `linear` from its `start` to its `end` (two picks of it are kept: its length) |
+| one piece of a section's cut line (`on_cut`, mitcad#1361) | `linear` from the piece's `start` to its `end`, as a straight edge's |
 | two straight edges that are not parallel (on a view seen from an angle: none) | `angle` |
 | any other two | `linear` |
 
@@ -22182,7 +22194,13 @@ The same pick twice is one pick, so a circle or an edge picked twice
 gives its own dimension, never 0 mm; two picks on one point (a circle
 and its own centre) are refused (`the picks lie on one point`), as are a
 point alone (`a point alone measures nothing`), a section's cut face
-alone and more than two picks (a baseline or a chain takes them). A
+picked whole, without `on_cut` (`a cut face picked whole spans its
+gaps`), and more than two picks (a baseline or a chain takes them).
+`drawing_pick` asked with neither `type` nor `want` (the Dimension
+tool's Auto) says whether its pick makes such a dimension alone,
+`"alone": true`, else `"alone": false` and `next`, the refusal's words
+(mitcad#1361): the application then waits for a second pick and says
+so, instead of placing. A
 linear one's `along` (unless given) follows its placing click `at`, as a
 sketch's dimensions do (`mitcad_model_drawing::annotate::placed_along`):
 placed above or below its picks' points (between them along x, beyond
@@ -22214,8 +22232,13 @@ of angles taken together). Two concentric whole circles are refused
 
 **Snapping points.** `drawing_pick` takes `"want": "snap"`: the nearest
 edge end, straight edge's middle (`"point": "center"` of the edge) or
-circle's or arc's centre within 3 mm of paper, nothing else; the
-application's Line and Arc snap their clicks on a view to it. A circle
+circle's or arc's centre within 3 mm of paper; with none of them there
+(mitcad#1362), the click's foot on the nearest centre line within 3 mm:
+a round face's axis seen from the side (the pick its face) or a line of
+a centre mark the view draws (the pick that centre), its `at` the foot,
+`"center_line": true` and the line first among its `items`; nothing
+else. The application's Line and Arc, Section View's line and Break's
+sides snap their clicks on a view to it. A circle
 or an arc seen end on that `drawing_pick` gives (any `want`) lists its
 centre among its `items` (`{"point"}`), where a click picks it.
 
@@ -22225,9 +22248,20 @@ length placed above, beside, between and beyond, an angle, parallel
 edges' distance, a hole to an edge aligned, the slot's centre to a hole
 by the placing click, the same pick twice, picks on one point, the
 `drawing_snap` answer, the slot's centre arc, snapping points),
+`core/model-tests/drawing-views/src/pick_tests.rs` (a snap onto a hole's
+axis seen from the side and onto a centre mark's line, mitcad#1362),
 `core/model-drawing/src/annotate.rs` (`placed_along`, the slot's centre
 arc), `app/tests/drawing_tools.cpp`, `app.ui-windows-drawing-dimension-picks`
-(`tools/ui-windows-drawing-dimension-picks-test.ps1`).
+(`tools/ui-windows-drawing-dimension-picks-test.ps1`). A section's cut
+edge (mitcad#1361): `chosen_dimension_tests.rs`
+(`a_sections_cut_edge_alone_is_the_length_of_the_piece_under_the_click`:
+a stepped part with a hole, the piece beside the hole 30 and not the
+line across it, its corners, `alone`, the face picked whole and a point
+in the hole refused), `tools/ui-drawing-section-dimension-test.sh` and
+`app.ui-windows-drawing-section-dimension`
+(`tools/ui-windows-drawing-section-dimension-test.ps1`: the cut edge
+beside the hole picked alone reads 30, a corner waits for a second
+pick).
 
 ## New designs from an agent: document_new
 
@@ -22495,8 +22529,8 @@ from the side is picked on its axis, its centreline, as before.
 **The corners a sheet shows.** The `drawing_corners` query (`drawing`,
 `sheet` (0)) gives `views`: for each drawn view of the sheet its `view`
 and `points` (sheet mm), the ends of its edges that a click picks
-(`"point": "start"` or `"end"`, the same candidates as `drawing_pick`'s)
-that lie on a line the view draws as visible and that the view sees
+(`"point": "start"` or `"end"`, the same candidates as `drawing_pick`'s;
+on a section the ends of its cut lines' pieces too, mitcad#1361) that lie on a line the view draws as visible and that the view sees
 (inside a detail's circle, outside a break), each place once. A view
 the model could not draw is left out. The application draws them as
 dots while its Preferences › Display › *Always show corners in drawings*
@@ -22510,3 +22544,34 @@ hover's items, horizontal and vertical in both orders;
 `the_corners_of_a_view_are_its_visible_edge_ends`),
 `tools/ui-drawing-corners-test.sh`, `app.ui-windows-drawing-corners`
 (`tools/ui-windows-drawing-corners-test.ps1`).
+
+## Midpoint lines and normal arcs (mitcad#1393)
+
+**Midpoint line.** `sketch.add_line` with `"mode": "midpoint"` takes the
+line's middle `center` and one end `end` (point inputs); the other end is
+as far on the other side of `center`. The middle is a sketch point (a new
+one, or the existing point given as `center`) held at the line's middle
+by a `midpoint` constraint, so the line stays symmetric about it when an
+end is dragged or dimensioned:
+
+```json
+{"cmd": "sketch.add_line", "sketch": "F1", "mode": "midpoint", "center": [0, 0], "end": [10, 5]}
+```
+
+**Normal arc.** `sketch.arc` with `"mode": "normal"` leaves the end point
+`from` of a line or a circular arc square to it (where `tangent` leaves
+along it), toward the side of the curve that `end` is on. Its centre lies
+on the line (a `coincident` of the centre point on the line, the
+infinite line), or, from an arc, on that arc's tangent at `from` (a
+construction line from the arc's centre to `from`, and a `tangent` of the
+new arc to it). The end may not lie straight across from `from` (the arc
+would be a line); from a spline or an ellipse the mode is refused.
+
+```json
+{"cmd": "sketch.arc", "sketch": "F1", "mode": "normal", "from": "p3", "end": [15, 5]}
+```
+
+The sketch Line tool draws both kinds of arc by a drag from a chain's end
+or from the end of a line or an arc, and the Midpoint Line tool draws the
+midpoint line (`app/COMMANDS.md`, "The line tool's arcs and Midpoint
+Line"). Tests: `core/model-tests/sketch/src/sketch_line_arcs_1393_tests.rs`.

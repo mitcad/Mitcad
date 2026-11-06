@@ -24,7 +24,9 @@
 // box, a dimension's lines, a leader), "Drawing selection: view 3, annotation
 // 1" when Ctrl+click adds to the selection or takes from it, "Drawing point
 // <n> at x,y" for each click of a line or an arc drawn outside the model
-// (mitcad#729), "Drawing corner marker at x,y, radius <r> px, filled" (sheet
+// (mitcad#729) and of a section's line or a break's sides (mitcad#1362:
+// "(snapped)" to a point, "(at 90 degrees)" turned, after "Drawing snap:
+// section line at 90 degrees"), "Drawing corner marker at x,y, radius <r> px, filled" (sheet
 // mm) when a point under the pointer is marked, "Drawing corner dots: <n>,
 // radius <r> px" or "Drawing corner dots: none" when they change
 // (mitcad#1338). A view the
@@ -178,9 +180,13 @@ public:
   // what a click there would pick (`hoverRequested`) meanwhile.
   void setPicksWhilePlacing(bool on);
   // Where the clicks of a line or an arc drawn outside the model go
-  // (mitcad#1272): the view under the click (0: none) and the click give
-  // the point it snaps to (sheet mm), none for the click itself. Alt: as
-  // clicked.
+  // (mitcad#1272), and since mitcad#1362 a section's line's and a break's
+  // sides': the view under the click (0: none; a section's or a break's
+  // second click: the view of its first) and the click give the point it
+  // snaps to (sheet mm), none for the click itself. A section's second
+  // click that snaps to no point turns onto 0°, 45°, 90° or a multiple
+  // from its first (snapLineAngle). Shift, or Alt where the desktop
+  // leaves it to the application (dragsFreely): as clicked.
   void setPointSnap(std::function<std::optional<QPointF>(int view, const QPointF& at)> snap);
   // Where a dimension placed goes when it snaps to the spacing of the one
   // before (mitcad#1173): its preview there (sheet mm) instead of at the
@@ -192,12 +198,15 @@ public:
   // text, a datum's square or a frame, its leader to 45 degrees
   // (mitcad#1294).
   void setDragSnap(bool snapped, const QPointF& delta, const QString& hint);
-  // The keyboard modifiers of the last mouse button released: with Alt a
-  // dimension is placed or dragged freely, without its snap.
+  // The keyboard modifiers of the last mouse button released: with Shift
+  // (or Alt, dragsFreely) a dimension is placed or dragged freely, without
+  // its snap.
   Qt::KeyboardModifiers releaseModifiers() const { return m_releaseModifiers; }
-  // Whether a drag with these modifiers goes where it is dropped: Shift,
-  // or Alt where the desktop leaves Alt-drags to the application (Linux
-  // desktops move windows with them; mitcad#1294).
+  // Whether a click or a drag with these modifiers goes where it is
+  // clicked or dropped, without any of the drawing's snaps: Shift, or Alt
+  // where the desktop leaves Alt-drags to the application (Linux desktops
+  // move windows with them; mitcad#1294, for every snap since
+  // mitcad#1362).
   static bool dragsFreely(Qt::KeyboardModifiers modifiers) {
     return modifiers.testFlag(Qt::ShiftModifier) || modifiers.testFlag(Qt::AltModifier);
   }
@@ -250,7 +259,9 @@ signals:
   void placing();
   // The pointer moved while an annotation tool waits for a pick (or a
   // line or an arc drawn outside the model for a click that snaps,
-  // mitcad#1272): the view under it (0: none) and where it is; the
+  // mitcad#1272, a section's line or a break's sides, mitcad#1362: after
+  // its first click the view of that one): the view under it (0: none)
+  // and where it is; the
   // workspace asks the model what a click there would pick. A view of -1:
   // the pointer left the sheet.
   void hoverRequested(int view, QPointF at);
@@ -265,9 +276,10 @@ signals:
   void contextMenuRequested(QPointF at, QPoint global);
   // A double-click on an annotation (with no tool).
   void annotationDoubleClicked(int id);
-  // The pointer moved (or Alt was pressed or released) while what an
-  // annotation tool picked is placed: where it is, and whether Alt is
-  // held; the workspace asks where a dimension snaps (mitcad#1173).
+  // The pointer moved (or Shift or Alt was pressed or released) while what
+  // an annotation tool picked is placed: where it is, and whether Shift or
+  // Alt is held (dragsFreely, mitcad#1362); the workspace asks where a
+  // dimension snaps (mitcad#1173).
   void placingMoved(QPointF at, bool freely);
   // An annotation dragged alone, by this so far (or Alt pressed or
   // released meanwhile).
@@ -294,11 +306,21 @@ protected:
   void keyReleaseEvent(QKeyEvent* event) override;
 
 private:
-  // Alt pressed or released: where a dimension placed or dragged goes is
-  // asked again (placingMoved, annotationDragged).
+  // Shift or Alt pressed or released: where a dimension placed or dragged
+  // goes is asked again (placingMoved, annotationDragged).
   void askSnap(bool freely);
   // Whether an annotation is dragged alone (its drag snaps).
   bool draggedAlone() const;
+  // Where a section's line's or a break's side's click at `at` goes
+  // (mitcad#1362): to `snap` (the point a click there snaps to, none when
+  // nothing is near), else a section's second click turned onto a
+  // multiple of 45 degrees from its first; `freely`: at `at`. `angle` (when
+  // given) gets the angle it was turned onto, -1 when it was not.
+  QPointF lineEnd(const QPointF& at, const std::optional<QPointF>& snap, bool freely,
+                  double* angle = nullptr) const;
+  // The point the hover's marks show a click snapping to (the model's
+  // answer for the pointer, mitcad#1362), if any.
+  std::optional<QPointF> hoverPoint() const;
   // Paints the paper and the groups' items into the sheet's picture, of
   // `pixels` at `ratio` device pixels per pixel.
   void paintSheet(const QSize& pixels, qreal ratio);

@@ -460,6 +460,10 @@ pub struct Importer<'a, K: Kernel> {
     /// (the file's new-component features use their parent's sketches), by
     /// sketch index and component, with the transform that moved them.
     pub sketch_copies: HashMap<(i64, ComponentUid), (Transform, SketchInfo)>,
+    /// The profile sketches of parts of items in other components made
+    /// before the items' own operations, by the part's index
+    /// (`Importer::part_face_sketch`, mitcad#1347).
+    pub part_sketches: HashMap<i64, features::PartFaceSketch>,
     /// The modelling item the import stopped at ([`Options::stop`]).
     pub stopped_at: Cell<Option<i64>>,
     /// A modelling item's definitions are being tried: the stop request
@@ -646,6 +650,7 @@ impl<'a, K: Kernel> Importer<'a, K> {
             components: components::Components::default(),
             component: ComponentUid::ROOT,
             sketch_copies: HashMap::new(),
+            part_sketches: HashMap::new(),
             stopped_at: Cell::new(None),
             trying: false,
             alternatives: HashMap::new(),

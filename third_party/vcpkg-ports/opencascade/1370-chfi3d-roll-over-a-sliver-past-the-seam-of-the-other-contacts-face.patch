@@ -1,0 +1,214 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a ball rolling on an edge before a blend curving away (patch
+1230) turns over a sliver past the seam of the face its other contact lies
+on, a face closed round its periodic surface (mitcad#1370).
+
+The case is patch 1230's: a ring's top, its inner rim rounded with 2.5,
+the ball rolling on the top's far edges and passing over sliver edges of a
+few micrometres where fins' crests meet the top. Since faces on one
+surface are joined after each feature, the body before the rounding has
+its inner cylinder as one face closed round its axis, its seam under a
+crest at one of the mouths, and the rim as one closed edge. There the
+ball reaches the end of the far edge it rolled on with its contact on the
+cylinder 0.15 micrometres short of the seam, and its turn about that end
+over the 6.5-micrometre sliver carries that contact across the seam. The
+surface/edge walk found the contact outside its face's parameters past
+the seam, refused each step, and the rounding failed. Before, the
+cylinder was cut at that mouth into faces of their own, and patch 1230
+moved the contact onto the next one at the edge between them.
+
+1. PerformSetOfSurfOnElSpine: patch 1230's change of face for the other
+   contact, within a hair of an edge of its face ahead at the end of the
+   edge rolled on, takes the seam of a face closed round its periodic
+   surface too (an edge used both ways in the face; two faces on one
+   surface share an edge with two curves on it as well, each using it
+   once). The contact goes on in the same face on the seam's other curve,
+   where the point a little ahead lies nearer that curve than the contact
+   does; the piece before ends on the seam, its use on the side it leaves,
+   with the walk's direction as its vector (ChangeTransition takes the next
+   piece's start by it). The walk starts there as on its face, with
+   nothing to find on the face's boundary.
+2. BRepBlend_SurfRstLineBuilder::Perform: a turn about the restriction's
+   end that an earlier Perform of the same walk found (StartPivot), as
+   ChFi3d_Builder::ComputeData walks again with a smaller step where the
+   first walk gave too few points, is found again from the start, the
+   section solved with the ball pinned there. Kept, the walk began from
+   the start's free section, tens of nanometres off the turn's, and each of
+   its first steps was refused as too large. A turn found by
+   PerformFirstSection is kept as before.
+Every other fillet is as before.
+
+On item 36's bodies of two versions of the design (the replay's body after
+the rounding of the outer rim, its faces on one surface joined): valid,
+244 and 261 faces; the bodies of patch 1230's test as before.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+index af4b102b..35fe78d5 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+@@ -222,6 +222,7 @@ BRepBlend_SurfRstLineBuilder::BRepBlend_SurfRstLineBuilder(
+       decrochfin(false),
+       rolling(false),
+       pivot(false),
++      pivotFromSection(false),
+       pivotLeaves(false),
+       pivotRelease(0.0),
+       pivotW(0.0),
+@@ -628,6 +629,17 @@ void BRepBlend_SurfRstLineBuilder::Perform(Blend_SurfRstFunction&  Func,
+   rebrou     = false;
+   pasmax     = std::abs(MaxStep);
+   rolling    = Func.IsRollingBall();
++  if (pivot && !pivotFromSection)
++  {
++    // A turn about the restriction's end that an earlier Perform from this
++    // start found (StartPivot below), as the walk is made again with a
++    // smaller step: found again from the start, its section solved with the
++    // ball pinned there. Kept, the walk began from the start's free section,
++    // tens of nanometres off the turn's, and each of its first steps was
++    // refused as too large (mitcad#1370).
++    Func.Unpin();
++    pivot = false;
++  }
+ 
+   if (Pmax - Pdep >= 0.)
+   {
+@@ -833,10 +845,12 @@ bool BRepBlend_SurfRstLineBuilder::PerformFirstSection(Blend_SurfRstFunction&  F
+   // A start at an end of the restriction (the end of the previous edge the
+   // ball rolled on): where the restriction runs away from the ball, the ball
+   // first turns about that point.
+-  pivot = false;
+-  sol   = ParDep;
++  pivot            = false;
++  pivotFromSection = false;
++  sol              = ParDep;
+   if (RecP && StartPivot(Func))
+   {
++    pivotFromSection = true;
+     TestArret(Func, false, Blend_OK);
+     Psol   = param;
+     ParSol = sol;
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx
+index 9568b29b..9147b44a 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.hxx
+@@ -248,6 +248,9 @@ private:
+   bool                             decrochfin;
+   bool                             rolling;
+   bool                             pivot;
++  //! Whether the turn was found by PerformFirstSection, for the walk that
++  //! follows it; one found by Perform is found again by the next Perform.
++  bool                             pivotFromSection;
+   bool                             pivotLeaves;
+   double                           pivotRelease;
+   double                           pivotW;
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index a7569a0d..d506c5d4 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -5583,9 +5583,14 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     // walk stopped at the end of the edge it rolled on while the other
+     // contact lies within a hair of an edge of its face ahead, across which
+     // that face goes on tangentially: that contact changes face too, the
+-    // ball turning about that end from there.)
++    // ball turning about that end from there. The edge may be the seam of
++    // that face, closed round its periodic surface: the contact then goes on
++    // in the same face past the seam, mitcad#1370.)
+     int         aSwitchSide = 0;
+     TopoDS_Edge aSwitchEdge;
++    // (Across a seam: the use of the seam in the face that the contact
++    // leaves across.)
++    TopoDS_Edge aSwitchLeaving;
+     double      aSwitchW = 0.;
+     if (!ref.IsNull() && Ok1 && Ok2 && obstacleon1 != obstacleon2 && HS3.IsNull() && HS4.IsNull()
+         && !Simul && myRollTangentStripes.Contains(Stripe))
+@@ -5610,8 +5615,35 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+         {
+           const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
+           TopoDS_Face        Fv;
+-          if (BRep_Tool::Degenerated(E) || Spine->Index(E) != 0 || !myEFMap.Contains(E)
+-              || !IsG1(myEFMap, E, Fk, Fv) || Fv.IsNull() || Fv.IsSame(Fk))
++          if (BRep_Tool::Degenerated(E) || Spine->Index(E) != 0 || !myEFMap.Contains(E))
++          {
++            continue;
++          }
++          // (A seam of Fk, used both ways in it: two faces on one surface
++          // share an edge with two curves on it too, each using it once.
++          // The face beyond is Fk itself, on the curve of this use.)
++          bool aSeam = BRep_Tool::IsClosed(E, Fk);
++          if (aSeam)
++          {
++            bool aForward = false, aReversed = false;
++            for (TopExp_Explorer exs(Fk, TopAbs_EDGE); exs.More(); exs.Next())
++            {
++              if (exs.Current().IsSame(E))
++              {
++                (exs.Current().Orientation() == TopAbs_REVERSED ? aReversed : aForward) = true;
++              }
++            }
++            aSeam = aForward && aReversed;
++          }
++          if (aSeam)
++          {
++            Fv = Fk;
++            if (!ChFi3d::IsTangentFaces(E, Fk, Fk))
++            {
++              continue;
++            }
++          }
++          else if (!IsG1(myEFMap, E, Fk, Fv) || Fv.IsNull() || Fv.IsSame(Fk))
+           {
+             continue;
+           }
+@@ -5652,12 +5684,24 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+           {
+             continue;
+           }
++          // (Across the seam only: the point ahead lies nearer this use's
++          // side of the seam than the contact does.)
++          if (aSeam && aUv.Distance(gp_Pnt2d(au, av)) >= ppk.Distance(gp_Pnt2d(au, av)))
++          {
++            continue;
++          }
+           HSk->Initialize(Fv);
+-          ppk         = aUv;
+-          RSk         = true;
++          ppk = aUv;
++          // (Past a seam the contact stays in its face: the walk starts
++          // there with nothing to find on the face's boundary.)
++          RSk         = !aSeam;
+           aSwitchSide = k;
+           aSwitchEdge = E;
+           aSwitchW    = aProj.LowerDistanceParameter();
++          if (aSeam)
++          {
++            aSwitchLeaving = TopoDS::Edge(E.Reversed());
++          }
+           break;
+         }
+       }
+@@ -6323,7 +6367,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+         TopAbs_Orientation aTr = TopAbs_FORWARD;
+         {
+           const TopoDS_Face aFk = TopoDS::Face(DStr.Shape(ref->Index(aSwitchSide)));
+-          TopoDS_Edge       aEk;
++          TopoDS_Edge       aEk = aSwitchLeaving;
+           for (TopExp_Explorer exk(aFk, TopAbs_EDGE); exk.More() && aEk.IsNull(); exk.Next())
+           {
+             if (exk.Current().IsSame(aSwitchEdge))
+@@ -6360,6 +6404,12 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+           }
+           const double aSide = aNk.Crossed(aTk).Dot(aTs);
+           aTr = aSide < 0. ? TopAbs_REVERSED : TopAbs_FORWARD;
++          if (!aSwitchLeaving.IsNull() && !CPr.HasVector())
++          {
++            // (The next piece's start takes a seam by the contact's
++            // direction there, ChangeTransition.)
++            CPr.SetVector(aTs);
++          }
+         }
+         CPr.SetArc(std::max(CPr.Tolerance(), 1.01 * aPe.Distance(CPr.Point())), aSwitchEdge, aSwitchW, aTr);
+       }

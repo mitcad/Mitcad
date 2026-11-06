@@ -24,7 +24,10 @@
 #   3. Refused: a tampered manifest, one signed with another key, a redirect
 #      to HTTP; an older release is no update. An expired manifest
 #      (mitcad#938) offers nothing to the automatic check; asked, its
-#      release is announced with why, without Install.
+#      release is announced with why, without Install. A release out for
+#      other platforms first (mitcad#1390): the automatic check shows
+#      nothing; asked, the notice says there is no download for Linux yet,
+#      without Install and Skip This Version.
 #   4. Preferences: the pre-release channel finds a beta through GitHub's
 #      list of releases; an error carrying markup from the list is shown
 #      as text (mitcad#938).
@@ -263,12 +266,16 @@ ui_stop_app
 
 echo "--- 3b. An expired manifest (mitcad#938)"
 mkdir -p "$WWW/expired"
+cp "$WORK/new/Mitcad.AppImage" "$WWW/expired/"
+# With this platform's download: its release page is the way to it.
 MITCAD_RELEASE_KEY=$SEED "$RELEASE_TOOL" manifest --version "$VERSION" --date 2020-01-06 --expires 2020-02-01 \
-  --notes "$BASE/expired/notes.html" --out "$WWW/expired/update-manifest.json" > /dev/null ||
+  --notes "$BASE/expired/notes.html" \
+  --asset linux-x64 "$WWW/expired/Mitcad.AppImage" "$BASE/expired/Mitcad.AppImage" \
+  --out "$WWW/expired/update-manifest.json" > /dev/null ||
   ui_fail "mitcad-release could not sign the expired manifest"
 fresh_settings
 MITCAD_UPDATE_URL=$BASE/expired/update-manifest.json ui_start_app
-ui_expect_log "Update manifest: MitCad $VERSION of 2020-01-06 (current, expired on 2020-02-01), no download for this platform" \
+ui_expect_log "Update manifest: MitCad $VERSION of 2020-01-06 (current, expired on 2020-02-01), " \
   "the automatic check reads the expired manifest"
 ui_expect_log "Update check: the manifest of MitCad $VERSION expired on 2020-02-01" "and offers nothing"
 sleep 1
@@ -281,13 +288,33 @@ ui_expect_new "Update notice (offer): MitCad $VERSION is available (this is 0.0.
 ui_expect_new "[Release Notes, Skip This Version, Later]" "no Install"
 ui_stop_app
 
+echo "--- 3c. A release out for other platforms first (mitcad#1390)"
+release elsewhere "$VERSION" "$SEED" windows-x64 "$WORK/new/Mitcad.AppImage"
+fresh_settings
+MITCAD_UPDATE_URL=$BASE/elsewhere/update-manifest.json ui_start_app
+ui_expect_log "Update manifest: MitCad $VERSION of 2026-10-06 (available), no download for this platform" \
+  "the automatic check reads a manifest without a download for linux-x64"
+ui_expect_log "Update check: MitCad $VERSION has no download for linux-x64 yet" "and logs why it offers nothing"
+sleep 1
+grep -qF "Update notice (offer)" "$UI_LOG" &&
+  ui_fail "an automatic check announced a release without a download for this platform"
+echo "ok   no notice"
+ui_mark
+ui_step "check for updates (search)"     ui_command "Check for Updates"
+ui_expect_new "Update notice (offer): MitCad $VERSION is out (this is 0.0.0), but there is no download for Linux yet. MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Later]" \
+  "asked, the notice says so, without Install and Skip This Version"
+grep -qF "Download it from its release page" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "the notice sends the user to a release page without a download for this platform"
+echo "ok   no release page as the way to a download"
+ui_stop_app
+
 echo "--- 4. The pre-release channel"
 # Above the build's own version, whatever it is: a beta, and a newer draft
 # that is not taken
 IFS=. read -r major minor _ <<< "$VERSION"
 BETA=$major.$((minor + 1)).0-beta.1
 DRAFT=$major.$((minor + 2)).0
-release beta "$BETA" "$SEED"
+release beta "$BETA" "$SEED" linux-x64 "$WORK/new/Mitcad.AppImage"
 cat > "$WWW/releases.json" << EOF
 [{"tag_name": "v$VERSION", "draft": false, "prerelease": false,
   "assets": [{"name": "update-manifest.json", "browser_download_url": "$BASE/stable/update-manifest.json"}]},

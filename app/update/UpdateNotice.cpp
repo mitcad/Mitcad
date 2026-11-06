@@ -81,11 +81,11 @@ void UpdateNotice::present(const QString& state, const QString& html) {
 
 QString UpdateNotice::text() const { return QTextDocumentFragment::fromHtml(m_text->text()).toPlainText(); }
 
-void UpdateNotice::showOffer(const QString& html, bool installable) {
+void UpdateNotice::showOffer(const QString& html, bool installable, bool skippable) {
   m_progress->hide();
   m_notes->show();
   m_install->setVisible(installable);
-  m_skip->show();
+  m_skip->setVisible(skippable);
   m_later->show();
   m_cancel->hide();
   m_close->hide();

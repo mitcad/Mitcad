@@ -254,6 +254,25 @@ vcpkg_from_github(
         1302-chfi3d-narrow-parts-pieces-generated-by-their-spine-edges.patch
         1310-chfi3d-kpart-blend-runs-past-the-end-where-the-end-face-goes-on-tangentially.patch
         1311-chfi3d-onsame-end-walked-on-past-the-end-of-an-extruded-stretch.patch
+        1320-blend-walking-vanishing-end-keeps-the-walk-parameter.patch
+        1330-chfi3d-onsame-prolongation-along-a-seam-not-split-at-its-start.patch
+        1331-chfi3d-onsame-opposite-contact-ending-on-the-prolonged-edge-cuts-it.patch
+        1332-chfi3d-periodic-contact-end-kept-at-its-end-of-a-whole-period.patch
+        1340-chfi3d-rounding-rides-on-a-part-of-another-contact.patch
+        1350-chfi3d-rounding-over-a-slight-concave-crease-cut-by-the-face-beyond.patch
+        1351-chfi3d-splitkpart-last-end-keeps-its-pieces-as-the-first.patch
+        1352-chfi3d-kpart-past-end-piece-one-face-with-the-end-piece.patch
+        1370-chfi3d-roll-over-a-sliver-past-the-seam-of-the-other-contacts-face.patch
+        1390-blendfunc-constrad-centre-picks-the-ball-where-the-mid-point-lies-on-the-guides-axis.patch
+        1400-chfi3d-convex-and-concave-roundings-crossing-before-a-smooth-common-end-overlap.patch
+        1401-chfi3d-vanishing-end-on-a-periodic-faces-seam-kept-in-the-contacts-period.patch
+        1402-chfi3d-end-walked-into-a-vanishing-end-taken-for-it-at-any-radius.patch
+        1410-geomfill-constrainedfilling-field-not-judged-where-it-vanishes.patch
+        1380-chfi3d-concave-chain-through-a-corner-tighter-than-the-ball-closed-by-the-corner-s-own-ball.patch
+        1381-chfi3d-wide-surface-of-a-trimmed-surface-is-its-basis.patch
+        1420-chfi3d-strip-edge-rolled-on-past-its-end-cut-by-a-transition-piece.patch
+        1440-chfi3d-walk-guided-along-the-balls-centres-where-the-spine-folds.patch
+        1460-chfi3d-end-crossing-of-a-periodic-edge-taken-in-the-edges-period.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

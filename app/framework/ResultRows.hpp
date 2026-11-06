@@ -48,6 +48,10 @@ public:
   // The Floating layout's look (a rounded, lightly tinted box) or the
   // Docked one's (a framed panel).
   void setFloatingStyle(bool floating);
+  // The lines set() logs for an answer's rows ("Panel <command> result
+  // values: …", "Panel <command> result <group title>: …"); the AppKit
+  // command form logs its rows with them too (mitcad#1354).
+  static void logRows(const QString& command, const Inspection& result);
 
 private:
   struct Row {

@@ -1,0 +1,71 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+GeomFill: a constrained filling's check that a boundary's tangent field
+keeps its orientation leaves out the points where the field vanishes
+(mitcad#1384). Example: a pocket's floor rounded with 0.8, twice the
+radius of the concave 0.4 arcs at its corners: past each arc the walked
+blend twists, and ChFi3d fills it with a three-sided
+GeomFill_ConstrainedFilling whose fourth side is the point where the
+floor's contact stands still. Along the two sides that run into that
+point the Coons patch's tangent field comes to nothing (1e-15), and the
+sign of its mixed product there was numerical noise. CheckTgte compares
+every one of its 13 points with the first, so that noise decided whether
+the patch's blending functions were made Law::MixBnd or left linear: at
+one arc or the other, at 0.79999, 0.8 or 0.80001, on one body or a copy
+0.0003 mm3 apart, the filled face came out one of two ways 0.04 mm apart
+(1.146 or 1.204 mm2).
+
+- CheckTgte takes the mixed products at its 13 points first and compares
+  only those above 1e-9 of the largest along the boundary: a field that
+  vanishes at a corner does not count as turning there.
+diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx b/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx
+index fe70c81b..7a30d36b 100644
+--- a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx
++++ b/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx
+@@ -1364,7 +1364,12 @@ bool GeomFill_ConstrainedFilling::CheckTgte(const int I)
+   // On prend 13 points le long du bord et on verifie que le triedre
+   // forme par la tangente a la courbe la normale et la tangente du
+   // peigne ne change pas d orientation.
+-  double ll = 1. / 12., pmix = 0;
++  // (Where the field vanishes, at a corner where the patch comes to a
++  // point, its orientation is only numerical noise and is not compared:
++  // a mixed product below 1e-9 of the largest one along the boundary.)
++  const double ll = 1. / 12.;
++  double       aMix[13];
++  double       aMax = 0.;
+   for (int iu = 0; iu < 13; iu++)
+   {
+     double uu = iu * ll;
+@@ -1373,17 +1378,23 @@ bool GeomFill_ConstrainedFilling::CheckTgte(const int I)
+     bou->D1(uu, pbid, tgte);
+     gp_Vec norm   = bou->Norm(uu);
+     gp_Vec vfield = tgalg[I]->Value(uu);
+-    if (iu == 0)
++    aMix[iu]      = vfield.Dot(tgte.Crossed(norm));
++    aMax          = std::max(aMax, std::abs(aMix[iu]));
++  }
++  double pmix = 0.;
++  for (int iu = 0; iu < 13; iu++)
++  {
++    if (std::abs(aMix[iu]) <= 1.e-9 * aMax)
+     {
+-      pmix = vfield.Dot(tgte.Crossed(norm));
++      continue;
+     }
+-    else
++    if (pmix == 0.)
+     {
+-      double pmixcur = vfield.Dot(tgte.Crossed(norm));
+-      if (pmix * pmixcur < 0.)
+-      {
+-        return false;
+-      }
++      pmix = aMix[iu];
++    }
++    else if (pmix * aMix[iu] < 0.)
++    {
++      return false;
+     }
+   }
+   return true;

@@ -1682,7 +1682,8 @@ The installer grew from 112 MB to 142 MB.
 
 ### macOS
 
-The default Qt GUI and opt-in AppKit frontend use an embedded XPC renderer
+The Qt GUI (the only macOS frontend since 6.11.2026; the paused AppKit
+frontend did the same) uses an embedded XPC renderer
 with leased RGBA-half IOSurfaces. CPU rendering writes the final mapped
 planes; Metal writes buffers wrapping those same allocations. The OCCT image
 layer samples them directly, without the intermediate CPU half-plane copy,

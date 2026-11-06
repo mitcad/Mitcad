@@ -3,7 +3,8 @@
 This is the one document for the conventions of everything the user sees
 in MitCad: the words (terms), the text style, the notices and their
 severity levels, and the colors. The same thing is always said, shown and
-colored the same way, in both frontends (Qt and AppKit), in every layout,
+colored the same way, in the Qt UI (on macOS too; the paused AppKit
+frontend follows the same rules when it returns), in every layout,
 in the user guide and in the README. A reviewer checks a new string, a
 notice or a color against this page.
 
@@ -414,8 +415,9 @@ hint and progress are the frontends' own.
   panel's message (the preview's made faces too), a Timeline item with
   its tooltip, a feature's Browser row, the Floating message band and the
   Docked status line, in both chromes. A place out of sight is painted
-  all the same; the view does not move. The AppKit command panel's message
-  follows in a ticket of its own (its presenter bridge has no hover yet).
+  all the same; the view does not move. The AppKit frontend does the same
+  over its command form's message, Timeline item and Browser row
+  (mitcad#1333).
 - The model takes the names out of a message built with them and puts
   them into its places, naming their kind in the text ("the fillet of an
   edge"); new messages are written without them from the start.

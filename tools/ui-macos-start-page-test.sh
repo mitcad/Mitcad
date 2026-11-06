@@ -69,7 +69,49 @@ for name in a b c; do
   ui_expect_log "^Design preview saved: start-$name\\.mitcad \\(" "start-$name.mitcad saved with its preview"
 done
 
-MITCAD_START_PAGE=1 MITCAD_TEST_INPUT=$here/ui-scripts/start-page.mitcad-ui \
+# Keep the common workflow, replacing only the Qt ribbon's coordinates
+# with AppKit's real workspace selector. The page and every project/card,
+# search, setting and document assertion below remain the same.
+start_script=$here/ui-scripts/start-page.mitcad-ui
+off_script=$here/ui-scripts/start-page-off.mitcad-ui
+if [ "$frontend" = native ]; then
+  start_script=$UI_OUT/start-page-native.mitcad-ui
+  off_script=$UI_OUT/start-page-off-native.mitcad-ui
+  python3 - "$here/ui-scripts" "$start_script" "$off_script" <<'PYTHON'
+from pathlib import Path
+import sys
+scripts, start, off = map(Path, sys.argv[1:])
+text = (scripts / "start-page.mitcad-ui").read_text()
+coordinate = "expect-ever '^Ribbon tab START at ' 10"
+assert text.count(coordinate) == 1
+text = text.replace(coordinate, "expect-native-visible native.workspaces true\n"
+                    "expect-ever '^Native workspaces: Start, Solid, Build, Make \\(shown Start\\)$' 10")
+click = "click-logged '^Ribbon tab START at '"
+assert text.count(click) == 2
+text = text.replace(click, "native-choice native.workspaces Start")
+start.write_text(text)
+text = (scripts / "start-page-off.mitcad-ui").read_text()
+start_coordinate = "expect-ever '^Ribbon tab START at ' 10"
+solid_coordinate = "expect-ever '^Ribbon tab SOLID at ' 10"
+assert text.count(start_coordinate) == text.count(solid_coordinate) == 1
+# The default Solid workspace does not emit a workspace-change log at
+# startup. After proving startup stayed off the page, exercise both real
+# selector entries: Start remains available and Solid returns to the view.
+text = text.replace(start_coordinate, "expect-native-visible native.workspaces true\n"
+                    "mark\nnative-choice native.workspaces Start\n"
+                    "expect-log '^Ribbon tab shown: START$'\nexpect-log '^Start page shown$'")
+text = text.replace(solid_coordinate, "mark\nnative-choice native.workspaces Solid\n"
+                    "expect-log '^Ribbon tab shown: SOLID$'\nexpect-log '^Start page hidden$'\n"
+                    "expect-setting start/showAtLaunch false")
+off.write_text(text)
+PYTHON
+  # A changed shared step the copies rely on stops here, not as a missing
+  # script in the app's first launch.
+  [ "$?" = 0 ] && [ -s "$start_script" ] && [ -s "$off_script" ] ||
+    { echo "FAIL: the AppKit copies of start-page.mitcad-ui and start-page-off.mitcad-ui" >&2; exit 1; }
+fi
+
+MITCAD_START_PAGE=1 MITCAD_TEST_INPUT=$start_script \
   ui_run_app start-page --ui="$frontend" --no-recovery --no-mcp
 ui_expect_log '^TestDriver: done' 'start-page: the steps'
 ui_expect_log '^Start page at launch: shown$' 'the Start tab at launch'
@@ -86,9 +128,17 @@ if [ "$frontend" = native ]; then
   ui_expect_log '^Native cards: none \(the Start page is shown\)$' 'AppKit: no card over the page'
 fi
 
-MITCAD_START_PAGE=1 MITCAD_TEST_INPUT=$here/ui-scripts/start-page-off.mitcad-ui \
+MITCAD_START_PAGE=1 MITCAD_TEST_INPUT=$off_script \
   ui_run_app start-page-off --ui="$frontend" --no-recovery --no-mcp
 ui_expect_log '^Start page at launch: off \(Show start page at launch\)$' 'off: no Start page at launch'
-ui_expect_no_log 'TestDriver: FAIL' 'no failed driver assertion'
+ui_expect_log '^TestDriver: done' 'start-page-off: the steps'
+# Anchored: the driver echoes each script line, start-page-off's own
+# "expect-never 'TestDriver: FAIL'" among them, which a fixed-string
+# ui_expect_no_log would take for a failure (mitcad#1358).
+if grep -Eq '^TestDriver: FAIL' "$UI_LOG_FILE"; then
+  ui_fail "no failed driver assertion: 'TestDriver: FAIL' in the log"
+else
+  ui_pass 'no failed driver assertion'
+fi
 [ "$UI_FAILURES" = 0 ] || exit 1
 echo "PASS: $frontend: the Start tab, its project browser and its search"

@@ -286,6 +286,11 @@ pub struct MockKernel {
     /// besides the boxes' edges, as the kernel draws the rim of a hole the
     /// eye sees; a curve left out is one the part hides.
     pub drawn_curves: RefCell<Vec<Vec<[f64; 3]>>>,
+    /// Drawings (mitcad#1361): the cut faces a section's `project_view`
+    /// gives (each its closed loops of points in the model, the last not
+    /// repeated) in place of where its plane cuts the boxes, when there
+    /// are any: a part with a step and a hole that a box is not.
+    pub drawn_cuts: RefCell<Vec<Vec<Vec<[f64; 3]>>>>,
     /// Section Analysis (mitcad#824): `section` cuts the bounds as
     /// `section_curves` does (one edge per side of the polygon, one face
     /// when there are edges, the polygon's perimeter and area); otherwise
@@ -4163,8 +4168,9 @@ impl Kernel for MockKernel {
     /// Drawings (mitcad#471): the twelve edges of each shape's box, all
     /// seen, each with its shape's index as its source (mitcad#1112); a
     /// section's (mitcad#717) what lies behind its plane of them,
-    /// and where the plane cuts the box as its cut face; then the
-    /// `drawn_curves`, seen (mitcad#1286).
+    /// and where the plane cuts the box as its cut face (the `drawn_cuts`
+    /// instead when there are any, mitcad#1361); then the `drawn_curves`,
+    /// seen (mitcad#1286).
     fn project_view(
         &self,
         shapes: &[&MockShape],
@@ -4227,7 +4233,7 @@ impl Kernel for MockKernel {
                     });
                 }
             }
-            if crossings.len() >= 3 {
+            if crossings.len() >= 3 && self.drawn_cuts.borrow().is_empty() {
                 let n = crossings.len() as f64;
                 let c = [
                     crossings.iter().map(|p| p[0]).sum::<f64>() / n,
@@ -4239,6 +4245,15 @@ impl Kernel for MockKernel {
                         .total_cmp(&(b[1] - c[1]).atan2(b[0] - c[0]))
                 });
                 projection.cuts.push(vec![crossings]);
+            }
+        }
+        if section.is_some() {
+            for face in self.drawn_cuts.borrow().iter() {
+                projection.cuts.push(
+                    face.iter()
+                        .map(|lp| lp.iter().map(|p| spec.project(*p)).collect())
+                        .collect(),
+                );
             }
         }
         for curve in self.drawn_curves.borrow().iter() {

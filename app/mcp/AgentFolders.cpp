@@ -253,7 +253,7 @@ QString agentNewDesignPath(const QString& folder, const QString& name, QString& 
 }
 
 AgentPreferencesBox::AgentPreferencesBox(QWidget* parent)
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     : QWidget(parent)
 #else
     : QGroupBox(tr("AI Assistants"), parent)
@@ -293,7 +293,7 @@ AgentPreferencesBox::AgentPreferencesBox(QWidget* parent)
     button->setAutoDefault(false);
   }
   auto* controls = new QHBoxLayout;
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   controls->setSpacing(0);
 #endif
   controls->addWidget(add);

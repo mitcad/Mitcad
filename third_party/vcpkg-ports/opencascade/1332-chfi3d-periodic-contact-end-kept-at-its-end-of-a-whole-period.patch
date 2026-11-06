@@ -1,0 +1,72 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the opposite contact's parameter at an OnSame end, on a periodic
+contact curve whose range is a whole period, stays at the end being updated
+instead of going to the other end a period off (mitcad#1359).
+
+Update brings the parameter where the contact meets the face at the end
+into the interference's range [uf, ul] with ElCLib::InPeriod. A boss's
+foot rounded on a plate's top up to the plate's sides, on the body MitCad's
+sketch and extrusions build: the blend's contact on the boss's cylinder
+runs a whole period, from -3.6e-15 to 2 pi, and at the vertex where the
+cylinder's seam starts it meets the face at the end at -3.7e-15, a little
+below uf. InPeriod took it to 2 pi - 3.7e-15: the contact's range
+collapsed to [2 pi, 2 pi], the cap's end on the blend lay a period off its
+other end, and the cap was sought round the whole torus ("echec calcul
+intersection" at radius 3; at 1 and 6 an invalid result). Where the range is a whole
+period, a parameter within the curve's resolution of the far end that is a
+period off the end being updated is taken at that end.
+
+Test: geometry/tests/test_fillet_boss_tangent.cpp, the boss's foot rounded
+with 1, 3 and 6 on the body MitCad's sketch and extrusions build
+(MITCAD_GEOMETRY_CASES): valid, the material added as the exact one within
+1e-6 of it.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -243,6 +243,23 @@ static bool Update(const occ::handle<Adaptor3d_Surface>& fb,
+     // blend rolling on an edge ends where the edge does, on the face at the
+     // end, its contact curves bounded there.)
+     const double tolw = std::max(Precision::PConfusion(), ct->Resolution(Precision::Confusion()));
++    // A parameter on a periodic curve brought into [uf, ul]: where the range
++    // is a whole period (a contact all round its axis, both ends one point),
++    // a point at the end being updated, a little past it, stays at that end
++    // instead of going to the other end a period off (the range collapsed).
++    const auto inRange = [&](const double t) {
++      double       aT = ElCLib::InPeriod(t, uf, ul);
++      const double T  = ct->Period();
++      if (isfirst && ul - aT <= tolw && std::abs(aT - T - uf) <= tolw)
++      {
++        aT -= T;
++      }
++      else if (!isfirst && aT - uf <= tolw && std::abs(aT + T - ul) <= tolw)
++      {
++        aT += T;
++      }
++      return aT;
++    };
+     for (i = 1; i <= nbp; i++)
+     {
+       w = Intersection.Point(i).W();
+@@ -308,7 +325,7 @@ static bool Update(const occ::handle<Adaptor3d_Surface>& fb,
+       w = pint.W();
+       if (isperiodic)
+       {
+-        w = ElCLib::InPeriod(w, uf, ul);
++        w = inRange(w);
+       }
+       else
+       {
+@@ -328,7 +345,7 @@ static bool Update(const occ::handle<Adaptor3d_Surface>& fb,
+         IntCurveSurface_IntersectionPoint pint = Intersection.Point(isol);
+         p2dbout.SetCoord(pint.U(), pint.V());
+         w = pint.W();
+-        w = ElCLib::InPeriod(w, uf, ul);
++        w = inRange(w);
+       }
+     }
+     fi.SetParameter(w, isfirst);

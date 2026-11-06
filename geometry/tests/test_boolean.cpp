@@ -27,6 +27,7 @@
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_Interpolate.hxx>
@@ -48,6 +49,7 @@
 #include <gp_Ax2.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Vec.hxx>
 
 #include "../src/face_join.hpp"
 #include "../src/history.hpp"
@@ -932,6 +934,59 @@ void test_closed_face_joined_with_a_piece_of_its_surface() {
   }
 }
 
+
+// A wedge whose edge lies on a bore's top line, its body in the block's
+// material above the bore (a sweep's edge along a bore's cylinder,
+// mitcad#1371): OCCT's fuse keeps that edge in the bore's face as an
+// internal edge bounding nothing, and a later fillet over the face gave
+// self-intersecting wires. The join has none, as the stored bodies of
+// designs have none.
+void test_join_leaves_no_internal_edge_on_a_face() {
+  const TopoDS_Shape block = BRepPrimAPI_MakeBox(gp_Pnt(-10, -10, 0), gp_Pnt(10, 10, 10)).Shape();
+  const TopoDS_Shape bore =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-11, 0, 5), gp_Dir(1, 0, 0), gp_Dir(0, 0, -1)), 4, 22).Shape();
+  const TopoDS_Shape bored = BRepAlgoAPI_Cut(block, bore).Shape();
+  BRepBuilderAPI_MakeWire profile;
+  const gp_Pnt a(-5, 0, 9), b(-5, -3, 12), c(-5, 3, 12);
+  profile.Add(BRepBuilderAPI_MakeEdge(a, b).Edge());
+  profile.Add(BRepBuilderAPI_MakeEdge(b, c).Edge());
+  profile.Add(BRepBuilderAPI_MakeEdge(c, a).Edge());
+  const TopoDS_Shape wedge =
+      BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(profile.Wire(), true).Face(), gp_Vec(10, 0, 0)).Shape();
+  const auto internal_edges = [](const TopoDS_Shape& shape) {
+    int count = 0;
+    for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
+      count += it.Current().Orientation() == TopAbs_INTERNAL ? 1 : 0;
+    }
+    return count;
+  };
+  // The case: OCCT's own fuse leaves the internal edge.
+  BRepAlgoAPI_Fuse fuse(bored, wedge);
+  CHECK(fuse.IsDone() && internal_edges(fuse.Shape()) > 0);
+  const ShapePtr target = import_body(bored, "F1", 0);
+  int            bore_face = -1;
+  for (int i = 0; i < target->face_count(); ++i) {
+    if (BRepAdaptor_Surface(target->face(i)).GetType() == GeomAbs_Cylinder) {
+      bore_face = i;
+    }
+  }
+  CHECK(bore_face >= 0);
+  const BooleanResult result = run(BooleanOp::Join, {target}, import_body(wedge, "F2", 0));
+  CHECK(result.pieces.size() == 1);
+  if (result.pieces.size() != 1) {
+    return;
+  }
+  const Shape& joined = *result.pieces[0].shape;
+  CHECK(internal_edges(joined.occt()) == 0);
+  CHECK(BRepCheck_Analyzer(joined.occt()).IsValid());
+  GProp_GProps fused;
+  BRepGProp::VolumeProperties(fuse.Shape(), fused);
+  CHECK_NEAR_TOL(volume(joined), fused.Mass(), 1e-6);
+  // The bore's face keeps its name, and the operands are as they were.
+  CHECK(joined.find_faces("F1:import(" + std::to_string(bore_face) + ")").size() == 1);
+  CHECK(internal_edges(bored) == 0 && internal_edges(wedge) == 0);
+}
+
 } // namespace
 
 void boolean_tests() {
@@ -961,6 +1016,8 @@ void boolean_tests() {
   // A closed face joined with a piece of its surface (mitcad#1336), on a
   // reported design's body.
   guarded("test_closed_face_joined_with_a_piece_of_its_surface", test_closed_face_joined_with_a_piece_of_its_surface);
+  // A join's edge lying on a face of the other body (mitcad#1371).
+  guarded("test_join_leaves_no_internal_edge_on_a_face", test_join_leaves_no_internal_edge_on_a_face);
 }
 
 } // namespace test

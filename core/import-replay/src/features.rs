@@ -2738,11 +2738,11 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             .as_deref()
             .and_then(|b| self.bodies_of_refs(b))
             .unwrap_or_default();
-        let profile_faces = self.profile_faces(&face_refs, &participants);
+        let mut profile_faces = self.profile_faces(&face_refs, &participants);
         // The faces are read when each is named by the file's own names
         // (the decoder found it in the history) and is the only face of
         // the replay that fits.
-        let faces_read = !face_refs.is_empty()
+        let mut faces_read = !face_refs.is_empty()
             && profile_faces.len() == face_refs.len()
             && profile_faces
                 .iter()
@@ -2751,10 +2751,25 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                     matches!(r, Reference::Face(fp)
                         if refs::face_resolved_uniquely(self.doc, fp, (*body, face)))
                 });
+        // A part of an item in another component whose faces the item's
+        // own operation took away: as the item's operation found them
+        // (mitcad#1347).
+        let mut made = None;
+        if profile_faces.is_empty()
+            && !face_refs.is_empty()
+            && profiles.is_empty()
+            && let Some((faces, read, sketch)) =
+                self.part_face_sketch(index, item, &face_refs, &participants)
+        {
+            profile_faces = faces;
+            faces_read = read;
+            made = Some(sketch);
+        }
         // No profile of a sketch: its faces as decoded, else perhaps a face
         // of a body (tried first), else the last sketch before it.
         let faces = if profiles.is_empty() {
-            let faces = self.face_profiles(index, item, d, &profile_faces, faces_read);
+            let faces =
+                self.face_profiles(index, item, d, &profile_faces, faces_read, made.as_ref());
             self.with_decoded_participants(index, item, d, faces)
         } else {
             Vec::new()
@@ -3935,7 +3950,8 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     /// region extruded, outwards first for a new body or a join, inwards
     /// first for a cut, and for a new body the side where the state's new
     /// body is. Distance extents only. The faces found by their areas are
-    /// guesses the history checks.
+    /// guesses the history checks. `made`: the decoded faces' sketch made
+    /// already ([`Importer::part_face_sketch`]).
     fn face_profiles(
         &mut self,
         index: i64,
@@ -3943,6 +3959,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         d: &ExtrudeDetail,
         decoded: &[(BodyUid, FaceName, f64)],
         faces_read: bool,
+        made: Option<&FaceSketch>,
     ) -> Vec<Candidate> {
         if !self.oracle.enabled && decoded.is_empty() {
             return Vec::new();
@@ -3970,7 +3987,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         // file gives it); the faces guessed by their prisms' volumes take a
         // distance only.
         if one.definition_type.as_deref() != Some("DistanceExtentDefinition") {
-            return self.face_profiles_without_distance(index, d, raw, operation, decoded);
+            return self.face_profiles_without_distance(index, d, raw, operation, decoded, made);
         }
         // A distance, its length known.
         let (length, extent_value): (Option<f64>, Value) = {
@@ -4064,9 +4081,12 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         };
         let mut out = Vec::new();
         // The faces as decoded, all in one extrusion (mitcad#169).
-        let sketch = (!decoded.is_empty())
-            .then(|| self.face_sketch(index, decoded))
-            .flatten();
+        let sketch = match made {
+            Some(m) => Some(m.clone()),
+            None => (!decoded.is_empty())
+                .then(|| self.face_sketch(index, decoded))
+                .flatten(),
+        };
         if let Some((sketch, keys, centre, normal)) = sketch {
             let area: f64 = decoded.iter().map(|(_, _, a)| a).sum();
             let mut flips = if operation == "cut" {
@@ -4083,10 +4103,6 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                     flips = [true, false];
                 }
             }
-            let profiles: Vec<Value> = keys
-                .iter()
-                .map(|key| json!({"sketch": "$0", "region": key}))
-                .collect();
             // The bodies it joins or cuts as decoded first.
             let options = self.participant_options_in(
                 index,
@@ -4132,12 +4148,15 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 }));
             }
             out.extend(flips.into_iter().flat_map(|flip| {
-                let defs = vec![
-                    sketch.clone(),
+                let defs = on_face_sketch(&sketch, |on| {
+                    let profiles: Vec<Value> = keys
+                        .iter()
+                        .map(|key| json!({"sketch": on, "region": key}))
+                        .collect();
                     with_start(json!({"type": "extrude", "profiles": profiles,
                            "extent": extent.clone(),
-                           "flip": flip, "operation": operation})),
-                ];
+                           "flip": flip, "operation": operation}))
+                });
                 let c = Candidate {
                     core: CandidateCore::of(defs),
                     note: Some("the faces of its profile as decoded".to_owned()),
@@ -4248,6 +4267,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         raw: Option<&ExtrudeF3d>,
         operation: &str,
         decoded: &[(BodyUid, FaceName, f64)],
+        made: Option<&FaceSketch>,
     ) -> Vec<Candidate> {
         let Some(one) = d.extent_one.as_ref() else {
             return Vec::new();
@@ -4268,7 +4288,11 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         let Some((extent, flag_flip)) = extent else {
             return Vec::new();
         };
-        let Some((sketch, keys, centre, normal)) = self.face_sketch(index, decoded) else {
+        let made = match made {
+            Some(m) => Some(m.clone()),
+            None => self.face_sketch(index, decoded),
+        };
+        let Some((sketch, keys, centre, normal)) = made else {
             return Vec::new();
         };
         let read_flip = match extent["type"].as_str() {
@@ -4297,10 +4321,6 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             _ => None,
         };
         let first = read_flip.unwrap_or(operation == "cut");
-        let profiles: Vec<Value> = keys
-            .iter()
-            .map(|key| json!({"sketch": "$0", "region": key}))
-            .collect();
         let options = self.participant_options_in(
             index,
             &d.participant_bodies,
@@ -4309,16 +4329,23 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         );
         let mut out = Vec::new();
         for flip in [first, !first] {
-            let mut def = json!({"type": "extrude", "profiles": profiles, "extent": extent,
-                                 "flip": flip, "operation": operation});
-            if let Ok(links) = self.object_links(self.component, &def)
-                && !links.is_empty()
-            {
-                def["object_links"] = Value::Object(links);
-            }
+            let defs = on_face_sketch(&sketch, |on| {
+                let profiles: Vec<Value> = keys
+                    .iter()
+                    .map(|key| json!({"sketch": on, "region": key}))
+                    .collect();
+                let mut def = json!({"type": "extrude", "profiles": profiles, "extent": extent,
+                                     "flip": flip, "operation": operation});
+                if let Ok(links) = self.object_links(self.component, &def)
+                    && !links.is_empty()
+                {
+                    def["object_links"] = Value::Object(links);
+                }
+                def
+            });
             let read = read_flip == Some(flip);
             let c = Candidate {
-                core: CandidateCore::of(vec![sketch.clone(), def]),
+                core: CandidateCore::of(defs),
                 note: Some("the faces of its profile as decoded".to_owned()),
                 guess: !read,
                 predicted: None,
@@ -4345,30 +4372,157 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         index: i64,
         faces: &[(BodyUid, FaceName, f64)],
     ) -> Option<FaceSketch> {
-        let (body, face, _) = faces.first()?;
         let depth = self.doc.undo_depth();
-        let plane = json!({"type": "sketch", "plane": {"face": face.to_string(), "body": body.to_string()}});
-        let sketch = self.add(&plane, None).ok().and_then(|uid| {
-            self.project_faces(uid, faces)?;
-            let keys = self.regions_on_faces(index, uid, faces)?;
-            let output = self.doc.sketch_output(uid)?;
-            let first = output
-                .region_info
-                .iter()
-                .find(|r| r.profile.key.to_string() == keys[0])?;
-            let centre = output.frame.point(first.centroid);
-            let normal = geom::normal(&output.frame);
-            let params = self.doc.parameters();
-            let def = self
-                .doc
-                .feature(uid)?
-                .def
-                .map_params(&mut |_, id| Ok::<_, ()>(params.name(*id)))
-                .ok()?;
-            Some((serde_json::to_value(&def).ok()?, keys, centre, normal))
-        });
+        let sketch = self
+            .make_face_sketch(index, faces)
+            .and_then(|(uid, keys, centre, normal)| {
+                let params = self.doc.parameters();
+                let def = self
+                    .doc
+                    .feature(uid)?
+                    .def
+                    .map_params(&mut |_, id| Ok::<_, ()>(params.name(*id)))
+                    .ok()?;
+                Some((serde_json::to_value(&def).ok()?, keys, centre, normal))
+            });
         self.undo_to(depth);
         sketch
+    }
+
+    /// The sketch of [`Importer::face_sketch`] added at the marker: its
+    /// uid, the keys of its regions on the faces, the first one's centre
+    /// and the sketch's normal. A face of another component's body is the
+    /// sketch's plane through that component's occurrence (`plane_link`,
+    /// one occurrence only), as its projections are. None (perhaps with a
+    /// feature added) when it does not come out.
+    fn make_face_sketch(
+        &mut self,
+        index: i64,
+        faces: &[(BodyUid, FaceName, f64)],
+    ) -> Option<MadeFaceSketch> {
+        let (body, face, _) = faces.first()?;
+        let mut plane = json!({"type": "sketch", "plane": {"face": face.to_string(), "body": body.to_string()}});
+        if let Some(owner) = self
+            .doc
+            .body_component(*body)
+            .filter(|c| *c != self.component)
+        {
+            let paths = self.doc.assembly().paths_to(owner);
+            let [path] = paths.as_slice() else {
+                return None;
+            };
+            plane["plane_link"] = linked::link(path, &self.sketch_target()?);
+        }
+        let uid = self.add(&plane, None).ok()?;
+        self.project_faces(uid, faces)?;
+        let keys = self.regions_on_faces(index, uid, faces)?;
+        let output = self.doc.sketch_output(uid)?;
+        let first = output
+            .region_info
+            .iter()
+            .find(|r| r.profile.key.to_string() == keys[0])?;
+        let centre = output.frame.point(first.centroid);
+        let normal = geom::normal(&output.frame);
+        Some((uid, keys, centre, normal))
+    }
+
+    /// The profile faces of a part of an item in another component
+    /// (`_f3d.part_of`, mitcad#169) that the replay no longer has: faces of
+    /// a body the item's own operation took away (a cut from a face of the
+    /// item's own body that goes on into another component's body,
+    /// mitcad#1347). The file makes such a feature's tool once, before any
+    /// of its operations, so the part takes its profile where the item's
+    /// operation stands: with the timeline marker before the item's last
+    /// feature, the faces as the profile names them, whether they are read
+    /// (each the only face that fits), and a sketch on them made there. The
+    /// sketch stays in the timeline, before the item's operation, as one of
+    /// the part's features; the part's extrusion of its regions comes after
+    /// the item's. None where the faces are not there either.
+    fn part_face_sketch(
+        &mut self,
+        index: i64,
+        item: &TimelineItem,
+        face_refs: &[Reference],
+        participants: &[BodyUid],
+    ) -> Option<PartFaceSketch> {
+        let of = item.f3d.as_ref()?.part_of?;
+        // (Made already, when the part is tried again.)
+        if let Some(made) = self.part_sketches.get(&index).filter(|m| {
+            m.2.0
+                .as_str()
+                .and_then(|u| u.parse::<FeatureUid>().ok())
+                .is_some_and(|u| self.doc.feature(u).is_some())
+        }) {
+            return Some(made.clone());
+        }
+        if self.doc.marker() != self.doc.features().count() {
+            return None;
+        }
+        let master: Vec<FeatureUid> = self
+            .report
+            .items
+            .iter()
+            .find(|r| r.index == of)?
+            .features
+            .iter()
+            .filter_map(|f| f.parse().ok())
+            .collect();
+        let at = self
+            .doc
+            .features()
+            .enumerate()
+            .filter(|(_, f)| master.contains(&f.uid))
+            .map(|(i, _)| i)
+            .max()?;
+        let depth = self.doc.undo_depth();
+        if self.doc.set_marker(at).is_err() {
+            self.undo_to(depth);
+            return None;
+        }
+        let made = self.part_face_sketch_here(index, face_refs, participants);
+        let end = self.doc.features().count();
+        let Some(made) = made.filter(|_| self.doc.set_marker(end).is_ok()) else {
+            self.undo_to(depth);
+            return None;
+        };
+        if crate::tracing() {
+            eprintln!(
+                "import: item {index}: its profile taken before item {of}'s operation (faces {}), sketched as {}",
+                made.0
+                    .iter()
+                    .map(|(b, f, _)| format!("{f} of {b}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                made.2.0
+            );
+        }
+        if let (Some(r), Some(uid)) = (
+            self.report.items.iter_mut().find(|r| r.index == index),
+            made.2.0.as_str(),
+        ) {
+            r.features.push(uid.to_owned());
+        }
+        self.part_sketches.insert(index, made.clone());
+        Some(made)
+    }
+
+    /// [`Importer::part_face_sketch`] at the marker as it is.
+    fn part_face_sketch_here(
+        &mut self,
+        index: i64,
+        face_refs: &[Reference],
+        participants: &[BodyUid],
+    ) -> Option<PartFaceSketch> {
+        let faces = self.profile_faces(face_refs, participants);
+        if faces.is_empty() {
+            return None;
+        }
+        let read = faces.iter().zip(face_refs).all(|((body, face, _), r)| {
+            matches!(r, Reference::Face(fp)
+                    if refs::face_resolved_uniquely(self.doc, fp, (*body, face)))
+        });
+        let (uid, keys, centre, normal) = self.make_face_sketch(index, &faces)?;
+        Some((faces, read, (json!(uid.to_string()), keys, centre, normal)))
     }
 
     fn revolve(&mut self, index: i64, d: &RevolveDetail) -> Result<Vec<Candidate>, String> {
@@ -5505,6 +5659,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                             smooth: gone
                                 .wedge
                                 .is_some_and(|w| w > std::f64::consts::PI - refs::SMOOTH_WEDGE),
+                            concave: gone.across.is_some_and(|a| !a.convex),
                         }
                     })
                     .collect();
@@ -5555,7 +5710,23 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             // distance (edges next to the rounded ones can be cut away too);
             // every gone edge; per set the largest group at one distance.
             // Edges between faces that meet tangentially are no dressup's.
-            for variant in 0..7 {
+            // First of all, those edges with the concave ones whose dressup
+            // the state has at any distance: a rounding of a concave edge
+            // whose face beside it is a strip narrower than the ball rolls
+            // on the strip's far edge and leaves the edge much nearer the
+            // state than the ball's depth (a fin's side strips under its
+            // top's chamfer, mitcad#1388); the same set as the next where
+            // there are none.
+            for variant in [7, 0, 1, 2, 3, 4, 5, 6] {
+                if variant == 7
+                    && !found.iter().any(|(_, edges)| {
+                        edges
+                            .iter()
+                            .any(|e| !e.smooth && e.fits && e.concave && e.off > 0.1)
+                    })
+                {
+                    continue;
+                }
                 let mut defs = Vec::new();
                 for (uid, edges) in &found {
                     let mut by_set: Vec<SetEdges> =
@@ -5574,6 +5745,11 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                             3 => mine.iter().copied().filter(|e| e.fits).collect(),
                             4 => mine.iter().copied().filter(|e| e.off <= 0.1).collect(),
                             5 => mine.clone(),
+                            7 => mine
+                                .iter()
+                                .copied()
+                                .filter(|e| e.fits && (e.off <= 0.1 || e.concave))
+                                .collect(),
                             _ => largest_group(&mine),
                         };
                         list.extend(chosen.into_iter().map(|e| e.name.clone()));
@@ -5605,7 +5781,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 }
                 if !defs.is_empty() && seen.insert(dressup_key(&defs)) {
                     let note = match variant {
-                        0 => format!("edges whose dressup ASM history state {q} has"),
+                        0 | 7 => format!("edges whose dressup ASM history state {q} has"),
                         1 => format!(
                             "edges whose dressup ASM history state {q} has, one tangent chain at a time"
                         ),
@@ -6211,7 +6387,35 @@ fn named_edges_read(edges: &Option<Vec<Reference>>) -> bool {
 /// A sketch made on a face for an extrusion of faces (mitcad#169): its
 /// definition, the keys of its regions on the faces, the first region's
 /// centre and the sketch's normal.
+/// A sketch already in the timeline has its uid (a string) for its
+/// definition ([`Importer::part_face_sketch`]).
 type FaceSketch = (Value, Vec<String>, [f64; 3], [f64; 3]);
+
+/// The profile of a part of an item in another component taken where the
+/// item's own operation stands ([`Importer::part_face_sketch`],
+/// mitcad#1347): the faces, whether they are read, and the sketch made on
+/// them there.
+pub type PartFaceSketch = (
+    Vec<(BodyUid, FaceName, f64)>,
+    bool,
+    (Value, Vec<String>, [f64; 3], [f64; 3]),
+);
+
+/// A face sketch added to the timeline ([`Importer::make_face_sketch`]): its
+/// uid, the keys of its regions on the faces, the first one's centre and
+/// the sketch's normal.
+type MadeFaceSketch = (FeatureUid, Vec<String>, [f64; 3], [f64; 3]);
+
+/// The definitions of an extrusion of regions of a face sketch
+/// ([`FaceSketch`]), `extrude` given the sketch to name in its profiles:
+/// the sketch's definition and the extrusion on it (`$0`), or the
+/// extrusion alone on a sketch already in the timeline.
+fn on_face_sketch(sketch: &Value, extrude: impl FnOnce(&str) -> Value) -> Vec<Value> {
+    match sketch.as_str() {
+        Some(uid) => vec![extrude(uid)],
+        None => vec![sketch.clone(), extrude("$0")],
+    }
+}
 
 /// An extrusion candidate that takes the regions `keys` of its sketch
 /// `sketch` too (the faces its profile selects, mitcad#169), those it
@@ -6295,6 +6499,8 @@ struct SetGone {
     fits: bool,
     /// Whether its faces meet tangentially (no dressup's input).
     smooth: bool,
+    /// Whether its faces meet in a concave edge.
+    concave: bool,
 }
 
 /// How far (relative to its size) the points of a dressup at an edge may

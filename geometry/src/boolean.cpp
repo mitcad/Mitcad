@@ -30,6 +30,7 @@
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -38,6 +39,7 @@
 #include <Geom2d_Curve.hxx>
 #include <NCollection_HSequence.hxx>
 #include <NCollection_List.hxx>
+#include <NCollection_Map.hxx>
 #include <Precision.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
 #include <ShapeBuild_ReShape.hxx>
@@ -46,6 +48,7 @@
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Wire.hxx>
@@ -65,6 +68,47 @@
 
 namespace mitcad::geometry {
 namespace {
+
+// Edges the operation leaves inside faces of its result, bounding nothing:
+// an edge of one operand lying on a face of the other (a sweep's edge along
+// a bore's cylinder, which OCCT's fuse keeps in the merged face as an
+// internal edge, mitcad#1371). Bodies stored in the files have none, and a
+// later fillet over such a face gives self-intersecting wires. A face whose
+// internal edges bound no face of the result loses them (BRepTools::
+// RemoveInternals, in place: the face stays the same shape, so the history
+// and the names hold); an internal edge that also bounds a face, where two
+// bodies touch along a line, stays. The result is made of copies of the
+// operands, so no operand changes. Returns how many faces lost some.
+int remove_internal_edges(const TopoDS_Shape& result) {
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> bounding;
+  std::vector<TopoDS_Shape>                              faces;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+  for (TopExp_Explorer f(result, TopAbs_FACE); f.More(); f.Next()) {
+    bool internal = false;
+    for (TopExp_Explorer e(f.Current(), TopAbs_EDGE); e.More(); e.Next()) {
+      if (e.Current().Orientation() == TopAbs_INTERNAL) {
+        internal = true;
+      } else if (e.Current().Orientation() != TopAbs_EXTERNAL) {
+        bounding.Add(e.Current());
+      }
+    }
+    if (internal && seen.Add(f.Current())) {
+      faces.push_back(f.Current());
+    }
+  }
+  int count = 0;
+  for (TopoDS_Shape& face : faces) {
+    bool bounds = false;
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More() && !bounds; e.Next()) {
+      bounds = e.Current().Orientation() == TopAbs_INTERNAL && bounding.Contains(e.Current());
+    }
+    if (!bounds) {
+      BRepTools::RemoveInternals(face);
+      ++count;
+    }
+  }
+  return count;
+}
 
 // Shapes closer than this touch.
 constexpr double kContact = 1.0e-6;
@@ -748,6 +792,9 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
   // The history then includes the merge.
   if (simplify) {
     operation->SimplifyResult();
+  }
+  if (const int faces = remove_internal_edges(operation->Shape()); faces > 0) {
+    trace.note("internal edges removed from " + std::to_string(faces) + " faces");
   }
   trace.mark("unify");
   detail::FaceNamer namer(operation->Shape());

@@ -563,8 +563,10 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
 endif()
 
 # Every in-window tool button shares the macOS flat rendering (mitcad#686).
+# The 0.48 macOS tool button style only: the shared Qt UI has none to audit
+# (docs/macos-shared-qt.md).
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
-   AND BASH_EXECUTABLE)
+   AND BASH_EXECUTABLE AND NOT MITCAD_MACOS_SHARED_QT_UI)
   add_test(NAME app.ui-macos-tool-buttons
     COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-tool-buttons-test.sh"
             "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
@@ -837,15 +839,22 @@ endif()
 # the guarded Qt-only fixture; product macOS keeps the system tab bar.
 if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
    AND BASH_EXECUTABLE)
-  add_test(NAME app.ui-macos-multi-document
-    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-multi-document-test.sh"
-            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
-            "${CMAKE_BINARY_DIR}/ui-macos-multi-document" qt all)
+  # The system window tabs of the 0.48 macOS presentation only; the shared
+  # Qt UI's document tabs are app.ui-macos-document-frames
+  # (docs/macos-shared-qt.md).
+  if(NOT MITCAD_MACOS_SHARED_QT_UI)
+    add_test(NAME app.ui-macos-multi-document
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-multi-document-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-multi-document" qt all)
+    set_tests_properties(app.ui-macos-multi-document PROPERTIES
+      TIMEOUT 900 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endif()
   add_test(NAME app.ui-macos-document-frames
     COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-multi-document-test.sh"
             "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
             "${CMAKE_BINARY_DIR}/ui-macos-document-frames" qt frames)
-  set_tests_properties(app.ui-macos-multi-document app.ui-macos-document-frames PROPERTIES
+  set_tests_properties(app.ui-macos-document-frames PROPERTIES
     TIMEOUT 900 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
   if(MITCAD_MACOS_NATIVE_UI)
     add_test(NAME app.ui-macos-native-multi-document
@@ -937,4 +946,132 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE AND TAR
   endif()
 endif()
 
-mitcad_macos_headless_tests()
+# Notice places in the AppKit frontend (mitcad#1333): the pointer over a
+# warned feature's Timeline item and over the command form's message while
+# it is edited paints the places its notices name, and leaving clears them,
+# as tools/ui-notice-places-test.sh checks the Qt frontend (mitcad#1327).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-notice-places
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-notice-places-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-notice-places")
+  set_tests_properties(app.ui-macos-native-notice-places PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# The arrow keys in the AppKit frontend (mitcad#1351): the turn commands'
+# keys stay with the focused Browser outline and timeline, which move their
+# selection, and turn the view only while the 3D view has the keyboard, as
+# tools/ui-view-arrow-keys-test.sh checks the Qt frontend (mitcad#1211).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-turn-keys
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-turn-keys-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-turn-keys")
+  set_tests_properties(app.ui-macos-native-turn-keys PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# Rename in the AppKit frontend's Browser and timeline menus (mitcad#1356):
+# the body's row is named in the visible AppKit outline, the feature in the
+# timeline's Rename Feature dialog as F2 does, and mitcad-cli finds the new
+# names in the saved design.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-rename
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-rename-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-rename")
+  set_tests_properties(app.ui-macos-native-rename PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# The AppKit ribbon in a narrow window (mitcad#1357): a group's pinned
+# buttons fold first, the last one first, before the group collapses, by
+# the Qt ribbon's rule (framework/RibbonFit, mitcad#1111).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-ribbon-pins-fold
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-ribbon-pins-fold-test.sh"
+            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-native-ribbon-pins-fold")
+  set_tests_properties(app.ui-macos-native-ribbon-pins-fold PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# The shared Browser rows' Make marker, half-open eye and analysis notes in
+# the AppKit outline (mitcad#1352): a Section Analysis row's later warning
+# (badge, colour, tooltip) and info note, and a transparent body's eye;
+# the Make marker is app.ui-macos-native-make-tab's.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-browser-markers
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-browser-markers-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-browser-markers")
+  set_tests_properties(app.ui-macos-native-browser-markers PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# The Make card and Property Sets in the AppKit frontend (mitcad#1353): the
+# card's Printer opens the searchable picker with its headings, Add Print
+# Value… is a sheet that adds a value, and Property Sets' process pop-up
+# shows its printer headings as items that cannot be chosen.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-make-card
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-make-card-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-make-card")
+  set_tests_properties(app.ui-macos-native-make-card PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# Seven small AppKit gaps (mitcad#1358): the window's title with the
+# version, the Chat agent pop-up's sign-in states, the Start page's footer
+# above a shown message and no empty row of groups above the page, timeline
+# search results' icons and failed colour, the Center of Mass marker's
+# Delete key in Sketch mode, the Import STEP Assembly answers' tooltips.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_agent AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-minor-gaps
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-minor-gaps-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "$<TARGET_FILE:test_chat_agent>"
+            "${CMAKE_BINARY_DIR}/ui-macos-native-minor-gaps")
+  set_tests_properties(app.ui-macos-native-minor-gaps PROPERTIES
+    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# Bridged tables in the AppKit frontend (mitcad#1355): the Configurations
+# Rows sheet selects a block of cells, copies it, pastes it two rows down
+# and empties a cell; the Appearances headings fold by a press and by keys,
+# as the Qt frontend's do (mitcad#1044, mitcad#1133).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-rows-appearances
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-rows-appearances-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-rows-appearances")
+  set_tests_properties(app.ui-macos-native-rows-appearances PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# Stepping a value in the AppKit frontend (mitcad#1350): Up, Shift+Up,
+# Option+Down and the focused wheel step a command form's value field, Up
+# the sketch's tool field and dimension editor, an expression stays, as
+# tools/ui-value-field-step-test.sh checks the Qt frontend (mitcad#1254).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-value-step
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-value-step-test.sh"
+            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-native-value-step")
+  set_tests_properties(app.ui-macos-native-value-step PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()
+
+# The AppKit command form's check box with its text across the form and an
+# inspection's result rows (mitcad#1354): Send to Slicer's Use the open
+# slicer window, Measure's Distance, Δx, Δy and Δz between sketch points.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-panel-rows
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-panel-rows-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-panel-rows")
+  set_tests_properties(app.ui-macos-native-panel-rows PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+endif()

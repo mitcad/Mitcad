@@ -260,7 +260,7 @@ with several), or **Assistants unavailable** with a struck-through dot
 `--no-mcp`). When you have blocked an assistant in its menu, the indicator
 says so as well: **No assistant · 1 blocked** or **1 connected · 1
 blocked**. It is in the title row of the Floating layout, in the status
-bar of the Docked layout and in the toolbar of the native macOS window.
+bar of the Docked layout.
 Its tooltip gives the details, with the window's instance id and port.
 
 With no assistant connected, a click on the indicator opens **Connect AI
@@ -642,21 +642,13 @@ unsaved changes, MitCad saves it or asks about it first. Cancel keeps
 MitCad open. Later keeps the choice for the next start. On the command
 line, `--chrome=docked|floating` overrides the setting for one run.
 
-**The native macOS interface.** On macOS, MitCad can also start with an
-interface that is built from the windows and controls of macOS. To use
-it, turn on **Native macOS interface (experimental)** on the General page
-of Settings (MitCad › Settings). It is off by default. The choice takes
-effect when MitCad starts again. The open window keeps its interface. The
-native interface has a layout of its own, so the Layout setting does not
-apply to it. On the command line, `--ui=native` or `--ui=qt` overrides
-the setting for one run, and `--chrome` starts the standard interface.
-The native interface is experimental: some parts of it are still
-being completed.
+**On macOS.** MitCad has the same interface as on Windows and Linux.
+The menus are in the menu bar at the top of the screen; **Show the menu
+bar in the window** on the Display page of Settings shows them under
+the title bar too (off by default).
 
-On macOS the Floating layout follows the system's own apps. In the
-Floating layout on macOS, the title bar row and the toolbar's
-groups are a bar at the top. On Windows and Linux only the menu bar is
-a bar at the top, and the 3D view starts directly below it. There the
+In the Floating layout only the menu bar is a bar at the top (on macOS
+the system's menu bar), and the 3D view starts directly below it. The
 title bar row floats over the top of the view without a card. Its
 controls and the design's name each have a small box of their own.
 Each of the toolbar's groups is a card of its own in a row below the
@@ -704,20 +696,15 @@ any window size. The parts of the Floating layout are:
   as folders close.
 - **Messages** show in a band right above the Timeline, as wide as it.
   Refer to [Messages and their history](#messages-and-their-history).
-  Update and remote notices show under the toolbar (on Windows and
-  Linux in a card under the groups). MitCad does not show the remote's
+  Update and remote notices show in a card under the toolbar's groups. MitCad does not show the remote's
   state. The remote's commands are in File › Project.
-- **Glass:** on macOS 26 and later the cards are Liquid Glass. With
-  `--no-glass`, or on older systems, they are translucent panels.
-- **Settings** (MitCad › Settings, Cmd+,) is a window with the same
-  pages as Preferences elsewhere, as panes. Changes apply at once. There
-  is no OK. Typed cache budgets apply when editing finishes; arrow buttons
+- **Settings** on macOS (MitCad › Settings, Cmd+,) is a window with the
+  same pages as Preferences elsewhere, in the same list. Changes apply at
+  once. There is no OK. Typed cache budgets apply when editing finishes; arrow buttons
   apply immediately. Camera and background controls follow changes made
   through View while Settings is open. Cmd+W closes the active tool window;
   in the design window it closes the design. The background can follow
   the system's appearance.
-- **Sheets:** questions and dialogs about the design hang from the
-  window's title bar.
 
 ### Messages and their history
 
@@ -1136,12 +1123,7 @@ group, now show in their own groups. In a narrow window the groups fold
 to their names from the right, Create last; before a group folds, the
 buttons you pinned in it go first, the last one first, so that pinning a
 command never hides its group's own buttons. A folded pinned command is
-still in the group's menu. (With menus that macOS draws natively,
-the rows have no ⋮ button; a pinned button's right-click menu works
-there too. In the native macOS window a group's menu ends with **Pin to
-Toolbar** and **Change Keyboard Shortcut**, each a submenu of the
-group's commands; a pinned command is checked there, and choosing it
-unpins it.)
+still in the group's menu.
 
 ### Shortcuts
 
@@ -1162,7 +1144,7 @@ unpins it.)
 | OK, Cancel | Enter, Esc | Accept or cancel a command. Esc also clears the selection |
 | Create Sketch | Alt+S (Option+S) | Select a plane or a planar face, or select it before the command. Available outside a sketch |
 | Finish Sketch | Ctrl+Enter | Go back to the 3D view |
-| Line | L | Draw lines one after another. Drag from the last point for a tangent arc |
+| Line | L | Draw lines one after another. Drag from the last point, or from the end of a line or an arc, for an arc: tangent when you drag along the curve, normal when you drag across it. Also Midpoint Line ([Sketch curve tools](#sketch-curve-tools)) |
 | 2-Point Rectangle | R | Also 3-Point Rectangle, Center Rectangle and the rounded rectangles |
 | Center Diameter Circle | C | Also 2-Point, 3-Point, 2-Tangent and 3-Tangent circles |
 | Sketch Dimension | D | A length, a distance, an angle, a radius or a diameter. A distance is horizontal, vertical or aligned. A horizontal or vertical distance can also be signed. The angle is the one on the side where you put the value. A dimension can also go to a body edge or corner, in the sketch plane or not, to the axes of the sketch and to its origin |
@@ -1477,6 +1459,12 @@ the Create row. Its rows go from the widest choice to the body's own:
   body then prints with the value it inherits: the row shows the
   occurrence's or the component's value, or goes away when the profile's
   value applies again.
+- **Send to Slicer**, the last row, opens Send to Slicer
+  ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)) with only
+  this body in **Bodies**, whatever else the view shows. The rest of the
+  panel is the same as from the toolbar, and you can still add or remove
+  bodies there before you press Send. The button is grayed when Send to
+  Slicer cannot start.
 
 When the body has no values of its own, the section says so and points
 at Add Print Value…. Each change is one undo step. The values added here
@@ -2814,7 +2802,7 @@ The Create menu of the Sketch tab groups the sketch curve tools:
 
 | Entry | Tools |
 | --- | --- |
-| Line | the line tool (lines end to end, with tangent arcs) |
+| Lines | Line (lines end to end, with tangent and normal arcs) and Midpoint Line |
 | Rectangles | 2-Point, 3-Point and Center Rectangle, 2-Point and Center Rounded Rectangle |
 | Circles | Center Diameter, 2-Point, 3-Point, 2-Tangent and 3-Tangent Circle |
 | Arcs | 3-Point, Center Point and Tangent Arc |
@@ -2824,12 +2812,13 @@ The Create menu of the Sketch tab groups the sketch curve tools:
 | References | Project, Intersect, Clean Up Projections, Clean Up Stale Projections and Project Again (references from the bodies) |
 | Sketch Dimension | Sketch Dimension |
 
-On the toolbar, Line and Sketch Dimension are buttons. Rectangles,
+On the toolbar, Sketch Dimension is a button. Lines, Rectangles,
 Circles and Arcs are split buttons. The button starts the default tool.
 The arrow of the button opens the other variants.
 
 | Split button | Default tool |
 | --- | --- |
+| Lines | Line |
 | Rectangles | 2-Point Rectangle |
 | Circles | Center Diameter Circle |
 | Arcs | 3-Point Arc |
@@ -2847,6 +2836,33 @@ nothing in progress ends the tool. A right-button drag is not a click:
 when your navigation moves the view with the right button, the drag
 orbits or pans the view as before and the chain goes on. With no tool
 on, a right-click opens the sketch's context menu as before.
+
+**Arcs from the Line tool.** Press on the last point of the chain, or,
+to start a chain, on the end of a line or an arc, and drag: the Line
+tool draws an arc instead of a line, and releases it where you release
+the button. The way you drag from the point chooses the arc. Drag along
+the curve (within 45 degrees of the way it leaves the point) for a
+tangent arc, which continues the curve smoothly. Drag across the curve,
+or back, for a normal arc, which leaves the point square to the curve on
+the side you drag to. The choice is made once the pointer is a little
+way from the point; to choose again, move back over the point and out
+again. The preview shows the tangent or perpendicular symbol at the
+point. From the end of a spline the arc is always tangent. While you
+drag, type the Radius, or press Tab and type the Sweep: the arc keeps
+that radius (it becomes the arc's radius dimension) or that sweep, and
+the pointer places the rest. After the arc, the chain goes on from its
+end. Press Esc during the drag to drop the arc and go on with lines. A
+click on the end of a line or an arc, without a drag, starts a chain of
+lines there as before.
+
+**Midpoint Line.** Midpoint Line (in the Lines split button) draws one
+line from its middle: click the midpoint, then one end. The line runs
+as far on the other side, and the midpoint stays a sketch point at the
+middle of the line (a Midpoint constraint), so the line stays symmetric
+about it when you drag an end or change its length. Type the Length (of
+the whole line) or the Angle (from the sketch's x axis) as for a line. A
+line drawn level or plumb gets Horizontal or Vertical, and the points
+that you click on geometry stay on it.
 
 A polygon (Circumscribed, Inscribed or Edge Polygon) stays regular. Its
 construction circles keep the sides equal and the corners evenly
@@ -3583,6 +3599,12 @@ are holes. The copies of sketch patterns follow their originals. Edit
 Text, Edit Pattern and Edit Offset change texts, patterns and offsets
 later.
 
+A double-click on a text opens Edit Text, and so does **Edit Text** in
+the context menu of a right-clicked text. Zoomed in, a click inside a
+letter or inside a letter's opening (the hole of an "o") selects that
+region, not the outline. Edit Text is there too: the double-click and
+the context menu edit the text the region belongs to.
+
 **Fonts** (Edit Text): the font chooser lists the bundled Droid Sans,
 then the installed fonts, then the font files of the folders of
 **Preferences › Fonts**. Each font has a preview. **File…** beside the
@@ -3615,7 +3637,8 @@ takes all of the code at once. Thus it extrudes or engraves the code as
 one.
 
 A double-click on the code opens Edit QR Code (content, module size,
-error correction).
+error correction). This also applies to a double-click inside a dark
+module or a light square of the code, and to its context menu.
 
 ### Selection in sketch mode
 
@@ -8161,7 +8184,6 @@ The tab bar shows only while two or more designs share a window: with one
 design the window looks as it does without tabs, the tabs appear below the
 menu bar when a second design opens there, and they go again when one
 design is left.
-On macOS the system provides window tabs instead of a Qt tab bar.
 
 **A design from a newer MitCad.** A newer MitCad can save things into a
 design that this MitCad does not know, for example a future note format.
@@ -10157,7 +10179,9 @@ The panel starts with the selected bodies in **Bodies**. A selected
 face, edge or vertex stands for its body. A component's occurrence
 selected in the browser stands for the bodies shown in it. If nothing
 is selected, the panel starts with every visible solid body and mesh
-body. MitCad highlights the bodies that it will send. While the panel
+body. On the Make tab, **Send to Slicer** in the selected body's card
+([The selected body on the Make tab](#the-selected-body-on-the-make-tab))
+starts it with that body alone. MitCad highlights the bodies that it will send. While the panel
 is open, click a body in the view to add it or to remove it. A window
 selection adds several bodies.
 
@@ -11166,7 +11190,7 @@ Command search finds each page by its name or by what it sets, for example "auto
 "slicer" or "git". The result shows as *Preferences: Cache* and so on.
 The window opens no larger than the screen, and you can resize it.
 
-On macOS, the same pages are the panes of the **Settings** window
+On macOS, the same pages are in the **Settings** window
 (MitCad › Settings, Cmd+,). Changes apply at once. There is no OK. The
 background can follow the system's appearance.
 
@@ -11175,7 +11199,7 @@ guide that explains its settings.
 
 | Page | What it sets | Refer to |
 |---|---|---|
-| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). On macOS, **Native macOS interface (experimental)**, for the next start | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
+| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
 | **Display** | **Camera**, **Orientation cube**, **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first** | [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
@@ -11322,6 +11346,12 @@ Updates** still shows the release, without **Install**, and says on
 which day its update information expired. If that day has not passed
 yet, the date of your computer is wrong: correct it, or get the release
 from its release page.
+
+A release can come out for one platform a few days before another.
+Until it has a download for yours, the check at start-up says nothing
+of it. **Help › Check for Updates** says that the release is out but
+has no download for your platform yet, with **Release Notes** and
+**Later** only. The notice comes at start-up once the download is out.
 
 The Updates page of Tools › Preferences sets the automatic check on or
 off, and if pre-releases are offered. With the setting off, MitCad
@@ -11488,8 +11518,6 @@ The application is `mitcad`, on Windows `mitcad.exe`. Its options:
 - `--chrome=docked|floating`: puts the panels in docks, or as cards over
   the 3D view, for this run. The default is the Layout selected in
   Preferences › Display, else floating.
-- `--no-glass`: the floating panels paint their own material instead of
-  Liquid Glass (macOS 26 and later)
 - `--debug-log [file.log]`, `--debug-log=file`: writes a debug log for
   this run ([Debug log](#debug-log)). It goes to the file given, or to a
   new file in the log folder.

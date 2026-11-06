@@ -66,7 +66,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
 | `geometry` (`mitcad_geometry`) | C++ | OCCT facade: profiles, features, booleans, name transfer, queries, file formats, ASM bodies, analyses. No Qt. |
 | `tools/cli` (`mitcad-cli`) | C++ | Headless open/import, recompute, properties, export; kernel and import tests run through it. Also `render` (the final render through the render worker), which links Qt Core and Gui for the application's scene and job code. |
-| `app` | C++/Qt, Objective-C++/AppKit | Shared document and command orchestration; Qt desktop UI and native macOS UI. |
+| `app` | C++/Qt, Objective-C++/AppKit | Shared document and command orchestration; the Qt desktop UI on every platform (macOS: [macos-shared-qt.md](macos-shared-qt.md)); the paused AppKit frontend. |
 | `tools/freecad-export` | Python, Bash | FreeCAD macros that make the FreeCAD import's reference models and dumps. |
 
 Dependencies point one way: `app` → `core/ffi` → `core/model-api` → `core/model-build`, `core/model-drawing` → `core/model` (with
@@ -1056,7 +1056,11 @@ the `Shape` type.
   triangulated while another thread computes with it (OCCT stores the
   triangulation in its faces).
 - Boolean results get coplanar faces and collinear edges merged, unless
-  the merge breaks a result OCCT's checker accepted.
+  the merge breaks a result OCCT's checker accepted. Edges the operation
+  leaves inside a face of its result, bounding no face (an edge of one
+  operand lying on a face of the other, which OCCT's fuse keeps as an
+  internal edge), are taken out of it (mitcad#1371): a later fillet over
+  such a face gave self-intersecting wires.
 - Faces on one surface (mitcad#1261, `join_same_surfaces` in
   `geometry/src/face_join.hpp`): OCCT's merge after a boolean takes its
   linear tolerance from the fuzzy value, none for an exact operation, so
@@ -2624,8 +2628,12 @@ the main window taller, up to past the screen (mitcad#412, mitcad#560). No
 dock's content may raise its minimum height with what it shows; the window
 logs its layout again whenever its size changes after it shows.
 
-With `MITCAD_MACOS_NATIVE_UI=ON` (the macOS presets and releases), macOS
-builds carry both frontends and start Qt by default (mitcad#1056). The
+**The AppKit frontend is paused (owner 6.11.2026):** it is not built and
+macOS uses the shared Qt UI ([macos-shared-qt.md](macos-shared-qt.md)).
+What follows describes it as it was, for when native UI work resumes.
+
+With `MITCAD_MACOS_NATIVE_UI=ON` (the macOS presets and releases until
+6.11.2026), macOS builds carried both frontends and started Qt by default (mitcad#1056). The
 preference `appearance/nativeMacInterface` (Settings › General) starts the
 AppKit frontend; `main()` reads it before the application object exists.
 `--ui=native|qt` overrides it for one run; `--chrome` without `--ui` also

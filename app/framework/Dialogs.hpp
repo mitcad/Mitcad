@@ -32,6 +32,11 @@ int execDialog(QDialog* dialog);
 // hidden widget presenter's initial values before QFileDialog is shown.
 void prepareFileDialog(QFileDialog* dialog);
 void showDialog(QWidget* widget);
+// QDialog::open through the shared dispatch (mitcad#1353): window modal
+// and shown without a loop of its own, its result through finished,
+// accepted or rejected. The native frontend presents it as an AppKit sheet
+// on its window; the others call open(), a sheet on macOS too.
+void openDialog(QDialog* dialog);
 void waitDialogUntil(const std::function<bool()>& completed);
 // Call before setValue or the minimum-duration timer can show a progress
 // dialog. Native mode keeps the Qt presenter hidden and forwards its show

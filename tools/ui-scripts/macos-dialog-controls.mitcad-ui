@@ -3,11 +3,7 @@ wait-idle
 show-dialog-style-fixture setup
 command tools.libraries
 focus-dialog '^Library Sources$'
-button '.*' libraryAddSource
-key Escape
-focus-dialog '^Library Sources$'
-button '.*' libraryAddSource
-popup 'Add URL…'
+button '.*' libraryAddUrl
 focus-dialog '^Add Library$'
 key Escape
 focus-dialog '^Library Sources$'
@@ -28,10 +24,6 @@ button '.*' partPickerPin
 expect-widget-property partPickerPin checked true
 button '.*' partPickerPin
 expect-widget-property partPickerPin checked false
-button '.*' partPickerStar
-expect-widget-property partPickerStar checked true
-button '.*' partPickerStar
-expect-widget-property partPickerStar checked false
 key Return
 expect-dialog-gone '^Component Picker'
 focus-main

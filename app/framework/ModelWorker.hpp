@@ -17,16 +17,10 @@
 
 #include "mitcad_bridge/lib.h"
 #include "rust/cxx.h"
+#include "ModelBusy.hpp"
 #include "WorkerThreadStart.hpp"
 
 namespace mitcad {
-
-// A document access while a job computes the model: the UI thread may not
-// use the document then.
-class ModelBusy : public std::runtime_error {
-public:
-  ModelBusy() : std::runtime_error("the model is busy computing") {}
-};
 
 // A job that was cancelled (MainWindow::runJob): what it ran was rejected
 // and changed nothing. The model's own words for it.

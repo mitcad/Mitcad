@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# Rename in the AppKit frontend's Browser and timeline menus (mitcad#1356),
+# run by tools/ui-macos-native-rename-test.sh on a design with one box, Base
+# (F1), whose body is Body1. The Browser menu's Rename names the body in
+# the visible AppKit outline's own text field, a double-click on the body
+# opens the same editor, and the timeline menu's Rename asks in the
+# timeline's Rename Feature dialog, as F2 there does; the hidden Qt tree
+# and strip never edit. The runner checks the saved names with mitcad-cli.
+wait-idle
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+native-resize 1280 820
+expect-model-bodies 1 1000
+native-expand native.modelTree
+expect-native-visible native.model.body:F1.b0@ true
+expect-native-visible native.history.F1 true
+
+# The body's menu: its row edits in place, Return takes the name.
+mark
+native-context-menu native.model.body:F1.b0@ Rename
+expect-log '^Native Browser editor: body:F1\.b0@$' 10
+expect-log '^Renaming .*Body1$' 10
+expect-native-focus native.model.body:F1.b0@ '^Body1$'
+screenshot '${MITCAD_TEST_WORK}/rename-body-editor.png'
+type Holder
+expect-native-focus native.model.body:F1.b0@ '^Holder$'
+key Return
+expect-log '^Renamed Body1 to Holder$' 30
+wait-idle
+expect-native-text native.model.body:F1.b0@ '^Holder$'
+
+# A double-click on the body opens the same editor; Escape keeps the name.
+mark
+native-activate native.model.body:F1.b0@
+expect-log '^Native Browser editor: body:F1\.b0@$' 10
+expect-native-focus native.model.body:F1.b0@ '^Holder$'
+type 'not this name'
+expect-native-focus native.model.body:F1.b0@ '^not this name$'
+key Escape
+expect-native-focus native.modelTree
+expect-native-text native.model.body:F1.b0@ '^Holder$'
+expect-no-log 'Renamed Holder to'
+
+# The feature's timeline menu: the timeline's Rename Feature dialog.
+mark
+native-context-menu native.history.F1 Rename
+expect-log '^Renaming Base in the timeline$' 10
+focus-dialog '^Rename Feature$'
+key Ctrl+a
+type 'Base block'
+button '^OK$'
+expect-log '^Renamed Base to Base block$' 30
+expect-native-dialog-gone '^Rename Feature$'
+focus-main
+wait-idle
+
+# F2 on the selected timeline cell asks in the same dialog; Cancel keeps it.
+mark
+native-select native.history.F1
+key F2
+expect-log '^Renaming Base block in the timeline$' 10
+focus-dialog '^Rename Feature$'
+button '^Cancel$'
+expect-native-dialog-gone '^Rename Feature$'
+focus-main
+expect-no-log 'Renamed Base block to'
+
+# Saved for the runner's check of the names in the model.
+mark
+native-action file.save
+wait-log '^Saved '
+expect-never 'Native Mac canvas:|OCCT view event failed|TestDriver:[ ]FAIL'

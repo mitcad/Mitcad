@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QLabel>
+#include <QPoint>
 #include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
@@ -64,11 +65,13 @@ int navigationPreferencesTests() {
   }
   CHECK(middle >= 0);
   // A short binding table initially reveals a useful gesture, rather than
-  // spending its whole viewport on disabled reserved left-button rows.
+  // spending its whole viewport on disabled reserved left-button rows. The
+  // page at its natural height: the table at about its minimum.
   form.setAttribute(Qt::WA_DontShowOnScreen);
-  form.resize(900, 700);
+  form.resize(900, form.sizeHint().height());
   form.show();
   QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+  CHECK(table->height() >= NavigationBindingsTable::kMinimumHeight);
   if (middle >= 0) {
     CHECK(table->rowAt(1) == middle);
     CHECK(table->viewport()->rect().contains(table->visualItemRect(table->item(middle, 0))));
@@ -107,6 +110,19 @@ int navigationPreferencesTests() {
   form.show();
   QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
   CHECK(right >= 0 && table->rowAt(1) == right);
+  // A taller page gives its spare height to the table (mitcad#1394): the
+  // rest keeps its height, and the page's last line ends at its bottom.
+  {
+    const int natural = table->height();
+    form.resize(900, form.height() + 200);
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    CHECK(table->height() >= natural + 190);
+    auto* hint = form.findChild<QLabel*>(QStringLiteral("navigationGuideExplanation"));
+    CHECK(hint != nullptr);
+    if (hint) CHECK(form.height() - hint->mapTo(&form, QPoint(0, hint->height())).y() <= 12);
+    form.resize(900, form.sizeHint().height());
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+  }
   form.hide();
   seed->setCurrentIndex(seed->findData(int(NavigationScheme::TrackpadShift)));
   seedButton->click();

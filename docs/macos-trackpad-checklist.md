@@ -1,10 +1,9 @@
 # macOS trackpad and Magic Mouse checklist
 
 A manual test of the view's trackpad navigation (`NavigationScheme::Trackpad`,
-`OcctViewer::trackpadScroll` and `OcctViewer::nativeGesture`) on a Mac. Run
-first with the default Qt frontend (`--ui=qt`), then repeat with the opt-in
-native frontend (`--ui=native`). Record the effective frontend and Navigation
-preset for each run. Open a
+`OcctViewer::trackpadScroll` and `OcctViewer::nativeGesture`) on a Mac, in
+the shared Qt UI ([macos-shared-qt.md](macos-shared-qt.md)). Record the
+Navigation preset for each run. Open a
 design with a few bodies and a zoom level where you can see the model's edges
 (Fit first). Preferences > Navigation: "Trackpad ..." (the default on macOS;
 delete the `view/navigationScheme` setting to see the default again). Try it
@@ -36,7 +35,7 @@ off.
       (clockwise fingers, clockwise model; flip `kRollDirection` if not). Not
       with the constrained orbit.
 - [ ] Two-finger double tap fits the whole design.
-- [ ] In the native frontend, a pinch starting on the canvas keeps zooming
+- [ ] A pinch starting on the canvas keeps zooming
       when the pointer crosses a floating card. A pinch starting on a card
       leaves the canvas unchanged, even if the pointer crosses onto it.
 - [ ] Option + left drag orbits; Shift + Option + left drag pans; a middle drag (if

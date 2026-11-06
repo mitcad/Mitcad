@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MIT
+# Notice places in the AppKit frontend (mitcad#1333, mitcad#1379), as
+# notice-places.mitcad-ui checks the Qt frontend's (mitcad#1327), on the
+# same design (tools/ui-scripts/notice-places.json: Body1 F1.b0, a hole by
+# the rounding of its top front edge, Rim F4 rounding its top rim and
+# warning that it leaves an edge on that rounding): the warning reads in
+# plain words, and the pointer over it paints its places (the rounding's
+# face of the body, a point) in the view until it leaves:
+#   1. the AppKit Timeline item, with its tooltip;
+#   2. the AppKit message band, the Browser warnings badge's message about
+#      Rim (its one warning) in full;
+#   3. the AppKit command form's message while Rim is edited, Cancel then.
+# The pointer is the in-process native hover (native-hover: the views' own
+# tracking areas get their entered and exited events; no system input).
+# Run by tools/ui-macos-native-notice-places-test.sh.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle 30
+native-resize 1280 900
+native-appearance light
+expect-native-history
+command view.fit
+wait-idle
+
+# 1. The Timeline item and its tooltip.
+mark
+native-hover native.history.F4 enter
+wait-log '^Notice hover highlighted: timeline: .*face F4:fillet[(][^ ]* of F1[.]b0.*point .*[(][1-9][0-9]* drawn[)]$' 10
+expect-timeline-hover F4
+expect-native-tooltip native.history.F4 '(?s)Rim.*The fillet runs onto a face beside it and leaves an edge there'
+screenshot '${MITCAD_TEST_SHOTS}/native-notice-places-timeline.png'
+mark
+native-hover native.history.F4 leave
+wait-log '^Notice hover highlighted: none$' 10
+expect-timeline-hover none
+
+# 2. The message band: the warnings badge says what is wrong with Rim.
+mark
+native-click native.browser.warnings
+wait-log '^Revealed Rim$' 10
+wait-log '^Message band full: warning Rim: The fillet runs onto a face beside it and leaves an edge there' 10
+expect-never '^Message band full: .*[EV][{]'
+# The AppKit band shows it in full (logged when what it shows changes).
+expect-ever '^Native message band: full warning Rim: The fillet runs onto a face beside it and leaves an edge there'
+expect-native-visible native.messageBand true
+expect-native-text native.messageBand.text '^Warning: Rim: The fillet runs onto a face beside it and leaves an edge there'
+mark
+native-hover native.messageBand.text enter
+wait-log '^Notice hover highlighted: message band: .*face F4:fillet[(][^ ]* of F1[.]b0.*point ' 10
+screenshot '${MITCAD_TEST_SHOTS}/native-notice-places-band.png'
+mark
+native-hover native.messageBand.text leave
+wait-log '^Notice hover highlighted: none$' 10
+
+# 3. The command form's message while Rim is edited.
+mark
+native-activate native.history.F4
+wait-log '^Editing F4 with Fillet' 20
+wait-log '^Preview Fillet: ok, warning: ' 120
+wait-log '^Panel Fillet message box: warning: The fillet runs onto a face beside it' 20
+expect-never '^Panel Fillet message box: .*[EV][{]'
+expect-native-text commandMessage 'The fillet runs onto a face beside it and leaves an edge there'
+mark
+native-hover commandMessage enter
+wait-log '^Notice hover highlighted: panel: .*face F4:fillet[(][^ ]* of F1[.]b0.*point .*[(][1-9][0-9]* drawn[)]$' 10
+screenshot '${MITCAD_TEST_SHOTS}/native-notice-places-panel.png'
+mark
+native-hover commandMessage leave
+wait-log '^Notice hover highlighted: none$' 10
+mark
+native-click commandCancel
+wait-log '^Command Fillet cancelled' 20
+wait-idle

@@ -700,6 +700,26 @@ on it):
   extrusion's own), the bodies' order chose either, and half of a cut's
   ten profile faces went to the other body (mitcad#325: two cuts of one
   design and its copies).
+- **A part's profile faces that its item took away** (mitcad#1347). The
+  file makes a feature's tool once, before any of its operations; the
+  replay makes the item's own operation first, and a cut from a face of
+  the item's own body (an extrusion of that face into the body) takes the
+  face away before the part in another component is replayed. Where a
+  part's profile faces are not on the replay's bodies, the part takes
+  them where its item's operation stands
+  (`Importer::part_face_sketch`): with the timeline marker before the
+  item's last feature, the faces are found as the profile names them, a
+  sketch on the first one with their boundaries projected (linked; the
+  plane and the projections through the occurrence placing the face's
+  component, once) is made there and stays as one of the part's
+  features, and the part's extrusions of its regions come after the
+  item's operation as before. The faces are read where each is the only
+  face that fits there. In one design of the backup corpus a cut of
+  another component goes on 0.0043 mm into a plate (its part): the part
+  was skipped as within the geometric tolerance, and the plate lacked a
+  step whose edge ends a later rounding's tangent chain; with the part
+  parametric that rounding's edges are read and the rounding of the
+  step's edges after it builds on the replay's body.
 - **Sketches lying off their frame.** A sketch on a face can keep its
   points at the face's height in its own coordinates while its stored
   frame lies in a parallel plane through the origin (in the design

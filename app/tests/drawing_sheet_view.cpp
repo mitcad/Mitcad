@@ -3,12 +3,15 @@
 // or a pan kept when the model's next answer brings a sheet of the same
 // size, the whole sheet fitted for another size (mitcad#751); the sheet
 // itself painted from its picture while the pointer only moves over it,
-// painted again for a zoom (mitcad#759).
+// painted again for a zoom (mitcad#759); a section's line's and a break's
+// clicks snapped to points, a section's second to 45 degrees, Shift as
+// clicked (mitcad#1362).
 #include "drawings/DrawingSheetView.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
+#include <optional>
 
 #include <QApplication>
 #include <QColor>
@@ -17,6 +20,8 @@
 #include <QJsonObject>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QPointF>
+#include <QVector>
 #include <QWheelEvent>
 
 namespace {
@@ -75,10 +80,13 @@ void wheel(QWidget& widget, const QPointF& at, int steps) {
   QApplication::sendEvent(&widget, &event);
 }
 
-void mouse(QWidget& widget, QEvent::Type type, const QPointF& at, Qt::MouseButton button, Qt::MouseButtons buttons) {
-  QMouseEvent event(type, at, widget.mapToGlobal(at), button, buttons, Qt::NoModifier);
+void mouse(QWidget& widget, QEvent::Type type, const QPointF& at, Qt::MouseButton button, Qt::MouseButtons buttons,
+           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+  QMouseEvent event(type, at, widget.mapToGlobal(at), button, buttons, modifiers);
   QApplication::sendEvent(&widget, &event);
 }
+
+bool closeTo(const QPointF& a, const QPointF& b) { return std::abs(a.x() - b.x()) < 1e-6 && std::abs(a.y() - b.y()) < 1e-6; }
 
 } // namespace
 
@@ -156,5 +164,88 @@ int drawingSheetViewTests() {
   CHECK(grey() < 192);
   sheet.setHoverMarks(QJsonArray());
   CHECK(grey() > 192);
+
+  // A section's line and a break's sides (mitcad#1362): each click snaps
+  // to the point the model gives (here a hole's centre at (50, 35) and a
+  // corner at (90, 37)), asked on the view of the first click; a section's
+  // second near none of them turns onto a multiple of 45 degrees from its
+  // first; Shift: as clicked.
+  using mitcad::drawings::SheetPick;
+  using mitcad::drawings::ToolPicks;
+  QVector<ToolPicks> got;
+  QObject::connect(&sheet, &DrawingSheetView::picked, &sheet, [&got](const ToolPicks& p) { got.append(p); });
+  QVector<int> askedOn;
+  sheet.setPointSnap([&askedOn](int on, const QPointF& at) -> std::optional<QPointF> {
+    askedOn.append(on);
+    for (const QPointF& p : {QPointF(50.0, 35.0), QPointF(90.0, 37.0)}) {
+      if (std::hypot(at.x() - p.x(), at.y() - p.y()) < 1.0) {
+        return p;
+      }
+    }
+    return std::nullopt;
+  });
+  const auto click = [&sheet](const QPointF& at, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    const QPointF w = sheet.toWidget(at);
+    mouse(sheet, QEvent::MouseButtonPress, w, Qt::LeftButton, Qt::LeftButton, modifiers);
+    mouse(sheet, QEvent::MouseButtonRelease, w, Qt::LeftButton, Qt::NoButton, modifiers);
+  };
+  const QPointF nearCentre(50.4, 35.3);
+  const QPointF placed(200.0, 150.0);
+  sheet.setPick(SheetPick::Line, true);
+  // Through the centre, its second click off the view, 1.9° off upright:
+  // upright, as long as it was.
+  click(nearCentre);
+  click(QPointF(51.0, 65.0));
+  CHECK(sheet.isPlacing());
+  click(placed);
+  CHECK(got.size() == 1);
+  if (got.size() == 1) {
+    const ToolPicks& line = got[0];
+    CHECK(line.view == 1 && line.points.size() == 3);
+    if (line.points.size() == 3) {
+      CHECK(closeTo(line.points[0], QPointF(50.0, 35.0)));
+      CHECK(closeTo(line.points[1], QPointF(50.0, 35.0 + std::hypot(1.0, 30.0))));
+      CHECK(closeTo(line.points[2], placed));
+    }
+  }
+  CHECK(askedOn.size() == 2 && askedOn.value(0) == 1 && askedOn.value(1) == 1);
+  // Near 45°: 45°.
+  click(nearCentre);
+  click(QPointF(70.0, 56.0));
+  click(placed);
+  CHECK(got.size() == 2);
+  if (got.size() == 2 && got[1].points.size() == 3) {
+    const double r = std::hypot(20.0, 21.0) / std::sqrt(2.0);
+    CHECK(closeTo(got[1].points[1], QPointF(50.0 + r, 35.0 + r)));
+  }
+  // The corner 3.3° off level: its point wins over the angle.
+  click(nearCentre);
+  click(QPointF(90.3, 37.3));
+  click(placed);
+  CHECK(got.size() == 3);
+  if (got.size() == 3 && got[2].points.size() == 3) {
+    CHECK(closeTo(got[2].points[1], QPointF(90.0, 37.0)));
+  }
+  // Shift held: where it is clicked, nothing asked.
+  const qsizetype asked = askedOn.size();
+  click(nearCentre, Qt::ShiftModifier);
+  click(QPointF(51.0, 55.0), Qt::ShiftModifier);
+  click(placed);
+  CHECK(askedOn.size() == asked);
+  CHECK(got.size() == 4);
+  if (got.size() == 4 && got[3].points.size() == 3) {
+    CHECK(closeTo(got[3].points[0], nearCentre));
+    CHECK(closeTo(got[3].points[1], QPointF(51.0, 55.0)));
+  }
+  // A break: its sides snap to points, the second never turns.
+  sheet.setPick(SheetPick::Line, false);
+  click(nearCentre);
+  click(QPointF(51.0, 55.0));
+  CHECK(got.size() == 5);
+  if (got.size() == 5 && got[4].points.size() == 2) {
+    CHECK(closeTo(got[4].points[0], QPointF(50.0, 35.0)));
+    CHECK(closeTo(got[4].points[1], QPointF(51.0, 55.0)));
+  }
+  sheet.setPick(SheetPick::None, false);
   return failures;
 }

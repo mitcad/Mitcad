@@ -10,7 +10,7 @@ void MainWindow::setDocumentVisible(bool visible) {
   if (m_viewer) m_viewer->setDocumentVisible(visible);
 }
 void MainWindow::minimizeDocumentWindow() {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   mac::minimizeDocumentWindow(window());
 #else
   window()->showMinimized();

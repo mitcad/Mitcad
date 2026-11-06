@@ -58,3 +58,5 @@ mod sketch_offset_open_parts_1246_tests;
 mod sketch_point_ids_1269_tests;
 // The pieces of an arc trimmed in the middle keep one radius (mitcad#1314).
 mod sketch_trim_arc_1314_tests;
+// The line tool's normal arcs and the Midpoint Line (mitcad#1393).
+mod sketch_line_arcs_1393_tests;

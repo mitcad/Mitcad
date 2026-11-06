@@ -137,7 +137,7 @@ double farthest(const TopoDS_Shape& from, const TopoDS_Shape& to, double z) {
   return worst;
 }
 
-void round_inner_rim(const char* name, double expected_volume, int expected_faces) {
+void round_inner_rim(const char* name, double expected_volume, int expected_faces, std::size_t rim_edges) {
   const std::string cases = geometry_cases();
   if (cases.empty()) {
     std::printf("%s: skipped (MITCAD_GEOMETRY_CASES is not set)\n", name);
@@ -171,7 +171,7 @@ void round_inner_rim(const char* name, double expected_volume, int expected_face
       rim.push_back(edge);
     }
   }
-  CHECK(rim.size() == 17);
+  CHECK(rim.size() == rim_edges);
   BRepFilletAPI_MakeFillet fillet(body);
   for (const TopoDS_Edge& edge : rim) {
     fillet.Add(2.5, edge);
@@ -208,11 +208,26 @@ void round_inner_rim(const char* name, double expected_volume, int expected_face
 }
 
 void test_rounding_rolls_on_the_far_edges() {
-  round_inner_rim("fillet-roll-over-blend", 324916.183179, 343);
+  round_inner_rim("fillet-roll-over-blend", 324916.183179, 343, 17);
 }
 
 void test_rounding_rolls_on_the_far_edges_other_version() {
-  round_inner_rim("fillet-roll-over-blend-2", 362484.952973, 358);
+  round_inner_rim("fillet-roll-over-blend-2", 362484.952973, 358, 17);
+}
+
+// The same bodies with their faces on one surface joined, as the import's
+// replay builds them since mitcad#1261 (`fillet-roll-over-seam` and
+// `fillet-roll-over-seam-2`): the top one face, the inner cylinder one face
+// closed round its axis with its seam under a crest at one mouth, the rim
+// one closed edge. The ball's turn over the sliver at that mouth carries
+// its contact on the cylinder across the seam (port patch 1370,
+// mitcad#1370).
+void test_rounding_turns_past_the_seam() {
+  round_inner_rim("fillet-roll-over-seam", 324917.409071, 244, 1);
+}
+
+void test_rounding_turns_past_the_seam_other_version() {
+  round_inner_rim("fillet-roll-over-seam-2", 362485.012459, 261, 1);
 }
 
 } // namespace
@@ -221,6 +236,9 @@ void test_rounding_rolls_on_the_far_edges_other_version() {
 int main() {
   test::guarded("test_rounding_rolls_on_the_far_edges", test::test_rounding_rolls_on_the_far_edges);
   test::guarded("test_rounding_rolls_on_the_far_edges_other_version", test::test_rounding_rolls_on_the_far_edges_other_version);
+  test::guarded("test_rounding_turns_past_the_seam", test::test_rounding_turns_past_the_seam);
+  test::guarded("test_rounding_turns_past_the_seam_other_version",
+                test::test_rounding_turns_past_the_seam_other_version);
   if (test::failures == 0) {
     std::puts("test_fillet_roll_over_blend: all checks passed");
   }

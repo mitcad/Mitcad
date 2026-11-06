@@ -22,6 +22,7 @@
 #include <QPoint>
 #include <QPointer>
 #include <QPolygonF>
+#include <QRect>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -973,6 +974,12 @@ protected:
                           const occ::handle<V3d_View>& view) override;
 
 private:
+  // Headless UI tests (MITCAD_TEST_HEADLESS): the hidden view logs its
+  // laid-out "View area" when its parent's layout places it.
+  void watchHeadlessParent();
+  void logHeadlessViewArea();
+  QPointer<QWidget> m_headlessParent;
+  QRect m_headlessArea;
   // What an object displays, for naming its picks.
   struct PickInfo {
     SelectionItem item;                    // complete, except for bodies

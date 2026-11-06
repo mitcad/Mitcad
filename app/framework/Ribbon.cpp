@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Ribbon.hpp"
+#include "RibbonFit.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -953,6 +954,19 @@ std::pair<int, int> Ribbon::groupWidths(const QString& tab, const QString& group
   return {0, 0};
 }
 
+std::vector<int> Ribbon::pinnedGroupWidths(const QString& tab, const QString& group) const {
+  const QString object = QStringLiteral("ribbonGroup_") + key(tab, group);
+  std::vector<int> widths;
+  for (const auto& page : m_groupsOfPage) {
+    for (const auto& info : page) {
+      if (info.capsule->objectName() != object || !info.collapsible) continue;
+      for (int pins = 0; pins <= info.pinButtons.size(); ++pins) widths.push_back(groupWidth(info, pins));
+      return widths;
+    }
+  }
+  return widths;
+}
+
 void Ribbon::addGroupExtras(const QString& tab, const QString& group, const QList<QAction*>& menu,
                             const QList<QAction*>& pinned) {
   Extras& extras = m_extras[key(tab, group)];
@@ -1598,6 +1612,13 @@ void Ribbon::showEvent(QShowEvent* event) {
 }
 
 void Ribbon::fitGroups() {
+  // Also while it is hidden: the window is laid out with its groups fitted
+  // before it first shows. A ribbon whose first fit came in its show event
+  // collapsed its groups after it had logged its places, and nothing logged
+  // them again: on Windows the CREATE menu's place was 36 px left of its
+  // button (app.ui-windows-pattern-options, after mitcad#1357). The AppKit
+  // frontend keeps this ribbon hidden and fits and logs its own
+  // (mitcad#1357): the hidden one logs no folds (fitPage).
   if (m_presentation == Presentation::Classic) {
     const QMargins outside = layout()->contentsMargins();
     const int available = std::max(0, width() - outside.left() - outside.right());
@@ -1639,48 +1660,25 @@ void Ribbon::fitGroups() {
 
 void Ribbon::fitPage(QList<GroupInfo>& infos, int fixed, int available) {
   const auto count = static_cast<std::size_t>(infos.size());
-  std::vector<bool> collapsed(count, false);
-  std::vector<int> shown(count, 0);  // the pinned buttons shown
-  std::vector<int> widths(count, 0); // the groups' widths as they fold
-  int total = fixed;
+  // The rule shared with the AppKit ribbon (framework/RibbonFit,
+  // mitcad#1111, mitcad#1357): from the right, a group's pinned buttons
+  // fold first, the last one first, before the group collapses.
+  std::vector<RibbonFitGroup> groups(count);
   for (std::size_t i = 0; i < count; ++i) {
     const GroupInfo& info = infos[static_cast<int>(i)];
+    RibbonFitGroup& group = groups[i];
+    group.collapsible = info.collapsible;
+    group.ownButtons = info.ownButtons;
+    group.collapsedWidth = info.collapsedWidth;
     if (info.collapsible) {
-      shown[i] = static_cast<int>(info.pinButtons.size());
-      widths[i] = info.fullWidth;
-      total += widths[i];
+      for (int pins = 0; pins <= info.pinButtons.size(); ++pins) {
+        group.widths.push_back(groupWidth(info, pins));
+      }
     }
   }
-  // From the right, so that the tab's first groups (Create, Modify) stay in
-  // sight the longest, Create the longest. In each group the commands the
-  // user pinned fold first, the last one first (mitcad#1111: a pinned
-  // command never hides its group's own buttons); the group collapses only
-  // when its own buttons do not fit either, and only when it gets narrower:
-  // a group whose buttons fit under its name (FINISH SKETCH) is no wider
-  // with them, and collapsing it hid Finish Sketch in a 1024-wide window for
-  // nothing (mitcad#696).
-  for (std::size_t i = count; i-- > 0 && total > available;) {
-    const GroupInfo& info = infos[static_cast<int>(i)];
-    if (!info.collapsible) {
-      continue;
-    }
-    // A pin folds only when the group gets narrower without it (not where
-    // the buttons fit under the group's name).
-    while (total > available && shown[i] > 0 && groupWidth(info, shown[i] - 1) < widths[i]) {
-      --shown[i];
-      const int narrower = groupWidth(info, shown[i]);
-      total -= widths[i] - narrower;
-      widths[i] = narrower;
-    }
-    if (shown[i] == 0 && info.ownButtons == 0) {
-      // Nothing of its own left in the row: its name alone.
-      total -= widths[i] - info.collapsedWidth;
-      collapsed[i] = true;
-    } else if (total > available && widths[i] > info.collapsedWidth) {
-      total -= widths[i] - info.collapsedWidth;
-      collapsed[i] = true;
-    }
-  }
+  const RibbonFit fit = fitRibbonGroups(groups, fixed, available);
+  const std::vector<bool>& collapsed = fit.collapsed;
+  const std::vector<int>& shown = fit.shown;
   for (std::size_t i = 0; i < count; ++i) {
     GroupInfo& info = infos[static_cast<int>(i)];
     if (!info.collapsible) {
@@ -1700,7 +1698,9 @@ void Ribbon::fitPage(QList<GroupInfo>& infos, int fixed, int available) {
         folded << button->property(kPinIdProperty).toString();
       }
     }
-    if (folded != info.folded) {
+    // Logged only as it shows: the folds of a hidden ribbon are none the
+    // user sees, and once it shows, its fit logs them.
+    if (folded != info.folded && isVisible()) {
       info.folded = folded;
       qDebug().noquote() << QStringLiteral("Ribbon pinned folded %1: %2")
                                 .arg(key(info.tab, info.group),

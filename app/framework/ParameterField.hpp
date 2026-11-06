@@ -142,6 +142,38 @@ public:
   void startNaming();
   void close(const QString& why = QString());
 
+  // Stepping a value (mitcad#1254, ValueStep.hpp), the rules every field
+  // that steps follows, also the AppKit frontend's value fields
+  // (mitcad#1350: NativeForms.mm, NativeInlineEditor.mm):
+  // - Up or Down with `modifiers`: the step, signed (Down negative), and
+  //   its name for the log in `name` ("Up", "Shift+Up", "Alt+Down" for
+  //   Option on macOS); 0 for another key or modifiers that do not step
+  //   (the key is the field's or a shortcut's as before).
+  static double keyStep(int key, Qt::KeyboardModifiers modifiers, QString* name = nullptr);
+  // - The wheel's turn `angle` (Qt's angle delta: 1/8 degree, 120 a notch;
+  //   a touchpad's smaller turns add up in `pending`) with `modifiers`: the
+  //   step it makes now, 0 while the turns add up to less than a notch;
+  //   nothing when the modifiers do not step or nothing turned (the wheel is
+  //   the panel's, which scrolls, or the view's).
+  static std::optional<double> wheelStep(int angle, Qt::KeyboardModifiers modifiers, int& pending);
+  // - The text `before` of a field with `options` stepped by `by` in the
+  //   unit it shows, `apply`d (the new text goes in as typed) and logged
+  //   with what stepped it ("Value field Extrude Distance: Shift+Up stepped
+  //   10 mm to 20 mm"); an expression, a parameter's name or a value at its
+  //   minimum is left as it is, logged why, and false is returned. `within`
+  //   is a widget of the window whose parameter source has the design's
+  //   length unit, which a bare length is in (null: millimetres).
+  static bool stepText(const QString& before, const ParameterFieldOptions& options, double by, const QString& how,
+                       const QWidget* within, const std::function<void(const QString&)>& apply);
+  // - A field's tooltip with the line on how its value steps.
+  static QString stepTooltip(const QString& tooltip);
+  // A native editor that stands in for this field's hidden presenter has
+  // the keyboard (the sketch's AppKit inline editors, mitcad#1350): its Up
+  // and Down, and the wheel over it, step the presenter's value as the
+  // field's own would. True when the field took the key or the wheel.
+  bool nativeStepKey(int key, Qt::KeyboardModifiers modifiers);
+  bool nativeStepWheel(int angle, Qt::KeyboardModifiers modifiers);
+
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
 

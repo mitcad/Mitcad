@@ -32,6 +32,13 @@ public:
   // the window is laid out exactly as a single document window. Returning
   // true here for one document shows the tabs always.
   static bool showsDocumentTabs(int documentCount);
+  // macOS: the system menu bar already shows the frame's menus, so the
+  // window's own copy of them is hidden unless Preferences › Display asks
+  // for it (off by default). Elsewhere the window's menu bar is the only
+  // one and is always shown.
+  static bool windowMenuBarShown();
+  // Saves the choice and applies it to every open frame; false if unchanged.
+  static bool setWindowMenuBarShown(bool shown);
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void closeEvent(QCloseEvent* event) override;

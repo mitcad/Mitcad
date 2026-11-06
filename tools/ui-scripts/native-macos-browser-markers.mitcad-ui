@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# What the shared Browser rows show beyond their name, in the AppKit
+# outline (mitcad#1352; tools/ui-macos-native-browser-markers-test.sh), on
+# section-clip-report.json: Body1 (F2.b0) and Body2 (F4.b0), Section1
+# shown at x = 10, Beyond hidden at x = 30, with
+# MITCAD_TEST_SECTION_CLIP_FAIL=F2.b0 making Body1's clips fail.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle 60
+native-resize 1280 820
+native-appearance light
+native-expand native.modelTree
+
+# 1. The section worker shows Body1 whole after the rows were built: the
+# shared row's note (mitcad#1230) reaches Section1's native row, its name
+# in the warning's colour, the warning's badge on its icon and the warning
+# with Body1's error in its tooltip.
+expect-ever '^Browser analysis note Root/Analysis/Section1: warning Section1 could not cut Body1; it is shown whole\. \| Body1: the clip failed for the test' 60
+expect-native-style native.model.analysis:Section1 row-warning
+expect-native-style native.model.analysis:Section1 badged-icon=section-analysis
+expect-native-tooltip native.model.analysis:Section1 '^Section1: Section Analysis\nSection1 could not cut Body1; it is shown whole\.\nBody1: the clip failed for the test'
+
+# 2. Hidden, the note goes: grey, the plain icon and tooltip.
+mark
+command inspect.remove_section
+wait-log '^Browser analysis note Root/Analysis/Section1: none$'
+expect-native-style native.model.analysis:Section1 row-dimmed
+expect-native-style native.model.analysis:Section1 icon=section-analysis
+expect-native-tooltip native.model.analysis:Section1 '^Section1: Section Analysis$'
+
+# 3. Shown again: the rows are rebuilt for the new snapshot at once, and
+# the note comes later from the section worker, without a new snapshot.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Browser analysis note Root/Analysis/Section1: warning Section1 could not cut Body1' 30
+expect-native-style native.model.analysis:Section1 row-warning
+expect-native-style native.model.analysis:Section1 badged-icon=section-analysis
+expect-native-tooltip native.model.analysis:Section1 '^Section1: Section Analysis\nSection1 could not cut Body1; it is shown whole\.\nBody1: the clip failed for the test'
+
+# 4. Beyond shown: its plane cuts no shown body, which its tooltip says;
+# no warning, so its icon is the plain one and its name plain.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Beyond","visible":true}'
+wait-log '^Browser analysis note Root/Analysis/Beyond: info The plane does not cut any shown body\.$' 30
+expect-native-style native.model.analysis:Beyond row-plain
+expect-native-style native.model.analysis:Beyond icon=section-analysis
+expect-native-tooltip native.model.analysis:Beyond '^Beyond: Section Analysis\nThe plane does not cut any shown body\.$'
+screenshot '${MITCAD_TEST_WORK}/browser-markers-analysis.png'
+
+# 5. Transparent from Body2's context menu (mitcad#1093): its light bulb
+# is the half-open eye, Body1's the open one; hidden, the closed eye;
+# shown again, the half-open one; Transparent again, the open eye.
+expect-native-style native.model.eye.body:F4.b0@ eye=eye
+mark
+native-context-menu native.model.body:F4.b0@ Transparent
+wait-log '^Transparent: Body2$'
+wait-log '^Browser eye Root/Bodies/Body2: transparent$'
+expect-native-style native.model.eye.body:F4.b0@ eye=eye-half
+expect-log '^Native bulb native\.model\.eye\.body:F4\.b0@: eye-half$'
+expect-native-style native.model.eye.body:F2.b0@ eye=eye
+mark
+native-click native.model.eye.body:F4.b0@
+expect-log 'Visibility .*Body2: hidden' 30
+expect-native-style native.model.eye.body:F4.b0@ eye=eye-off
+mark
+native-click native.model.eye.body:F4.b0@
+expect-log 'Visibility .*Body2: shown' 30
+expect-native-style native.model.eye.body:F4.b0@ eye=eye-half
+screenshot '${MITCAD_TEST_WORK}/browser-markers-transparent.png'
+mark
+native-context-menu native.model.body:F4.b0@ Transparent
+wait-log '^Opaque: Body2$'
+wait-log '^Browser eye Root/Bodies/Body2: opaque$'
+expect-native-style native.model.eye.body:F4.b0@ eye=eye
+native-appearance dark
+expect-native-style native.model.analysis:Beyond row-plain
+screenshot '${MITCAD_TEST_WORK}/browser-markers-dark.png'
+native-appearance light

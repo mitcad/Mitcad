@@ -12,11 +12,11 @@ controls to AppKit ones. Two things escape it:
   Each such class of app/ has a line in the coverage list
   (app/platform/macos/native-coverage.txt) saying how the AppKit frontend
   shows it;
-- a dialog, message box or menu that Qt shows itself (QDialog::exec,
-  QMessageBox::warning, QFileDialog::getOpenFileName, QMenu::exec, ...)
-  instead of the shared dispatch of app/framework/Dialogs.hpp (execDialog,
-  showDialog, execMenu, sheetWarning, dialogOpenFileName, ...), which hands
-  it to the AppKit presenter.
+- a dialog, message box or menu that Qt shows itself (QDialog::exec or
+  open, QMessageBox::warning, QFileDialog::getOpenFileName, QMenu::exec,
+  ...) instead of the shared dispatch of app/framework/Dialogs.hpp
+  (execDialog, openDialog, showDialog, execMenu, sheetWarning,
+  dialogOpenFileName, ...), which hands it to the AppKit presenter.
 
   check-native-coverage.py APP LIST    scans the .cpp, .hpp, .h and .mm files
                                        under APP, less platform/ and tests/,
@@ -30,8 +30,11 @@ literals left out. A class is a `class` or `struct` with a body; a painting
 class declares `paintEvent(QPaintEvent...)` in its body, or its file defines
 `Class::paintEvent(QPaintEvent...)`. A call's receiver has the type of its
 nearest declaration before the call in the file (or, for a member, in the
-file's header); a receiver of unknown type is not reported. Widgets painted
-through an event filter or a delegate are not seen.
+file's header); a receiver of unknown type is not reported. A dialog's
+`open(...)` is its class's own (not QDialog::open) when the class or one of
+the app's classes it derives from declares an `open` taking the same kind of
+arguments (none, or some). Widgets painted through an event filter or a
+delegate are not seen.
 
 A line of the list is `Class status detail`:
 
@@ -85,6 +88,12 @@ CLASS_HEAD = re.compile(
 PAINT_DECLARATION = re.compile(r"\bpaintEvent\s*\(\s*QPaintEvent\b")
 PAINT_DEFINITION = re.compile(r"\b(\w+)\s*::\s*paintEvent\s*\(\s*QPaintEvent\b")
 EXEC_CALL = re.compile(r"\b(\w+)\s*(?:\.|->)\s*exec\s*\(")
+# QDialog::open (mitcad#1353), and QMessageBox's and QFileDialog's open with
+# a receiver; group 2 is set when it takes no arguments.
+OPEN_CALL = re.compile(r"\b(\w+)\s*(?:\.|->)\s*open\s*\(\s*(\))?")
+# A member function `open` declared in a class's body, with its return type;
+# group 2 is set when it takes no arguments.
+OPEN_DECLARATION = re.compile(r"(?<![\w:])(\w+)[\s*&]+open\s*\(\s*(\))?")
 NOT_TYPES = {
     "return", "else", "case", "new", "delete", "throw", "co_return", "goto",
     "sizeof", "operator", "public", "private", "protected", "using", "typedef",
@@ -229,6 +238,7 @@ class Scan:
         self.classes = {}      # name -> (rel, line, bases)
         self.painting = {}     # name -> (rel, line)
         self.problems = []     # (rel, line, text)
+        self.own_open = {}     # name -> {"none", "some"}: the arguments of its own open
 
     def classes_of(self, source):
         found = []
@@ -237,6 +247,11 @@ class Scan:
             open_at = m.end() - 1
             found.append((name, open_at, matching_brace(source.code, open_at), base_names(m.group(2))))
             self.classes.setdefault(name, (source.rel, source.line(m.start()), base_names(m.group(2))))
+        for m in OPEN_DECLARATION.finditer(source.code):
+            inner = [s for s in found if s[1] < m.start() < s[2]]
+            if inner and m.group(1) not in NOT_TYPES:
+                name = max(inner, key=lambda s: s[1])[0]
+                self.own_open.setdefault(name, set()).add("none" if m.group(2) else "some")
         return found
 
     def paint_declarations(self, source, scopes):
@@ -260,6 +275,21 @@ class Scan:
                     types.add(name)
                     grown = True
         return types
+
+    def own_open_of(self, kind, arguments):
+        """Whether the class or one of the app's classes it derives from
+        declares an open taking such arguments ("none" or "some")."""
+        seen = set()
+        pending = [kind]
+        while pending:
+            name = pending.pop()
+            if name in seen or name not in self.classes:
+                continue
+            seen.add(name)
+            if arguments in self.own_open.get(name, ()):
+                return True
+            pending.extend(self.classes[name][2])
+        return False
 
     def receiver_type(self, source, header, name, before):
         """The type of the nearest declaration of name before the position."""
@@ -300,6 +330,12 @@ class Scan:
                 self.problems.append((source.rel, source.line(m.start()),
                                       f"{m.group(1)}: {kind}::exec shows a Qt window in the AppKit frontend; "
                                       f"use {use} (framework/Dialogs.hpp)"))
+        for m in OPEN_CALL.finditer(source.code):
+            kind = self.receiver_type(source, header, m.group(1), m.start())
+            if kind in dialogs and kind != "QMenu" and not self.own_open_of(kind, "none" if m.group(2) else "some"):
+                self.problems.append((source.rel, source.line(m.start()),
+                                      f"{m.group(1)}: {kind}::open shows a Qt window in the AppKit frontend; "
+                                      f"use openDialog (framework/Dialogs.hpp)"))
 
 
 def read_sources(app):
@@ -393,6 +429,7 @@ def check(app, list_path):
 PLANTED = {
     "framework/Dialogs.cpp": """
 int execDialog(QDialog* dialog) { return dialog->exec(); }
+void openDialog(QDialog* dialog) { dialog->open(); }
 void warn() { QMessageBox::warning(nullptr, "a", "b"); }
 """,
     "framework/Swatch.hpp": """
@@ -426,6 +463,17 @@ class Waiting : public QWidget { void paintEvent(QPaintEvent*) override {} };
 class Editor : public QDialog {};
 class Panel : public QWidget {
   Editor* m_editor = nullptr;
+};
+class Own : public QDialog {
+public:
+  void open() override { open(QString()); }
+  void open(const QString& key);
+};
+class OwnChild : public Own {};
+class Keyed : public Editor {
+public:
+  using QDialog::open;
+  bool open(const QString& key);
 };
 """,
     "framework/Editor.cpp": """
@@ -463,6 +511,23 @@ void e() { QMessageBox::about(nullptr, "a", "b"); }
 #if !defined(Q_OS_WIN) && defined(MITCAD_MACOS_NATIVE_UI)
 void f() { QMessageBox::critical(nullptr, "a", "b"); }
 #endif
+void g() {
+  auto* picker = new Editor(nullptr);
+  picker->open();
+  Own own;
+  own.open();
+  OwnChild child;
+  child.open( );
+  Keyed keyed;
+  keyed.open(QString());
+  keyed.open();
+  QFile file;
+  file.open(QIODevice::ReadOnly);
+  auto* message = new QMessageBox();
+  message->open(nullptr, "accepted");
+  std::unique_ptr<QMenu> popup = makeMenu();
+  popup->open();
+}
 """,
 }
 PLANTED_LIST = """# SPDX-License-Identifier: MIT
@@ -486,6 +551,9 @@ EXPECTED = {
     ("framework/Editor.cpp", 23): "QColorDialog::getColor",
     ("framework/Editor.cpp", 24): "QMessageBox::question",
     ("framework/Editor.cpp", 34): "QMessageBox::critical",
+    ("framework/Editor.cpp", 38): "picker: Editor::open",
+    ("framework/Editor.cpp", 45): "keyed: Keyed::open",
+    ("framework/Editor.cpp", 49): "message: QMessageBox::open",
     ("native-coverage.txt", 5): "Gone is no class",
     ("native-coverage.txt", 6): "MitcadMissing is not in",
     ("native-coverage.txt", 7): "Listed is listed twice",

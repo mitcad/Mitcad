@@ -989,8 +989,14 @@ int MaterialsPanel::listWidthNeeded() const {
     const int indent = depthOf(row) * m_list->indentation();
     widest = std::max(widest, indent + cellHint(m_list, indexOfItem(m_list, row, 0)).width());
   }
+  // Beside the names: the mark's column, the list's frame and scroll bar,
+  // and what its pane keeps around it. The style may lay the list out
+  // narrower than its pane (macOS's layout margins, 11 px there,
+  // mitcad#1324), so that is measured once the pane is laid out.
+  const QWidget* pane = m_list->parentWidget();
+  const int around = pane != nullptr && pane->isVisible() ? std::max(0, pane->width() - m_list->width()) : 0;
   return widest + m_list->header()->sectionSize(1) + 2 * m_list->frameWidth() +
-         m_list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_list);
+         m_list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_list) + around;
 }
 
 void MaterialsPanel::fitListWidth() {

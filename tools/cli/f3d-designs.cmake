@@ -181,13 +181,47 @@ set(designs
     # fin's end (#89, radius 1) is rounded on the replay's body: its sides'
     # roundings walk on past the top over the end face's surface beyond the
     # profile stretch it is made of (port patch 1311). The rounding of the
-    # plate's side outlines (#91, radius 0.3), which ran on the file's state
-    # while #89 was retried there, builds only on the file's exact state
-    # (state 61): on the replay its walk along an earlier rounding of the
-    # plate's top edge ends in a point where that rounding vanishes into the
-    # side, and the result's wires there cross. The corner of #30 is the
-    # file kernel's own construction (round 19): it falls back.
-    "5ef2dbd5|#51,#87,#89|#30|#5,#11,#24,#39,#85,#86,#90|||#91")
+    # plate's side outlines (#91, radius 0.3) is rounded on the replay's
+    # body: its walk along an earlier rounding of the plate's top edge ends
+    # in a point where that rounding vanishes into the side, and that end
+    # keeps the walk's parameter (port patch 1320). A cut in another
+    # component (#66), an extrusion of a face of that component's body, goes
+    # on 0.0043 mm into the plate's face at y = 11.75 (its part in the
+    # plate's component, #97): the part's profile is that face as #66 found
+    # it, a sketch made before #66's cut (mitcad#1347), so the plate gets the
+    # file's shallow step there. The step ends the tangent chain of the
+    # rounding after #91 (#92, radius 0.3) at the step's edge, as the
+    # file's does: without it the rounding ran on round the corner below,
+    # up to 0.12 mm off the file's, and #95, which rounds the step's edges,
+    # had no edge there to round. #92's edges are read by their names and
+    # #95 builds on the replay's body.
+    # The rounding of #30 (radius 3 along a wall's foot on a rod, past the
+    # wall's concave arcs of 1.25) closes each corner with the arc's own
+    # rolling ball, as the file does (port patch 1380, mitcad#1371);
+    # parametric and verified, its edges and #31's inferred from the
+    # history (the file's edge along the rod is two edges at x = 0, the
+    # replay's one). With #30 built, the replay reaches #38 on its own body,
+    # whose torus face lies on a trimmed surface (port patch 1381), and #92
+    # on its own body: the same faces as the file's within 1e-6 mm, on
+    # surfaces parametrized otherwise. There #92's rounding (0.3) ends over
+    # the sloped face and a groove's cylinder of 13.5 at x = 7, z = 20,
+    # whose edge's ellipse runs past the end of its first period: the end
+    # takes its crossing in the edge's period (port patch 1460,
+    # mitcad#1395), and #92 builds on the replay's body without the retry
+    # on the file's state 62.
+    "5ef2dbd5|#30,#51,#87,#89,#91,#92,#95,#97||#5,#11,#24,#30,#31,#39,#85,#86,#90"
+    # A ring with fins at eight mouths (45 items). Its outer rim's rounding
+    # (#35) runs over the mouths, the fins' crests touching the top (port
+    # patch 1210, mitcad#1204); the inner rim's (#36) rolls on the top's far
+    # edges before #35's blend, over slivers of a few micrometres at the
+    # crests (port patch 1230, mitcad#1215). Since the faces on one surface
+    # are joined after each feature (mitcad#1261), the inner cylinder is one
+    # face whose seam lies under a crest, and #36's turn over the sliver
+    # there carries its contact past the seam (port patch 1370, mitcad#1370).
+    # A rounding of three edges (#30) gives a self-intersecting wire, and the
+    # circular pattern after it (#31) none of the material the file's
+    # removes: they fall back.
+    "49ccc315|#34,#35,#36|#30,#31")
 
 # Seconds as the trace gives them (two decimals) in hundredths.
 function(hundredths seconds out)

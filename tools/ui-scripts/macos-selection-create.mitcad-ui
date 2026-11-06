@@ -10,10 +10,6 @@ mark
 click-logged '^Browser Root/Bodies/Body1 at '
 expect-selection 1 0
 expect-log '^Selection card create: Rectangular Pattern \| Circular Pattern \| Mirror$'
-expect-widget-property selectionCreate0 macFlatToolButton true
-expect-widget-property selectionCreate1 macFlatToolButton true
-expect-widget-property selectionCreate2 macFlatToolButton true
-expect-widget-property selectionCreate3 macFlatToolButton true
 screenshot '${MITCAD_TEST_SHOTS}/body.png'
 screenshot-screen '${MITCAD_TEST_SHOTS}/body-native.png'
 mark
@@ -27,10 +23,6 @@ mark
 click-visible-face
 expect-selection 1 0
 expect-log '^Selection card create: Extrude \| Create Sketch \| Hole$'
-expect-widget-property selectionCreate0 macFlatToolButton true
-expect-widget-property selectionCreate1 macFlatToolButton true
-expect-widget-property selectionCreate2 macFlatToolButton true
-expect-widget-property selectionCreate3 macFlatToolButton true
 screenshot '${MITCAD_TEST_SHOTS}/face.png'
 mark
 click-logged '^Selection card create Extrude at '

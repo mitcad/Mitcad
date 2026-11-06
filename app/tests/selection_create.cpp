@@ -286,7 +286,7 @@ int selectionCreateTests() {
   CHECK(panel.button(0)->toolButtonStyle() == Qt::ToolButtonTextUnderIcon);
   CHECK(panel.button(0)->autoRaise());
   CHECK(panel.button(0)->iconSize() == QSize(24, 24));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   CHECK(panel.button(0)->property("macFlatToolButton").toBool());
 #endif
   CHECK(!panel.setEntries({extrudeEntry, revolveEntry, sweepEntry})); // the same: nothing changes
@@ -329,7 +329,7 @@ int selectionCreateTests() {
     CHECK(!panel.button(index)->isHidden());
     CHECK(panel.button(index)->autoRaise());
     CHECK(panel.button(index)->toolButtonStyle() == Qt::ToolButtonTextUnderIcon);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     CHECK(panel.button(index)->property("macFlatToolButton").toBool());
 #endif
     panel.button(index)->click();

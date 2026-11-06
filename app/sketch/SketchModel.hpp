@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPointF>
@@ -220,10 +221,19 @@ public:
   // redundant constraints.
   QJsonArray notices;
   QStringList redundant;
+  // The regions a text's contours bound, by region key (the Profile pick's
+  // name): the text they belong to, for a letter and its counter alike
+  // (the `sketch` query's regions with a `text`, mitcad#1369).
+  QHash<QString, QString> regionTexts;
 
   const PointData* point(const QString& id) const;
   const CurveData* curve(const QString& id) const;
   const TextData* text(const QString& id) const;
+  // The text a pick of this sketch stands for (mitcad#1369): a text's
+  // outline (a pick named by the text's id), or a region its contours
+  // bound, inside a letter or a letter's counter (the hole of an 'o'); none
+  // for a region bounded by no text or by several texts' curves.
+  const TextData* textOfPick(const SelectionItem& item) const;
   // The pattern an entity is an original or a copy of, and the offset that
   // made a curve.
   const PatternData* patternOf(const QString& entity) const;
@@ -300,6 +310,11 @@ bool isAxisSelection(const SelectionItem& item);
 // `origin` (view pixels) along `along` (the view offset of a step along the
 // axis); none when the sketch plane is seen edge on.
 std::optional<double> axisScreenDistance(const QPointF& screen, const QPointF& origin, const QPointF& along);
+// The item an edit panel of texts takes for a pick (mitcad#1369): a Profile
+// pick of `model`'s sketch whose region a text's contours bound becomes the
+// text's sketch curve pick, as a click on its outline gives it; any other
+// item stays as it is.
+SelectionItem textSelectionItem(const SketchModel& model, const SelectionItem& item);
 
 // The sketch point of a 3D frame point and back.
 V2 toSketch(const geometry::Frame& frame, const gp_Pnt& point);

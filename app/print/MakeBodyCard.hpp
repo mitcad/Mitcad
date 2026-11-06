@@ -18,7 +18,9 @@
 // the Printers and the Processes managers. Add Print Value… under the
 // values asks for a setting to add to the body (PrintValuePicker,
 // mitcad#1178); a value set on the body has a remove button, which clears
-// it there. The Properties window stays for full editing.
+// it there. Send to Slicer, the last row (mitcad#1377), opens Send to
+// Slicer's panel with the card's body alone in Bodies. The Properties
+// window stays for full editing.
 
 #include <QGroupBox>
 #include <QHash>
@@ -127,11 +129,15 @@ public:
   // Gives a value's field the keyboard, its text selected; false when the
   // card has no such field.
   bool focusValue(const QString& key);
+  // Whether Send to Slicer can start now (mitcad#1377): its button is
+  // greyed where the command is.
+  void setSendEnabled(bool enabled);
   // The places of its fields in the main window's coordinates, for the UI
   // tests: "Make card printer at x,y", "Make card process at x,y", "Make
   // card material at x,y", "Make card value perimeters at x,y", "Make
   // card remove perimeters at x,y" (a value set on the body), "Make card
-  // add value at x,y"; each value's level icon, "Make card value
+  // add value at x,y", "Make card send to slicer at x,y" (mitcad#1377,
+  // with " (disabled)" after it while greyed); each value's level icon, "Make card value
   // perimeters icon body"; and its rows' names from the top, "Make card
   // rows: Printer, Process, Material, Walls" (mitcad#1239).
   QStringList places() const;
@@ -153,6 +159,8 @@ signals:
   // A body value's remove button clicked (not a pending one's: the card
   // drops that itself).
   void valueRemoved(const QString& set, const QString& key, const QString& name);
+  // Send to Slicer clicked (mitcad#1377).
+  void sendRequested();
 
 private:
   void rebuild();
@@ -172,6 +180,8 @@ private:
   QHash<QString, QWidget*> m_removes;     // the body values' remove buttons, by key
   QHash<QString, QString> m_icons;        // the values' level icons, by key
   QWidget* m_add = nullptr;               // Add Print Value…
+  QWidget* m_send = nullptr;              // Send to Slicer (mitcad#1377)
+  bool m_sendEnabled = true;
 };
 
 } // namespace mitcad

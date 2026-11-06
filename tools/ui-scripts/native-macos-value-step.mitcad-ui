@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: MIT
+# Stepping a value in the AppKit frontend (mitcad#1350), as
+# value-field-step.mitcad-ui checks the Qt frontend's (mitcad#1254), in a
+# new design:
+#   1. a sketch on xy: the rectangle tool's Width field (an AppKit inline
+#      editor over its hidden Qt field) steps 40 mm to 41 mm with Up, and
+#      the rectangle is added 41 mm wide;
+#   2. a second rectangle drawn by two clicks, 20 x 10 mm with no
+#      dimensions (the typed first one is fully constrained, where a new
+#      dimension would only be a driven one): the Dimension tool's editor on
+#      its bottom edge steps 20.00 to 21 with Up (the shared rule keeps no
+#      trailing zeros), and the dimension is added with 21;
+#   3. Extrude's Distance (an AppKit command form field) holding an
+#      expression is not stepped by Up; 10 mm steps with Up to 11 mm, with
+#      Shift+Up to 21 mm, with Option+Down to 20.9 mm and with a wheel notch
+#      while it has the keyboard to 21.9 mm, each previewed as typed, and
+#      the extrusion takes 21.9 mm.
+# The fields' tooltips say how they step. The keys are the in-process
+# native keys, the wheel the in-process native wheel (native-wheel): no
+# system input.
+# Run by tools/ui-macos-native-value-step-test.sh.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+expect-ever 'View area'
+sleep 800
+native-resize 1280 900
+
+# 1. The rectangle tool's Width field.
+mark
+native-action sketch.create
+expect-log 'Create Sketch: select a plane'
+click-logged 'Datum xy'
+expect-log 'Sketch started on xy'
+mark
+native-click native.ribbon.sketch.rectangle
+sketch-click 0 0
+native-type sketchField_width '40 mm'
+expect-log '^Sketch value width: 40 mm = 40 mm'
+expect-native-tooltip sketchField_width '(?s)Up/Down steps the value; Shift .10, Option .0[.]1'
+mark
+key Up
+expect-log '^Value field sketch width: Up stepped 40 mm to 41 mm$'
+expect-native-text sketchField_width '^41 mm$'
+expect-log '^Sketch value width: 41 mm = 41 mm'
+native-type sketchField_height '20 mm'
+expect-log '^Sketch value height: 20 mm = 20 mm'
+native-key-event Return
+expect-log 'Added rectangle 41 x 20 mm at \(0, 0\)' 30
+
+# 2. A rectangle without dimensions, then the Dimension tool's editor on
+# its bottom edge, away from its corners.
+mark
+sketch-click -70 -40
+sketch-click -50 -30
+expect-log 'Added rectangle 20 x 10 mm at \(-70, -40\)' 30
+mark
+native-action sketch.dimension
+sketch-click -60 -40
+sketch-click -60 -44
+expect-log '^Sketch value editor at -?[0-9]+,-?[0-9]+ with 20[.]00$'
+expect-native-tooltip sketchValueEditor '(?s)Up/Down steps the value; Shift .10, Option .0[.]1'
+mark
+key Up
+expect-log '^Value field sketch dimension: Up stepped 20[.]00 to 21$'
+expect-native-text sketchValueEditor '^21$'
+native-key-event Return
+expect-log '^Added dimension \S+ \S+ \S* = 21 mm$' 30
+expect-no-log '^Added driven dimension'
+native-click native.ribbon.sketch.finish
+expect-log 'Sketch finished' 30
+
+# 3. Extrude's Distance: an expression stays, a plain value steps.
+mark
+native-action solid.extrude
+expect-log 'Command Extrude started'
+wait-idle
+expect-native-tooltip input_distance '(?s)Up/Down steps the value; Shift .10, Option .0[.]1'
+native-type input_distance '5 mm * 2'
+wait-idle
+mark
+key Up
+expect-log '^Value field Extrude Distance: Up not stepped: 5 mm [*] 2 is not a plain value$'
+expect-native-text input_distance '^5 mm [*] 2$'
+native-type input_distance '10 mm'
+wait-log '^Extrude Distance: 10 mm = '
+wait-idle
+mark
+key Up
+expect-log '^Value field Extrude Distance: Up stepped 10 mm to 11 mm$'
+expect-native-text input_distance '^11 mm$'
+wait-log '^Extrude Distance: 11 mm = '
+mark
+key shift+Up
+expect-log '^Value field Extrude Distance: Shift[+]Up stepped 11 mm to 21 mm$'
+expect-native-text input_distance '^21 mm$'
+wait-log '^Extrude Distance: 21 mm = '
+mark
+key alt+Down
+expect-log '^Value field Extrude Distance: Alt[+]Down stepped 21 mm to 20[.]9 mm$'
+expect-native-text input_distance '^20[.]9 mm$'
+wait-log '^Extrude Distance: 20[.]9 mm = '
+# The wheel over the field with the keyboard steps it.
+mark
+native-wheel input_distance 1
+expect-log '^Value field Extrude Distance: wheel stepped 20[.]9 mm to 21[.]9 mm$'
+expect-native-text input_distance '^21[.]9 mm$'
+wait-log '^Extrude Distance: 21[.]9 mm = '
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+mark
+native-click commandOk
+expect-log 'Added extrude \(New Body\), distance 21[.]9' 30
+wait-idle

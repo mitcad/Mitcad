@@ -17,6 +17,7 @@
 #include <QtLogging>
 
 #include "UpdateNotice.hpp"
+#include "UpdateOffer.hpp"
 #include "UpdateSettings.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/Json.hpp"
@@ -224,6 +225,14 @@ void UpdateController::onChecked(const UpdateOffer& offer) {
     qInfo().noquote() << QStringLiteral("Update check: MitCad %1 is skipped").arg(offer.version);
     return;
   }
+  if (!offer.hasDownload && !m_manual) {
+    // Out for other platforms first (mitcad#1390): an automatic check
+    // says nothing until the manifest has this platform's download.
+    qInfo().noquote() << QStringLiteral("Update check: MitCad %1 has no download for %2 yet")
+                             .arg(offer.version, m_client->source().platform);
+    hideNotice();
+    return;
+  }
   this->offer(offer);
 }
 
@@ -232,31 +241,18 @@ bool UpdateController::installable() const {
 }
 
 void UpdateController::offer(const UpdateOffer& offer) {
-  // Rich text for the bold version: every value escaped, as they come from
-  // the network (mitcad#938).
-  QString text = tr("<b>MitCad %1</b> is available (this is %2).")
-                     .arg(offer.version.toHtmlEscaped(), m_client->source().currentVersion.toHtmlEscaped());
-  if (offer.prerelease) {
-    text += QLatin1Char(' ') + tr("It is a pre-release.");
-  }
-  if (offer.expired) {
-    text += QLatin1Char(' ') + tr("Its update information expired on %1, so MitCad does not install it; if that "
-                                  "date has not passed, check the date of this computer.")
-                                   .arg(offer.expires.toHtmlEscaped());
-  }
-  if (!installable()) {
-    text += QLatin1Char(' ') + tr("Download it from its release page.");
-  }
-  if (offer.status == QStringLiteral("skipped")) {
-    text += QLatin1Char(' ') + tr("You skipped this version.");
-  }
   UpdateSettings settings = UpdateSettings::load();
+  const OfferNotice notice = offerNotice(offer, m_client->source().currentVersion, m_client->source().platform,
+                                         m_installation.canInstall(), m_manual, !settings.hintShown);
+  if (!notice.show) {
+    hideNotice();
+    return;
+  }
   if (!settings.hintShown) {
-    text += QLatin1Char(' ') + tr("MitCad checks for updates once a day; Tools › Preferences turns that off.");
     settings.hintShown = true;
     settings.save();
   }
-  m_notice->showOffer(text, installable());
+  m_notice->showOffer(notice.html, notice.install, notice.skip);
   showNotice();
 }
 

@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Keys while a pasted component's Move/Copy preview computes (mitcad#1360), tools/ui-paste-busy-keys-test.sh: a 30 x 20 x 10 mm body extruded as a new component, Component1:1 (O1), placed 40 mm along X."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":30,"height":20},
+  {"cmd":"add_feature","def":{"type":"extrude",
+    "profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":10},"operation":"new_component"}},
+  {"cmd":"set_occurrence_transform","occurrence":"Component1:1","transform":{"translation":[40,0,0]}},
+  {"expect":{"feature":"F2","status":"ok"}}
+]

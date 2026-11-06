@@ -24,7 +24,7 @@
 namespace mitcad {
 
 CachePreferencesBox::CachePreferencesBox(std::function<void()> diagnostics, QWidget* parent)
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     : QWidget(parent),
 #else
     : QGroupBox(tr("Cache"), parent),
@@ -68,7 +68,7 @@ CachePreferencesBox::CachePreferencesBox(std::function<void()> diagnostics, QWid
   diskRow->addWidget(m_disk);
   diskRow->addWidget(m_diskSize);
   diskRow->addStretch(1);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   form->addRow(QString(), diskRow); // under the other controls, as macOS aligns them
 #else
   form->addRow(diskRow);
@@ -98,7 +98,7 @@ CachePreferencesBox::CachePreferencesBox(std::function<void()> diagnostics, QWid
   connect(m_memorySize, &QSpinBox::valueChanged, this, &CachePreferencesBox::changed);
   m_cleared = new QLabel;
   m_cleared->hide();
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   form->addRow(QString(), m_cleared);
 #else
   form->addRow(m_cleared);

@@ -219,7 +219,7 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
   auto* remove = new QPushButton(tr("&Remove"));
   auto* fetchSelected = new QPushButton(tr("Fetch &Selected"));
   auto* fetchAll = new QPushButton(tr("&Fetch All"));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* add = new QPushButton(tr("Add Library"));
   add->setObjectName(QStringLiteral("libraryAddSource"));
   auto* addMenu = new QMenu(add);
@@ -235,7 +235,9 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
   buttons->addLayout(sourceButtons);
 #else
   auto* addUrlControl = new QPushButton(addUrlButton->text());
+  addUrlControl->setObjectName(QStringLiteral("libraryAddUrl"));
   auto* addFolderControl = new QPushButton(addFolder->text());
+  addFolderControl->setObjectName(QStringLiteral("libraryAddFolder"));
   for (QPushButton* button : {addUrlControl, addFolderControl, remove}) {
     mac::auxiliaryButton(button);
     buttons->addWidget(button);

@@ -485,7 +485,7 @@ private:
 
   void registerCommands();
   void createMenus();
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   void createWindowMenu();
 #endif
   void createRibbon();
@@ -1768,6 +1768,11 @@ private:
   // clears it on the body (remove_property, one undo step).
   void addMakeCardValue();
   void removeMakeCardValue(const QString& set, const QString& key, const QString& name);
+  // The card's Send to Slicer (mitcad#1377): the command started as its
+  // ribbon button starts it (trigger), on the card's body alone (a face,
+  // edge or vertex selected stands for it), so that its Bodies holds only
+  // that body. Logs "Make card send to slicer: <body>".
+  void sendMakeCardToSlicer();
   // The Browser's markers on the Make tab: the bodies whose material or
   // print settings differ from their component's; none on another tab.
   void updateMakeMarkers();

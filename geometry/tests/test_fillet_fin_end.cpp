@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <sstream>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -93,8 +94,9 @@ std::vector<int> read_indices(const std::string& path) {
   std::ifstream    in(path);
   std::string      line;
   while (std::getline(in, line)) {
-    int index = -1;
-    if (std::sscanf(line.c_str(), "%d", &index) == 1 && index >= 0) {
+    std::istringstream fields(line);
+    int                index = -1;
+    if (fields >> index && index >= 0) {
       out.push_back(index);
     }
   }

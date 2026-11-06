@@ -6,11 +6,14 @@
 #include <QCloseEvent>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QListWidget>
 #include <QPainter>
 #include <QPainterPath>
 #include <QShortcut>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -87,28 +90,43 @@ private:
   }
 };
 
-SettingsWindow::SettingsWindow(QWidget* parent) : QWidget(parent, Qt::Window) {
+SettingsWindow::SettingsWindow(QWidget* parent, Selector selector) : QWidget(parent, Qt::Window) {
   setAttribute(Qt::WA_DeleteOnClose);
-  auto* layout = new QVBoxLayout(this);
-  layout->setContentsMargins(0, 0, 0, 0);
-  layout->setSpacing(0);
-  // The window takes the size of the chosen pane, and cannot be resized.
-  layout->setSizeConstraint(QLayout::SetFixedSize);
-
-  m_header = new QWidget;
-  auto* row = new QHBoxLayout(m_header);
-  row->setContentsMargins(12, 8, 12, 8);
-  row->setSpacing(4);
-  row->addStretch(1);
-  row->addStretch(1);
-  layout->addWidget(m_header);
-  auto* line = new QFrame;
-  line->setFrameShape(QFrame::HLine);
-  line->setFrameShadow(QFrame::Sunken);
-  layout->addWidget(line);
-
   m_pages = new QStackedWidget;
-  layout->addWidget(m_pages);
+  if (selector == Selector::PageList) {
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(12, 12, 12, 12);
+    // The window takes the size of the chosen pane, and cannot be resized.
+    layout->setSizeConstraint(QLayout::SetFixedSize);
+    m_list = new QListWidget;
+    m_list->setObjectName(QStringLiteral("settingsPageList"));
+    m_list->setSpacing(2);
+    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    layout->addWidget(m_list, 0, Qt::AlignTop);
+    layout->addWidget(m_pages, 1);
+    connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
+      if (row >= 0) showPane(row);
+    });
+  } else {
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    // The window takes the size of the chosen pane, and cannot be resized.
+    layout->setSizeConstraint(QLayout::SetFixedSize);
+
+    m_header = new QWidget;
+    auto* row = new QHBoxLayout(m_header);
+    row->setContentsMargins(12, 8, 12, 8);
+    row->setSpacing(4);
+    row->addStretch(1);
+    row->addStretch(1);
+    layout->addWidget(m_header);
+    auto* line = new QFrame;
+    line->setFrameShape(QFrame::HLine);
+    line->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(line);
+    layout->addWidget(m_pages);
+  }
 
   // Cmd+W (Ctrl+W elsewhere) closes the window, not the document.
   auto* close = new QShortcut(QKeySequence::Close, this);
@@ -118,13 +136,24 @@ SettingsWindow::SettingsWindow(QWidget* parent) : QWidget(parent, Qt::Window) {
 
 void SettingsWindow::addPane(const QString& title, const QIcon& icon, QWidget* page) {
   page->setProperty("nativePaneTitle", title);
-  const int index = int(m_buttons.size());
-  auto* button = new PaneButton(title, icon);
-  m_buttons.push_back(button);
-  // Before the stretch at the end.
-  auto* row = static_cast<QHBoxLayout*>(m_header->layout());
-  row->insertWidget(row->count() - 1, button);
-  connect(button, &QToolButton::clicked, this, [this, index] { showPane(index); });
+  if (m_list != nullptr) {
+    m_list->addItem(title);
+    // As wide as its entries, with room for a scroll bar.
+    ensurePolished();
+    m_list->setFixedWidth(m_list->sizeHintForColumn(0) + 2 * m_list->spacing() + 2 * m_list->frameWidth() +
+                          m_list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_list) +
+                          m_list->fontMetrics().averageCharWidth());
+    m_list->setFixedHeight(m_list->count() * (m_list->sizeHintForRow(0) + 2 * m_list->spacing()) +
+                           2 * m_list->frameWidth() + 2 * m_list->spacing());
+  } else {
+    const int index = int(m_buttons.size());
+    auto* button = new PaneButton(title, icon);
+    m_buttons.push_back(button);
+    // Before the stretch at the end.
+    auto* row = static_cast<QHBoxLayout*>(m_header->layout());
+    row->insertWidget(row->count() - 1, button);
+    connect(button, &QToolButton::clicked, this, [this, index] { showPane(index); });
+  }
 
   // Margins of the pane; the stack is as large as its current page only.
   auto* frame = new QWidget;
@@ -138,8 +167,12 @@ void SettingsWindow::addPane(const QString& title, const QIcon& icon, QWidget* p
 }
 
 void SettingsWindow::showPane(int index) {
+  if (m_list != nullptr && m_list->currentRow() != index) {
+    const QSignalBlocker quiet(m_list);
+    m_list->setCurrentRow(index);
+  }
   for (int i = 0; i < m_pages->count(); ++i) {
-    m_buttons[std::size_t(i)]->setChecked(i == index);
+    if (std::size_t(i) < m_buttons.size()) m_buttons[std::size_t(i)]->setChecked(i == index);
     // Ignored pages do not count for the stack's size.
     m_pages->widget(i)->setSizePolicy(i == index ? QSizePolicy::Preferred : QSizePolicy::Ignored,
                                       i == index ? QSizePolicy::Preferred : QSizePolicy::Ignored);

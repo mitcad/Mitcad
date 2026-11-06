@@ -237,6 +237,7 @@ void MakeBodyCard::rebuild() {
   m_removes.clear();
   m_icons.clear();
   m_add = nullptr;
+  m_send = nullptr;
   m_printer = nullptr;
   m_process = nullptr;
   m_material = nullptr;
@@ -364,6 +365,22 @@ void MakeBodyCard::rebuild() {
   connect(add, &QPushButton::clicked, this, [this] { emit addValueRequested(); });
   m_add = add;
   m_grid->addWidget(add, row++, 0, 1, 4, Qt::AlignLeft);
+  // Send to Slicer (mitcad#1377): the command's panel with this body alone
+  // in Bodies, named and drawn as the command (MainWindow::print3dCommand).
+  auto* send = new QPushButton(themeIcon(QStringLiteral("print-3d")), tr("Send to Slicer"), this);
+  send->setObjectName(QStringLiteral("makeCardSend"));
+  send->setToolTip(tr("Send %1 alone to a slicer: opens Send to Slicer with it in Bodies").arg(m_data.body));
+  send->setEnabled(m_sendEnabled);
+  connect(send, &QPushButton::clicked, this, [this] { emit sendRequested(); });
+  m_send = send;
+  m_grid->addWidget(send, row++, 0, 1, 4, Qt::AlignLeft);
+}
+
+void MakeBodyCard::setSendEnabled(bool enabled) {
+  m_sendEnabled = enabled;
+  if (m_send != nullptr) {
+    m_send->setEnabled(enabled);
+  }
 }
 
 QStringList MakeBodyCard::places() const {
@@ -407,6 +424,10 @@ QStringList MakeBodyCard::places() const {
   }
   if (m_add != nullptr) {
     lines << QStringLiteral("Make card add value at %1").arg(at(m_add));
+  }
+  if (m_send != nullptr) {
+    lines << QStringLiteral("Make card send to slicer at %1%2")
+                 .arg(at(m_send), m_send->isEnabled() ? QString() : QStringLiteral(" (disabled)"));
   }
   return lines;
 }

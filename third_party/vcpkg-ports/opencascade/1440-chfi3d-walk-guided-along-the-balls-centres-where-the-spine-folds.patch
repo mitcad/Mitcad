@@ -1,0 +1,340 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a concave rounding along an acute corner whose edge turns towards
+the ball, walked along the balls' centres (mitcad#1396).
+
+The case: an end wall standing at 45 degrees to a rail on a plate, the
+rail's foot rounded with 2 and its top with 1.2; the wall's foot along the
+plate and the rail's profile rounded with 1.5. A walk takes the ball whose
+contacts' mid-point M lies in the guide's normal plane at the guide's
+parameter; the guide is the spine (the edges on the wall). In the acute
+corner the ball lies far from the edge (2.6 radii at 45 degrees), and where
+the edge turns round the foot rounding (an ellipse, its radius of curvature
+1.41 at the rail's side) the mid-point lay 3.1 from the guide along its
+principal normal: k (M - G).n was 2.2, above 1, where the normal planes turn
+back faster than the ball moves. The walk from the analytic piece along the
+rail's side found its next section on the foot rounding's cylinder beyond
+the face, every step, and failed at once ("the walk between the two faces
+fails"; from radius 1 up: at 0.5 the fold is 0.73 and the walk went
+through).
+
+- ChFi3d_UnfoldGuide (new, ChFi3d_Builder_Guide.cxx), called by
+  PerformSetOfKPart after ChFi3d_PerformElSpine for each guide: the guide of
+  a constant-radius rounding's walk between two pieces (its Previous and
+  Next) whose spine folds, k (M - G).n of 0.9 or more somewhere (M taken
+  between the end balls' mid-points along the way), becomes the cubic from
+  the centre of the ball the walk starts on (the previous piece's last
+  section, read from its contacts and its faces' normals) to the centre of
+  the ball it ends on (the next piece's first), with the spine's tangents
+  there and a circle's handles. Each end ball's centre and mid-point lie in
+  the spine's normal plane at its end (else it is left), so the walk starts
+  and ends on the same sections; between them the guide runs near the
+  balls' centres and its normal planes turn with the ball. Taken only where
+  the cubic itself folds less than 0.5. The blend is the same rolling ball:
+  the guide says which ball each section is.
+
+On the reported design's stored body before the item (both sides of a
+mirror, 14 edges): valid, the result and the stored body within 0.0046 mm
+of each other along both chains (the stored foot faces' own fit; the
+result's points within 0.001 mm of the stored body), no piece over 1e-4 mm3
+in the boolean difference of the two; before, the fillet failed. On a
+synthetic plate, rail and end wall (OCCT alone), at radii 1, 1.5 and 1.9:
+valid, closed, every point of the walked face over the foot rounding within
+1.1e-5 mm of the ball (R from the analytic path of its centre); before,
+each failed.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -679,4 +679,16 @@
+ //! thread (cleared as it starts).
+ NCollection_List<ChFi3d_PivotEnd>& ChFi3d_PivotEnds();
+ 
++//! The guide HES of a constant-radius rounding's walk between two pieces
++//! (its Previous and Next), where the spine turns towards the balls' contacts
++//! so sharply that its normal planes turn back past them (an acute concave
++//! corner where the spine turns, mitcad#1396), becomes the cubic from the
++//! centre of the ball before it to the centre of the ball after it, with the
++//! spine's tangents there: the same sections at its ends, normal planes that
++//! turn with the ball between them. Other guides are left as they are.
++void ChFi3d_UnfoldGuide(const occ::handle<ChFiDS_ElSpine>& HES,
++                        const occ::handle<ChFiDS_Spine>&   Spine,
++                        const TopOpeBRepDS_DataStructure&  DStr,
++                        const double                       Tol);
++
+ #endif
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -21269,6 +21269,9 @@
+   for (; ILES.More(); ILES.Next())
+   {
+     ChFi3d_PerformElSpine(ILES.ChangeValue(), Spine, myConti, tolesp, false, aFreeEnds);
++    // (A guide the balls' contacts lie beyond the turn of: the walk's own,
++    // ChFi3d_UnfoldGuide.)
++    ChFi3d_UnfoldGuide(ILES.Value(), Spine, myDS->DS(), tolesp);
+   }
+   if (Spine->Mode() == ChFiDS_ConstThroatWithPenetrationChamfer)
+   {
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Guide.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Guide.cxx
+new file mode 100644
+--- /dev/null
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Guide.cxx
+@@ -0,0 +1,244 @@
++// Created for MitCad (mitcad#1396): the guide of a walk the spine folds.
++//
++// This file is part of a patch to Open CASCADE Technology software library
++// (OCCT 8.0.1) and is distributed under OCCT's licence: GNU Lesser General
++// Public License version 2.1 with the additional exception of OCCT.
++// SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
++//
++// A walk takes the ball whose contacts' mid-point M lies in the guide's
++// normal plane at the guide's parameter t. Where the guide (the spine's
++// edges) turns with curvature k towards a mid-point farther than 1 / k from
++// it, k (M - G).n > 1 (G the guide's point, n its principal normal), the
++// normal planes turn faster than the ball moves: as t grows the ball goes
++// back, and the walk's sections run backwards off its faces. An acute
++// concave corner does that where its spine turns: the ball of a rounding
++// along an edge whose faces meet at 45 degrees lies 2.6 radii from the edge,
++// and where the edge runs on round a wall's foot rounding of radius 2 at 45
++// degrees to it (an ellipse, radius of curvature 1.41 at its end) a ball of
++// 1.5 is 3.1 from the guide along its normal: the walk from the analytic
++// piece before it failed at once.
++//
++// Such a walk between two pieces whose end balls are known (the analytic
++// pieces before and after it) takes another guide: the cubic from the
++// centre of the ball before it to the centre of the ball after it, with the
++// spine's tangents there. Its normal planes at its ends are the spine's (each
++// end ball's centre lies in the spine's normal plane there), so the walk
++// starts and ends on the same sections; between them it runs near the
++// balls' centres, so its normal planes turn with the ball. The blend is the
++// same rolling ball: the guide only says which ball each section is.
++
++#include <ChFi3d_Builder_0.hxx>
++
++#include <BRepAdaptor_Surface.hxx>
++#include <ChFiDS_ElSpine.hxx>
++#include <ChFiDS_FaceInterference.hxx>
++#include <ChFiDS_FilSpine.hxx>
++#include <ChFiDS_Spine.hxx>
++#include <ChFiDS_SurfData.hxx>
++#include <Geom2d_Curve.hxx>
++#include <GeomAdaptor_Curve.hxx>
++#include <Geom_BSplineCurve.hxx>
++#include <Geom_Surface.hxx>
++#include <NCollection_Array1.hxx>
++#include <TopOpeBRepDS_DataStructure.hxx>
++#include <TopOpeBRepDS_Surface.hxx>
++#include <TopoDS.hxx>
++#include <TopoDS_Face.hxx>
++#include <gp.hxx>
++#include <gp_Pnt.hxx>
++#include <gp_Vec.hxx>
++
++#include <algorithm>
++#include <cmath>
++
++namespace
++{
++
++//! The ball of an end section of SD (its first where First): its contacts'
++//! mid-point M and its centre C, the radius R along each face's normal from
++//! its contact (on the side where the two meet). False where it cannot be
++//! read or the two centres differ.
++bool ugEndBall(const occ::handle<ChFiDS_SurfData>& SD,
++               const bool                          First,
++               const double                        R,
++               const TopOpeBRepDS_DataStructure&   DStr,
++               const double                        Tol,
++               gp_Pnt&                             M,
++               gp_Pnt&                             C)
++{
++  if (SD.IsNull() || SD->IsOnCurve1() || SD->IsOnCurve2() || SD->Surf() <= 0 || SD->IndexOfS1() <= 0
++      || SD->IndexOfS2() <= 0)
++  {
++    return false;
++  }
++  const occ::handle<Geom_Surface>& S = DStr.Surface(SD->Surf()).Surface();
++  if (S.IsNull())
++  {
++    return false;
++  }
++  gp_Pnt P[2];
++  gp_Vec N[2];
++  for (int k = 0; k < 2; k++)
++  {
++    const ChFiDS_FaceInterference& Fi = SD->Interference(k + 1);
++    if (Fi.PCurveOnSurf().IsNull() || Fi.PCurveOnFace().IsNull())
++    {
++      return false;
++    }
++    const double   w   = First ? Fi.FirstParameter() : Fi.LastParameter();
++    const gp_Pnt2d uvS = Fi.PCurveOnSurf()->Value(w);
++    P[k]               = S->Value(uvS.X(), uvS.Y());
++    const TopoDS_Shape& aF = DStr.Shape(SD->Index(k + 1));
++    if (aF.IsNull() || aF.ShapeType() != TopAbs_FACE)
++    {
++      return false;
++    }
++    const BRepAdaptor_Surface aS(TopoDS::Face(aF), false);
++    const gp_Pnt2d            uvF = Fi.PCurveOnFace()->Value(w);
++    gp_Pnt                    X;
++    gp_Vec                    du, dv;
++    aS.D1(uvF.X(), uvF.Y(), X, du, dv);
++    N[k] = du.Crossed(dv);
++    if (N[k].Magnitude() < gp::Resolution() || X.Distance(P[k]) > 10. * Tol)
++    {
++      return false;
++    }
++    N[k].Normalize();
++  }
++  // (The side where the centres seen from both contacts meet.)
++  double best = RealLast();
++  for (const double s1 : {1., -1.})
++  {
++    for (const double s2 : {1., -1.})
++    {
++      const gp_Pnt C1 = P[0].Translated(N[0] * (s1 * R));
++      const gp_Pnt C2 = P[1].Translated(N[1] * (s2 * R));
++      if (C1.Distance(C2) < best)
++      {
++        best = C1.Distance(C2);
++        C    = gp_Pnt((C1.XYZ() + C2.XYZ()) / 2.);
++      }
++    }
++  }
++  if (best > std::max(10. * Tol, 1.e-3 * R))
++  {
++    return false;
++  }
++  M = gp_Pnt((P[0].XYZ() + P[1].XYZ()) / 2.);
++  return true;
++}
++
++//! The guide's hold on the mid-point at t: k (M - G).n, its curvature vector
++//! dotted with the mid-point's offset (1 where the normal planes stand
++//! still at M, above 1 where they turn back).
++double ugFold(const Adaptor3d_Curve& Cv, const double t, const gp_Pnt& M)
++{
++  gp_Pnt G;
++  gp_Vec d1, d2;
++  Cv.D2(t, G, d1, d2);
++  const double s2 = d1.SquareMagnitude();
++  if (s2 < gp::Resolution())
++  {
++    return RealLast();
++  }
++  const gp_Vec K = (d2 - d1 * (d2.Dot(d1) / s2)) / s2;
++  return K.Dot(gp_Vec(G, M));
++}
++
++//! The largest fold over [WF, WL], the mid-point taken from the end balls'
++//! along the way.
++double ugMaxFold(const Adaptor3d_Curve& Cv, const double WF, const double WL, const gp_Pnt& M0, const gp_Pnt& M1)
++{
++  double    f = -RealLast();
++  const int n = 40;
++  for (int i = 0; i <= n; i++)
++  {
++    const double a = double(i) / double(n);
++    const double t = WF + (WL - WF) * (0.001 + 0.998 * a);
++    f              = std::max(f, ugFold(Cv, t, gp_Pnt(M0.XYZ() * (1. - a) + M1.XYZ() * a)));
++  }
++  return f;
++}
++
++} // namespace
++
++//=======================================================================
++// function : ChFi3d_UnfoldGuide
++// purpose  : See ChFi3d_Builder_0.hxx.
++//=======================================================================
++
++void ChFi3d_UnfoldGuide(const occ::handle<ChFiDS_ElSpine>& HES,
++                        const occ::handle<ChFiDS_Spine>&   Spine,
++                        const TopOpeBRepDS_DataStructure&  DStr,
++                        const double                       Tol)
++{
++  const occ::handle<ChFiDS_FilSpine> fsp = occ::down_cast<ChFiDS_FilSpine>(Spine);
++  if (HES.IsNull() || fsp.IsNull() || !fsp->IsConstant() || HES->IsPeriodic() || HES->Previous().IsNull()
++      || HES->Next().IsNull() || HES->GetType() != GeomAbs_BSplineCurve)
++  {
++    return;
++  }
++  ChFiDS_ElSpine& ES = *HES;
++  const double    R  = fsp->Radius();
++  const double    WF = ES.FirstParameter(), WL = ES.LastParameter();
++  if (!(R > 0.) || WL - WF < 10. * Tol)
++  {
++    return;
++  }
++  // The balls the walk starts and ends on: the pieces' before and after.
++  gp_Pnt M0, C0, M1, C1;
++  if (!ugEndBall(ES.Previous(), false, R, DStr, Tol, M0, C0) || !ugEndBall(ES.Next(), true, R, DStr, Tol, M1, C1))
++  {
++    return;
++  }
++  // (Only where the spine's normal planes come near to turning back: below
++  // that the walk follows them, as it did.)
++  if (ugMaxFold(ES, WF, WL, M0, M1) < 0.9)
++  {
++    return;
++  }
++  // Each end ball's centre in the spine's normal plane at its end.
++  gp_Pnt G0, G1;
++  gp_Vec T0, T1;
++  ES.D1(WF, G0, T0);
++  ES.D1(WL, G1, T1);
++  if (T0.Magnitude() < gp::Resolution() || T1.Magnitude() < gp::Resolution())
++  {
++    return;
++  }
++  T0.Normalize();
++  T1.Normalize();
++  const double tolPlane = std::max(10. * Tol, 1.e-4 * R);
++  if (std::abs(gp_Vec(G0, C0).Dot(T0)) > tolPlane || std::abs(gp_Vec(G1, C1).Dot(T1)) > tolPlane
++      || std::abs(gp_Vec(G0, M0).Dot(T0)) > tolPlane || std::abs(gp_Vec(G1, M1).Dot(T1)) > tolPlane)
++  {
++    return;
++  }
++  const gp_Vec D(C0, C1);
++  const double d = D.Magnitude();
++  if (d < 10. * Tol || T0.Dot(D) <= 0. || T1.Dot(D) <= 0.)
++  {
++    return;
++  }
++  // The cubic: a circle's quarter where the tangents turn by a right angle
++  // (handles of (2/3) tan(a/4) / sin(a/2) of the chord, a the turn).
++  const double a = T0.Angle(T1);
++  const double h = a < 1.e-6 ? d / 3. : d * (2. / 3.) * std::tan(a / 4.) / std::sin(a / 2.);
++  NCollection_Array1<gp_Pnt> aP(1, 4);
++  NCollection_Array1<double> aK(1, 2);
++  NCollection_Array1<int>    aM(1, 2);
++  aP(1) = C0;
++  aP(2) = C0.Translated(T0 * h);
++  aP(3) = C1.Translated(T1 * (-h));
++  aP(4) = C1;
++  aK(1) = WF;
++  aK(2) = WL;
++  aM(1) = aM(2) = 4;
++  occ::handle<Geom_BSplineCurve> aGuide = new Geom_BSplineCurve(aP, aK, aM, 3);
++  // (Taken only where it does not fold itself.)
++  if (ugMaxFold(GeomAdaptor_Curve(aGuide), WF, WL, M0, M1) >= 0.5)
++  {
++    return;
++  }
++  ES.SetCurve(aGuide);
++}
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
+@@ -20,6 +20,7 @@
+   ChFi3d_Builder_Gap.cxx
+   ChFi3d_Builder_Lens.cxx
+   ChFi3d_Builder_TightConcave.cxx
++  ChFi3d_Builder_Guide.cxx
+   ChFi3d_ChBuilder.cxx
+   ChFi3d_ChBuilder.hxx
+   ChFi3d_ChBuilder_C2.cxx

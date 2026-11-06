@@ -7,12 +7,12 @@
 # check-all sources: app/framework/ToolbarPins.cpp app/framework/ToolbarPins.hpp app/framework/ShortcutDialog.cpp
 # The sketch CREATE group in submenus (mitcad#222), through the real UI, in
 # the Docked and the Floating layout:
-#   - the CREATE menu: Line, Rectangles, Circles, Arcs, Other Geometry,
+#   - the CREATE menu: Lines, Rectangles, Circles, Arcs, Other Geometry,
 #     Text, Patterns, References (Project, Intersect, Clean Up
 #     Projections, Clean Up Stale Projections, Project Again) and Sketch
 #     Dimension, every sketch creation command exactly once; Offset (and
 #     Edit Text) in MODIFY, not in CREATE;
-#   - split buttons for Rectangles, Circles and Arcs, none for Other
+#   - split buttons for Lines (mitcad#1393), Rectangles, Circles and Arcs, none for Other
 #     Geometry and Patterns: the Circles button starts Center Diameter
 #     Circle, its arrow opens the circle variants, which start from there;
 #   - the keyboard: the CREATE menu's Circles submenu with the arrow keys,
@@ -52,7 +52,7 @@ OTHER="$OTHER | Center Point Slot | Three Point Arc Slot | Center Point Arc Slot
 OTHER="$OTHER | Control Point Spline | Point"
 PATTERNS="Rectangular Pattern | Circular Pattern | Mirror"
 REFERENCES="Project | Intersect | Clean Up Projections | Clean Up Stale Projections | Project Again"
-CREATE="Line | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES] | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
+CREATE="Lines > [Line | Midpoint Line] | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES] | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
 CREATE="$CREATE | Text > [Text | QR Code] | Patterns > [$PATTERNS] | References > [$REFERENCES] | Sketch Dimension"
 # The SOLID CREATE menu (mitcad#579), up to the Machine Elements submenu's
 # Bearing: later machine elements may follow it in the submenu.
@@ -95,11 +95,11 @@ check_layout() {
   ui_mark
   ui_create_sketch
   ui_expect_new "Ribbon SKETCH/CREATE at" "$layout: the CREATE group"
-  for subgroup in Rectangles Circles Arcs; do
+  for subgroup in Lines Rectangles Circles Arcs; do
     ui_expect_new "Ribbon split SKETCH/CREATE/$subgroup at" "$layout: a $subgroup split button"
     ui_expect_new "Ribbon split SKETCH/CREATE/$subgroup arrow at" "$layout: its arrow"
   done
-  for subgroup in "Other Geometry" Patterns Lines Text References; do
+  for subgroup in "Other Geometry" Patterns Text References; do
     tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Ribbon split SKETCH/CREATE/$subgroup " &&
       ui_fail "$layout: a split button for $subgroup"
   done

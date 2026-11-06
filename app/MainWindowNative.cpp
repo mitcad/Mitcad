@@ -328,17 +328,26 @@ void MainWindow::createNativeWindow() {
       const BrowserNode node = m_nativeNodes.value(key);
       if (node.isValid()) nodes.append(node);
     }
-    if (!nodes.isEmpty() && !modelBusy() && canChangeModel()) {
+    // The Center of Mass marker alone is display state: deleted also in
+    // Sketch mode and read-only designs, as the shared controller allows
+    // (mitcad#1094, mitcad#1358).
+    const bool markerOnly = std::all_of(nodes.cbegin(), nodes.cend(), [](const BrowserNode& node) {
+      return node.type == BrowserNode::Type::CenterOfMass;
+    });
+    if (!nodes.isEmpty() && !modelBusy() && canChangeModel(markerOnly)) {
       emit m_controller->browser()->deleteRequested(nodes);
     }
   };
   callbacks.historyDelete = [this](const QStringList& uids) {
     if (!modelBusy() && canChangeModel()) emit m_controller->timeline()->deleteRequested(uids);
   };
-  callbacks.historyRename = [this](const QString& uid) {
+  // F2 in the timeline and the timeline menu's Rename (mitcad#1356) ask
+  // for the name in the same dialog.
+  const auto renameFeature = [this](const QString& uid) {
     QTimer::singleShot(0, this, [this, uid] {
       const auto* feature = m_snapshot.feature(uid);
       if (!feature || modelBusy() || !canChangeModel()) return;
+      qDebug().noquote() << QStringLiteral("Renaming %1 in the timeline").arg(feature->name);
       bool accepted = false;
       const QString name = dialogText(this, tr("Rename Feature"), tr("Name:"), feature->name, &accepted).trimmed();
       if (accepted && !name.isEmpty() && !modelBusy() && canChangeModel()) {
@@ -346,6 +355,7 @@ void MainWindow::createNativeWindow() {
       }
     });
   };
+  callbacks.historyRename = renameFeature;
   callbacks.historyActivated = [this](const QString& uid) {
     emit m_controller->timeline()->editRequested(uid);
   };
@@ -515,7 +525,20 @@ void MainWindow::createNativeWindow() {
     emit m_messageHistory->featureChosen(uid);
     QTimer::singleShot(0, this, [this] { refreshNativeWindow(); });
   };
+  // The pointer over the band's message paints its feature's notice places
+  // (mitcad#1379), as the Qt band's noticeHovered; after the AppKit event,
+  // which may come while the band shows the shared log's change.
+  callbacks.messageNoticeHovered = [this](const QString& uid) {
+    QTimer::singleShot(0, this, [this, uid] { previewNoticePlaces(QStringLiteral("message band"), uid); });
+  };
   m_nativeWindow = std::make_unique<NativeMacWindow>(this, std::move(callbacks));
+  // Rename in the Browser and timeline menus, and a double-click on a body
+  // or a component, name the row in the visible AppKit outline or ask in
+  // the timeline's dialog, as F2 does, never in the hidden Qt rows
+  // (mitcad#1356).
+  m_controller->browser()->setPresentationRenamer(
+      [this](const QString& key) { return m_nativeWindow != nullptr && m_nativeWindow->editModelRow(key); });
+  m_controller->timeline()->setPresentationRenamer(renameFeature);
   if (!m_nativeWindow->isEmbedded()) {
     throw std::runtime_error(m_nativeWindow->embeddingError().toStdString());
   }
@@ -549,6 +572,12 @@ void MainWindow::createNativeWindow() {
   showCubeArrows();
   bindNativeDialogWindow(this, m_nativeWindow->nativeWindow());
   connect(m_controller->browser(), &BrowserPanel::contentHeightChanged, this, [this] {
+    m_nativeSnapshotKey.clear();
+    QTimer::singleShot(0, this, [this] { refreshNativeWindow(); });
+  });
+  // The Make markers and an analysis row's later note restyle the shared
+  // rows without a new snapshot (mitcad#1352): the outline reads them again.
+  connect(m_controller->browser(), &BrowserPanel::rowsRestyled, this, [this] {
     m_nativeSnapshotKey.clear();
     QTimer::singleShot(0, this, [this] { refreshNativeWindow(); });
   });
@@ -632,6 +661,12 @@ void MainWindow::createNativeWindow() {
         item.title = feature->name;
         item.detail = m_snapshot.componentName(feature->component);
         item.icon = themeIcon(featureIcon(feature->type));
+        // The failed ones in the error colour, the state in the tooltip
+        // and the component's swatch, as the shared results show them
+        // (mitcad#1358, mitcad#1380).
+        item.status = feature->status;
+        item.toolTip = timeline->searchResultToolTip(uid);
+        item.swatch = timeline->searchResultColor(uid);
         results.append(item);
       }
     }
@@ -916,6 +951,7 @@ void MainWindow::refreshNativeActions() {
       const auto widths = m_ribbon->groupWidths(workspace, name);
       group.fullWidth = widths.first;
       group.collapsedWidth = widths.second;
+      for (const int width : m_ribbon->pinnedGroupWidths(workspace, name)) group.pinnedWidths.append(width);
       group.menu = menuItems(menuItems, caption->menu());
       for (QToolButton* button : caption->parentWidget()->findChildren<QToolButton*>()) {
         if (!button->defaultAction() || button->parentWidget()->parentWidget() != caption->parentWidget()) continue;
@@ -1058,6 +1094,8 @@ void MainWindow::refreshNativeWindow() {
       item.tone = row.tone; // mitcad#1079
       item.eyeTip = row.eyeTip;
       item.eyeBound = row.eyeBound;
+      item.makeTip = row.makeTip;         // mitcad#1049
+      item.transparent = row.transparent; // mitcad#1093
       rows.append(item);
       m_nativeNodes.insert(row.key, row.node);
     }

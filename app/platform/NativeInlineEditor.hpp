@@ -11,7 +11,7 @@ namespace mitcad {
 // while the user edits a real NSTextField in an AppKit child panel. Geometry,
 // text, selection, validity and destruction follow the presenter. Set its
 // nativeInlineInvalid property to expose the shared validation state.
-#if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
+#if defined(MITCAD_MAC_UI) && defined(MITCAD_MACOS_NATIVE_UI)
 bool showNativeInlineEditor(QLineEdit* presenter);
 bool focusNativeInlineEditor(QLineEdit* presenter);
 bool nativeInlineEditorFocused(const QLineEdit* presenter);

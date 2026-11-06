@@ -434,7 +434,36 @@ MakeBodyCard* MainWindow::createMakeCard() {
   connect(card, &MakeBodyCard::valueRemoved, this, [this](const QString& set, const QString& key, const QString& name) {
     QTimer::singleShot(0, this, [this, set, key, name] { removeMakeCardValue(set, key, name); });
   });
+  // Send to Slicer (mitcad#1377), greyed where the command is.
+  connect(card, &MakeBodyCard::sendRequested, this,
+          [this] { QTimer::singleShot(0, this, [this] { sendMakeCardToSlicer(); }); });
+  if (QAction* send = m_registry->action(QStringLiteral("make.print3d"))) {
+    card->setSendEnabled(send->isEnabled());
+    connect(send, &QAction::changed, card, [card, send] { card->setSendEnabled(send->isEnabled()); });
+  }
   return card;
+}
+
+void MainWindow::sendMakeCardToSlicer() {
+  QString body;
+  QString occurrence;
+  if (m_mode != Mode::Idle || !selectedBody(m_selection, &body, &occurrence)) {
+    return;
+  }
+  if (modelBusy()) {
+    whenIdle(this, [this] { sendMakeCardToSlicer(); });
+    return;
+  }
+  const QString id = QStringLiteral("make.print3d");
+  const CommandDef* def = m_registry->find(id);
+  if (def == nullptr || !isAvailable(*def)) {
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Make card send to slicer: %1").arg(bodyName(body));
+  // The panel's Bodies start from the selection (printStartBodies): the
+  // card's body alone, in its occurrence.
+  setSelection({SelectionItem{SelectKind::Body, body, QString(), QString(), occurrence}});
+  trigger(id);
 }
 
 void MainWindow::setMakeCardMaterial(const QString& id) {
@@ -615,7 +644,8 @@ void MainWindow::addMakeCardValue() {
       });
     });
   });
-  picker->open();
+  // A sheet on the window, the AppKit frontend's too (mitcad#1353).
+  openDialog(picker);
 }
 
 void MainWindow::removeMakeCardValue(const QString& set, const QString& key, const QString& name) {

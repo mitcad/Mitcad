@@ -22,7 +22,7 @@
 #include <QTreeView>
 #include <QVariant>
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 #include <algorithm>
 
 #include <QApplication>
@@ -44,7 +44,7 @@
 
 namespace mitcad::mac {
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 // The offscreen platform has no Cocoa theme to supply macOS button order.
 // Keep the actual Qt controls in their platform roles in component tests.
 class OffscreenDialogButtonOrder final : public QProxyStyle {
@@ -71,7 +71,7 @@ inline void auxiliaryButton(QPushButton* button) {
 // `primary` the default on every platform (Open, Insert, Create), and Close
 // keeps its underlined letter (Alt+C).
 inline void styleDialogButtons(QDialogButtonBox* box, QPushButton* primary = nullptr, bool everywhere = false) {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   if (QGuiApplication::platformName() == QStringLiteral("offscreen") &&
       !box->property("mitcad.offscreenButtonOrder").toBool()) {
     box->setProperty("mitcad.offscreenButtonOrder", true);
@@ -89,6 +89,8 @@ inline void styleDialogButtons(QDialogButtonBox* box, QPushButton* primary = nul
     }
     if (primary == nullptr) { primary = box->button(QDialogButtonBox::Close); }
   }
+// Keyboard conventions, not presentation: macOS has no mnemonics and Return
+// takes the default button there, in the shared Qt UI too.
 #ifndef Q_OS_MACOS
   // Once the dialog is shown (all its widgets made): Close takes Alt+C unless
   // another of its buttons or labels has it (Save Copy As, Copy as CSV), and
@@ -143,7 +145,7 @@ inline void styleDialogButtons(QDialogButtonBox* box, QPushButton* primary = nul
   }
 }
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 namespace dialogs {
 
 class Appearance final : public QObject {
@@ -330,7 +332,7 @@ inline void styleListTable(QTableView* table) {
   table->setShowGrid(false);
   table->verticalHeader()->hide();
   table->setAlternatingRowColors(true);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   table->setFrameShape(QFrame::NoFrame);
   table->setItemDelegate(new dialogs::ListRowDelegate(table));
   table->verticalHeader()->setDefaultSectionSize(28);

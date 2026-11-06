@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+# The AppKit command form's check box with its text and an inspection's
+# rows (mitcad#1354), as the shared panel shows them (mitcad#1162,
+# mitcad#1010, mitcad#1167), on a design with a box (F1.b0) and a sketch
+# (F2) with two points, p1 at (10, 10) and p2 at (40, 50):
+#   1. Send to Slicer's Use the open slicer window is one check box with
+#      its text, a row across the form with no caption: the captions'
+#      column is as wide as its widest caption (the runner compares the
+#      logged widths), and the form keeps its aligned columns;
+#   2. Measure between the sketch's two points shows Distance 50 mm, then
+#      Δx 30 mm, Δy 40 mm and Δz 0 mm as rows of their own, the distance's
+#      tooltip the points it is measured between, then a group for each
+#      pick that its header folds and unfolds; the text is not shown.
+# Run by tools/ui-macos-native-panel-rows-test.sh.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle 30
+native-resize 1280 900
+command view.fit
+wait-idle
+
+# 1. Use the open slicer window.
+mark
+command make.print3d
+expect-log '^Command Send to Slicer started$'
+wait-idle 30
+expect-native-text input_reuse '^Use the open slicer window$'
+expect-native-present caption_reuse false
+expect-log '^Panel Send to Slicer input reuse: a check box with its text across the form, [0-9]+ wide$' 10
+expect-log '^Panel Send to Slicer captions column: [0-9]+ wide, its widest caption ' 10
+expect-native-command-layout
+native-click commandCancel
+expect-log '^Command Send to Slicer cancelled$'
+
+# 2. Measure between the sketch's points.
+mark
+native-action inspect.measure
+expect-log 'Command Measure started'
+native-choice input_filter 'Sketch Curves and Points'
+expect-log 'Measure: Selection Filter = Sketch Curves and Points' 10
+wait-idle
+mark
+click-logged 'Sketch entity F2/p1 at'
+expect-log 'Measure Selection 1: 1 sketch point' 30
+wait-idle
+mark
+click-logged 'Sketch entity F2/p2 at'
+expect-log 'Measure Selection 2: 1 sketch point' 30
+expect-log '^Panel Measure result values: Distance = 50 mm, .x = 30 mm, .y = 40 mm, .z = 0 mm' 30
+wait-idle
+expect-native-visible commandResultRows true
+expect-native-visible commandResult false
+expect-native-text commandResultName1 '^Distance$'
+expect-native-text commandResultValue1 '^50 mm$'
+expect-native-tooltip commandResultValue1 '^From .* to '
+expect-native-text commandResultName2 '^.x$'
+expect-native-text commandResultValue2 '^30 mm$'
+expect-native-text commandResultName3 '^.y$'
+expect-native-text commandResultValue3 '^40 mm$'
+expect-native-text commandResultName4 '^.z$'
+expect-native-text commandResultValue4 '^0 mm$'
+expect-native-visible commandResultGroup1 true
+expect-native-visible commandResultValue5 true
+screenshot '${MITCAD_TEST_WORK}/native-panel-rows-measure.png'
+# The first pick's group folds and unfolds by its header.
+mark
+native-click commandResultGroup1
+expect-log '^Panel Measure result group 1 folded$'
+expect-native-visible commandResultValue5 false
+native-click commandResultGroup1
+expect-log '^Panel Measure result group 1 unfolded$'
+expect-native-visible commandResultValue5 true
+mark
+native-click commandOk
+expect-log 'Closed Measure' 30
+wait-idle

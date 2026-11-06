@@ -539,7 +539,7 @@ QWidget* RenderEnvironmentDialog::buildLights() {
   listRow->addWidget(m_lightList, 1);
   m_deleteLight = new QPushButton(tr("Delete"));
   m_deleteLight->setToolTip(tr("Deletes the chosen light"));
-#ifndef Q_OS_MACOS
+#ifndef MITCAD_MAC_UI
   listRow->addWidget(m_deleteLight);
 #endif
   column->addLayout(listRow);
@@ -553,7 +553,7 @@ QWidget* RenderEnvironmentDialog::buildLights() {
   m_addLight = new QPushButton(tr("Add"));
   m_addLight->setToolTip(tr("Adds a light of this kind, placed at the camera and shining where it looks"));
   addRow->addWidget(m_newLightKind, 1);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* lightButtons = new QHBoxLayout;
   lightButtons->setSpacing(0);
   lightButtons->addWidget(m_addLight);

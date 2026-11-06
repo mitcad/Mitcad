@@ -3,6 +3,8 @@
 
 #import <AppKit/AppKit.h>
 
+#include <algorithm>
+
 #include <QKeySequence>
 #include <QList>
 #include <QString>
@@ -17,6 +19,27 @@ inline Qt::KeyboardModifiers qtKeyModifiers(NSEventModifierFlags flags) {
   if ((flags & NSEventModifierFlagOption) != 0) modifiers |= Qt::AltModifier;
   if ((flags & NSEventModifierFlagShift) != 0) modifiers |= Qt::ShiftModifier;
   return modifiers;
+}
+
+// A scroll event's turn as Qt's cocoa plugin gives it to a QWheelEvent's
+// angleDelta (1/8 degree, 120 a notch): a mouse wheel's notch is 120
+// without its acceleration, a touchpad's points are 2 each. Vertical, or
+// sideways when nothing turned vertically (Shift with a mouse wheel comes
+// sideways on macOS); 0 for another event. The value fields' wheel step
+// (mitcad#1350, ParameterField::wheelStep) reads it as Qt's fields do.
+inline int qtWheelAngle(NSEvent* event) {
+  if (event == nil || event.type != NSEventTypeScrollWheel) return 0;
+  CGFloat x = 0;
+  CGFloat y = 0;
+  if (event.hasPreciseScrollingDeltas) {
+    x = event.scrollingDeltaX * 2;
+    y = event.scrollingDeltaY * 2;
+  } else {
+    x = std::clamp<CGFloat>(event.deltaX * 10000, -120, 120);
+    y = std::clamp<CGFloat>(event.deltaY * 10000, -120, 120);
+  }
+  const int vertical = static_cast<int>(y);
+  return vertical != 0 ? vertical : static_cast<int>(x);
 }
 
 inline QKeySequence keySequence(NSEvent* event) {

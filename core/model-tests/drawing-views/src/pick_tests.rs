@@ -634,6 +634,43 @@ fn a_round_face_ends_at_its_own_edges_and_a_half_hole_is_marked() {
 }
 
 #[test]
+fn a_snap_near_no_point_goes_onto_a_centre_line() {
+    // A section's line through a hole (mitcad#1362): the hole seen from
+    // the side in the front view, its axis at x 85 from y 110 to 130.
+    let doc = holed(false);
+    let at = |answer: &Value| point(&answer["at"]);
+    let axis = pick_at(&doc, 1, [86.0, 121.0], "snap");
+    assert_eq!(axis["pick"]["face"], "F2:side(c1[c4,c2])", "{axis}");
+    assert_eq!(axis["center_line"], true, "{axis}");
+    assert!(
+        near(at(&axis)[0], 85.0) && near(at(&axis)[1], 121.0),
+        "{axis}"
+    );
+    // A point within reach wins: the top half circle's centre.
+    let centre = pick_at(&doc, 1, [85.5, 111.0], "snap");
+    assert_eq!(centre["pick"]["point"], "center", "{centre}");
+    assert!(centre.get("center_line").is_none(), "{centre}");
+    assert!(
+        near(at(&centre)[0], 85.0) && near(at(&centre)[1], 110.0),
+        "{centre}"
+    );
+    // The top view's centre mark on the half hole: 6 below its centre,
+    // beyond the reach of its points, onto the mark's line.
+    let place = point(&view(&doc, 2)["place"]);
+    let (x, y) = (place[0] + 20.0, place[1] + 15.0);
+    let mark = pick_at(&doc, 2, [x + 0.6, y - 6.0], "snap");
+    assert_eq!(mark["center_line"], true, "{mark}");
+    assert_eq!(mark["pick"]["point"], "center", "{mark}");
+    assert!(
+        near(at(&mark)[0], x) && near(at(&mark)[1], y - 6.0),
+        "{mark}"
+    );
+    // Beyond the reach of every centre line too: nothing.
+    let none = pick_at(&doc, 1, [100.0, 121.0], "snap");
+    assert!(none["pick"].is_null(), "{none}");
+}
+
+#[test]
 fn datum_letters_are_one_set_with_the_models() {
     let (mut doc, names) = picked_with(true);
     let top = json!({"body": "F2.b0", "face": format!("F2:end({R})")});

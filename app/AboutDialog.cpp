@@ -42,7 +42,7 @@ void showAboutDialog(QWidget* parent) {
       QStringLiteral("<p>%1</p>")
           .arg(QObject::tr("Qt is used under the GNU LGPL v3 (<a href=\"https://www.gnu.org/licenses/lgpl-3.0.html\">"
                            "gnu.org/licenses/lgpl-3.0.html</a>)."));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   // The standard About panel shows the name and version itself.
   Q_UNUSED(parent);
   mac::showAboutPanel(body);

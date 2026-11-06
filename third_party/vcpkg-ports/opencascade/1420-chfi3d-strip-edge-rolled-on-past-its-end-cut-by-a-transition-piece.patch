@@ -1,0 +1,375 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose ball rolls on the far edge of a strip narrower
+than its radius goes on rolling along that edge's circle past the edge's
+vertex wherever the strip's next far edge belongs to a face going on
+tangentially from the face beyond the edge, and that face cuts it there,
+also where the walk went on rolling on that face's edge or started there
+(mitcad#1388).
+
+A fin's side strips, about 0.05 high between the arcs' chamfer cone and
+the root's chamfer, are rounded with 0.86 against the root's chamfer. The
+ball rolls on the strip's edge with the arc's chamfer (a circle) and
+touches the root's chamfer: a torus. At each end of that edge the strip's
+far edge goes on as its edge with a transition piece W of the arc's
+chamfer, tangent to the cone there, and narrows to the spine's end vertex
+V. The stored bodies run the torus on along the circle past the edge's
+vertex A and cut it by W; RolledOnProlongedEdgeAtEnd (0904) does so where
+the walk past A failed. On a body 0.003 mm off the stored one (the root's
+chamfer a spline instead of a cone) the walk instead:
+
+- found its start rolling on W's edge, beside V, and rolled into V at once
+  or failed where its other contact crossed onto W: StartSolOverflow now
+  takes such a start, a side rolling on an edge that runs into the spine's
+  end vertex, only where no other start is found;
+- went on past A rolling on W's edge into V: RolledOnProlongedEdgeAtEnd now
+  drops the pieces at that end that roll on edges of a face W holding V,
+  W going on tangentially (within a tenth of a radian) from the face beyond
+  Er at A, or turn about A on Er, and rolls the blend on from the piece
+  before them (the dropped pieces generate no face). At an end face that
+  meets the cone at an angle (the fin's end, 45 degrees) the walked pieces
+  stay, as in the stored bodies;
+- at the first end, walked back from P's other end past the spine's end,
+  was completed forward over P and the rest of the stripe: that walk is
+  not completed forward (ChFi3d_SetStartsAtPieceBefore), as a walk back
+  from a piece's start.
+
+On the design's body (its chamfer's spline pieces joined, as MitCad's
+dressup does), the far walls and the near wall at x = -0.5 with the fin's
+end rim (the eleven edges the stored body rounds) give the stored body's
+152 faces, valid, every face within 0.003 mm of the stored one (the body's
+own deviation); the near wall alone with either order of its edges, 149
+faces within 0.0006 mm. Before, the near wall failed in both orders of
+its edges, and so did the eleven edges. On the stored state before the
+item, the same 152 faces as before.
+
+Test: geometry/tests/test_fillet_fin_end_strips.cpp, on the case
+`fin-end-strips` of MITCAD_GEOMETRY_CASES.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index e2415548..8f83db81 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -1810,6 +1810,112 @@ static bool ChFi3d_RolledToFaceAtEnd(const TopOpeBRepDS_DataStructure&   DStr,
+   return false;
+ }
+ 
++// Whether the blend of SD rolls on one side on an edge of a face W (its face
++// on that side) that holds vertex V and goes on tangentially from P's face B
++// on that side at the vertex A of the edge Er P rolls on, where P's contact
++// ends towards V (W a transition piece of the chamfer B belongs to), or
++// turns about A on Er itself.
++static bool ChFi3d_RollsOnEdgeOfFaceAt(const TopOpeBRepDS_DataStructure&   DStr,
++                                       const ChFiDS_Map&                   VFMap,
++                                       const ChFiDS_Map&                   EFMap,
++                                       const occ::handle<ChFiDS_SurfData>& SD,
++                                       const TopoDS_Vertex&                V,
++                                       const occ::handle<ChFiDS_SurfData>& P,
++                                       const bool                          isFirst,
++                                       const double                        Tol)
++{
++  if (SD.IsNull() || V.IsNull() || !VFMap.Contains(V) || P.IsNull())
++  {
++    return false;
++  }
++  // A and B: P's contact rolling on Er at its end towards V.
++  TopoDS_Vertex A;
++  TopoDS_Face   B;
++  for (int s = 1; s <= 2 && A.IsNull(); s++)
++  {
++    if (!P->IsOnCurve(s) || P->IndexOfC(s) <= 0 || P->Index(s) <= 0)
++    {
++      continue;
++    }
++    const TopoDS_Shape& Er = DStr.Shape(P->IndexOfC(s));
++    if (!EFMap.Contains(Er))
++    {
++      continue;
++    }
++    const gp_Pnt pA = P->Vertex(isFirst, s).Point();
++    for (TopExp_Explorer ex(Er, TopAbs_VERTEX); ex.More() && A.IsNull(); ex.Next())
++    {
++      if (BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())).Distance(pA) <= Tol)
++      {
++        A = TopoDS::Vertex(ex.Current());
++      }
++    }
++    if (!A.IsNull())
++    {
++      B = TopoDS::Face(DStr.Shape(P->Index(s)));
++    }
++  }
++  if (A.IsNull() || B.IsNull())
++  {
++    return false;
++  }
++  // Whether W meets B tangentially at A: their outward normals there within
++  // a tenth of a radian (ChFi3d::IsTangentFaces' angle).
++  const gp_Pnt pA         = BRep_Tool::Pnt(A);
++  const auto   normalAtA  = [&](const TopoDS_Face& F, gp_Dir& theN) {
++    const occ::handle<Geom_Surface> S = BRep_Tool::Surface(F);
++    if (S.IsNull())
++    {
++      return false;
++    }
++    GeomAPI_ProjectPointOnSurf aPr(pA, S);
++    if (aPr.NbPoints() == 0 || aPr.LowerDistance() > std::max(1.e-4, 2. * BRep_Tool::Tolerance(A)))
++    {
++      return false;
++    }
++    double u = 0., v = 0.;
++    aPr.LowerDistanceParameters(u, v);
++    GeomLProp_SLProps aProps(S, u, v, 1, Precision::Confusion());
++    if (!aProps.IsNormalDefined())
++    {
++      return false;
++    }
++    theN = aProps.Normal();
++    if (F.Orientation() == TopAbs_REVERSED)
++    {
++      theN.Reverse();
++    }
++    return true;
++  };
++  gp_Dir     nB;
++  const bool hasB       = normalAtA(B, nB);
++  const auto continuesB = [&](const TopoDS_Face& W) {
++    gp_Dir nW;
++    return hasB && normalAtA(W, nW) && nW.Angle(nB) < 0.1;
++  };
++  for (int s = 1; s <= 2; s++)
++  {
++    if (!SD->IsOnCurve(s) || SD->IndexOfC(s) <= 0 || SD->Index(s) <= 0)
++    {
++      continue;
++    }
++    // (A turn about A on Er itself.)
++    if (SD->IndexOfC(s) == P->IndexOfC(s) && SD->Index(s) == P->Index(s))
++    {
++      return true;
++    }
++    const TopoDS_Shape& W = DStr.Shape(SD->Index(s));
++    for (NCollection_List<TopoDS_Shape>::Iterator itV(VFMap.FindFromKey(V)); itV.More(); itV.Next())
++    {
++      if (itV.Value().IsSame(W) && continuesB(TopoDS::Face(W)))
++      {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
+ //=================================================================================================
+ 
+ bool ChFi3d_Builder::ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -1870,6 +1976,16 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+                   Spine->FirstParameter(1),
+                   Spine->LastParameter(nbed),
+                   Precision::Confusion());
++  // (The first start rolling into the spine's end vertex, taken only where
++  // no other start is found.)
++  struct LastResort
++  {
++    int                              sides = -1;
++    occ::handle<BRepAdaptor_Surface> HS1, HS2, HSr1, HSr2;
++    occ::handle<BRepAdaptor_Curve2d> HC1, HC2, HCr1, HCr2;
++    double                           W1 = 0., W2 = 0., w = 0.;
++    gp_Pnt2d                         P1, P2;
++  } aLast;
+   // The samples along the spine; where none of them finds a start, the
+   // spine four times as finely between them (a start may be found only
+   // along a stretch shorter than their spacing).
+@@ -2460,6 +2576,45 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+     {
+       continue;
+     }
++    // A side rolling on an edge that runs into the spine's end vertex (the
++    // far edge of a strip narrowing to that vertex): the walk from there
++    // rolls into the spine's end at once and fails where the other contact
++    // crosses onto the face beyond. Such a start is taken only where no
++    // other start is found.
++    bool intoEnd = false;
++    for (int k = 0; k < 2 && !intoEnd; k++)
++    {
++      if (!rolls[k])
++      {
++        continue;
++      }
++      for (TopExp_Explorer exV(entry[k], TopAbs_VERTEX); exV.More() && !intoEnd; exV.Next())
++      {
++        intoEnd = (!Spine->FirstVertex().IsNull() && exV.Current().IsSame(Spine->FirstVertex()))
++                  || (!Spine->LastVertex().IsNull() && exV.Current().IsSame(Spine->LastVertex()));
++      }
++    }
++    if (intoEnd && !Spine->IsPeriodic())
++    {
++      if (aLast.sides < 0)
++      {
++        aLast.sides = (rolls[0] ? 1 : 0) | (rolls[1] ? 2 : 0);
++        aLast.HS1   = HS[0];
++        aLast.HS2   = HS[1];
++        aLast.HC1   = HC[0];
++        aLast.HC2   = HC[1];
++        aLast.HSr1  = HSref[0];
++        aLast.HSr2  = HSref[1];
++        aLast.HCr1  = HCref[0];
++        aLast.HCr2  = HCref[1];
++        aLast.W1    = W[0];
++        aLast.W2    = W[1];
++        aLast.P1    = Pk[0];
++        aLast.P2    = Pk[1];
++        aLast.w     = w;
++      }
++      continue;
++    }
+     HS1    = HS[0];
+     HS2    = HS[1];
+     HC1    = HC[0];
+@@ -2477,6 +2632,25 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+     First = w;
+     return (rolls[0] ? 1 : 0) | (rolls[1] ? 2 : 0);
+   }
++  if (aLast.sides >= 0)
++  {
++    HS1    = aLast.HS1;
++    HS2    = aLast.HS2;
++    HC1    = aLast.HC1;
++    HC2    = aLast.HC2;
++    HSref1 = aLast.HSr1;
++    HSref2 = aLast.HSr2;
++    HCref1 = aLast.HCr1;
++    HCref2 = aLast.HCr2;
++    W1     = aLast.W1;
++    W2     = aLast.W2;
++    P1     = aLast.P1;
++    P2     = aLast.P2;
++    I1->Initialize((const occ::handle<Adaptor3d_Surface>&)HS1);
++    I2->Initialize((const occ::handle<Adaptor3d_Surface>&)HS2);
++    First = aLast.w;
++    return aLast.sides;
++  }
+   return -1;
+ }
+ 
+@@ -19376,7 +19550,11 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
+ //            end, rolling on Er's line past A as the edge of a strip of B's
+ //            surface, the other side's face N's surface grown, up to the
+ //            guide's end; the corner at V cuts it by W from A
+-//            (ChFi3d_RolledPastEdgeVertex).
++//            (ChFi3d_RolledPastEdgeVertex). Where the walk went on past A
++//            instead, rolling on W's edges with B into V, W going on
++//            tangentially from P's face beyond Er (a transition piece of
++//            that face's chamfer), those pieces are dropped and the blend
++//            is rolled on so too.
+ //=======================================================================
+ 
+ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>& Stripe, const bool isFirst)
+@@ -19394,11 +19572,46 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+   }
+   TopOpeBRepDS_DataStructure&                         DStr = myDS->ChangeDS();
+   NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = Stripe->ChangeSetOfSurfData()->ChangeSequence();
+-  const int                                           iP   = isFirst ? 1 : aSeq.Length();
+-  const occ::handle<ChFiDS_SurfData>                  P    = aSeq.Value(iP);
+   const TopoDS_Vertex                                 V    = isFirst ? Spine->FirstVertex() : Spine->LastVertex();
+-  if (P->Index(1) <= 0 || P->Index(2) <= 0 || V.IsNull()
+-      || !ChFi3d_RolledToFaceAtEnd(DStr, myVFMap, myEFMap, P, isFirst, V, 10. * tolesp))
++  if (V.IsNull())
++  {
++    return false;
++  }
++  // The pieces at that end that roll on edges of a face W holding V, past
++  // the vertex A on W where the piece before them stops rolling on Er (the
++  // walk went on past A, rolling on W's edge with B into V): W cuts the
++  // blend rolled on along Er's line from A, so they are dropped, and the
++  // piece before them is P (nDrop of them).
++  int nDrop = 0;
++  if (!ChFi3d_RolledToFaceAtEnd(DStr, myVFMap, myEFMap, aSeq.Value(isFirst ? 1 : aSeq.Length()), isFirst, V,
++                                10. * tolesp))
++  {
++    // (The first piece from that end that ends at such an A: P.)
++    for (int k = 1; k < aSeq.Length() && nDrop == 0; k++)
++    {
++      if (ChFi3d_RolledToFaceAtEnd(DStr, myVFMap, myEFMap, aSeq.Value(isFirst ? k + 1 : aSeq.Length() - k), isFirst, V,
++                                   10. * tolesp))
++      {
++        nDrop = k;
++      }
++    }
++    if (nDrop == 0)
++    {
++      return false;
++    }
++    const occ::handle<ChFiDS_SurfData>& aP = aSeq.Value(isFirst ? 1 + nDrop : aSeq.Length() - nDrop);
++    for (int k = 0; k < nDrop; k++)
++    {
++      if (!ChFi3d_RollsOnEdgeOfFaceAt(DStr, myVFMap, myEFMap, aSeq.Value(isFirst ? 1 + k : aSeq.Length() - k), V, aP,
++                                      isFirst, 10. * tolesp))
++      {
++        return false;
++      }
++    }
++  }
++  const int                          iP = isFirst ? 1 + nDrop : aSeq.Length() - nDrop;
++  const occ::handle<ChFiDS_SurfData> P  = aSeq.Value(iP);
++  if (P->Index(1) <= 0 || P->Index(2) <= 0)
+   {
+     return false;
+   }
+@@ -19564,6 +19777,13 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+   bool                     walked   = true;
+   const bool               doneSave = done;
+   const ChFiDS_ErrorStatus stSave   = Spine->ErrorStatus();
++  // (Walked back towards the first end from P's other end: not completed
++  // forward over P and the pieces after it, which hold the blend there.)
++  struct BackGuard
++  {
++    explicit BackGuard(const bool theOn) { ChFi3d_SetStartsAtPieceBefore(theOn); }
++    ~BackGuard() { ChFi3d_SetStartsAtPieceBefore(false); }
++  } aBackGuard(isFirst);
+   try
+   {
+     OCC_CATCH_SIGNALS
+@@ -19647,21 +19867,37 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+       CP.SetVector(v);
+     }
+   }
+-  // X's face is generated by the spine's edges P's was.
++  // X's face is generated by the spine's edges P's was (the dropped pieces'
++  // by none).
++  NCollection_Map<int> aDropped;
++  for (int k = 0; k < nDrop; k++)
++  {
++    aDropped.Add(aSeq.Value(isFirst ? 1 + k : aSeq.Length() - k)->Surf());
++  }
+   for (int ie = 1; ie <= Spine->NbEdges(); ie++)
+   {
+     if (NCollection_List<int>* aList = myEVIMap.ChangeSeek(Spine->Edges(ie)))
+     {
+-      for (NCollection_List<int>::Iterator it(*aList); it.More(); it.Next())
++      for (NCollection_List<int>::Iterator it(*aList); it.More();)
+       {
++        if (aDropped.Contains(it.Value()))
++        {
++          aList->Remove(it);
++          continue;
++        }
+         if (it.Value() == P->Surf())
+         {
+           it.ChangeValue() = X->Surf();
+         }
++        it.Next();
+       }
+     }
+   }
+   aSeq.ChangeValue(iP) = X;
++  for (int k = 0; k < nDrop; k++)
++  {
++    aSeq.Remove(isFirst ? 1 : aSeq.Length());
++  }
+   return true;
+ }
+ 

@@ -122,6 +122,10 @@ public:
     // A bar that floats over the view's bottom (the Floating layout's
     // message band): the page's footer stays above it while it shows.
     std::function<QWidget*()> bottomBar;
+    // The room another toolkit's band keeps over the view's bottom, in the
+    // view's points (the AppKit message band, mitcad#1358): the footer stays
+    // above it too; null: none.
+    std::function<int()> bottomInset;
     // The edit locks' session of this run, for reading the projects (whose
     // locks are this window's).
     std::function<QString()> session;

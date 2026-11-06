@@ -465,7 +465,7 @@ ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
   m_advancedToggle->setCheckable(true);
   m_advancedToggle->setAutoRaise(true);
   m_advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_advancedToggle->setIcon(mac::symbolIcon(QStringLiteral("chevron.right")));
 #else
   m_advancedToggle->setArrowType(Qt::RightArrow);
@@ -541,7 +541,7 @@ ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
     if (!chosen.isEmpty()) setFolder(chosen);
   });
   connect(m_advancedToggle, &QToolButton::toggled, this, [this](bool open) {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     m_advancedToggle->setIcon(mac::symbolIcon(open ? QStringLiteral("chevron.down") : QStringLiteral("chevron.right")));
 #else
     m_advancedToggle->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
@@ -627,7 +627,7 @@ void ConnectAssistantDialog::applyStyles() {
         "QPushButton { border: none; background: transparent; color: palette(link); padding: 0 2px; }"
         "QPushButton:hover { text-decoration: underline; }"));
   }
-#ifndef Q_OS_MACOS
+#ifndef MITCAD_MAC_UI
   const QColor text = palette().color(QPalette::HighlightedText);
   m_setup->setStyleSheet(QStringLiteral(
       "QPushButton { background: %1; color: %2; border: 1px solid %1; border-radius: 5px; padding: 5px 16px;"

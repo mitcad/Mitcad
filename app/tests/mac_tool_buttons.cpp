@@ -26,7 +26,7 @@ void check(bool passed, const char* expression, int line) {
 }
 #define CHECK(expression) check(bool(expression), #expression, __LINE__)
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 QImage panel(QToolButton& button, QStyle::State state, const QPalette& palette, int scale) {
   QStyleOptionToolButton option;
   option.initFrom(&button);
@@ -65,7 +65,7 @@ int macToolButtonTests() {
   QToolButton existing(&root);
   existing.setAutoRaise(false);
   mitcad::installMacToolButtonStyle(&root);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   CHECK(existing.property("macFlatToolButton").toBool());
   CHECK(existing.style()->objectName() == QStringLiteral("macToolButtonStyle"));
   CHECK(!existing.autoRaise());

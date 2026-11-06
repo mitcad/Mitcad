@@ -1,6 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Native UI parity acceptance
 
+> **Paused (owner 6.11.2026).** The AppKit frontend is not built:
+> `MITCAD_MACOS_NATIVE_UI=ON` is a configure error and macOS uses the shared
+> Qt UI ([macos-shared-qt.md](macos-shared-qt.md)), so that macOS releases
+> keep pace with the other platforms. Native UI work resumes when MitCad is
+> more mature elsewhere; this document keeps the frontend's design contract
+> and its state for then.
+
 Issue #820 combines the corrections in #812–#819 with an integrated Qt/AppKit
 comparison. A successful build, a capture or a control found by identifier
 does not establish visual or interaction acceptance. Keep Qt as the default

@@ -1,0 +1,18 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The AppKit Rows sheet and Appearances headings (mitcad#1355), tools/ui-macos-native-rows-appearances-test.sh: a 10 x 10 mm extrusion k high; a closed table with the option size and the parameter columns d and k, four rows of screw sizes, each with a designation."},
+  {"cmd": "add_parameter", "name": "size", "unit": "Text", "expression": "'M3'", "values": ["'M3'", "'M4'", "'M5'", "'M6'"]},
+  {"cmd": "add_parameter", "name": "d", "unit": "mm", "expression": "3 mm"},
+  {"cmd": "add_parameter", "name": "k", "unit": "mm", "expression": "3 mm"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "k"}, "operation": "new_body"}},
+  {"cmd": "set_configurations", "configurations": {
+    "options": ["size"], "closed": true, "parameters": ["d", "k"],
+    "rows": [
+      {"name": "M3", "values": {"size": "'M3'", "d": "3 mm", "k": "3 mm"}, "designation": "Screw M3"},
+      {"name": "M4", "values": {"size": "'M4'", "d": "4 mm", "k": "4 mm"}, "designation": "Screw M4"},
+      {"name": "M5", "values": {"size": "'M5'", "d": "5 mm", "k": "5 mm"}, "designation": "Screw M5"},
+      {"name": "M6", "values": {"size": "'M6'", "d": "6 mm", "k": "6 mm"}, "designation": "Screw M6"}]}}
+]

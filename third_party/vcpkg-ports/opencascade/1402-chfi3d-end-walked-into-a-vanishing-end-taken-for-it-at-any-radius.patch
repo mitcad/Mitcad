@@ -1,0 +1,48 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a line walked into a vanishing end and ended there narrower than
+5e-4 of the radius is taken for that end at every radius, instead of being
+walked once more into a piece of micrometres of its own (mitcad#1374).
+
+ChFi3d_EndBeforeVanishing (patch 0771) ends a line walked into the vertex
+where its rounding vanishes at its first section narrower than 5e-4 of
+the radius within a hundredth of the radius of the vertex.
+PerformSetOfSurfOnElSpine takes such an end for the end of the stripe
+(ContactsAtTangentEnd, patches 0400 and 0771) only where its contacts are within 10 tolesp
+(1e-3) of each other: above a radius of 2 the line's end may be wider than
+that, and the end was walked once more from there, a second piece of a few
+micrometres along the guide, its face a sliver. A boss's foot rounded with
+3 or 6 on a plate's top whose side's top edge was rounded first: the
+foot's chain runs on along the side's blend's cut on the boss's cylinder
+to where that blend vanishes, and the line there ended 1.5e-3 wide at
+r = 3: the result had a face of 4e-6 mm2 at each end. ContactsAtTangentEnd
+now takes a width up to that of ChFi3d_EndBeforeVanishing, a twentieth of
+its reach (a hundredth of the radius) where that is more than 10 tolesp.
+
+Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
+and the boss's foot rounded together with 3 and 6 on the synthetic bodies
+and on the case of MITCAD_GEOMETRY_CASES: no face of the result smaller
+than 1e-3 mm2; 24 checks fail without the patch.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -4899,8 +4899,13 @@ static bool ContactsAtTangentEnd(const occ::handle<ChFiDS_SurfData>& SD,
+   }
+   // (Or the section has no width any more, its contacts within Tol of each
+   // other, within Reach of V: the walk got no nearer before its sections
+-  // got singular.)
+-  return P1.Distance(P2) <= Tol && P1.Distance(P) <= Reach && P2.Distance(P) <= Reach;
++  // got singular. Or narrower than the width at which a line walked into
++  // the vanishing end is ended, ChFi3d_EndBeforeVanishing's 5e-4 of the
++  // radius, a twentieth of Reach: at radii above 2 that width is more than
++  // Tol, and the end, not taken for the vanishing end, was walked once
++  // more, a piece of micrometres of its own.)
++  const double aWidth = std::max(Tol, 0.05 * Reach);
++  return P1.Distance(P2) <= aWidth && P1.Distance(P) <= Reach && P2.Distance(P) <= Reach;
+ }
+ 
+ //=======================================================================

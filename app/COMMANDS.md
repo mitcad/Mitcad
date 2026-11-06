@@ -6,6 +6,10 @@ command is a declarative definition plus a little glue between its inputs
 and the model's feature definition (`core/model-api/src/commands.md`);
 the framework does the rest. Where the code lives: [Files](#files).
 
+The notes on the native macOS (AppKit) frontend below describe a paused
+frontend: it is not built, and macOS uses these Qt definitions as every
+platform does ([macos-shared-qt.md](../docs/macos-shared-qt.md)).
+
 ## A feature command
 
 ```cpp
@@ -1385,7 +1389,10 @@ light bulb and of the appearance and material.
   (`eye-half`, `kEyeTransparentRole` in `BrowserPanel.cpp`); hidden, the
   closed eye; a hidden transparent one is transparent again when shown.
   Logged when it comes and goes: `Browser eye Root/Bodies/Body2:
-  transparent`, `Browser eye Root/Bodies/Body2: opaque`.
+  transparent`, `Browser eye Root/Bodies/Body2: opaque`. The AppKit
+  outline draws the same half-open eye (mitcad#1352,
+  `BrowserPanel::PresentationRow::transparent`;
+  `app.ui-macos-native-browser-markers`).
 - **The view** (`OcctViewer`): the `instances` query's `transparent` (the
   body's, or an occurrence's on its path) becomes
   `BodyDisplay::transparent`. A normal body so is drawn in the shaded
@@ -1649,7 +1656,9 @@ groups (`ClassicRibbonPage`). Both chrome layouts show them. The
 native AppKit ribbon (`MainWindowNative`, the experimental macOS
 frontend; mitcad#1074) shows the same pinned buttons in their groups,
 after the group's own (`native.ribbon.pinned.<id>`), each with Unpin from
-Toolbar and Change Keyboard Shortcut… as its right-click menu. Its group
+Toolbar and Change Keyboard Shortcut… as its right-click menu; in a narrow
+window they fold first by the same rule (`framework/RibbonFit`,
+mitcad#1357), logged with the same line. Its group
 menus (NSMenu, without a row's ⋮ button) end with two submenus that list
 the menu's commands as its rows do (a subgroup's in a submenu of its
 own): **Pin to Toolbar**, where a pinned command is checked and choosing
@@ -1818,7 +1827,13 @@ width the user dragged (mitcad#1010, mitcad#529):
    nor cut; where the panel is too narrow for both (coordinates far from
    the origin) the value goes on a line of its own under its name
    (`ValueLine`). Each row's context menu has **Copy**, its value's number and unit
-   (`40 mm`). The macOS AppKit form shows the text as before.
+   (`40 mm`). The macOS AppKit form shows the same rows in place of the
+   text (mitcad#1354, `AppKitCommandForm::setInspection`): in a tinted
+   box right under the picks, the names in a column, the main value bold
+   and larger, a value too long for the width wrapping under its line
+   rather than cut, the groups' headers folding their rows, each row's
+   menu with Copy; the same log lines, the rows' places and the groups'
+   headers included (`app.ui-macos-native-panel-rows`).
 3. **History** at the bottom, folded when the panel opens (*Measure's
    history*); unfolded, the panel's page scrolls its rows into sight
    (`QScrollArea::ensureWidgetVisible`) in a low window.
@@ -2571,15 +2586,16 @@ add({"sketch.line", QObject::tr("Line"), "line", "CREATE/Lines",
 ```
 
 The sketch CREATE group's subgroups (mitcad#222), in this order: Lines
-(Line), Rectangles (default 2-Point Rectangle; also the rounded ones, below), Circles (default Center
+(default Line; also Midpoint Line, mitcad#1393, below), Rectangles (default 2-Point Rectangle; also the rounded ones, below), Circles (default Center
 Diameter Circle), Arcs (default 3-Point Arc), Other Geometry (Ellipse, the
 polygons, the slots, the splines, Point; no default), Text, Patterns
 (Rectangular Pattern, Circular Pattern, Mirror; no default), References
 (Project, Intersect, Clean Up Projections, Clean Up Stale Projections,
 Project Again);
 Sketch Dimension follows on its own. Offset, Edit Pattern, Edit
-Offset and Edit Text are in MODIFY. The toolbar row has Line, the three
-split buttons and Sketch Dimension (`tools/ui-sketch-create-menu-test.sh`).
+Offset and Edit Text are in MODIFY. The toolbar row has the four split
+buttons (Lines, Rectangles, Circles, Arcs) and Sketch Dimension
+(`tools/ui-sketch-create-menu-test.sh`).
 
 Closed splines and tangents at an end (mitcad#783): Fit Point Spline
 (`SplineTool` in `DrawTools.cpp`) closes on a click on its first point
@@ -2643,6 +2659,63 @@ corner radius 5 mm at (0, 0) [c1, …]`. No UI test script of its own
 (the menu entries are in `tools/ui-sketch-create-menu-test.sh`); the
 model tests are
 `core/model-tests/sketch/src/sketch_rounded_rectangle_867_tests.rs`.
+
+The line tool's arcs and Midpoint Line (mitcad#1393). **Arcs by a
+drag.** `LineTool` (`DrawTools.cpp`) draws an
+arc instead of a line when the left button is pressed on the chain's end
+(within 8 px) or, to start a chain, on the end point of a line or an arc
+(`arcSource`: the first open curve that ends there, as `sketch.arc` finds
+it; a construction curve only while Construction is on), and the pointer
+moves 4 px with the button down. The kind is chosen once the drag is 8 px
+from the point and chosen again when it comes back within them, by the
+pointer's way on the screen, not the snapped point's (a grid point can
+lie in another direction) (`lineArcKind`, `sketch/LineArcs.cpp`): within 45 degrees of the way the
+curve leaves the point a tangent arc, else (across or back) a normal arc
+square to the curve on the pointer's side; a curve other than a line or
+an arc (a spline) takes only tangent arcs. The preview shows the arc with
+the `tangent` or `perpendicular` glyph at the point and two fields,
+Radius and Sweep (Tab), as dimensions on the arc: a typed radius puts the
+end on that circle toward the pointer, a typed sweep that far round,
+both together exactly there (`lineArcEnd`). The release (or Enter with
+the button still down) sends `sketch.arc` with `tangent` or `normal`,
+`from` the point and `end` (the snapped point, or where typed values put
+it), holds a snapped end, adds a radius dimension for a typed radius
+(the sweep places the end only: the model has no sweep dimension, as
+Center Point Arc's Angle) and the tangents the arc already satisfies, as
+one `SketchOp`; the chain goes on from the arc's end. Esc during the drag
+drops the arc and keeps the chain; a refused or straight arc (released
+straight ahead of the curve, or straight across it for a normal arc,
+where the grid snap can put it) keeps the chain too, and one an arc from
+a curve's end was to start goes on with a line from that point (logged
+`Line: no arc from p3`). A click on a
+curve's end without a drag starts the chain there as before. Logged
+`Line: an arc from the end p3 of c1`, `Line arc: tangent` (`normal`) and
+`Added normal arc c5 to (15, 5), radius 5.000 mm` (`, dimensioned`
+after it with a typed radius).
+
+**Midpoint Line** (`sketch.line_midpoint`, icon `line-midpoint`, no
+shortcut) is the second entry of the Lines submenu, which is now a split
+button with Line as its default: `midpointLineTool` (`MidpointLineTool`).
+The first click is the middle, the second an end; the preview shows the
+whole line through the middle, Length (the whole line, dimensioned when
+typed) and Angle (from the sketch's x axis, the end on the pointer's
+side) fields and the `horizontal` or `vertical` glyph within 6 px of
+level or plumb (as the Line tool's first line infers). The click sends
+`sketch.add_line` with `mode: midpoint`, `center` (the middle's point
+input: an existing point there is the middle) and `end`; snapped points
+are held (`holdPoint`), and a level or plumb line gets `horizontal` or
+`vertical` when safe (`addAuto`). One `SketchOp`, logged `Added midpoint
+line c1 from (-10, -5) to (10, 5) about (0, 0)`. It takes no palette Auto
+constraints (`AutoKind::None`).
+
+The arc choice and placement are unit tested in `app/tests/line_arcs.cpp`;
+the model's in
+`core/model-tests/sketch/src/sketch_line_arcs_1393_tests.rs`; the UI in
+`tools/ui-sketch-line-arcs-test.sh` and
+`tools/ui-windows-sketch-line-arcs-test.ps1` (ctest
+`app.ui-windows-sketch-line-arcs`). The AppKit frontend's ribbon and
+menus are built from the Qt ribbon's (`MainWindowNative.cpp`), so they
+show the Lines split button and Midpoint Line without code of their own.
 
 - `move(snap)`, `press(snap)`, `release`, `doubleClick` get the cursor
   snapped (`SketchSnap`: points, origin, midpoints, centres, quadrants,
@@ -3133,6 +3206,30 @@ shared by Qt and AppKit (its word, icon, colour role and lifetime).
   in its box, yellow with the icon, not red. The same in AppKit
   (`NativeForms.mm`). Logged `Panel <command> message box: <level>:
   <text>`; the shown state (`shownState`, live MCP) has `message_level`.
+- **A notice's places on hover** (mitcad#1327, docs/ui-conventions.md
+  "What a message says"): a message names no faces or edges; the pointer
+  over it paints the places its notices name (`places`) in the view until
+  it leaves. The command panel's message calls the presenter's
+  `messageHovered` (`CommandPresenter::Actions`; the session's
+  `hoverMessage` then gives the preview's notices and bodies to
+  `CommandHost::hoverNoticePlaces`); a Timeline item
+  (`TimelineWidget::featuresHovered`), a feature's Browser row
+  (`BrowserPanel::featureHovered`), the message band and the Docked status
+  line give their feature's notices (`previewNoticePlaces`); all paint
+  through `MainWindowNoticeHover.cpp`. The AppKit frontend (mitcad#1333)
+  calls the same: its command form's message has a tracking area that
+  calls `messageHovered` (`MitcadCommandMessageField`, `NativeForms.mm`),
+  and its Timeline cells and Browser rows go through the shared
+  `TimelineWidget::hoverFeature` and `BrowserPanel::hoverNode`; its
+  message band's text and stub have tracking areas that call
+  `previewNoticePlaces("message band", …)` through
+  `NativeMacWindowCallbacks::messageNoticeHovered` (`NativeMessageBand.mm`,
+  mitcad#1379). Logged
+  `Notice hover highlighted: <source>: <places> (<n> drawn)` and
+  `Notice hover highlighted: none`. Tests: `tools/ui-notice-places-test.sh`
+  (Linux), `app.ui-windows-notice-places`, `app.ui-macos-native-notice-places`
+  (`tools/ui-macos-native-notice-places-test.sh`: the AppKit Timeline item,
+  message band and command form's message).
 - **A feature's level** is the model's (`level` and `notices` of the
   timeline query): failed an error, built with warnings a warning, an
   import note alone information. The timeline cell's badge (`Timeline cell
@@ -3585,6 +3682,21 @@ Texts, patterns and offsets stay editable:
   code extrudes whole. Logged `Added QR code "https://mitcad.org", module
   1, level M` and `Edited QR code t2: "…", module 0.5, level M`. Test:
   `tools/ui-qr-code-test.sh`.
+- A text's regions stand for the text (mitcad#1369,
+  `sketch/SketchTextPicks.cpp`): zoomed in, a click inside a letter (its
+  stroke, or a counter such as the hole of an 'o') picks a profile, not
+  the outline. A single Profile pick of the edited sketch whose region a
+  text's contours bound (`SketchModel::regionTexts`, from the `sketch`
+  query's regions with a `text`; `textOfPick`) gets that text's Edit Text
+  (Edit QR Code for a code's module or light square) in the context menu,
+  and a double-click on it opens the same panel (`Double-click on t2:
+  sketch.edit_text`). The panels' text input takes such a region selected
+  before it (`withAlsoTakes(Profile)`) as the text's curve pick
+  (`textSelectionItem`); clicks in the panel still pick the outline. A
+  region bounded by no text, or by curves of several texts, offers
+  nothing new, and a profile pick elsewhere (Extrude) is unchanged.
+  Tests: `tests/sketch_text_picks.cpp`, `tools/ui-text-region-edit-test.sh`
+  and `app.ui-windows-text-region-edit`.
 - A derived offset spline (of an ellipse or spline) shows only its ends
   as points: the query marks what the offset computes `derived`, and
   `SketchModel` drops the other control points (no snapping to them).
@@ -4169,7 +4281,13 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   the name of the selected, current row (`BrowserTree`: after the
   double-click interval, not in a double-click or a drag; the timer is
   watched by `TestSync`). Bodies, components, sketches, datums, joints,
-  analyses and named views rename this way too.
+  analyses and named views rename this way too. In the AppKit frontend
+  the menu's Rename and a double-click on a body or component name the row
+  in the AppKit outline, and the timeline menu's Rename asks in the
+  timeline's Rename Feature dialog, as F2 there does (mitcad#1356,
+  `BrowserPanel`/`TimelineWidget::setPresentationRenamer`; logged
+  `Native Browser editor: <key>`, `Renaming Base in the timeline`; test
+  `app.ui-macos-native-rename`).
 - **Paste / Paste New** place the copy where the original is and open
   Move/Copy on it (`DocumentHost::startCommand` with the occurrence
   selected); OK keeps the moved copy as its own placement
@@ -4407,7 +4525,9 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   the import notes (information, mitcad#1040), `is:rolled-back` is
   after the marker. Matches are outlined (`TimelineStrip::setFound`,
   the `SearchMatch` colour role, teal, apart from the status hues) and listed with their component's colour and name in
-  `m_searchList`, a `QTreeWidget` child of the host window
+  `m_searchList` (the colour `TimelineWidget::searchResultColor`, the
+  strip's band colour, none for the root's features; the AppKit results
+  draw the same swatch, mitcad#1380), a `QTreeWidget` child of the host window
   (`GlassCard::hostWindow`) placed over the field, without focus. The
   field takes Enter, Esc, Up and Down before the window's OK and Cancel
   (ShortcutOverride): Enter and Down step forward, Shift+Enter and Up
@@ -4461,7 +4581,10 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   error in its tooltip; while its plane cuts none of the shown bodies (it
   keeps or removes each whole), its tooltip adds `The plane does not cut
   any shown body.` A plane that cannot be found stays red
-  (`BrowserPanel::setAnalysisNotes`). Remove Section Analysis hides
+  (`BrowserPanel::setAnalysisNotes`). The AppKit outline's row shows the
+  same badge, colour and tooltip, also when the note comes later from the
+  section worker (mitcad#1352: `BrowserPanel::rowsRestyled` refreshes it;
+  `app.ui-macos-native-browser-markers`). Remove Section Analysis hides
   the shown section (it stays in the folder); Flip Section Analysis edits
   it with `flip` toggled; neither is offered while a Print Analysis is
   the one shown. A Print Analysis (mitcad#620) is a row `Print1` with
@@ -4520,6 +4643,12 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   groups shown: FDM Plastic 15` (`none`) after each filtered line,
   `Appearances group Metal collapsed` (`expanded`) and the headings in
   sight, `Appearances group metal at x,y` (by key: the class id, `design`).
+  The AppKit frontend (mitcad#1355) folds them the same way: a press on a
+  heading is the list's click (`Native row clicked: appearanceLibrary
+  row=0 …`), Up and Down reach the headings (`NativeHeadingRowsProperty`;
+  `Native heading row: appearanceLibrary …`, the heading framed) and the
+  keys reach the list's event filter on a heading
+  (`NativeModelKeysProperty`; `app.ui-macos-native-rows-appearances`).
   It assigns nothing (mitcad#1059):
   Appearance... of a body's browser menu and of the view's menu of
   bodies, faces, edges and vertices starts the Appearance tool with them
@@ -5466,7 +5595,14 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
     paste keeps each pasted cell in red with the reason. Delete (or
     Backspace) empties the selected cells (`configurations::clearCells`; a
     name stays). The keys work outside a cell's editor and come before the
-    application's shortcuts. A cell edit is `set_configurations` with the table; a typed
+    application's shortcuts. The AppKit frontend (mitcad#1355) selects the
+    same ranges through the sheet's own mouse and keys
+    (`NativeCellSelectionProperty`: a press, Shift and Command presses,
+    the arrows with or without Shift; a double press or F2 edits a cell;
+    each selected cell tinted, the current one framed) and sends Command+C,
+    Command+V, Delete and Backspace, and the Edit menu's Copy and Paste, to
+    the sheet (`NativeModelKeysProperty`); logs `Native cell selection:
+    configurationsRows current=1,3 selected=0,2 0,3 1,2 1,3`. A cell edit is `set_configurations` with the table; a typed
     text gets quotes for a text option and the unit for a bare number
     (`configurations::rowExpression`). Before an option's value is written,
     the row's combination is tried with the `configure` query's `values`
@@ -5586,9 +5722,12 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   (Linux, mitcad#1044: Import CSV… of a table of screw sizes through its
   preview, a block of cells copied and pasted, Add Option… taking a
   parameter column, and a size on the bar setting the row's parameter
-  column) and `app.ui-windows-configuration-rows` (the driver script
+  column), `app.ui-windows-configuration-rows` (the driver script
   `tools/ui-scripts/configuration-rows.mitcad-ui`: the import, Add
-  Option…, the bar).
+  Option…, the bar) and `app.ui-macos-native-rows-appearances`
+  (`tools/ui-macos-native-rows-appearances-test.sh`, mitcad#1355: in the
+  AppKit frontend a 2 x 2 block of the Rows sheet selected, copied, pasted
+  two rows down and a cell emptied; also the Appearances headings).
 - **Property Sets** (mitcad#496): `view.property_sets` (the command
   search: the selected body or component, else the root), the browser's
   menus of a body (after Appearance...) and of a component (after Design
@@ -7205,6 +7344,24 @@ settings in the user's settings (`ViewSettings`, group `view`);
   immediately without restarting. On macOS Settings saves navigation
   changes immediately; elsewhere Preferences saves with OK and Cancel
   restores the previous navigation settings.
+  The Navigation page fills the window's height (mitcad#1394, `pageFills`
+  in `ViewController.cpp`): the bindings table (`navigationBindings`,
+  `NavigationBindingsTable`) asks for its 138-pixel minimum only, so the
+  page's natural height still fits a low screen, and takes all the height
+  the page has to spare; the rest of the Mouse and Trackpad tab keeps its
+  height under it, and the 3D Mouse tab stays at the top. Once the page
+  is laid out after a show or a resize it logs `Navigation page: bindings
+  table 138 high, its last line 9 above the bottom of its area 610 high`
+  (the area is the page of the window's stack;
+  `tools/ui-preferences-test.sh`, `app.ui-windows-preferences`). The Cloud
+  page fills it the same way: its **Known brokers** list
+  (`cloudKnownBrokers`, once at most 110 pixels) asks for 110 pixels and
+  takes the spare height, logged as `Cloud page: known brokers list 110
+  high, its last line 11 above the bottom of its area 520 high`
+  (`framework/PreferencesPageLayout.hpp`). With
+  `MITCAD_TEST_PREFERENCES_SHOTS` naming a folder, each such line also
+  saves a picture of the window there, `navigation-<area>.png` or
+  `cloud-<area>.png`.
 - **Arrow keys** (mitcad#1211): `view.turn_left`, `view.turn_right`,
   `view.turn_up`, `view.turn_down` (Turn View Left, Right, Up, Down;
   actions without a tab: the command search, Keyboard Shortcuts, where
@@ -7223,7 +7380,12 @@ settings in the user's settings (`ViewSettings`, group `view`);
   application event filter accepts the `ShortcutOverride` of a turn
   command's key for any other widget with the keyboard (a value or text
   field, the Browser, the timeline, a list, a panel, a dialog), which then
-  gets the key as before. Logs `View turned right by 15 degrees` (`left`,
+  gets the key as before. The AppKit frontend keeps the same rule in its
+  window's key dispatch (`NativeMacWindow.mm`, `dispatchShortcut`,
+  mitcad#1351): a key among the turn actions' shortcuts goes to the first
+  responder (the Browser outline, the timeline, Projects, a control)
+  unless the keyboard is in the 3D view's host or the window itself.
+  Logs `View turned right by 15 degrees` (`left`,
   `up`, `down`), then the camera as it rests. Tests:
   `app/tests/camera_turn.cpp` (axis, angle, centre, zoom on both
   projections), `app/tests/NavigationTests.hpp` and
@@ -7234,7 +7396,13 @@ settings in the user's settings (`ViewSettings`, group `view`);
   `tools/ui-scripts/view-arrow-keys.mitcad-ui`: Right from the front
   view logs `Camera direction -0.259 0.966 0`, Left turns back, Up and
   Down in perspective, the zoom unchanged; with the keyboard in Extrude's
-  Distance field the keys leave the view as it is.
+  Distance field the keys leave the view as it is;
+  `tools/ui-macos-native-turn-keys-test.sh`
+  (`app.ui-macos-native-turn-keys`, the steps
+  `tools/ui-scripts/native-macos-turn-keys.mitcad-ui`): in the AppKit
+  frontend Down in the focused Browser outline selects the next body row
+  and Left in the focused timeline the feature before, the camera
+  unchanged, and Left with the 3D view focused turns it.
 - **Orbit past the edge of the screen** (mitcad#1281, GitHub
   mitcad/Mitcad#139): during an orbit (every orbit binding, a cube drag,
   F4 + left drag: OCCT's `AIS_MouseGesture_RotateOrbit`) the cursor jumps
@@ -7885,6 +8053,26 @@ next, and OK waits for it. Rules:
   and the browser's and timeline's queued calls wait (`whenIdle`;
   `BrowserController::follow`), context menus are dropped, `runCommand`
   refuses, autosave skips.
+- A key or wheel step in a panel's value field while its preview computes
+  (mitcad#1254) takes the length unit the window read before
+  (`MainWindow::lengthUnit`, its parameter source's too): Up in Move/Copy's
+  X Distance just after Paste New read the document there and ended the
+  application (mitcad#1360). A field whose source cannot answer is not
+  stepped (`Value field <label>: Up not stepped: the model is busy
+  computing`).
+- A `ModelBusy` that still escapes an event handler (a filter, a widget's
+  own handler, a timer) is caught where the event is delivered
+  (`framework/Application.hpp`'s `notify`), logged as `Input dropped while
+  the model computes: <event> on <class> <object name>` and the event
+  dropped (a close keeps its window open); Debug builds assert there too,
+  so that the path is found and made to wait. `test_app` checks it
+  (`tests/busy_input.cpp`), `tools/ui-paste-busy-keys-test.sh` and
+  `app.ui-windows-paste-busy-keys` the keys of the report. On macOS the net
+  cannot hold: Qt's frameworks there are built without exception support,
+  and an exception thrown inside Qt's event delivery is never unwound to
+  `notify` (the process terminates), so there a read must catch
+  `ModelBusy` itself, as the value field's step does; `busy_input.cpp`
+  checks only the dropped input's log line on macOS (mitcad#1382).
 - Drags end when the progress dialog blocks the window
   (`QEvent::WindowBlocked`: the view, sketch drags, manipulators, the
   timeline marker).
@@ -8235,7 +8423,9 @@ the Make tab's 3D Print group; `files/MainWindowPrint.cpp`,
   selection stands for (`printStartBodies`: a face, edge or vertex its
   body, an occurrence the bodies shown in it), or with nothing of that
   selected the bodies with a shown instance (`instances`); a body item per
-  placement, with its occurrence. A click on a body in the view adds or
+  placement, with its occurrence. The Make card's **Send to Slicer**
+  (mitcad#1377, [The Make tab](#the-make-tab)) starts it with the card's
+  body alone. A click on a body in the view adds or
   removes it (Ctrl and Shift as in other inputs, a window adds several);
   the bodies in it are highlighted whole in the input's colour. Its
   `withAccepts` takes solids and mesh bodies only (`geometry::body_kind`):
@@ -8292,7 +8482,12 @@ the Make tab's 3D Print group; `files/MainWindowPrint.cpp`,
 - **Use the open slicer window** (`reuse`, mitcad#1162): a check under
   Open in, its text beside the box on a row across the panel
   (`InputDef::textBeside`: in the labels' column the long label narrowed
-  every field), on by default, disabled with Folder only; remembered per user
+  every field; the macOS AppKit form likewise, an `NSButton` check box
+  with its title on a row across the form and no caption, mitcad#1354,
+  logged `Panel Send to Slicer input reuse: a check box with its text
+  across the form, <w> wide` beside `Panel Send to Slicer captions
+  column: <w> wide, its widest caption <key> <w> wide`;
+  `app.ui-macos-native-panel-rows`), on by default, disabled with Folder only; remembered per user
   as soon as it changes (setting `print/reuseWindow`, logged `3D Print
   open slicer window: on`, also when the panel opens). Send remembers
   each slicer process it starts by the design (its file, an unsaved
@@ -8414,7 +8609,9 @@ the Make tab's 3D Print group; `files/MainWindowPrint.cpp`,
   Draft`), and the Process row of Property Sets under headings that
   cannot be chosen, with the level's printer first (only
   when a process names a printer; logged `Property sets profile list:
-  …`, the headings among the names), and last, below a separator
+  …`, the headings among the names; in AppKit the cell's pop-up shows them
+  bold and not choosable, mitcad#1353, `Native choice native.properties.C0.Print
+  Process.profile.value: … (heading) …`), and last, below a separator
   line (`choiceSeparatorPrefix()`, mitcad#828), **New printer…** /
   **New process…** (`MainWindow::newDesignProfile`: a new profile in this
   design named by the model, `Process 1`, `Process 2`, ...,
@@ -9983,7 +10180,11 @@ fold kept; the Supplier filter's counts in part 6), BUILD in
 `tools/ui-build-test.sh` (part 8; part 9, the part a command starts with,
 mitcad#452) and `tools/ui-windows-build-test.ps1`
 (part 8; both with the tree for Profile's role: Slot profile with its
-Profiles, listing them, folded and unfolded by the arrow); the
+Profiles, listing them, folded and unfolded by the arrow), the search
+for a standard and a size on the parts library's ASTM A500 tubes in
+`tools/ui-tube-picker-test.sh` and `app.ui-windows-tube-picker`
+(mitcad#1372: A500 lists every row, A500 3x3x3/16 and A500 4x2x3/16 one
+tube each, A500 2x2x1/8 lists HSS 2x2x1/8); the
 manifest's side in `core/vcs/src/tests/library_groups.rs`. The stars that leave the tiles and the groups in place
 (mitcad#517) are in the BUILD tests' parts 8 and 9 (`Component picker tiles
 kept`, `Component picker groups kept`, then the order after switching the
@@ -11785,11 +11986,24 @@ SVG at several sizes (`themeIcon`).
     apply as before. The tooltip gets the line `Up/Down steps the value;
     Shift ×10, Ctrl ×0.1` (Option on macOS), added as it shows. Not in the
     parameter table's cells (Up and Down move between the rows), not in
-    the 3D view's value boxes, not in the native macOS interface's own
-    fields. Tests: the unit test `app/tests/value_step.cpp`,
-    `tools/ui-value-field-step-test.sh` and `app.ui-windows-value-field-step`
+    the 3D view's value boxes. The macOS AppKit frontend's value boxes
+    step by the same rules (mitcad#1350; `ParameterField::keyStep`,
+    `wheelStep`, `stepText` and `stepTooltip`, no second implementation):
+    the command form's value fields (`NativeForms.mm`: the arrow keys'
+    move commands of the field editor, one step per key event, and the
+    wheel over the field while it has the keyboard; the new text goes into
+    the field editor as typed, with its undo, and on to the session as a
+    typed value) and the sketch's tool fields and dimension editor
+    (`NativeInlineEditor.mm`: Up, Down and the focused wheel go to the
+    hidden Qt field's `ParameterField`, not to a window shortcut). Their
+    tooltips carry the same line. Tests: the unit test
+    `app/tests/value_step.cpp`, `tools/ui-value-field-step-test.sh` and
+    `app.ui-windows-value-field-step`
     (`tools/ui-windows-value-field-step-test.ps1`), one input script
-    `tools/ui-scripts/value-field-step.mitcad-ui`.
+    `tools/ui-scripts/value-field-step.mitcad-ui`; the AppKit frontend's
+    `app.ui-macos-native-value-step`
+    (`tools/ui-macos-native-value-step-test.sh`,
+    `tools/ui-scripts/native-macos-value-step.mitcad-ui`).
   - **fx:** the browser lists every parameter; what is typed then
     searches names and comments without changing the field; a choice goes
     in where the caret was when it opened (in place of a selection, so a
@@ -12032,7 +12246,8 @@ next screenshot.
 | `Ribbon split SKETCH/CREATE/Circles at x,y`, `Ribbon split SKETCH/CREATE/Circles arrow at x,y` | a subgroup's split button: the part that starts its default, the arrow that opens the submenu (mitcad#222; logged with the group menus) |
 | `Ribbon menu SKETCH/CREATE: Line \| Rectangles > [2-Point Rectangle \| …] \| … \| Sketch Dimension`, `Ribbon menu SKETCH/CREATE/Circles: Center Diameter Circle \| …` | a group menu or a subgroup's submenu as it opens (`-` a separator, a submenu as `Name > [its entries]`; the SOLID CREATE menu: `Create Sketch \| - \| Extrude \| … \| - \| Pattern > [Rectangular Pattern \| …] \| Mirror \| - \| Machine Elements > [Gear | Pulley | Bearing]`, mitcad#579)\| Pulley]`, mitcad#579) |
 | `Ribbon pinned SOLID/CREATE/solid.sweep at x,y` | a pinned command's button, in its own group (mitcad#1001, mitcad#1084; logged with the group menus) |
-| `Ribbon pinned folded SOLID/CREATE: solid.sweep`, `Ribbon pinned folded SOLID/CREATE: none` | a group's pinned buttons folded out of its row in a narrow window, before the group itself collapses (mitcad#1111), when they change; `none` when they are all back (`Ribbon::fitPage`) |
+| `Ribbon pinned folded SOLID/CREATE: solid.sweep`, `Ribbon pinned folded SOLID/CREATE: none` | a group's pinned buttons folded out of its row in a narrow window, before the group itself collapses (mitcad#1111), when they change; `none` when they are all back (`Ribbon::fitPage`; the AppKit ribbon's `layoutRibbon` too, mitcad#1357) |
+| `Native ribbon collapsed SOLID: SELECT, RENDER`, `Native ribbon collapsed SOLID: none` | the AppKit frontend: the tab's groups collapsed to their menus, when they change, logged before the folds of the same layout (mitcad#1357) |
 | `Ribbon menu dots SOLID/CREATE solid.sweep at x,y` | the ⋮ button of each command row of a group menu or submenu, as it shows (mitcad#1001) |
 | `Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar \| Change Keyboard Shortcut…`, `Toolbar menu entry Pin to Toolbar at x,y` | a command row's menu (also from a pinned button, with its group: `SOLID/CREATE`) and its entries' places, as it opens (mitcad#1001) |
 | `Native toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar`, `… Unpin from Toolbar`, `… Change Keyboard Shortcut…` | the AppKit frontend: an entry of a group menu's Pin to Toolbar or Change Keyboard Shortcut submenu, or of a pinned button's menu (with its group: `SOLID/CREATE`), chosen (mitcad#1074) |
@@ -12202,7 +12417,7 @@ next screenshot.
 | `Version watermark 'MitCad 0.42.0' at 1210,742: box 1166,734 88x16, view 0,64 1280x736`, `Version watermark hidden: preference` (`no room`), `Preferences: show the version in the view off` (`on`) | the version watermark (mitcad#1209, "The view"), when it changes and the window is visible: its centre, its rectangle and the view's in the main window's coordinates, or why it is hidden; the preference saved; `tools/ui-version-watermark-test.sh`, `app.ui-windows-version-watermark` |
 | `Saved named view NamedView1`, `View NamedView1`, `Deleted named view …` | named views |
 | `Rendered view on`/`off`, `No render worker (mitcad-render) next to the application: no rendered view`, `Render worker started (pid <n>): <path of mitcad-render>`, `Render frame memory 1: 910 x 735` (debug; the frame memory's id and capacity), `Render worker ready: Cycles 5.3.0 on <CPU>`, `Render scene 1: 2 bodies, 1 meshes sent (F4.b0), 1 meshed, 0 released`, `Render scene 1 applied in 2.1 ms: received F4.b0; added -; changed F4.b0; moved -; removed -; kept 1; meshes 3; instanced 0`, `Render view 3: orthographic 728 x 588` (debug; a view sent to the worker, once a navigation of the view ends, mitcad#214), `Render view 3: first frame (145 x 117) after 26 ms`, `Render view 3: first denoised frame (145 x 117, 1 samples) after 60 ms`, `Render frame view 3 728x588 samples 4 denoised covers x0,y0 x1,y1` (debug; what the frame's alpha covers, in view pixels; `denoised` for a denoised frame), `Render image dropped: camera moved` (debug; `size changed`, `animation`: the view draws the bodies shaded from this frame, once per navigation, mitcad#216), `Render view 3: 64 samples in 2.91 s`, `Render mesh F2.b0: 12 of 12 triangles turned to face outwards` (debug; a triangulation wound inwards, mitcad#319), `Render material swap F2.b0: default (transmission 0, opacity 1) -> glass_clear (transmission 1, opacity 1); mesh reused (the worker holds it)` (debug; `meshed again`, `sent again`), `Render brightness view 3 samples 16: 0.412 over 5321 pixels` (debug; the mean linear brightness of what the frame covers, `tools/ui-render-glass-test.sh`), `Render worker: render-ground off: the camera looks at the ground from below` (debug; `render-ground on: the camera is above the ground again`: the ground dropped and built again as the camera crosses its plane, mitcad#320, `tools/ui-render-ground-test.sh`), `Render worker stopped: <reason>`, `View message: <text>`, `Render worker ended` | View > Rendered (`tools/ui-render-test.sh`) |
-| `Preferences opened: General, 640 x 330` (the page shown and the size the window asks for), `Preferences page: General, minimum 520 x 300` (a page chosen and the minimum size it sets), `Preferences frame 700 x 420 at 330,170 on a screen of 1600 x 768 at 0,0` (once shown: the frame and the screen's available area), `Preferences minimum 520 x 300, resizable` (or `fixed`), `Preferences page list 140 wide, its entries 118` (the list's room and what its entries need; `tools/ui-preferences-test.sh`, mitcad#690), `Preferences: navigation middle-orbit, zoom to cursor on, …, autosave every 5 min` (or `…, autosave off`), `Preferences: default units for new designs in` (a changed choice, mitcad#1036), `Shortcut overview: 23 command shortcuts` | the dialogs |
+| `Preferences opened: General, 640 x 330` (the page shown and the size the window asks for), `Preferences page: General, minimum 520 x 300` (a page chosen and the minimum size it sets), `Preferences frame 700 x 420 at 330,170 on a screen of 1600 x 768 at 0,0` (once shown: the frame and the screen's available area), `Preferences minimum 520 x 300, resizable` (or `fixed`), `Preferences page list 140 wide, its entries 118` (the list's room and what its entries need; `tools/ui-preferences-test.sh`, mitcad#690), `Navigation page: bindings table 138 high, its last line 9 above the bottom of its area 610 high`, `Cloud page: known brokers list 110 high, its last line 11 above the bottom of its area 520 high` (the Navigation or Cloud page laid out, mitcad#1394), `Preferences: navigation middle-orbit, zoom to cursor on, …, autosave every 5 min` (or `…, autosave off`), `Preferences: default units for new designs in` (a changed choice, mitcad#1036), `Shortcut overview: 23 command shortcuts` | the dialogs |
 | `Section caps: 2 face(s) at {"normal":[1,0,0],"origin":[30,…]}, area 400.0`, `Section caps: 3 face(s) at {…}, area 599.5 (preview)`, `Section caps: none` | the caps of Section Analysis or Hide Above Sketch drawn (when they change), with their area in mm², a feature preview's with its clips (mitcad#943), and gone again (the bodies whole) |
 | `Computing section preview started`, `Section preview clips at {"plane":…} off the UI thread (section worker): 1 bodies, 1 new, 1 meshed in 30 ms`, `Section preview ready at {"plane":…}: 1 bodies from the section worker`, `Section round preview superseded` | a feature preview's bodies clipped at the section's plane off the UI thread (mitcad#943), a newer preview's round stopping one that runs |
 | `Section: F2.b0 shown whole: section: clip: SIGSEGV 'segmentation violation' detected. …` (warning) | a body whose clip failed, shown uncut (mitcad#392) |
@@ -12269,7 +12484,7 @@ next screenshot.
 | `Save to Project cancelled`, `Save to Project: <path> into a new project`, `Save to Project: <path> saved in <root>`, `Save to Project: <folder> is no project with versions`, `Recorded <path> in the project <root>` (the design was in the new project's folder already), `Preferences: cloud: git 2.47.0 at <path>…`, `Preferences: versions by git's user, else Name <email>` (or `nobody`), `Preferences: git …, remote checks every 10 min, each version sent on, live updates on, default broker none` | Save to Project; Preferences' Cloud page |
 | `Project picker <title>: a place, reading the projects` (`a design`, `a project`), `Project picker project <key>: local, <root>` (`cloud`, `no versions`; one per project offered; the key is its name, or its folder when another listed project has the same name), `Project picker <title>: 2 projects: Shop (local) \| acme/gripper (cloud)` (once read), `Project picker row <key> at x,y` (rows in sight: `<key>`, `<key>/<folder>/`, `<key>/<design path>`), `Project picker name at x,y`, `Project picker button Another Folder at x,y` (each button), `Project picker selected <key>`, `Project picker target <key>/parts/bolt.mitcad: free` (`exists`, `invalid`; when it changes), `Project picker <title>: chose <path>` (`another folder`, `another file`, `new project`, `cancelled`), `Project picker button New Project at x,y` | the project picker (mitcad#174; places in the main window's coordinates) |
 | `Project browser <title>: reading the projects`, `Project browser <title>: 2 projects: Shop (local) \| Team (cloud)` (once read, by name), `Project browser starts at Shop/parts/ (remembered)` (`(current project)`, `(first project)`), `Project browser shows Shop/parts/: sub/ \| gear.mitcad v2, changed, editing elsewhere` (`empty`; each place shown: its sub-folders, then its designs with the words of `Projects tree:`), `Project browser search "hex" in all projects: 1 found: Team/bolts/hex-bolt.mitcad` (`in <project key>`, `0 found`; as typed), `Project browser search scope: all projects` (`this project`), `Project browser read-only: on` (`off`), `Project browser selected <key>`, the places (debug, when they moved): `Project browser folder <key> at x,y` (the folders' tree, rows in sight: `Shop`, `Shop/parts/`), `Project browser item <key> at x,y` (the contents' rows in sight: `Shop/parts/sub/`, `Shop/parts/gear.mitcad`, a search's results too), `Project browser path <place key> at x,y` (the path bar), `Project browser search at x,y`, `Project browser scope at x,y`, `Project browser button <Another File\|Read-only\|Open\|Cancel> at x,y`; `Project browser <title>: chose <path>` (` (read-only)`; `another file`, `cancelled`) | File › Open from Project's project browser (mitcad#530; keys: a project's folder name, its whole path when two have the same; places in the main window's coordinates) |
-| `Updates: MitCad 0.0.0 for linux-x64, the AppImage <path>` (`installed in <folder>`, `announce only: <why>`), `Automatic update checks are off`, `Update checks are turned off by the administrator`, `Update check: the last was at <time>`, `Update check: manifest at <url>` (`releases at <url>`), `Update check: TLS OpenSSL 3.6.5 29 Sep 2026 (openssl backend)` (the TLS library of the first request; `Update check: TLS unavailable (Qt's TLS backends: <list>; Qt built with <version>)`), `Update request redirected to https://<host>`, `Update manifest: MitCad 0.1.0 of 2026-10-06 (available), 214 bytes for linux-x64` (`(current, expired on <date>)` for a newer release whose manifest expired, mitcad#938), `Update check: MitCad 0.0.1 is up to date`, `Update check: the manifest of MitCad 0.1.0 expired on <date>`, `Update notice (offer): <text> [Release Notes, Install, Skip This Version, Later]` (`(progress)`, `(message)`, `(error)`), `Update notice closed`, `Update: skipping MitCad 0.1.0`, `Update download: <url> (<n> bytes) to <path>`, `Update verified: <path>`, `Update rejected: <reason> (deleted <path>)`, `Update staged: 0.0.0 -> 0.1.0, <program> when MitCad has quit`, `Update: replaced <AppImage>`, `Update: started <program> (process <pid>)`, `Update installed: 0.0.0 -> 0.1.0` (`Update not installed: …`), `Update failed: <reason>`, `Preferences: update checks on, channel stable` | automatic updates ([docs/updates.md](../docs/updates.md); `tools/ui-update-test.sh`) |
+| `Updates: MitCad 0.0.0 for linux-x64, the AppImage <path>` (`installed in <folder>`, `announce only: <why>`), `Automatic update checks are off`, `Update checks are turned off by the administrator`, `Update check: the last was at <time>`, `Update check: manifest at <url>` (`releases at <url>`), `Update check: TLS OpenSSL 3.6.5 29 Sep 2026 (openssl backend)` (the TLS library of the first request; `Update check: TLS unavailable (Qt's TLS backends: <list>; Qt built with <version>)`), `Update request redirected to https://<host>`, `Update manifest: MitCad 0.1.0 of 2026-10-06 (available), 214 bytes for linux-x64` (`(current, expired on <date>)` for a newer release whose manifest expired, mitcad#938), `Update check: MitCad 0.0.1 is up to date`, `Update check: the manifest of MitCad 0.1.0 expired on <date>`, `Update check: MitCad 0.1.0 has no download for linux-x64 yet` (an automatic check of a release without this platform's download shows nothing, mitcad#1390), `Update notice (offer): <text> [Release Notes, Install, Skip This Version, Later]` (`[Release Notes, Later]` for a release without this platform's download, asked) (`(progress)`, `(message)`, `(error)`), `Update notice closed`, `Update: skipping MitCad 0.1.0`, `Update download: <url> (<n> bytes) to <path>`, `Update verified: <path>`, `Update rejected: <reason> (deleted <path>)`, `Update staged: 0.0.0 -> 0.1.0, <program> when MitCad has quit`, `Update: replaced <AppImage>`, `Update: started <program> (process <pid>)`, `Update installed: 0.0.0 -> 0.1.0` (`Update not installed: …`), `Update failed: <reason>`, `Preferences: update checks on, channel stable` | automatic updates ([docs/updates.md](../docs/updates.md); `tools/ui-update-test.sh`) |
 | `Live: <project>: off (no broker)` (`not allowed in Preferences`, `no versions`), `Live trust question: <project> through <address> [Connect, Not Now]`, `Live trust: <address> connect` (`not now`), `Live: <project>: <address> not trusted (Not Now): not connected`, `Keychain: read <host:port>: found, user <user>` (`not found`, `unavailable (<why>)`), `Keychain: saved <host:port>` (`save … failed (<why>)`), `Keychain: removed <host:port>`, `Live: <project> subscribes through <address>, prefix <prefix>, as <user>` (`anonymous`; `(<connection>, <state>)`), `Live: <project>: cannot connect to <address>: <why>`, `Live: connection c1 (<address>) connected` (`connecting`, `offline, again in <ms> ms`, `failed (auth_failed: <why>)`, `closed`), `Live: <project> subscribed`, `Live: <project> unsubscribed from c1[, which closed]`, `Live: <project>: the remote is checked (version abc1234)` (`connected again`), `Remote check: announced by live updates`, `Remote check: no timer while live updates are connected` (`the timer again (every 10 min)`), `Live: <project> published version abc1234` (`open <path>`, `closed <path>`, `lock <path>`), `Live event: <project>: open <file id> by <name> (editing) in session <id>` (`open … closed by session <id>[ (cleared: offline)]`, `version abc1234 on main by <name>`, `lock <file id> held by <name> (active)`, `lock … released`, `request <kind> <file id> from <name>`, `session <id> online` / `offline` / `left`, `dropped <reason> (<n> so far)`; ` (retained)`; ids are their first 8 characters), `Live notice: Live updates need you to sign in to <host> [Sign In, Not Now]`, `Live notice Sign In at x,y` (`Not Now`), `Live notice: Sign In` (`not now`), `Live sign-in dialog: <address>, user <user>, keychain on` (`off`), `Live sign-in refused: <why>`, `Live sign-in: <address> as <user>[, remembered]` (`cancelled`), `Live: signed out of <host:port>`, `Live: <address> forgotten: <project> disconnected`, `Live test dialog: <address>, prefix <prefix>[, as <user>]`, `Live test: <address>: ok; steps connect ok, sign_in ok, subscribe ok, publish ok, receive ok` (`failed (<class>: <why>)`), `Live: closed[, every connection left cleanly]`, `Preferences: known brokers: <address> (trusted, user <user>), …` (`none`), `Preferences: sign out of <host:port>`, `Preferences: forget <address>` | live updates (mitcad#89, `tools/ui-live-test.sh`); places in the main window's coordinates |
 | `Debug log on: <file> (--debug-log)` (`MITCAD_DEBUG_LOG`, `Preferences`), `Debug log off: <file>`, `Debug log not started: <why>`, `Debug log turned off from the project indicator`, `Preferences: debug log on` (`off`), `Project indicator: …, debug log on`, `Open Log Folder: <folder>`, `Report section log: 150 lines`, `Report section logfile: <file>`, `Report section logfile included` (`left out`), `Report debug log: <file>` | the debug log (mitcad#269): started and stopped (the file's own first and last lines too), Preferences' switch, the indicator, Help > Open Log Folder (with `MITCAD_TEST_LOG_URLS` the folder's address is logged, not opened), a report's recent log lines and log file |
 | `Wait cursor on: set_parameter (depth 1)`, `Wait cursor off: set_parameter (depth 1)`, `Wait cursor at idle: none set`, `Wait cursor left on after <job>: cleared` (a warning; ` (2 override cursors)`), `Wait cursor left on for a test: test hook` | the wait cursor of a job the window waits for (mitcad#268): set, and restored once by the progress dialog or at the wait's end (N counts the waits holding one, nested waits too); the first idle check after a wait; the idle recovery of one left on; the test hook (`MITCAD_TEST_WAIT_CURSOR=1`) |
@@ -13296,15 +13511,15 @@ drawing commands; it computes no geometry of its own.
   |---|---|---|---|
   | Base View (`drawing.base_view`) | a click: the view's middle | Shows (mitcad#725: the drawing's component by its name, `design`; each occurrence in it by its path of names, `occurrence:O1/O4`; each of its own bodies, `body:F2.b0`; from the `components` and `bodies` queries, `subjectChoices`), Orientation (Front, Top, Right, Back, Bottom, Left, Isometric, Isometric Top Left, Isometric Bottom Right, Isometric Bottom Left, Current View: the 3D view's camera as `{"toward_eye", "up"}`), Scale (Fit the Sheet, as in the view panel, or a scale, a ratio typed too, mitcad#1169), Hidden Edges, Tangent Edges, Shaded | `add_drawing_view` `base` (with `subject` unless the whole component, which the model records as the bodies the 3D view shows at that moment, mitcad#1293; `direction` the camera for Current View); then Projected View starts from it |
   | Projected View (`drawing.projected_view`) | a drag out of a view, or a click beside the view picked (the selected one, or one clicked) | | `add_drawing_view` `projected` with `at`; the side follows from where it is |
-  | Section View (`drawing.section_view`) | two clicks on a view: the line; a third: where it goes | Letter (the next free), Hatching, Look the Other Way | `add_drawing_view` `section` with `line`, `flip`, `at` |
+  | Section View (`drawing.section_view`) | two clicks on a view: the line; a third: where it goes. Each of the two snaps as Line's do, on the view of the first (mitcad#1362; shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`); the second, when it snaps to no point, turns about the first onto 0°, 45°, 90° or a multiple when within 4° of one, its length kept (`snapLineAngle`; the rubber band shows it with the hint `90°`, logged `Drawing snap: section line at 90 degrees` and `Drawing point 2 at x,y (at 90 degrees)`); a point wins over the angle; Shift: as clicked | Letter (the next free), Hatching, Look the Other Way | `add_drawing_view` `section` with `line`, `flip`, `at` |
   | Detail View (`drawing.detail_view`) | a click on a view (the middle), a second (the radius), a third: where it goes | Letter, Scale (Twice Its Parent's, as in the view panel, or a scale, a ratio typed too, mitcad#1169) | `add_drawing_view` `detail` with `at` |
-  | Break (`drawing.break`) | two clicks on a view: the band | Direction (Horizontal, Vertical) | `edit_drawing_view` `add_break` |
-  | Dimension (`drawing.dimension`) | Auto (`kAutoPicks`, mitcad#1272): one circle, arc or straight edge, placed at once (a click on another edge, circle or corner while it is placed is its second pick; Alt places), a corner and a second pick; then a click where it goes. The other types: two picks (a radius or diameter: one) | Type (Auto, Linear, Aligned, Angle, Radius, Diameter) | `add_drawing_annotation` `dimension` (Auto: the model chooses a diameter, a radius, an edge's length, an angle or a distance horizontal, vertical or aligned by the placing click), `linear` (Aligned: `"along": "aligned"`), `angle`, `radius`, `diameter` with `picks` and `at` |
+  | Break (`drawing.break`) | two clicks on a view: the band; each snaps as Section View's (mitcad#1362), without the angle (only where each side lies along its direction counts) | Direction (Horizontal, Vertical) | `edit_drawing_view` `add_break` |
+  | Dimension (`drawing.dimension`) | Auto (`kAutoPicks`, mitcad#1272): one circle, arc or straight edge, or on a section one piece of a cut edge (the piece under the click, beside a hole too, mitcad#1361), placed at once (a click on another edge, circle or corner while it is placed is its second pick; Shift or Alt places), a corner and a second pick; then a click where it goes. Which pick is placed at once is the model's `drawing_pick` `alone` (mitcad#1361); over a pick that is not, the hint says `Click it, then a second edge, circle or corner to dimension it from`, and once it is picked `Click a second edge, circle or corner to dimension it from (Esc: start again)` instead of a leader's preview. The other types: two picks (a radius or diameter: one) | Type (Auto, Linear, Aligned, Angle, Radius, Diameter) | `add_drawing_annotation` `dimension` (Auto: the model chooses a diameter, a radius, an edge's length, an angle or a distance horizontal, vertical or aligned by the placing click), `linear` (Aligned: `"along": "aligned"`), `angle`, `radius`, `diameter` with `picks` and `at` |
   | Ordinate (`drawing.ordinate`) | the origin, the point, then a click where the value goes | Direction (Horizontal, Vertical) | `ordinate` with `along` |
   | Baseline (`drawing.baseline`) | picks until a click that picks nothing, which places them (two at least) | Type (Baseline, Chain), Direction | `linear` with `series` |
   | Center Mark (`drawing.center_mark`) | a circle, or a round face seen from the side | | `center_mark` |
   | Centerline (`drawing.centerline`) | two circles, two parallel edges, or a curved slot's two sides (its centre arc, mitcad#1272) | | `centerline` |
-  | Line (`drawing.line`, mitcad#729) | two clicks anywhere: its ends; on a view each snaps to an edge's end, a straight edge's middle or a circle's or an arc's centre near it (mitcad#1272: `drawing_pick` with `"want": "snap"`, shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`; Alt: as clicked) | Drawn (In the View Clicked: the view under the first click, if any; On the Sheet), Line (Thin, Thick, Dashed, Center Line: `penChoices`) | `"type": "line"` with `points`, `pen`, and `view` or `sheet`; the tool stays |
+  | Line (`drawing.line`, mitcad#729) | two clicks anywhere: its ends; on a view each snaps to an edge's end, a straight edge's middle or a circle's or an arc's centre near it (mitcad#1272: `drawing_pick` with `"want": "snap"`, shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`), else onto a centre line near it, a round face's axis seen from the side or a centre mark's line, at the click's foot on it (mitcad#1362; the hover logged `Drawing hover: center line`); Shift (mitcad#1362), or Alt where the desktop leaves it to MitCad: as clicked | Drawn (In the View Clicked: the view under the first click, if any; On the Sheet), Line (Thin, Thick, Dashed, Center Line: `penChoices`) | `"type": "line"` with `points`, `pen`, and `view` or `sheet`; the tool stays |
   | Arc (`drawing.arc`, mitcad#729) | three clicks anywhere: its centre, start and end (a dashed line from the centre and the circle through the start follow the pointer), snapping as Line's | as Line's | `"type": "arc"` with `points`, `pen`, `view` or `sheet` |
   | Center Pattern (`drawing.center_pattern`, mitcad#729) | one circle seen end on | | `center_pattern`: the model finds the pattern's other holes |
   | Edge Extension (`drawing.edge_extension`, mitcad#729) | two straight edges, or one | Edges (Two, to Their Corner; One, Both Ways) | `edge_extension` |
@@ -13426,11 +13641,12 @@ drawing commands; it computes no geometry of its own.
   has nothing to snap to). A dimension dragged alone snaps the same way
   (`annotationDragged`, its outline at the snapped drag, `setDragSnap`;
   the drop's `move` the answer's, logged `Drawing dimension moved: …`);
-  several dragged together keep their drag. **Alt** held (Option on
-  macOS; pressed or released during the move, the preview follows)
+  several dragged together keep their drag. **Shift** held (since
+  mitcad#1362; or Alt, Option on macOS, where the desktop leaves it to
+  MitCad; pressed or released during the move, the preview follows)
   places or drops it where the pointer is (`, free`); the placing hints
-  of Dimension and Ordinate say so (`Click where the dimension goes (Alt:
-  no snap)`). While a job computes the model nothing is asked: the
+  of Dimension and Ordinate say so (`Click where the dimension goes
+  (Shift: no snap)`). While a job computes the model nothing is asked: the
   dimension goes where it is clicked. Tests:
   `tools/ui-drawing-dimension-spacing-test.sh`,
   `app.ui-windows-drawing-spacing`.
@@ -13453,10 +13669,23 @@ drawing commands; it computes no geometry of its own.
   move, the preview follows) drops it where the pointer is: Alt-drags
   move windows on many Linux desktops, so Alt is not needed, though it
   frees a drag too where the desktop leaves it to MitCad
-  (`DrawingSheetView::dragsFreely`; a dimension's drag likewise). A
-  dimension's placing click keeps Alt alone. Test:
+  (`DrawingSheetView::dragsFreely`; a dimension's drag likewise). Since
+  mitcad#1362 this one way frees every snap of the drawing: a
+  dimension's placing click, a second pick while one is placed, the
+  clicks of Line, Arc, Section View and Break. Test:
   `tools/ui-drawing-dimension-spacing-test.sh` (a datum's square dragged
   near 45°, then with Shift).
+- **Section lines and break sides snap** (mitcad#1362): Section View's
+  and Break's clicks snap as Line's (the table above), a section's second
+  to 0°, 45° and 90°; the line the sheet draws follows the snapped points
+  (the hover's point, or the turned one with its angle beside it), and
+  the section's line as placed is the snapped one. Tests:
+  `app/tests/drawing_sheet_view.cpp`, `app/tests/drawing_tools.cpp`
+  (`snapLineAngle`), `core/model-tests/drawing-views/src/pick_tests.rs`
+  (a snap onto a centre line), `tools/ui-drawing-section-snap-test.sh`,
+  `app.ui-windows-drawing-section-snap` (a vertical line through a hole's
+  centre and onto its centre line, 45°, Shift as clicked, a break's
+  sides).
 - **Sliding a datum's triangle** (mitcad#1295; the model's side in
   `commands.md`, *Annotations on drawing views*, `slide` and
   `tip_along`). A drag that starts on a datum label's filled triangle or
@@ -14029,7 +14258,8 @@ the window's live MCP server.
   "Claude Code (Claude Desktop's)" (mitcad#1297: by its path in either
   layout, `mcp::claudeDesktopKeepsClaudeCode`); every entry's sign-in state beside its
   name in the list (the item's `kAgentStateRole`, drawn by its delegate;
-  the item's text stays the name): checking, not found, needs an update,
+  the item's text stays the name; the AppKit pop-up shows it under the
+  name, the combo's `nativeItemDetailRole`, mitcad#1358): checking, not found, needs an update,
   not signed in, needs an API key, signing in, signed in, signed in as
   *account* (Claude Code's `claude auth status` `email`), ready (an API
   endpoint, a local model, the custom command), then "· same sign-in as
@@ -14576,6 +14806,23 @@ until CAM exists.
     component's value, or goes when the profile's value applies again.
   - With no values of its own the section says *No print values of its
     own: Add Print Value… adds one.*
+  - **Send to Slicer** (mitcad#1377), the section's last row, a button
+    named and drawn as the command (`print-3d`), opens Send to Slicer's
+    panel (`make.print3d`) as the ribbon's button does (`trigger`), with
+    the card's body alone in **Bodies**: the selection is made that body
+    in its occurrence first (`MainWindow::sendMakeCardToSlicer`; a face,
+    edge or vertex selected stands for its body), so `printStartBodies`
+    starts the panel with it whatever else is shown. Everything else in
+    the panel is as from the ribbon (Bed Face, Format, Open in, the
+    plates' choice), and bodies can still be added or removed there
+    before Send. The button is there only while the card is (one body),
+    and greyed while the command is (it follows the command's action).
+    Logged: `Make card send to slicer at x,y` (` (disabled)` after it
+    while greyed) with the card's places, `Make card send to slicer:
+    Body2` when clicked. Tests: `tools/ui-make-card-send-test.sh` and
+    `tools/ui-windows-make-card-send-test.ps1`
+    (`app.ui-windows-make-card-send`), the shared script
+    `tools/ui-scripts/make-card-send.mitcad-ui`.
   - The values set this way are the body-level `Print Process` and
     `Print Printer` properties the Properties window sets: Send to Slicer
     and the 3MF export write them, and the Browser's Make marker names
@@ -14588,11 +14835,24 @@ until CAM exists.
     margin on both sides, at any card width; a long material or process
     name is elided. Before, a drop-down of a long name made the page
     wider than the card, which cut the sections' right frames.
+  - **AppKit** (mitcad#1353): the generic bridge presents the card in the
+    native inspector. Printer and Process are fields with the short label
+    and a chevron that open the same picker as an AppKit popover under the
+    field (`PickerComboBox::showPopup`, `showNativePicker`: `Native picker
+    libraryPicker at makeCardPrinter: <n> rows`); the Material pop-up and
+    other plain drop-downs keep the shared items' lines, bold headings and
+    disabled items, which cannot be chosen (`Native choice <objectName>:
+    Standard | Any printer (heading) | Draft | --- | Edit… (disabled)` when
+    a drop-down has any). Add Print Value… opens through `openDialog`:
+    window modal, on macOS a sheet on the window in both frontends
+    (`Native sheet shown: Add Print Value (printValuePicker)`).
 - **Browser markers.** On the Make tab the rows of the bodies whose
   material or print settings differ from their component's (the
   `make_differences` query) have a small dot in the accent colour after
   their name; its tooltip names what differs (`Own material: ABS`, `Own
-  print settings: Walls, Process profile`). None on the other tabs.
+  print settings: Walls, Process profile`). None on the other tabs. The
+  AppKit outline draws the same dot with the same tooltip (mitcad#1352,
+  `BrowserPanel::PresentationRow::makeTip`).
 - **Log.** `Ribbon tab shown: MAKE` when a tab is shown; `Ribbon tabs:
   START, SOLID, BUILD, MAKE (shown SOLID)` after a drawing closes; the groups'
   places `Ribbon MAKE/ANNOTATE at x,y`, the buttons' `Ribbon button
@@ -14644,7 +14904,8 @@ only), `app.ui-windows-make-tab` (`tools/ui-windows-make-tab-test.ps1`,
 the same with the test's shortcuts for the Annotate entries) and
 `app.ui-macos-make-tab` / `app.ui-macos-native-make-tab`
 (`tools/ui-macos-make-tab-test.sh`: the tabs, the moved commands from the
-Make tab in Qt and from the toolbar's actions in AppKit, the card in Qt).
+Make tab in Qt and from the toolbar's actions in AppKit, the card in Qt,
+the Browser marker in both).
 The tests that kept measurements from the Measure panel
 (`tools/ui-annotations-test.sh`, `tools/ui-measurement-objects-test.sh`,
 `tools/ui-annotation-colour-test.sh` and their Windows counterparts, the
@@ -14744,7 +15005,7 @@ as a marker in the view, with a row in the browser.
   `center-of-mass`). Its light bulb runs `set_center_of_mass_visible`,
   in every mode as the Origin folder's (outside a command's undo range);
   its menu has Hide or Show and **Delete** (`delete_center_of_mass`, also
-  the Delete key). The marker and its light bulb are saved with the design
+  the Delete key, in the AppKit frontend too, mitcad#1358). The marker and its light bulb are saved with the design
   (the display state of a project stays outside the design file, as the
   Origin folder's does).
 

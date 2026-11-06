@@ -53,11 +53,24 @@ private:
 };
 
 #ifdef Q_OS_MACOS
-
+// Thread quality, process activity and window capture stay native in the
+// shared Qt UI experiment: they are system services, not presentation.
 void setThreadQuality(ThreadQuality quality);
 // Before model/section workers start: sets each default OCCT pool thread's
 // quality explicitly. Does not change the caller's quality or the pool size.
 void initializeComputeThreads();
+bool captureOwnWindows(const QString& path, QRectF* capturedBounds = nullptr);
+#else
+inline void setThreadQuality(ThreadQuality) {}
+inline void initializeComputeThreads() {}
+inline void ProcessActivity::start(const char*) {}
+inline void ProcessActivity::stop() {}
+inline ThreadQualityScope::ThreadQualityScope(ThreadQuality) {}
+inline ThreadQualityScope::~ThreadQualityScope() = default;
+inline bool captureOwnWindows(const QString&, QRectF* = nullptr) { return false; }
+#endif
+
+#ifdef MITCAD_MAC_UI
 
 // An SF Symbol (e.g. "arrow.uturn.backward") as an icon: a template image
 // drawn in the application palette's ButtonText colour (the palette's
@@ -125,8 +138,6 @@ void setGlassCornerRadius(QWidget* card, qreal cornerRadius);
 // a process's own windows. Optional bounds are logical screen coordinates,
 // with the window server's top-left origin, including the captured shadows.
 // False if it failed.
-bool captureOwnWindows(const QString& path, QRectF* capturedBounds = nullptr);
-
 // In-process UI driver only (MITCAD_TEST_INPUT): Qt can show a combo with
 // an AppKit menu even in the ordinary Qt frontend. Select its actual
 // enabled item after tracking starts. False with no error means that Qt
@@ -137,17 +148,9 @@ bool chooseTestPopup(const QString& title, const std::function<void()>& open,
 
 #else
 
-inline void setThreadQuality(ThreadQuality) {}
-inline void initializeComputeThreads() {}
-inline void ProcessActivity::start(const char*) {}
-inline void ProcessActivity::stop() {}
-inline ThreadQualityScope::ThreadQualityScope(ThreadQuality) {}
-inline ThreadQualityScope::~ThreadQualityScope() = default;
-
 inline bool glassAvailable() { return false; }
 inline void attachGlassWindow(QWidget*, QWidget*, qreal) {}
 inline void setGlassCornerRadius(QWidget*, qreal) {}
-inline bool captureOwnWindows(const QString&, QRectF* = nullptr) { return false; }
 inline bool chooseTestPopup(const QString&, const std::function<void()>& open,
                             const std::function<bool()>&, QString&, const std::function<void()>& = {}) {
   open();

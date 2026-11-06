@@ -138,7 +138,7 @@ MotionStudyDialog::MotionStudyDialog(MotionStudyHost host, const QString& study,
   mac::auxiliaryButton(add);
   mac::auxiliaryButton(remove);
   mac::styleListButtons(add, remove);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   auto* keyButtons = new QHBoxLayout;
   keyButtons->setSpacing(0);
   keyButtons->addWidget(add);

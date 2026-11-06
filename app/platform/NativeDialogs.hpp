@@ -58,9 +58,27 @@ inline void requestNativeFocus(QObject* field) {
   const quint64 previous = field->property(NativeFocusRequestProperty).toULongLong();
   field->setProperty(NativeFocusRequestProperty, QVariant::fromValue(previous + 1));
 }
-// Optional QVariantList of unmodified Qt keys owned by an item view's
-// shared event filter. Ordinary native table navigation stays in AppKit.
+// Optional QVariantList of Qt keys owned by an item view's shared key
+// handling (its keyPressEvent or event filter), each an int: a plain key, or
+// a combination with its modifiers (QKeyCombination::toCombined(), such as
+// QKeySequence::Copy's first). The focused native table sends them, and
+// Copy and Paste of the Edit menu, to the shared view (mitcad#1355).
+// Ordinary native table navigation stays in AppKit.
 inline constexpr char NativeModelKeysProperty[] = "nativeModelKeys";
+// Optional bool on a SelectItems item view whose cells, not its rows, are
+// selected, in ranges, as a spreadsheet's (mitcad#1355). A press selects
+// a cell (Shift extends the range from its anchor, Command adds or removes
+// a cell) and the arrows, with or without Shift, move the current cell,
+// both through the shared view's own mouse and key handling; a double
+// press or F2 edits the cell. The native rows are not highlighted; each
+// selected cell is tinted and the current one framed.
+inline constexpr char NativeCellSelectionProperty[] = "nativeCellSelection";
+// Optional bool on a list whose enabled rows that cannot be selected are
+// headings, such as the Appearances window's groups (mitcad#1355). Up and
+// Down reach them, as in the shared view: a heading becomes the current
+// row (framed, nothing selected), and the list's NativeModelKeysProperty
+// keys reach the shared view only while a heading is current.
+inline constexpr char NativeHeadingRowsProperty[] = "nativeHeadingRows";
 // A NoSelection checklist whose current row is a keyboard cursor, rather
 // than a selection. Arrows publish the visible model row; Space reaches
 // the shared view's event filter, and Tab reaches its
@@ -119,7 +137,7 @@ public:
   virtual void refresh() = 0;
 };
 
-#if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
+#if defined(MITCAD_MAC_UI) && defined(MITCAD_MACOS_NATIVE_UI)
 void bindNativeDialogWindow(QWidget* caller, void* nativeNSWindow);
 void* nativeDialogWindow(QWidget* caller = nullptr); // Borrowed document NSWindow; popup anchoring only.
 bool nativeDialogsActive();
@@ -163,7 +181,7 @@ struct NativeRowMoves {
   std::function<void(const QModelIndex& dragged, const QModelIndex& over)> drop;
   std::function<void(const QModelIndex& dragged, bool dragging)> dragging;
 };
-#if defined(Q_OS_MACOS) && defined(MITCAD_MACOS_NATIVE_UI)
+#if defined(MITCAD_MAC_UI) && defined(MITCAD_MACOS_NATIVE_UI)
 void setNativeRowMoves(QAbstractItemView* view, NativeRowMoves moves);
 #else
 inline void setNativeRowMoves(QAbstractItemView*, NativeRowMoves) {}

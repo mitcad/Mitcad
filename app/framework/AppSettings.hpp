@@ -55,7 +55,7 @@ struct GeneralSettings {
   // Open normally adds a document; this restores replacement in the
   // current window. macOS uses system window tabs instead of a Qt frame.
   bool openInCurrentWindow = false;
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   QString openDesignsIn = QStringLiteral("windows");
 #else
   QString openDesignsIn = QStringLiteral("tabs");

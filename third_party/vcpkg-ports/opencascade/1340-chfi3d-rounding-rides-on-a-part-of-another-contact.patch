@@ -1,0 +1,946 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose contact on a face lies along a part of another
+rounding's contact there, rides on that part (mitcad#1392). Example: a boss
+of radius 4.5 standing 2 out of a bar's end face, coaxial with the bar's
+half-round top (one cylinder face), its foot (the half circle below the
+top) and its rim (the whole circle) rounded together with 1, half the
+boss's height: both contacts on the cylinder lie on the circle at its
+middle, the foot's open contact along part of the rim's closed one.
+0153 and 0270 record such a pair only where the two contacts are one line
+both ways and neither stripe is closed, so ChFi3d_StripeEdgeInter found
+the common segment, which covers only part of the rim's contact, and threw
+("fillets have too big radiuses").
+
+- ChFi3d_Builder::Compute, where 0153 and 0270 record their pairs: an open
+  stripe whose contact on the face (its ends inside it or on its seam),
+  or each of its SurfData's contacts there, lies along a part of the
+  other stripe's contact (partOfContact; the other's may be closed) is
+  recorded as a ride on the other.
+- ApplyRides: each SurfData of the rider on the face, its ends as the
+  corners left them, rides on its own piece of the other's line: the
+  other's SurfData holding its contact is split at its ends (splitForPart,
+  with 0271's splitSurfDataAt), and the rider leaves the face there as in
+  0270. The face keeps its part along the rest of the other's line.
+- The piece's ends inside the other's line, and the rider's ends at the
+  junctions of its SurfData, are no ends of the stripes: each stripe makes
+  its own point there, made one once both are in the data structure, and
+  the shared line keeps one start and one end, the piece's
+  (keepPartLineEnds). Where the rider runs against the line, that is told
+  from its ends.
+- On the face's seam, where the rider ends at the start of the other's
+  closed line or crosses the seam, each stripe cut the seam as if alone,
+  keeping the face on the side the other consumes: the seam keeps the face
+  on a side only where both keep it (combineSeamPoints, joinSeamPoints).
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index b0d8907b..b4816e40 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -14,6 +14,7 @@
+ // Alternatively, this file may be used under the terms of Open CASCADE
+ // commercial license or contractual agreement.
+ 
++#include <initializer_list>
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Blend_FuncInv.hxx>
+ #include <BRepBlend_Line.hxx>
+@@ -273,6 +274,110 @@ static bool sameContact(const TopOpeBRepDS_DataStructure&   DStr,
+   return true;
+ }
+ 
++// Whether the contact of SurfData P on its side onP, both of whose ends lie
++// inside its face (or on its seam), lies along a part of the contact of
++// SurfData L on its side onL (a closed contact, or a longer one) within Tol:
++// the parameters of that part on L's line, in increasing order (U1 < U2),
++// within L's range; with theWhole, the whole of it too. Not where the part
++// runs over the start of a closed line.
++static bool partOfContact(const TopOpeBRepDS_DataStructure&   DStr,
++                          const occ::handle<ChFiDS_SurfData>& L,
++                          const int                           onL,
++                          const occ::handle<ChFiDS_SurfData>& P,
++                          const int                           onP,
++                          const double                        Tol,
++                          double&                             U1,
++                          double&                             U2,
++                          const bool                          theWhole = false)
++{
++  const ChFiDS_FaceInterference& IL = L->Interference(onL);
++  const ChFiDS_FaceInterference& IP = P->Interference(onP);
++  if (IL.LineIndex() <= 0 || IP.LineIndex() <= 0 || P->Index(onP) <= 0)
++  {
++    return false;
++  }
++  const TopoDS_Shape& aFace = DStr.Shape(P->Index(onP));
++  for (const bool f : {true, false})
++  {
++    const ChFiDS_CommonPoint& CP = P->Vertex(f, onP);
++    if (CP.IsOnArc()
++        && (CP.IsVertex() || aFace.ShapeType() != TopAbs_FACE
++            || !BRep_Tool::IsClosed(CP.Arc(), TopoDS::Face(aFace))))
++    {
++      return false;
++    }
++  }
++  const occ::handle<Geom_Curve>& CL = DStr.Curve(IL.LineIndex()).Curve();
++  const occ::handle<Geom_Curve>& CP = DStr.Curve(IP.LineIndex()).Curve();
++  if (CL.IsNull() || CP.IsNull())
++  {
++    return false;
++  }
++  const double l1 = std::min(IL.FirstParameter(), IL.LastParameter());
++  const double l2 = std::max(IL.FirstParameter(), IL.LastParameter());
++  // (P's contact between its ends: an analytic blend cut at its ends keeps
++  // its line's whole range.)
++  double       aD1 = 0., aD2 = 0.;
++  const double i1 = std::min(IP.FirstParameter(), IP.LastParameter());
++  const double i2 = std::max(IP.FirstParameter(), IP.LastParameter());
++  GeomAPI_ProjectPointOnCurve aEnd1(P->Vertex(true, onP).Point(), CP, i1, i2);
++  GeomAPI_ProjectPointOnCurve aEnd2(P->Vertex(false, onP).Point(), CP, i1, i2);
++  if (aEnd1.NbPoints() == 0 || aEnd2.NbPoints() == 0)
++  {
++    return false;
++  }
++  aD1             = aEnd1.LowerDistance();
++  aD2             = aEnd2.LowerDistance();
++  const double p1 = aEnd1.LowerDistanceParameter(), p2 = aEnd2.LowerDistanceParameter();
++  if (std::max(aD1, aD2) > Tol || l2 - l1 <= Precision::PConfusion()
++      || std::abs(p2 - p1) <= Precision::PConfusion())
++  {
++    return false;
++  }
++  // The points of P's contact along L's line, its ends at both ends of the
++  // samples: their parameters increasing or decreasing all the way.
++  const int aNb = 8;
++  double    u[aNb + 1];
++  for (int i = 0; i <= aNb; i++)
++  {
++    const gp_Pnt aP = i == 0     ? P->Vertex(true, onP).Point()
++                      : i == aNb ? P->Vertex(false, onP).Point()
++                                 : CP->Value(p1 + (p2 - p1) * i / aNb);
++    GeomAPI_ProjectPointOnCurve aProj(aP, CL, l1, l2);
++    if (aProj.NbPoints() == 0 || aProj.LowerDistance() > Tol)
++    {
++      return false;
++    }
++    u[i] = aProj.LowerDistanceParameter();
++  }
++  // (An end at the start of a closed line may project on either end of
++  // its range: the one beside the samples.)
++  const double aPeriod = l2 - l1;
++  const bool   aClosed = CL->Value(l1).Distance(CL->Value(l2)) <= Tol;
++  for (const int e : {0, aNb})
++  {
++    const double aNear = u[e == 0 ? 1 : aNb - 1];
++    if (aClosed && std::abs(u[e] - aNear) > 0.5 * aPeriod)
++    {
++      u[e] += u[e] < aNear ? aPeriod : -aPeriod;
++    }
++  }
++  const bool anUp = u[aNb] > u[0];
++  for (int i = 1; i <= aNb; i++)
++  {
++    if ((u[i] > u[i - 1]) != anUp)
++    {
++      return false;
++    }
++  }
++  U1 = std::min(u[0], u[aNb]);
++  U2 = std::max(u[0], u[aNb]);
++  const double aSlack = 1.e-9 * aPeriod + Precision::PConfusion();
++  // (A part, not the whole: some of L's line lies past it.)
++  return U1 >= l1 - aSlack && U2 <= l2 + aSlack && (theWhole || U1 > l1 + Tol || U2 < l2 - Tol)
++         && U2 - U1 > Precision::PConfusion();
++}
++
+ // Whether SurfData B is a part of SurfData A: the same two faces, its
+ // contact curves on those of A.
+ static bool coincidentSurfData(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -1227,6 +1332,35 @@ static bool findRideSurfData(const TopOpeBRepDS_DataStructure& DStr,
+   return !SD.IsNull();
+ }
+ 
++// The surface data of stripe S with a side on face F, in S's order, and
++// those sides; their number.
++static int surfDatasOn(const TopOpeBRepDS_DataStructure&                   DStr,
++                       const occ::handle<ChFiDS_Stripe>&                   S,
++                       const TopoDS_Shape&                                 F,
++                       NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SDs,
++                       NCollection_Sequence<int>&                          OnS)
++{
++  SDs.Clear();
++  OnS.Clear();
++  if (S->SetOfSurfData().IsNull())
++  {
++    return 0;
++  }
++  for (int i = 1; i <= S->SetOfSurfData()->Length(); i++)
++  {
++    const occ::handle<ChFiDS_SurfData>& aSD = S->SetOfSurfData()->Value(i);
++    for (int k = 1; k <= 2; k++)
++    {
++      if (aSD->Index(k) > 0 && DStr.Shape(aSD->Index(k)).IsSame(F))
++      {
++        SDs.Append(aSD);
++        OnS.Append(k);
++      }
++    }
++  }
++  return SDs.Length();
++}
++
+ bool ChFi3d_Builder::RideOf(const occ::handle<ChFiDS_Stripe>& S,
+                             TopoDS_Face&                      F,
+                             TopoDS_Edge&                      E,
+@@ -1713,6 +1847,67 @@ static occ::handle<ChFiDS_SurfData> splitSurfDataAt(TopOpeBRepDS_DataStructure&
+   return aNext;
+ }
+ 
++// SurfData I of stripe S split where its line on side onS reaches U1 and U2
++// (U1 < U2, parameters of that line; not at its ends), so that one piece's
++// contact runs from U1 to U2: that piece, null where a split fails (S as
++// it was). The pieces follow each other in S.
++static occ::handle<ChFiDS_SurfData> splitForPart(TopOpeBRepDS_DataStructure&       DStr,
++                                                 const occ::handle<ChFiDS_Stripe>& S,
++                                                 const int                         I,
++                                                 const int                         onS,
++                                                 const double                      U1,
++                                                 const double                      U2)
++{
++  const occ::handle<ChFiDS_SurfData> Fd = S->SetOfSurfData()->Value(I);
++  const ChFiDS_FaceInterference&     FI = Fd->Interference(onS);
++  const double                       t1 = FI.FirstParameter(), t2 = FI.LastParameter();
++  const bool                         forward = t1 <= t2;
++  const double lo = std::min(t1, t2), hi = std::max(t1, t2), aTol = 1.e-7 * (hi - lo);
++  // The cuts in the line's direction. (An array of their own: the elements
++  // of a braced list chosen by ?: would be a temporary gone by the loop.)
++  double       aCuts[2];
++  int          aNb         = 0;
++  const double aInOrder[2] = {forward ? U1 : U2, forward ? U2 : U1};
++  for (const double u : aInOrder)
++  {
++    if (u > lo + aTol && u < hi - aTol)
++    {
++      aCuts[aNb++] = u;
++    }
++  }
++  if (aNb == 0)
++  {
++    return occ::handle<ChFiDS_SurfData>();
++  }
++  // (Copies: undone where a later split fails.)
++  occ::handle<ChFiDS_SurfData> aFirst = new ChFiDS_SurfData();
++  aFirst->Copy(Fd);
++  occ::handle<ChFiDS_SurfData> aPieces[3] = {aFirst, nullptr, nullptr};
++  for (int c = 0; c < aNb; c++)
++  {
++    aPieces[c + 1] = splitSurfDataAt(DStr, aPieces[c], onS, aCuts[c]);
++    if (aPieces[c + 1].IsNull())
++    {
++      return occ::handle<ChFiDS_SurfData>();
++    }
++  }
++  // The part from U1 to U2: the middle of three, or of two the one away
++  // from the end of the line where the part reaches.
++  int aPart = 1;
++  if (aNb == 1)
++  {
++    const bool atStart = forward ? U1 <= lo + aTol : U2 >= hi - aTol;
++    aPart              = atStart ? 0 : 1;
++  }
++  NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = S->ChangeSetOfSurfData()->ChangeSequence();
++  aSeq.SetValue(I, aPieces[0]);
++  for (int c = aNb; c >= 1; c--)
++  {
++    aSeq.InsertAfter(I, aPieces[c]);
++  }
++  return aPieces[aPart];
++}
++
+ // Whether the contacts of stripes A and B on a face they share cross each
+ // other twice inside both (the face narrowing between their edges to less
+ // than the two roundings' width, part of the way): the SurfData of each
+@@ -2242,161 +2435,424 @@ static void turnRidesAgainst(TopOpeBRepDS_DataStructure&
+   }
+ }
+ 
+-void ChFi3d_Builder::ApplyRides()
++// The points where a part ride's blends meet inside the line of the stripe
++// ridden on (ApplyRides): each stripe makes its own point there, made one
++// once both are in the data structure.
++static NCollection_Sequence<gp_Pnt>& ChFi3d_PartRideEnds()
+ {
+-  TopOpeBRepDS_DataStructure&                            DStr = myDS->ChangeDS();
+-  NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itB(myRideStripes), itA(myRideOn);
+-  NCollection_List<TopoDS_Shape>::Iterator               itF(myRideFaces), itS(myRideSupports);
+-  for (; itB.More(); itB.Next(), itA.Next(), itF.Next(), itS.Next())
++  static thread_local NCollection_Sequence<gp_Pnt> theEnds;
++  return theEnds;
++}
++
++// (And the face whose contacts meet there.)
++static NCollection_Sequence<TopoDS_Shape>& ChFi3d_PartRideEndFaces()
++{
++  static thread_local NCollection_Sequence<TopoDS_Shape> theFaces;
++  return theFaces;
++}
++
++// The lines of the data structure that a part ride's blends share, with the
++// range of the piece of the line ridden on (from its first parameter to its
++// last): each stripe put its own ends on them (ChFi3d_FilDS), the rider's
++// the other way where it runs against the line.
++static NCollection_Sequence<int>& ChFi3d_PartRideLines()
++{
++  static thread_local NCollection_Sequence<int> theLines;
++  return theLines;
++}
++
++static NCollection_Sequence<gp_XY>& ChFi3d_PartRideRanges()
++{
++  static thread_local NCollection_Sequence<gp_XY> theRanges;
++  return theRanges;
++}
++
++// Where a part ride ends at the start of the closed line ridden on, on F's
++// seam: B's end cut the seam there as for B alone (F kept on the side B does
++// not consume); A's start, CP, cuts it as for A alone. The seam keeps F on a
++// side only where both keep it: B's interferences of point Ip on the seam
++// are made so (A's own, the same point, is then not added).
++static void combineSeamPoints(TopOpeBRepDS_DataStructure& DStr,
++                              const TopoDS_Face&          F,
++                              const int                   Ip,
++                              const ChFiDS_CommonPoint&   CP)
++{
++  if (!CP.IsOnArc() || !BRep_Tool::IsClosed(CP.Arc(), F) || !DStr.HasShape(CP.Arc()))
+   {
+-    const occ::handle<ChFiDS_Stripe>& A = itA.Value();
+-    const occ::handle<ChFiDS_Stripe>& B = itB.Value();
+-    occ::handle<ChFiDS_SurfData>      SA, SB;
+-    int                               onA = 0, onB = 0;
+-    if (!findRideSurfData(DStr, A, itF.Value(), SA, onA)
+-        || !findRideSurfData(DStr, B, itS.Value(), SB, onB))
++    return;
++  }
++  const int                                    Iarc = DStr.Shape(CP.Arc());
++  const occ::handle<TopOpeBRepDS_Interference> aA =
++    ChFi3d_FilPointInDS(CP.TransitionOnArc(), Iarc, Ip, CP.ParameterOnArc(), false);
++  NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& L = DStr.ChangeShapeInterferences(Iarc);
++  for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(L); it.More(); it.Next())
++  {
++    if (it.Value()->GeometryType() != TopOpeBRepDS_POINT || it.Value()->Geometry() != Ip)
+     {
+       continue;
+     }
+-    const ChFiDS_FaceInterference& FI = SA->Interference(onA);
+-    if (FI.LineIndex() <= 0)
++    TopOpeBRepDS_Transition&       T  = it.ChangeValue()->ChangeTransition();
++    const TopOpeBRepDS_Transition& TA = aA->Transition();
++    T.Before(T.Before() == TopAbs_IN && TA.Before() == TopAbs_IN ? TopAbs_IN : TopAbs_OUT, T.ShapeBefore());
++    T.After(T.After() == TopAbs_IN && TA.After() == TopAbs_IN ? TopAbs_IN : TopAbs_OUT, T.ShapeAfter());
++  }
++}
++
++// The interferences of point Ip on a seam of face F, where both stripes of a
++// part ride cut it there (each as alone): each keeping F on a side only
++// where all keep it.
++static void joinSeamPoints(TopOpeBRepDS_DataStructure& DStr, const TopoDS_Face& F, const int Ip)
++{
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (!BRep_Tool::IsClosed(E, F) || !DStr.HasShape(E))
+     {
+       continue;
+     }
+-    const occ::handle<Geom_Curve>& C  = DStr.Curve(FI.LineIndex()).Curve();
+-    const double                   t1 = FI.FirstParameter(), t2 = FI.LastParameter();
+-    if (C.IsNull() || t2 - t1 <= Precision::PConfusion())
++    NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& L = DStr.ChangeShapeInterferences(E);
++    bool aBefore = true, anAfter = true, aFound = false;
++    for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(L); it.More(); it.Next())
+     {
+-      continue;
++      if (it.Value()->GeometryType() == TopOpeBRepDS_POINT && it.Value()->Geometry() == Ip)
++      {
++        aFound  = true;
++        aBefore = aBefore && it.Value()->Transition().Before() == TopAbs_IN;
++        anAfter = anAfter && it.Value()->Transition().After() == TopAbs_IN;
++      }
+     }
+-    // Whether B runs along the line against A (the spines of the two edges
+-    // running opposite ways round the face between them: two rims of a
+-    // band whose circles turn opposite ways). B's own line on the support,
+-    // computed by rolling on A's, runs B's way.
+-    const bool against = rideRunsAgainst(DStr, SB, onB, C, t1, t2);
+-    // (B's start at A's start, or at A's end where B runs against A.)
+-    if (SB->Vertex(true, onB).Point().Distance(SA->Vertex(!against, onA).Point()) > 10. * tolapp3d)
++    if (!aFound)
+     {
+       continue;
+     }
+-    // Where F goes on past the line's ends (contact lines that coincide, F
+-    // standing for the support, not a strip), each end is either on one
+-    // arc of F for both (as on a strip) or, where F goes on, a point inside
+-    // F where both corners end, on the curves that cut F off there.
+-    bool              atPoint[2] = {false, false};
+-    const TopoDS_Face F          = TopoDS::Face(itF.Value());
+-    if (itS.Value().IsSame(F)
+-        && !isStripBetween(F, spineEdgeOf(A->Spine(), F), spineEdgeOf(B->Spine(), F)))
+-    {
+-      bool ends = true;
+-      for (int f = 0; f < 2 && ends; f++)
++    for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(L); it.More(); it.Next())
++    {
++      if (it.Value()->GeometryType() == TopOpeBRepDS_POINT && it.Value()->Geometry() == Ip)
+       {
+-        const ChFiDS_CommonPoint& CPA = SA->Vertex(f == 0, onA);
+-        const ChFiDS_CommonPoint& CPB = SB->Vertex((f == 0) != against, onB);
+-        if (CPA.IsOnArc() && CPB.IsOnArc())
+-        {
+-          ends = !CPA.IsVertex() && !CPB.IsVertex() && CPA.Arc().IsSame(CPB.Arc());
+-        }
+-        else
+-        {
+-          atPoint[f] = true;
+-          ends       = !CPA.IsOnArc() && !CPB.IsOnArc()
+-                 && CPA.Point().Distance(CPB.Point()) <= 10. * tolapp3d
+-                 && A->IndexPoint(f == 0, onA) > 0 && B->IndexPoint((f == 0) != against, onB) > 0;
+-        }
+-      }
+-      if (!ends || (!atPoint[0] && !atPoint[1]))
+-      {
+-        continue;
++        TopOpeBRepDS_Transition& T = it.ChangeValue()->ChangeTransition();
++        T.Before(aBefore ? TopAbs_IN : TopAbs_OUT, T.ShapeBefore());
++        T.After(anAfter ? TopAbs_IN : TopAbs_OUT, T.ShapeAfter());
+       }
+     }
+-    // The two blends meet on A's contact line: both sides hold that line,
+-    // each on its own surface, and lie on no face (F, between the line and
+-    // B's edge, has no contact line left and vanishes).
+-    const occ::handle<Geom2d_Curve> PCB = GeomProjLib::Curve2d(new Geom_TrimmedCurve(C, t1, t2),
+-                                                               t1,
+-                                                               t2,
+-                                                               DStr.Surface(SB->Surf()).Surface());
+-    if (PCB.IsNull())
++  }
++}
++
++// The ends of curve Ic, a part ride's line, once the points there are made
++// one: the point at T1 its start, the point at T2 its end, once each. (On a
++// periodic line the rider's ends the other way round, the start at T2 and
++// the end at T1, would make the rest of the period the edge.)
++static void keepPartLineEnds(TopOpeBRepDS_DataStructure& DStr, const int Ic, const double T1, const double T2)
++{
++  NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& L = DStr.ChangeCurveInterferences(Ic);
++  occ::handle<TopOpeBRepDS_CurvePointInterference>           aAt[2];
++  const double aTol = 1.e-7 * std::max(1., std::abs(T2 - T1));
++  for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(L); it.More(); it.Next())
++  {
++    const occ::handle<TopOpeBRepDS_CurvePointInterference> I =
++      occ::down_cast<TopOpeBRepDS_CurvePointInterference>(it.Value());
++    if (I.IsNull())
+     {
+       continue;
+     }
+-    ChFiDS_FaceInterference& aFIB = SB->ChangeInterference(onB);
+-    aFIB.SetInterference(FI.LineIndex(), aFIB.Transition(), PCB, PCB);
+-    // (Run from t2 to t1 where B runs against A: the line's transition on
+-    // B's surface is turned once B is in the data structure,
+-    // TurnRidesAgainst.)
+-    aFIB.SetFirstParameter(against ? t2 : t1);
+-    aFIB.SetLastParameter(against ? t1 : t2);
+-    if (onA == 1)
++    for (int e = 0; e < 2; e++)
+     {
+-      SA->ChangeIndexOfS1(0);
+-    }
+-    else
+-    {
+-      SA->ChangeIndexOfS2(0);
++      if (aAt[e].IsNull() && std::abs(I->Parameter() - (e == 0 ? T1 : T2)) <= aTol)
++      {
++        aAt[e] = I;
++      }
+     }
+-    if (onB == 1)
++  }
++  if (aAt[0].IsNull() || aAt[1].IsNull())
++  {
++    return;
++  }
++  NCollection_List<occ::handle<TopOpeBRepDS_Interference>> aKept;
++  for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(L); it.More(); it.Next())
++  {
++    if (occ::down_cast<TopOpeBRepDS_CurvePointInterference>(it.Value()).IsNull())
+     {
+-      SB->ChangeIndexOfS1(0);
+-      SB->SetIndexOfC1(0);
++      aKept.Append(it.Value());
+     }
+-    else
++  }
++  for (int e = 0; e < 2; e++)
++  {
++    aKept.Append(ChFi3d_FilPointInDS(e == 0 ? TopAbs_FORWARD : TopAbs_REVERSED,
++                                     Ic,
++                                     aAt[e]->Geometry(),
++                                     e == 0 ? T1 : T2,
++                                     aAt[e]->GeometryType() == TopOpeBRepDS_VERTEX));
++  }
++  L = aKept;
++}
++
++void ChFi3d_Builder::ApplyRides()
++{
++  TopOpeBRepDS_DataStructure&                            DStr = myDS->ChangeDS();
++  NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itB(myRideStripes), itA(myRideOn);
++  NCollection_List<TopoDS_Shape>::Iterator               itF(myRideFaces), itS(myRideSupports);
++  for (; itB.More(); itB.Next(), itA.Next(), itF.Next(), itS.Next())
++  {
++    const occ::handle<ChFiDS_Stripe>& A = itA.Value();
++    const occ::handle<ChFiDS_Stripe>& B = itB.Value();
++    // (B's SurfData on the support: one, or several where B's contact runs
++    // over F's seam, each riding on its own piece of A's line.)
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aSBs;
++    NCollection_Sequence<int>                          aOnBs;
++    if (surfDatasOn(DStr, B, itS.Value(), aSBs, aOnBs) == 0)
+     {
+-      SB->ChangeIndexOfS2(0);
+-      SB->SetIndexOfC2(0);
++      continue;
+     }
+-    // At the ends of the line the two blends meet on an arc between F and
+-    // the face at the end: that arc, from A's edge to B's, lies on F's side
+-    // of both blends and vanishes with F (as the edges of a face that a
+-    // blend rolling on an edge consumes, ChFi3d_CutConsumedFaces): it is cut
+-    // at its vertices, and the blends' points on it are mere points.
+-    for (int f = 0; f < 2; f++)
+-    {
+-      for (int s = 0; s < 2; s++)
++    for (int kb = 1; kb <= aSBs.Length(); kb++)
++    {
++      const occ::handle<ChFiDS_SurfData> SB  = aSBs(kb);
++      const int                          onB = aOnBs(kb);
++      occ::handle<ChFiDS_SurfData>       SA;
++      int                                onA = 0;
++      // A part ride (B's contact, its ends as the corners left them, along a
++      // part of A's): A's SurfData split at B's ends, B riding on the piece
++      // between. The piece's ends that are no ends of A lie inside A's line,
++      // and B's ends at the junctions of its SurfData are no ends of B: the
++      // stripes' points there are made one once both stripes are in the data
++      // structure (ChFi3d_PartRideEnds).
++      bool       aPartEnd[2] = {false, false};
++      const bool aJunction[2] = {aSBs.Length() > 1 && SB != B->SetOfSurfData()->First(),
++                                 aSBs.Length() > 1 && SB != B->SetOfSurfData()->Last()};
++      double     U1 = 0., U2 = 0.;
++      if (aSBs.Length() == 1 && findRideSurfData(DStr, A, itF.Value(), SA, onA))
+       {
+-        ChFiDS_CommonPoint& CP =
+-          s == 0 ? SA->ChangeVertex(f == 0, onA) : SB->ChangeVertex(f == 0, onB);
+-        if (!CP.IsOnArc() || CP.IsVertex())
++        if (partOfContact(DStr, SA, onA, SB, onB, 10. * tolapp3d, U1, U2))
++        {
++          int iA = 0;
++          for (int j = 1; j <= A->SetOfSurfData()->Length() && iA == 0; j++)
++          {
++            iA = A->SetOfSurfData()->Value(j) == SA ? j : 0;
++          }
++          const occ::handle<ChFiDS_SurfData> aPiece =
++            iA == 0 ? occ::handle<ChFiDS_SurfData>() : splitForPart(DStr, A, iA, onA, U1, U2);
++          if (aPiece.IsNull())
++          {
++            continue;
++          }
++          SA          = aPiece;
++          aPartEnd[0] = SA != A->SetOfSurfData()->First();
++          aPartEnd[1] = SA != A->SetOfSurfData()->Last();
++        }
++      }
++      else
++      {
++        // (The SurfData of A on F, not yet ridden, holding SB's contact,
++        // split where it holds more.)
++        NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aSAs;
++        NCollection_Sequence<int>                          aOnAs;
++        surfDatasOn(DStr, A, itF.Value(), aSAs, aOnAs);
++        for (int ja = 1; ja <= aSAs.Length() && SA.IsNull(); ja++)
++        {
++          if (!aSAs(ja)->IsOnCurve(aOnAs(ja))
++              && partOfContact(DStr, aSAs(ja), aOnAs(ja), SB, onB, 10. * tolapp3d, U1, U2, true))
++          {
++            SA  = aSAs(ja);
++            onA = aOnAs(ja);
++          }
++        }
++        if (SA.IsNull())
+         {
+           continue;
+         }
+-        TopoDS_Edge  anArc = CP.Arc();
+-        const gp_Pnt aP    = CP.Point();
+-        const double aPar  = CP.Parameter();
+-        CP.Reset();
+-        CP.SetPoint(aP);
+-        CP.SetParameter(aPar);
+-        if (s == 1)
++        const ChFiDS_FaceInterference& FA   = SA->Interference(onA);
++        const double                   aLo  = std::min(FA.FirstParameter(), FA.LastParameter());
++        const double                   aHi  = std::max(FA.FirstParameter(), FA.LastParameter());
++        const double                   aEps = 1.e-7 * (aHi - aLo);
++        if (U1 > aLo + aEps || U2 < aHi - aEps)
++        {
++          int iA = 0;
++          for (int j = 1; j <= A->SetOfSurfData()->Length() && iA == 0; j++)
++          {
++            iA = A->SetOfSurfData()->Value(j) == SA ? j : 0;
++          }
++          const occ::handle<ChFiDS_SurfData> aPiece =
++            iA == 0 ? occ::handle<ChFiDS_SurfData>() : splitForPart(DStr, A, iA, onA, U1, U2);
++          if (aPiece.IsNull())
++          {
++            continue;
++          }
++          SA = aPiece;
++        }
++        aPartEnd[0] = SA != A->SetOfSurfData()->First();
++        aPartEnd[1] = SA != A->SetOfSurfData()->Last();
++        if (!aPartEnd[0] && !aPartEnd[1] && !aJunction[0] && !aJunction[1])
+         {
+           continue;
+         }
+-        const int Iarc = DStr.AddShape(anArc);
+-        anArc.Orientation(TopAbs_FORWARD);
+-        for (TopExp_Explorer exv(anArc, TopAbs_VERTEX); exv.More(); exv.Next())
++      }
++      const ChFiDS_FaceInterference& FI = SA->Interference(onA);
++      if (FI.LineIndex() <= 0)
++      {
++        continue;
++      }
++      const occ::handle<Geom_Curve>& C  = DStr.Curve(FI.LineIndex()).Curve();
++      const double                   t1 = FI.FirstParameter(), t2 = FI.LastParameter();
++      if (C.IsNull() || t2 - t1 <= Precision::PConfusion())
++      {
++        continue;
++      }
++      // Whether B runs along the line against A (the spines of the two edges
++      // running opposite ways round the face between them: two rims of a
++      // band whose circles turn opposite ways). B's own line on the support,
++      // computed by rolling on A's, runs B's way.
++      // (For a part ride, B's start is at one end of A's piece: the piece's
++      // ends are B's.)
++      const bool aPart = aPartEnd[0] || aPartEnd[1] || aJunction[0] || aJunction[1];
++      const bool against =
++        aPart
++          ? SB->Vertex(true, onB).Point().Distance(SA->Vertex(false, onA).Point())
++              < SB->Vertex(true, onB).Point().Distance(SA->Vertex(true, onA).Point())
++          : rideRunsAgainst(DStr, SB, onB, C, t1, t2);
++      // (B's start at A's start, or at A's end where B runs against A.)
++      if (SB->Vertex(true, onB).Point().Distance(SA->Vertex(!against, onA).Point()) > 10. * tolapp3d)
++      {
++        continue;
++      }
++      // Where F goes on past the line's ends (contact lines that coincide, F
++      // standing for the support, not a strip), each end is either on one
++      // arc of F for both (as on a strip) or, where F goes on, a point inside
++      // F where both corners end, on the curves that cut F off there.
++      bool              atPoint[2] = {false, false};
++      const TopoDS_Face F          = TopoDS::Face(itF.Value());
++      if (itS.Value().IsSame(F)
++          && !isStripBetween(F, spineEdgeOf(A->Spine(), F), spineEdgeOf(B->Spine(), F)))
++      {
++        bool ends = true;
++        for (int f = 0; f < 2 && ends; f++)
+         {
+-          const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
+-          DStr.ChangeShapeInterferences(Iarc).Append(
+-            ChFi3d_FilVertexInDS(TopAbs::Reverse(vv.Orientation()),
+-                                 Iarc,
+-                                 DStr.AddShape(vv),
+-                                 BRep_Tool::Parameter(vv, anArc)));
++          const ChFiDS_CommonPoint& CPA = SA->Vertex(f == 0, onA);
++          const ChFiDS_CommonPoint& CPB = SB->Vertex((f == 0) != against, onB);
++          // (A part ride's piece of a closed line may end at the line's start
++          // on F's seam, which F keeps: an end inside F.)
++          const bool aOnArcA = CPA.IsOnArc() && !(aPart && BRep_Tool::IsClosed(CPA.Arc(), F));
++          const bool aOnArcB = CPB.IsOnArc() && !(aPart && BRep_Tool::IsClosed(CPB.Arc(), F));
++          if (aOnArcA && aOnArcB)
++          {
++            ends = !CPA.IsVertex() && !CPB.IsVertex() && CPA.Arc().IsSame(CPB.Arc());
++          }
++          else
++          {
++            atPoint[f] = true;
++            ends       = !aOnArcA && !aOnArcB && CPA.Point().Distance(CPB.Point()) <= 10. * tolapp3d
++                   && (aPart
++                       || (A->IndexPoint(f == 0, onA) > 0 && B->IndexPoint((f == 0) != against, onB) > 0));
++          }
++        }
++        if (!ends || (!atPoint[0] && !atPoint[1]))
++        {
++          continue;
+         }
+       }
+-    }
+-    // B's points on the line are A's.
+-    for (int f = 0; f < 2; f++)
+-    {
+-      if (A->IndexPoint(f == 0, onA) > 0)
++      // The two blends meet on A's contact line: both sides hold that line,
++      // each on its own surface, and lie on no face (F, between the line and
++      // B's edge, has no contact line left and vanishes).
++      const occ::handle<Geom2d_Curve> PCB = GeomProjLib::Curve2d(new Geom_TrimmedCurve(C, t1, t2),
++                                                                 t1,
++                                                                 t2,
++                                                                 DStr.Surface(SB->Surf()).Surface());
++      if (PCB.IsNull())
++      {
++        continue;
++      }
++      ChFiDS_FaceInterference& aFIB = SB->ChangeInterference(onB);
++      aFIB.SetInterference(FI.LineIndex(), aFIB.Transition(), PCB, PCB);
++      // (Run from t2 to t1 where B runs against A: the line's transition on
++      // B's surface is turned once B is in the data structure,
++      // TurnRidesAgainst.)
++      aFIB.SetFirstParameter(against ? t2 : t1);
++      aFIB.SetLastParameter(against ? t1 : t2);
++      if (onA == 1)
++      {
++        SA->ChangeIndexOfS1(0);
++      }
++      else
++      {
++        SA->ChangeIndexOfS2(0);
++      }
++      if (onB == 1)
++      {
++        SB->ChangeIndexOfS1(0);
++        SB->SetIndexOfC1(0);
++      }
++      else
+       {
+-        const int aNew  = A->IndexPoint(f == 0, onA);
+-        const int anOld = B->IndexPoint((f == 0) != against, onB);
+-        B->SetIndexPoint(aNew, (f == 0) != against, onB);
+-        // (At an end inside F, B's corner already used its own point: the
+-        // corners' curves there, which cut F off, meet at A's.)
+-        if (atPoint[f] && anOld > 0 && anOld != aNew)
++        SB->ChangeIndexOfS2(0);
++        SB->SetIndexOfC2(0);
++      }
++      // At the ends of the line the two blends meet on an arc between F and
++      // the face at the end: that arc, from A's edge to B's, lies on F's side
++      // of both blends and vanishes with F (as the edges of a face that a
++      // blend rolling on an edge consumes, ChFi3d_CutConsumedFaces): it is cut
++      // at its vertices, and the blends' points on it are mere points.
++      for (int f = 0; f < 2; f++)
++      {
++        for (int s = 0; s < 2; s++)
+         {
+-          redirectPoint(DStr, anOld, aNew);
++          ChFiDS_CommonPoint& CP =
++            s == 0 ? SA->ChangeVertex(f == 0, onA) : SB->ChangeVertex(f == 0, onB);
++          if (!CP.IsOnArc() || CP.IsVertex() || (aPart && BRep_Tool::IsClosed(CP.Arc(), F)))
++          {
++            continue;
++          }
++          TopoDS_Edge  anArc = CP.Arc();
++          const gp_Pnt aP    = CP.Point();
++          const double aPar  = CP.Parameter();
++          CP.Reset();
++          CP.SetPoint(aP);
++          CP.SetParameter(aPar);
++          if (s == 1)
++          {
++            continue;
++          }
++          const int Iarc = DStr.AddShape(anArc);
++          anArc.Orientation(TopAbs_FORWARD);
++          for (TopExp_Explorer exv(anArc, TopAbs_VERTEX); exv.More(); exv.Next())
++          {
++            const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++            DStr.ChangeShapeInterferences(Iarc).Append(
++              ChFi3d_FilVertexInDS(TopAbs::Reverse(vv.Orientation()),
++                                   Iarc,
++                                   DStr.AddShape(vv),
++                                   BRep_Tool::Parameter(vv, anArc)));
++          }
++        }
++      }
++      if (aPart)
++      {
++        ChFi3d_PartRideLines().Append(FI.LineIndex());
++        ChFi3d_PartRideRanges().Append(gp_XY(t1, t2));
++      }
++      // B's points on the line are A's.
++      for (int f = 0; f < 2; f++)
++      {
++        if (aPartEnd[f] || aJunction[((f == 0) != against) ? 0 : 1])
++        {
++          ChFi3d_PartRideEnds().Append(SA->Vertex(f == 0, onA).Point());
++          ChFi3d_PartRideEndFaces().Append(F);
++          continue;
++        }
++        if (A->IndexPoint(f == 0, onA) > 0)
++        {
++          const int aNew  = A->IndexPoint(f == 0, onA);
++          const int anOld = B->IndexPoint((f == 0) != against, onB);
++          B->SetIndexPoint(aNew, (f == 0) != against, onB);
++          // (At an end inside F, B's corner already used its own point: the
++          // corners' curves there, which cut F off, meet at A's.)
++          if (atPoint[f] && anOld > 0 && anOld != aNew)
++          {
++            // (A part ride ending at the start of A's closed line, on F's
++            // seam: B's end there cut the seam as for B alone, keeping the
++            // seam's side A consumes; A's own point cuts it instead.)
++            if (aPart)
++            {
++              combineSeamPoints(DStr, F, anOld, SA->Vertex(f == 0, onA));
++            }
++            redirectPoint(DStr, anOld, aNew);
++          }
+         }
+       }
+     }
+@@ -2619,6 +3075,10 @@ void ChFi3d_Builder::Compute()
+   myFailedStripe.Nullify();
+   myNarrowParts.Clear();
+   ChFi3d_PivotEnds().Clear();
++  ChFi3d_PartRideEnds().Clear();
++  ChFi3d_PartRideEndFaces().Clear();
++  ChFi3d_PartRideLines().Clear();
++  ChFi3d_PartRideRanges().Clear();
+   myStripeFailed.Clear();
+   myStripeFailure.Clear();
+   const auto noteFailure = [this](const occ::handle<ChFiDS_Stripe>& S, const FailureKind K) {
+@@ -3098,10 +3558,12 @@ void ChFi3d_Builder::Compute()
+         {
+           continue;
+         }
+-        for (int i = 1; i <= A->SetOfSurfData()->Length(); i++)
++        // (Once a stripe's SurfData is split for a part ride, the pair is done.)
++        bool aPartRide = false;
++        for (int i = 1; i <= A->SetOfSurfData()->Length() && !aPartRide; i++)
+         {
+-          const occ::handle<ChFiDS_SurfData>& a = A->SetOfSurfData()->Value(i);
+-          for (int ka = 1; ka <= 2; ka++)
++          const occ::handle<ChFiDS_SurfData> a = A->SetOfSurfData()->Value(i);
++          for (int ka = 1; ka <= 2 && !aPartRide; ka++)
+           {
+             if (a->Index(ka) <= 0 || a->IsOnCurve(ka))
+             {
+@@ -3113,15 +3575,88 @@ void ChFi3d_Builder::Compute()
+             if (!findRideSurfData(DStr, A, F, SA, onA) || !findRideSurfData(DStr, B, F, SB, onB)
+                 || SB->IsOnCurve(onB))
+             {
++              // (A part ride whose open stripe has several SurfData on F,
++              // its contact running over F's seam: each a part of the
++              // other's contact.)
++              for (int r = 0; r < 2 && !aPartRide; r++)
++              {
++                const occ::handle<ChFiDS_Stripe>& L = r == 0 ? A : B;
++                const occ::handle<ChFiDS_Stripe>& P = r == 0 ? B : A;
++                occ::handle<ChFiDS_SurfData>      SL;
++                int                               onL = 0;
++                NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aPs;
++                NCollection_Sequence<int>                          aOnPs;
++                if (P->Spine()->IsClosed() || P->Spine()->IsPeriodic() || !findRideSurfData(DStr, L, F, SL, onL)
++                    || SL->IsOnCurve(onL) || surfDatasOn(DStr, P, F, aPs, aOnPs) < 2)
++                {
++                  continue;
++                }
++                const TopoDS_Edge EL = spineEdgeOf(L->Spine(), F);
++                const TopoDS_Edge EP = spineEdgeOf(P->Spine(), F);
++                if (EL.IsNull() || EP.IsNull() || EL.IsSame(EP) || isStripBetween(F, EL, EP))
++                {
++                  continue;
++                }
++                bool aAll = true;
++                for (int k = 1; k <= aPs.Length() && aAll; k++)
++                {
++                  double U1 = 0., U2 = 0.;
++                  aAll = !aPs(k)->IsOnCurve(aOnPs(k))
++                         && partOfContact(DStr, SL, onL, aPs(k), aOnPs(k), tolc, U1, U2, true);
++                }
++                if (!aAll)
++                {
++                  continue;
++                }
++                myRideStripes.Append(P);
++                myRideOn.Append(L);
++                myRideFaces.Append(F);
++                myRideEdges.Append(TopoDS_Edge());
++                myRideSupports.Append(F);
++                aPartRide = true;
++              }
+               continue;
+             }
+             const TopoDS_Edge EA = spineEdgeOf(A->Spine(), F);
+             const TopoDS_Edge EB = spineEdgeOf(B->Spine(), F);
+-            if (EA.IsNull() || EB.IsNull() || EA.IsSame(EB)
+-                || !sameContact(DStr, SA, onA, SB, onB, tolc)
+-                || !sameContact(DStr, SB, onB, SA, onA, tolc)
++            if (EA.IsNull() || EB.IsNull() || EA.IsSame(EB))
++            {
++              continue;
++            }
++            if (!sameContact(DStr, SA, onA, SB, onB, tolc) || !sameContact(DStr, SB, onB, SA, onA, tolc)
+                 || SB->Vertex(true, onB).Point().Distance(SA->Vertex(true, onA).Point()) > tolc)
+             {
++              // One open stripe's contact, both of whose ends lie inside F,
++              // along a part of the other's (a boss's foot rounded part of
++              // the way round, its rim all round, with half the boss's
++              // height): the open one rides on that part, F keeping the
++              // rest (ApplyRides splits the other's SurfData at the part's
++              // ends as the corners leave them).
++              if (isStripBetween(F, EA, EB))
++              {
++                continue;
++              }
++              for (int r = 0; r < 2 && !aPartRide; r++)
++              {
++                const occ::handle<ChFiDS_Stripe>&   L   = r == 0 ? A : B;
++                const occ::handle<ChFiDS_Stripe>&   P   = r == 0 ? B : A;
++                const occ::handle<ChFiDS_SurfData>& SL  = r == 0 ? SA : SB;
++                const occ::handle<ChFiDS_SurfData>& SP  = r == 0 ? SB : SA;
++                const int                           onL = r == 0 ? onA : onB;
++                const int                           onP = r == 0 ? onB : onA;
++                double                              U1 = 0., U2 = 0.;
++                if (P->Spine()->IsClosed() || P->Spine()->IsPeriodic()
++                    || !partOfContact(DStr, SL, onL, SP, onP, tolc, U1, U2))
++                {
++                  continue;
++                }
++                myRideStripes.Append(P);
++                myRideOn.Append(L);
++                myRideFaces.Append(F);
++                myRideEdges.Append(TopoDS_Edge());
++                myRideSupports.Append(F);
++                aPartRide = true;
++              }
+               continue;
+             }
+             // F vanishes: its other edges join a vertex of EA to one of EB.
+@@ -3396,6 +3931,21 @@ void ChFi3d_Builder::Compute()
+                   aCutAgainst(ip),
+                   10. * tolapp3d);
+     }
++    // (Where a part ride's blends meet inside the line ridden on, each
++    // stripe made its own point.)
++    for (int ip = 1; done && ip <= ChFi3d_PartRideEnds().Length(); ip++)
++    {
++      const int aP = mergePointsAt(DStr, ChFi3d_PartRideEnds()(ip), 10. * tolapp3d);
++      if (aP > 0)
++      {
++        joinSeamPoints(DStr, TopoDS::Face(ChFi3d_PartRideEndFaces()(ip)), aP);
++      }
++    }
++    for (int il = 1; done && il <= ChFi3d_PartRideLines().Length(); il++)
++    {
++      const int Ic = ChFi3d_PartRideLines()(il);
++      keepPartLineEnds(DStr, Ic, ChFi3d_PartRideRanges()(il).X(), ChFi3d_PartRideRanges()(il).Y());
++    }
+     // (Rides on a contact line against it use the line the other way.)
+     if (done)
+     {

@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include <QApplication>
+#include <QStyleFactory>
 #include <QCommandLineParser>
 #include <QFileInfo>
 #include <QIcon>
@@ -29,6 +30,7 @@
 #include "files/F3dImport.hpp"
 #include "files/FileOpenFilter.hpp"
 #include "framework/AppSettings.hpp"
+#include "framework/Application.hpp"
 #include "framework/AppTheme.hpp"
 #include "framework/ChromeStyle.hpp"
 #include "framework/DebugLog.hpp"
@@ -47,6 +49,7 @@
 #include "mcp/LiveServer.hpp"
 #include "mcp/LogRing.hpp"
 #include "platform/MacChrome.hpp"
+#include "platform/MacTestApplication.hpp"
 #include "platform/WindowsTheme.hpp"
 #include "print/MaterialProperties.hpp"
 #include "report/CrashHandler.hpp"
@@ -199,9 +202,37 @@ int runApplication(int argc, char* argv[]) {
     qCritical("MITCAD_TEST_HEADLESS requires a Qt offscreen UI script");
     return 2;
   }
-  if (mitcad::headlessUiTest()) QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
-  QApplication app(argc, argv);
-  if (mitcad::headlessUiTest()) qInfo("Headless UI test: Qt offscreen; no viewport");
+  if (mitcad::headlessUiTest()) {
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
+    QString error;
+    if (!mitcad::mac::prepareHeadlessTestApplication(error)) {
+      qCritical().noquote() << error;
+      return 2;
+    }
+  }
+  // Its notify() drops an event whose handler read the model while a job
+  // computes it, instead of ending the application (mitcad#1360).
+  mitcad::Application app(argc, argv);
+#ifdef MITCAD_MACOS_SHARED_QT_UI
+  // The shared Qt presentation (experiment/macos-shared-qt-ui): Qt's portable
+  // style, the one Linux uses, instead of Qt's macOS style. It is the only
+  // built-in key that is neither "macOS" nor "Windows".
+  for (const QString& key : QStyleFactory::keys()) {
+    if (key.compare(QStringLiteral("macOS"), Qt::CaseInsensitive) != 0 &&
+        key.compare(QStringLiteral("Windows"), Qt::CaseInsensitive) != 0) {
+      QApplication::setStyle(key);
+      break;
+    }
+  }
+#endif
+  if (mitcad::headlessUiTest()) {
+    QString error;
+    if (!mitcad::mac::headlessTestApplicationIsolated(error)) {
+      qCritical().noquote() << error;
+      return 2;
+    }
+    qInfo("Headless UI test: Qt offscreen; no viewport");
+  }
   // UI tests' sync key (MITCAD_TEST_SYNC), before the window's timers exist.
   mitcad::TestSync::installIfRequested();
   // What the UI tests type into text fields (MITCAD_LOG_TYPED_TEXT).

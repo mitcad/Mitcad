@@ -15,7 +15,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 #include <QImage>
 #include <QPainter>
 #include <QProxyStyle>
@@ -213,7 +213,7 @@ void delegateTests() {
   CHECK(tree.topLevelItem(tree.topLevelItemCount() - 2)->text(1) == s("d1 * 2"));
 }
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 // Observe the actual installed column delegate's paint options, including
 // its standard fallback, without depending on native rasterisation details.
 class CellStyle : public QProxyStyle {
@@ -337,7 +337,7 @@ int decimalAlignTests() {
   splitTests();
   layoutTests();
   delegateTests();
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   macRejectedCellTests();
 #endif
   return failures;

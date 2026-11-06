@@ -1407,7 +1407,9 @@ QVector<BrowserPanel::PresentationRow> BrowserPanel::presentationRows() const {
     rows.append({key, parent, node, item->toolTip(0), icon, item->isExpanded(),
                  item->data(kName, kRadioRole).isValid(), item->data(kName, kRadioRole).toBool(),
                  item->data(kName, kBindingsRole).toInt(), rowTone(item),
-                 item->data(kName, kEyeTipRole).toString(), item->data(kName, kEyeBoundRole).toBool()});
+                 item->data(kName, kEyeTipRole).toString(), item->data(kName, kEyeBoundRole).toBool(),
+                 item->data(kName, kMakeRole).toString(),
+                 item->data(kName, kEyeRole).toBool() && item->data(kName, kEyeTransparentRole).toBool()});
     for (int index = 0; index < item->childCount(); ++index) {
       self(self, item->child(index), key);
     }
@@ -2380,6 +2382,7 @@ void BrowserPanel::setMakeMarkers(const QHash<QString, QString>& markers) {
   }
   m_makeMarkers = markers;
   applyMakeMarkers();
+  emit rowsRestyled(); // the AppKit outline's markers (mitcad#1352)
 }
 
 void BrowserPanel::setAnalysisNotes(const QHash<QString, AnalysisNote>& notes) {
@@ -2388,6 +2391,7 @@ void BrowserPanel::setAnalysisNotes(const QHash<QString, AnalysisNote>& notes) {
   }
   m_analysisNotes = notes;
   applyAnalysisNotes();
+  emit rowsRestyled(); // the AppKit outline's row (mitcad#1352)
 }
 
 void BrowserPanel::applyAnalysisNotes() {
@@ -2820,6 +2824,12 @@ bool BrowserPanel::revealKeys(const QSet<QString>& keys) {
 void BrowserPanel::startRename(const BrowserNode& node) {
   for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
     if (keyOf(it.value()) == keyOf(node) && (it.key()->flags() & Qt::ItemIsEditable)) {
+      if (m_presentationRenamer) {
+        if (m_presentationRenamer(keyOf(node))) {
+          qDebug().noquote() << QStringLiteral("Renaming %1").arg(node.path.isEmpty() ? node.name : node.path);
+        }
+        return;
+      }
       m_tree->setFocus();
       m_tree->setCurrentItem(it.key(), kName);
       m_tree->scrollToItem(it.key());

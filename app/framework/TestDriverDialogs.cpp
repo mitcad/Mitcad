@@ -133,7 +133,7 @@ void TestDriver::testDialogControls(const QString& kind) {
   for (QTableView* table : window->findChildren<QTableView*>()) {
     check(!table->showGrid() && table->verticalHeader()->isHidden(), QStringLiteral("table still has grid or row numbers"));
   }
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   for (QLineEdit* field : window->findChildren<QLineEdit*>()) {
     if (field->property("macSearchField").toBool()) {
       check(field->placeholderText() == QStringLiteral("Search") && !field->actions().isEmpty(),

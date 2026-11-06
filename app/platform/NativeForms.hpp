@@ -32,7 +32,7 @@ public:
   virtual void addSection(QWidget* section) = 0;
 };
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 // `parameterOwner` is the window whose ParameterSource the value fields'
 // expression tools use (setParameterSource); none gives no fx tools.
 std::unique_ptr<NativeCommandForm> createNativeCommandForm(CommandSession& session,

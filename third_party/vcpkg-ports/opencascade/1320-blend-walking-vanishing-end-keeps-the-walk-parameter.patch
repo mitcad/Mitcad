@@ -1,0 +1,61 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a walk that stops on a restriction of one surface where its two
+contacts meet gives the other contact's extremity the walk's parameter,
+not the V of that contact on its surface (mitcad#1346).
+
+Where BRepBlend_Walking stops on a restriction of one surface (Blend_OnRst1
+or Blend_OnRst2) with its two contacts at one point, the blend vanishing
+there, the extremity on the other surface is set by the four-argument
+BRepBlend_Extremity::SetValue, the overload for a point on a restriction
+(P, W, Param, Tol): the contact's U went into W and its V into the
+parameter on the guide. ChFi3d_FilCommonPoint takes that for the common
+point's parameter, and where the contact's end lies on an arc of its face
+(the end at a vertex) StoreData's CompParam looks for the arc on the
+contact's curve on the face at it; with the curve evaluated far outside its
+range there, neither the intersection nor the projection found it, and the
+end took the wrong parameter. The contact's edge then ended part of the way
+along, at the blend's other side, and the end's degenerated edge was made
+from there across the blend: the faces' wires crossed.
+
+A plate's side rounded with 0.3 along an earlier rounding of its top edge
+that vanishes into the side (the two faces tangent at the vertex where it
+ends): the walk reaches the vertex with no width left there, stopping on
+the side's edge, and the contact on the earlier rounding got that
+rounding's V there (-0.034, the vertex's parameter on its edge) instead of
+36.96. Both such extremities now take previousP.Parameter(), as every
+other extremity of the walk does.
+
+Test: geometry/tests/test_fillet_vanishing_side.cpp, the reported plate's
+sides rounded on the body MitCad builds: the result is valid and its faces
+lie on the stored body after the rounding within 0.01 mm (invalid without
+the patch, the faces' wires crossing at both vanishing ends).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+index 589debd1..637ba43b 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+@@ -2607,7 +2607,9 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+         // On blinde le cas singulier ou un des recadrage a planter
+         if (previousP.PointOnS1().IsEqual(previousP.PointOnS2(), 2.0 * tolpoint3d))
+         {
+-          Ext2.SetValue(previousP.PointOnS1(), sol(3), sol(4), tolpoint3d);
++          // (With the walk's parameter: the overload without it, meant for a
++          // point on a restriction, took the point's V on the surface for it.)
++          Ext2.SetValue(previousP.PointOnS1(), sol(3), sol(4), previousP.Parameter(), tolpoint3d);
+           if (Isvtx1)
+           {
+             MakeSingularExtremity(Ext2, false, Vtx1);
+@@ -2634,7 +2636,8 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+         // On blinde le cas singulier ou un des recadrage a plante
+         if (previousP.PointOnS1().IsEqual(previousP.PointOnS2(), 2.0 * tolpoint3d))
+         {
+-          Ext1.SetValue(previousP.PointOnS2(), sol(1), sol(2), tolpoint3d);
++          // (With the walk's parameter, as above.)
++          Ext1.SetValue(previousP.PointOnS2(), sol(1), sol(2), previousP.Parameter(), tolpoint3d);
+           if (Isvtx2)
+           {
+             MakeSingularExtremity(Ext1, true, Vtx2);

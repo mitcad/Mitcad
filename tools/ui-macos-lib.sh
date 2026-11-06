@@ -24,6 +24,7 @@
 set -u
 
 UI_APP=""
+UI_HEADLESS_APP=""
 UI_OUT=""
 UI_ROOT=""
 UI_PID=""
@@ -155,6 +156,38 @@ ui_init() {
 {"screens":[{"name":"component-tests","width":1920,"height":1200,"logicalDpi":96,"logicalBaseDpi":96,"dpr":1}]}
 JSON
     export QT_QPA_PLATFORM="offscreen:configfile=$UI_ROOT/offscreen.json"
+    # A bundled executable starts with AppKit's Regular activation policy,
+    # even with Qt offscreen; changing it in main can already be too late
+    # for another app's popup. A byte-identical standalone copy starts as
+    # a background executable. Its existing build RPATHs still resolve the
+    # same libraries; runtime guards require prohibited activation too.
+    local app_dir headless_dir headless_app sibling resource
+    app_dir=$(dirname "$UI_APP")
+    headless_dir=$UI_ROOT/headless/MacOS
+    mkdir -p "$headless_dir" || exit 2
+    headless_app=$headless_dir/mitcad-headless
+    # Preserve the real worker/tool and resource lookup relative to the
+    # executable. Keep Info.plist absent so AppKit starts background-only.
+    for sibling in mitcad-render mitcad-mcp-launcher mitcad-updater; do
+      if [ -e "$app_dir/$sibling" ]; then
+        ln -s "$app_dir/$sibling" "$headless_dir/$sibling" || exit 2
+      fi
+    done
+    for resource in Resources Frameworks PlugIns XPCServices; do
+      if [ -d "$app_dir/../$resource" ]; then
+        ln -s "$app_dir/../$resource" "$UI_ROOT/headless/$resource" || exit 2
+      fi
+    done
+    if ! { cp -c "$UI_APP" "$headless_app" 2>/dev/null || cp -p "$UI_APP" "$headless_app"; }; then
+      echo 'FAIL: could not make the standalone headless executable' >&2
+      exit 2
+    fi
+    if ! cmp -s "$UI_APP" "$headless_app"; then
+      echo 'FAIL: the standalone headless executable differs from the application' >&2
+      exit 2
+    fi
+    UI_HEADLESS_APP=$headless_app
+    echo 'Headless executable: byte-identical standalone copy (no application bundle)'
   fi
 
   # The app's own files in the root, not the user's ~/Library: Qt would use
@@ -267,10 +300,11 @@ ui_run_app() {
       ui_fail "headless tests require Qt offscreen and a UI script"; return 1
     fi
   elif ! ui_gui_lock; then return 1; fi
+  local run_app=${UI_HEADLESS_APP:-$UI_APP}
   if [ "${MITCAD_UI_LLDB:-0}" = 1 ] && command -v lldb > /dev/null; then
-    lldb --batch -o run -o 'bt all' -- "$UI_APP" -ApplePersistenceIgnoreState YES "$@" > "$UI_LOG_FILE" 2>&1 &
+    lldb --batch -o run -o 'bt all' -- "$run_app" -ApplePersistenceIgnoreState YES "$@" > "$UI_LOG_FILE" 2>&1 &
   else
-    "$UI_APP" -ApplePersistenceIgnoreState YES "$@" > "$UI_LOG_FILE" 2>&1 &
+    "$run_app" -ApplePersistenceIgnoreState YES "$@" > "$UI_LOG_FILE" 2>&1 &
   fi
   UI_PID=$!
   local ticks=0 limit=$((UI_TIMEOUT * 5)) assertion_tick=-1

@@ -1276,6 +1276,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
     policy.setRetainSizeWhenHidden(true);
     setSizePolicy(policy);
     setVisible(false);
+    watchHeadlessParent();
   }
   // The presentations' triangulations (BRepMesh through AIS) mesh the faces
   // of a shape on all cores instead of one after another (W1: a design of
@@ -3295,6 +3296,11 @@ void OcctViewer::setShiftHeld(bool held, bool hover) {
 
 bool OcctViewer::eventFilter(QObject* watched, QEvent* event) {
   const QEvent::Type type = event->type();
+  if (headlessUiTest() && watched == parentWidget() &&
+      (type == QEvent::Resize || type == QEvent::Show || type == QEvent::LayoutRequest)) {
+    // The parent's layout places the hidden view after this event.
+    QTimer::singleShot(0, this, &OcctViewer::logHeadlessViewArea);
+  }
   if (type == QEvent::Paint && m_navigationState.active() && watched != this && watched->isWidgetType() &&
       isAncestorOf(static_cast<QWidget*>(watched))) {
     // A widget over the view painted while it is navigated (mitcad#768).
@@ -6150,6 +6156,29 @@ void OcctViewer::initializeGL() {
   }
 }
 
+void OcctViewer::watchHeadlessParent() {
+  if (m_headlessParent == parentWidget()) return;
+  if (m_headlessParent) m_headlessParent->removeEventFilter(this);
+  m_headlessParent = parentWidget();
+  if (m_headlessParent) m_headlessParent->installEventFilter(this);
+}
+
+void OcctViewer::logHeadlessViewArea() {
+  // A headless test's view never initializes OpenGL, so resizeGL does not
+  // log its place. Its layout still places it (it keeps its size while
+  // hidden): the same line, for scripts that wait for the window's layout.
+  // Pointer steps in the view still fail, without a viewer to send to.
+  const QPoint corner = mapTo(window(), QPoint(0, 0));
+  const QRect area(corner, size());
+  if (area.isEmpty() || area == m_headlessArea) return;
+  m_headlessArea = area;
+  qDebug().noquote() << QStringLiteral("View area %1 %2 %3 %4")
+                            .arg(area.x())
+                            .arg(area.y())
+                            .arg(area.width())
+                            .arg(area.height());
+}
+
 void OcctViewer::resizeGL(int width, int height) {
   QOpenGLWidget::resizeGL(width, height);
   applyDevicePixelRatio(); // a move to another screen resizes the view
@@ -6543,6 +6572,7 @@ bool OcctViewer::event(QEvent* event) {
     // Reparenting and layout changes can show this widget without calling
     // setVisible(). Bypass QOpenGLWidget's surface lifecycle as well: even
     // a resize of an offscreen widget may otherwise initialize OpenGL.
+    if (event->type() == QEvent::ParentChange) watchHeadlessParent();
     if (event->type() == QEvent::Resize || event->type() == QEvent::Paint) return true;
     return QWidget::event(event);
   }

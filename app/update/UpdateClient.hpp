@@ -15,6 +15,7 @@
 #include <QSslCertificate>
 #include <QString>
 
+#include "UpdateOffer.hpp"
 #include "UpdateSettings.hpp"
 
 class QNetworkAccessManager;
@@ -22,31 +23,6 @@ class QNetworkReply;
 class QUrl;
 
 namespace mitcad {
-
-// What a release manifest offers the running version (core/update: check).
-struct UpdateOffer {
-  QString status; // "available", "skipped" or "current"
-  QString version;
-  QString date;
-  // The manifest's last day, or empty (mitcad#938).
-  QString expires;
-  // A newer version whose manifest has expired: status "current"; a check
-  // the user asked for announces it, without Install.
-  bool expired = false;
-  QString notes; // the release's page
-  bool prerelease = false;
-  // The download for this platform; without one the release is announced
-  // only.
-  bool hasDownload = false;
-  QString url;
-  qint64 size = 0;
-  // The download's SHA-256 (64 lower-case hex digits) from the verified
-  // manifest; the Windows updater checks the installer against it again
-  // right before it runs it (mitcad#603).
-  QString sha256;
-  // The manifest as received, verified again with the download.
-  QByteArray manifest;
-};
 
 class UpdateClient : public QObject {
   Q_OBJECT

@@ -250,7 +250,7 @@ void greyEmptyGroup(QStyleOptionViewItem* option, const QModelIndex& index) {
                           (text.blue() + band.blue()) / 2));
 }
 
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 constexpr int kGroupStarRole = Qt::UserRole + 71;
 
 // Keep the star's hit area in place without filling the whole sidebar
@@ -313,7 +313,7 @@ public:
     panel.icon = QIcon();
     const QWidget* widget = option.widget;
     QStyle* style = widget != nullptr ? widget->style() : QApplication::style();
-#ifndef Q_OS_MACOS
+#ifndef MITCAD_MAC_UI
     style->drawPrimitive(QStyle::PE_PanelItemViewItem, &panel, painter, widget);
 #else
     Q_UNUSED(style);
@@ -326,7 +326,7 @@ public:
     const QPalette& palette = option.palette;
     const QColor text = palette.color(selected ? QPalette::HighlightedText : QPalette::Text);
     const QColor faint =
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
         palette.color(QPalette::PlaceholderText);
 #else
         selected ? text : palette.color(QPalette::PlaceholderText);
@@ -335,7 +335,7 @@ public:
     if (!index.data(PartGridModel::kRefusedRole).toString().isEmpty()) {
       painter->setOpacity(0.38);
     }
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     if (selected) {
       QColor fill = palette.color(QPalette::Highlight);
       fill.setAlpha(38);
@@ -359,7 +359,7 @@ public:
     const int line = metrics.height();
     const QRect nameRect(tile.left() + 3, image.bottom() + 5, tile.width() - 6, line);
     const QString name = metrics.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, nameRect.width());
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     if (selected) {
       const int captionWidth = std::min(nameRect.width(), metrics.horizontalAdvance(name) + 12);
       const QRect caption(nameRect.center().x() - captionWidth / 2, nameRect.top(), captionWidth, nameRect.height());
@@ -795,13 +795,13 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
                            .arg(QKeySequence(QStringLiteral("Ctrl+Shift+D")).toString(QKeySequence::NativeText)));
   mac::styleListTree(m_groups);
   m_groups->setItemDelegate(new GroupDelegate(m_groups));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_groups->setMouseTracking(true);
 #endif
   auto* groupsLabel = new QLabel(tr("Gr&oups:"));
   groupsLabel->setBuddy(m_groups);
   left->addWidget(groupsLabel);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   groupsLabel->hide();
 #endif
   left->addWidget(m_groups, 1);
@@ -817,7 +817,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   auto* searchLabel = new QLabel(tr("&Search:"));
   searchLabel->setBuddy(m_search);
   top->addWidget(searchLabel);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   searchLabel->hide();
 #endif
   top->addWidget(m_search, 1);
@@ -860,7 +860,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_star->setAutoRaise(true);
   m_star->setToolTip(tr("Star the chosen component or turn its star off (%1): favorites come first")
                          .arg(QKeySequence(QStringLiteral("Ctrl+D")).toString(QKeySequence::NativeText)));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_star->setCheckable(true);
 #endif
   mac::styleIconToggle(m_star, QStringLiteral("star"), QStringLiteral("star.fill"));
@@ -897,7 +897,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_view->setMouseTracking(true);
   m_view->setDragEnabled(false);
   m_view->setMinimumWidth(tileBox(kMaxTile, fontMetrics().height()).width() + 40);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_view->setFrameShape(QFrame::NoFrame);
   m_view->setAttribute(Qt::WA_MacShowFocusRect, false);
 #endif
@@ -919,7 +919,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_groups->setProperty("nativeGroupKeyRole", int(Qt::UserRole));
   // A group with no part under the filters, greyed (mitcad#1015).
   m_groups->setProperty("nativeGroupDimmedRole", kEmptyGroupRole);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   m_groups->setProperty("nativeStarRole", kGroupStarRole);
   m_groups->setProperty("nativeStarMethod", QByteArray("toggleGroupStar"));
 #endif
@@ -1448,7 +1448,7 @@ void PartGrid::showGroups(const QHash<QString, int>& counts) {
     item->setData(0, Qt::UserRole, key);
     showCount(item, counts);
     item->setIcon(0, starIcon(groupStarred(key), outline));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
     item->setData(0, kGroupStarRole, groupStarred(key));
 #endif
     if (node != nullptr) {
@@ -1702,7 +1702,7 @@ void PartGrid::refreshStars() {
     showCount(*it, counts);
     if (!id.startsWith(QLatin1Char(':'))) {
       (*it)->setIcon(0, starIcon(groupStarred(id), outline));
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
       (*it)->setData(0, kGroupStarRole, groupStarred(id));
 #endif
     }
@@ -1719,7 +1719,7 @@ void PartGrid::refreshStarButton() {
   const PickerPart* part = currentPart();
   const bool enabled = part != nullptr && !part->libraryEntry;
   m_star->setEnabled(enabled);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   const bool starred = enabled && starredTile(*part);
   const QSignalBlocker quiet(m_star);
   m_star->setChecked(starred);

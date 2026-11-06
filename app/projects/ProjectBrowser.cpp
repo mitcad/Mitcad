@@ -203,7 +203,7 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   m_scope->addItem(tr("This Project"));
   m_scope->setToolTip(tr("Where the search looks: every project, or the project shown"));
   scopeLabel->setBuddy(m_scope);
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   searchLabel->hide();
 #else
   top->addWidget(searchLabel);

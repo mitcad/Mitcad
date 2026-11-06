@@ -6,7 +6,8 @@ manifest, previews, licence, sources and README. With --merge the
 library's other parts already in the manifest (the fasteners;
 tools/libraries/make-parts-library.py runs both generators) stay. With
 --commit the folder becomes a git repository with the version recorded and
-tagged.
+tagged; a version whose tag the repository already has is refused before
+anything is made (library_tags.py, mitcad#1372).
 
     python3 make-profile-library.py --cli build/dev/tools/cli/mitcad-cli \\
         --source <folder of the supplier's files> --out ../libraries/mitcad-parts \\
@@ -62,6 +63,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import library_previews as previews  # noqa: E402
+import library_tags  # noqa: E402
 
 LIBRARY_ID = "mitcad-parts"
 LIBRARY_NAME = "Mitcad parts"
@@ -675,7 +677,10 @@ def import_source(ctx, entry):
     if not os.path.isfile(path):
         raise PartError(f"the source {source} is not in --source")
     imported = f"source-{entry['id']}.mitcad"
-    run([ctx.cli, "import", path, "--save", os.path.join(ctx.scratch, imported)])
+    # One base feature, as a library part holds its features in the root:
+    # a STEP assembly would otherwise come in as components (mitcad#1274),
+    # which save() refuses.
+    run([ctx.cli, "import", path, "--structure", "base", "--save", os.path.join(ctx.scratch, imported)])
     return imported
 
 
@@ -3213,6 +3218,9 @@ def main():
                              "rendered, rendered without its thread, or a screw's thread or rounding was left out")
     args = parser.parse_args()
 
+    if args.commit:
+        # A version is tagged once (mitcad#1372).
+        library_tags.refuse_existing_tag(os.path.abspath(args.out), args.version, "make-profile-library")
     only = {s.strip() for s in args.only.split(",") if s.strip()}
     entries, categories, left_out_files = read_groups(args.groups, only)
     if not entries:
@@ -3317,7 +3325,7 @@ def main():
         status = run(["git", "-C", ctx.out, "status", "--porcelain"]).stdout
         if status.strip():
             run(["git", "-C", ctx.out] + identity + ["commit", "-q", "-m", f"{LIBRARY_NAME} {args.version}"])
-        run(["git", "-C", ctx.out] + identity + ["tag", "-a", "-f", f"v{args.version}", "-m",
+        run(["git", "-C", ctx.out] + identity + ["tag", "-a", library_tags.tag_of(args.version), "-m",
                                                   f"{LIBRARY_NAME} {args.version}"])
     print(f"{LIBRARY_ID} {args.version}: {len(made)} components in {ctx.out}")
     if left_out:

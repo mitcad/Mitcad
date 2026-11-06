@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# The Make card's Send to Slicer (mitcad#1377), the shared input script of
+# tools/ui-make-card-send-test.sh (Linux) and
+# tools/ui-windows-make-card-send-test.ps1, on
+# tools/ui-scripts/make-card-send.json (Body1 and Body2, both shown): on the
+# Make tab a face of Body2 selected shows the card with its Send to Slicer
+# button; a face of Body1 added takes the card away (several bodies); a
+# face of Body2 alone again, the card's Send to Slicer opens Send to
+# Slicer's panel with Body2 alone in Bodies, and Send writes its file only
+# (the settings' format, STL: a file per body). The wrappers read the
+# folder written.
+wait-idle
+key F6
+wait-idle
+
+mark
+click-logged '^Ribbon tab MAKE at '
+wait-log '^Ribbon tab shown: MAKE$'
+
+# A face of Body2 (its top, at a point the view picks it: a body's logged
+# centre can fall on a corner): the card of Body2, its Send to Slicer
+# enabled.
+mark
+click-pick-offset 'face F2.b0/F2:top' 0 0 '^face F2:top of F2.b0$'
+wait-log '^Selected: 1 face \[face F2:top of F2[.]b0\]$'
+wait-log '^Make card: Body2: '
+wait-log '^Make card send to slicer at [0-9]+,[0-9]+$'
+
+# Something of Body1 added (Ctrl): two bodies, no card.
+mark
+click-logged '^Body F1[.]b0 at ' ctrl
+wait-log '^Selected: 2 .* of F1[.]b0\]$'
+wait-log '^Make card: none$'
+
+# A face of Body2 alone again; the card's Send to Slicer opens the panel
+# with Body2 alone in Bodies, whatever is shown.
+mark
+click-pick-offset 'face F2.b0/F2:top' 0 0 '^face F2:top of F2.b0$'
+wait-log '^Selected: 1 face \[face F2:top of F2[.]b0\]$'
+wait-log '^Make card: Body2: '
+wait-log '^Make card send to slicer at [0-9]+,[0-9]+$'
+mark
+click-logged '^Make card send to slicer at '
+wait-log '^Make card send to slicer: Body2$'
+wait-log '^Command Send to Slicer started'
+wait-log '^3D Print panel: 1 selected: Body2; format stl'
+wait-log 'Panel Send to Slicer input format at '
+
+# Send writes Body2's file alone.
+mark
+key Return
+wait-log '^3D Print: 1 bodies as stl \(.*\) to .*: Body2[.]stl$'
+expect-never 'TestDriver: FAIL|3D Print: [02-9] bodies as'

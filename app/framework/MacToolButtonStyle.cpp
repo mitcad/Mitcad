@@ -13,7 +13,7 @@
 #include <QToolButton>
 
 namespace mitcad {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
 namespace {
 
 class MacToolButtonStyle final : public QProxyStyle {
@@ -196,7 +196,7 @@ private:
 #endif
 
 void styleMacToolButton(QToolButton* button) {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   if (button != nullptr && !button->property("macToolButtonInstalling").toBool() &&
       !button->property("macFlatToolButton").toBool()) {
     const ButtonStyleInstallation installing(button);
@@ -210,7 +210,7 @@ void styleMacToolButton(QToolButton* button) {
 }
 
 void installMacToolButtonStyle(QWidget* root) {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   if (root == nullptr || root->findChild<QObject*>(QStringLiteral("macToolButtonFilter"),
                                                  Qt::FindDirectChildrenOnly) != nullptr) {
     return;

@@ -387,7 +387,7 @@ QToolButton* SketchPalette::commandButton(const QString& id, const QString& name
 }
 
 void SketchPalette::styleButton(QToolButton* button) const {
-#ifdef Q_OS_MACOS
+#ifdef MITCAD_MAC_UI
   Q_UNUSED(button);
 #else
   // The card's flat button (setFlatCardButton), checked as the ribbon's

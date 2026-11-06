@@ -1463,6 +1463,24 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-corners"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-drawing-corners PROPERTIES TIMEOUT 300)
+    # A section's cut edge dimensioned alone (mitcad#1361): the piece beside
+    # a hole picked alone reads its own length, a corner waits for a second
+    # pick.
+    add_test(NAME app.ui-windows-drawing-section-dimension
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-section-dimension-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-section-dimension"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-section-dimension PROPERTIES TIMEOUT 300)
+    # A section's line and a break's sides snap (mitcad#1362): onto a hole's
+    # centre and its centre line, a second click turned to 45 degrees,
+    # Shift as clicked, a break's sides onto points.
+    add_test(NAME app.ui-windows-drawing-section-snap
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-section-snap-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-section-snap"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-section-snap PROPERTIES TIMEOUT 300)
     # Names typed in the Projects panel (mitcad#1268): the proposed name free
     # on disk, also while a remote fetch runs; a refused name keeps the
     # editor with its message; the collapsed card expanded and the hidden
@@ -1566,6 +1584,67 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-theme-preference"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-theme-preference PROPERTIES TIMEOUT 600)
+    # Keys while a pasted component is still computed (mitcad#1360, GitHub
+    # mitcad/Mitcad#156, a crash of 0.47.0 here): Paste New opens
+    # Move/Copy, and Shift and Up in its X Distance field while the preview
+    # computes neither read the document nor end the application; OK places
+    # the copy once the job has ended. The Linux test's shared input script.
+    add_test(NAME app.ui-windows-paste-busy-keys
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-paste-busy-keys-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-paste-busy-keys"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-paste-busy-keys PROPERTIES TIMEOUT 240)
+    # Edit Text from inside a letter (mitcad#1369, GitHub mitcad/Mitcad#158):
+    # zoomed in, a right-click and a double-click inside the I's stroke and
+    # the o's stroke and counter offer and open the text's Edit Text, and a
+    # QR code's finder pattern (its dark centre and the light ring round it)
+    # Edit QR Code. The Linux test is
+    # tools/ui-text-region-edit-test.sh.
+    add_test(NAME app.ui-windows-text-region-edit
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-text-region-edit-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-text-region-edit"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-text-region-edit PROPERTIES TIMEOUT 300)
+    # The Make card's Send to Slicer (mitcad#1377), the Linux test's shared
+    # input script: with a face of one of two shown bodies selected, the
+    # card's button opens Send to Slicer's panel with that body alone, and
+    # Send writes its file only.
+    add_test(NAME app.ui-windows-make-card-send
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-make-card-send-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-make-card-send"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-make-card-send PROPERTIES TIMEOUT 300)
+    # The ASTM A500 tubes in BUILD's part picker (mitcad#1372, GitHub
+    # mitcad/Mitcad#159): the parts library's A500 tubes made by
+    # make-profile-library.py and fetched; the search A500 lists them all,
+    # HSS 3x3x3/16, 2x2x1/8 and 4x2x3/16 found. The Linux test is
+    # tools/ui-tube-picker-test.sh. Needs Python for the generator.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME app.ui-windows-tube-picker
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-tube-picker-test.ps1"
+                -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>" -Python "${Python3_EXECUTABLE}"
+                -Out "${CMAKE_BINARY_DIR}/ui-windows-tube-picker"
+                -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+      set_tests_properties(app.ui-windows-tube-picker PROPERTIES TIMEOUT 600)
+    endif()
+    # The Line tool's arcs and the Midpoint Line (mitcad#1393): a drag along
+    # a line from its end draws a tangent arc from it, a drag across a
+    # chain's line a normal arc with a typed radius dimensioned, and a
+    # Midpoint Line drawn with two clicks has its middle at the first. The
+    # Linux test is tools/ui-sketch-line-arcs-test.sh.
+    add_test(NAME app.ui-windows-sketch-line-arcs
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-line-arcs-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-line-arcs" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-line-arcs PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

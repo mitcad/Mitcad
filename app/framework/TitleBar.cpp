@@ -355,7 +355,7 @@ void TitleBar::updateQuickFold() {
 }
 
 bool TitleBar::underNativeTitleBar() const {
-#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+#if defined(MITCAD_MAC_UI) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
   const QWidget* top = window();
   return top != nullptr && top->windowFlags().testFlag(Qt::ExpandedClientAreaHint);
 #else

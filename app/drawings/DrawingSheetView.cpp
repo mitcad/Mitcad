@@ -12,6 +12,7 @@
 #include <QShowEvent>
 #include <QFontMetrics>
 #include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -577,9 +578,44 @@ void DrawingSheetView::setPointSnap(std::function<std::optional<QPointF>(int vie
 bool DrawingSheetView::asksHover() const {
   // An annotation tool's picks (and, mitcad#1272, while one pick of the
   // Dimension tool's Auto is placed); a line's or an arc's snapping
-  // clicks.
+  // clicks; a section's line's or a break's (mitcad#1362), until it is
+  // placed.
   return (m_pick == SheetPick::Picks && (!m_placing || m_picksWhilePlacing)) || m_pick == SheetPick::Segment ||
-         m_pick == SheetPick::ArcPoints;
+         m_pick == SheetPick::ArcPoints || (m_pick == SheetPick::Line && !m_placing);
+}
+
+QPointF DrawingSheetView::lineEnd(const QPointF& at, const std::optional<QPointF>& snap, bool freely,
+                                  double* angle) const {
+  if (angle != nullptr) {
+    *angle = -1.0;
+  }
+  if (freely) {
+    return at;
+  }
+  // A point first (mitcad#1362): it wins over the angle.
+  if (snap) {
+    return *snap;
+  }
+  // A section's second click (a break's sides stand alone).
+  if (m_pick == SheetPick::Line && m_place && m_picks.points.size() == 1) {
+    if (const std::optional<LineAngleSnap> turned = snapLineAngle(m_picks.points.first(), at)) {
+      if (angle != nullptr) {
+        *angle = turned->angle;
+      }
+      return turned->to;
+    }
+  }
+  return at;
+}
+
+std::optional<QPointF> DrawingSheetView::hoverPoint() const {
+  for (const QJsonValue& value : m_hoverMarks) {
+    const QJsonObject item = value.toObject();
+    if (item.contains(QStringLiteral("point"))) {
+      return pointOf(item.value(QStringLiteral("point")));
+    }
+  }
+  return std::nullopt;
 }
 
 void DrawingSheetView::setPlacingSnap(bool snapped, const QPointF& at, const QString& hint) {
@@ -1022,7 +1058,17 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
   } else if (m_pointerIn && !m_picks.points.isEmpty()) {
     const QPointF first = toWidget(m_picks.points.first());
     const QPointF now = toWidget(m_pointer);
-    if (m_pick == SheetPick::Line || m_pick == SheetPick::Segment) {
+    if (m_pick == SheetPick::Line) {
+      // To where the click would go (mitcad#1362): the point it snaps to,
+      // or turned onto a multiple of 45 degrees with its angle beside it.
+      double angle = -1.0;
+      const QPointF end = toWidget(
+          lineEnd(m_pointer, hoverPoint(), dragsFreely(QGuiApplication::keyboardModifiers()), &angle));
+      painter.drawLine(first, end);
+      if (angle >= 0.0) {
+        paintSnapHint(painter, end, tr("%1°").arg(QString::number(angle, 'g', 4)));
+      }
+    } else if (m_pick == SheetPick::Segment) {
       painter.drawLine(first, now);
     } else if (m_pick == SheetPick::Circle) {
       const double r = distance(first, now);
@@ -1406,12 +1452,15 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
     logPreview(QStringLiteral("view box"));
   }
   // What a click would pick: the workspace asks the model (mitcad#725).
+  // A section's line's or a break's second click snaps on the view of its
+  // first (mitcad#1362), wherever it is.
   if (asksHover()) {
-    emit hoverRequested(under, at);
+    emit hoverRequested(m_pick == SheetPick::Line && !m_picks.points.isEmpty() ? m_picks.view : under, at);
   }
-  // Where a dimension placed snaps (mitcad#1173).
+  // Where a dimension placed snaps (mitcad#1173); Shift or Alt held:
+  // where it is clicked (mitcad#1362).
   if (m_pick == SheetPick::Picks && m_placing) {
-    emit placingMoved(at, event->modifiers().testFlag(Qt::AltModifier));
+    emit placingMoved(at, dragsFreely(event->modifiers()));
   }
   // Painted again only when what shows changed (mitcad#759): the outline
   // under the pointer, or what follows it; the model's hover marks paint
@@ -1428,7 +1477,7 @@ void DrawingSheetView::enterEvent(QEnterEvent* event) {
   // what a click there would pick is asked again (mitcad#753).
   if (asksHover() && m_drag == Drag::None) {
     const QPointF at = toSheet(event->position());
-    emit hoverRequested(viewAt(at), at);
+    emit hoverRequested(m_pick == SheetPick::Line && !m_picks.points.isEmpty() ? m_picks.view : viewAt(at), at);
   }
 }
 
@@ -1437,7 +1486,8 @@ void DrawingSheetView::leaveEvent(QEvent* event) {
   m_pointerIn = false;
   m_hovered = 0;
   m_hoveredAnnotation = 0;
-  if (m_pick == SheetPick::Picks || m_pick == SheetPick::Segment || m_pick == SheetPick::ArcPoints) {
+  if (m_pick == SheetPick::Picks || m_pick == SheetPick::Segment || m_pick == SheetPick::ArcPoints ||
+      m_pick == SheetPick::Line) {
     emit hoverRequested(-1, QPointF());
   }
   update();
@@ -1481,7 +1531,8 @@ void DrawingSheetView::contextMenuEvent(QContextMenuEvent* event) {
 
 void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
   const QPointF at = toSheet(event->position());
-  // Alt with the click or at the drag's end: placed freely (mitcad#1173).
+  // Shift or Alt with the click or at the drag's end: placed freely
+  // (mitcad#1173, mitcad#1362).
   m_releaseModifiers = event->modifiers();
   m_dragSnapped = false;
   m_snapHint.clear();
@@ -1599,15 +1650,39 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
       emit picked(ToolPicks{m_parentView, {at}, 0.0, {}, {}, {}});
     }
     break;
-  case SheetPick::Line:
-    if (m_picks.points.isEmpty()) {
-      if (under == 0) {
-        break; // on a view only
-      }
+  case SheetPick::Line: {
+    const bool first = m_picks.points.isEmpty();
+    if (first && under == 0) {
+      break; // on a view only
+    }
+    // Each click snaps as a line's do, on the view of the first
+    // (mitcad#1362); a section's second, near nothing, to a multiple of 45
+    // degrees from its first; Shift (or Alt): where it is clicked.
+    const int on = first ? under : m_picks.view;
+    const bool freely = dragsFreely(m_releaseModifiers);
+    std::optional<QPointF> snap;
+    if (!freely && m_pointSnap) {
+      snap = m_pointSnap(on, at);
+    }
+    double angle = -1.0;
+    const QPointF point = lineEnd(at, snap, freely, &angle);
+    if (angle >= 0.0) {
+      qDebug().noquote() << QStringLiteral("Drawing snap: section line at %1 degrees").arg(angle, 0, 'f', 0);
+    }
+    if (first) {
       m_picks.view = under;
-      m_picks.points.append(at);
-    } else {
-      m_picks.points.append(at);
+    }
+    m_picks.points.append(point);
+    m_hoverMarks = QJsonArray();
+    qDebug().noquote() << QStringLiteral("Drawing point %1 at %2,%3%4")
+                              .arg(m_picks.points.size())
+                              .arg(point.x(), 0, 'f', 1)
+                              .arg(point.y(), 0, 'f', 1)
+                              .arg(snap ? QStringLiteral(" (snapped)")
+                                   : angle >= 0.0
+                                       ? QStringLiteral(" (at %1 degrees)").arg(angle, 0, 'f', 0)
+                                       : QString());
+    if (!first) {
       if (m_place) {
         startPlacing();
         break;
@@ -1617,6 +1692,7 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
       emit picked(picks);
     }
     break;
+  }
   case SheetPick::Circle:
     if (m_picks.points.isEmpty()) {
       if (under == 0) {
@@ -1661,10 +1737,10 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
       m_picks.view = under;
     }
     // On a view it snaps to an edge's end or middle or a centre near it
-    // (mitcad#1272); Alt: where it is clicked.
+    // (mitcad#1272); Shift, or Alt (mitcad#1362): where it is clicked.
     QPointF point = at;
     bool snapped = false;
-    if (under != 0 && m_pointSnap && !m_releaseModifiers.testFlag(Qt::AltModifier)) {
+    if (under != 0 && m_pointSnap && !dragsFreely(m_releaseModifiers)) {
       if (const std::optional<QPointF> to = m_pointSnap(under, at)) {
         point = *to;
         snapped = true;
@@ -1729,27 +1805,27 @@ bool DrawingSheetView::cancelPicks() {
 }
 
 void DrawingSheetView::keyReleaseEvent(QKeyEvent* event) {
-  // Alt let go: a dimension placed or dragged snaps again (mitcad#1173).
-  if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+  // Alt or Shift let go: a dimension placed or dragged snaps again
+  // (mitcad#1173, mitcad#1294; Shift for a placing click too since
+  // mitcad#1362), a section's line follows its snap again.
+  if ((event->key() == Qt::Key_Alt || event->key() == Qt::Key_Shift) && !event->isAutoRepeat()) {
     askSnap(false);
-  }
-  // Shift let go: a drag snaps again (mitcad#1294).
-  if (event->key() == Qt::Key_Shift && !event->isAutoRepeat() && draggedAlone()) {
-    askSnap(false);
+    if (followsPointer()) {
+      update();
+    }
   }
   QWidget::keyReleaseEvent(event);
 }
 
 void DrawingSheetView::keyPressEvent(QKeyEvent* event) {
-  // Alt held: a dimension placed or dragged goes where the pointer is
-  // (mitcad#1173).
-  if (event->key() == Qt::Key_Alt && !event->isAutoRepeat()) {
+  // Alt or Shift held: a dimension placed or dragged goes where the
+  // pointer is (mitcad#1173, mitcad#1294, mitcad#1362), a section's line
+  // runs to the pointer.
+  if ((event->key() == Qt::Key_Alt || event->key() == Qt::Key_Shift) && !event->isAutoRepeat()) {
     askSnap(true);
-  }
-  // Shift held: a drag goes where the pointer is (mitcad#1294); a
-  // placing click keeps Alt alone.
-  if (event->key() == Qt::Key_Shift && !event->isAutoRepeat() && draggedAlone()) {
-    askSnap(true);
+    if (followsPointer()) {
+      update();
+    }
   }
   if (!unmodified(event)) {
     QWidget::keyPressEvent(event);

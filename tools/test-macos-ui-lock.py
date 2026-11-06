@@ -280,7 +280,12 @@ def main():
             # shell protocol on the same existing file. Its timeout starts
             # after acquisition and the actual app inherits ownership.
             python_app = root / "python-app"
-            python_app.write_text(FAKE_APP.replace("os.fstat(9)\n", ""))
+            # Preserve each suite and its indentation when this fixture does
+            # not require the shell-specific descriptor number. Removing the
+            # whole line also consumed the newline before the new except.
+            python_source = FAKE_APP.replace("os.fstat(9)", "pass")
+            compile(python_source, str(python_app), "exec")
+            python_app.write_text(python_source)
 
             def launch_python(name, timeout=10, exit_code=0):
                 work = root / name
