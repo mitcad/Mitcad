@@ -268,23 +268,28 @@ QJsonObject finalJob(const QJsonObject& settings, const QString& documentFolder,
   return job;
 }
 
-QString workerExecutable() {
-  QString path = qEnvironmentVariable("MITCAD_RENDER_WORKER");
-  if (path.isEmpty()) {
-    QString name = QString::fromLatin1(kWorkerName);
+QString shippedWorkerExecutable() {
+  QString name = QString::fromLatin1(kWorkerName);
 #ifdef _WIN32
-    name += QStringLiteral(".exe");
+  name += QStringLiteral(".exe");
 #endif
-    QString folder = QCoreApplication::applicationDirPath();
+  QString folder = QCoreApplication::applicationDirPath();
 #ifdef __linux__
-    // Qt names the AppImage file as the application for an AppImage; the
-    // worker is next to the executable inside it.
-    const QString self = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
-    if (!self.isEmpty()) {
-      folder = QFileInfo(self).absolutePath();
-    }
+  // Qt names the AppImage file as the application for an AppImage; the
+  // worker is next to the executable inside it.
+  const QString self = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
+  if (!self.isEmpty()) {
+    folder = QFileInfo(self).absolutePath();
+  }
 #endif
-    path = QDir(folder).filePath(name);
+  const QFileInfo file(QDir(folder).filePath(name));
+  return file.isFile() && file.isExecutable() ? file.absoluteFilePath() : QString();
+}
+
+QString workerExecutable() {
+  const QString path = qEnvironmentVariable("MITCAD_RENDER_WORKER");
+  if (path.isEmpty()) {
+    return shippedWorkerExecutable();
   }
   const QFileInfo file(path);
   return file.isFile() && file.isExecutable() ? file.absoluteFilePath() : QString();

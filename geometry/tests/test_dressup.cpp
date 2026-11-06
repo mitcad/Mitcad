@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <exception>
+#include <string>
 #include <utility>
 
 #include <cstdint>
@@ -39,6 +42,7 @@
 #include <gp_Ax2.hxx>
 #include <gp_Vec2d.hxx>
 
+#include "../src/dressup_check.hpp"
 #include "../src/face_select.hpp"
 #include "../src/history.hpp"
 #include "../src/util.hpp"
@@ -1037,6 +1041,60 @@ void test_dressups_of_circles_built_as_rings() {
   CHECK(faces_matching(*rounded, "F5:fillet(" + rim + ")") >= 1);
   const double round_loss = volume(*holed) - volume(*rounded);
   CHECK(round_loss > 0.3 * bevel_loss && round_loss < bevel_loss);
+  // The kernel builds it itself, running on over the side face and cut by
+  // it there, as a rounding that overflows its face is (mitcad#1232): no
+  // ring, and no warning (mitcad#1327: the ring's check is for rings).
+  CHECK(rounded->notes().empty());
+  // A rim whose rounding runs 0.9 mm past the top's flat onto the rounding
+  // of 1 of the block's front edge: the kernel's stops there, the ring
+  // runs over it and meets that rounding at about 53 degrees, leaving an
+  // edge on it (mitcad#1327): the one warning, with the rounding, the
+  // front rounding, the edge and a point as its places.
+  const ShapePtr small_front = fillet("F3", *block(), {top_front()}, 1);
+  const ShapePtr by_drill = extrude("F4", {circle(5, 30, 6.1, 5)}, -1, 21);
+  const ShapePtr by_rounding = boolean(BooleanOp::Cut, {small_front.get()}, *by_drill).pieces.at(0).shape;
+  const ShapePtr ringed = fillet("F5", *by_rounding, {edge(end_cap("F2", 1), "F4:side(c5)")}, 1);
+  CHECK(mitcad::geometry::detail::is_valid(ringed->occt()));
+  CHECK(ringed->notes().size() == 1);
+  if (ringed->notes().size() == 1 && ringed->note_places().size() == 1) {
+    const std::string& note = ringed->notes().front();
+    std::printf("  ring over the rounding: %s\n", note.c_str());
+    CHECK(note.find("The fillet runs onto a face beside it and leaves an edge there") != std::string::npos);
+    CHECK(note.find("E{") == std::string::npos && note.find("built as a ring") == std::string::npos);
+    const auto& places = ringed->note_places().front();
+    const auto has = [&](Shape::NotePlace::Kind kind) {
+      return std::any_of(places.begin(), places.end(), [&](const Shape::NotePlace& p) { return p.kind == kind; });
+    };
+    CHECK(has(Shape::NotePlace::Kind::Face) && has(Shape::NotePlace::Kind::Edge) &&
+          has(Shape::NotePlace::Kind::Point));
+    CHECK(std::any_of(places.begin(), places.end(), [&](const Shape::NotePlace& p) {
+      return p.kind == Shape::NotePlace::Kind::Face && p.name.rfind("F5:fillet(", 0) == 0;
+    }));
+    CHECK(std::any_of(places.begin(), places.end(), [&](const Shape::NotePlace& p) {
+      return p.kind == Shape::NotePlace::Kind::Face && p.name.rfind("F3:fillet(", 0) == 0;
+    }));
+  } else {
+    std::printf("  ring over the rounding: %zu notes\n", ringed->notes().size());
+  }
+  // A rim in the middle of the block's top rounds within its faces: the
+  // ring's check finds nothing on it.
+  const ShapePtr middle_drill = extrude("F4", {circle(5, 30, 20, 5)}, -1, 21);
+  const ShapePtr middle = boolean(BooleanOp::Cut, {block().get()}, *middle_drill).pieces.at(0).shape;
+  const ShapePtr smooth = fillet("F5", *middle, {edge(end_cap("F2", 1), "F4:side(c5)")}, 1);
+  CHECK(smooth->notes().empty());
+  CHECK(mitcad::geometry::detail::ring_check(*middle, *smooth, "F5", "fillet", 1.0).empty());
+  // A rim whose rounding runs 0.65 mm past the top's flat onto the
+  // rounding of 5 of the block's front edge (mitcad#1327: a ring there
+  // meets it at about 17 degrees and is smooth): no warning, however it
+  // is built.
+  const ShapePtr rounded_front = fillet("F3", *block(), {top_front()}, 5);
+  const ShapePtr near_drill = extrude("F4", {circle(5, 30, 10.35, 5)}, -1, 21);
+  const ShapePtr near_rounding =
+      boolean(BooleanOp::Cut, {rounded_front.get()}, *near_drill).pieces.at(0).shape;
+  const ShapePtr run_on = fillet("F5", *near_rounding, {edge(end_cap("F2", 1), "F4:side(c5)")}, 1);
+  std::printf("  rim by the rounding: %s\n", run_on->notes().empty() ? "no note" : run_on->notes().front().c_str());
+  CHECK(mitcad::geometry::detail::is_valid(run_on->occt()));
+  CHECK(run_on->notes().empty());
   // A boss 0.5 mm from the side: the rounding at its foot (concave) is
   // joined to it, over the edge of the top face.
   const ShapePtr post = extrude("F4", {circle(5, 5.5, 20, 5)}, 20, 30);

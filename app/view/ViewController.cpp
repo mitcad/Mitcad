@@ -55,9 +55,13 @@
 
 #include "../browser/BrowserBackground.hpp"
 #include "../browser/DocumentHost.hpp"
+#include "../drawings/DrawingPreferences.hpp"
+#include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../framework/AppSettings.hpp"
+#include "../framework/AppTheme.hpp"
 #include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
 #include "../framework/ChromeStyle.hpp"
@@ -77,8 +81,10 @@
 // Remote repositories' git program (P12 remote).
 #include "../files/RemotePreferences.hpp"
 // View > Rendered (mitcad#32).
+#include "../render/RenderBatch.hpp"
 #include "../render/RenderClient.hpp"
 #include "../render/RenderDevice.hpp"
+#include "../render/RenderWorkerChoice.hpp"
 #include "../render/RenderEnvironmentDialog.hpp"
 #include "../render/RenderImageDialog.hpp"
 #include "../render/RenderMode.hpp"
@@ -91,6 +97,8 @@
 #include "../platform/MacDialogs.hpp"
 // The Sketch page: the first dimension scales the sketch (mitcad#860).
 #include "../sketch/SketchPreferences.hpp"
+// The Suppliers page: the shops of the product links (mitcad#950).
+#include "../library/SupplierPreferences.hpp"
 // Preferences › AI Assistants › Agents may resolve comments (mitcad#1119).
 #include "Comments.hpp"
 // General: ask to activate the component of a picked face (mitcad#960).
@@ -232,8 +240,8 @@ const PreferencePage kPreferencePages[] = {
      "autosave recovery activate component ask picked face units inch new design"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
-     "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda ghost inactive components pick priority layout docked floating browser background rows card "
-     "quick_access_toolbar quick-access toolbar"},
+     "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda worker optix ghost inactive components pick priority layout docked floating browser background rows card "
+     "quick_access_toolbar quick-access toolbar theme dark light mode colour color scheme"},
     {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
     {"cloud", QT_TRANSLATE_NOOP("View", "Cloud"),
      "git remote sync push fetch version control author email name mqtt live broker"},
@@ -250,6 +258,10 @@ const PreferencePage kPreferencePages[] = {
     {"fonts", QT_TRANSLATE_NOOP("View", "Fonts"), "font folders text ttf otf woff typeface"},
     // The first dimension scales the sketch (mitcad#860).
     {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"), "sketch dimension first scale proportion drawn size"},
+    // The suppliers' shops: the region of the product links and the shops
+    // the Supplier filters start with (mitcad#950).
+    {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
+     "supplier suppliers shop shops region country product link links part number filter buy"},
 };
 
 // The pages whose folder list takes the page's height (mitcad#727,
@@ -470,6 +482,9 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
         m_viewer, [this](QObject* context, std::function<void()> call) { m_host.whenIdle(context, std::move(call)); },
         this);
     connect(m_render, &RenderMode::stopped, this, [this] { syncChecks(); });
+    // The picked render worker gave way to the shipped one (mitcad#1332).
+    connect(m_render, &RenderMode::workerFallback, this,
+            [this](const QString& text) { m_host.showStatus(text + QLatin1Char('.'), NoticeLevel::Warning); });
   } else {
     qInfo().noquote() << QStringLiteral("No render worker (%1) next to the application: no rendered view")
                              .arg(QString::fromLatin1(render::kWorkerName));
@@ -659,6 +674,8 @@ void ViewController::registerCommands() {
   preferences.duringCommands = true;
 #ifdef Q_OS_MACOS
   preferences.shortcut = QKeySequence::Preferences; // Cmd+,
+  // Minimal Qt platform themes may omit this macOS standard binding.
+  if (preferences.shortcut.isEmpty()) preferences.shortcut = QKeySequence(Qt::CTRL | Qt::Key_Comma);
 #endif
   m_registry.add(preferences);
   // Each page on its own (mitcad#25), so that the search finds where a
@@ -1491,6 +1508,16 @@ void ViewController::showPreferences(const QString& page) {
     connect(dialog.get(), &QDialog::accepted, firstDimensionScale, applyScaleToFirstDimension);
   }
   groups.insert(QStringLiteral("sketch"), sketchBox);
+  // Suppliers (mitcad#950): the region of the product links and the shops
+  // the Supplier filters start with. Saved when the dialog is accepted, at
+  // once in the Settings window.
+  auto* suppliersBox = new SupplierPreferencesBox;
+  if (window != nullptr) {
+    connect(suppliersBox, &SupplierPreferencesBox::changed, suppliersBox, &SupplierPreferencesBox::apply);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, suppliersBox, &SupplierPreferencesBox::apply);
+  }
+  groups.insert(QStringLiteral("suppliers"), suppliersBox);
 
   QWidget* navigationBox = section(tr("Navigation"));
   auto* navigationLayout = new QVBoxLayout(navigationBox);
@@ -1625,7 +1652,14 @@ void ViewController::showPreferences(const QString& page) {
     renderDevice->setMinimumContentsLength(32);
     renderDevice->addItem(tr("Automatic (the best GPU, else the CPU)"), QStringLiteral("auto"));
     QString error;
-    const QList<render::RenderDevice> devices = render::renderDevices(render::RenderClient::workerPath(), error);
+    const render::WorkerChoice worker = render::RenderClient::workerChoice();
+    QList<render::RenderDevice> devices = render::renderDevices(worker.path, error);
+    if (devices.isEmpty() && worker.picked) {
+      // A picked worker that does not list its devices (mitcad#1332): the
+      // shipped one's, which renders instead.
+      qWarning().noquote() << QStringLiteral("Render devices of %1 not listed: %2").arg(worker.path, error);
+      devices = render::renderDevices(render::shippedWorkerExecutable(), error);
+    }
     for (const render::RenderDevice& device : devices) {
       renderDevice->addItem(device.type == QLatin1String("CPU") ? tr("CPU: %1").arg(device.label()) : device.label(),
                             device.type == QLatin1String("CPU") ? QStringLiteral("cpu") : device.id);
@@ -1654,6 +1688,71 @@ void ViewController::showPreferences(const QString& page) {
     }
     qDebug().noquote() << QStringLiteral("Preferences: render devices %1").arg(labels.join(QStringLiteral(", ")));
   }
+  // The render worker (mitcad#1332): the shipped mitcad-render, or one the
+  // user built for this machine, such as an OptiX worker (docs/rendering.md
+  // "Building an OptiX worker yourself"). A setting of the machine, kept in
+  // the user's settings (render/worker); MITCAD_RENDER_WORKER overrides it.
+  QComboBox* renderWorker = nullptr;
+  if (m_render != nullptr) {
+    renderWorker = new QComboBox;
+    renderWorker->setObjectName(QStringLiteral("renderWorker"));
+    renderWorker->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    renderWorker->setMinimumContentsLength(32);
+    renderWorker->addItem(tr("Shipped (%1)").arg(QString::fromLatin1(render::kWorkerName)), QString());
+    const QString picked = render::pickedWorker();
+    if (!picked.isEmpty()) {
+      renderWorker->addItem(QDir::toNativeSeparators(picked), picked);
+      renderWorker->setItemData(1, picked, Qt::ToolTipRole);
+      renderWorker->setCurrentIndex(1);
+    }
+    // The last item opens a file dialog; it is never the choice itself.
+    renderWorker->addItem(tr("Choose a Worker…"));
+    renderWorker->setToolTip(tr("The renderer program; a worker you built runs instead of the shipped one"));
+    const auto shown = std::make_shared<int>(renderWorker->currentIndex());
+    connect(renderWorker, &QComboBox::activated, host, [host, renderWorker, shown](int index) {
+      if (index != renderWorker->count() - 1) {
+        *shown = index;
+        return;
+      }
+      // After the list has closed.
+      QTimer::singleShot(0, renderWorker, [host, renderWorker, shown] {
+        const QString start = dialogStartFolder(DialogGroup::Program, QString());
+        const QString file = dialogOpenFileName(host, tr("Render Worker"), start);
+        if (file.isEmpty()) {
+          renderWorker->setCurrentIndex(*shown);
+          return;
+        }
+        rememberDialogFolder(DialogGroup::Program, file);
+        const QString path = QDir::fromNativeSeparators(file);
+        if (renderWorker->count() == 3) {
+          renderWorker->setItemText(1, QDir::toNativeSeparators(path));
+          renderWorker->setItemData(1, path);
+        } else {
+          renderWorker->insertItem(1, QDir::toNativeSeparators(path), path);
+        }
+        renderWorker->setItemData(1, path, Qt::ToolTipRole);
+        *shown = 1;
+        renderWorker->setCurrentIndex(1);
+        qDebug().noquote() << QStringLiteral("Preferences: render worker file %1").arg(path);
+      });
+    });
+    display->addRow(tr("Render worker:"), renderWorker);
+    qDebug().noquote() << QStringLiteral("Preferences: render worker shown %1")
+                              .arg(picked.isEmpty() ? QStringLiteral("shipped") : picked);
+  }
+  // MitCad's own theme (mitcad#1330): the desktop's colour scheme, or Light
+  // or Dark whatever it is; applied at once, without a restart, in both
+  // frontends (framework/AppTheme). The 3D view's background stays its own
+  // setting above.
+  auto* themeChoice = new QComboBox;
+  themeChoice->setObjectName(QStringLiteral("preferencesTheme"));
+  themeChoice->addItem(tr("System"), themeChoiceName(ThemeChoice::System));
+  themeChoice->addItem(tr("Light"), themeChoiceName(ThemeChoice::Light));
+  themeChoice->addItem(tr("Dark"), themeChoiceName(ThemeChoice::Dark));
+  themeChoice->setCurrentIndex(themeChoice->findData(themeChoiceName(themePreference())));
+  themeChoice->setToolTip(tr("The colors of MitCad's panels, cards and dialogs: the desktop's, or always light or "
+                             "dark"));
+  display->addRow(tr("&Theme:"), themeChoice);
   // The window's layout (mitcad#419), for the next starts: Docked or
   // Floating, the platform's until one is chosen. Not in the native macOS
   // frontend, which has its own.
@@ -1776,6 +1875,42 @@ void ViewController::showPreferences(const QString& page) {
       navigationBarChanged(m_settings.navigationBar);
     }
   };
+  // Every corner of a drawing's views as a dot on the screen (mitcad#1338):
+  // off by default; its dots' size beside it, enabled only while it is on.
+  // Saved when the dialog is accepted, at once in the Settings window; an
+  // open drawing follows at once (drawings::CornerDotsNotifier).
+  const drawings::CornerDots savedDots = drawings::savedCornerDots();
+  auto* cornerDots = new QCheckBox(tr("Al&ways show corners in drawings"));
+  cornerDots->setObjectName(QStringLiteral("alwaysShowCorners"));
+  cornerDots->setChecked(savedDots.always);
+  cornerDots->setToolTip(tr("Draws every corner of a drawing's views as a dot on the screen, never printed or exported"));
+  control(display, cornerDots);
+  auto* cornerDotSize = new QComboBox;
+  cornerDotSize->setObjectName(QStringLiteral("cornerDotSize"));
+  cornerDotSize->addItem(tr("Small"), drawings::cornerDotSizeId(drawings::CornerDotSize::Small));
+  cornerDotSize->addItem(tr("Medium"), drawings::cornerDotSizeId(drawings::CornerDotSize::Medium));
+  cornerDotSize->addItem(tr("Large"), drawings::cornerDotSizeId(drawings::CornerDotSize::Large));
+  cornerDotSize->setCurrentIndex(cornerDotSize->findData(drawings::cornerDotSizeId(savedDots.size)));
+  cornerDotSize->setEnabled(savedDots.always);
+  cornerDotSize->setToolTip(tr("How large the corner dots of a drawing are"));
+  display->addRow(tr("Corner dot si&ze:"), cornerDotSize);
+  connect(cornerDots, &QCheckBox::toggled, cornerDotSize, &QWidget::setEnabled);
+  const auto applyCornerDots = [cornerDots, cornerDotSize] {
+    drawings::CornerDots chosen;
+    chosen.always = cornerDots->isChecked();
+    chosen.size = drawings::cornerDotSizeFromId(cornerDotSize->currentData().toString())
+                      .value_or(drawings::CornerDotSize::Medium);
+    if (drawings::saveCornerDots(chosen)) {
+      qDebug().noquote() << QStringLiteral("Preferences: always show corners in drawings %1, dot size %2")
+                                .arg(onOff(chosen.always), drawings::cornerDotSizeId(chosen.size));
+    }
+  };
+  if (window != nullptr) {
+    connect(cornerDots, &QCheckBox::toggled, host, applyCornerDots);
+    connect(cornerDotSize, &QComboBox::currentIndexChanged, host, applyCornerDots);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, cornerDots, applyCornerDots);
+  }
   if (window != nullptr) {
     connect(ghostInactive, &QCheckBox::toggled, host, applyGhostInactive);
     connect(activePickPriority, &QCheckBox::toggled, host, applyActivePickPriority);
@@ -1791,9 +1926,9 @@ void ViewController::showPreferences(const QString& page) {
 
   *commit = [this, general, top, bottom, navigation, camera, cubeProjection, background,
              autosave, minutes, importTolerance, newDesignUnits, temperatureUnit, openInCurrent, openDesignsIn,
-             cacheBox, updatesBox, slicerBox, remoteBox,
+             cacheBox, updatesBox, slicerBox, remoteBox, renderWorker,
              renderDevice, debugLog, debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice,
-             layoutApplied] {
+             layoutApplied, themeChoice] {
     // Font folders for sketch text (mitcad#473).
     const QStringList fontFolders = fontsBox->chosen();
     if (fontFolders != sketch::savedFontFolders()) {
@@ -1912,6 +2047,18 @@ void ViewController::showPreferences(const QString& page) {
         m_render->deviceChanged();
       }
     }
+    // The render worker (mitcad#1332); the dialog's item is not a choice.
+    if (renderWorker != nullptr && renderWorker->currentIndex() != renderWorker->count() - 1) {
+      const QString worker = renderWorker->currentData().toString();
+      if (worker != render::pickedWorker()) {
+        render::setPickedWorker(worker);
+        qDebug().noquote() << QStringLiteral("Preferences: render worker %1")
+                                  .arg(worker.isEmpty() ? QStringLiteral("shipped") : worker);
+        if (m_render != nullptr) {
+          m_render->workerChanged();
+        }
+      }
+    }
     apply();
     if (generalChanged) {
       generalChanged();
@@ -1927,6 +2074,13 @@ void ViewController::showPreferences(const QString& page) {
                                                           : QStringLiteral("orthographic"),
                                    chosen.autosave ? QStringLiteral("autosave every %1 min").arg(chosen.autosaveMinutes)
                                                    : QStringLiteral("autosave off"));
+    // The theme (mitcad#1330): saved and applied at once.
+    const ThemeChoice theme = themeChoiceFromName(themeChoice->currentData().toString());
+    if (theme != themePreference()) {
+      setThemePreference(theme);
+      qDebug().noquote() << QStringLiteral("Preferences: theme %1").arg(themeChoiceName(theme));
+      applyThemePreference(theme);
+    }
     // The window's layout (mitcad#419): saved for the next starts; one other
     // than the window's asks whether to restart now, once the dialog is gone.
     if (layoutChoice != nullptr && layoutChoice->currentData().toInt() != *layoutApplied) {
@@ -1980,6 +2134,7 @@ void ViewController::showPreferences(const QString& page) {
         {"agents", "person.badge.key", "person.crop.circle"},
         {"fonts", "textformat", "textformat.alt"},
         {"sketch", "pencil.and.ruler", "pencil"},
+        {"suppliers", "cart", "bag"},
     };
     for (const PreferencePage& entry : kPreferencePages) {
       QWidget* group = groups.value(QLatin1String(entry.id));
@@ -2013,9 +2168,13 @@ void ViewController::showPreferences(const QString& page) {
     if (renderDevice != nullptr) {
       connect(renderDevice, &QComboBox::currentIndexChanged, host, changed);
     }
+    if (renderWorker != nullptr) {
+      connect(renderWorker, &QComboBox::currentIndexChanged, host, changed);
+    }
     if (layoutChoice != nullptr) {
       connect(layoutChoice, &QComboBox::currentIndexChanged, host, changed);
     }
+    connect(themeChoice, &QComboBox::currentIndexChanged, host, changed);
     for (QCheckBox* box : {autosave, debugLog}) {
       connect(box, &QCheckBox::toggled, host, changed);
     }

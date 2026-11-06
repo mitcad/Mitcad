@@ -198,9 +198,13 @@ Ui-ExpectNew 'Thread: Size = 24' 'size 24 chosen'
 # (The diameter sign by its code: the script is read in the system's code
 # page.)
 $dia = [string][char]0x00D8
+# The preview's log line carries the model's warning, which names the
+# face; the panel's notice names none, its place is in the notice
+# (mitcad#1327).
 $m24 = "M24x3 (${dia}24 mm) on face $side (${dia}20 mm): the face's diameter is 4 mm smaller than the thread's major diameter"
+$m24Notice = "M24x3 (${dia}24 mm) on a face (${dia}20 mm): the face's diameter is 4 mm smaller than the thread's major diameter"
 Ui-ExpectNew "Preview Thread: ok, warning: $m24" 'the preview warns of the size' 30
-Ui-ExpectNew "Panel Thread message box: warning: $m24" 'the panel''s message shows the warning'
+Ui-ExpectNew "Panel Thread message box: warning: $m24Notice" 'the panel''s message shows the warning'
 Ui-Mark
 Ui-Step 'cancel (Esc)'                     { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Thread cancelled' 'cancelled'

@@ -63,12 +63,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .collect()
     }
 
-    /// The Mitcad features of the file's features by name (for patterns).
-    fn features_named(&self, names: &[String]) -> Result<Vec<String>, String> {
-        names
-            .iter()
-            .map(|n| {
-                let f = self.file_feature_named(n)?;
+    /// The Mitcad features of the file's features by id (a pattern's or a
+    /// mirror's seeds; 0 is a name an older design's upgrade found no
+    /// feature for).
+    fn features_of(&self, ids: &[u64]) -> Result<Vec<String>, String> {
+        ids.iter()
+            .map(|id| {
+                let f = self.design.feature(*id).ok_or_else(|| {
+                    format!("it copies feature {id}, which the file does not have")
+                })?;
                 self.made
                     .get(&f.id)
                     .map(|m| {
@@ -78,7 +81,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                             .collect::<Vec<_>>()
                     })
                     .filter(|v| !v.is_empty())
-                    .ok_or_else(|| format!("{n} did not come in"))
+                    .ok_or_else(|| format!("{} did not come in", f.name))
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|v| v.into_iter().flatten().collect())
@@ -195,6 +198,25 @@ fn map_kind<K: Kernel>(
         "lip" => super::plastic::lip(im, f, component)?,
         "snap_fit" => super::plastic::snap_fit(im, f, component)?,
         "rest" => super::plastic::rest(im, f, component)?,
+        // Kinds of the later formats (mitcad#1331) MitCad has no feature
+        // for: placeholders with the reason.
+        "cone" => {
+            return Err(NotMapped::Unmapped(
+                "MitCad has no cone primitive".to_owned(),
+            ));
+        }
+        "frame_member" => {
+            return Err(NotMapped::Unmapped(
+                "MitCad has no frame member feature (a profile along each line of a frame sketch)"
+                    .to_owned(),
+            ));
+        }
+        "repair" => {
+            return Err(NotMapped::Unmapped(
+                "MitCad has no Repair Part feature (faces rebuilt, free edges sewn, holes patched)"
+                    .to_owned(),
+            ));
+        }
         other => {
             return Err(NotMapped::Unmapped(format!(
                 "`{other}` is not a feature kind this import knows"
@@ -216,7 +238,16 @@ fn extrude<K: Kernel>(
     let e: k::Extrude = f.typed()?;
     let def = extrude_def(im, f, component, &e, None)?;
     im.add(&def, Some(&f.name), component)?;
-    Ok(Mapped::partial(Vec::new()))
+    let mut notes = Vec::new();
+    // How a taper closes the profile's sharp corners (format 49).
+    if let Some(corner) = &e.extent.corner
+        && e.extent.taper.is_some()
+    {
+        notes.push(format!(
+            "the taper closes the sharp corners as MitCad does (the file: `{corner}`)"
+        ));
+    }
+    Ok(Mapped::partial(notes))
 }
 
 /// The definition of an extrude; `profiles` instead of the file's
@@ -294,7 +325,38 @@ pub(super) fn extrude_def<K: Kernel>(
             ),
         }
     };
-    let (operation, participants) = im.operation(e.operation, &e.targets)?;
+    let (operation, mut participants) = im.operation(e.operation, &e.targets)?;
+    // A Join To Object that keeps the body it runs to apart (format 49,
+    // and every design before format 40): only its targets take the tool.
+    if x.to_body_apart
+        && e.operation == Operation::Join
+        && let Some(to) = x.to
+        && let Ok((apart, _)) = im.face_named(
+            component,
+            None,
+            to,
+            f.face_names.first().map(String::as_str),
+        )
+    {
+        let targets: Vec<BodyUid> = if e.targets.is_empty() {
+            im.component_bodies(component)
+        } else {
+            e.targets
+                .iter()
+                .filter(|n| n.as_str() != "*")
+                .map(|n| im.body(n))
+                .collect::<Result<_, _>>()?
+        };
+        let joined: Vec<String> = targets
+            .iter()
+            .filter(|b| **b != apart)
+            .map(ToString::to_string)
+            .collect();
+        // None left: MitCad's empty list would join every body.
+        if !joined.is_empty() {
+            participants = json!(joined);
+        }
+    }
     let mut def = json!({"type": "extrude", "extent": extent, "flip": flip,
         "operation": operation, "participants": participants});
     match thin {
@@ -361,10 +423,26 @@ fn thin_wall<K: Kernel>(
 /// The axis of a revolve in the sketch: a reference and its direction in
 /// component coordinates (from a point on it).
 fn revolve_axis<K: Kernel>(
-    im: &Importer<'_, '_, K>,
+    im: &mut Importer<'_, '_, K>,
     sketch: u64,
     axis: &k::AxisRef,
+    component: ComponentUid,
 ) -> Result<(Value, [f64; 3], [f64; 3]), String> {
+    // A construction axis (format 31) or an edge or round face of the
+    // model (format 39), where MitCad finds it.
+    let model = match axis {
+        k::AxisRef::Construction { name } => Some(k::GeoRef::Axis { name: name.clone() }),
+        k::AxisRef::Model { geo } => Some(geo.clone()),
+        _ => None,
+    };
+    if let Some(g) = model {
+        let mut notes = Vec::new();
+        let reference = im.geo(&g, component, &mut notes)?;
+        let r: mitcad_model::GeomRef =
+            serde_json::from_value(reference.clone()).map_err(|e| e.to_string())?;
+        let line = im.doc.resolve_axis(&r)?;
+        return Ok((reference, line.origin, line.direction));
+    }
     let s = im
         .sketches
         .get(&sketch)
@@ -407,6 +485,9 @@ fn revolve_axis<K: Kernel>(
         k::AxisRef::Line { origin, dir } => {
             (json!({"origin": origin, "direction": dir}), *origin, *dir)
         }
+        k::AxisRef::Construction { .. } | k::AxisRef::Model { .. } => {
+            unreachable!("taken above")
+        }
     })
 }
 
@@ -436,7 +517,7 @@ pub(super) fn revolve_def<K: Kernel>(
         Some(profiles) => profiles,
         None => im.profiles(r.sketch, &r.profiles)?,
     };
-    let (axis, origin, dir) = revolve_axis(im, r.sketch, &r.axis)?;
+    let (axis, origin, dir) = revolve_axis(im, r.sketch, &r.axis, component)?;
     let s = im
         .sketches
         .get(&r.sketch)
@@ -530,6 +611,12 @@ fn fillet<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let fl: k::Fillet = f.typed()?;
+    if !fl.setbacks.is_empty() {
+        return Err(NotMapped::Unmapped(
+            "corners set back by distances of their own, which MitCad's fillet does not take"
+                .to_owned(),
+        ));
+    }
     let mut notes = Vec::new();
     let groups = edges_by_body(im, component, fl.body.as_deref(), &fl.edges, &f.edge_names)?;
     let radius = im.slot(f, "/radius")?;
@@ -589,7 +676,9 @@ fn fillet<K: Kernel>(
     }
     let several = groups.len() > 1;
     for (i, (b, edges)) in groups.values().enumerate() {
-        let mut set = json!({"edges": edges, "size": size.clone()});
+        // Only the picked edges (format 49), else their tangent chains.
+        let mut set =
+            json!({"edges": edges, "size": size.clone(), "tangent_chain": fl.tangent_chain});
         if curvature {
             set["continuity"] = json!("curvature");
         }
@@ -667,7 +756,8 @@ fn chamfer<K: Kernel>(
                 .iter()
                 .map(|e| {
                     let reference = up_face(im, *b, e, c.flip);
-                    let mut set = json!({"edges": [e], "size": size.clone()});
+                    let mut set = json!({"edges": [e], "size": size.clone(),
+                        "tangent_chain": c.tangent_chain});
                     if let Some(r) = reference {
                         set["reference_face"] = json!(r);
                     }
@@ -675,7 +765,7 @@ fn chamfer<K: Kernel>(
                 })
                 .collect()
         } else {
-            vec![json!({"edges": edges, "size": size.clone()})]
+            vec![json!({"edges": edges, "size": size.clone(), "tangent_chain": c.tangent_chain})]
         };
         let def = json!({"type": "chamfer", "body": b.to_string(), "sets": sets});
         let name = if several {
@@ -734,6 +824,13 @@ fn primitive<K: Kernel>(
         }
         "cylinder" => {
             let c: k::Cylinder = f.typed()?;
+            if !c.references.is_empty() {
+                // Format 41: drawn at its distances from the edges, `base`
+                // where it was first placed.
+                return Err(NotMapped::Unmapped(
+                    "it is placed by distances from edges of the face it stands on, which MitCad's cylinder does not take".to_owned(),
+                ));
+            }
             ("base", c.axis, c.operation)
         }
         "sphere" => {
@@ -1010,6 +1107,14 @@ fn hole<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let h: k::Hole = f.typed()?;
+    if !h.references.is_empty() && h.points.is_none() {
+        // Format 35: the file keeps where the hole was first placed, and
+        // drills it at its distances from the edges.
+        return Err(NotMapped::Unmapped(
+            "it is placed by distances from edges of its face, which MitCad's hole does not take"
+                .to_owned(),
+        ));
+    }
     let mut notes = Vec::new();
     let (placement, flip) = match &h.points {
         Some(points) => {
@@ -1072,24 +1177,92 @@ fn hole<K: Kernel>(
     match &h.hole {
         k::HoleKind::Simple => def["flat"] = json!(true),
         k::HoleKind::Drilled { .. } => def["tip_angle"] = json!(im.slot(f, "/hole/tip_angle")?),
-        k::HoleKind::Counterbore { .. } => {
-            def["flat"] = json!(true);
+        k::HoleKind::Counterbore { tip_angle, .. } => {
             def["kind"] = json!({"type": "counterbore", "diameter": im.slot(f, "/hole/cb_diameter")?,
                 "depth": im.slot(f, "/hole/cb_depth")?});
+            // A drill point below the bore (format 36), else flat.
+            match tip_angle {
+                Some(_) => def["tip_angle"] = json!(im.slot(f, "/hole/tip_angle")?),
+                None => def["flat"] = json!(true),
+            }
         }
-        k::HoleKind::Countersink { .. } => {
-            def["flat"] = json!(true);
+        k::HoleKind::Countersink { tip_angle, .. } => {
             def["kind"] = json!({"type": "countersink", "diameter": im.slot(f, "/hole/cs_diameter")?,
                 "angle": im.slot(f, "/hole/cs_angle")?});
+            match tip_angle {
+                Some(_) => def["tip_angle"] = json!(im.slot(f, "/hole/tip_angle")?),
+                None => def["flat"] = json!(true),
+            }
         }
     }
-    if let Some(t) = &h.thread {
-        notes.push(format!(
-            "a cosmetic thread {t} is a note: the hole keeps its diameter"
-        ));
+    let left = h.hand.as_deref() == Some("left");
+    match &h.thread {
+        // A tapped thread cut into the wall (format 49).
+        Some(t) if h.modeled => {
+            let standard = hole_thread_standard(t).ok_or_else(|| {
+                NotMapped::Unmapped(format!(
+                    "its modelled tapped thread {t} is of a form MitCad does not cut"
+                ))
+            })?;
+            let mut thread = json!({"standard": standard, "designation": t, "modeled": true,
+                "ends": "flat"});
+            if left {
+                thread["right_handed"] = json!(false);
+            }
+            if h.thread_depth.is_some() {
+                thread["length"] = json!(im.slot(f, "/thread_depth")?);
+                if !matches!(h.hole, k::HoleKind::Simple | k::HoleKind::Drilled { .. }) {
+                    notes.push(
+                        "its thread depth is measured from the hole's start, where the file measures it from the bore's entry"
+                            .to_owned(),
+                    );
+                }
+            }
+            if h.ease_out.is_some() {
+                notes.push("its thread's runout is left out: the groove stops square".to_owned());
+            }
+            notes.push(format!(
+                "the tapped {t} sets the bore to its minor diameter, where the file drills the hole's diameter"
+            ));
+            def["thread"] = thread;
+        }
+        Some(t) => {
+            let mut what = format!("a cosmetic thread {t}");
+            if left {
+                what.push_str(" (left-hand)");
+            }
+            if h.thread_depth.is_some() {
+                what.push_str(" over part of the wall");
+            }
+            notes.push(format!("{what} is a note: the hole keeps its diameter"));
+        }
+        None => {}
     }
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
+}
+
+/// MitCad's standard of a tapped hole's designation (SolidCraft's: ISO
+/// metric, UNC and UNF, G, Rc and NPT); none for one MitCad does not cut
+/// (`Rp`, ISO 7-1's parallel internal thread).
+fn hole_thread_standard(designation: &str) -> Option<&'static str> {
+    let d = designation.trim();
+    let upper = d.to_ascii_uppercase();
+    if upper.starts_with('M') {
+        Some("iso_metric")
+    } else if upper.contains("NPT") {
+        Some("npt")
+    } else if upper.starts_with("RC") {
+        Some("iso_taper")
+    } else if upper.starts_with("RP") {
+        None
+    } else if upper.starts_with('G') {
+        Some("whitworth")
+    } else if upper.contains("UN") {
+        Some("unified")
+    } else {
+        None
+    }
 }
 
 fn thread<K: Kernel>(
@@ -1099,20 +1272,49 @@ fn thread<K: Kernel>(
 ) -> MapResult {
     let t: k::Thread = f.typed()?;
     let mut notes = Vec::new();
+    // Options of the later formats MitCad's thread has no counterpart for.
+    if t.up_to.is_some() {
+        return Err(NotMapped::Unmapped(
+            "it runs up to a face or a plane instead of a length".to_owned(),
+        ));
+    }
+    let standard = match t.form.as_deref() {
+        None | Some("metric") => None,
+        Some("trapezoidal") => Some("trapezoidal"),
+        Some("bspp") => Some("whitworth"),
+        Some("bspt") => Some("iso_taper"),
+        Some("npt") => Some("npt"),
+        Some(other) => {
+            return Err(NotMapped::Unmapped(format!(
+                "its thread form `{other}` is not one of MitCad's"
+            )));
+        }
+    };
+    let right_handed = match t.hand.as_deref() {
+        None | Some("right") => true,
+        Some("left") => false,
+        Some(other) => {
+            return Err(NotMapped::Unmapped(format!(
+                "its hand `{other}` (a right- and a left-hand groove crossing) is not one of MitCad's"
+            )));
+        }
+    };
     let (body, face) = im.face_named(
         component,
         None,
         t.face,
         f.face_names.first().map(String::as_str),
     )?;
-    // The length is measured from the end of the face nearest the pick.
+    // The length is measured from the end of the face it starts at: the one
+    // near `from` (format 49), else the one nearest the pick.
+    let start = t.from.unwrap_or(t.face);
     let location = match im.doc.body_shape(body).and_then(|s| {
         let name: mitcad_model::FaceName = face.parse().ok()?;
         im.doc.kernel().face_cylinder(s, &name).ok()
     }) {
         Some(c) => {
             let along = dot(
-                mitcad_import_base::geom::sub(t.face, c.axis.origin),
+                mitcad_import_base::geom::sub(start, c.axis.origin),
                 c.axis.direction,
             );
             if along >= c.length / 2.0 {
@@ -1125,11 +1327,22 @@ fn thread<K: Kernel>(
     };
     let designation = t.designation.clone().unwrap_or_default();
     if designation.is_empty() {
-        return Err(NotMapped::Failed(
-            "a thread without a designation".to_owned(),
-        ));
+        return Err(NotMapped::Failed(if t.old_auto_size {
+            "a thread without a designation (sized by the tap drill its hole matches)".to_owned()
+        } else {
+            "a thread without a designation (sized by its face's diameter)".to_owned()
+        }));
     }
     let mut def = thread_def(&body.to_string(), &face, &designation, t.modeled, location);
+    if let Some(standard) = standard {
+        def["thread"]["standard"] = json!(standard);
+    }
+    if !right_handed {
+        def["thread"]["right_handed"] = json!(false);
+    }
+    if t.starts > 1 {
+        def["starts"] = json!(im.params.unnamed(im.doc, &t.starts.to_string()));
+    }
     if t.length.is_some() {
         def["length"] = json!(im.slot(f, "/length")?);
     }
@@ -1137,6 +1350,20 @@ fn thread<K: Kernel>(
         notes.push(
             "the modeled thread's profile is ISO 68-1's at the size's basic diameters".to_owned(),
         );
+        // Its finished ends (format 49): the chamfered tips, MitCad's
+        // chamfer at the same ends; the runout is left out.
+        match t.tip.as_deref() {
+            Some("start") => def["chamfer"] = json!("start"),
+            Some("both") => def["chamfer"] = json!("both"),
+            _ => {}
+        }
+        if def.get("chamfer").is_some() && (t.chamfer_angle.is_some() || t.chamfer_depth.is_some())
+        {
+            notes.push("the end chamfers take MitCad's default angle and size".to_owned());
+        }
+        if t.ease_out.is_some() {
+            notes.push("its runout at the inner end is left out".to_owned());
+        }
     }
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
@@ -1147,7 +1374,7 @@ fn thread<K: Kernel>(
 /// past each end of the threaded length that is an end of the face,
 /// through whatever lies there (a cone or a countersink too), so it leaves
 /// no flat lip; an end inside the face stops square in both, and a
-/// SolidCraft thread has no end chamfers.
+/// SolidCraft thread without a `tip` (format 49) has no end chamfers.
 pub(crate) fn thread_def(
     body: &str,
     face: &str,
@@ -1167,13 +1394,13 @@ pub(crate) fn thread_def(
 /// its bodies.
 fn objects<K: Kernel>(
     im: &Importer<'_, '_, K>,
-    features: &[String],
+    features: &[u64],
     bodies: &[String],
 ) -> Result<Value, String> {
     if !bodies.is_empty() {
         Ok(json!({"type": "bodies", "bodies": im.body_ids(bodies)?}))
     } else {
-        Ok(json!({"type": "features", "features": im.features_named(features)?}))
+        Ok(json!({"type": "features", "features": im.features_of(features)?}))
     }
 }
 
@@ -1252,6 +1479,8 @@ fn pattern<K: Kernel>(
             axis,
             alignment,
             reversed,
+            axis_ref,
+            axis_feature,
             ..
         } => {
             let angle = if *reversed {
@@ -1259,8 +1488,34 @@ fn pattern<K: Kernel>(
             } else {
                 im.slot(f, "/pattern/angle")?
             };
+            // The axis: a construction axis (format 31) or an edge or round
+            // face of the model (format 39) it follows, else the fixed line
+            // through the origin (expressions since format 48, fixed where
+            // they put it now).
+            let axis = match (axis_feature, axis_ref) {
+                (Some(name), _) => im.geo(
+                    &k::GeoRef::Axis { name: name.clone() },
+                    component,
+                    &mut notes,
+                )?,
+                (None, Some(g)) => im.geo(g, component, &mut notes)?,
+                (None, None) => {
+                    let o = [
+                        im.eval(origin[0].as_str(), Kind::Length)?,
+                        im.eval(origin[1].as_str(), Kind::Length)?,
+                        im.eval(origin[2].as_str(), Kind::Length)?,
+                    ];
+                    if origin
+                        .iter()
+                        .any(|e| mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none())
+                    {
+                        notes.push("its axis is fixed where its expressions put it now".to_owned());
+                    }
+                    json!({"origin": o, "direction": axis})
+                }
+            };
             json!({"type": "circular_pattern", "objects": objects,
-                "axis": {"origin": origin, "direction": axis}, "quantity": im.slot(f, "/pattern/count")?,
+                "axis": axis, "quantity": im.slot(f, "/pattern/count")?,
                 "angle": angle, "symmetric": alignment.as_deref() == Some("center")})
         }
         k::PatternKind::Path {
@@ -1381,6 +1636,26 @@ fn align<K: Kernel>(
     let to_normal: Option<[f64; 3]> =
         serde_json::from_value(f.def["to_normal"].clone()).unwrap_or(None);
     let flip = f.def["flip"].as_bool().unwrap_or(false);
+    // Planes (format 29) and frames (format 50) the bodies follow, and a
+    // move on some of the axes only (format 46).
+    for (key, what) in [
+        ("from_plane", "a plane the bodies move with"),
+        ("to_plane", "a plane the bodies move onto"),
+        ("from_frame", "a frame on the bodies, found again"),
+        ("to_frame", "a frame the bodies move onto, found again"),
+        ("axes", "a move along some of the axes only"),
+    ] {
+        if f.def.get(key).is_some_and(|v| !v.is_null()) {
+            return Err(NotMapped::Unmapped(format!(
+                "it aligns by {what}, which MitCad's align does not take"
+            )));
+        }
+    }
+    let angle = if f.def.get("angle").is_some_and(|v| !v.is_null()) {
+        im.slot(f, "/angle")?
+    } else {
+        im.params.unnamed(im.doc, "0")
+    };
     let bodies = im.body_ids(&bodies)?;
     let (a, b) = match (from_normal, to_normal) {
         (Some(n1), Some(n2)) => (
@@ -1392,7 +1667,7 @@ fn align<K: Kernel>(
             json!({"type": "point", "point": {"point": to}}),
         ),
     };
-    let def = json!({"type": "align", "bodies": bodies, "from": a, "to": b, "flip": flip, "angle": im.params.unnamed(im.doc, "0")});
+    let def = json!({"type": "align", "bodies": bodies, "from": a, "to": b, "flip": flip, "angle": angle});
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(vec![
         "aligned by the file's points (fixed)".to_owned(),
@@ -1509,6 +1784,12 @@ fn loft<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let l: k::Loft = f.typed()?;
+    if !l.rails.is_empty() {
+        // Format 28: a ruled loft whose sections follow guide rails.
+        return Err(NotMapped::Unmapped(
+            "a ruled loft along guide rails, which MitCad lofts only smooth".to_owned(),
+        ));
+    }
     let mut sections = Vec::new();
     for s in &l.sections {
         match &s.point {
@@ -1661,6 +1942,13 @@ fn coil<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let c: k::Coil = f.typed()?;
+    if c.sketch.is_some() {
+        // Format 36: the section is a sketch's profile, swept about the axis.
+        return Err(NotMapped::Unmapped(
+            "its section is the profile of a sketch, and MitCad's coil sweeps a circle or a square"
+                .to_owned(),
+        ));
+    }
     let mut notes = Vec::new();
     let base = [
         im.eval(c.base[0].as_str(), Kind::Length)?,

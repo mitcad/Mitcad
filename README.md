@@ -236,17 +236,25 @@ Issues made entirely by an AI agent are welcome, with these conditions:
 
 ### Can RTX cards render faster? Can MitCad use OptiX?
 
-No. The renderer can use the ray tracing cores of NVIDIA's RTX cards
-only through NVIDIA OptiX, and the OptiX license does not fit open source
+MitCad does not ship OptiX, but you can build it for your own machine.
+The renderer can use the ray tracing cores of NVIDIA's RTX cards only
+through NVIDIA OptiX, and the OptiX license does not fit open source
 software. The OptiX SDK headers would be compiled into MitCad's renderer.
 NVIDIA's license permits the distribution of such a program only in
 binary form, only for NVIDIA hardware, and only when an enforceable
 agreement binds every recipient to NVIDIA's terms. Open source software
 that anyone can download, build, change and pass on cannot meet those
-terms. Thus MitCad does not build or ship OptiX. NVIDIA cards render with
-Cycles' CUDA device, which needs no such terms. The CUDA device does not
-use the RT cores, so RTX cards render slower than they could
+terms. Thus MitCad's downloads have no OptiX: NVIDIA cards render with
+Cycles' CUDA device, which needs no such terms but does not use the RT
+cores, so RTX cards render slower than they could
 ([docs/rendering.md](docs/rendering.md#devices)).
+
+With the OptiX SDK that you download from NVIDIA yourself, under its
+license, you can build an OptiX render worker for your own machine and
+pick it in Preferences › Display › Render worker; the shipped worker
+stays as the fallback. The build is for your own use: passing it on is
+between you and NVIDIA's license
+([Building an OptiX worker yourself](docs/rendering.md#building-an-optix-worker-yourself)).
 
 ## License
 

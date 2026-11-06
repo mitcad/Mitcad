@@ -31,7 +31,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{Document, ModelError, invalid};
+use super::{DocState, Document, ModelError, invalid};
 use crate::datum::Vec3;
 use crate::features::{OccurrencePath, is_false};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid};
@@ -107,7 +107,8 @@ pub struct CommentTarget {
     /// numbers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dimension: Option<String>,
-    /// A parameter, by its name.
+    /// A parameter, by its name; a rename rewrites it in the same undo
+    /// step (mitcad#1305).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameter: Option<String>,
     /// A free point, mm in its component's coordinates.
@@ -443,6 +444,30 @@ fn same_place(a: Vec3, b: Vec3) -> bool {
     a.iter().zip(b).all(|(a, b)| (a - b).abs() <= SAME_PLACE)
 }
 
+impl DocState {
+    /// Comments pinned to a parameter follow its renames, given as (old
+    /// name, new name) in one edit, so that they are not orphaned
+    /// (mitcad#1305). Names compare exactly, as the parameter table finds
+    /// them; each comment takes at most one rename. The other targets are
+    /// kept by uid or topological name, not by a name that can change.
+    pub(crate) fn rename_in_comments(&mut self, renames: &[(String, String)]) {
+        if renames.is_empty() {
+            return;
+        }
+        for comment in &mut self.comments {
+            let Some(name) = comment.target.parameter.as_mut() else {
+                continue;
+            };
+            if let Some((_, new)) = renames
+                .iter()
+                .find(|(old, _)| old.as_str() == name.as_str())
+            {
+                name.clone_from(new);
+            }
+        }
+    }
+}
+
 impl<K: Kernel> Document<K> {
     /// The comments in the order they were added.
     pub fn comments(&self) -> &[Comment] {
@@ -541,7 +566,10 @@ impl<K: Kernel> Document<K> {
     /// Pins a comment to another target (its form checked here; the API
     /// checks first that it is in the model and finds `place`), which
     /// clears `orphaned`; an undo step `Retarget C1`, none when nothing
-    /// changes. Returns whether it changed.
+    /// changes. Returns whether it changed. The comment takes the new
+    /// target's place, none for one that has none (a parameter), never the
+    /// old target's (mitcad#1315); keeping the last known place is for
+    /// settling a target found without a place for now.
     pub fn retarget_comment(
         &mut self,
         id: &str,
@@ -551,7 +579,7 @@ impl<K: Kernel> Document<K> {
         let i = self.comment_index(id)?;
         let target = target.normalized();
         target.kind().map_err(invalid)?;
-        let place = finite(place).or(self.state.comments[i].place);
+        let place = finite(place);
         let comment = &self.state.comments[i];
         if comment.target == target && !comment.orphaned && comment.place == place {
             return Ok(false);

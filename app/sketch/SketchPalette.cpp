@@ -138,11 +138,34 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_cleanUp->setObjectName(QStringLiteral("paletteCleanUpStale"));
   m_cleanUp->setToolTip(tr("Removes, trims or unlinks projected curves that no longer match their source"));
   m_cleanUp->hide();
-  layout->addWidget(m_cleanUp, 0, Qt::AlignLeft);
+  // Beside it, Project Again (mitcad#1303): the projections made anew from
+  // their sources, the constraints and dimensions on them carried over.
+  if (chromeStyle() == ChromeStyle::Floating) {
+    m_projectAgain = new CapsuleButton(tr("Project Again"));
+  } else {
+    m_projectAgain = new QPushButton(tr("Project Again"));
+    m_projectAgain->setFocusPolicy(Qt::NoFocus);
+  }
+  m_projectAgain->setObjectName(QStringLiteral("paletteProjectAgain"));
+  m_projectAgain->setToolTip(
+      tr("Projects the source again and carries the constraints and dimensions over to the new curves"));
+  m_projectAgain->hide();
+  auto* repairs = new QHBoxLayout;
+  repairs->setContentsMargins(0, 0, 0, 0);
+  repairs->addWidget(m_projectAgain);
+  repairs->addWidget(m_cleanUp);
+  repairs->addStretch(1);
+  layout->addLayout(repairs);
   CommandRegistry* commands = &registry;
   connect(m_cleanUp, &QAbstractButton::clicked, this, [commands] {
     if (QAction* action = commands->action(QStringLiteral("sketch.clean_up_stale_projections"))) {
       qDebug().noquote() << QStringLiteral("Palette: Clean Up Stale Projections from the warning");
+      action->trigger();
+    }
+  });
+  connect(m_projectAgain, &QAbstractButton::clicked, this, [commands] {
+    if (QAction* action = commands->action(QStringLiteral("sketch.project_again"))) {
+      qDebug().noquote() << QStringLiteral("Palette: Project Again from the warning");
       action->trigger();
     }
   });
@@ -599,9 +622,12 @@ void SketchPalette::refresh() {
     qDebug().noquote() << QStringLiteral("Sketch Palette redundant: %1").arg(redundantLine);
   }
   // The clean-up offered while projections cannot follow (mitcad#252).
-  if (model.staleProjections != m_cleanUpOffered) {
+  // Project Again beside it, for those whose sources are there (mitcad#1303).
+  if (model.staleProjections != m_cleanUpOffered || model.projectAgain != m_projectAgainOffered) {
     m_cleanUpOffered = model.staleProjections;
+    m_projectAgainOffered = model.projectAgain;
     m_cleanUp->setVisible(m_cleanUpOffered);
+    m_projectAgain->setVisible(m_projectAgainOffered);
     if (m_cleanUpOffered) {
       // Once it is laid out.
       TestSync::singleShot(50, this, [this] { logCleanUp(); });
@@ -777,9 +803,15 @@ void SketchPalette::logCleanUp() const {
   if (!m_cleanUp->isVisible()) {
     return;
   }
-  // "Palette paletteCleanUpStale at x,y", for UI tests.
-  const QPoint center = GlassCard::mapToHost(m_cleanUp, m_cleanUp->rect().center());
-  qDebug().noquote() << QStringLiteral("Palette %1 at %2,%3").arg(m_cleanUp->objectName()).arg(center.x()).arg(center.y());
+  // "Palette paletteCleanUpStale at x,y" (and paletteProjectAgain, when it
+  // is offered), for UI tests.
+  for (QAbstractButton* button : {m_projectAgain, m_cleanUp}) {
+    if (!button->isVisible()) {
+      continue;
+    }
+    const QPoint center = GlassCard::mapToHost(button, button->rect().center());
+    qDebug().noquote() << QStringLiteral("Palette %1 at %2,%3").arg(button->objectName()).arg(center.x()).arg(center.y());
+  }
 }
 
 QString SketchPalette::statusText() const {

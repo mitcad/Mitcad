@@ -108,6 +108,9 @@ private:
   QPushButton* m_close = nullptr;
   QPointer<RenderFrameOverlay> m_frame;
   render::FinalRender* m_job = nullptr;
+  QJsonObject m_jobSpec;      // the last render's job, for the shipped worker after a picked one (mitcad#1332)
+  QString m_worker;           // the worker it started
+  bool m_workerPicked = false; // the one picked in Preferences
   std::unique_ptr<QTemporaryDir> m_dir; // the scene, the job, previews and the image
   QString m_image;      // the finished image, until the next render
   QString m_imageFormat; // its output.format

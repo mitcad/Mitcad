@@ -80,6 +80,26 @@ native-pointer-click orientationCube_right
 expect-log '^Camera direction -1 0 0 up 0 0 1 ' 30
 expect-native-visible orientationCube_left true
 expect-view-buttons none
+expect-native-cube-arrows
+mark
+native-action view.home
+expect-log '^Native cube arrows hidden$' 30
+expect-native-visible orientationCube_up false
+# Arrows published while a notice bar is shown are at the Qt arrows'
+# places too (the view below the bar), and stay there when the bar closes
+# (mitcad#1317). ui_init disables update checks: this notice needs no
+# network.
+command help.check_updates
+wait-log '^Native viewport notices: [1-9][0-9]* points$'
+mark
+native-action view.front
+expect-log '^Camera direction 0 1 0 up 0 0 1 ' 30
+expect-log '^Native cube arrows: up, down, left, right, cw, ccw$'
+expect-native-cube-arrows
+screenshot '${MITCAD_TEST_WORK}/cube-arrows-notice.png'
+click-logged '^Update notice Close at '
+wait-log '^Native viewport notices: 0 points$'
+expect-native-cube-arrows
 mark
 native-action view.home
 expect-log '^Native cube arrows hidden$' 30

@@ -276,3 +276,80 @@ fn fixed_curves_made_of_fixed_points_are_not_redundant() {
         [SolverItem::Constraint(ConstraintUid(1))]
     );
 }
+
+/// A projected line from (0, 0) to (100, 0) and an elliptical arc (radii 20
+/// and 10) that starts at its end with a tangent turned 1e-6 rad from the
+/// line's: imported or nearly tangent geometry.
+fn line_and_nearly_tangent_elliptical_arc() -> (SketchDef, Vec<EntityUid>) {
+    let turn: f64 = 1e-6;
+    let (a, b) = (20.0, 10.0);
+    // The major axis along the line turned by `turn`; the arc starts at
+    // the ellipse's parameter -90 degrees, where it runs along that axis.
+    let u = [turn.cos(), turn.sin()];
+    let v = [-turn.sin(), turn.cos()];
+    let c = [100.0 + b * v[0], b * v[1]];
+    let mut entities = Vec::new();
+    let origin = fixed_point(&mut entities, [0.0, 0.0], true);
+    let corner = fixed_point(&mut entities, [100.0, 0.0], true);
+    let line = fixed_curve(
+        &mut entities,
+        EntityKind::Line {
+            start: origin,
+            end: corner,
+            centerline: false,
+        },
+    );
+    let center = fixed_point(&mut entities, c, false);
+    let major = fixed_point(&mut entities, [c[0] + a * u[0], c[1] + a * u[1]], false);
+    // The end at the parameter -45 degrees.
+    let (s, k) = (-std::f64::consts::FRAC_PI_4).sin_cos();
+    let end = fixed_point(
+        &mut entities,
+        [
+            c[0] + a * k * u[0] + b * s * v[0],
+            c[1] + a * k * u[1] + b * s * v[1],
+        ],
+        false,
+    );
+    let arc = fixed_curve(
+        &mut entities,
+        EntityKind::EllipticalArc {
+            center,
+            major,
+            minor_radius: b,
+            start: corner,
+            end,
+        },
+    );
+    let def = SketchDef {
+        entities,
+        ..SketchDef::default()
+    };
+    (def, vec![line, arc])
+}
+
+/// A derived offset's near-smooth corner is judged the same way when the
+/// offset is made and when every later edit fits it again (mitcad#1314):
+/// the offsets of a line and an elliptical arc whose tangents differ by
+/// 1e-6 rad meet 1e-6 mm apart at distance 1, well within 1e-7 of the
+/// sketch's 100 mm, so the corner is shared, although the angle alone is
+/// above 1e-7.
+#[test]
+fn a_derived_offset_keeps_a_nearly_smooth_corner_after_edits() {
+    let (def, chain) = line_and_nearly_tangent_elliptical_arc();
+    let mut params = Parameters::default();
+    let mut edit = SketchEdit::new(def, &mut params, FeatureUid(1), "Sketch1");
+    let (_, made) = edit.offset(&chain, &ValueInput::Number(1.0)).unwrap();
+    assert_eq!(made.len(), 2, "{made:?}");
+    // The edit's finish fits the derived offset again.
+    let (def, _) = edit.finish().unwrap();
+    assert_eq!(def.offsets.len(), 1);
+    assert!(def.offsets[0].derived);
+    let results = def.offsets[0].results.clone();
+    // A later edit of the sketch keeps the offset and its curves.
+    let mut edit = SketchEdit::new(def, &mut params, FeatureUid(1), "Sketch1");
+    edit.add_point([50.0, 50.0]);
+    let (def, _) = edit.finish().unwrap();
+    assert_eq!(def.offsets.len(), 1);
+    assert_eq!(def.offsets[0].results, results);
+}

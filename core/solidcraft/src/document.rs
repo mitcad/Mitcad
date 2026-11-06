@@ -248,6 +248,9 @@ pub struct Design {
     pub visibility: Visibility,
     #[serde(default)]
     pub metadata: Value,
+    /// Scanned points kept as a reference (format 43).
+    #[serde(default)]
+    pub point_clouds: Vec<Value>,
 }
 
 fn mm() -> String {

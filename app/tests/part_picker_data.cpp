@@ -467,7 +467,8 @@ void groupTreeTests() {
 // The grid's Supplier filter (mitcad#949): a component's suppliers from
 // library_search (its rows' and its own), a tile of one row's, the filter's
 // choices, a component no row of which the supplier sells hidden, and the
-// choice kept in the settings.
+// choice kept in the settings; the shops chosen in Preferences as the
+// filter's default and as one entry of several suppliers (mitcad#950).
 void supplierFilterTests() {
   const QJsonObject screw{
       {QStringLiteral("id"), QStringLiteral("iso4762")},
@@ -527,6 +528,39 @@ void supplierFilterTests() {
   CHECK(savedSupplierFilter() == QStringLiteral("wurth"));
   saveSupplierFilter(QString());
   CHECK(savedSupplierFilter().isEmpty());
+
+  // The shops chosen in Preferences (mitcad#950): several suppliers in one
+  // filter hide what none of them sells.
+  CHECK(shown(QStringLiteral("wurth|etra")) == (QList<int>{0, 1}));
+  CHECK(shown(QStringLiteral("acme|Profiles Inc")) == QList<int>{2});
+  // Your shops: an entry only for two or more of them that the list has.
+  const PartSupplier yours = yourShopsChoice(choices, {QStringLiteral("etra"), QStringLiteral("acme"),
+                                                       QStringLiteral("WURTH")});
+  CHECK(yours.id == QStringLiteral("etra|wurth"));
+  CHECK(yours.name == QStringLiteral("Your shops (Etra, Würth)"));
+  CHECK(yourShopsChoice(choices, {QStringLiteral("wurth"), QStringLiteral("acme")}).id.isEmpty());
+  CHECK(yourShopsChoice(choices, {}).id.isEmpty());
+  // The entry a filter of several selects: Your shops of those listed, the
+  // one listed, else All.
+  CHECK(supplierChoiceFor(choices, QStringLiteral("etra|wurth")) == QStringLiteral("etra|wurth"));
+  CHECK(supplierChoiceFor(choices, QStringLiteral("acme|wurth")) == QStringLiteral("wurth"));
+  CHECK(supplierChoiceFor(choices, QStringLiteral("acme|nobody")).isEmpty());
+  CHECK(supplierChoiceFor(choices, QStringLiteral("etra")) == QStringLiteral("etra"));
+  // The filters start with the shops until a filter is chosen; All chosen
+  // stays All; new shops in Preferences start the filters with them again.
+  QSettings().remove(QStringLiteral("partPicker/supplierFilter"));
+  CHECK(preferredShops().isEmpty() && savedSupplierFilter().isEmpty());
+  savePreferredShops({QStringLiteral("wurth")});
+  CHECK(preferredSupplierFilter() == QStringLiteral("wurth"));
+  CHECK(savedSupplierFilter() == QStringLiteral("wurth"));
+  saveSupplierFilter(QString());
+  CHECK(savedSupplierFilter().isEmpty());
+  savePreferredShops({QStringLiteral("wurth"), QStringLiteral("etra")});
+  CHECK(savedSupplierFilter() == QStringLiteral("wurth|etra"));
+  saveSupplierFilter(QStringLiteral("etra"));
+  CHECK(savedSupplierFilter() == QStringLiteral("etra"));
+  savePreferredShops({});
+  CHECK(preferredShops().isEmpty() && savedSupplierFilter().isEmpty());
 }
 
 // The groups' counts under the filters (mitcad#1015): each group counts

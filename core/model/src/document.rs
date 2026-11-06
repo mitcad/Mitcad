@@ -55,7 +55,7 @@ pub use move_features::{MoveConflict, MoveGroup, MovePlan, MovedGroup, PlannedGr
 pub use move_features::{MoveDestination, MovedDestination};
 // What the importers say about the features they made (mitcad#170).
 mod import_notes;
-pub use import_notes::{feature_level, feature_notices};
+pub use import_notes::{feature_level, feature_notices, feature_notices_placed};
 pub use import_notes::{status_message as noted_message, status_text as noted_status};
 // Origin groups of the final unused sketch (mitcad#193).
 mod autoselect;
@@ -586,6 +586,10 @@ impl DocState {
         // (mitcad#1300).
         if let FeatureDef::Thread(thread) = &mut resolved {
             thread.settle_ends(crate::features::thread::ThreadEnds::RunOut);
+        }
+        // So does a hole's (mitcad#1307).
+        if let FeatureDef::Hole(hole) = &mut resolved {
+            hole.settle_thread_ends(crate::features::thread::ThreadEnds::RunOut);
         }
         if let FeatureDef::SheetFace(face) = &mut resolved {
             face.settle(match old {
@@ -1256,6 +1260,8 @@ pub struct TimelineItem<'a> {
     pub warnings: &'a [String],
     /// What is worth knowing of how it was built (mitcad#1106).
     pub infos: &'a [String],
+    /// Where its warnings are about, by message (mitcad#1327).
+    pub warning_places: &'a [(String, Vec<crate::notice::NoticePlace>)],
     /// What the importer that made it said (mitcad#170).
     pub import_note: Option<&'a str>,
 }
@@ -1281,12 +1287,13 @@ impl TimelineItem<'_> {
     /// Its notices: its error, its warnings, its infos, its import note
     /// ([`feature_notices`]).
     pub fn notices(&self) -> Vec<crate::notice::Notice> {
-        import_notes::feature_notices(
+        import_notes::feature_notices_placed(
             self.status,
             self.warnings,
             self.infos,
             self.import_note,
             self.entry.uid,
+            self.warning_places,
         )
     }
 
@@ -1375,6 +1382,8 @@ pub struct PreviewReport {
     pub warnings: Vec<String>,
     /// What is worth knowing of how it was built (mitcad#1106).
     pub infos: Vec<String>,
+    /// Where its warnings are about, by message (mitcad#1327).
+    pub warning_places: crate::notice::WarningPlaces,
     /// A pattern's elements by number, suppressed ones too (P9).
     pub elements: Vec<crate::transform::Transform>,
     pub anchor: Option<crate::features::point_pattern::PatternAnchor>,
@@ -2074,6 +2083,12 @@ impl<K: Kernel> Document<K> {
         self.feature_result(uid).map_or(&[], |r| r.infos())
     }
 
+    /// The places of the warnings of a feature that succeeded in the last
+    /// recompute, by message (mitcad#1327).
+    pub fn warning_places(&self, uid: FeatureUid) -> &[(String, Vec<crate::notice::NoticePlace>)] {
+        self.feature_result(uid).map_or(&[], |r| r.warning_places())
+    }
+
     pub fn timeline(&self) -> Vec<TimelineItem<'_>> {
         self.features()
             .map(|entry| TimelineItem {
@@ -2081,6 +2096,7 @@ impl<K: Kernel> Document<K> {
                 status: self.status(entry.uid),
                 warnings: self.warnings(entry.uid),
                 infos: self.infos(entry.uid),
+                warning_places: self.warning_places(entry.uid),
                 import_note: self.import_note(entry.uid),
             })
             .collect()
@@ -2453,13 +2469,16 @@ impl<K: Kernel> Document<K> {
         // A library source goes with its last derived part (mitcad#375).
         next.prune_library_sources(&self.state);
         // Configurations follow renames, also those a value slot's
-        // `name = expression` made (mitcad#231).
+        // `name = expression` made (mitcad#231), and so do the comments
+        // pinned to a parameter (mitcad#1305).
         if next.parameters != self.state.parameters {
-            for (old, new) in renamed_parameters(&self.state.parameters, &next.parameters) {
+            let renames = renamed_parameters(&self.state.parameters, &next.parameters);
+            for (old, new) in &renames {
                 next.configurations
-                    .rename_parameter(&old, &new)
+                    .rename_parameter(old, new)
                     .map_err(invalid)?;
             }
+            next.rename_in_comments(&renames);
         }
         // Nothing that breaks the design policy is added (mitcad#220).
         self.check_policy(&next)?;
@@ -4291,6 +4310,10 @@ impl<K: Kernel> Document<K> {
                 .result(uid)
                 .map(|r| r.infos().to_vec())
                 .unwrap_or_default(),
+            warning_places: result
+                .result(uid)
+                .map(|r| r.warning_places().to_vec())
+                .unwrap_or_default(),
             elements: result
                 .result(uid)
                 .and_then(|r| r.output.as_ref())
@@ -4549,3 +4572,7 @@ pub use repeated_parts::{REPEATED_PARTS_TOLERANCE, RepeatedPart, RepeatedParts};
 // Envelope: its body takes its source's appearance when added, and a
 // linked component shown by its envelope (mitcad#1271).
 mod envelope;
+// Print plate items, comment targets and drawings' recorded bodies follow
+// moved occurrences and renamed bodies (mitcad#1318).
+mod follow_paths;
+pub(crate) use follow_paths::Follow;

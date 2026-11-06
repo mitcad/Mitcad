@@ -139,7 +139,14 @@ Ui-ExpectLog 'Browser background: card' 'the Browser starts on its card (the set
 # Its 30 sketches do not fit: the design opens folded below the root
 # (mitcad#426); Bodies opened again for Body1's row.
 Ui-ExpectLog 'Browser opened folded: ' 'the design opens folded'
-Ui-ExpectLog 'Browser Root/Sketches/Sketch1 out of sight' 'the sketches folded away'
+# Sketch1's row is not in sight: "out of sight" when the rows were logged
+# open before the fold, never logged when the fold came before the
+# panel's first layout (which of the two depends on the start's timing).
+Ui-Sync
+for ($i = 0; $i -lt 30 -and (Place-Valid 'Browser Root/Sketches/Sketch1'); $i++) { Start-Sleep -Milliseconds 200 }
+if (Place-Valid 'Browser Root/Sketches/Sketch1') { Ui-Fail "Sketch1's row is still in sight after the fold" }
+if (-not (Place-Valid 'Browser Root/Sketches')) { Ui-Fail 'the Sketches folder is not in sight' }
+Write-Host 'ok   the sketches folded away'
 Ui-ExpectLog 'Browser arrow Root/Bodies at' "the Bodies folder's arrow"
 Ui-Mark
 Ui-Step 'open Bodies'                       { Ui-ClickLogged 'Browser arrow Root/Bodies' }

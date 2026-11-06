@@ -16,8 +16,14 @@
 #   - A device that fails while it renders (the worker's test hook
 #     MITCAD_RENDER_TEST_DEVICE_FAILURE): the CPU takes over, the view says
 #     so, and the render finishes.
+#   - A render worker of one's own (mitcad#1332), picked in Preferences
+#     (render/worker; here the shipped one under another name, as a user's
+#     own OptiX worker is): it starts and renders, and Preferences shows it.
+#     A picked worker of another protocol version gives way to the shipped
+#     one, with a line in the log and a message in the status bar, and the
+#     shipped one renders.
 #
-# The app starts three times.
+# The app starts five times.
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-device-test.sh
 # check-all sources: tools/cli
@@ -148,6 +154,66 @@ ui_expect_new "Render device fallback: Rendering on the CPU: ${GPU:-$CPU} failed
   "the CPU takes over from the failed device" 30
 ui_expect_new "View message: Rendering on the CPU: ${GPU:-$CPU} failed" "the view says so"
 expect_rendered "the CPU renders the same scene"
+ui_stop_app
+
+# pick_worker path: the render worker picked in Preferences (render/worker).
+pick_worker() {
+  python3 - "$UI_CONFIG/Mitcad/Mitcad.conf" "$1" << 'EOF'
+import re, sys
+path, worker = sys.argv[1:3]
+text = open(path).read()
+text = re.sub(r"(?m)^worker=.*\n", "", text)
+text = re.sub(r"(?m)^\[render\]\n", "[render]\nworker=%s\n" % worker, text, count=1)
+open(path, "w").write(text)
+EOF
+}
+
+echo "--- A render worker of one's own"
+# The shipped worker under another name, as a user's own OptiX worker is
+# (mitcad-render-optix, docs/rendering.md "Building an OptiX worker
+# yourself").
+OWN=$WORK/mitcad-render-optix
+printf '%s\n' '#!/bin/sh' "exec \"$WORKER\" \"\$@\"" > "$OWN"
+chmod +x "$OWN"
+pick_worker "$OWN"
+ui_start_app --open "$WORK/block.mitcad"
+ui_expect_log "Opened $WORK/block.mitcad" "the block is open a fourth time"
+ui_mark
+ui_step "View > Rendered" ui_command "Rendered"
+ui_expect_new "): $OWN" "the picked worker starts" 30
+expect_rendered "the picked worker renders"
+grep -q "Render worker fallback:" "$UI_LOG" && ui_fail "the picked worker gave way: $(grep "Render worker fallback:" "$UI_LOG")"
+ui_mark
+ui_step "preferences, Display (search)" ui_command "Preferences: Display"
+ui_expect_new "Preferences: render worker shown $OWN" "Preferences shows the picked worker"
+ui_expect_new "Preferences: render devices auto, cpu" "Preferences lists the picked worker's devices"
+ui_focus_dialog '^Preferences$'
+ui_key Escape
+ui_focus_main
+ui_stop_app
+
+echo "--- A picked worker of another protocol version"
+printf '%s\n' '#!/bin/sh' "echo '{\"event\":\"hello\",\"protocol\":1,\"version\":\"0.0.1\"}'" \
+  'exec cat > /dev/null' > "$WORK/old-render"
+chmod +x "$WORK/old-render"
+pick_worker "$WORK/old-render"
+ui_start_app --open "$WORK/block.mitcad"
+ui_expect_log "Opened $WORK/block.mitcad" "the block is open a fifth time"
+ui_mark
+ui_step "View > Rendered" ui_command "Rendered"
+ui_expect_new "Render worker fallback: The render worker $WORK/old-render cannot be used (mitcad-render does not match" \
+  "the log says the picked worker gives way to the shipped one" 30
+ui_expect_new "Status warning: The render worker $WORK/old-render cannot be used" "the status bar says so"
+expect_rendered "the shipped worker renders instead"
+started=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "Render worker started (pid" | tail -1)
+case $started in
+  */mitcad-render) echo "ok   the shipped worker started: ${started##*: }" ;;
+  *) ui_fail "the last worker started is not the shipped one: $started" ;;
+esac
+grep -A3 '^\[render\]' "$UI_CONFIG/Mitcad/Mitcad.conf" | grep -qF "worker=$WORK/old-render" ||
+  ui_fail "the picked worker is not kept in the settings"
+echo "ok   the choice is kept (render/worker)"
+ui_crashed && ui_fail "the app ended"
 ui_stop_app
 
 ui_finish "the render device"

@@ -3,8 +3,10 @@
 //! target, replied to, addressed, resolved, reopened and deleted, each an
 //! undo step of its own; the `comments` query with its filters, `open` and
 //! `revision`; saved and read back; orphaned when a feature removes the
-//! face they are on, and retargeted; and a model change with its
-//! `address_comment` in one array undone as one step.
+//! face they are on, and retargeted; a model change with its
+//! `address_comment` in one array undone as one step; a comment on a
+//! parameter following its renames (mitcad#1305); and comments on a
+//! deleted last feature staying orphaned after a reload (mitcad#1320).
 
 use serde_json::{Value, json};
 
@@ -573,6 +575,29 @@ fn a_comment_whose_face_a_feature_removes_is_orphaned_and_retargeted() {
     assert_eq!(comment(&doc, "C1")["orphaned"], true);
 }
 
+/// A comment retargeted to a parameter has no place: it does not keep the
+/// face's (mitcad#1315), in the query nor in the file.
+#[test]
+fn a_comment_retargeted_to_a_parameter_has_no_place() {
+    let mut doc = block();
+    add(&mut doc, "make this face flat", top());
+    near(&comment(&doc, "C1")["place"], [10.0, 10.0, 20.0]);
+    let retargeted = command(
+        &mut doc,
+        json!({"cmd": "retarget_comment", "id": "C1", "target": {"parameter": "width"}}),
+    );
+    assert_eq!(retargeted["changed"], true);
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["place"], Value::Null, "{c1}");
+    assert_eq!(c1["label"], "width");
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert!(
+        file["comments"][0].get("place").is_none(),
+        "{}",
+        file["comments"][0]
+    );
+}
+
 /// Done when: an agent's model change and its `address_comment` in one
 /// `model_command` array (whose steps MCP merges with `merge_undo`) undo
 /// and redo as one step.
@@ -613,4 +638,163 @@ fn a_model_change_and_its_address_in_one_array_undo_together() {
     command(&mut doc, json!({"cmd": "redo"}));
     assert_ne!(document(&doc)["features"], features);
     assert_eq!(comment(&doc, "C1")["status"], "addressed");
+}
+
+/// Done when (mitcad#1305): a comment on a parameter follows
+/// `rename_parameter` in the same undo step, is not orphaned, and undo and
+/// redo take its target back and forth; a rename by a value slot's
+/// `name = expression` takes it along too.
+#[test]
+fn a_comment_on_a_parameter_follows_its_rename() {
+    let mut doc = block();
+    add(&mut doc, "make this 25 mm", json!({"parameter": "width"}));
+    let depth = document(&doc)["undo_depth"].as_u64().unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "rename_parameter", "name": "width", "new_name": "span"}),
+    );
+    // One undo step: the rename's.
+    assert_eq!(document(&doc)["undo_depth"], depth + 1);
+    assert_eq!(undo_label(&doc), "Rename width to span");
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["orphaned"], false, "{c1}");
+    assert_eq!(c1["target"], json!({"parameter": "span"}));
+    assert_eq!(c1["label"], "span");
+    assert!(c1.get("error").is_none(), "{c1}");
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert_eq!(file["comments"][0]["target"], json!({"parameter": "span"}));
+    assert!(file["comments"][0].get("orphaned").is_none());
+
+    command(&mut doc, json!({"cmd": "undo"}));
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["orphaned"], false, "{c1}");
+    assert_eq!(c1["target"], json!({"parameter": "width"}));
+    command(&mut doc, json!({"cmd": "redo"}));
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["orphaned"], false, "{c1}");
+    assert_eq!(c1["target"], json!({"parameter": "span"}));
+
+    // Extrude1's own distance parameter, renamed by its slot.
+    let parameters = query(&doc, json!({"query": "parameters"}));
+    let own = parameters
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["owner"] == "F2")
+        .unwrap_or_else(|| panic!("Extrude1 owns no parameter: {parameters}"));
+    let own = own["name"].as_str().unwrap().to_owned();
+    let id = add(&mut doc, "deeper", json!({"parameter": own}));
+    let mut def = query(&doc, json!({"query": "feature", "uid": "F2"}))["def"].clone();
+    def["extent"]["distance"] = json!("depth = 20 mm");
+    command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": "F2", "def": def}),
+    );
+    let on_own = comment(&doc, &id);
+    assert_eq!(on_own["orphaned"], false, "{on_own}");
+    assert_eq!(on_own["target"], json!({"parameter": "depth"}));
+    // The other comment stays on its own parameter.
+    assert_eq!(comment(&doc, "C1")["target"], json!({"parameter": "span"}));
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(comment(&doc, &id)["target"], json!({"parameter": own}));
+    assert_eq!(comment(&doc, &id)["orphaned"], false);
+}
+
+/// A 4 mm box beside the block at `x`, a new body.
+fn box_at(x: f64) -> Value {
+    json!({"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [x, 0],
+           "length": 4, "width": 4, "height": 4, "operation": "new_body"}})
+}
+
+/// mitcad#1320: comments on a deleted last feature and on its body stay
+/// orphaned after a save, a load and a new feature: the new one takes a
+/// new uid, not the deleted one's, so the comments are not found on it.
+#[test]
+fn a_comment_on_a_deleted_last_feature_stays_orphaned_after_a_reload() {
+    let mut doc = block();
+    let added = command(&mut doc, box_at(40.0));
+    assert_eq!(added["uid"], "F3", "{added}");
+    let on_feature = add(&mut doc, "make this box taller", json!({"feature": "F3"}));
+    let on_body = add(&mut doc, "round this box", json!({"body": "F3.b0"}));
+    for id in [&on_feature, &on_body] {
+        assert_eq!(comment(&doc, id)["orphaned"], false);
+    }
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": "F3"}));
+    for id in [&on_feature, &on_body] {
+        assert_eq!(comment(&doc, id)["orphaned"], true);
+    }
+
+    // The file keeps the number the next feature takes.
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(file["next_feature"], json!(4), "{saved}");
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    loaded.kernel().measures_selections.set(true);
+    loaded.recompute();
+    assert_eq!(loaded.to_json(), saved);
+
+    // A new box is F4: both comments stay orphaned on their targets.
+    let added = command(&mut loaded, box_at(60.0));
+    assert_eq!(added["uid"], "F4", "{added}");
+    let c = comment(&loaded, &on_feature);
+    assert_eq!(c["orphaned"], true, "{c}");
+    assert_eq!(c["target"], json!({"feature": "F3"}), "{c}");
+    let c = comment(&loaded, &on_body);
+    assert_eq!(c["orphaned"], true, "{c}");
+    assert_eq!(c["target"], json!({"body": "F3.b0"}), "{c}");
+    // A comment can go on the new box.
+    add(&mut loaded, "and this one", json!({"feature": "F4"}));
+}
+
+/// mitcad#1318: a comment on a body where an occurrence places it follows
+/// the occurrence to another parent, and back with Undo.
+#[test]
+fn a_comment_follows_its_occurrence_to_another_parent() {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures_selections.set(true);
+    let arm = command(&mut doc, json!({"cmd": "create_component", "name": "Arm"}))["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": "20 mm"}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+        ]),
+    );
+    let cell = command(&mut doc, json!({"cmd": "create_component", "name": "Cell"}))["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    let id = add(
+        &mut doc,
+        "round these edges",
+        json!({"body": "F2.b0", "occurrence": arm}),
+    );
+    assert_eq!(comment(&doc, &id)["orphaned"], false);
+
+    command(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": arm, "parent": cell}),
+    );
+    let moved = comment(&doc, &id);
+    assert_eq!(
+        moved["target"]["occurrence"],
+        format!("{cell}/{arm}"),
+        "{moved}"
+    );
+    assert_eq!(moved["orphaned"], false, "{moved}");
+
+    command(&mut doc, json!({"cmd": "undo"}));
+    let back = comment(&doc, &id);
+    assert_eq!(back["target"]["occurrence"], arm, "{back}");
+    assert_eq!(back["orphaned"], false, "{back}");
 }

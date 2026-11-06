@@ -44,6 +44,8 @@ public:
   // Stale Projections is offered, for live MCP's ui_state (mitcad#265).
   QString statusText() const;
   bool cleanUpOffered() const { return m_cleanUpOffered; }
+  // Whether Project Again is offered beside it (mitcad#1303).
+  bool projectAgainOffered() const { return m_projectAgainOffered; }
 
   // The Create section (mitcad#1027): the tools chosen again from the
   // Sketch tab's pins and the counts of the tools' starts
@@ -125,6 +127,10 @@ private:
   // that cannot follow (mitcad#252).
   QAbstractButton* m_cleanUp = nullptr;
   bool m_cleanUpOffered = false;
+  // Project Again beside it, for those whose sources are there
+  // (mitcad#1303).
+  QAbstractButton* m_projectAgain = nullptr;
+  bool m_projectAgainOffered = false;
   // The Create section (mitcad#1027) and the constraints' buttons.
   QGridLayout* m_createGrid = nullptr;
   QStringList m_createIds;

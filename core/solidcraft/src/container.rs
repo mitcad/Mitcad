@@ -11,6 +11,9 @@
 use mitcad_zip::Archive;
 use serde_json::{Value, json};
 
+/// The largest blob expanded: SolidCraft's cap on a mesh blob (format 39).
+pub const MAX_BLOB_BYTES: u64 = 512 << 20;
+
 /// The container's JSON document with its blobs put back.
 pub fn read(bytes: &[u8]) -> Result<Value, String> {
     let archive = Archive::new(bytes.to_vec()).map_err(|e| format!("design container: {e}"))?;
@@ -42,8 +45,10 @@ pub fn read(bytes: &[u8]) -> Result<Value, String> {
         if !valid {
             return Err(format!("design container: invalid blob reference `{name}`"));
         }
+        // A mesh blob may expand to 512 MiB (format 39), the file staying
+        // within its 256 MiB.
         archive
-            .read_by_name(name)
+            .read_by_name_with_limit(name, MAX_BLOB_BYTES)
             .map_err(|e| format!("design container: {name}: {e}"))
     };
     if let Some(Value::Array(features)) = doc.get_mut("features") {

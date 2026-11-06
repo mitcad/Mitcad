@@ -56,7 +56,9 @@ int paintListPages(QPagedPaintDevice& device, const QString& title, const QStrin
 // are as before.
 QVector<ListTable> cutListTables(const QJsonObject& answer);
 // The parts list's table from `parts_list`'s rows (with the suppliers' part
-// numbers of each row, mitcad#949); with timber in the cut
+// numbers of each row, mitcad#949, and after them a column Product Pages
+// when a row has links in the region chosen in Preferences: its
+// `product_urls` separated by spaces, mitcad#950); with timber in the cut
 // list (`cut`), the timber parts' material and grade; then a column per
 // property key (`keys`, mitcad#496: `Key` or `Set/Key`) with the rows'
 // `properties` (the `parts_list` query's `properties`).

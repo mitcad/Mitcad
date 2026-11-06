@@ -597,6 +597,89 @@ fn stop_while_a_call_runs_keeps_its_place_with_a_stopped_result() {
     assert_eq!(late[0]["id"], "toolu_9");
 }
 
+/// A call that starts streaming in an answer that then ends.
+fn call_started(stream: &mut ApiStream, id: u64, call: &str) -> Vec<Value> {
+    let streamed = lines(&[
+        anthropic_event(
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0,
+                   "content_block": {"type": "tool_use", "id": call, "name": "model_command", "input": {}}}),
+        ),
+        anthropic_event(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "input_json_delta", "partial_json": "{\"command\": "}}),
+        ),
+    ]);
+    let refs: Vec<&str> = streamed.iter().map(String::as_str).collect();
+    sse(stream, id, &refs)
+}
+
+#[test]
+fn a_streaming_call_that_is_never_made_gets_a_failed_result() {
+    // Stop while the call streams (mitcad#1317): its row ends.
+    let mut stream = connected("anthropic", "https://api.anthropic.com", "");
+    let sent = control(&mut stream, json!({"op": "message", "text": "a box"}));
+    let id = sent[0]["id"].as_u64().unwrap();
+    assert_eq!(
+        kinds(&call_started(&mut stream, id, "toolu_s")),
+        ["tool_start"]
+    );
+    let stopped = control(&mut stream, json!({"op": "interrupt"}));
+    assert_eq!(
+        kinds(&stopped),
+        ["http_abort", "tool_result", "turn_end", "transcript"]
+    );
+    assert_eq!(stopped[1]["id"], "toolu_s");
+    assert_eq!(stopped[1]["error"], true);
+    assert!(stopped[1]["text"].as_str().unwrap().contains("stopped"));
+
+    // An answer cut at the output limit while a call streams.
+    let sent = control(
+        &mut stream,
+        json!({"op": "message", "text": "a bigger box"}),
+    );
+    let id = sent[0]["id"].as_u64().unwrap();
+    assert_eq!(
+        kinds(&call_started(&mut stream, id, "toolu_m")),
+        ["tool_start"]
+    );
+    let streamed = lines(&[
+        anthropic_event(
+            "message_delta",
+            json!({"type": "message_delta", "delta": {"stop_reason": "max_tokens"}}),
+        ),
+        anthropic_event("message_stop", json!({"type": "message_stop"})),
+    ]);
+    let refs: Vec<&str> = streamed.iter().map(String::as_str).collect();
+    assert!(sse(&mut stream, id, &refs).is_empty());
+    let ended = control(
+        &mut stream,
+        json!({"op": "http_end", "id": id, "status": 200}),
+    );
+    assert_eq!(kinds(&ended), ["tool_result", "turn_end", "transcript"]);
+    assert_eq!(ended[0]["id"], "toolu_m");
+    assert_eq!(ended[0]["error"], true);
+    assert!(ended[0]["text"].as_str().unwrap().contains("output limit"));
+    assert_eq!(ended[1]["subtype"], "max_tokens");
+
+    // A stream that breaks while a call streams.
+    let sent = control(&mut stream, json!({"op": "message", "text": "a third box"}));
+    let id = sent[0]["id"].as_u64().unwrap();
+    assert_eq!(
+        kinds(&call_started(&mut stream, id, "toolu_e")),
+        ["tool_start"]
+    );
+    let ended = control(
+        &mut stream,
+        json!({"op": "http_end", "id": id, "status": 200, "error": "connection reset"}),
+    );
+    assert_eq!(kinds(&ended), ["tool_result", "turn_end", "transcript"]);
+    assert_eq!(ended[0]["id"], "toolu_e");
+    assert_eq!(ended[0]["error"], true);
+    assert_eq!(ended[1]["subtype"], "error");
+}
+
 #[test]
 fn the_kept_conversation_resumes_or_a_new_one_starts() {
     let kept = json!({"format": "mitcad-chat-api", "provider": "openai", "messages": [

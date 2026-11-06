@@ -870,6 +870,9 @@ pub struct EvalContext<'a, K: Kernel> {
     /// What is worth knowing of how it was built, needing no action
     /// (mitcad#1106: information in the feature's details).
     pub(crate) infos: Vec<String>,
+    /// Where its warnings are about, by message (mitcad#1327): the places
+    /// the geometry gave with its notes ([`Kernel::note_places`]).
+    pub(crate) warning_places: crate::notice::WarningPlaces,
     /// A pattern's elements, suppressed ones too (P9: the panel shows a
     /// toggle at each), by element number; element 0 is the original.
     pub(crate) elements: Vec<Transform>,
@@ -912,6 +915,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             reads: Vec::new(),
             warnings: Vec::new(),
             infos: Vec::new(),
+            warning_places: Vec::new(),
             elements: Vec::new(),
             pattern_anchor: None,
             cut_targets: None,
@@ -986,6 +990,26 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
         }
     }
 
+    /// A warning with the places it is about (mitcad#1327): faces, edges
+    /// and vertices of the body the feature makes, points; its notice
+    /// gives them, its message says what is wrong without their names.
+    pub fn warn_at(&mut self, message: impl Into<String>, places: Vec<crate::notice::NoticePlace>) {
+        let message = message.into();
+        if !places.is_empty() {
+            match self.warning_places.iter_mut().find(|(m, _)| *m == message) {
+                Some((_, known)) => {
+                    for place in places {
+                        if !known.contains(&place) {
+                            known.push(place);
+                        }
+                    }
+                }
+                None => self.warning_places.push((message.clone(), places)),
+            }
+        }
+        self.warn(message);
+    }
+
     /// Information about the feature that needs no action (mitcad#1106).
     pub fn inform(&mut self, message: impl Into<String>) {
         let message = message.into();
@@ -998,8 +1022,9 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
     /// ([`Kernel::notes`]), and tells what else is worth knowing of how it
     /// was built ([`Kernel::infos`]).
     pub fn warn_notes(&mut self, shape: &K::Shape) {
+        let mut places = self.kernel.note_places(shape).into_iter();
         for note in self.kernel.notes(shape) {
-            self.warn(note);
+            self.warn_at(note, places.next().unwrap_or_default());
         }
         for info in self.kernel.infos(shape) {
             self.inform(info);

@@ -264,7 +264,9 @@ with an embedded XPC service and leased IOSurfaces instead; see
   without windows (`QCoreApplication`) and stops on `stop` or when its
   stdin closes (the application is gone, also when it was killed).
   `MITCAD_RENDER_WORKER` names another executable (the UI test's worker
-  of an old protocol version, or none).
+  of an old protocol version, or none); Preferences > Display > Render
+  worker picks a worker of the user's own, such as an OptiX one
+  ([Building an OptiX worker yourself](#building-an-optix-worker-yourself)).
 - **Protocol** (`app/render/RenderProtocol.hpp`): one JSON object per
   line. The worker's first line is `hello` with its protocol version
   (`kProtocolVersion`, now 9) and MitCad's version, written before the
@@ -1207,7 +1209,9 @@ Decisions and limits:
 
 The renderer renders on the CPU or on one GPU (mitcad#50): Cycles' CUDA
 device (NVIDIA, Maxwell and newer), and, in builds with their SDKs, HIP
-(AMD), Metal (Apple) and oneAPI (Intel); never OptiX (see below). Which
+(AMD), Metal (Apple) and oneAPI (Intel); never OptiX in MitCad's own
+builds (see below; a user may build an OptiX worker for their own
+machine: [Building an OptiX worker yourself](#building-an-optix-worker-yourself)). Which
 ones a build has is up to its dependency builder ([Building](#building));
 Apple Silicon builds include CPU and Metal. A build without any GPU
 device renders on the CPU, as before.
@@ -1234,7 +1238,10 @@ device renders on the CPU, as before.
   rendered view's worker again on the new device. Render Image
   takes the same setting into its job (`"device"`); `mitcad-cli render`
   takes `--device auto|cpu|cuda|<id>` (default `auto`; it does not read
-  the application's settings) and `--list-devices`.
+  the application's settings) and `--list-devices`. The devices are the
+  worker's: Preferences > Display > Render worker (mitcad#1332) picks
+  which worker that is ([Building an OptiX worker
+  yourself](#building-an-optix-worker-yourself)).
 - **Fallback** (`makeDeviceRenderer`, `RenderDevices.cpp`): a renderer on
   the chosen device that hands over to the CPU when the device cannot
   start (its driver or kernels are missing, it is not there) or fails
@@ -1348,7 +1355,10 @@ Decisions and limits:
   licence policy does not allow ([Licences](#licences)), and which cannot
   work for open source software that anyone may build and pass on. MitCad
   neither builds nor ships it (the README's FAQ); CUDA renders on the same
-  GPUs, without their RT cores.
+  GPUs, without their RT cores. A user may build an OptiX worker for their
+  own machine with the SDK they download from NVIDIA themselves
+  ([Building an OptiX worker yourself](#building-an-optix-worker-yourself),
+  mitcad#1332).
 - Pascal, Maxwell and Volta need CUDA 12: CUDA 13 compiles for sm_75
   and newer only. `versions.sh` pins CUDA 12.9.1.
 
@@ -1471,6 +1481,108 @@ fail rather than ship a CPU-only renderer:
   every kernel of the build folder is in the installer's `bin\cycles\lib`
   with cuew's licence, fails without kernels when the build requires
   CUDA, and runs the installed worker's `--list-devices`.
+- No OptiX (mitcad#1332): a configure with `MITCAD_RENDER_REQUIRED_DEVICES`
+  set (a release's) stops on a prefix whose devices have `OPTIX` or
+  whose kernels have an OptiX kernel (`kernel_optix*`), and no configure
+  may require `OPTIX` (`cmake/RenderOptix.cmake`; the ctest
+  `repo.render_optix_gate` checks the rule on made-up lists). Release
+  builds and presets never pass `--optix` or `-Optix`.
+
+### Building an OptiX worker yourself
+
+MitCad does not build or ship OptiX ([Devices](#devices)): no OptiX code,
+header or binary is in its repository, packages or downloads. A user with
+an NVIDIA RTX card may build an OptiX render worker for their own machine
+(mitcad#1332), with the OptiX SDK they download from NVIDIA themselves,
+and MitCad uses it when it is picked in Preferences. Everything else
+stays as it is: the shipped `mitcad-render` stays installed and is the
+fallback.
+
+- **The SDK** comes from NVIDIA (developer.nvidia.com/optix, or NVIDIA's
+  `optix-dev` headers), under NVIDIA's own licence, which the user accepts
+  there. The scripts never download it: they take its folder and refuse
+  one without `include/optix.h`. Since OptiX 7 the SDK is headers only;
+  the OptiX runtime is part of NVIDIA's driver (`libnvoptix.so.1`,
+  `nvoptix.dll`), and the driver works with every header version from 7.0
+  on, so a worker built once keeps working with newer drivers. Take an SDK
+  version Cycles supports (its build notes; `versions.sh` pins Cycles).
+- **The build is for the user's own use.** Passing the worker on is
+  between that user and NVIDIA's licence, which allows it only in binary
+  form, only for NVIDIA hardware and only to recipients bound to NVIDIA's
+  terms ([Licences](#licences)). MitCad's own builds never have it.
+
+Linux, in the development environment (`setup-user.sh` done once):
+
+```bash
+tools/dev-env/build-cycles.sh --optix ~/NVIDIA-OptiX-SDK    # the prefix ~/mitcad-render-deps-optix
+cmake --preset dev -B build/optix -DMITCAD_RENDER_DEPS=$HOME/mitcad-render-deps-optix
+cmake --build build/optix --target optix-worker             # ~/.local/lib/mitcad-render-optix
+```
+
+Windows, in the Visual Studio x64 environment (`setup-windows.ps1` done
+once):
+
+```bat
+tools\dev-env\msvc.cmd powershell -ExecutionPolicy Bypass -File tools\dev-env\build-cycles.ps1 -Optix "C:\ProgramData\NVIDIA Corporation\OptiX SDK 9.0.0"
+tools\dev-env\msvc.cmd cmake --preset dev -B build\optix -DMITCAD_RENDER_DEPS=C:/dev/mitcad-render-deps-optix
+tools\dev-env\msvc.cmd cmake --build build\optix --target optix-worker
+```
+
+Then Preferences > Display > Render worker > Choose a Worker… and the
+worker's file (`~/.local/lib/mitcad-render-optix/mitcad-render-optix`,
+`%LOCALAPPDATA%\MitCad\mitcad-render-optix\mitcad-render-optix.exe`).
+Render device then lists the RTX card as an OptiX device too, and
+Automatic takes OptiX first (`chooseDevice`).
+
+- **The prefix** (`--optix SDK`, `-Optix SDK`): Cycles with
+  `WITH_CYCLES_DEVICE_OPTIX=ON` and `OPTIX_ROOT_DIR` set to the SDK, on
+  its CUDA device (`--optix` implies `--cuda`); the OptiX kernels
+  (`kernel_optix*.ptx.zst`) are compiled with the SDK's headers next to the
+  CUDA ones. Its default is a prefix of its own,
+  `~/mitcad-render-deps-optix` (`C:\dev\mitcad-render-deps-optix`), never
+  `MITCAD_RENDER_DEPS`; the scripts refuse the ordinary prefix, so MitCad's
+  own builds stay without OptiX. The ctest `repo.build_cycles_optix_args`
+  checks the refusals (a folder without `include/optix.h`, the ordinary
+  prefix) without an SDK.
+- **The worker** (`cmake/RenderOptix.cmake`, `cmake/OptixWorker.cmake`): a
+  configure with a prefix whose devices have `OPTIX` names the worker
+  `mitcad-render-optix`, so that it never replaces `mitcad-render`, and
+  makes no installer and no AppImage; a release configure stops on such a
+  prefix ([Release builds](#release-builds)). The target `optix-worker`
+  copies the worker into a folder of its own, `MITCAD_OPTIX_WORKER_DIR`
+  (default above): the worker, Cycles' kernels in `cycles/lib` beside it
+  and, on Windows, the DLLs beside it in the build folder. It refuses
+  MitCad's installation as that folder, so an update or an uninstall of
+  MitCad leaves the worker. On Linux it keeps the build's run path: the
+  build folder and the prefix stay while the worker is used.
+- **Preferences > Display > Render worker** (`render/worker` in the user's
+  settings, `RenderWorkerChoice.cpp`): Shipped (the default) or a file the
+  user picks; the choice is kept. `MITCAD_RENDER_WORKER` overrides it.
+  The rendered view, Render Image and the device list take the picked
+  worker. A picked worker that is not there, does not start, ends before
+  its `hello` or answers with another protocol version gives way to the
+  shipped one for the rest of the run: the log says `Render worker
+  fallback: The render worker … cannot be used (…); rendering with the
+  shipped mitcad-render`, the status bar says the same, and the shipped
+  worker starts at once. A worker of another MitCad version is such a
+  worker: build it again after an update that changes the protocol
+  (`kProtocolVersion`). `mitcad-cli render` takes `--worker` instead (it
+  does not read the application's settings). The problem report says
+  whether the worker is the shipped one or the user's own, without its
+  path.
+- **Docker**: the driver's OptiX libraries must be visible in the
+  container, not only CUDA's: `libnvoptix.so.1` and `libnvidia-rtcore.so`
+  (with the NVIDIA Container Toolkit, for example
+  `NVIDIA_DRIVER_CAPABILITIES=all` rather than `compute,utility`).
+  Without them OptiX fails with `OPTIX_ERROR_UNKNOWN`, and the worker
+  falls back to the CPU as for any failed device ([Devices](#devices)).
+- **Tests**: no OptiX build in CI or on the development machines (no SDK
+  there). `repo.build_cycles_optix_args`, `repo.render_optix_gate`, the
+  unit test of the choice (`renderWorkerChoiceTests`) and
+  `tools/ui-render-device-test.sh` (a picked worker renders; one of
+  another protocol version gives way to the shipped one; Linux) run
+  without it; the OptiX path itself is checked by hand on a machine with an RTX card
+  and the SDK.
 
 ### Windows
 
@@ -1481,7 +1593,7 @@ tools\dev-env\msvc.cmd powershell -ExecutionPolicy Bypass -File tools\dev-env\bu
 tools\dev-env\msvc.cmd cmake --preset dev
 ```
 
-- `build-cycles.ps1 [-Prefix dir] [-Cuda [-CudaArch list]]` (which
+- `build-cycles.ps1 [-Prefix dir] [-Cuda [-CudaArch list]] [-Optix SDK]` (which
   `setup-windows.ps1` runs, with `-Cuda` unless `MITCAD_RENDER_CUDA=0`)
   does what `build-cycles.sh` does,
   with MSVC and Ninja: the manifest's libraries for `x64-windows`, ISPC's
@@ -1524,7 +1636,8 @@ tools\dev-env\msvc.cmd cmake --preset dev
   Open Image Denoise's own small runtime (it imports `nvcuda.dll` and
   links no CUDA toolkit library), and the core loads it at run time only
   where that works, so a machine without the driver denoises on the CPU.
-  OptiX stays off.
+  OptiX stays off without `-Optix` ([Building an OptiX worker
+  yourself](#building-an-optix-worker-yourself)).
 - A release configuration only (the Windows preset is RelWithDebInfo;
   there is no Windows Debug preset): a Debug build's runtime library
   (`/MDd`) does not match the release libraries, and `cmake/Render.cmake`
@@ -2855,7 +2968,7 @@ about 3 s.
 | `MITCAD_RENDER_TEST_DENOISER_FAILURE` | Inject a denoiser error after its first successful denoise; the CPU retry ignores this hook and any Metal override. |
 | `MITCAD_RENDER_REQUIRE_METAL=1` | The worker's `--bench` comparison or `--swap-test` requires actual Metal, default MetalRT policy and no fallback or skip, as with `--require-metal`. |
 | `MITCAD_RENDER_REQUIRE_GPU=1` | The Metal OIDN tests fail instead of skipping when the denoising capability is absent. |
-| `MITCAD_RENDER_WORKER` | The render worker's executable instead of `mitcad-render` next to the application or `mitcad-cli` (tests); a missing file means no rendered view and no final render. |
+| `MITCAD_RENDER_WORKER` | The render worker's executable instead of `mitcad-render` next to the application or `mitcad-cli` (tests), also instead of the worker picked in Preferences (mitcad#1332); a missing file means no rendered view and no final render. |
 
 ## Licences
 
@@ -2884,11 +2997,14 @@ GPU devices (mitcad#50; also in [development.md](development.md#licence-policy))
   (section 1.1.2: an application with material functionality of its own).
   No toolkit file is shipped (not even the runtime, which the EULA's
   Attachment A would allow): the user's driver runs the kernels.
-- **OptiX**: not used by MitCad. The SDK's headers are
-  on GitHub (NVIDIA/optix-dev) without a login, but under NVIDIA's
-  proprietary SDK licence (binary-only distribution, NVIDIA hardware
-  only, recipients bound to its terms), and Cycles compiles them into the
-  worker.
+- **OptiX**: not used by MitCad's builds, packages or downloads. The
+  SDK's headers are on GitHub (NVIDIA/optix-dev) without a login, but
+  under NVIDIA's proprietary SDK licence (binary-only distribution, NVIDIA
+  hardware only, recipients bound to its terms), and Cycles compiles them
+  into the worker. A user may build an OptiX worker for their own use with
+  the SDK they downloaded and accepted themselves; passing it on is
+  between that user and NVIDIA's licence ([Building an OptiX worker
+  yourself](#building-an-optix-worker-yourself), mitcad#1332).
 - **HIP**: the HIP SDK's compiler (ROCm's clang, Apache-2.0 with LLVM
   exception) is a build tool; hipew (as cuew) loads the HIP runtime at run
   time. **oneAPI**: the DPC++ compiler and the SYCL runtime (Apache-2.0

@@ -5,7 +5,9 @@
 // a library component and an inserted one, the tables of library_show
 // (open, closed, the old form), the constants written, and the rows'
 // Standard and Supplier filters with the designation's standard (mitcad#949),
-// and the suppliers' articles as their table shows them (mitcad#979).
+// and the suppliers' articles as their table shows them (mitcad#979), with
+// the shops chosen in Preferences as a filter of several suppliers and the
+// articles' product links (mitcad#950).
 #include "library/PartOptions.hpp"
 
 #include <cmath>
@@ -280,6 +282,26 @@ void rowFilterTests() {
        "allowed": {"kind": "list", "values": [{"value": 6, "text": "6 mm"}, {"value": 8, "text": "8 mm"},
                                               {"value": 10, "text": "10 mm"}]}}],
     "row": "M6x8"})"));
+  // The shops chosen in Preferences (mitcad#950): several suppliers' ids in
+  // one filter; a row passes when one of them sells it.
+  CHECK(supplierFilterIds(QStringLiteral(" wurth | etra|")) ==
+        (QStringList{QStringLiteral("wurth"), QStringLiteral("etra")}));
+  CHECK(supplierFilterIds(QString()).isEmpty());
+  CHECK(supplierFilterOf({QStringLiteral("wurth"), QStringLiteral(" Wurth"), QStringLiteral("etra"), QString()}) ==
+        QStringLiteral("wurth|etra"));
+  CHECK(supplierInFilter(QStringLiteral("wurth|etra"), QStringLiteral("ETRA")));
+  CHECK(supplierInFilter(QStringLiteral("wurth"), QStringLiteral("x"), QStringLiteral("Wurth")));
+  CHECK(!supplierInFilter(QStringLiteral("wurth|etra"), QStringLiteral("acme")));
+  CHECK(supplierInFilter(QString(), QStringLiteral("acme")));
+  RowFilter shops;
+  shops.supplier = QStringLiteral("wurth|etra");
+  CHECK(namesOf(filteredRows(rows, shops)) == (QStringList{QStringLiteral("M6x8"), QStringLiteral("M6x10")}));
+  CHECK(filteredOptionValues(rows, options, 0, QJsonObject(), shops) == QStringList{QStringLiteral("M6")});
+  RowFilter etraOnly;
+  etraOnly.supplier = QStringLiteral("acme|etra");
+  CHECK(filteredOptionValues(rows, options, 1, m6, etraOnly) == QStringList{QStringLiteral("10")});
+  CHECK(filteredTable(table, shops).value(QStringLiteral("default")).toString() == QStringLiteral("M6x8"));
+
   narrowAnswer(answer, rows, din);
   const PartOption* length = answer.option(QStringLiteral("Length"));
   CHECK(length != nullptr && length->allowedText() == QStringLiteral("8 mm, 10 mm"));
@@ -394,6 +416,28 @@ void supplierArticleTests() {
   odd.supplierName = QStringLiteral("Odd");
   odd.partNumber = QStringLiteral("X\t1\n2");
   CHECK(supplierArticlesTsv({odd}, {SupplierColumn::PartNumber}) == QStringLiteral("Supplier Part Number\nX 1 2\n"));
+  // The product links of the region chosen in Preferences (mitcad#950,
+  // `supplier_links`' `product_url` and `shop`): the part number links to
+  // the product; an article of one region gets the Region column; the
+  // shops chosen first.
+  const QJsonArray linked = parse(R"({"parts": [
+      {"supplier": "etra", "supplier_name": "Etra", "part_number": "E-516"},
+      {"supplier": "wurth", "supplier_name": "Würth", "part_number": "0084 5 16", "region": "FI",
+       "product_url": "https://shop.example/00845%20%2016", "shop": "Example shop"}]})")
+                               .value(QStringLiteral("parts"))
+                               .toArray();
+  const QList<SupplierArticle> shopFirst =
+      supplierArticles(linked, suppliers, QString(), QStringLiteral("acme|wurth"));
+  CHECK(shopFirst.size() == 2 && shopFirst[0].supplier == QStringLiteral("wurth"));
+  CHECK(shopFirst[0].productUrl == QStringLiteral("https://shop.example/00845%20%2016") &&
+        shopFirst[0].shop == QStringLiteral("Example shop") && shopFirst[0].region == QStringLiteral("FI"));
+  CHECK(supplierCellLink(shopFirst[0], SupplierColumn::PartNumber) ==
+        QStringLiteral("https://shop.example/00845%20%2016"));
+  CHECK(supplierCellLink(shopFirst[1], SupplierColumn::PartNumber).isEmpty());
+  CHECK(supplierColumns(shopFirst) ==
+        (QList<SupplierColumn>{SupplierColumn::Supplier, SupplierColumn::PartNumber, SupplierColumn::Region}));
+  CHECK(supplierCell(shopFirst[0], SupplierColumn::Region) == QStringLiteral("FI"));
+  CHECK(supplierColumnName(SupplierColumn::Region) == QStringLiteral("Region"));
   // No articles: no columns.
   CHECK(supplierArticles(QJsonArray(), suppliers, QString()).isEmpty());
   CHECK(supplierColumns({}).isEmpty());

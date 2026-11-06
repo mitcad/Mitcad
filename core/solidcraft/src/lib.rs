@@ -4,9 +4,10 @@
 //! (`document.json`) and its blobs (STEP text and meshes). No geometry.
 //!
 //! A design of any format is first upgraded to one format, [`PINNED`]
-//! (27 with the changes pending after it), by SolidCraft's own upgrade
-//! steps (`third_party/solidcraft/format.rs`), so that the import maps a
-//! single version. Feature inputs without parameter names get them as
+//! (50, the format of SolidCraft's release 0.40), by SolidCraft's own
+//! upgrade steps (`third_party/solidcraft/format.rs`), so that the import
+//! maps a single version. A SolidCraft drawing (a file of its own) is
+//! refused with a message saying so. Feature inputs without parameter names get them as
 //! SolidCraft gives them when it opens such a design, and components
 //! without an occurrence get one at the identity.
 //!
@@ -95,6 +96,13 @@ impl SolidcraftFile {
         };
         let version = match obj.get("format") {
             None => 1,
+            // Drawings are files of their own (`solidcraft-drawing/N`): sheets
+            // that draw designs saved elsewhere, with no model of their own.
+            Some(Value::String(f)) if f.starts_with("solidcraft-drawing/") => {
+                return Err(format!(
+                    "a SolidCraft drawing (format `{f}`), not a design: this import reads designs; open the designs the drawing draws instead"
+                ));
+            }
             Some(Value::String(f)) => {
                 version_of(f).ok_or_else(|| format!("not a SolidCraft design (format `{f}`)"))?
             }

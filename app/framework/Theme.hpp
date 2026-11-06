@@ -156,6 +156,15 @@ ColorRole colorRolePartner(ColorRole role);
 QColor themeColor(ColorRole role, const QPalette& palette = QGuiApplication::palette());
 // The role's value on a light or a dark background.
 QColor themeColor(ColorRole role, bool dark);
+// A whole palette of the neutral roles of a light or a dark theme, for Qt's
+// own style (QFusionStyle), which draws every control from the palette:
+// the window and the dialogs in Surface, fields and lists in Window,
+// buttons and tooltips in Raised, the texts in Text and TextSecondary, the
+// selection in Action. Every role of every group is set, so that nothing
+// resolves from the platform's palette under it. Windows 10's dark app
+// mode (platform/WindowsTheme) and the Theme preference where the platform
+// keeps its own palette (framework/AppTheme) set it.
+QPalette themePalette(bool dark);
 // The role's value in the 3D view, by the view's background.
 QColor viewColor(ColorRole role, bool darkBackground);
 // The component palette's color of a component's index (componentColorIndex).

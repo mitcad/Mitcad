@@ -24,7 +24,16 @@ def main():
     for name in sorted(desktop):
         props = properties[name]
         harness = "macos_gui_harness" in props.get("LABELS", [])
-        if harness:
+        headless = "macos_headless" in props.get("LABELS", [])
+        if headless:
+            assert not harness, name
+            assert name.removeprefix("app.ui-macos-") in {
+                "settings", "dialogs", "naming", "configuration-tables-parity",
+                "filament-variants", "make-tab", "dialog-gallery"}, name
+            assert "macos_desktop" not in props.get("RESOURCE_LOCK", []), name
+            assert "QT_QPA_PLATFORM=offscreen" in props.get("ENVIRONMENT", []), name
+            assert "MITCAD_TEST_HEADLESS=1" in props.get("ENVIRONMENT", []), name
+        elif harness:
             # Only the audited, process-private workflows may own Aqua
             # inside ui_run_app rather than throughout their CLI setup.
             workflow = name.removeprefix("app.ui-macos-").removeprefix("native-")
@@ -63,7 +72,9 @@ def main():
         if name in properties:
             assert properties[name].get("RUN_SERIAL", False), name
     harnesses = sum("macos_gui_harness" in properties[n].get("LABELS", []) for n in desktop)
-    print(f"macOS resources: {len(desktop) - harnesses} CTest desktop locks; "
+    headless = sum("macos_headless" in properties[n].get("LABELS", []) for n in desktop)
+    print(f"macOS resources: {len(desktop) - harnesses - headless} CTest desktop locks; "
+          f"{headless} headless Qt workflows; "
           f"{harnesses} harnesses lock every app launch; offscreen work independent")
 
 

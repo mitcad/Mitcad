@@ -468,6 +468,36 @@ bool sameOptionText(const QString& a, const QString& b) {
 
 } // namespace
 
+QStringList supplierFilterIds(const QString& filter) {
+  QStringList out;
+  for (const QString& id : filter.split(QLatin1Char('|'), Qt::SkipEmptyParts)) {
+    if (!id.trimmed().isEmpty()) {
+      out << id.trimmed();
+    }
+  }
+  return out;
+}
+
+QString supplierFilterOf(const QStringList& ids) {
+  QStringList out;
+  for (const QString& id : ids) {
+    if (!id.trimmed().isEmpty() && !out.contains(id.trimmed(), Qt::CaseInsensitive)) {
+      out << id.trimmed();
+    }
+  }
+  return out.join(QLatin1Char('|'));
+}
+
+bool supplierInFilter(const QString& filter, const QString& id, const QString& name) {
+  const QStringList ids = supplierFilterIds(filter);
+  if (ids.isEmpty()) {
+    return true;
+  }
+  return std::any_of(ids.cbegin(), ids.cend(), [&id, &name](const QString& one) {
+    return sameTag(one, id) || (!name.trimmed().isEmpty() && sameTag(one, name));
+  });
+}
+
 bool rowPasses(const QJsonObject& row, const RowFilter& filter) {
   if (!filter.standard.isEmpty()) {
     const QStringList tags = rowStandardTags(row);
@@ -479,8 +509,7 @@ bool rowPasses(const QJsonObject& row, const RowFilter& filter) {
     const QJsonArray parts = row.value(QStringLiteral("supplier_parts")).toArray();
     const bool sold = std::any_of(parts.cbegin(), parts.cend(), [&filter](const QJsonValue& part) {
       const QJsonObject one = part.toObject();
-      return sameTag(textOf(one, "supplier"), filter.supplier) ||
-             (!textOf(one, "supplier_name").isEmpty() && sameTag(textOf(one, "supplier_name"), filter.supplier));
+      return supplierInFilter(filter.supplier, textOf(one, "supplier"), textOf(one, "supplier_name"));
     });
     if (!sold) {
       return false;
@@ -686,8 +715,10 @@ QList<SupplierArticle> supplierArticles(const QJsonArray& parts, const QJsonArra
     article.finish = textOf(part, "finish").trimmed();
     article.checked = textOf(part, "checked").trimmed();
     article.productPage = productPage.trimmed();
-    const bool chosen = !firstSupplier.trimmed().isEmpty() &&
-                        article.supplier.compare(firstSupplier.trimmed(), Qt::CaseInsensitive) == 0;
+    article.productUrl = textOf(part, "product_url").trimmed();
+    article.shop = textOf(part, "shop").trimmed();
+    article.region = textOf(part, "region").trimmed();
+    const bool chosen = !firstSupplier.trimmed().isEmpty() && supplierInFilter(firstSupplier, article.supplier);
     (chosen ? first : rest).append(article);
   }
   return first + rest;
@@ -696,7 +727,8 @@ QList<SupplierArticle> supplierArticles(const QJsonArray& parts, const QJsonArra
 QList<SupplierColumn> supplierColumns(const QList<SupplierArticle>& articles) {
   static const SupplierColumn kAll[] = {SupplierColumn::Supplier, SupplierColumn::PartNumber,
                                         SupplierColumn::Material, SupplierColumn::Finish,
-                                        SupplierColumn::Checked,  SupplierColumn::ProductPage};
+                                        SupplierColumn::Region,   SupplierColumn::Checked,
+                                        SupplierColumn::ProductPage};
   QList<SupplierColumn> out;
   for (const SupplierColumn column : kAll) {
     const bool filled = std::any_of(articles.cbegin(), articles.cend(), [column](const SupplierArticle& article) {
@@ -719,6 +751,8 @@ QString supplierColumnName(SupplierColumn column) {
     return QStringLiteral("Material");
   case SupplierColumn::Finish:
     return QStringLiteral("Finish");
+  case SupplierColumn::Region:
+    return QStringLiteral("Region");
   case SupplierColumn::Checked:
     return QStringLiteral("Checked");
   case SupplierColumn::ProductPage:
@@ -737,6 +771,8 @@ QString supplierCell(const SupplierArticle& article, SupplierColumn column) {
     return article.material;
   case SupplierColumn::Finish:
     return article.finish;
+  case SupplierColumn::Region:
+    return article.region;
   case SupplierColumn::Checked:
     return article.checked;
   case SupplierColumn::ProductPage:
@@ -748,6 +784,9 @@ QString supplierCell(const SupplierArticle& article, SupplierColumn column) {
 QString supplierCellLink(const SupplierArticle& article, SupplierColumn column) {
   if (column == SupplierColumn::Supplier) {
     return article.supplierUrl;
+  }
+  if (column == SupplierColumn::PartNumber) {
+    return article.productUrl;
   }
   if (column == SupplierColumn::ProductPage) {
     return article.productPage;

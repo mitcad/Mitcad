@@ -199,6 +199,9 @@ public:
   // entities that found nothing): Clean Up Stale Projections tidies them,
   // and the palette offers it (mitcad#252).
   bool staleProjections = false;
+  // Of them, those whose sources are there (not lost): Project Again
+  // projects them anew (mitcad#1303), and the palette offers it.
+  bool projectAgain = false;
   int dof = 0;
   std::vector<PointData> points;
   std::vector<CurveData> curves;

@@ -64,7 +64,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::components::check_transform;
-use super::{DocState, Document, ModelError, invalid, same_placement};
+use super::{DocState, Document, Follow, ModelError, invalid, same_placement};
 use crate::assembly::{Assembly, inverse, matrix_rows};
 use crate::document::AnalysisDef;
 use crate::drawing::def::Drawing;
@@ -78,6 +78,7 @@ use crate::ids::{ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
+use crate::print_plates::PlateTarget;
 use crate::recompute::FeatureStatus;
 use crate::transform::Transform;
 
@@ -571,6 +572,29 @@ fn rewrite_references(
             updates.push(drawing.name.clone());
             out.drawings.push((i, changed));
         }
+    }
+    // Print plate items and comments follow it when it is taken
+    // (`DocState::follow`, mitcad#1318).
+    let through = |target: &PlateTarget| match target {
+        PlateTarget::Occurrence(path) => rewrite.through(path),
+        PlateTarget::Body(_) => false,
+    };
+    let plated = state
+        .print_plates
+        .iter()
+        .flat_map(|p| &p.items)
+        .any(|item| through(&item.target));
+    if plated {
+        updates.push("Print plates".to_owned());
+    }
+    let commented = state.comments.iter().any(|c| {
+        c.target
+            .occurrence
+            .as_ref()
+            .is_some_and(|path| rewrite.through(&path.0))
+    });
+    if commented {
+        updates.push("Comments".to_owned());
     }
     // Occurrences made by Pattern at Points keep the paths they were made
     // from.
@@ -1109,6 +1133,12 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
     for (i, drawing) in &plan.changes.drawings {
         state.drawings[*i].clone_from(drawing);
     }
+    // Print plate items and comment targets (mitcad#1318).
+    let new = plan.path();
+    state.follow(&Follow::Moved {
+        old: &plan.source,
+        new: &new,
+    });
 }
 
 impl<K: Kernel> Document<K> {

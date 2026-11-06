@@ -1,0 +1,47 @@
+{
+  "format": "solidcraft/50",
+  "name": "Format 50 holes and threads",
+  "units": "mm",
+  "params": [
+    {"name": "cx", "expr": "50 mm", "unit": "mm"}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Plate", "type": "box", "body_names": ["Plate"],
+      "param_names": ["d1", "d2", "d3"],
+      "corner": [0, 0, 0], "length": "100", "width": "60", "height": "10",
+      "operation": "new_body"
+    },
+    {
+      "id": 2, "name": "Tapped", "type": "hole",
+      "param_names": ["d4", "d5"],
+      "position": [30.0, 30.0, 10.0], "direction": [0.0, 0.0, -1.0],
+      "diameter": "6.8 mm", "hole": {"type": "simple"},
+      "thread": "M8x1.25", "thread_depth": "8 mm", "hand": "left"
+    },
+    {
+      "id": 3, "name": "Around", "type": "pattern", "features": [2],
+      "param_names": ["d6", "d7"],
+      "pattern": {"type": "circular", "origin": ["cx", "30", 0], "axis": [0, 0, 1], "count": "4", "angle": "360 deg"}
+    },
+    {
+      "id": 4, "name": "Counterbored", "type": "hole",
+      "param_names": ["d8", "d9", "d10", "d11"],
+      "position": [85.0, 15.0, 10.0], "direction": [0.0, 0.0, -1.0],
+      "diameter": "6 mm",
+      "hole": {"type": "counterbore", "cb_diameter": "10 mm", "cb_depth": "3 mm", "tip_angle": "118 deg"}
+    },
+    {
+      "id": 5, "name": "Pin", "type": "cylinder",
+      "param_names": ["d12", "d13"],
+      "base": [15, 45, 10], "axis": [0, 0, 1], "radius": "4", "height": "12",
+      "operation": "join"
+    },
+    {
+      "id": 6, "name": "Pin thread", "type": "thread",
+      "face": [19.0, 45.0, 16.0], "from": [15.0, 45.0, 22.0],
+      "designation": "M8", "hand": "left", "starts": 2, "tip": "both"
+    }
+  ],
+  "next_id": 7
+}

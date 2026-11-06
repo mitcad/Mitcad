@@ -284,10 +284,38 @@ public:
   bool unified() const { return m_unified; }
   void set_unified(bool unified) { m_unified = unified; }
 
-  // What the operation that made the shape gave up to build it (a fillet
-  // built as rings); the model shows them as warnings.
+  // A place a note is about (mitcad#1327): a face, an edge or a vertex of
+  // the shape by its name, or a point in the shape's coordinates. The model
+  // gives them as the warning notice's places, and the application paints
+  // them in the view while the pointer is over the warning.
+  struct NotePlace {
+    enum class Kind { Face, Edge, Vertex, Point };
+    Kind kind = Kind::Point;
+    std::string name; // (Face, Edge, Vertex)
+    std::array<double, 3> point{}; // (Point)
+
+    static NotePlace of(Kind kind, std::string name) {
+      NotePlace place;
+      place.kind = kind;
+      place.name = std::move(name);
+      return place;
+    }
+    static NotePlace at(double x, double y, double z) {
+      NotePlace place;
+      place.point = {x, y, z};
+      return place;
+    }
+  };
+
+  // What is wrong with the shape the operation made, although it is kept
+  // (a fillet's corner that folds back on itself); the model shows them as
+  // warnings. Each with its places (none for a note added without).
   const std::vector<std::string>& notes() const { return m_notes; }
-  void add_note(std::string note) { m_notes.push_back(std::move(note)); }
+  const std::vector<std::vector<NotePlace>>& note_places() const { return m_notePlaces; }
+  void add_note(std::string note, std::vector<NotePlace> places = {}) {
+    m_notes.push_back(std::move(note));
+    m_notePlaces.push_back(std::move(places));
+  }
   // What is worth knowing of how it was built but needs no action (a
   // fillet made 0.1 % smaller than asked, mitcad#1106); the model shows
   // them as information, in the feature's details.
@@ -295,7 +323,12 @@ public:
   void add_info(std::string info) { m_infos.push_back(std::move(info)); }
   // The other shape's notes and infos added to this one's.
   void copy_notes(const Shape& other) {
+    // (Places kept beside their notes: one list per note.)
+    m_notePlaces.resize(m_notes.size());
     m_notes.insert(m_notes.end(), other.m_notes.begin(), other.m_notes.end());
+    for (std::size_t k = 0; k < other.m_notes.size(); ++k) {
+      m_notePlaces.push_back(k < other.m_notePlaces.size() ? other.m_notePlaces[k] : std::vector<NotePlace>());
+    }
     m_infos.insert(m_infos.end(), other.m_infos.begin(), other.m_infos.end());
   }
 
@@ -350,6 +383,7 @@ private:
   std::vector<int> matching_faces(const std::string& reference) const;
   bool m_unified = false;
   std::vector<std::string> m_notes;
+  std::vector<std::vector<NotePlace>> m_notePlaces;
   std::vector<std::string> m_infos;
   // Registered with the input check when made.
   bool m_checked = false;

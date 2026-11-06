@@ -2090,3 +2090,205 @@ face there. On both bodies the result is valid, its faces and the file's
 round the rim on each other within 2 µm. The test is
 `geometry.fillet_roll_over_blend` on the cases `fillet-roll-over-blend` and
 `fillet-roll-over-blend-2` of `MITCAD_GEOMETRY_CASES`.
+
+## A pin's foot rounded where a plate's end goes on from it, again (mitcad#1336)
+
+`5ef2dbd5` imported at 88 / 3 / 7 (parametric / fallback / skipped of 98
+items) on dev 49c6482c3, where main 641b06c1 (round 20 of mitcad#343) had
+90 / 1 / 7: items 51 (Fillet5, the pin's foot of round 12) and 87
+(Fillet27, the fin's top of rounds 18 and 20) fell back. Traced on this
+design alone with the dressup dump, OCCT's fillet alone on the replay's
+body and on the history's stored body before the item (OCCT built from
+the port at each patch for TKFillet), and both builds' imports.
+
+- **Item 51, two causes, each enough.**
+  - **OCCT: port patch 1140 (with 1170).** On the stored body (the pin and
+    the plate's rounded end one face, closed round the axis) OCCT's fillet
+    alone is valid with the port up to 1120 (one torus, the material added
+    4.76572 against the file's 4.76602 mm³) and not valid from 1140 on (an
+    unorientable cylinder, a second torus with a negative area).
+    `ChFi3d_KPartCutToEnd` took both ends past the vertex (1140's end along
+    a tangent edge), where 0911's corner had cut them: the other contact's
+    line is a closed circle, the analytic piece's parameters at its ends
+    the whole line's a period apart, the last end's section found at the
+    line's start, and at one end the side's edge with the pin was prolonged
+    over the pin's seam. Port patch 1290 leaves such ends (the other
+    contact's face closed round its surface) to the corner, as before 1140.
+  - **The join of faces on one surface (mitcad#1261).** The replay's body
+    after item 50 (Extrude7, the pin joined onto the plate) kept the pin's
+    side (56.55 mm²) and the plate's rounded end (13.75 mm²) apart, where
+    641b06c1 made them one face (70.30 mm², as the file). The pin is
+    extruded from two regions; the extrusion's join (`joined` in
+    `extrude.cpp`) makes its side one face closed round the axis, its seam
+    where the regions met: along the plate's side's edge with its end.
+    OCCT's merge after the join leaves such a closed face apart from an
+    open piece of its surface (it joins open pieces into a closed face),
+    and the join of faces on one surface did too. Such a group is now
+    joined again with every closed face cut in two first
+    (`ShapeUpgrade_ShapeDivideClosed`, `join_same_surfaces`): the pin and
+    the plate's end one face again, the body after item 50 the file's 42
+    faces. On that body the dressup builds item 51 with 1290: parametric,
+    verified, its edge read by its name in the file.
+- **Item 87 followed item 51.** At 641b06c1 it was parametric through the
+  retry on the file's exact state (state 57, the varsi body replaced; the
+  fin's rounding fails on the replay's body, whose fin top item 86's
+  chamfer leaves 0.06 mm³ off the file's, within the tolerance). With
+  item 51's fallback, its base feature brought the varsi body to the file's
+  state 33 as well, so the replay before item 87 matched state 57 within
+  the tolerance: the retry kept the replay's body and failed on it. With
+  item 51 parametric again, item 87 is parametric through the retry as at
+  641b06c1 (matched, its main faces on the file's within 0.01 mm).
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 51 Fillet5 | 1 / 1 parametric, verified, edge read by its name in the file (1290, the join) | |
+| `5ef2dbd5` 87 Fillet27 | 1 / 1 parametric, verified, inputs read, on the file's exact state (as at 641b06c1) | the rounding fails on the replay's body (item 86's chamfer 0.06 mm³ off): not built on the replay since round 20 |
+| `5ef2dbd5` 30 Fillet4 | 0 / 1, as before | the file kernel's own corner (round 19) |
+
+The design imported alone (release build, its reference folder): 90 / 1 /
+7 of 98, history states matched 64 of 67 (as round 19), final bodies as
+before (9.7e-6). `f3d.corpus_designs` names it (items 51 and 87
+parametric, 87 allowed the retry on the exact state, a new seventh field;
+30 falling back). Tests: `geometry.fillet_tangent_end_face` (a pin on a
+plate's end, its seam along a side, failing without 1290) and the
+boolean part of `geometry.suite` on the case `pin-plate-end-join` of
+`MITCAD_GEOMETRY_CASES` (the body after item 50 as the boolean left it:
+the pin and the plate's end one face, failing without the cut; no
+synthetic layout reproduced the merge's refusal: a pin made with its seam
+there, by a primitive or by a face of the plate's own cylinder, was joined
+without it).
+
+## A fin's top rounded on the replay's body after its chamfer (mitcad#1341)
+
+`5ef2dbd5` item 87 (Fillet27, radius 0.2 on the fin's top edges) was
+parametric only through the retry on the file's exact state (state 57):
+on the replay's body the rounding failed. Traced with the dressup dump,
+item by item on the replay's bodies and the history's stored ones, and
+OCCT's chamfer and fillet alone (OCCT built from the port at each patch).
+
+- **Not a deviation of the replay before the item.** Item 86's chamfer
+  (Chamfer2) on the replay's body lies on state 57 within 3 µm (its cones
+  end at the arcs' meridian sections, the file's a few micrometres short of
+  them on the side strip). Run on the file's stored state 56 itself, the
+  same chamfer gives the same body, and the rounding failed on it the same
+  way: the operation, not the replay's state before it.
+- **Three causes in OCCT, each hidden behind the one before** (port
+  patches 1300 to 1302, `third_party/vcpkg-ports/docs/fillet-replay-1300-1302.md`):
+  - Where an arc's torus ends, the rounding's contact on the top lies on the
+    crease between the arc's cylinder and the spline's extrusion, convex by
+    1.4 degrees. 0980's turn about a concave crease took it for concave
+    (`ChFi3d::DefineConnectType` judged it 0.17 mm into the extrusion,
+    where the spline has turned past the crease); the ball rolled on the
+    crease's edge, which it leaves at once, and the walk failed on both
+    sides (1300).
+  - Coming to an arc's torus, the walk's contact on the chamfer reached the
+    torus's start 2.2 µm along the spine before the guide's end; a step of
+    2.2 µm made a piece the result's build could not join, the arc's edge
+    left on one face (1301).
+  - Three of the chamfer's faces (the parts that 0531 cuts it into over the
+    narrow side strips) had no name: OCCT's history did not give them their
+    edges, so the file's edge along the arc on one side was not found by its
+    name (1302).
+- **Item 89 (Fillet29, radius 1 round the fin's end) now builds on the
+  file's exact state.** Before, it ran on item 87's result on state 57 (the
+  retry had brought the fin's body to it); on the replay's chain both its
+  sides' roundings are taken for overlapping where they reach the fin top's
+  rounding (OCCT's walk then fails), and on state 59 it builds. Run on state
+  58 with the replay's item 88 it builds too, so the first deviation is item
+  87's own result at the fin's end: its corner faces there lie up to
+  0.013 mm off the file's (a torus of 1.24 mm² in the file), within the
+  import's check of item 87's corner faces. Not fixed here.
+- **Item 85 (Chamfer1, the root's chamfer of 1.6 at 40 degrees between the
+  fin's sides and the base's tori) is a walked B-spline** where the file
+  has cones: OCCT has no analytic chamfer between a plane square to a
+  torus's axis and the torus. The walked faces lie on the file's within
+  1 µm and the items after it build on them; an analytic piece for it (a
+  cone, built and checked within 5e-5 mm of the file's) made item 85 the
+  file's, but the walked intersection of its end with the fin's spline
+  extrusion, whose profile is only C0 at a knot, then got a curve 1.4 mm
+  off on the extrusion and item 87's end at the base a broken edge: left
+  for a follow-up with item 89.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 87 Fillet27 | 1 / 1 parametric, verified, edges read by their names in the file, on the replay's body (1300 to 1302) | |
+| `5ef2dbd5` 88 Fillet28 | 1 / 1 parametric, verified, on the replay's body | |
+| `5ef2dbd5` 89 Fillet29 | 1 / 1 parametric, verified, on the file's exact state (state 59) | the fin top's rounding's corners at the fin's end, up to 0.013 mm off the file's |
+| `5ef2dbd5` 30 Fillet4 | 0 / 1, as before | the file kernel's own corner (round 19) |
+
+The design imported alone (release build, its reference folder): 90 / 1 /
+7 of 98 as before; `f3d.corpus_designs` names #89 (no longer #87) among the
+items allowed the retry on the exact state. Test:
+`geometry.fillet_fin_top_creases` on the case `fin-top-chamfer-rounding` of
+`MITCAD_GEOMETRY_CASES` (the stored body before the chamfer and that body
+chamfered by the import): every chamfer face generated by a contour edge,
+the rounding built and closed, the stored body after it on the result
+within 0.01 mm (each patch's part fails without it).
+
+## A fin's end rounded on the replay's body (mitcad#1345)
+
+After mitcad#1341, `5ef2dbd5` item 89 (Fillet29, radius 1 along the fin's
+end face's edges with the root's chamfer and rounding, up each side to the
+top) built only through the retry on the file's exact state (state 59).
+Traced on the replay's bodies and the history's stored ones, with OCCT's
+fillet alone (OCCT built from the port at each patch).
+
+- **Item 87's end at the fin's end face (the first deviation).** The fin's
+  last arc meets the end face, an extrusion of a spline stretch of the
+  profile that goes on from the arc tangentially and falls away from it.
+  The file's torus along the arc (1.24 mm² on each side) runs on past the
+  vertex where the arc's edge ends, cut by the end face up to where it
+  meets the chamfer's edge with the end face, 1.2 mm past the vertex. OCCT
+  ended one side's torus at the vertex with a corner face (0.005 mm²) and
+  left the chamfer's cone to meet the end face directly: 0.013 mm off the
+  file's; the other side, walked, matched within 3e-4 mm. Run on the file's
+  own state 57, OCCT gave the same end, so the operation, not the replay
+  before it, was the cause. Port patch 1310
+  (`third_party/vcpkg-ports/docs/fillet-replay-1310-1311.md`): the analytic
+  blend runs on past the end, cut by the end face. Item 87's faces about
+  the fin's end now lie on state 58 within 2e-5 mm.
+- **Item 89 on the replay (the cause of its retry).** Each side's chain
+  ends at the top at an OnSame vertex, and 0600's walk on past it with the
+  end face's surface unbounded runs the contact on the end face over the
+  top, past the top's crease. The replay's end face is the extrusion of
+  the profile's spline stretch alone (a B-spline curve of four knots), the
+  file's state the extrusion of the whole spline (thirteen knots, running
+  on past the stretch's ends): the walk fell off the stretch's end at once
+  and the two sides' roundings were taken for intersecting. That is why
+  item 89 built on state 58 with the replay's item 88, as mitcad#1341 found,
+  and also, with 1310 in, still failed on the replay. Port patch 1311: the
+  extruded face's curve run on past the stretch's end by four radii
+  (curvature continuous, within 1e-4 mm of the file's spline over the first
+  1.6 mm). On the replay's body item 89 builds, and the stored state 60
+  lies on it within 0.0006 mm round the fin's end.
+- **Item 91 (Fillet20, radius 0.3 round the outlines of the plate's two
+  sides) now needs the retry on the file's exact state (state 61).** It ran
+  on the file's state before, because item 89's retry had brought the body
+  to it; on the replay's body it gives an invalid result (crossing wires),
+  with or without 1310 and 1311. Its walk along the plate's side where an
+  earlier rounding of the plate's top edge meets it ends where that
+  rounding vanishes into the side: on the replay that rounding ends in a
+  point at the side's vertex and the walk ends in a point there, while the
+  file's ends 0.04 short of it; the faces there lie within 2 µm of the
+  file's. Left for a follow-up.
+- **Item 87 at the creases between the top's arcs and spline stretches**
+  (not the fin's end): the import's check passes it with seven of its new
+  faces up to 0.012 mm off the file's, the walked faces next to the creases
+  (their contact lines on the top lie some 0.07 mm from the file's, the
+  faces tangent to the top there). Nothing after it depends on those faces;
+  not changed here.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5ef2dbd5` 87 Fillet27 | 1 / 1 parametric, verified, edges read by their names, on the replay's body; its end at the fin's end face the file's (1310) | |
+| `5ef2dbd5` 88 Fillet28 | 1 / 1 parametric, verified, on the replay's body | |
+| `5ef2dbd5` 89 Fillet29 | 1 / 1 parametric, verified, edges read by their names, on the replay's body (1311) | |
+| `5ef2dbd5` 90 Fillet25 | 1 / 1 parametric, verified, inputs inferred as before, now on the replay's body (seven of the file's new corner faces, 0.8 % of their area, up to 0.044 mm off) | |
+| `5ef2dbd5` 91 Fillet20 | 1 / 1 parametric, verified, on the file's exact state (state 61) | the walk along the plate's side ending in a point where an earlier rounding vanishes into it; was on the file's state through item 89's retry |
+| `5ef2dbd5` 30 Fillet4 | 0 / 1, as before | the file kernel's own corner (round 19) |
+
+The design imported alone (release build, its reference folder): 90 / 1 /
+7 of 98 as before; `f3d.corpus_designs` names #91 (no longer #89) among the
+items allowed the retry on the exact state. Test: `geometry.fillet_fin_end`
+on the cases `fin-top-chamfer-rounding` and `fin-end-rounding` of
+`MITCAD_GEOMETRY_CASES` (each patch's part fails without it).

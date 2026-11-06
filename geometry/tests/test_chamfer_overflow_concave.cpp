@@ -395,9 +395,18 @@ void test_warning_on_an_eave() {
   CHECK(edges >= 8);
   const std::string warning = detail::dressup_warning(*input, *result, "C", "chamfer", DressupSide::Outside, 3.0);
   std::printf("eave: %s\n", warning.c_str());
-  CHECK(warning.find("mm past the body's original extent, where a chamfer of concave edges only fills the corner") !=
-        std::string::npos);
+  CHECK(warning.find("mm past the edge of the face beside it, where a chamfer of concave edges only fills the "
+                     "corner") != std::string::npos);
   CHECK(warning.find("is turned over on its surface (it faces into the body)") != std::string::npos);
+  // In plain words, the faces and the farthest point as its places
+  // (mitcad#1327).
+  CHECK(warning.find("E{") == std::string::npos && warning.find("C:chamfer(") == std::string::npos);
+  const detail::DressupFinding found = detail::dressup_check(*input, *result, "C", "chamfer", DressupSide::Outside, 3.0);
+  CHECK(std::any_of(found.places.begin(), found.places.end(), [](const Shape::NotePlace& place) {
+    return place.kind == Shape::NotePlace::Kind::Face && place.name.rfind("C:chamfer(", 0) == 0;
+  }));
+  CHECK(std::any_of(found.places.begin(), found.places.end(),
+                    [](const Shape::NotePlace& place) { return place.kind == Shape::NotePlace::Kind::Point; }));
   // The chamfer as built on the disc of 44: none.
   const ShapePtr built = chamfer("C", *input, {foot_chamfer(*input, 3.0)});
   CHECK(detail::dressup_warning(*input, *built, "C", "chamfer", DressupSide::Outside, 3.0).empty());

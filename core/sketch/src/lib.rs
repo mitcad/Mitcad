@@ -89,6 +89,9 @@ pub mod auto;
 // Driven dimensions used by driving dimensions of their own sketch, solved
 // in stages (mitcad#1116).
 pub mod driven;
+// Project Again of a linked projection that stopped following its source,
+// its constraints and dimensions carried over (mitcad#1303).
+pub mod again;
 // Sketch Fillet at corners of arcs (mitcad#1192).
 mod fillet;
 

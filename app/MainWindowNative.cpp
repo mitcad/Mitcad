@@ -536,12 +536,12 @@ void MainWindow::createNativeWindow() {
   // caption Row (mitcad#1020).
   if (ConfigurationBar* configuration = m_controller->configurationBar()) configuration->setHeaderTitled(true);
   // The orientation cube's arrows are AppKit buttons at the hidden Qt
-  // arrows' places.
+  // arrows' places, in the view's coordinates: the shell adds the notice
+  // bars' height above the view as it changes (mitcad#1317).
   const auto showCubeArrows = [this] {
     QList<mac::NativeMacCubeArrow> arrows;
     for (const OcctViewer::CubeArrow& arrow : m_viewer->shownCubeArrows()) {
-      arrows.append({arrow.id, arrow.toolTip, arrow.symbol,
-                     QRect(m_viewer->mapTo(this, arrow.geometry.topLeft()), arrow.geometry.size())});
+      arrows.append({arrow.id, arrow.toolTip, arrow.symbol, arrow.geometry});
     }
     m_nativeWindow->setCubeArrows(arrows);
   };

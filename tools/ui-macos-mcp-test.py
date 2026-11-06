@@ -29,6 +29,11 @@ import tempfile
 import threading
 import time
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import gui_lock
+
 
 PROTOCOL = "2025-11-25"
 TIMEOUT = 20
@@ -69,7 +74,7 @@ def wait_for(predicate, description, gui=None, timeout=TIMEOUT):
 
 
 class Gui:
-    def __init__(self, app, env, out, label, script, ui, extra=()):
+    def __init__(self, app, env, out, label, script, ui, extra=(), *, gui_options):
         self.log_path = out / (label + ".log")
         self.log = self.log_path.open("wb")
         script_path = out / (label + ".mitcad-ui")
@@ -77,7 +82,7 @@ class Gui:
         own_env = dict(env, MITCAD_TEST_INPUT=str(script_path))
         self.process = subprocess.Popen(
             [app, "--ui=" + ui, "--no-recovery", *extra], env=own_env,
-            stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT)
+            stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT, **gui_options)
 
     def log_text(self):
         return self.log_path.read_text(encoding="utf-8", errors="replace")
@@ -235,6 +240,13 @@ def check_png(path, gui, following_gate):
 
 
 def run(app, cli, out, ui):
+    # The coordinated windows belong to one workflow and share ownership;
+    # every actual GUI child inherits its descriptor through Gui below.
+    with gui_lock() as gui_options:
+        _run_locked(app, cli, out, ui, gui_options)
+
+
+def _run_locked(app, cli, out, ui, gui_options):
     out.mkdir(parents=True, exist_ok=True)
     guis, bridges = [], []
     with tempfile.TemporaryDirectory(prefix="live-", dir=out) as directory:
@@ -303,7 +315,7 @@ def run(app, cli, out, ui):
             script += "command view.fit\nscreenshot '${MITCAD_MCP_TEST_OUT}/selection-circle.png'\n"
         script += "expect-file '${MITCAD_MCP_TEST_WORK}/finish' 60\nquit\n"
         try:
-            gui = Gui(app, env, out, "gui", script, ui)
+            gui = Gui(app, env, out, "gui", script, ui, gui_options=gui_options)
             guis.append(gui)
             discovery = Path(env["MITCAD_MCP_DISCOVERY_DIR"])
             wait_for(lambda: discovery.exists() and bool(list(discovery.glob("*.json"))), "GUI endpoint", gui)
@@ -477,7 +489,7 @@ def run(app, cli, out, ui):
             check(unknown.returncode != 0 and not unknown.stdout, "CLI connected to a stale endpoint")
 
             second_script = "expect-ever 'View area'\nexpect-file '${MITCAD_MCP_TEST_WORK}/second-finish' 60\nquit\n"
-            second = Gui(app, env, out, "second", second_script, ui)
+            second = Gui(app, env, out, "second", second_script, ui, gui_options=gui_options)
             guis.append(second)
             wait_for(lambda: len(public_instances(cli, env)) == 2, "second GUI discovery", second)
             automatic = subprocess.run([cli, "mcp", "--connect"], env=env, input=b"",
@@ -536,7 +548,7 @@ def run(app, cli, out, ui):
             check(not record.exists(), "Clean GUI exit left its discovery token behind")
             check(public_instances(cli, env) == [], "CLI reported a closed GUI instance")
             disabled_script = "expect-ever 'View area'\nexpect-file '${MITCAD_MCP_TEST_WORK}/disabled-finish' 60\nquit\n"
-            disabled = Gui(app, env, out, "disabled", disabled_script, ui, ("--no-mcp",))
+            disabled = Gui(app, env, out, "disabled", disabled_script, ui, ("--no-mcp",), gui_options=gui_options)
             guis.append(disabled)
             wait_for(lambda: "View area" in disabled.log_text(), "MCP-disabled GUI", disabled)
             check(public_instances(cli, env) == [], "--no-mcp still published a listener")
@@ -551,7 +563,7 @@ def run(app, cli, out, ui):
             design = LIVE.make_design(cli, debug, env)
             debug_script = "expect-ever 'View area'\nexpect-file '${MITCAD_MCP_TEST_WORK}/debug-finish' 300\nquit\n"
             debugger = Gui(app, env, out, "debug", debug_script, ui,
-                           ("--mcp-folder", str(debug), "--open", str(design)))
+                           ("--mcp-folder", str(debug), "--open", str(design)), gui_options=gui_options)
             guis.append(debugger)
             wait_for(lambda: len(public_instances(cli, env)) == 1, "the debugging GUI's discovery", debugger)
             live = LIVE.Bridge(cli, env, out / "debug-bridge.stderr.log")

@@ -1413,6 +1413,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-browser-eyes-mid-command"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-browser-eyes-mid-command PROPERTIES TIMEOUT 600)
+    # Notice places (mitcad#1327): a rounding's warning in plain words, its
+    # places painted while the pointer is over it on the Timeline item, in
+    # the message band and in the command panel's message; the Linux
+    # test's shared input script.
+    add_test(NAME app.ui-windows-notice-places
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-notice-places-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-notice-places"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-notice-places PROPERTIES TIMEOUT 360)
     # The rolled-back features evaluated in the background after an edit
     # before the marker, so that the marker dragged to the end evaluates
     # nothing; an edit that opens cancels a run at once (mitcad#1267); the
@@ -1443,6 +1454,15 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-dimension-picks"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-drawing-dimension-picks PROPERTIES TIMEOUT 300)
+    # Corners on drawings (mitcad#1338): a corner dimensioned to a hole's
+    # centre line in both pick orders, Always show corners' dots from the
+    # settings, the PDF and SVG the same with them on and off.
+    add_test(NAME app.ui-windows-drawing-corners
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-corners-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-corners"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-corners PROPERTIES TIMEOUT 300)
     # Names typed in the Projects panel (mitcad#1268): the proposed name free
     # on disk, also while a remote fetch runs; a refused name keeps the
     # editor with its message; the collapsed card expanded and the hidden
@@ -1522,6 +1542,30 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-view-show" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-view-show PROPERTIES TIMEOUT 300)
+    # Delete on the Start page (mitcad#1313): with Sketch1 selected, the
+    # Start tab clears the selection, and Delete and Backspace on the page
+    # and on its New Design card delete nothing of the design behind it, in
+    # the Floating and the Docked layout. The Linux test is
+    # tools/ui-start-page-delete-test.sh.
+    add_test(NAME app.ui-windows-start-page-delete
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-start-page-delete-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-start-page-delete"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-start-page-delete PROPERTIES TIMEOUT 300)
+    # Preferences > Display > Theme (mitcad#1330, GitHub mitcad/Mitcad#151):
+    # started with Theme Dark on the light app mode, the Start page, the
+    # Browser's card, the Browser and the timeline dark; Light and Dark from
+    # Preferences at once; System follows the app mode again; Windows 11's
+    # style (Floating, Docked) and Windows 10's path forced. The Linux test
+    # is tools/ui-theme-preference-test.sh.
+    add_test(NAME app.ui-windows-theme-preference
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-theme-preference-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-theme-preference"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-theme-preference PROPERTIES TIMEOUT 600)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

@@ -250,7 +250,7 @@ void MainWindow::printCurrent() {
   }
   // The pages as printed: the dialog may have changed the paper.
   const printing::PrintPlan printed =
-      printing::plan(panel.scale(), picture.size, printing::printableSize(printer.pageLayout()));
+      printing::plan(panel.scale(), picture, printing::printableSize(printer.pageLayout()));
   qInfo().noquote() << QStringLiteral("Printed %1: %2 page(s), %3, %4 x %5 to %6")
                            .arg(picture.name)
                            .arg(pages)

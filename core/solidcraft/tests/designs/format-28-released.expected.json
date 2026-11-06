@@ -1,0 +1,9 @@
+{
+  "comment": "Worked out by hand (mitcad#1331): a released format-28 design has every change of format 28, so its two-sided extrude keeps `direction: negative`: the first distance (10) runs against the sketch normal and the second (5) along it, a 40 x 30 slab from z = -10 to z = 5 (40 * 30 * 15 = 18000). Upgraded again it would run from z = -5 to z = 10.",
+  "body_count": 1,
+  "total": {"volume_mm3": 18000},
+  "bbox": {"min": [0, 0, -10], "max": [40, 30, 5]},
+  "bodies": [{"name": "Slab", "volume_mm3": 18000}],
+  "timeline": [{"name": "Sketch1"}, {"name": "Two sides"}],
+  "parametric": 2
+}

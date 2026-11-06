@@ -81,11 +81,18 @@ QString foreignObject(const CommandState& state, const CommandContext& context) 
   }
   const SelectionItem& object = objects.first();
   const bool plane = object.kind == SelectKind::Plane;
-  if (object.kind != SelectKind::Face && object.kind != SelectKind::Body && !plane) {
+  // A point or a straight line (mitcad#1329) is in the component where it
+  // was picked, as a face is; the origin point and axes are every
+  // component's own.
+  const bool origin = object.owner == QStringLiteral("origin") || object.owner == QStringLiteral("x") ||
+                      object.owner == QStringLiteral("y") || object.owner == QStringLiteral("z");
+  const bool point = (isPointLike(object) || isStraightLine(object)) && !origin;
+  if (object.kind != SelectKind::Face && object.kind != SelectKind::Body && !plane && !point) {
     return QString();
   }
   // A construction plane's component is its feature's (none for an origin
-  // plane, every component's own); a face's or body's, where it was picked.
+  // plane, every component's own); a face's, body's or point's, where it
+  // was picked.
   const QString at = plane ? planeComponent(object, context) : occurrenceComponent(object.occurrence, context);
   if (at.isEmpty()) {
     return QString();
@@ -101,7 +108,7 @@ QString foreignObject(const CommandState& state, const CommandContext& context) 
   if (at == own) {
     return QString();
   }
-  return QObject::tr("The object is in %1: a hole ends at a plane, face or body of its own component.")
+  return QObject::tr("The object is in %1: a hole ends at a plane, face, body, point or line of its own component.")
       .arg(componentName(at, context));
 }
 
@@ -820,7 +827,7 @@ CommandDef holeCommand(const CommandContext& context) {
                    {QStringLiteral("through_all"), QStringLiteral("All")}},
                   QStringLiteral("distance")),
   };
-  def.inputs += objectInputs(QString(), choiceIs(QStringLiteral("extent"), QStringLiteral("to_object")));
+  def.inputs += objectInputs(QString(), choiceIs(QStringLiteral("extent"), QStringLiteral("to_object")), true);
   def.inputs += {
       valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(choiceIs(QStringLiteral("extent"), QStringLiteral("to_object"))),

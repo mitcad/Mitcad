@@ -38,6 +38,7 @@
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 
+#include "../src/dressup_strips.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/boolean.hpp"
 #include "mitcad/geometry/dressup.hpp"
@@ -528,6 +529,80 @@ void test_wedge_of_45_degrees() {
   CHECK_NEAR_TOL(volume_of(*rounded), 10.0 * (section - taken), 1e-4);
 }
 
+// A loop of straight lines through the points, named <prefix><first>..
+Loop polygon_loop(const std::string& prefix, int first, const std::vector<gp_Pnt2d>& points) {
+  Loop loop;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    Segment segment;
+    segment.name = prefix + std::to_string(first + static_cast<int>(i));
+    segment.start = points[i];
+    segment.end = points[(i + 1) % points.size()];
+    loop.segments.push_back(segment);
+  }
+  return loop;
+}
+
+// The removal of the strip a dressup built 0.1 % smaller leaves
+// (detail::without_strips, mitcad#1106) on a body made to look like one:
+// the input's top face c4 of a prism 5 high is 6 wide; in the "smaller"
+// body its face of the same name is 2 µm wide, between two faces whose names
+// the input has not (the dressup's). With 4 faces beside it, it is removed:
+// the faces beside it meet, one face fewer, the volume within 1e-4.
+void test_strip_removed() {
+  const ShapePtr input = extrude(
+      "F1", {polygon(1, {gp_Pnt2d(0, 0), gp_Pnt2d(20, 0), gp_Pnt2d(20, 10), gp_Pnt2d(13, 15), gp_Pnt2d(7, 15),
+                         gp_Pnt2d(0, 10)})},
+      0, 5);
+  Region narrow = polygon(11, {gp_Pnt2d(0, 0), gp_Pnt2d(20, 0), gp_Pnt2d(20, 10), gp_Pnt2d(10.001, 15),
+                               gp_Pnt2d(9.999, 15), gp_Pnt2d(0, 10)});
+  narrow.loops[0].segments[3].name = "c4";
+  const ShapePtr smaller = extrude("F1", {narrow}, 0, 5);
+  CHECK(input->find_faces(face_name("F1", "side", "c4")).size() == 1);
+  CHECK(smaller->find_faces(face_name("F1", "side", "c4")).size() == 1);
+  CHECK(detail::strips_to_remove(*smaller, *input, 2.0).faces == smaller->find_faces(face_name("F1", "side", "c4")));
+  const ShapePtr out = detail::without_strips(*smaller, *input, 2.0);
+  CHECK(out != nullptr);
+  if (out) {
+    CHECK(valid(*out));
+    CHECK(out->face_count() == smaller->face_count() - 1);
+    CHECK_NEAR_TOL(volume_of(*out), volume_of(*smaller), 1e-4 * volume_of(*smaller));
+  }
+}
+
+// A strip with more faces beside it than kMostFacesBesideStrips stays
+// (mitcad#1337): OCCT's defeaturing would grow every one of them by the
+// strip's extent and intersect each with each (a strip along a rounding of
+// 44 edges round a circle, 88 faces beside it, took more than 300 s and
+// 5 GB). Here the caps of a tube 2 µm thick, both named as the wide caps of
+// the input's block: between two squares 8 faces lie beside each cap and
+// both are removed; between two 12-gons 24 do, and neither is.
+void test_strip_with_many_faces_beside_it_stays() {
+  const Region square = polygon(1, {gp_Pnt2d(-30, -30), gp_Pnt2d(30, -30), gp_Pnt2d(30, 30), gp_Pnt2d(-30, 30)});
+  const ShapePtr input = extrude("F1", {square}, 0, 5);
+  const auto tube = [&square](int corners) {
+    std::vector<gp_Pnt2d> outer;
+    std::vector<gp_Pnt2d> inner;
+    for (int i = 0; i < corners; ++i) {
+      const double a = 2.0 * kPi * i / corners;
+      outer.emplace_back(20.0 * std::cos(a), 20.0 * std::sin(a));
+      inner.emplace_back(19.998 * std::cos(a), 19.998 * std::sin(a));
+    }
+    std::reverse(inner.begin(), inner.end());
+    Region region;
+    region.name = square.name;
+    region.loops = {polygon_loop("c", 101, outer), polygon_loop("c", 201, inner)};
+    return extrude("F1", {region}, 0, 5);
+  };
+  const ShapePtr few = tube(4);
+  CHECK(few->face_count() == 10);
+  CHECK(detail::strips_to_remove(*few, *input, 2.0).faces.size() == 2);
+  const ShapePtr many = tube(12);
+  CHECK(many->face_count() == 26);
+  CHECK(detail::kMostFacesBesideStrips < 24);
+  CHECK(detail::strips_to_remove(*many, *input, 2.0).faces.empty());
+  CHECK(detail::without_strips(*many, *input, 2.0) == nullptr);
+}
+
 } // namespace
 
 void dressup_takes_face_tests() {
@@ -539,6 +614,8 @@ void dressup_takes_face_tests() {
   guarded("hole rim at its size", test_hole_rim_at_its_size);
   guarded("hole rim with OCCT alone", test_hole_rim_with_occt_alone);
   guarded("wedge of 45 degrees", test_wedge_of_45_degrees);
+  guarded("strip removed", test_strip_removed);
+  guarded("strip with many faces beside it stays", test_strip_with_many_faces_beside_it_stays);
 }
 
 } // namespace test

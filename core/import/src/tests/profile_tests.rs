@@ -759,3 +759,68 @@ fn two_sides_up_to_objects_are_read_with_the_second_objects_block() {
     assert_eq!(provenance(Some(false)), Some(InputProvenance::Read));
     assert_ne!(provenance(None), Some(InputProvenance::Read));
 }
+
+/// An extrusion up to a vertex (mitcad#1329): the vertex comes in by the
+/// faces that meet there, and the extrusion goes up to the point, the
+/// plane through it parallel to its sketch, and builds.
+#[test]
+fn an_extrusion_up_to_a_vertex_comes_in_up_to_the_point() {
+    let block = || {
+        vec![
+            rectangle_sketch(0),
+            extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        ]
+    };
+    // The block's top face as the replay names it: the only face of the
+    // mock's block through its top corner whose plane it knows.
+    let mut first = Document::new(MockKernel::default());
+    import(&mut first, &timeline_dump(block()));
+    let top = first
+        .body_shape(BodyUid::new(FeatureUid(2), 0))
+        .expect("the block")
+        .faces
+        .iter()
+        .map(ToString::to_string)
+        .find(|f| f.contains(":end("))
+        .expect("a top face");
+    let vertex = format!("V{{{top}}}")
+        .parse::<mitcad_model::VertexName>()
+        .unwrap()
+        .to_string();
+    // A second extrusion of the rectangle up to the block's corner at
+    // (4, 0, 1) cm.
+    let mut items = block();
+    let mut item = extrude(2, 0, "NewBodyFeatureOperation", "d2");
+    let detail = item["detail"].as_object_mut().unwrap();
+    detail.remove("taperAngleOne");
+    detail.insert(
+        "extentOne".to_owned(),
+        json!({"_type": "ToEntityExtentDefinition",
+               "entity": {"kind": "vertex", "objectType": "BRepVertex", "point": [4.0, 0.0, 1.0]}}),
+    );
+    items.push(item);
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel()
+        .vertex_points
+        .borrow_mut()
+        .insert(vertex.clone(), [40.0, 0.0, 10.0]);
+    let report = import(&mut doc, &timeline_dump(items));
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let def: Value =
+        serde_json::from_str(&doc.query(r#"{"query": "feature", "uid": "F3"}"#).unwrap()).unwrap();
+    assert_eq!(def["def"]["extent"]["type"], "to_object", "{def}");
+    assert_eq!(
+        def["def"]["extent"]["object"],
+        json!({"type": "point", "point": {"body": "F2.b0", "vertex": vertex}}),
+        "{def}"
+    );
+    // The corner lies along the sketch's normal.
+    assert!(!def["def"]["flip"].as_bool().unwrap_or(false), "{def}");
+    assert_eq!(doc.status(FeatureUid(3)).and_then(|s| s.error()), None);
+    assert!(doc.body_shape(BodyUid::new(FeatureUid(3), 0)).is_some());
+}

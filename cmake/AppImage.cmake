@@ -14,6 +14,12 @@
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   return()
 endif()
+# A build with a user's own OptiX worker (mitcad#1332, cmake/RenderOptix.cmake)
+# makes no AppImage: MitCad never ships OptiX.
+get_property(mitcad_render_optix GLOBAL PROPERTY MITCAD_RENDER_OPTIX)
+if(mitcad_render_optix)
+  return()
+endif()
 
 include(GNUInstallDirs)
 

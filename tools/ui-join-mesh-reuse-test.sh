@@ -8,7 +8,7 @@
 # tools/ui-scripts/join-mesh-reuse.mitcad-ui (also run by
 # tools/ui-windows-join-mesh-reuse-test.ps1) on a design that mitcad-cli
 # makes (tools/ui-scripts/join-mesh-reuse.json): a 177.2 x 25 plate
-# extruded 5 mm, then a 6 x 25 block on its end 10 mm, a Join, refined
+# extruded 5 mm, then a 6 x 25 block on its end 12 mm, a Join, refined
 # before OK. All 8 faces of the joined body are meshed where the view
 # draws them, and Create Sketch can pick the plate's top.
 #

@@ -485,11 +485,14 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                     signature.materials = materials.clone();
                 }
                 let group = if settings.group_identical {
-                    signature.as_ref().and_then(|s| {
-                        groups
+                    match signature.as_ref() {
+                        Some(s) => groups
                             .iter_mut()
-                            .find(|g| g.3.as_ref().is_some_and(|other| other.matches(s)))
-                    })
+                            .find(|g| g.3.as_ref().is_some_and(|other| other.matches(s))),
+                        // Not measured: its own row still counts each of its
+                        // placements, merged with no other (mitcad#1315).
+                        None => groups.iter_mut().find(|g| g.3.is_none() && g.0 == *key),
+                    }
                 } else {
                     groups.iter_mut().find(|g| g.0 == *key)
                 };

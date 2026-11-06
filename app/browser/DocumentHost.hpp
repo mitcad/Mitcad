@@ -145,6 +145,10 @@ public:
   // path from the root, empty when the pointer left those rows. The
   // selection, visibility and camera stay as they are.
   virtual void previewBodies(const QString& /*row*/, const QString& /*body*/, const QString& /*occurrence*/) {}
+  // The pointer over a feature's notice (mitcad#1327): its Browser row, the
+  // message band or the status line about it (`source`); the view paints
+  // the places its notices name until the pointer leaves (an empty uid).
+  virtual void previewNoticePlaces(const QString& /*source*/, const QString& /*feature*/) {}
   // Motion studies and contact sets (mitcad#454): a study in the Motion
   // Study panel (a new one when `name` is empty), a contact set in its
   // command's panel.

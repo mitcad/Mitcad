@@ -20,6 +20,11 @@ import subprocess
 import sys
 import tempfile
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import gui_lock
+
 
 def support_module():
     spec = importlib.util.spec_from_file_location(
@@ -40,6 +45,11 @@ def near(actual, expected, description):
 
 
 def run(app, cli, out):
+    with gui_lock() as gui_options:
+        _run_locked(app, cli, out, gui_options)
+
+
+def _run_locked(app, cli, out, gui_options):
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="seating-", dir=out) as directory:
         work = Path(directory)
@@ -73,7 +83,7 @@ def run(app, cli, out):
             subprocess.run([cli, "library", "fetch", str(library)], env=env,
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
         script = "expect-ever 'View area'\nexpect-file '${MITCAD_TIMBER_WORK}/finish' 300\nquit\n"
-        gui = MCP.Gui(app, env, out, "timber-seating", script, "qt")
+        gui = MCP.Gui(app, env, out, "timber-seating", script, "qt", gui_options=gui_options)
         bridge = None
         try:
             discovery = Path(env["MITCAD_MCP_DISCOVERY_DIR"])

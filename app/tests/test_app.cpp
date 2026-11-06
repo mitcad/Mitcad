@@ -47,6 +47,7 @@
 #include "projects/ProjectRowDrag.hpp"
 #include "render/RenderDevices.hpp"
 #include "render/RenderImage.hpp"
+#include "render/RenderWorkerChoice.hpp"
 #include "render/RenderWorkerFailure.hpp"
 #include "report/ReportText.hpp"
 #include "sketch/AutoConstraint.hpp"
@@ -154,6 +155,76 @@ void renderWorkerFailureTests() {
   const QString mismatch = workerExitReason(QStringLiteral("protocol mismatch"), 9, true, true);
   CHECK(mismatch.contains(QStringLiteral("protocol mismatch")));
   CHECK(mismatch.contains(QStringLiteral("exit code 9")));
+}
+
+// The render worker that starts (mitcad#1332): MITCAD_RENDER_WORKER over the
+// one picked in Preferences, over the shipped one; a picked one that is not
+// there, or that failed in this run, gives way to the shipped one.
+void renderWorkerChoiceTests() {
+  using mitcad::render::chooseWorker;
+  using mitcad::render::executableFile;
+  using mitcad::render::WorkerChoice;
+  QTemporaryDir directory;
+  CHECK(directory.isValid());
+#ifdef _WIN32
+  const QString suffix = QStringLiteral(".exe"); // what Windows runs
+#else
+  const QString suffix;
+#endif
+  const auto program = [&directory, &suffix](const QString& name, bool executable) {
+    const QString path = directory.filePath(name + suffix);
+    QFile file(path);
+    CHECK(file.open(QIODevice::WriteOnly));
+    file.write("#!/bin/sh\n");
+    file.close();
+    if (executable) {
+      CHECK(file.setPermissions(file.permissions() | QFileDevice::ExeOwner | QFileDevice::ExeUser));
+    }
+    return QFileInfo(path).absoluteFilePath();
+  };
+  const QString shipped = program(QStringLiteral("mitcad-render"), true);
+  const QString own = program(QStringLiteral("mitcad-render-optix"), true);
+  const QString missing = directory.filePath(QStringLiteral("no-such-worker") + suffix);
+  CHECK(executableFile(own) == own && executableFile(missing).isEmpty() && executableFile(QString()).isEmpty());
+  // The shipped one by default.
+  WorkerChoice choice = chooseWorker(QString(), QString(), QString(), shipped);
+  CHECK(choice.path == shipped && !choice.picked && choice.fallback.isEmpty());
+  // The picked one, in either separators.
+  choice = chooseWorker(QString(), own, QString(), shipped);
+  CHECK(choice.path == own && choice.picked && choice.fallback.isEmpty());
+  choice = chooseWorker(QString(), QDir::toNativeSeparators(own), QString(), shipped);
+  CHECK(choice.path == own && choice.picked);
+  // A picked one that is not there: the shipped one, and the message says
+  // which and why.
+  choice = chooseWorker(QString(), missing, QString(), shipped);
+  CHECK(choice.path == shipped && !choice.picked);
+  CHECK(choice.fallback.contains(QDir::toNativeSeparators(missing)) &&
+        choice.fallback.contains(QStringLiteral("is not there")) &&
+        choice.fallback.contains(QStringLiteral("shipped mitcad-render")));
+#ifndef _WIN32
+  // One that cannot be run, likewise.
+  const QString plain = program(QStringLiteral("plain-file"), false);
+  choice = chooseWorker(QString(), plain, QString(), shipped);
+  CHECK(choice.path == shipped && !choice.picked && !choice.fallback.isEmpty());
+#endif
+  // One that failed in this run (it did not start, or spoke another
+  // protocol version): the shipped one, already reported.
+  choice = chooseWorker(QString(), own, own, shipped);
+  CHECK(choice.path == shipped && !choice.picked && choice.fallback.isEmpty());
+  choice = chooseWorker(QString(), own, missing, shipped);
+  CHECK(choice.path == own && choice.picked);
+  // The shipped one picked is the shipped one: nothing to fall back from.
+  choice = chooseWorker(QString(), shipped, QString(), shipped);
+  CHECK(choice.path == shipped && !choice.picked);
+  // MITCAD_RENDER_WORKER overrides the choice, as it is: a missing one
+  // leaves no worker.
+  choice = chooseWorker(own, missing, QString(), shipped);
+  CHECK(choice.path == own && !choice.picked && choice.fallback.isEmpty());
+  choice = chooseWorker(missing, own, QString(), shipped);
+  CHECK(choice.path.isEmpty() && !choice.picked);
+  // Without a shipped one a missing picked one leaves none.
+  choice = chooseWorker(QString(), missing, QString(), QString());
+  CHECK(choice.path.isEmpty() && !choice.picked && !choice.fallback.isEmpty());
 }
 
 void workerThreadStartTests() {
@@ -2793,6 +2864,9 @@ int valueStepTests();
 int recentDesignsTests();
 int uiCommandListTests();
 int orbitWrapTests();
+int startBrowserTests();
+int noticePlacesTests();
+int drawingPreferencesTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2805,6 +2879,7 @@ int main(int argc, char* argv[]) {
     atomicCopyTests();
     projectRowDragTests();
     renderWorkerFailureTests();
+    renderWorkerChoiceTests();
     workerThreadStartTests();
     shortcutBindingTests();
     shortcutContextTests();
@@ -2933,6 +3008,9 @@ int main(int argc, char* argv[]) {
     failures += recentDesignsTests();
     failures += uiCommandListTests();
     failures += orbitWrapTests();
+    failures += startBrowserTests();
+    failures += noticePlacesTests();
+    failures += drawingPreferencesTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

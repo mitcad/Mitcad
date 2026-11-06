@@ -120,6 +120,32 @@ Checklist for a new command or feature type:
   links carry bodies only, and the model reads a construction plane only
   in its own component ("Plane1 is in frame: pick a plane of crank, or a
   face of frame.").
+- Points and lines as objects (mitcad#1329): Extrude's Object on each
+  side and its Start Object, and Hole's Object, also take a sketch point,
+  a vertex or a construction point, and a straight line: a sketch line, a
+  straight edge or an axis (`cmd::objectInputs(suffix, shown, true)`,
+  `kPointKinds | kStraightLineKinds`, edges and sketch curves only when
+  `cmd::isStraightLine`; the tooltip "A plane, face, body, point (sketch,
+  vertex, construction) or straight line the extent ends at"; Start
+  Object "The plane, planar face, point or straight line (its parallel
+  plane) the profiles start at"). `objectOf` sends such a pick as the
+  model's `{"type": "point", "point": <its reference>}` or `{"type":
+  "line", "line": <its reference>}` (commands.md, *extrude*: the plane
+  through it parallel to the sketch, or across a hole's axis), and
+  `loadObject` and `objectShowable` take it back. Extrude's `build`
+  refuses a line that leans out of the planes parallel to the profiles
+  (`cmd::slantedLine`, from `axisOf` and `profileNormal`: "The line is
+  26.565 degrees off the profiles' plane: pick a line parallel to it.");
+  the pick filter takes any straight line, as it does not know the
+  profiles' plane, and Hole leaves the check to the model, whose preview
+  error says it. Revolve's Object keeps planes, faces and bodies (the
+  model refuses a point or a line there). A point or line picked in
+  another occurrence than the profiles is refused in the panel
+  (`cmd::foreignPoint`: "Pick a point or a line where the profiles are:
+  one of another occurrence is not taken."), as no link carries one; Hole
+  refuses a point or line of another component as it refuses its faces
+  (`tools/ui-extrude-to-point-test.sh`: a rectangle extruded up to a point
+  of a sketch at right angles to it).
 - Every unit a dialog or panel offers starts at millimetres, the thread
   table at ISO metric (`tools/ui-units-test.sh`).
 
@@ -2549,7 +2575,8 @@ The sketch CREATE group's subgroups (mitcad#222), in this order: Lines
 Diameter Circle), Arcs (default 3-Point Arc), Other Geometry (Ellipse, the
 polygons, the slots, the splines, Point; no default), Text, Patterns
 (Rectangular Pattern, Circular Pattern, Mirror; no default), References
-(Project, Intersect, Clean Up Projections, Clean Up Stale Projections);
+(Project, Intersect, Clean Up Projections, Clean Up Stale Projections,
+Project Again);
 Sketch Dimension follows on its own. Offset, Edit Pattern, Edit
 Offset and Edit Text are in MODIFY. The toolbar row has Line, the three
 split buttons and Sketch Dimension (`tools/ui-sketch-create-menu-test.sh`).
@@ -3376,6 +3403,29 @@ the command under its warnings while a linked projection does not follow
 (`kept`, `lost`, `unfollowed` or `stale` in the `sketch` query): a
 Clean Up Stale Projections button (`paletteCleanUpStale`, a capsule in the
 Floating layout), whose click starts it as the menu does.
+
+**Project Again** (`sketch.project_again`, CREATE's References after Clean
+Up Stale Projections, mitcad#1303) is a panel without inputs as well: its
+preview runs the command for every linked projection of the sketch that
+does not follow and whose source is there, showing the projections made
+anew from their sources with the constraints and dimensions carried over
+to the new curves, and its warnings list what stays on old curves kept as
+construction references (with the constraints and dimensions that hold
+them) and the regions later features use that change their names; OK
+(`Projected again`) keeps it as one undo step, and with nothing to repair
+the panel says so and OK stays off. The Sketch Palette shows a Project
+Again button (`paletteProjectAgain`) before Clean Up Stale Projections
+under the warning while such a projection's source is there (`kept`,
+`unfollowed` or `stale` without `lost` in the `sketch` query; the log line
+`Palette paletteProjectAgain at x,y` gives its place); its click logs
+`Palette: Project Again from the warning` and starts the command. The
+sketch's context menu in the sketch lists Project Again and Clean Up
+Stale Projections then, and outside it the timeline's and the browser's
+menu of the sketch list Project Again while the `timeline` query gives the
+sketch `project_again` (`BrowserController::projectAgain`: the model
+command at once, one undo step, its warnings in the status bar and the log
+line `Project Again in Sketch2: done`), and the timeline's tooltip of the
+sketch says so under its warning.
 
 **Convert to Sketch Geometry** (`sketch.convert_projected`, MODIFY after
 Centerline, mitcad#257) is an `Action` on the selection, like
@@ -7280,7 +7330,9 @@ settings in the user's settings (`ViewSettings`, group `view`);
   folders of font files Edit Text offers, mitcad#473, Sketch: **Scale the
   sketch to its first dimension**, `sketch/SketchPreferences.*`, logged
   `Preferences: scale the sketch to its first dimension on|off`,
-  mitcad#860) so the window fits 1366 × 768; each page is also a command
+  mitcad#860, Suppliers: `SupplierPreferencesBox`, the Region of the
+  product links and the Shops you buy from, mitcad#950, [Suppliers'
+  shops](#suppliers-shops)) so the window fits 1366 × 768; each page is also a command
   `tools.preferences.<page>` that the search finds by its settings. OK
   saves every page. The window opens at its largest page's size, never
   larger than the screen's available area, with its frame on the screen;
@@ -7332,6 +7384,43 @@ settings in the user's settings (`ViewSettings`, group `view`);
   `--debug-log`), without `--chrome` and the one-off start actions, and
   with `--open <file>` when the design has a file. `MITCAD_TEST_NO_RESTART=1`
   logs the command instead of starting it (UI tests).
+- **Theme** (mitcad#1330, GitHub mitcad/Mitcad#151; Preferences › Display
+  › Theme, before the Layout, in both frontends): **System** (the
+  default), **Light** or **Dark**, the colours of MitCad's own UI (its
+  panels, cards, the Browser, the timeline, the Start page and the
+  dialogs) whatever the desktop's colour scheme; kept as
+  `appearance/theme` (`system`, `light`, `dark`; absent or anything else:
+  system; `framework/AppTheme`). `main()` applies it before the first
+  window (`startThemePreference`, after Windows 10's path below, which
+  reacts first to the scheme it asks for), and a change applies at once,
+  without a restart: when Preferences is accepted (OK), at once in macOS's
+  Settings window. Light and Dark ask the platform for that scheme
+  (`QStyleHints::setColorScheme`); System asks for none at start and
+  returns to the platform's own scheme after a change
+  (`QStyleHints::unsetColorScheme`). Where the platform does not change
+  its palette for the request within 250 ms (Qt's generic platform theme
+  on Linux, which has no dark scheme; a style that keeps its own palette)
+  MitCad sets a palette of the theme's neutral roles itself
+  (`themePalette`, `framework/Theme`), as Windows 10's path does, so that
+  every panel, card, the Browser, the timeline and the Start page change
+  (they follow the palette, `isDarkPalette`); it is taken away again when
+  the choice changes. Qt's GTK platform theme, Windows 11's style and
+  macOS honour the request; Windows 10's default style keeps a light
+  palette, and its path (Qt's own style with the dark palette while the
+  scheme is dark) follows the requested scheme as it follows the app
+  mode. The start-up logs which decided, `Theme: dark (preference)`,
+  `Theme: dark (preference; MitCad's own palette, window #1f2024 over the
+  platform's light one)` or `Theme: system (light)`, and a change logs
+  `Preferences: theme dark` and the same line once it is settled. The 3D
+  view's background is its own setting (View background, unchanged;
+  Follow System follows the palette, so the Theme). The AppKit frontend
+  has no appearance handling of its own: its colours are dynamic colours
+  of the application's appearance (`app/platform/macos/NativeColors`),
+  and Qt's macOS platform sets that appearance (`NSApp.appearance`) for
+  the scheme asked, so the same choice in its Settings window's Display
+  pane changes it too, without code of its own. Tests:
+  `tools/ui-theme-preference-test.sh` and `app.ui-windows-theme-preference`
+  (`tools/ui-scripts/theme-preference.mitcad-ui`).
 - **Native macOS interface (experimental)** (mitcad#1056; Settings ›
   General, after Ask to activate the component of a picked face, with the
   note *Takes effect when MitCad starts again.*; only in macOS builds with
@@ -10072,6 +10161,64 @@ and Components in This Design on M5x16), `tools/ui-windows-library-test.ps1` par
 and `tools/ui-macos-native-library-test.sh`; its pictures on the light and
 the dark theme with `tools/ui-supplier-articles-look.sh <dir>`.
 
+### Suppliers' shops
+
+The suppliers' part numbers become links to their products in the shops
+of the user's region (mitcad#950; the format and MitCad's list of shops
+in [docs/libraries.md](../docs/libraries.md#shops-and-product-links), the
+library commands `supplier_shops` and `supplier_links` in
+[commands.md](../core/model-api/src/commands.md#suppliers-shops-and-product-links)).
+`library/SupplierShops.*` asks the model and keeps the choice,
+`library/SupplierPreferences.*` is its page of Preferences.
+
+- **Preferences › Suppliers** (`tools.preferences.suppliers`,
+  `SupplierPreferencesBox`): **Region** (Alt+R; None, then the regions
+  MitCad knows shops in by name; the setting `suppliers/region`, until it
+  is set the system's territory when a shop sells there:
+  `supplier_shops`' `default_region` for `QLocale::system().name()`) and
+  **Shops you buy from** (Alt+S; the region's shops, `Würth eShop
+  (Würth)`, each checkable; the setting `suppliers/shops`: the suppliers'
+  ids, only those with a shop in the region, `supplier_shops`' `chosen`).
+  Saved when Preferences is accepted, at once in the macOS Settings
+  window; new shops drop the part grid's kept filter
+  (`partPicker/supplierFilter`), so that the filters start with them.
+- **The Supplier filters' default**: the part grid's (`PartGrid`,
+  `savedSupplierFilter`: the filter kept, else the shops) and the size
+  choosers' (`OptionChooser`: the grid's in Insert from Library and BUILD's
+  picker; the shops in Edit Options… and Components in This Design, but
+  only when they sell the row the chooser starts on, so a default never
+  changes an inserted component's row). One shop is its supplier's entry;
+  several are one entry before the suppliers, **Your shops (Würth,
+  Etra)**, whose value is the ids separated by `|` (`supplierFilterIds`,
+  `supplierInFilter`; a row or component passes when one of them sells
+  it). No shops: All, as before.
+- **Links**: `showSupplierParts` gives the articles their `product_url`
+  and `shop` (`supplier_links` with the region) before the table opens,
+  for Insert from Library, Components in This Design and Edit Options…:
+  the Supplier Part Number cell is then a link (link color, underlined,
+  tooltip `<url> in <shop>`; a double click, Return or Open Link opens
+  it), the column Region shows an article's own region when one has it,
+  and the text above the table says what the colored part numbers do.
+  The bills of materials (BUILD's `BuildListsDialog` and Components in
+  This Design's tab) ask `supplier_links` with their rows and add a
+  column **Product Pages** after Supplier Part Numbers when a row has
+  links: its `product_urls` separated by spaces, in the CSV and the PDF
+  too; a double click or Return on the cell opens the one link, or a menu
+  of them (`openProductLinks`). Without a region, or with no supplier
+  shop in it, everything is as before.
+
+Logs: `Preferences: suppliers region FI, shops wurth` (`none`), `Part
+picker supplier to start: wurth` (the filter the grid starts with, when
+not All), `<prefix> filters start: Standard All, Supplier wurth: 9 of 23
+rows` (a size chooser starting filtered), `Supplier parts of <row>: 3 of
+5 articles linked in FI`, `Supplier link opened: <url>`, `Product page
+opened: <url>`, `Build BOM product pages: <part>: <urls>`, `Parts list
+product pages: <part>: <urls>`. Tests: `tests/part_options.cpp` (several
+suppliers in one filter, the articles' links and the Region column),
+`tests/part_picker_data.cpp` (the grid's default from the shops, Your
+shops), `tools/ui-library-test.sh` part 10 (Preferences › Suppliers,
+the filters starting with Würth, a part number opening its product).
+
 ### Design policy
 
 `browser/PolicyDialog.cpp`, `BrowserController::openPolicy`,
@@ -11892,9 +12039,10 @@ next screenshot.
 | `Native workspaces: Drawing (shown Drawing)`, `Native workspaces: Start, Solid, Build, Make (shown Build)` | the AppKit frontend: its workspace selector's tabs or the tab shown changed (another tab chosen, a drawing opened or closed, a sketch begun or finished; mitcad#1073) |
 | `Native cards: Browser only (a drawing is open)`, `Native cards: all (the drawing closed)` | the AppKit frontend: a drawing opened or closed hides or shows the cards other than the Browser (mitcad#1073) |
 | `Start page at launch: shown`, `Start page at launch: off (Show start page at launch)`, `Start page at launch: off (a file opens)` | at start-up, whether the Start tab shows and why not (`--demo`, `--screenshot`, `--set`, `MITCAD_START_PAGE=0`, `a UI test script`; mitcad#1258, [The Start tab](#the-start-tab)) |
-| `Start page shown`, `Start page hidden`, `Start page margins: top 60, bottom 68` (its content below the workspace tabs, its footer above the Floating message band, when they change), `Start page recent designs (all): a.mitcad (preview) \| b.step (no preview) \| c.mitcad (missing)`, `Start page recent designs (pinned, "text"): none`, `Start page new design units: mm` | the Start page shown or left, its list of recent designs when it changes (the filter and the search in brackets), New Design's units as the page shows them (mitcad#1258) |
-| `Start page action New Design at x,y`, `Start page filter Pinned at x,y`, `Start page search at x,y`, `Start page view List at x,y`, `Start page card a.mitcad at x,y`, `Start page star a.mitcad at x,y`, `Start page remove c.mitcad at x,y`, `Start page resource User Guide at x,y`, `Start page link Preferences at x,y`, `Start page show at launch at x,y`, `Start page drop area at x,y` | the Start page's controls while they are in sight, logged again when a place changes (`PlaceWatcher`, scrolling; mitcad#1258) |
-| `Start page chosen: New Design`, `Start page chosen: open a.mitcad`, `Start page filter: pinned` (or `all`, each choice, with the list logged again), `Start page pinned: a.mitcad`, `Start page unpinned: a.mitcad`, `Start page removed: c.mitcad`, `Start page view: list`, `Start page dropped: a.step`, `Start page at launch: off`, `Design preview saved: a.mitcad (256 x 160)`, `Recent files previews: 3 of 4` | what the Start page was asked to do; a save's preview of the design; File › Open Recent's entries with a preview (mitcad#1258) |
+| `Start page shown`, `Start page hidden`, `Start page margins: top 60, bottom 68` (its content below the workspace tabs, its footer above the Floating message band, when they change), `Start page recent designs (all): a.mitcad (preview) \| b.step (no preview) \| c.mitcad (missing)`, `Start page recent designs (pinned): none`, `Start page new design units: mm` | the Start page shown or left, its list of recent designs when it changes (Recent or Pinned in brackets), New Design's units as the page shows them (mitcad#1258) |
+| `Start page projects: Shop (local) \| Team (cloud)` (`none`), `Start page place: Shop/parts/ (1 folders, 2 designs)`, `Start page search results: 2 (Team/bolts/hex-bolt.mitcad \| hex.mitcad)` (`0`) and for each `Start page search result: Team/bolts/hex-bolt.mitcad (Team / bolts)`, `Start page cards: Shop/parts/gear.mitcad (no preview) \| Shop/parts/axle.mitcad (preview)` | the Start page's project browser (mitcad#1301, [The Start tab](#the-start-tab)): the projects of its left column when they were read, a project's place shown (its key, as Open from Project's) with its counts, the search's results by their keys (a project's design `<project>/<path>`, a recent design in no listed project its file's name) with their second lines, and a project's or the search's cards once their previews were looked for; each logged when it changes and on every choice |
+| `Start page action New Design at x,y`, `Start page filter Recent at x,y` (`Pinned`), `Start page project Shop at x,y`, `Start page add project at x,y`, `Start page crumb Shop/parts/ at x,y`, `Start page folder Shop/parts/sub/ at x,y`, `Start page search at x,y`, `Start page view List at x,y`, `Start page card a.mitcad at x,y` (a project's design by its key: `Start page card Shop/parts/gear.mitcad at x,y`), `Start page star a.mitcad at x,y`, `Start page remove c.mitcad at x,y`, `Start page resource User Guide at x,y`, `Start page link Preferences at x,y`, `Start page show at launch at x,y`, `Start page drop area at x,y` | the Start page's controls while they are in sight, logged again when a place changes (`PlaceWatcher`, scrolling; mitcad#1258, the browser's rows, breadcrumb and folders mitcad#1301) |
+| `Start page chosen: New Design`, `Start page chosen: open a.mitcad`, `Start page chosen: Add Project`, `Start page filter: pinned` (or `all`, each choice, with the list logged again), `Start page pinned: a.mitcad`, `Start page unpinned: a.mitcad`, `Start page removed: c.mitcad`, `Start page view: list`, `Start page dropped: a.step`, `Start page at launch: off`, `Design preview saved: a.mitcad (256 x 160)`, `Recent files previews: 3 of 4` | what the Start page was asked to do; a save's preview of the design; File › Open Recent's entries with a preview (mitcad#1258) |
 | `Native cards: none (the Start page is shown)`, `Native cards: all (the Start page left)` | the AppKit frontend: the Start page shown or left hides or shows every card over the canvas (mitcad#1258) |
 | `Panel <command> input <id> at x,y [(hidden)]`, `Panel <command> OK at x,y` | a panel opened; again whenever its places move (mitcad#528: the panel, a row's field or a widget it is in moved or was resized, a tile's picture read, the dock laid out again: 50 ms after it settles, a timer the sync waits for, only when a place differs from those logged last), so the last line logged is where the input is; the component picker's places likewise when its window moves or is resized; the in-process test driver's `click-logged` (macOS) waits for these timers (`TestSync::settling`, up to 5 s) before it reads a place |
 | `Panel <command> view y 160 to 668, scrolled 0 of 297, bar at 1015,414` | with a panel's places: the part of the window its page shows, how far it is scrolled, and its scroll bar while it scrolls (a long panel in a low window); the places are logged again when it scrolls (`Ui-PanelReveal` in `tools/ui-windows-lib.ps1`) |
@@ -11976,7 +12124,8 @@ next screenshot.
 | `Timeline colours: dark, marker #c8d0da, buttons #f0f0f0, window #1f2024, handle #5aa2ff` (`light, marker #2b3a4a, buttons the style's, …`), `Asking the platform for the dark colour scheme` | the timeline's palette colours at start and when the theme changes (the marker's handle: the Docked window's accent colour, orange in the Floating layout); the switch of `MITCAD_TEST_COLOR_SCHEME` |
 | `Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin, Root/Sketches/Sketch1; error #ff9c9c: Root/Sketches/Sketch1/Fillet1` (`light, hidden #4c525c: …`; `none`; groups hidden, error, warning, success, info, each its colour on the rows' palette now and at most 12 paths in order, then `<n> more`; a value that is none of these last, as `unknown <n>: <paths>`, mitcad#1143) | the Browser rows whose names have a colour role (a hidden, failed or warned row; mitcad#1104: the item keeps the role, the delegate paints its colour in the theme of the moment), after each rebuild and when the theme changes, when it changed; the test driver's `color-scheme light\|dark` switches the scheme at a step (`tools/ui-theme-test.sh`, `tools/ui-windows-test.ps1`) |
 | `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font Segoe UI Variable Text` (`light, …`; `font the platform's`), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme. `panels` is the toolbar's surface, which the Classic ribbon's body and the bar's Undo, Redo, separator and Chat buttons show in both themes (the test driver's `expect-widget-background`, `TestDriver: widget background ribbonPageScroll #1f2024 (…)`; `tools/ui-docked-toolbar-colors-test.sh`, `app.ui-windows-docked-toolbar-colors`, mitcad#1245) |
-| `Windows 10 app mode: followed (Windows build 19045, the style windowsvista)` (`not followed (Windows build 26100)`, `not followed (the style <name>)`; `, MITCAD_TEST_WINDOWS10=1` when forced), `Windows 10 app mode: dark, the style <name> with a dark palette (window #1f2024)`, `Windows 10 app mode: light, the style windowsvista with its own palette` | Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138; `platform/windows/WindowsTheme`), at start: on Windows 10 (build < 22000) over its default style (windowsvista, which keeps a light palette whatever the app mode), while the app mode is dark, Qt's own style (its class QFusionStyle) with a dark palette of the theme's neutral roles, and the default style with its own palette again when it is light, at start and at each change of the app mode; not on Windows 11, Linux and macOS, where the default style follows the app mode, nor over a style chosen with `-style` or `QT_STYLE_OVERRIDE`. No preference. `MITCAD_TEST_WINDOWS10=1` takes the path on Windows 11 too, over any style (the test driver's `expect-widget-theme`, `TestDriver: widget theme startPage #141518 (…), lightness 22: dark`; `app.ui-windows-windows10-dark`) |
+| `Windows 10 app mode: followed (Windows build 19045, the style windowsvista)` (`not followed (Windows build 26100)`, `not followed (the style <name>)`; `, MITCAD_TEST_WINDOWS10=1` when forced), `Windows 10 app mode: dark, the style <name> with a dark palette (window #1f2024)`, `Windows 10 app mode: light, the style windowsvista with its own palette` | Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138; `platform/windows/WindowsTheme`), at start: on Windows 10 (build < 22000) over its default style (windowsvista, which keeps a light palette whatever the app mode), while the app mode is dark, Qt's own style (its class QFusionStyle) with a dark palette of the theme's neutral roles, and the default style with its own palette again when it is light, at start and at each change of the app mode; not on Windows 11, Linux and macOS, where the default style follows the app mode, nor over a style chosen with `-style` or `QT_STYLE_OVERRIDE`. It follows the scheme the Theme preference asks for as it follows the app mode (mitcad#1330), and sets its style and palette again when the preference's own palette is taken away. `MITCAD_TEST_WINDOWS10=1` takes the path on Windows 11 too, over any style (the test driver's `expect-widget-theme`, `TestDriver: widget theme startPage #141518 (…), lightness 22: dark`; `app.ui-windows-windows10-dark`) |
+| `Theme: dark (preference)` (`light`), `Theme: dark (preference; MitCad's own palette, window #1f2024 over the platform's light one)`, `Theme: system (light)` (`dark`), `Preferences: theme dark` (`light`, `system`) | Preferences › Display › Theme (mitcad#1330, `framework/AppTheme`, [above](#the-view)): at start (System at once, Light and Dark once the platform's palette has followed or 250 ms have passed) and after each change, which choice decided and whether MitCad set its own palette because the platform kept its own; `Preferences: theme …` when the choice is saved (`tools/ui-theme-preference-test.sh`, `app.ui-windows-theme-preference`) |
 | `Timeline hover highlighted: F3 1, F4 2` / `none`, `F5 12 (edges 4)` | timeline hover preview (uid and number of faces; a Fillet's or Chamfer's picked edges drawn with it, mitcad#1076), without changing selection; folded groups include every active member; the AppKit timeline's hover sets the same preview; drawn in the hover colour with the Browser hover's look (in sight as the view's hover, fainter through what hides it, with outlines; `HighlightDisplay::hoverLook`, mitcad#1041) |
 | `Feature faces highlighted: F3 1, F4 2` / `none` | the faces of the features selected on the timeline (uid and number of faces), when they change |
 | `Feature inputs highlighted: Fillet1 edges 4, Chamfer1 edges 2` / `none` | the picked edges of the Fillets and Chamfers selected, drawn where they were (mitcad#957; name and number of edges), when they change |
@@ -13197,7 +13346,30 @@ drawing commands; it computes no geometry of its own.
   (mitcad#1272: its `type`, `along`, `ends` and `direction`; logged
   `Drawing preview: dimension aligned`, `leader diameter`). A pick the
   Dimension tool has already is no pick (`Drawing pick: picked already at x,y`, a
-  hint): the same circle or edge twice made 0 mm (mitcad#1272). The
+  hint): the same circle or edge twice made 0 mm (mitcad#1272). A
+  corner or a centre under the pointer is a filled marker in the hover's
+  colour, ringed white, of 6 logical pixels (9 device pixels at 150 %),
+  logged `Drawing corner marker at 120.0,100.0, radius 6.0 px, filled`
+  (sheet mm; mitcad#1338: the unfilled 4-pixel circle went unnoticed on a
+  high-DPI screen). A click on a line of a centre mark the view draws picks
+  its circle's centre (`drawing_pick`'s `center_line`, commands.md
+  "Corners and centre lines on drawing views"; logged `Drawing hover:
+  center line at …`, `Drawing picked center line (1): …`), so a corner and
+  a hole's centre line make a dimension in either order, horizontal or
+  vertical by the placing click. **Always show corners** (Preferences ›
+  Display › *Always show corners in drawings*, off by default, with
+  *Corner dot size* Small, Medium or Large beside it, enabled only while
+  it is on; `drawings/DrawingPreferences.*`, the settings
+  `drawing/alwaysShowCorners` and `drawing/cornerDotSize`): while it is
+  on, every corner the open sheet's views show (the model's
+  `drawing_corners`: the edge ends a click picks, on visible lines) is a
+  filled dot of 2, 3 or 4.5 logical pixels under the hover's marker, asked
+  again with each answer of the model and at once when the preference
+  changes (`CornerDotsNotifier`); logged `Drawing corner dots: 42, radius
+  3.0 px` or `Drawing corner dots: none`, the preference `Preferences:
+  always show corners in drawings on, dot size medium`. The dots are drawn
+  on the screen only: an export (PDF, SVG, DXF, DWG) and a print are the
+  model's and never have them, and nothing of them is stored. The
   command gets the model's
   picks (`ToolPicks::picks`), so the annotation follows the model. A click picks an annotation on what it
   draws (mitcad#717): near one of its lines or arcs (4 pixels, 0.8 mm of
@@ -14860,7 +15032,9 @@ choices are, and Close keeps them. Floating and Docked alike.
 
 A feature whose reference a sketch change renamed is computed with what
 the model found and warns (`region r{…} found as r{…} + r{…} after a
-change in Sketch9`, `edge E{…} found as E{…} …`); its definition keeps
+change in Sketch9`, `edge E{…} found as E{…} …`; shown in plain words,
+"a region found as 2 regions after a change in Sketch9", "2 edges found
+again …", mitcad#1334); its definition keeps
 the old reference, so the warning stays until the reference is written.
 **Auto Fix** (icon `ok`) writes it: the model's `auto_fix` command
 (*Auto Fix* in `core/model-api/src/commands.md`) with the features, one
@@ -14896,7 +15070,8 @@ the warning and the entry back.
 ## The Start tab
 
 mitcad#1258, GitHub mitcad/Mitcad#125 (`files/StartPage.*`,
-`files/RecentDesigns.*`, `MainWindowStart.cpp`, `framework/Ribbon.*`): a
+`files/RecentDesigns.*`, `files/StartBrowser.*` (mitcad#1301),
+`MainWindowStart.cpp`, `framework/Ribbon.*`): a
 page to start from and come back to. The ribbon's tab `START` (shown
 **Start**) is the first, before Solid, Build and Make, and is there at any
 time in both layouts; a drawing hides it with the model's tabs
@@ -14921,22 +15096,56 @@ view.
   Preferences › General; *New designs' units*), **Open Design…**
   (`file.open`), **Open Project…** (`file.open_project`), **Import File…**
   (`file.import`).
-- **Recent designs**: File › Open Recent's list (the setting
-  `recentFiles`, at most ten, newest first) and the designs pinned with
-  their star (`start/pinnedDesigns`; a pinned design stays listed when it
-  drops out of the ten). A card shows the design's preview, its file name,
-  its type (the suffix: MITCAD, STEP, F3D), its folder (the last two
-  folders) and when it was last opened or saved (`start/recentOpened`;
-  Today, Yesterday, 3 days ago, then the date; an older list without
-  times shows the file's date). **All** and **Pinned** choose what is
-  listed, the search field (*Find a recent design*) keeps the designs
-  whose name or folder has the text, and the two view buttons show cards
-  or a compact list (`start/compactList`). A click on a card opens the
-  design as Open Recent does (in the window while it holds an untouched
-  untitled design); its context menu has Open, Pin or Unpin and Remove
-  from List. A file that is no longer there is shown as missing, with
-  **Remove**, which takes it off the list and its pin. Clear Recent Files
-  keeps the pinned designs.
+- **The designs' browser** (mitcad#1301): one search at the top, the two
+  view buttons (cards or a compact list, `start/compactList`), and two
+  columns below them.
+  - **Left**: **Recent** and **Pinned** (the recent designs, all or the
+    pinned ones), then under **Projects** every project of the Projects
+    panel that has versions (Local and Cloud, by name, as File › Open from
+    Project lists them: `readProjects` on a thread of its own,
+    `project_tree`, no network) with its state icon as the panel shows it
+    (a Cloud project's sync state: synced, versions to send or newer ones,
+    offline, a warning; a Local project a folder) and its state in words in
+    the tooltip, and last **Add project**, which runs New Project
+    (`file.new_project`). The row shown is highlighted.
+  - **Right, for Recent and Pinned**: File › Open Recent's list (the
+    setting `recentFiles`, at most ten, newest first) and the designs pinned
+    with their star (`start/pinnedDesigns`; a pinned design stays listed
+    when it drops out of the ten). A card shows the design's preview, its
+    file name, its type (the suffix: MITCAD, STEP, F3D), its folder (the
+    last two folders) and when it was last opened or saved
+    (`start/recentOpened`; Today, Yesterday, 3 days ago, then the date; an
+    older list without times shows the file's date).
+  - **Right, for a project**: a breadcrumb (the project › its folder › …;
+    each part goes there, so a click goes up), the place's sub-folders as a
+    row of low folder buttons (a click goes into one), and its designs as
+    cards in the same style: the preview (else the type's icon), the name,
+    its project and folders, when it last changed (`project_tree`'s
+    `modified`), the pin star. The place's contents are Open from
+    Project's (`ProjectBrowserData`: sub-folders first, then designs, each
+    by name). A Cloud project's cards show at once with the type's icon and
+    get their previews as they are found on this computer; nothing is
+    downloaded for a preview.
+  - **The search** (*Search designs in all projects*) lists, as it is
+    typed, the designs whose name (without its suffix) holds the text, case
+    ignored, in every project and then in the recent list (a recent design
+    that is in a listed project only once, as the project's). The results
+    are cards whose second line names their project and folder ("Shop /
+    parts"; a recent design its folder), so designs of the same name tell
+    apart; none: *No designs match*. Clearing the field returns to the row
+    shown, and choosing a row ends the search.
+  - A click on a card opens the design as Open Recent does (in the window
+    while it holds an untouched untitled design), and it joins the recent
+    list; its context menu has Open, Pin or Unpin and (a recent design)
+    Remove from List. A file that is no longer there is shown as missing,
+    with **Remove**, which takes it off the list and its pin. Clear Recent
+    Files keeps the pinned designs; a project's design pinned with its star
+    is listed under Pinned too.
+  - **Remembered**: the row and folder shown (`start/browseRow`: `recent`,
+    `pinned` or `project`, with `start/browseRoot` and
+    `start/browseFolder`) show the next time; a project or folder that is
+    gone falls back to the project's top or to Recent.
+  - File › Open from Project and its window are not changed by it.
 - **Drop area**: a file MitCad opens or imports, dropped anywhere on the
   page, is opened (a design) or comes in (an import; the page goes), as
   on the window.
@@ -14956,6 +15165,17 @@ view.
   Preferences, the user guide) leave the page where it is until a design
   opens or something comes in. A sketch or a drawing started
   from it goes back to Solid when it ends.
+- **The design behind it** (mitcad#1313): the page clears the design's
+  selection when it opens (unless a command is running, which keeps its
+  own), and Delete (on macOS also Backspace) on the page or one of its
+  controls deletes nothing (`MainWindow::keyPressEvent`); back on Solid
+  the design is as it was. Tests: `tools/ui-start-page-delete-test.sh` and
+  `app.ui-windows-start-page-delete`
+  (`tools/ui-windows-start-page-delete-test.ps1`), the shared steps
+  `tools/ui-scripts/start-page-delete.mitcad-ui` on
+  `start-page-delete.json`, Floating and Docked: Sketch1 selected, the
+  Start tab clears the selection, Delete and Backspace on the page and on
+  its New Design card add no undo step and keep the block.
 - **At launch** (`main.cpp`, `MainWindow::showStartPageAtLaunch`): the
   Start tab shows when Show start page at launch is on, unless MitCad
   opens a file (`--open`, a file argument), the demo block, a screenshot
@@ -14975,17 +15195,25 @@ view.
   entries show it; a design without one (an imported file, a design not
   saved since) shows its type's icon.
 
-Tests: `tools/ui-start-page-test.sh` and `app.ui-windows-start-page`
-(`tools/ui-windows-start-page-test.ps1`), the shared steps
+Tests: `tools/ui-start-page-test.sh`, `app.ui-windows-start-page`
+(`tools/ui-windows-start-page-test.ps1`) and `app.ui-macos-start-page`
+(`app.ui-macos-native-start-page` for the AppKit frontend;
+`tools/ui-macos-start-page-test.sh`), the shared steps
 `tools/ui-scripts/start-page-fixture.mitcad-ui`, `start-page.mitcad-ui`
-and `start-page-off.mitcad-ui` on `tools/ui-scripts/start-page.json`:
-three designs saved with their previews; at launch the Start tab lists
-them newest first with their previews; the star pins one and Pinned shows
-it alone; the search finds one; a card opens its design on the Solid tab;
-New Design gives an empty design in the default units; with Show start
-page at launch off MitCad starts on an empty design. The list's rules are
-`app/tests/recent_designs.cpp` (`app.unit`). Pictures:
-`tools/ui-start-page-look.sh <dir>` (both themes, Floating and Docked).
+and `start-page-off.mitcad-ui` on `tools/ui-scripts/start-page.json` and
+two projects with nested folders (Shop, Local; Team, Cloud through a bare
+repository): three designs saved with their previews; at launch the Start
+tab lists them newest first with their previews; the star pins one and
+Pinned shows it alone; the search finds one; a project, its folder and
+sub-folder, and back up by the breadcrumb; the search finds the other
+project's design with its project and folder; a project's card opens its
+design, which is then first in Recent; a card opens its design on the
+Solid tab; New Design gives an empty design in the default units; with
+Show start page at launch off MitCad starts on an empty design. The list's
+rules are `app/tests/recent_designs.cpp`, the browser's
+`app/tests/start_browser.cpp` (`app.unit`). Pictures:
+`tools/ui-start-page-look.sh <dir>` (both themes, Floating and Docked, a
+project and a search too).
 
 ## Background evaluation of the rolled-back features (mitcad#1267)
 

@@ -3,7 +3,7 @@
 # (GitHub #126, mitcad#1243), on join-mesh-reuse.json:
 #   1. Extrude the 177.2 x 25 profile 5 mm as a new body (F2.b0): its 6
 #      faces meshed where the view draws them.
-#   2. Extrude the 6 x 25 profile on the plate's end 10 mm, a Join: the
+#   2. Extrude the 6 x 25 profile on the plate's end 12 mm, a Join: the
 #      preview is refined to the final meshes before OK, taking the faces
 #      the Join leaves as they were (the plate's top and far end) from the
 #      plate as shown. After OK all 8 faces of F2.b0 are meshed where the
@@ -47,7 +47,15 @@ wait-log '^Extrude Profiles: nothing$'
 wait-log '^Pick profile F1/r\{c2\[' 20
 click-pick 'profile F1/r\{c2\['
 wait-log '^Extrude Profiles: 1 profile \[profile r\{c2\['
-type-in '^Panel Extrude input distance at ' '10 mm'
+# The command starts with this profile preselected at the panel's default
+# 10 mm and refines that preview around the mark above, a race for the
+# refinement's line; the re-picked profile at 10 mm is that preview again,
+# from the preview cache and already refined, so it logs no refinement.
+# Hence a new mark once it is shown, and another distance: a new preview,
+# the only one refined after this mark.
+wait-log '^Preview Extrude: ok' 30
+mark
+type-in '^Panel Extrude input distance at ' '12 mm'
 wait-log '^Preview Extrude: ok' 30
 # The refined preview is what OK commits (the reported case).
 wait-log '^Preview Extrude: display meshes refined' 30

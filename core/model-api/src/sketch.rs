@@ -566,6 +566,15 @@ named_enum! {
         },
         // Projected curves that no longer match their source (mitcad#252).
         "sketch.clean_up_stale_projections" => CleanUpStaleProjections { sketch: FeatureUid },
+        // A linked projection that stopped following its source projected
+        // anew, its constraints and dimensions carried over (mitcad#1303):
+        // one by its index, an entity of it or its source's name, or all of
+        // the sketch's when left out.
+        "sketch.project_again" => ProjectAgain {
+            sketch: FeatureUid,
+            #[serde(default)]
+            projection: Option<Value>,
+        },
         // Projected geometry into ordinary sketch geometry (mitcad#257).
         "sketch.convert_projected" => ConvertProjected {
             sketch: FeatureUid,
@@ -1217,6 +1226,9 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
             SketchCommand::CleanUpStaleProjections { sketch } => {
                 self.clean_up_stale_projections(sketch)?
             }
+            SketchCommand::ProjectAgain { sketch, projection } => {
+                self.project_again(sketch, projection.as_ref())?
+            }
             SketchCommand::ConvertProjected { sketch, entities } => {
                 self.convert_projected(sketch, &entities)?
             }
@@ -1841,6 +1853,18 @@ trait SketchLocal<K: Kernel> {
     /// Clean Up Stale Projections panel shows them).
     fn clean_up_stale_projections(&mut self, sketch: FeatureUid) -> Result<Value, ApiError>;
 
+    /// `sketch.project_again` (mitcad#1303): the linked projections that
+    /// did not follow their sources at the last evaluation (`projection`:
+    /// one of them, by its index, an entity of it or its source's name; all
+    /// of them when None) projected anew, with what was carried over to
+    /// the new entities, what stays on the old ones and, in `warnings`, the
+    /// same in words and the regions later features use whose names change.
+    fn project_again(
+        &mut self,
+        sketch: FeatureUid,
+        projection: Option<&Value>,
+    ) -> Result<Value, ApiError>;
+
     /// `sketch.axis` (mitcad#500): the entity that stands for the sketch's
     /// origin or one of its axes, made when the sketch has none (one undo
     /// step `Axis in Sketch1`); the one there is changes nothing. The result
@@ -2006,6 +2030,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             | C::ImportDxf { .. }
             | C::CleanUpProjections { .. }
             | C::CleanUpStaleProjections { .. }
+            | C::ProjectAgain { .. }
             | C::ConvertProjected { .. }
             | C::ImportSvg { .. }
             | C::Axis { .. }
@@ -2914,6 +2939,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 | C::ImportDxf { .. }
                 | C::CleanUpProjections { .. }
                 | C::CleanUpStaleProjections { .. }
+                | C::ProjectAgain { .. }
                 | C::ConvertProjected { .. }
                 | C::ImportSvg { .. }
                 | C::Axis { .. }
@@ -3103,6 +3129,94 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             "kept": kept,
             "preview": {"removed": removed_geometry, "cut": cut},
         });
+        value["warnings"] = json!(warnings);
+        Ok(value)
+    }
+
+    fn project_again(
+        &mut self,
+        sketch: FeatureUid,
+        projection: Option<&Value>,
+    ) -> Result<Value, ApiError> {
+        let output = self.sketch_output(sketch).ok_or_else(|| {
+            ApiError(format!(
+                "{sketch} has not evaluated: which of its projections do not follow their \
+                 sources is not known"
+            ))
+        })?;
+        let follow = output.follow.to_vec();
+        let before: Vec<String> = output.regions.iter().map(|r| r.key.to_string()).collect();
+        let def = self
+            .sketch_def(sketch)
+            .ok_or_else(|| ApiError(format!("{sketch} is not a sketch")))?;
+        let which: Vec<usize> = match projection {
+            Some(selector) => vec![projection_index(def, selector)?],
+            None => again_candidates(&follow),
+        };
+        if which.is_empty() {
+            return Err(ApiError(
+                "nothing to project again: every linked projection follows its source, or its \
+                 source is gone"
+                    .to_owned(),
+            ));
+        }
+        let (again, report) = self.edit_sketch(sketch, "Project Again in {sketch}", |edit| {
+            edit.project_again(&follow, &which)
+        })?;
+        let mut warnings: Vec<String> = Vec::new();
+        let mut done: Vec<Value> = Vec::new();
+        for one in &again {
+            let names = |refs: &[Ref]| -> String {
+                refs.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            };
+            if !one.kept.is_empty() {
+                let kept: Vec<Ref> = one.kept.iter().map(|(r, _)| *r).collect();
+                let mut by: Vec<String> = one.kept.iter().flat_map(|(_, h)| h.clone()).collect();
+                by.sort();
+                by.dedup();
+                warnings.push(format!(
+                    "the projection of {}: {} kept as construction references, held by {} \
+                     that could not be carried over",
+                    one.source,
+                    names(&kept),
+                    by.join(", ")
+                ));
+            }
+            for same in &one.same {
+                warnings.push(format!(
+                    "c{} is in the sketch already: not projected again",
+                    same.0
+                ));
+            }
+            let carried: Vec<Value> = one
+                .carried
+                .iter()
+                .map(|(from, to)| json!({"from": from.to_string(), "to": to.to_string()}))
+                .collect();
+            let kept: Vec<Value> = one
+                .kept
+                .iter()
+                .map(|(entity, by)| {
+                    let mut by = by.clone();
+                    by.sort();
+                    by.dedup();
+                    json!({"entity": entity.to_string(), "held_by": by})
+                })
+                .collect();
+            let left: Vec<String> = one.left.iter().map(ToString::to_string).collect();
+            done.push(json!({
+                "source": one.source,
+                "carried": carried,
+                "kept": kept,
+                "left": left,
+            }));
+        }
+        warnings.extend(self.renamed_regions(sketch, &before));
+        let mut value = report_json(&report, self.sketch_def(sketch));
+        value["again"] = json!(done);
         value["warnings"] = json!(warnings);
         Ok(value)
     }
@@ -3301,6 +3415,57 @@ pub(crate) fn seen_from(
     axis: impl Fn([f64; 3]) -> [f64; 3],
 ) -> Option<[f64; 3]> {
     matches!(plane, SketchPlane::Xz).then(|| axis([0.0, -1.0, 0.0]))
+}
+
+/// The linked projections Project Again repairs (mitcad#1303), by their
+/// indices: those that did not follow their sources at the last evaluation
+/// (kept their geometry, or have entities that found nothing like them or
+/// that match nothing of the source) whose sources are there.
+pub(crate) fn again_candidates(
+    follow: &[mitcad_model::sketch::project::ProjectionFollow],
+) -> Vec<usize> {
+    let mut out: Vec<usize> = follow
+        .iter()
+        .filter(|r| {
+            !r.lost
+                && !r.current.is_empty()
+                && (r.kept || !r.unfollowed.is_empty() || !r.stale.is_empty())
+        })
+        .map(|r| r.projection)
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A projection of a sketch picked for `sketch.project_again`: its index in
+/// the definition's `projections`, an entity of it (`c4`, `p3`) or its
+/// source's name.
+fn projection_index(def: &SketchDef, selector: &Value) -> Result<usize, ApiError> {
+    let found = match selector {
+        Value::Number(n) => n
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n < def.projections.len()),
+        Value::String(text) => match text.parse::<Ref>() {
+            Ok(entity) => def
+                .projections
+                .iter()
+                .position(|p| p.entities.iter().any(|r| r.uid() == entity.uid())),
+            Err(_) => def
+                .projections
+                .iter()
+                .position(|p| p.source.to_string() == *text),
+        },
+        _ => {
+            return Err(ApiError(
+                "projection: an index, an entity of the projection (\"c4\") or its source's \
+                 name"
+                    .to_owned(),
+            ));
+        }
+    };
+    found.ok_or_else(|| ApiError(format!("the sketch has no linked projection {selector}")))
 }
 
 /// The entities a linked projection's warning is about (mitcad#264): all

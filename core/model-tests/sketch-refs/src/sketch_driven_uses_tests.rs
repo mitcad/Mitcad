@@ -291,3 +291,68 @@ fn other_values_of_the_sketch_still_may_not_use_its_references() {
         "{error}"
     );
 }
+
+/// The design saved as `d`, with the expression of parameter `name`
+/// replaced, as a file written elsewhere may have it, opened and
+/// recomputed.
+fn opened_with(d: &Document<MockKernel>, name: &str, expression: &str) -> Document<MockKernel> {
+    let mut file: Value = serde_json::from_str(&d.to_json()).unwrap();
+    let parameter = file["parameters"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["name"] == name)
+        .unwrap_or_else(|| panic!("no parameter {name} in the file"));
+    parameter["expression"] = json!(expression);
+    let mut opened = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    opened.recompute();
+    opened
+}
+
+/// Sketch1's error after a recompute.
+fn sketch_error(d: &Document<MockKernel>) -> String {
+    let feature = query(d, json!({"query": "feature", "uid": "F1"}));
+    feature["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("Sketch1 does not fail: {feature}"))
+        .to_owned()
+}
+
+/// The evaluation names every parameter in its errors (mitcad#1314): the
+/// cycle the command refuses, found in a design opened from a file, names
+/// the driven dimension's reference; a derived offset's distance set below
+/// zero names that parameter.
+#[test]
+fn evaluation_errors_name_driven_references_and_offset_distances() {
+    let (d, k) = rectangle(60.0, 40.0, "c4");
+    assert_eq!(k, "k7");
+    let opened = opened_with(&d, "d2", "d3 * 2");
+    let error = sketch_error(&opened);
+    assert!(
+        error.contains("k6 (d2) uses d3")
+            && error.contains("driven dimension k7 (d3)")
+            && error.contains("so d3 would depend on itself"),
+        "{error}"
+    );
+    // A derived offset (of an ellipse): its distance has no dimension.
+    let mut d = Document::new(MockKernel::default());
+    command(&mut d, json!({"cmd": "sketch.create"}));
+    command(
+        &mut d,
+        json!({"cmd": "sketch.ellipse", "sketch": "F1", "center": [0, 0], "major": [10, 0],
+               "minor_radius": 5}),
+    );
+    command(
+        &mut d,
+        json!({"cmd": "sketch.offset", "sketch": "F1", "curves": ["c1"], "distance": 2}),
+    );
+    let s = sketch(&d);
+    assert_eq!(s["offsets"][0]["derived"], true, "{s}");
+    let distance = s["offsets"][0]["distance"].as_str().unwrap().to_owned();
+    let opened = opened_with(&d, &distance, "-2");
+    let error = sketch_error(&opened);
+    assert!(
+        error.contains(&format!("{distance} must be greater than zero")),
+        "{error}"
+    );
+}

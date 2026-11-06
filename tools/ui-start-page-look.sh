@@ -5,7 +5,9 @@
 # picks it up). Four designs that mitcad-cli makes (a plate, a block with a
 # hole, a bracket, a ring) are opened, changed and saved in one start
 # (each save writes its preview), the ring's file is then moved away (a
-# missing file on the list), and MitCad started again on the Start tab
+# missing file on the list), two projects made in the projects folder (Shop,
+# Local, with plate, parts/gear and parts/sub/block; Team, Cloud through a
+# bare repository, with bolts/bracket), and MitCad started again on the Start tab
 # (MITCAD_START_PAGE=1), the bracket pinned with its star, on the light and
 # the dark theme (Qt's GTK platform theme, MITCAD_TEST_COLOR_SCHEME), in the
 # Floating layout (the default) and the Docked one:
@@ -16,6 +18,11 @@
 #   <dir>/start-page-<layout>-light-list.png     the compact list
 #   <dir>/start-page-<layout>-light-solid.png    the Solid tab after it:
 #                                        the cards (or docks) back
+#   <dir>/start-page-<layout>-<theme>-project.png  the project browser
+#                                        (mitcad#1301): Shop's folder parts
+#   <dir>/start-page-<layout>-<theme>-search.png   the search "pla": Shop's
+#                                        plate and the recent plate, each
+#                                        with its folder
 # and the app's logs as <dir>/<name>.log.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -115,6 +122,31 @@ unset MITCAD_TEST_INPUT
 # A missing file on the list.
 mv -f "$WORK/ring.mitcad" "$WORK/ring-moved.mitcad"
 
+# The projects of the browser (as tools/ui-start-page-test.sh makes them).
+printf '[user]\n\tname = Ada Tester\n\temail = ada@example.invalid\n[init]\n\tdefaultBranch = main\n' \
+  > "$GIT_CONFIG_GLOBAL"
+AUTHOR="Ada Tester <ada@example.invalid>"
+export MITCAD_PROJECTS_DIR=$WORK/projects
+SHOP=$MITCAD_PROJECTS_DIR/Shop
+TEAM=$MITCAD_PROJECTS_DIR/Team
+mkdir -p "$MITCAD_PROJECTS_DIR" "$WORK/remotes"
+pcli() { "$CLI" "$@" >> "$WORK/cli-projects.log" 2>&1 || { cat "$WORK/cli-projects.log"; ui_fail "mitcad-cli $*"; }; }
+pcli project init "$SHOP" --author "$AUTHOR"
+mkdir -p "$SHOP/parts/sub" "$SHOP/drawings"
+pcli run "$WORK/plate.json" --save "$SHOP/plate.mitcad"
+pcli run "$WORK/block.json" --save "$SHOP/parts/gear.mitcad"
+pcli run "$WORK/bracket.json" --save "$SHOP/parts/bracket.mitcad"
+pcli run "$WORK/block.json" --save "$SHOP/parts/sub/block.mitcad"
+for design in plate parts/gear parts/bracket parts/sub/block; do
+  pcli version save "$SHOP/$design.mitcad" -m "Add $design" --author "$AUTHOR"
+done
+git init -q --bare "$WORK/remotes/team.git"
+pcli project create "$TEAM" --author "$AUTHOR" --url "$WORK/remotes/team.git"
+mkdir -p "$TEAM/bolts"
+pcli run "$WORK/bracket.json" --save "$TEAM/bolts/bracket.mitcad"
+pcli version save "$TEAM/bolts/bracket.mitcad" -m "Add the bracket" --author "$AUTHOR"
+pcli project settings "$TEAM" --set '{"local": {"name": "Team"}}' --author "$AUTHOR"
+
 # shot name: the mouse off the window (no hover, no tooltip), the screen
 # saved.
 shot() {
@@ -142,6 +174,26 @@ picture() {
     pinned=1
   fi
   shot "$name"
+  # The project browser: Shop's folder parts, then a search.
+  ui_expect_log "Start page project Shop at" "$layout, $theme: the projects"
+  ui_mark
+  ui_step "the project Shop"               ui_click_logged "Start page project Shop"
+  ui_expect_new "Start page place: Shop (" "Shop shown"
+  ui_mark
+  ui_step "its folder parts"               ui_click_logged "Start page folder Shop/parts/"
+  ui_expect_new "Start page cards: Shop/parts/" "parts shown"
+  shot "$name-project"
+  ui_mark
+  ui_step "the search"                     ui_click_logged "Start page search"
+  xdotool type --delay 20 -- "pla"
+  ui_expect_new "Start page search results: 2" "the two plates"
+  shot "$name-search"
+  ui_mark
+  ui_step "the search cleared"             ui_key ctrl+a BackSpace
+  ui_expect_new "Start page place: Shop/parts/" "parts again"
+  ui_mark
+  ui_step "Recent"                         ui_click_logged "Start page filter Recent"
+  ui_expect_new "Start page filter: all" "Recent again"
   ui_mark
   ui_step "a wide window"                  xdotool windowsize "$UI_WINDOW" 1600 1000
   ui_sync

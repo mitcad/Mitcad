@@ -180,6 +180,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("sketch.clean_up_projections", Model),
     ("sketch.clean_up_stale_projections", Model),
     ("sketch.convert_projected", Model),
+    // Project Again (mitcad#1303).
+    ("sketch.project_again", Model),
     // The BUILD tab (mitcad#375): placing reads a new source from a library
     // (with `part.source` it does not: [`command_class_with`]).
     ("build_place", Remote),
@@ -573,6 +575,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     // Whether a STEP file has an assembly to keep, read by its path
     // (mitcad#1274).
     ("file_structure", FileIo),
+    // The corners a drawing sheet's views show (mitcad#1338).
+    ("drawing_corners", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

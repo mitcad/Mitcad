@@ -361,10 +361,16 @@ fn approvals_by_mode() {
 #[test]
 fn undo_asks_only_past_the_message_start() {
     let undo = |turn: Value, now: Value, tool: &str| {
-        let arguments = if tool == "ui_command" {
-            json!({"id": "edit.undo"})
+        let arguments: Value = match tool {
+            "ui_command" => json!({"id": "edit.undo"}),
+            // A command array of one undo (mitcad#1322).
+            "model_command_array" => json!({"document": "d", "command": [{"cmd": "undo"}]}),
+            _ => json!({"document": "d", "command": {"cmd": "undo"}}),
+        };
+        let tool = if tool == "model_command_array" {
+            "model_command"
         } else {
-            json!({"document": "d", "command": {"cmd": "undo"}})
+            tool
         };
         request(
             &json!({"op": "approval", "tool": tool, "arguments": arguments, "mode": "model",
@@ -372,15 +378,26 @@ fn undo_asks_only_past_the_message_start() {
         )
         .unwrap()
     };
-    for tool in ["model_command", "ui_command"] {
+    for tool in ["model_command", "model_command_array", "ui_command"] {
         // The agent's own step of this message: runs.
-        assert_eq!(undo(json!(4), json!(5), tool)["verdict"], "run");
+        let own = undo(json!(4), json!(5), tool);
+        assert_eq!(own["verdict"], "run", "{tool}");
+        assert_eq!(own["kind"], "edit", "{tool}");
         // A step from before the message: asks.
         let past = undo(json!(4), json!(4), tool);
-        assert_eq!(past["verdict"], "ask");
-        assert_eq!(past["kind"], "undo_past_start");
-        assert_eq!(undo(Value::Null, json!(9), tool)["verdict"], "ask");
+        assert_eq!(past["verdict"], "ask", "{tool}");
+        assert_eq!(past["kind"], "undo_past_start", "{tool}");
+        let unknown = undo(Value::Null, json!(9), tool);
+        assert_eq!(unknown["verdict"], "ask", "{tool}");
+        assert_eq!(unknown["kind"], "undo_past_start", "{tool}");
     }
+    // An array without an undo stays a model edit.
+    let edit = request(&json!({"op": "approval", "tool": "model_command",
+        "arguments": {"document": "d", "command": [{"cmd": "redo"}]}, "mode": "model",
+        "always": [], "turn_depth": 4, "undo_depth": 4}))
+    .unwrap();
+    assert_eq!(edit["verdict"], "run");
+    assert_eq!(edit["kind"], "edit");
 }
 
 #[test]

@@ -149,6 +149,9 @@ pub struct MockKernel {
     /// Notes of the results of operations (P9): "fillet" -> what a smaller
     /// fillet would say; `notes` gives them for shapes the operation made.
     pub notes: RefCell<BTreeMap<&'static str, String>>,
+    /// The places of those notes (mitcad#1327): "fillet" -> the faces and
+    /// points its note is about; `note_places` gives them beside `notes`.
+    pub note_places: RefCell<BTreeMap<&'static str, Vec<mitcad_model_base::notice::NoticePlace>>>,
     /// Infos of the results of operations (mitcad#1106), as `notes`.
     pub infos: RefCell<BTreeMap<&'static str, String>>,
     /// Profile features: what the extrude, revolve, hole and thread calls
@@ -328,6 +331,14 @@ pub struct MockKernel {
     /// history is `empty(<history>)`, without faces, edges or bounds, and
     /// `solid_count` gives it no solid (other shapes are not counted).
     pub empty_results: RefCell<BTreeSet<&'static str>>,
+    /// Wrapped Embosses on a turned design (mitcad#1315): with this,
+    /// `face_cylinder` gives an extrusion's side its axis along the
+    /// extrusion's direction (kept in `extrusion_directions` by feature)
+    /// through the middle of the bounds; otherwise along +Z.
+    pub extrusion_axes: Cell<bool>,
+    /// The direction of each feature's last extrusion. Shared with the
+    /// kernel's forks, which may extrude.
+    pub extrusion_directions: Arc<Mutex<BTreeMap<FeatureUid, [f64; 3]>>>,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -1075,6 +1086,10 @@ impl Kernel for MockKernel {
         self.call("extrude")?;
         let feature = spec.feature;
         self.extrusion_begins(feature);
+        self.extrusion_directions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(feature, spec.direction);
         let mut parts = Vec::new();
         for region in spec.regions {
             let start = FaceName::start(feature, region.key.clone());
@@ -2092,7 +2107,11 @@ impl Kernel for MockKernel {
         let end = match &spec.end {
             HoleEnd::Distance(d) => format!("depth {}", number(*d)),
             HoleEnd::ThroughAll => format!("through {} bodies", spec.bodies.len()),
-            HoleEnd::Target(_) => "target".to_owned(),
+            HoleEnd::Target(bound) => format!(
+                "target {} offset {}",
+                describe_target(&bound.target),
+                number(bound.offset)
+            ),
         };
         let mut text = format!(
             "hole {} at {:?} diameter {:.6} {:?} tip {:?} {end}",
@@ -2458,6 +2477,37 @@ impl Kernel for MockKernel {
             min: [0.0; 3],
             max: [10.0; 3],
         });
+        // An extrusion's side along its direction (`extrusion_axes`,
+        // mitcad#1315): from the bounds' end against it, through their
+        // middle, as wide as the bounds across it.
+        let along = (self.extrusion_axes.get() && plain.role == "side")
+            .then(|| {
+                self.extrusion_directions
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&plain.feature)
+                    .copied()
+            })
+            .flatten()
+            .and_then(mitcad_vec3::unit);
+        if let Some(d) = along {
+            let size: [f64; 3] = std::array::from_fn(|i| bounds.max[i] - bounds.min[i]);
+            let length: f64 = (0..3).map(|i| d[i].abs() * size[i]).sum();
+            let across = (0..3)
+                .min_by(|&a, &b| d[a].abs().total_cmp(&d[b].abs()))
+                .unwrap_or(0);
+            return Ok(Cylinder {
+                axis: Axis {
+                    origin: std::array::from_fn(|i| {
+                        (bounds.min[i] + bounds.max[i]) / 2.0 - d[i] * length / 2.0
+                    }),
+                    direction: d,
+                },
+                radius: size[across] / 2.0,
+                length,
+                internal,
+            });
+        }
         // What a modelled thread left of the face (mitcad#628), else the
         // bounds' height.
         let (from, to) = self
@@ -3212,6 +3262,7 @@ impl Kernel for MockKernel {
             surfaces: self.surfaces.clone(),
             files: self.files.clone(),
             notes: self.notes.clone(),
+            note_places: self.note_places.clone(),
             infos: self.infos.clone(),
             curves: self.curves.clone(),
             named_curves: self.named_curves.clone(),
@@ -3250,6 +3301,8 @@ impl Kernel for MockKernel {
             tube_bore: self.tube_bore.clone(),
             round_faces: self.round_faces.clone(),
             empty_results: self.empty_results.clone(),
+            extrusion_axes: self.extrusion_axes.clone(),
+            extrusion_directions: Arc::clone(&self.extrusion_directions),
             ..MockKernel::default()
         })
     }
@@ -5529,6 +5582,20 @@ impl Kernel for MockKernel {
                 }
             })
             .collect())
+    }
+
+    // Notice places (mitcad#1327).
+
+    /// The places `note_places` holds for each note `notes` gives, in its
+    /// order (none for a note without).
+    fn note_places(&self, shape: &MockShape) -> Vec<Vec<mitcad_model_base::notice::NoticePlace>> {
+        let places = self.note_places.borrow();
+        self.notes
+            .borrow()
+            .iter()
+            .filter(|(op, _)| shape.history.starts_with(&format!("{op}(")))
+            .map(|(op, _)| places.get(op).cloned().unwrap_or_default())
+            .collect()
     }
 }
 

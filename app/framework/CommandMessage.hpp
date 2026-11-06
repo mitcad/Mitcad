@@ -39,13 +39,24 @@ public:
   QSize sizeHint() const override;
   QSize minimumSizeHint() const override;
 
+signals:
+  // The pointer came over the message (true) or left it, or the message
+  // went (mitcad#1327: the places its notices name are painted meanwhile).
+  void hovered(bool on);
+
 protected:
   // Copy and Select All go to the text while it has the keyboard, not to
-  // the window's actions of the same keys.
+  // the window's actions of the same keys; the pointer leaving it ends its
+  // hover.
   bool event(QEvent* event) override;
+  // The pointer moving over the text starts its hover, leaving it ends it.
+  bool viewportEvent(QEvent* event) override;
 
 private:
+  void setHovered(bool on);
+
   QString m_text;
+  bool m_hovered = false;
 };
 
 // Plain text with a zero-width space between the characters of each word

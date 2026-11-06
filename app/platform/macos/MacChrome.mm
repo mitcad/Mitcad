@@ -53,7 +53,11 @@
 namespace mitcad::mac {
 namespace {
 
-NSView* viewOf(QWidget* widget) { return (__bridge NSView*)reinterpret_cast<void*>(widget->winId()); }
+NSView* viewOf(QWidget* widget) {
+  // Offscreen Qt window ids are opaque integers, not Cocoa objects.
+  if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa")) return nil;
+  return (__bridge NSView*)reinterpret_cast<void*>(widget->winId());
+}
 
 // The glass effect view of a card window, if it has one.
 NSView* glassViewOf(NSView* qtView) {
@@ -270,7 +274,7 @@ int documentWindowTabCount(QWidget* widget) {
 }
 
 bool documentWindowTabSelected(QWidget* widget) {
-  if (!widget) return false;
+  if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa")) return false;
   NSWindow* window = (__bridge NSWindow*)nativeDialogWindow(widget);
   if (!window) {
     // Observation must not create a Qt native handle or present a window.
@@ -394,7 +398,7 @@ void hideNativeTitle(QWidget* window) {
   if (window == nullptr) {
     return;
   }
-  NSView* view = (__bridge NSView*)reinterpret_cast<void*>(window->winId());
+  NSView* view = viewOf(window);
   NSWindow* native = view.window;
   if (native == nil) {
     return;
@@ -422,6 +426,7 @@ void hideMenuImages(QMenu* menu) {
 }
 
 bool glassAvailable() {
+  if (QGuiApplication::platformName() != QStringLiteral("cocoa")) return false;
   if (@available(macOS 26.0, *)) {
     return NSClassFromString(@"NSGlassEffectView") != nil;
   }

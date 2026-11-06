@@ -412,6 +412,48 @@ double contrastRatio(const QColor& a, const QColor& b) {
 
 bool isDarkPalette(const QPalette& palette) { return palette.color(QPalette::Window).lightness() < 128; }
 
+QPalette themePalette(bool dark) {
+  const auto role = [dark](ColorRole r) { return themeColor(r, dark); };
+  const QColor window = role(ColorRole::Surface); // the panels' and the dialogs' colour
+  const QColor base = role(ColorRole::Window);    // fields and lists, recessed below it
+  const QColor raised = role(ColorRole::Raised);  // buttons and tooltips
+  const QColor text = role(ColorRole::Text);
+  const QColor secondary = role(ColorRole::TextSecondary);
+  // Disabled text: further from the text than the secondary text, on either.
+  const QColor disabledText = dark ? secondary.darker(150) : secondary.lighter(140);
+  const QColor action = role(ColorRole::Action);
+  const QColor accentText = role(ColorRole::AccentText);
+
+  QPalette palette;
+  const auto set = [&palette](QPalette::ColorRole which, const QColor& enabled, const QColor& disabled) {
+    palette.setColor(QPalette::Active, which, enabled);
+    palette.setColor(QPalette::Inactive, which, enabled);
+    palette.setColor(QPalette::Disabled, which, disabled);
+  };
+  set(QPalette::Window, window, window);
+  set(QPalette::WindowText, text, disabledText);
+  set(QPalette::Base, base, window);
+  set(QPalette::AlternateBase, window, window);
+  set(QPalette::ToolTipBase, raised, raised);
+  set(QPalette::ToolTipText, text, text);
+  set(QPalette::PlaceholderText, secondary, disabledText);
+  set(QPalette::Text, text, disabledText);
+  set(QPalette::Button, raised, window);
+  set(QPalette::ButtonText, text, disabledText);
+  set(QPalette::BrightText, QColor(Qt::white), QColor(Qt::white));
+  set(QPalette::Light, raised.lighter(150), raised.lighter(150));
+  set(QPalette::Midlight, raised.lighter(125), raised.lighter(125));
+  set(QPalette::Mid, raised.darker(130), raised.darker(130));
+  set(QPalette::Dark, raised.darker(200), raised.darker(200));
+  set(QPalette::Shadow, QColor(Qt::black), QColor(Qt::black));
+  set(QPalette::Highlight, action, raised);
+  set(QPalette::HighlightedText, accentText, secondary);
+  set(QPalette::Link, action, secondary);
+  set(QPalette::LinkVisited, action, secondary);
+  set(QPalette::Accent, action, raised);
+  return palette;
+}
+
 QColor errorColor(const QPalette& palette) {
   // At least 4.5:1 on a dark window, panel or Floating card (#464748, mitcad#961).
   return themeColor(ColorRole::ErrorText, palette);

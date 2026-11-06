@@ -301,6 +301,9 @@ pub struct Output<S> {
     pub warnings: Vec<String>,
     /// What is worth knowing of how it was built (mitcad#1106).
     pub infos: Vec<String>,
+    /// Where its warnings are about, by message (mitcad#1327): faces,
+    /// edges and vertices of its body, points.
+    pub warning_places: crate::notice::WarningPlaces,
     /// A pattern's elements by number, suppressed ones too (P9).
     pub elements: Vec<Transform>,
     pub pattern_anchor: Option<crate::features::point_pattern::PatternAnchor>,
@@ -361,6 +364,15 @@ impl<S> FeatureResult<S> {
     pub fn infos(&self) -> &[String] {
         match &self.output {
             Some(output) if self.status.is_ok() => &output.infos,
+            _ => &[],
+        }
+    }
+
+    /// The places of the warnings of a feature that succeeded, by message
+    /// (mitcad#1327); none otherwise.
+    pub fn warning_places(&self) -> &[(String, Vec<crate::notice::NoticePlace>)] {
+        match &self.output {
+            Some(output) if self.status.is_ok() => &output.warning_places,
             _ => &[],
         }
     }
@@ -2197,12 +2209,14 @@ fn evaluate<K: Kernel>(
     let reads = std::mem::take(&mut ctx.reads);
     let warnings = std::mem::take(&mut ctx.warnings);
     let infos = std::mem::take(&mut ctx.infos);
+    let warning_places = std::mem::take(&mut ctx.warning_places);
     // Angles of more than one turn where one is the most (mitcad#714).
     let turns = turn_warnings(entry, params);
     let elements = std::mem::take(&mut ctx.elements);
     let version = output_version(entry.uid, def_fp, &reads, params);
     let output = match result {
         Ok(produced) => Output {
+            warning_places: placed_warnings(warning_places, &warnings, &produced.changes),
             sheet_rules: produced.sheet_rules.map(|value| Versioned {
                 version: part_version(version, Part::SheetRules),
                 value,
@@ -2267,6 +2281,7 @@ fn evaluate<K: Kernel>(
             result: Err(failed_with_turns(message, &turns)),
             warnings: Vec::new(),
             infos: Vec::new(),
+            warning_places: Vec::new(),
             elements: Vec::new(),
             pattern_anchor: None,
             // Known also when the sweep failed (mitcad#795): the panel
@@ -2353,6 +2368,35 @@ fn short_number(value: f64) -> bool {
     let text = value.abs().to_string();
     let digits: String = text.chars().filter(char::is_ascii_digit).collect();
     digits.trim_start_matches('0').trim_end_matches('0').len() <= 6
+}
+
+/// The places of the warnings an evaluation kept (mitcad#1327; a pattern
+/// drops the warnings of copies it does not keep), in the body it sets
+/// where it sets one.
+fn placed_warnings<S>(
+    places: crate::notice::WarningPlaces,
+    warnings: &[String],
+    changes: &[BodyChange<S>],
+) -> crate::notice::WarningPlaces {
+    let mut set = changes.iter().filter_map(|change| match change {
+        BodyChange::Set(uid, _) => Some(uid),
+        BodyChange::Remove(_) => None,
+    });
+    let body = match (set.next(), set.next()) {
+        (Some(uid), None) => Some(uid.to_string()),
+        _ => None,
+    };
+    places
+        .into_iter()
+        .filter(|(message, _)| warnings.contains(message))
+        .map(|(message, places)| {
+            let places = match &body {
+                Some(body) => places.into_iter().map(|p| p.in_body(body)).collect(),
+                None => places,
+            };
+            (message, places)
+        })
+        .collect()
 }
 
 fn with_turns(mut warnings: Vec<String>, turns: &[String]) -> Vec<String> {

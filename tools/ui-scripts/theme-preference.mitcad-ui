@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Display › Theme (mitcad#1330, GitHub mitcad/Mitcad#151) on
+# a light platform scheme, MitCad started with appearance/theme=dark; the
+# widgets as the window draws them ("TestDriver: widget theme ..."):
+#   1. Dark at launch: the Start page, then on the Solid tab the Browser's
+#      card (its dock in the Docked layout), the Browser and the timeline.
+#   2. Light chosen in Preferences: light, without a restart.
+#   3. Dark chosen again: dark.
+#   4. System: the platform's light scheme again; the desktop switching to
+#      dark (color-scheme dark) is followed (MITCAD_TEST_THEME_DESKTOP_DARK:
+#      dark, or light where the platform has no dark scheme), and the
+#      switch back to light.
+# Run with MITCAD_START_PAGE=1 by tools/ui-theme-preference-test.sh (Linux)
+# and tools/ui-windows-theme-preference-test.ps1 (Windows), which read the
+# log for which path decided.
+expect-ever '^Start page shown$' 30
+expect-ever '^Theme: dark [(]preference' 10
+wait-idle
+sleep 500
+
+# 1. Dark at launch.
+expect-widget-theme startPage dark
+expect-ever '^Ribbon tab SOLID at ' 10
+mark
+click-logged '^Ribbon tab SOLID at '
+expect-log '^Start page hidden$'
+wait-idle
+sleep 500
+expect-widget-theme browserDock dark
+expect-widget-theme modelBrowserTree dark
+expect-widget-theme timelineStrip dark
+
+# 2. Light in Preferences.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice preferencesTheme 'Light'
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Preferences: theme light$' 10
+expect-log '^Theme: light [(]preference' 10
+wait-idle
+sleep 500
+expect-widget-theme browserDock light
+expect-widget-theme modelBrowserTree light
+expect-widget-theme timelineStrip light
+expect-setting appearance/theme light
+
+# 3. Dark again.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice preferencesTheme 'Dark'
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Theme: dark [(]preference' 10
+wait-idle
+sleep 500
+expect-widget-theme browserDock dark
+expect-widget-theme modelBrowserTree dark
+expect-widget-theme timelineStrip dark
+
+# 4. System: the platform's scheme, light, and its switches.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice preferencesTheme 'System'
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Preferences: theme system$' 10
+expect-log '^Theme: system [(]light[)]$' 10
+wait-idle
+sleep 500
+expect-widget-theme browserDock light
+expect-widget-theme modelBrowserTree light
+expect-widget-theme timelineStrip light
+expect-setting appearance/theme system
+color-scheme dark
+wait-idle
+sleep 500
+expect-widget-theme modelBrowserTree ${MITCAD_TEST_THEME_DESKTOP_DARK}
+expect-widget-theme timelineStrip ${MITCAD_TEST_THEME_DESKTOP_DARK}
+color-scheme light
+wait-idle
+sleep 500
+expect-widget-theme modelBrowserTree light
+expect-widget-theme timelineStrip light
+expect-never 'TestDriver: FAIL'

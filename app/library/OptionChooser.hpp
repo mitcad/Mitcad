@@ -118,7 +118,8 @@ public:
   QString standard() const { return m_filter.standard; }
   // The Supplier filter set to a supplier's id (the part grid's), when the
   // rows have it; else All. `apply` false: only the one the next table
-  // starts with (before setTable).
+  // starts with (before setTable). Until it is called, the filter starts
+  // with the shops chosen in Preferences (mitcad#950).
   void setSupplierFilter(const QString& supplier, bool apply = true);
   // The row of the rows the filters narrow by (with its `standards` and
   // `supplier_parts`), empty when none is chosen or the rows lack it.
@@ -205,6 +206,12 @@ private:
   QStringList m_filterOrder;   // the standards' order (the component's)
   bool m_ownFilterRows = false; // setFilterRows gave them
   QString m_wantedSupplier;    // setSupplierFilter's, until rows have it
+  // The Supplier filter starts with the shops chosen in Preferences
+  // (mitcad#950) until setSupplierFilter or the user chooses one: on a
+  // table whose row asked for none of those shops sell, All (an inserted
+  // component's row is never changed by a default).
+  bool m_preferredSupplier = true;
+  QString m_startRow;          // the row setTable asked for
   QJsonObject m_table;         // the table as given, all rows
   QJsonObject m_tableParameters;
   // The forms whose label column lines up with the chooser's (mitcad#1007).

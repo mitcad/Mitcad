@@ -1,6 +1,6 @@
 [
   {"comment":"SPDX-License-Identifier: MIT"},
-  {"comment":"A Join on a plate's end made in the Extrude panel (GitHub #126, mitcad#1243), tools/ui-join-mesh-reuse-test.sh: a sketch (F1) on the xy plane with a 177.2 x 25 rectangle (c1..c4, c2 its right side at x = 177.2) and, on that side, a 6 x 25 one of three lines (c9, c12, c15). The UI test extrudes the large profile 5 mm (F2.b0) and then the small one 10 mm into it."},
+  {"comment":"A Join on a plate's end made in the Extrude panel (GitHub #126, mitcad#1243), tools/ui-join-mesh-reuse-test.sh: a sketch (F1) on the xy plane with a 177.2 x 25 rectangle (c1..c4, c2 its right side at x = 177.2) and, on that side, a 6 x 25 one of three lines (c9, c12, c15). The UI test extrudes the large profile 5 mm (F2.b0) and then the small one 12 mm into it."},
   {"cmd":"sketch.create"},
   {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":177.2,"height":25},
   {"cmd":"sketch.add_line","sketch":"F1","start":[177.2,0],"end":[183.2,0]},

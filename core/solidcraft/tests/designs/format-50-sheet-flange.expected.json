@@ -1,0 +1,7 @@
+{
+  "comment": "Worked out by hand (mitcad#1331): a 100 x 50 sheet 2 thick (z 0..2) with a 90 degree flange up on the edge y = 0 at `material_outside` (format 37: the inner virtual sharp on the picked edge, so the flange's inside is flush with the edge's face y = 0) and its 20 measured from the inner virtual sharp (`height_from: inner`), bend radius 2 inside: the panel y 2..50 (100 * 48 * 2 = 9600), the bend a quarter of the ring 2..4 about (y 2, z 4) (pi / 4 * 12 * 100 = 942.4778), the wall y -2..0, z 4..22 (100 * 2 * 18 = 3600).",
+  "body_count": 1,
+  "total": {"volume_mm3": 14142.4778},
+  "bbox": {"min": [0, -2, 0], "max": [100, 50, 22]},
+  "parametric": 3
+}

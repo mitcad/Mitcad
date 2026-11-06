@@ -115,6 +115,7 @@ bool SketchModel::load(const QJsonObject& sketch) {
     warningEntities.push_back(ids);
   }
   staleProjections = false;
+  projectAgain = false;
   projections.clear();
   for (const QJsonValue& value : sketch.value(QStringLiteral("projections")).toArray()) {
     const QJsonObject p = value.toObject();
@@ -122,6 +123,7 @@ bool SketchModel::load(const QJsonObject& sketch) {
                        !p.value(QStringLiteral("unfollowed")).toArray().isEmpty() ||
                        !p.value(QStringLiteral("stale")).toArray().isEmpty();
     staleProjections = staleProjections || stale;
+    projectAgain = projectAgain || (stale && !flag(p, "lost"));
     ProjectionData projection;
     const QJsonValue source = p.value(QStringLiteral("source"));
     if (source.isObject()) {

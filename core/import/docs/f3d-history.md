@@ -348,7 +348,13 @@ just before the item (its `_f3d.result_no`) and finds them there
     (`isFlipped`) is off, on the other face where it is on (mitcad#343,
     round 16), whichever order the replay's edge name puts its faces in;
   - the edges found by their names are also tried one tangent chain at a
-    time (a feature per chain), right after all at once.
+    time (a feature per chain), right after all at once. Two edges are
+    one chain where an end of each lies within the import's geometric
+    tolerance of the other's and their tangents are parallel there
+    (mitcad#1343: an extrusion's end face whose loop joins the sketch's
+    curves with the edges of the face it lies on has its edges' ends 1 to
+    2 µm apart, which split a rounding of 44 edges round a ring into 9
+    features that no longer built, and two more roundings after it).
 - **Bodies** of moves, splits, body patterns and mirrors: by their tags;
   the middle points of some of their edges let the import find them among
   its bodies (`refs::resolve_body`), else as the only body whose faces

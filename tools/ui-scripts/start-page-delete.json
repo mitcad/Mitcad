@@ -1,0 +1,10 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Delete on the Start page (mitcad#1313), tools/ui-start-page-delete-test.sh and tools/ui-windows-start-page-delete-test.ps1: a 40 x 30 x 20 mm block (sketch F1 Sketch1, its extrusion F2)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[-20,-15],"width":40,"height":30},
+  {"cmd":"add_feature","def":{"type":"extrude",
+    "profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}}
+]

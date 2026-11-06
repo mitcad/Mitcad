@@ -44,7 +44,7 @@ for scheme in light dark; do
   python3 "$here/ui-scripts/configuration-tables-parity-script.py" "$frontend" > "$script"
   args=(--ui="$frontend" --no-recovery --no-mcp --open "$model")
   [ "$frontend" != qt ] || args+=(--no-native-dialogs)
-  MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_STEP_MS=90 MITCAD_TEST_INPUT=$script \
+  MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_STEP_MS=${MITCAD_TEST_STEP_MS:-90} MITCAD_TEST_INPUT=$script \
     ui_run_app "$frontend-$scheme" "${args[@]}"
   ui_expect_log '^TestDriver: done' "$frontend/$scheme: complete table/configuration workflow"
   for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints' 'Native Mac canvas:'; do

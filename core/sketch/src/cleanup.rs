@@ -382,7 +382,7 @@ fn param(p0: P2, p1: P2, q: P2) -> f64 {
 
 /// An angle dimension with a side (mitcad#296) measuring from the other
 /// ray of `line`: for a line that is to run the other way.
-fn reverse_angle_ray(kind: &mut DimensionKind, line: EntityUid) {
+pub(super) fn reverse_angle_ray(kind: &mut DimensionKind, line: EntityUid) {
     if kind.angle_side().is_none() {
         return;
     }

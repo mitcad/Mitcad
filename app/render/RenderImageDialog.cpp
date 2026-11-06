@@ -42,8 +42,10 @@
 #include "framework/TestSync.hpp"
 #include "framework/Theme.hpp"
 #include "render/RenderBatch.hpp"
+#include "render/RenderClient.hpp"
 #include "render/RenderDevice.hpp"
 #include "render/RenderScene.hpp"
+#include "render/RenderWorkerChoice.hpp"
 #include "view/MeasurementDrawing.hpp"
 
 #include "../framework/Dialogs.hpp"
@@ -326,6 +328,19 @@ RenderImageDialog::RenderImageDialog(DocumentHost& host, OcctViewer& viewer, QWi
     }
   };
   connect(m_job, &render::FinalRender::failed, this, [this, noImage](const QString& reason) {
+    // A picked render worker that did not start or speaks another protocol
+    // version (mitcad#1332): the shipped one renders the same job.
+    if (m_workerPicked && !m_job->greeted() && m_dir) {
+      m_workerPicked = false;
+      m_host.showStatus(render::pickedWorkerFailed(m_worker, reason) + QLatin1Char('.'), NoticeLevel::Warning);
+      m_worker = render::RenderClient::workerPath();
+      if (m_job->start(m_worker, m_jobSpec, m_dir->filePath(QStringLiteral("job.json")))) {
+        qInfo().noquote() << QStringLiteral("Render image started again with %1 (pid %2)")
+                                 .arg(m_worker)
+                                 .arg(m_job->processId());
+      }
+      return; // a worker that cannot start fails again, as the shipped one
+    }
     setRendering(false);
     noImage(tr("No image."));
     m_status->clear();
@@ -622,7 +637,15 @@ void RenderImageDialog::renderScene() {
   m_preview->setPixmap(QPixmap());
   m_preview->setText(tr("Starting the renderer…"));
   m_status->setText(tr("Rendering %1 × %2 pixels…").arg(size.width()).arg(size.height()));
-  if (m_job->start(render::workerExecutable(), job, m_dir->filePath(QStringLiteral("job.json")))) {
+  // The render worker of Preferences (mitcad#1332).
+  const render::WorkerChoice worker = render::RenderClient::workerChoice();
+  if (!worker.fallback.isEmpty()) {
+    m_host.showStatus(worker.fallback + QLatin1Char('.'), NoticeLevel::Warning);
+  }
+  m_worker = worker.path;
+  m_workerPicked = worker.picked;
+  m_jobSpec = job;
+  if (m_job->start(m_worker, job, m_dir->filePath(QStringLiteral("job.json")))) {
     qInfo().noquote() << QStringLiteral("Render image started: %1 x %2, %3 samples, %4, %5, %6 bodies (pid %7)")
                              .arg(size.width())
                              .arg(size.height())

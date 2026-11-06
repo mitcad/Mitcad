@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/files app/library
+# check-all sources: app/files app/library app/view
 # Component libraries (mitcad#64) and the community library (mitcad#63)
 # through the real UI, with local git repositories only (no network):
 #   1. Publish to Library: the demo block added to a new library of one's
@@ -44,6 +44,11 @@
 #      M6x6 not), and the part inserted is named DIN 912 M6x8. The fields
 #      of Version, Standard, Supplier, Size and Length start at one x (one
 #      label column, mitcad#1007; Components in This Design's too, in part 4).
+#  10. The suppliers' shops (mitcad#950): Preferences > Suppliers, Region
+#      Finland and Würth's shop checked; Insert from Library's Supplier
+#      filters then start with Würth (the grid's and the size choosers'),
+#      and in Supplier Articles Würth's part numbers link to the product
+#      in its shop.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-test.sh
@@ -591,6 +596,45 @@ ui_focus_main
 drop_in
 ui_expect_new "Inserted component DIN 912 M6x8 (linked) from mitcad-parts v1.1.0" "the part named by DIN 912"
 closed
+
+echo "--- 10. The suppliers' shops (mitcad#950)"
+ui_mark
+ui_step "Preferences: Suppliers (command search)" ui_command "Preferences: Suppliers"
+ui_focus_dialog '^Preferences$'
+ui_step "Region Finland (Alt+R, F)"         eval 'ui_key alt+r; ui_sync; ui_type_ahead "F"'
+ui_step "check the first shop (Alt+S, Space)" eval 'ui_key alt+s; ui_sync; ui_key space'
+# Return from the Region box: the dialog's OK (the list would take it).
+ui_step "OK (Alt+R, Return)"                eval 'ui_key alt+r; ui_sync; ui_key Return'
+ui_focus_main
+ui_expect_new "Preferences: suppliers region FI, shops wurth" "the region and Würth's shop kept"
+grep -q "^region=FI" "$UI_CONFIG/Mitcad/Mitcad.conf" || ui_fail "the settings do not keep the region"
+echo "ok   the settings keep the region"
+ui_mark
+ui_step "Insert from Library (command search)" ui_command "Insert from Library"
+ui_focus_dialog '^Browse Components$'
+ui_expect_new "Part picker supplier to start: wurth" "the grid's Supplier filter starts with the shop"
+ui_step "All components (Alt+O, A)"         eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
+ui_mark
+ui_step "search 4762"                       eval 'ui_key alt+s; ui_sync; xdotool type --delay 40 "4762"'
+ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" "the socket head cap screw"
+ui_expect_new "Library filters start: Standard All, Supplier wurth: " "the size choosers' Supplier filter too"
+ui_mark
+ui_step "Supplier Articles (Alt+A)"         ui_key alt+a
+ui_focus_dialog '^Supplier Articles - '
+ui_expect_new " articles linked in FI" "the articles get their links in Finland"
+LINKED=$(grep " articles linked in FI$" "$UI_LOG" | tail -1)
+[[ $LINKED =~ :\ ([1-9][0-9]*)\ of\ ([0-9]+)\ articles ]] || ui_fail "no part number linked: '$LINKED'"
+echo "ok   $LINKED"
+# Würth's articles first (the filter's); the first one's part number.
+ui_step "its part number (Right), Open Link (Alt+L)" eval 'ui_key Right; ui_sync; ui_key alt+l'
+ui_expect_new "Supplier link opened: https://eshop.wurth.fi/product/0084" "the part number opens the product in the shop"
+LINK=$(grep "^Supplier link opened: " "$UI_LOG" | tail -1)
+[[ $LINK == *"%20"*".sku/fi/FI/EUR/" ]] || ui_fail "not the shop's product address: '$LINK'"
+echo "ok   $LINK"
+ui_step "close (Escape)"                    ui_key Escape
+ui_focus_dialog '^Browse Components$'
+ui_step "close (Escape)"                    ui_key Escape
+ui_focus_main
 
 ui_stop_app
 ui_finish "component libraries and the community library"

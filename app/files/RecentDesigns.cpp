@@ -19,9 +19,9 @@ QString absolute(const QString& path) { return QFileInfo(path).absoluteFilePath(
 
 QVariantMap openedTimes() { return QSettings().value(openedKey()).toMap(); }
 
-QStringList pinnedPaths() { return QSettings().value(pinnedKey()).toStringList(); }
-
 } // namespace
+
+QStringList pinnedPaths() { return QSettings().value(pinnedKey()).toStringList(); }
 
 QString recentFilesKey() { return QStringLiteral("recentFiles"); }
 QString openedKey() { return QStringLiteral("start/recentOpened"); }

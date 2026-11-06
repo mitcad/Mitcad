@@ -12,7 +12,8 @@
 //! **Layout.** Automatic within each plate, by the export's arranger
 //! (`exchange/bed.rs`): each piece on its print bed face (else the
 //! automatic orientation's), the pieces side by side along X, the row
-//! centred on the plate.
+//! centred on the plate, wrapped into rows along Y where it is wider than
+//! the bed (mitcad#1316).
 //!
 //! **Plate settings** ([`PrintPlate::values`]): process values of the
 //! key map, in its JSON form, as a profile keeps them. The plate is a

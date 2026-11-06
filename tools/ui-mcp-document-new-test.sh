@@ -19,6 +19,9 @@
 #   - with a name and a folder outside projects the empty design is saved
 #     there; from a loose design without a project an untitled design; a
 #     name without a folder or project goes to the allowed folder.
+#   - document_open and document_save with a path refuse a design another
+#     window has open, naming its handle (mitcad#1323); a name starting
+#     with two dots is not taken as outside the project (mitcad#1317).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-mcp-document-new-test.sh
@@ -171,6 +174,13 @@ expect '.error | contains("not a design'"'"'s name")' "a name with a folder is r
 mcp_tool document_new '{"name": "block"}' true
 expect '(.error | contains("block.mitcad")) and (.error | contains("already exists"))' \
   "a name that exists in the project is refused, naming it"
+# A name that starts with two dots is inside the project, not a parent
+# reference (mitcad#1317): the project refuses it as a hidden name, which
+# its versions leave out.
+mcp_tool document_new '{"name": "..draft"}' true
+expect '(.error | contains("starting with a dot")) and (.error | contains("not inside its project") | not)' \
+  "a name starting with two dots is refused by the project as hidden, not as outside it"
+[ -e "$SHOP/..draft.mitcad" ] && ui_fail "the refused ..draft.mitcad was made"
 mcp_tool document_list '{}'
 expect '.documents | length == 1' "no refused call opened a design"
 [ -e "$OUTSIDE/Design1.mitcad" ] && ui_fail "a refused call wrote outside the folder"
@@ -222,6 +232,19 @@ expect '.path | endswith("/allowed/nipple.mitcad")' "a name without a folder or 
 [ -s "$ALLOWED/nipple.mitcad" ] || ui_fail "nipple.mitcad was not written"
 mcp_tool document_list '{}'
 expect '.documents | length == 5' "five designs are open"
+[ "$(volume "$FIRST")" = 3000 ] || ui_fail "the first design changed"
+
+echo "--- A design open in one window is not opened or saved in another (mitcad#1323)"
+mcp_tool document_open "$(jq -cn --arg d "$THIRD" '{document: $d, path: "shop/block.mitcad", discard: true}')" true
+expect '(.error | contains($a)) and .open_document == $a' \
+  "document_open of a design another window has open is refused, naming its document" --arg a "$FIRST"
+mcp_tool document_save "$(jq -cn --arg d "$THIRD" '{document: $d, path: "shop/block.mitcad", overwrite: true}')" true
+expect '(.error | contains($a)) and .open_document == $a' \
+  "document_save to a design another window has open is refused, naming its document" --arg a "$FIRST"
+mcp_tool document_list '{}'
+expect '.documents | length == 5' "still five designs"
+expect '[.documents[].path | select(. != null)] | length == (unique | length)' \
+  "document_list never lists one path twice"
 [ "$(volume "$FIRST")" = 3000 ] || ui_fail "the first design changed"
 
 bridge_close

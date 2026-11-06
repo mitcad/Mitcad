@@ -98,6 +98,7 @@ RenderMode::RenderMode(OcctViewer& viewer, std::function<void(QObject*, std::fun
       m_messageTimer(new QTimer(this)) {
   connect(m_client, &render::RenderClient::ready, this, &RenderMode::workerReady);
   connect(m_client, &render::RenderClient::failed, this, &RenderMode::workerFailed);
+  connect(m_client, &render::RenderClient::workerFallback, this, &RenderMode::workerFallback);
   connect(m_client, &render::RenderClient::sceneApplied, this, &RenderMode::sceneApplied);
   connect(m_client, &render::RenderClient::frameAvailable, this, &RenderMode::showFrame, Qt::QueuedConnection);
   // The CPU took over from the render device (mitcad#50): it renders, not as
@@ -189,6 +190,16 @@ void RenderMode::deviceChanged() {
   }
   qInfo().noquote() << QStringLiteral("Render device changed to %1: the worker starts again")
                            .arg(render::renderDeviceChoice());
+  setEnabled(false);
+  setEnabled(true);
+}
+
+void RenderMode::workerChanged() {
+  if (!m_enabled) {
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Render worker changed to %1: the worker starts again")
+                           .arg(render::RenderClient::workerPath());
   setEnabled(false);
   setEnabled(true);
 }

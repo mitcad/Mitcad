@@ -43,6 +43,7 @@
 #include "report/ReportDialogs.hpp"
 #include "mcp/LogRing.hpp"
 #include "render/RenderDevice.hpp"
+#include "render/RenderWorkerChoice.hpp"
 
 // The Rust panic hook's sink (core/ffi/src/panic_note.rs).
 extern "C" void mitcad_set_panic_sink(void (*sink)(const char* message, std::size_t length));
@@ -200,7 +201,10 @@ QString ReportCenter::diagnostics() const {
   lines << QStringLiteral("Graphics: %1%2")
                .arg(m_renderer.isEmpty() ? QStringLiteral("not known yet") : m_renderer,
                     m_glVersion.isEmpty() ? QString() : QStringLiteral(", OpenGL ") + m_glVersion);
-  lines << QStringLiteral("Rendered view: render device setting %1").arg(render::renderDeviceChoice());
+  // The worker as shipped or the user's own (mitcad#1332), without its path.
+  lines << QStringLiteral("Rendered view: render device setting %1, %2 render worker")
+               .arg(render::renderDeviceChoice(),
+                    render::pickedWorker().isEmpty() ? QStringLiteral("the shipped") : QStringLiteral("an own"));
   const QScreen* screen = m_window.screen();
   lines << QStringLiteral("Window: %1 layout, %2 x %3, device pixel ratio %4")
                .arg(chromeStyle() == ChromeStyle::Floating ? QStringLiteral("floating") : QStringLiteral("docked"))

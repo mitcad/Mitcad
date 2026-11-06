@@ -299,6 +299,7 @@ public:
 
   explicit OcctViewer(QWidget* parent = nullptr);
   ~OcctViewer() override;
+  void setVisible(bool visible) override;
 
   // Display settings (U5).
   void setVisualStyle(VisualStyle style);

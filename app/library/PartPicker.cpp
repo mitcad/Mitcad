@@ -843,6 +843,10 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_supplierLabel = new QLabel(tr("Supplie&r:"));
   m_supplierLabel->setBuddy(m_supplier);
   m_wantedSupplier = savedSupplierFilter();
+  if (!m_wantedSupplier.isEmpty()) {
+    // The one kept, or the shops chosen in Preferences (mitcad#950).
+    qInfo().noquote() << QStringLiteral("Part picker supplier to start: %1").arg(m_wantedSupplier);
+  }
   second->addWidget(m_supplierLabel);
   second->addWidget(m_supplier);
   m_supplier->hide();
@@ -1557,10 +1561,16 @@ void PartGrid::fillSuppliers() {
   m_filling = true;
   m_supplier->clear();
   m_supplier->addItem(tr("All suppliers"), QString());
+  // The shops chosen in Preferences as one entry, when they are several
+  // (mitcad#950).
+  const PartSupplier yours = yourShopsChoice(suppliers, preferredShops());
+  if (!yours.id.isEmpty()) {
+    m_supplier->addItem(yours.name, yours.id);
+  }
   for (const PartSupplier& one : suppliers) {
     m_supplier->addItem(one.name, one.id);
   }
-  m_supplier->setCurrentIndex(std::max(0, m_supplier->findData(m_wantedSupplier)));
+  m_supplier->setCurrentIndex(std::max(0, m_supplier->findData(supplierChoiceFor(suppliers, m_wantedSupplier))));
   m_filling = false;
   m_supplier->setVisible(!suppliers.isEmpty());
   m_supplierLabel->setVisible(!suppliers.isEmpty());

@@ -108,7 +108,7 @@ for frontend in $frontends; do
   } > "$script"
   rm -rf "$MITCAD_SETTINGS_DIR"
   mkdir -p "$MITCAD_SETTINGS_DIR"
-  MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$script \
+  MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_STEP_MS=${MITCAD_TEST_STEP_MS:-70} MITCAD_TEST_INPUT=$script \
     ui_run_app "make-tab-$frontend-$scheme" --ui="$frontend" --no-recovery --no-mcp \
       --open "$MITCAD_TEST_WORK/make.mitcad"
   ui_expect_log '^TestDriver: done' "$frontend/$scheme: the Make tab, its commands and the body card"

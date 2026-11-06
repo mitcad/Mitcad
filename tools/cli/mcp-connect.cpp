@@ -577,7 +577,13 @@ private:
   void forward(const QByteArray& frame, const QJsonDocument& message) {
     if (expectsResponse(frame)) {
       const QJsonObject object = message.object();
-      if (message.isObject() && object.contains(QStringLiteral("id")) && object.value(QStringLiteral("method")).isString()) {
+      // The window answers an id that is neither a string nor an integer
+      // with a null id (core/mcp/src/lib.rs valid_id): such a request is
+      // counted, not tracked (mitcad#1317).
+      const QJsonValue id = object.value(QStringLiteral("id"));
+      const bool usableId =
+          id.isString() || (id.isDouble() && static_cast<double>(id.toInteger()) == id.toDouble());
+      if (message.isObject() && usableId && object.value(QStringLiteral("method")).isString()) {
         m_forwarded.append({idKey(object.value(QStringLiteral("id"))), frame});
       } else {
         ++m_untracked;

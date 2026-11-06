@@ -825,6 +825,10 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     // A timber frame's members by frame (mitcad#522).
                     "frame": r.frame,
                 });
+                // A section of a typed size (mitcad#1328): its options.
+                if let Some(size) = &r.size {
+                    row["size"] = json!(size);
+                }
                 // The timber columns, only in a design with timber.
                 if has_timber {
                     let t = r.timber.as_ref();

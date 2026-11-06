@@ -252,7 +252,9 @@ use self::prelude::*;
 use mitcad_model::expr::{DEFAULT_DECIMALS, Unit, value_to_expression};
 use mitcad_model::features::{FeatureDef, ValueInput};
 use mitcad_model::ids::{BodyUid, FeatureUid};
-use mitcad_model::internal::document::{feature_level, feature_notices, noted_status};
+use mitcad_model::internal::document::{
+    feature_level, feature_notices, feature_notices_placed, noted_status,
+};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::notice::{self, NoticeLevel};
 use mitcad_model::profile::{ProfileRegion, SketchFrame};
@@ -1049,6 +1051,9 @@ named_enum! {
         "file_structure" => FileStructure {
             path: String,
         },
+        // The corners a drawing sheet's views show, drawn as dots on the
+        // screen while Always show corners is on (mitcad#1338).
+        "drawing_corners" => DrawingCorners(drawing_annotations::CornersQuery),
     }
 }
 
@@ -1302,7 +1307,16 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 let note = self.import_note(uid);
                 // Its notices and level (mitcad#1040); `error` only for a
                 // failure, `warnings` for one release beside the notices.
-                let notices = feature_notices(status, warnings, infos, note, uid);
+                // The notices in plain words, their places by name
+                // (mitcad#1327).
+                let notices = feature_notices_placed(
+                    status,
+                    warnings,
+                    infos,
+                    note,
+                    uid,
+                    self.warning_places(uid),
+                );
                 let mut value = json!({"uid": uid, "name": entry.name, "type": entry.def.type_name(),
                        "suppressed": entry.suppressed,
                        "status": status.map(|s| noted_status(Some(s), warnings, note)),
@@ -1612,6 +1626,8 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::FileStructure { path } => {
                 json!({"assembly": mitcad_model::exchange::file_has_assembly(&path)?})
             }
+            // A sheet's visible corners (mitcad#1338).
+            Query::DrawingCorners(query) => self.drawing_corners_json(&query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2475,6 +2491,12 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 // fully constrained one).
                 if let Some(sketch) = self.sketch_output(item.entry.uid) {
                     value["dof"] = json!(sketch.solved.status.dof);
+                    // Its linked projections Project Again repairs
+                    // (mitcad#1303): the timeline offers it then.
+                    let again = crate::sketch::again_candidates(&sketch.follow).len();
+                    if again > 0 {
+                        value["project_again"] = json!(again);
+                    }
                 }
                 // The sketches it uses: the browser lists it under each
                 // (mitcad#177).
@@ -2722,6 +2744,28 @@ fn preview_json(report: &PreviewReport) -> Value {
     // built 0.1 % smaller than asked), information beside the warnings.
     if !report.infos.is_empty() {
         value["infos"] = json!(report.infos);
+    }
+    // The warnings as notices in plain words with their places
+    // (mitcad#1327: the panel paints them while the pointer is over its
+    // message); `warnings` keeps the model's own text for one release.
+    // (A failure's error first, in plain words too.)
+    let failure = report
+        .status
+        .error()
+        .map(|error| notice::Notice::error(error).to_json());
+    let notices: Vec<Value> = failure
+        .into_iter()
+        .chain(report.warnings.iter().map(|warning| {
+            let notice = notice::Notice::warning(warning.as_str());
+            match report.warning_places.iter().find(|(m, _)| m == warning) {
+                Some((_, places)) => notice.with_places(places.iter().cloned()),
+                None => notice,
+            }
+            .to_json()
+        }))
+        .collect();
+    if !notices.is_empty() {
+        value["notices"] = Value::Array(notices);
     }
     // A pattern's elements (P9): rows of each element's transform.
     if let Some(anchor) = &report.anchor {

@@ -472,3 +472,148 @@ fn lines_and_arcs_snap_to_ends_middles_and_centres() {
         "{hole}"
     );
 }
+
+fn same(a: [f64; 2], b: [f64; 2]) -> bool {
+    near(a[0], b[0]) && near(a[1], b[1])
+}
+
+#[test]
+fn a_corner_is_dimensioned_to_a_centre_marks_line() {
+    let (mut doc, _) = plate();
+    // On the line through the slot's centre, left of its sides: no edge or
+    // point within reach, and no mark there yet (its sides turn less than
+    // half way round: no automatic mark).
+    let on_line = [18.0, 10.0];
+    let hover = |doc: &Document<MockKernel>| {
+        query(
+            doc,
+            json!({"query": "drawing_pick", "drawing": "D1", "view": 2,
+                   "at": on_top(doc, on_line)}),
+        )
+    };
+    let before = hover(&doc);
+    assert!(before["pick"].is_null(), "{before}");
+    // A centre mark on the slot's outer side: its horizontal line runs 12
+    // and 2.5 mm each way from the slot's centre (mitcad#1338).
+    let side = on_top(&doc, slot_at(60.0, 12.0));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2,
+               "type": "center_mark", "picks": [side]}),
+    );
+    let hovered = hover(&doc);
+    assert_eq!(hovered["seen"], "point", "{hovered}");
+    assert_eq!(hovered["center_line"], true, "{hovered}");
+    assert_eq!(hovered["pick"]["point"], "center", "{hovered}");
+    let centre = on_top(&doc, SLOT);
+    assert!(same(point(&hovered["at"]), centre), "{hovered}");
+    // The mark's line, from the centre leftward through the click, first;
+    // then the centre.
+    let items = hovered["items"].as_array().unwrap();
+    let line = &items[0]["line"];
+    assert!(same(point(&line[0]), centre), "{hovered}");
+    assert!(
+        same(point(&line[1]), [centre[0] - 14.5, centre[1]]),
+        "{hovered}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|i| i.get("point").is_some_and(|p| same(point(p), centre))),
+        "{hovered}"
+    );
+    // The plate's corner (40, 0) and the mark's line, in both orders:
+    // above them horizontal (12 to its vertical line), beside them
+    // vertical (10 to its horizontal line).
+    for clicks in [[[40.0, 0.0], on_line], [on_line, [40.0, 0.0]]] {
+        for (placed, along, length) in [
+            ([34.0, 35.0], "horizontal", 12.0),
+            ([45.0, 5.0], "vertical", 10.0),
+        ] {
+            let entry = dimension(&mut doc, &clicks, placed);
+            assert_eq!(
+                entry["type"], "linear",
+                "{clicks:?} placed at {placed:?}: {entry}"
+            );
+            assert_eq!(
+                entry["along"], along,
+                "{clicks:?} placed at {placed:?}: {entry}"
+            );
+            assert!(
+                near(value(&entry), length),
+                "{clicks:?} placed at {placed:?}: {entry}"
+            );
+            let points: Vec<&Value> = entry["picks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| &p["point"])
+                .collect();
+            assert!(points.contains(&&json!("center")), "{entry}");
+        }
+    }
+}
+
+#[test]
+fn the_corners_of_a_view_are_its_visible_edge_ends() {
+    let (doc, _) = plate();
+    let corners = query(&doc, json!({"query": "drawing_corners", "drawing": "D1"}));
+    let views = corners["views"].as_array().unwrap();
+    assert_eq!(views.len(), 2, "{corners}");
+    let top = views
+        .iter()
+        .find(|v| v["view"] == 2)
+        .unwrap_or_else(|| panic!("no top view: {corners}"));
+    let points: Vec<[f64; 2]> = top["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(point)
+        .collect();
+    // The plate's corners and the slanted edge's ends, on the lines the
+    // view draws.
+    for corner in [
+        [0.0, 0.0],
+        [40.0, 0.0],
+        [40.0, 30.0],
+        [0.0, 30.0],
+        [0.0, 22.0],
+        [12.0, 30.0],
+    ] {
+        let at = on_top(&doc, corner);
+        assert!(
+            points.iter().any(|p| same(*p, at)),
+            "{corner:?} is not among {points:?}"
+        );
+    }
+    // Each place once.
+    for (i, p) in points.iter().enumerate() {
+        assert!(
+            !points[i + 1..].iter().any(|q| same(*p, *q)),
+            "{p:?} twice in {points:?}"
+        );
+    }
+    // Not the slot's sides' ends, which the view does not draw, nor a
+    // centre.
+    for hidden in [slot_at(30.0, 12.0), slot_at(90.0, 8.0), SLOT, [10.0, 8.0]] {
+        let at = on_top(&doc, hidden);
+        assert!(
+            !points.iter().any(|p| same(*p, at)),
+            "{hidden:?} is among {points:?}"
+        );
+    }
+    // A corner hovered is one of them: the same point a click picks.
+    let hovered = query(
+        &doc,
+        json!({"query": "drawing_pick", "drawing": "D1", "view": 2,
+               "at": on_top(&doc, [39.5, 0.4])}),
+    );
+    assert_eq!(hovered["seen"], "point", "{hovered}");
+    let at = point(&hovered["at"]);
+    assert!(points.iter().any(|p| same(*p, at)), "{hovered}");
+    // A sheet that is not there is refused.
+    let error = doc
+        .query(&json!({"query": "drawing_corners", "drawing": "D1", "sheet": 3}).to_string())
+        .expect_err("no sheet 3");
+    assert!(error.to_string().contains("no sheet 3"), "{error}");
+}

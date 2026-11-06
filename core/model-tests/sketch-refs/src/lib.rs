@@ -27,3 +27,6 @@ mod sketch_driven_uses_tests;
 // Project of a curved face: its outline seen along the sketch's normal
 // (mitcad#1265).
 mod face_outline_tests;
+// Project Again of a projection that stopped following its source
+// (mitcad#1303).
+mod project_again_tests;

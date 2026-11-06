@@ -1,0 +1,138 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the walk of WalkedOnSameToEndFace past the end of the face N it
+takes unbounded runs on past the end of the curve N is an extrusion of
+(mitcad#1345).
+
+WalkedOnSameToEndFace (patch 0600) walks an OnSame end's
+last piece again with the surface of the face N its contact left
+unbounded, past the spine's end vertex, up to where the other contact
+reaches the edge between its face and the face at the end. A face made by
+extruding a profile's spline stretch is a surface of linear extrusion of a
+B-spline curve covering that stretch alone, bounded by the stretch's ends.
+A fin's end face is one: its two side edges rounded with 1 up to the top,
+each side's walk past its chain's top vertex runs its contact on the end
+face over the top, past the stretch's end at the top's crease. The walk
+fell off the surface there at once, no corner was made, and the two
+sides' roundings were taken for intersecting. A stored state whose end
+face is the extrusion of the whole spline builds the same rounding.
+
+Where N's surface is such an extrusion, its curve is now run on past the
+end nearer P's contact on N by four radii, curvature continuously
+(GeomLib::ExtendCurveToPoint, third order, up to the curve's own
+polynomial run on there), its parameters kept. On the reported fin the
+run on lies on the whole spline's extrusion within 1e-4 mm over the first
+1.6 mm and 5.5e-4 mm over four.
+
+Test: geometry/tests/test_fillet_fin_end.cpp, the reported fin's end
+rounded along its sides on the body MitCad builds: the rounding builds,
+closed, and the stored body after it lies on the result within 0.01 mm
+round the end (the rounding fails without the patch).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 686b8059..a7569a0d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -66,6 +66,7 @@
+ #include <GeomAPI_ProjectPointOnSurf.hxx>
+ #include <GeomInt_IntSS.hxx>
+ #include <GeomLib.hxx>
++#include <Geom_SurfaceOfLinearExtrusion.hxx>
+ #include <GeomConvert_CompCurveToBSplineCurve.hxx>
+ #include <GeomConvert.hxx>
+ #include <Geom_BoundedCurve.hxx>
+@@ -17537,9 +17538,68 @@ bool ChFi3d_Builder::RolledEndToEndAcrossSeam(const occ::handle<ChFiDS_Stripe>&
+ //            B's surface (En prolonged, PerformOneCorner). The last
+ //            surfdata is walked again from its other end with N's
+ //            surface unbounded, on the same guide run on past its end, up
+-//            to where the contact on Fo reaches Eq.
++//            to where the contact on Fo reaches Eq. (N's surface an
++//            extrusion of a bounded B-spline curve, as a profile's stretch
++//            extruded, the curve is run on past its end nearer the contact
++//            on N, ChFi3d_RunOnExtrusionCurve.)
+ //=======================================================================
+ 
++//=======================================================================
++// function : ChFi3d_RunOnExtrusionCurve
++// purpose  : The surface S of linear extrusion of a bounded B-spline curve
++//            C with C run on past its end nearer the parameter U by the
++//            length L: C extended there curvature continuously
++//            (GeomLib::ExtendCurveToPoint, third order) up to its own
++//            polynomial run on at that length, its own parameters kept. S
++//            itself where it is no such surface or the extension fails.
++//=======================================================================
++
++static occ::handle<Geom_Surface> ChFi3d_RunOnExtrusionCurve(const occ::handle<Geom_Surface>& S,
++                                                            const double                     U,
++                                                            const double                     L)
++{
++  const occ::handle<Geom_SurfaceOfLinearExtrusion> aExt = occ::down_cast<Geom_SurfaceOfLinearExtrusion>(S);
++  if (aExt.IsNull())
++  {
++    return S;
++  }
++  const occ::handle<Geom_BSplineCurve> aC = occ::down_cast<Geom_BSplineCurve>(aExt->BasisCurve());
++  if (aC.IsNull() || aC->IsPeriodic() || aC->IsClosed())
++  {
++    return S;
++  }
++  const double u1 = aC->FirstParameter(), u2 = aC->LastParameter();
++  const bool   after = std::abs(U - u2) < std::abs(U - u1);
++  const double ue    = after ? u2 : u1;
++  gp_Pnt       aP;
++  gp_Vec       aD1;
++  aC->D1(ue, aP, aD1);
++  if (aD1.Magnitude() <= gp::Resolution() || L <= Precision::Confusion())
++  {
++    return S;
++  }
++  try
++  {
++    OCC_CATCH_SIGNALS
++    // (A B-spline curve evaluated past its end runs on along its end span's
++    // polynomial.)
++    const gp_Pnt aTo = aC->Value(ue + (after ? 1. : -1.) * L / aD1.Magnitude());
++    occ::handle<Geom_BoundedCurve> aRun = occ::down_cast<Geom_BoundedCurve>(aC->Copy());
++    GeomLib::ExtendCurveToPoint(aRun, aTo, 3, after);
++    const double um = 0.5 * (u1 + u2);
++    if (aRun.IsNull() || aRun->Value(um).Distance(aC->Value(um)) > Precision::Confusion()
++        || aRun->Value(ue).Distance(aP) > Precision::Confusion())
++    {
++      return S;
++    }
++    return new Geom_SurfaceOfLinearExtrusion(aRun, aExt->Direction());
++  }
++  catch (Standard_Failure const&)
++  {
++    return S;
++  }
++}
++
+ bool ChFi3d_Builder::WalkedOnSameToEndFace(const occ::handle<ChFiDS_Stripe>& Stripe, const bool isFirst)
+ {
+   const occ::handle<ChFiDS_Spine>& Spine = Stripe->Spine();
+@@ -17704,11 +17764,20 @@ bool ChFi3d_Builder::WalkedOnSameToEndFace(const occ::handle<ChFiDS_Stripe>& Str
+   {
+     return false;
+   }
+-  const occ::handle<Geom_Surface> SN = BRep_Tool::Surface(N);
++  occ::handle<Geom_Surface> SN = BRep_Tool::Surface(N);
+   if (SN.IsNull())
+   {
+     return false;
+   }
++  {
++    // (Unbounded: an extrusion of a profile's stretch run on past the
++    // stretch's end where P's contact on N lies, by four radii. The walk
++    // past E may run past that end: a fin's end face, which goes on from
++    // the top tangentially, the contact on it running on over the top.)
++    const ChFiDS_FaceInterference& FIn = P->Interference(ons);
++    const gp_Pnt2d                 uvN = FIn.PCurveOnFace()->Value(FIn.Parameter(isFirst));
++    SN                                  = ChFi3d_RunOnExtrusionCurve(SN, uvN.X(), 4. * fsp->Radius());
++  }
+   TopoDS_Face NF = BRepLib_MakeFace(SN, Precision::Confusion());
+   if (NF.IsNull())
+   {

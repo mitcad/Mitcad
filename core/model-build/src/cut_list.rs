@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::parts::{PartInfo, designation, part_number, part_values};
+use crate::parts::{PartInfo, designation, part_number, part_values, typed_section};
 use crate::prelude::*;
 use crate::{BuildItem, MaterialMeta, SourceId};
 use mitcad_model::Document;
@@ -102,6 +102,10 @@ pub struct CutRow {
     /// The timber frame its parts are members of (mitcad#522): the rows go
     /// by frame, each frame's members apart from another's.
     pub frame: Option<String>,
+    /// A section of a typed size (mitcad#1328): its options' values but
+    /// the length (`B 76.2, T 4.8`). Its rows and stock go apart from its
+    /// source's other sizes. None for other parts.
+    pub size: Option<String>,
 }
 
 /// The stock pieces one source (in one row) is cut from.
@@ -305,6 +309,21 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
             let section = info.meta.section_size();
             // A profiled board's area is its own (mitcad#477).
             let area = info.meta.section_area();
+            // A section of a typed size (mitcad#1328): its area in the
+            // part's combination (the source's parameter's value) and its
+            // options, which keep its rows and stock apart from its
+            // source's other sizes.
+            let cut_by = info.meta.length.as_ref().map(|l| l.parameter.as_str());
+            let section_of = info
+                .meta
+                .area_parameter
+                .as_deref()
+                .and_then(|name| typed_section(source, config, &values, name, cut_by));
+            let typed: Option<f64> = section_of.as_ref().and_then(|s| s.area);
+            let size: Option<String> = section_of.map(|s| s.size).filter(|s| !s.is_empty());
+            if let Some(size) = &size {
+                key.push_str(&format!("|{size}"));
+            }
             let row = groups.entry(key).or_insert_with(|| CutRow {
                 source: source.id,
                 designation: designation(source, config, &values),
@@ -316,8 +335,9 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
                 machining,
                 features: own.len(),
                 quantity: 0,
-                mass: match (timber, info.meta.density(), area) {
-                    (true, Some(density), Some(area)) => Some(density * area * length / 1e9),
+                mass: match (timber, info.meta.density(), area, typed) {
+                    (true, Some(density), Some(area), _)
+                    | (false, Some(density), _, Some(area)) => Some(density * area * length / 1e9),
                     _ => info
                         .meta
                         .kilograms_per_metre()
@@ -342,6 +362,7 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
                     ),
                 }),
                 frame: frame.clone(),
+                size: size.clone(),
             });
             row.quantity += quantity;
             row.components.push(info.component);
@@ -356,18 +377,19 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
         }
         let rows: Vec<CutRow> = groups.into_values().collect();
         // The stock: first fit of the longest pieces into the longest stock,
-        // per source and configuration row.
-        let mut by_source: BTreeMap<(SourceId, Option<String>), Vec<f64>> = BTreeMap::new();
+        // per source and configuration row, and per typed size (mitcad#1328).
+        type StockKey = (SourceId, Option<String>, Option<String>);
+        let mut by_source: BTreeMap<StockKey, Vec<f64>> = BTreeMap::new();
         for row in &rows {
             for _ in 0..row.quantity {
                 by_source
-                    .entry((row.source, row.config.clone()))
+                    .entry((row.source, row.config.clone(), row.size.clone()))
                     .or_default()
                     .push(row.length);
             }
         }
         let mut stock = Vec::new();
-        for ((id, config), mut pieces) in by_source {
+        for ((id, config, size), mut pieces) in by_source {
             let Some(source) = self.state().library_sources.get(id) else {
                 continue;
             };
@@ -426,8 +448,9 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
                     offcut += (shortest - used).max(0.0);
                 }
             }
-            let designation = match &config {
-                Some(row) if meta.is_timber() => format!("{} {row}", source.label()),
+            let designation = match (&config, &size) {
+                (_, Some(size)) => format!("{} ({size})", source.label()),
+                (Some(row), None) if meta.is_timber() => format!("{} {row}", source.label()),
                 _ => source.label(),
             };
             stock.push(StockEntry {

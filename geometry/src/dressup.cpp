@@ -68,6 +68,7 @@
 #include "corner.hpp"
 #include "cutouts.hpp"
 #include "dressup_check.hpp"
+#include "dressup_strips.hpp"
 #include "face_join.hpp"
 #include "face_select.hpp"
 #include "history.hpp"
@@ -150,52 +151,106 @@ double face_width(const TopoDS_Face& face) {
   return boundary > 0.0 ? 2.0 * area.Mass() / boundary : 0.0;
 }
 
-// A dressup built with its sizes scaled by kShrink (`smaller`, of the body
-// `input`) without the strips it left where the faces it takes away at its
-// exact size were (mitcad#1106): `contact` is how far from its edges the
-// dressup touches its faces at most, so a strip is (1 - kShrink) of it wide
-// (mitcad#1150: a fillet across a sharp angle touches its faces far beyond
-// its radius). The faces of the smaller one narrower than twice that and
-// not in the input, beside a face the dressup made, removed by OCCT's
-// defeaturing, which extends the faces round each strip to meet. The
-// dressup's faces then meet the faces beyond the strips at one edge, as at
-// the exact size, and take the strips' names, as a face the dressup takes
-// away gives its names to the dressup's face there (name_consumed_faces).
-// Null where it leaves no strip, or the defeaturing fails or gives no
-// valid solid of nearly the same volume.
-ShapePtr without_strips(const Shape& smaller, const Shape& input, double contact) {
+} // namespace
+
+// The strips of a dressup built 0.1 % smaller, removed (dressup_strips.hpp,
+// mitcad#1106): the faces of the smaller one narrower than twice (1 -
+// kShrink) of `contact` (a strip's width; mitcad#1150: a fillet across a
+// sharp angle touches its faces far beyond its radius) and not in the
+// input, beside a face the dressup made, removed by OCCT's defeaturing,
+// which extends the faces round each strip to meet. The dressup's faces
+// then meet the faces beyond the strips at one edge, as at the exact size,
+// and take the strips' names, as a face the dressup takes away gives its
+// names to the dressup's face there (name_consumed_faces). A connected
+// group of strips with more than kMostFacesBesideStrips faces beside it
+// stays (mitcad#1337: the defeaturing intersects all of them, grown by the
+// group's extent).
+detail::Strips detail::strips_to_remove(const Shape& smaller, const Shape& input, double contact) {
   const double narrow = 2.0 * (1.0 - kShrink) * contact;
-  const detail::EdgeFaces edge_faces(smaller);
+  const int face_count = smaller.face_count();
+  Strips out;
+  // The faces beside each face, across its edges (one pass over the edges:
+  // the body may have thousands of faces).
+  std::vector<std::vector<int>>& beside = out.beside;
+  beside.resize(static_cast<std::size_t>(face_count));
+  {
+    const detail::EdgeFaces edge_faces(smaller);
+    for (int e = 0; e < smaller.edge_count(); ++e) {
+      const std::vector<int> faces = edge_faces.at(e);
+      if (faces.size() == 2 && faces[0] != faces[1]) {
+        beside[static_cast<std::size_t>(faces[0])].push_back(faces[1]);
+        beside[static_cast<std::size_t>(faces[1])].push_back(faces[0]);
+      }
+    }
+    for (std::vector<int>& faces : beside) {
+      std::sort(faces.begin(), faces.end());
+      faces.erase(std::unique(faces.begin(), faces.end()), faces.end());
+    }
+  }
   // The dressup's faces: those whose names the input has not.
-  const auto made = [&](int f) {
+  std::vector<char>& made = out.made;
+  made.assign(static_cast<std::size_t>(face_count), 0);
+  for (int f = 0; f < face_count; ++f) {
     const NameList& names = smaller.face_names(f);
-    return !names.empty() && input.find_faces(names.front()).empty();
-  };
-  NCollection_List<TopoDS_Shape> strips;
+    made[static_cast<std::size_t>(f)] = !names.empty() && input.find_faces(names.front()).empty() ? 1 : 0;
+  }
+  // The strips: faces of the input's beside a face the dressup made, narrow
+  // where they were wide (only those beside a made face are measured).
+  std::vector<char> strip(static_cast<std::size_t>(face_count), 0);
   std::vector<int> strip_faces;
-  for (int f = 0; f < smaller.face_count(); ++f) {
+  for (int f = 0; f < face_count; ++f) {
     const NameList& names = smaller.face_names(f);
-    if (names.empty() || made(f) || !(face_width(smaller.face(f)) < narrow)) {
+    const std::vector<int>& around = beside[static_cast<std::size_t>(f)];
+    if (names.empty() || made[static_cast<std::size_t>(f)] != 0 ||
+        std::none_of(around.begin(), around.end(), [&made](int g) { return made[static_cast<std::size_t>(g)] != 0; }) ||
+        !(face_width(smaller.face(f)) < narrow)) {
       continue;
     }
     bool was_wide = false;
     for (const int g : input.find_faces(names.front())) {
       was_wide = was_wide || face_width(input.face(g)) >= 2.0 * narrow;
     }
-    bool beside = false;
-    for (int e = 0; e < smaller.edge_count() && !beside; ++e) {
-      const std::vector<int> faces = edge_faces.at(e);
-      if (faces.size() == 2 && (faces[0] == f || faces[1] == f)) {
-        beside = made(faces[0] == f ? faces[1] : faces[0]);
-      }
-    }
-    if (was_wide && beside) {
-      strips.Append(smaller.face(f));
+    if (was_wide) {
+      strip[static_cast<std::size_t>(f)] = 1;
       strip_faces.push_back(f);
     }
   }
-  if (strips.IsEmpty()) {
+  // The connected groups of strips (OCCT's defeaturing removes each as one
+  // feature) and the faces beside each: a group with too many stays.
+  std::vector<char> grouped(static_cast<std::size_t>(face_count), 0);
+  for (const int first : strip_faces) {
+    if (grouped[static_cast<std::size_t>(first)] != 0) {
+      continue;
+    }
+    std::vector<int> group = {first};
+    grouped[static_cast<std::size_t>(first)] = 1;
+    std::set<int> around;
+    for (std::size_t k = 0; k < group.size(); ++k) {
+      for (const int g : beside[static_cast<std::size_t>(group[k])]) {
+        if (strip[static_cast<std::size_t>(g)] == 0) {
+          around.insert(g);
+        } else if (grouped[static_cast<std::size_t>(g)] == 0) {
+          grouped[static_cast<std::size_t>(g)] = 1;
+          group.push_back(g);
+        }
+      }
+    }
+    if (static_cast<int>(around.size()) > kMostFacesBesideStrips) {
+      continue;
+    }
+    out.faces.insert(out.faces.end(), group.begin(), group.end());
+  }
+  return out;
+}
+
+ShapePtr detail::without_strips(const Shape& smaller, const Shape& input, double contact) {
+  const Strips found = strips_to_remove(smaller, input, contact);
+  if (found.faces.empty()) {
     return nullptr;
+  }
+  NCollection_List<TopoDS_Shape> strips;
+  for (const int f : found.faces) {
+    strips.Append(smaller.face(f));
   }
   try {
     OCC_CATCH_SIGNALS
@@ -204,7 +259,9 @@ ShapePtr without_strips(const Shape& smaller, const Shape& input, double contact
     defeaturing.AddFacesToRemove(strips);
     defeaturing.SetRunParallel(false);
     defeaturing.SetToFillHistory(true);
-    defeaturing.Build();
+    // (Stopped on a cancel request, its progress shown to the source: an
+    // import's watchdog sees it is not stuck.)
+    detail::build(defeaturing);
     if (!defeaturing.IsDone() || defeaturing.HasWarnings()) {
       return nullptr;
     }
@@ -222,14 +279,9 @@ ShapePtr without_strips(const Shape& smaller, const Shape& input, double contact
     detail::FaceNamer namer(whole);
     namer.carry(*history, smaller);
     // Each strip's names to the images of the dressup's faces beside it.
-    for (const int f : strip_faces) {
-      for (int e = 0; e < smaller.edge_count(); ++e) {
-        const std::vector<int> faces = edge_faces.at(e);
-        if (faces.size() != 2 || (faces[0] != f && faces[1] != f)) {
-          continue;
-        }
-        const int other = faces[0] == f ? faces[1] : faces[0];
-        if (!made(other)) {
+    for (const int f : found.faces) {
+      for (const int other : found.beside[static_cast<std::size_t>(f)]) {
+        if (found.made[static_cast<std::size_t>(other)] == 0) {
           continue;
         }
         const TopoDS_Shape& face = smaller.face(other);
@@ -257,6 +309,8 @@ ShapePtr without_strips(const Shape& smaller, const Shape& input, double contact
   }
 }
 
+namespace {
+
 // Runs `attempt` with the sizes as given (scale 1), then, when it fails
 // (not for invalid arguments), with the sizes scaled by kShrink, without
 // the strips that leaves (without_strips; `input` the body it dresses,
@@ -280,7 +334,7 @@ ShapePtr with_shrink_retry(const char* what, const Shape& input, Contact&& conta
   try {
     OCC_CATCH_SIGNALS
     ShapePtr smaller = attempt(kShrink);
-    if (ShapePtr whole = without_strips(*smaller, input, contact())) {
+    if (ShapePtr whole = detail::without_strips(*smaller, input, contact())) {
       smaller = whole;
     }
     smaller->add_info(std::string("the ") + what +
@@ -404,9 +458,11 @@ bool follows_own_chain(const ChamferSet& set) { return set.tangent_chain; }
 // Builds the dressup (`build`, of the selection of each edge: its set, -1
 // for none) with Mitcad's own tangent chains of the sets added
 // (detail::follow_tangent_chains, mitcad#224); where that fails, as before
-// with the geometry kernel's chains alone, noting so (OCCT cannot round some
-// chains it does not follow itself: two contours that meet end to end at a
-// vertex where other sharp edges meet).
+// with the geometry kernel's chains alone (OCCT cannot round some chains it
+// does not follow itself: two contours that meet end to end at a vertex
+// where other sharp edges meet). Noted only where the result lacks some
+// of the edges that continue the chains, still sharp in it (mitcad#1327:
+// how it was built is no warning), with those edges as the note's places.
 template <class Set, class Build>
 ShapePtr with_own_chains(const char* what, const Shape& input, const std::vector<Set>& sets,
                          const std::vector<int>& owner, Build&& build) {
@@ -426,9 +482,25 @@ ShapePtr with_own_chains(const char* what, const Shape& input, const std::vector
   } catch (...) {
   }
   ShapePtr result = build(owner);
-  result->add_note(std::string("the ") + what +
-                   " follows the geometry kernel's tangent chains only: with the edges that continue them end to "
-                   "end it could not be built");
+  // The edges the chains were to take on that the result still has.
+  std::vector<Shape::NotePlace> sharp;
+  for (int e = 0; e < input.edge_count() && e < static_cast<int>(grown.size()); ++e) {
+    if (grown[static_cast<std::size_t>(e)] < 0 || owner[static_cast<std::size_t>(e)] >= 0) {
+      continue;
+    }
+    const std::string& name = input.edge_name(e);
+    if (!name.empty() && !result->find_edges(name).empty()) {
+      sharp.push_back(Shape::NotePlace::of(Shape::NotePlace::Kind::Edge, name));
+    }
+  }
+  if (!sharp.empty()) {
+    const std::size_t count = sharp.size();
+    result->add_note(std::string("The ") + what + "'s tangent chain stops where other sharp edges meet: " +
+                         (count == 1 ? std::string("an edge that continues it is")
+                                     : std::to_string(count) + " edges that continue it are") +
+                         " left sharp. Check the result.",
+                     std::move(sharp));
+  }
   return result;
 }
 
@@ -2018,11 +2090,19 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
   return detail::blend_bevels(feature, start, *chamfered, kinds);
 }
 
-// The note on a dressup built as rings.
-std::string ring_note(const char* role) {
-  return std::string("the ") + role +
-         " is built as a ring about its circle: the geometry kernel's own stops where it runs over a "
-         "neighbouring face";
+// A dressup built as rings gets a note only where its result is faulty
+// (mitcad#1327: how it was built is no warning): the ring's check
+// (dressup_check.hpp's ring_check), with its places.
+void note_ring_faults(Shape& result, const Shape& body, const std::string& feature, const char* role,
+                      const std::vector<detail::RingEdge>& rings) {
+  double size = 0.0;
+  for (const detail::RingEdge& ring : rings) {
+    size = std::max({size, ring.radius, ring.distance, ring.distance2});
+  }
+  detail::DressupFinding found = detail::ring_check(body, result, feature, role, size);
+  if (!found.empty()) {
+    result.add_note(std::move(found.text), std::move(found.places));
+  }
 }
 
 // The fillet as rings about whole circles (ring_dressup.hpp), for constant
@@ -2057,7 +2137,7 @@ ShapePtr ring_fillet(const std::string& feature, const Shape& body, const std::v
   }
   ShapePtr result = detail::ring_dressup(feature, "fillet", body, rings);
   if (result) {
-    result->add_note(ring_note("fillet"));
+    note_ring_faults(*result, body, feature, "fillet", rings);
   }
   return result;
 }
@@ -2177,7 +2257,7 @@ ShapePtr ring_chamfer(const std::string& feature, const Shape& body, const std::
   }
   ShapePtr result = detail::ring_dressup(feature, "chamfer", body, rings);
   if (result) {
-    result->add_note(ring_note("chamfer"));
+    note_ring_faults(*result, body, feature, "chamfer", rings);
   }
   return result;
 }
@@ -2975,12 +3055,9 @@ ShapePtr over_cutouts(const Shape& input, const std::vector<FilletSet>& sets, co
     return nullptr;
   }
   const ShapePtr rounded = build(*cutouts->body, cutouts->owner);
-  ShapePtr result = detail::cut_out_again(rounded, *cutouts, *copy);
-  if (result) {
-    result->add_note("the rounding runs over cut-outs or protrusions of its faces: built with the faces' "
-                     "surfaces cleared of them and with them put back");
-  }
-  return result;
+  // (No note on how it was built, mitcad#1327: the dressup check after it
+  // tells what is wrong with the result, if anything.)
+  return detail::cut_out_again(rounded, *cutouts, *copy);
 }
 
 // A chamfer wider than a narrow face beside its edges (mitcad#1232,
@@ -3259,10 +3336,10 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     const ShapePtr built = detail::join_same_surfaces(rounded);
     if (built) {
       if (const auto side = detail::dressup_side(input, owner)) {
-        const std::string warning =
-            detail::dressup_warning(given, *built, feature, "fillet", *side, largest_size(sets));
+        detail::DressupFinding warning =
+            detail::dressup_check(given, *built, feature, "fillet", *side, largest_size(sets));
         if (!warning.empty()) {
-          built->add_note(warning);
+          built->add_note(std::move(warning.text), std::move(warning.places));
         }
       }
     }
@@ -3409,10 +3486,10 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
     // A result whose made faces reach to the wrong side of the body gets a
     // warning, never a refusal (mitcad#1253).
     if (const auto side = detail::dressup_side(input, select_edges(input, sets))) {
-      const std::string warning =
-          detail::dressup_warning(input, *result, feature, "chamfer", *side, largest_size(sets));
+      detail::DressupFinding warning =
+          detail::dressup_check(input, *result, feature, "chamfer", *side, largest_size(sets));
       if (!warning.empty()) {
-        result->add_note(warning);
+        result->add_note(std::move(warning.text), std::move(warning.places));
       }
     }
     return result;

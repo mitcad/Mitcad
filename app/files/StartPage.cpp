@@ -26,6 +26,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPair>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -44,12 +45,16 @@
 #include <QtLogging>
 
 #include "../OcctViewer.hpp"
+#include "../framework/AppSettings.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../library/PartStar.hpp"
+#include "../projects/ProjectBrowserData.hpp"
+#include "../projects/ProjectsTree.hpp"
+#include "RemoteTask.hpp"
 
 namespace mitcad {
 namespace {
@@ -63,6 +68,13 @@ constexpr int kPreviewHeight = 112;
 constexpr int kCompactPreviewWidth = 54;
 constexpr int kCompactPreviewHeight = 36;
 constexpr int kStarSize = 18;
+// The left column's width, a card's and a folder button's least width in
+// the right side's grids.
+constexpr int kRowsWidth = 210;
+constexpr int kCardWidth = 300;
+constexpr int kFolderWidth = 170;
+// A dynamic property of a project's row: the project's folder.
+const char* const kRootProperty = "startPageRoot";
 
 QColor roleColor(ColorRole role, const QWidget* widget) { return themeColor(role, widget->palette()); }
 
@@ -308,17 +320,19 @@ private:
   bool m_active = false;
 };
 
-// A recent design: its preview, name, type, folder and when it was opened,
-// the star that pins it at the top right; in the compact list a row of
-// the same. A missing file says so and has Remove.
+// A design's card (start::Card): its preview, name, type, folder (a
+// project's design: its project and folders) and when it was opened or
+// changed, the star that pins it at the top right; in the compact list a
+// row of the same. A missing file says so and has Remove.
 class RecentCard : public QAbstractButton {
 public:
-  RecentCard(const RecentDesign& design, bool compact, std::function<void()> star,
+  RecentCard(const start::Card& design, bool compact, std::function<void()> star,
              std::function<void(const QPoint&)> menu, std::function<void()> remove, QWidget* parent = nullptr)
       : QAbstractButton(parent), m_design(design), m_compact(compact), m_star(std::move(star)),
         m_menu(std::move(menu)) {
     setText(design.name);
     setAccessibleName(design.name);
+    setAccessibleDescription(design.location);
     setToolTip(QDir::toNativeSeparators(design.path));
     setAttribute(Qt::WA_Hover);
     setCursor(design.missing ? Qt::ArrowCursor : Qt::PointingHandCursor);
@@ -337,8 +351,17 @@ public:
     }
   }
 
-  const RecentDesign& design() const { return m_design; }
+  const start::Card& design() const { return m_design; }
   QWidget* removeButton() const { return m_remove; }
+  // The preview and the time found on this computer later (findLocally).
+  void setFound(const start::Card& found) {
+    if (found.preview != m_design.preview && !found.preview.isEmpty()) {
+      m_preview = QPixmap(found.preview);
+    }
+    m_design.preview = found.preview;
+    m_design.when = found.when;
+    update();
+  }
   // The star's place in the card.
   QRect starRect() const {
     return m_compact ? QRect(width() - kStarSize - 12, (height() - kStarSize) / 2, kStarSize, kStarSize)
@@ -440,7 +463,7 @@ protected:
     const QFontMetrics nameMetrics(nameFont);
     const QFontMetrics smallMetrics(smallFont);
     const QString missing = QCoreApplication::translate("StartPage", "Missing: the file is not there");
-    const QString opened = recent::openedText(m_design.opened);
+    const QString opened = recent::openedText(m_design.when);
     if (m_compact) {
       // name · type · folder · when, on one line, then nothing.
       painter.setFont(nameFont);
@@ -451,7 +474,7 @@ protected:
       painter.setFont(smallFont);
       const QString rest = m_design.missing
                                ? missing
-                               : QStringLiteral("%1  ·  %2  ·  %3").arg(m_design.type, m_design.folder, opened);
+                               : QStringLiteral("%1  ·  %2  ·  %3").arg(m_design.type, m_design.location, opened);
       painter.setPen(roleColor(m_design.missing ? ColorRole::WarningText : ColorRole::TextSecondary, this));
       const int restLeft = left + nameWidth + 14;
       painter.drawText(QRect(restLeft, 0, std::max(10, right - restLeft), height()), Qt::AlignLeft | Qt::AlignVCenter,
@@ -489,7 +512,7 @@ protected:
     painter.setPen(roleColor(ColorRole::TextSecondary, this));
     themeIcon(QStringLiteral("folder")).paint(&painter, QRect(left, top, glyph, glyph));
     painter.drawText(QRect(textLeft, top - 2, textWidth, glyph + 4), Qt::AlignLeft | Qt::AlignVCenter,
-                     smallMetrics.elidedText(m_design.folder, Qt::ElideMiddle, textWidth));
+                     smallMetrics.elidedText(m_design.location, Qt::ElideMiddle, textWidth));
     top += glyph + 8;
     if (!opened.isEmpty() && !m_design.missing) {
       themeIcon(QStringLiteral("version-history")).paint(&painter, QRect(left, top, glyph, glyph));
@@ -498,7 +521,7 @@ protected:
   }
 
 private:
-  RecentDesign m_design;
+  start::Card m_design;
   bool m_compact;
   QPixmap m_preview;
   std::function<void()> m_star;
@@ -507,17 +530,86 @@ private:
   bool m_starPressed = false;
 };
 
-// A text button of the All and Pinned choice, and the views' icon buttons.
-QToolButton* choiceButton(const QString& text, const QString& name) {
-  auto* button = new QToolButton;
-  button->setObjectName(name);
-  button->setText(text);
-  button->setCheckable(true);
-  button->setAutoExclusive(true);
-  button->setAutoRaise(true);
-  button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-  button->setFocusPolicy(Qt::StrongFocus);
-  return button;
+// A row of the browser's left column (mitcad#1301): Recent, Pinned, a
+// project with its state icon, Add project. The row shown is highlighted
+// in the accent's tint.
+class StartNavRow : public QAbstractButton {
+public:
+  StartNavRow(const QString& iconName, const QString& title, QWidget* parent = nullptr)
+      : QAbstractButton(parent), m_icon(iconName) {
+    setText(title);
+    setAccessibleName(title);
+    setAttribute(Qt::WA_Hover);
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  }
+
+  void setIconName(const QString& iconName) {
+    m_icon = iconName;
+    update();
+  }
+
+  QSize sizeHint() const override { return QSize(kRowsWidth, 34); }
+  QSize minimumSizeHint() const override { return QSize(120, 34); }
+
+protected:
+  bool event(QEvent* event) override {
+    hoverRepaint(this, event);
+    return QAbstractButton::event(event);
+  }
+
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter.setPen(Qt::NoPen);
+    if (isChecked()) {
+      QColor tint = accentColor(palette());
+      tint.setAlpha(isDarkPalette(palette()) ? 80 : 46);
+      painter.setBrush(tint);
+      painter.drawRoundedRect(box, 8, 8);
+    }
+    if ((underMouse() && isEnabled()) || isDown()) {
+      painter.setBrush(roleColor(ColorRole::HoverFill, this));
+      painter.drawRoundedRect(box, 8, 8);
+    }
+    if (hasFocus()) {
+      painter.setPen(QPen(accentColor(palette()), 1));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(box, 8, 8);
+    }
+    const int glyph = 18;
+    const QRect iconBox(10, (height() - glyph) / 2, glyph, glyph);
+    if (m_icon == QLatin1String("star")) {
+      // Pinned: the cards' own star, filled (no theme icon of it).
+      paintPartStar(&painter, QRectF(iconBox).adjusted(1, 1, -1, -1), true, roleColor(ColorRole::TextSecondary, this));
+    } else {
+      themeIcon(m_icon).paint(&painter, iconBox, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
+    }
+    const int left = iconBox.right() + 10;
+    const int room = std::max(10, width() - left - 8);
+    const QFont rowFont = scaledFont(this, 1.0, isChecked());
+    painter.setFont(rowFont);
+    painter.setPen(roleColor(ColorRole::Text, this));
+    painter.drawText(QRect(left, 0, room, height()), Qt::AlignLeft | Qt::AlignVCenter,
+                     QFontMetrics(rowFont).elidedText(text(), Qt::ElideMiddle, room));
+  }
+
+private:
+  QString m_icon;
+};
+
+// The removal of a layout's items and widgets (the breadcrumb's, before it
+// is built again).
+void clearLayout(QLayout* layout) {
+  while (QLayoutItem* item = layout->takeAt(0)) {
+    if (QWidget* widget = item->widget()) {
+      widget->hide();
+      widget->deleteLater();
+    }
+    delete item;
+  }
 }
 
 QToolButton* iconChoice(const QString& icon, const QString& tooltip, const QString& name) {
@@ -541,6 +633,7 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   setAcceptDrops(true);
   setFocusPolicy(Qt::StrongFocus);
   m_compact = QSettings().value(kCompactKey, false).toBool();
+  m_row = start::loadRow();
 
   m_column = new QVBoxLayout(this);
   m_column->setSpacing(12);
@@ -611,7 +704,7 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   actionTile(QStringLiteral("import"), tr("Import File…"), tr("STEP, IGES, DXF and more"), QStringLiteral("file.import"));
   column->addLayout(actionRow);
 
-  // Recent designs and Resources side by side.
+  // The designs' browser (mitcad#1301) and Resources side by side.
   auto* middle = new QHBoxLayout;
   middle->setSpacing(16);
   auto* recentPanel = new StartPanel;
@@ -619,27 +712,17 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   auto* recentColumn = new QVBoxLayout(recentPanel);
   recentColumn->setContentsMargins(18, 14, 18, 16);
   recentColumn->setSpacing(12);
+  // One search over every project and the recent list, and the views.
   auto* recentHeader = new QHBoxLayout;
   recentHeader->setSpacing(6);
-  recentHeader->addWidget(heading(tr("Recent designs"), 1.3, QStringLiteral("startPageRecentTitle")));
-  recentHeader->addStretch(1);
-  m_all = choiceButton(tr("All"), QStringLiteral("startPageAll"));
-  m_pinned = choiceButton(tr("Pinned"), QStringLiteral("startPagePinned"));
-  m_all->setToolTip(tr("Every recent design"));
-  m_pinned->setToolTip(tr("Only the designs pinned with their star"));
-  m_all->setChecked(true);
-  connect(m_all, &QToolButton::clicked, this, [this] { setFilterPinned(false); });
-  connect(m_pinned, &QToolButton::clicked, this, [this] { setFilterPinned(true); });
-  recentHeader->addWidget(m_all);
-  recentHeader->addWidget(m_pinned);
-  recentHeader->addSpacing(10);
   m_search = new QLineEdit;
   m_search->setObjectName(QStringLiteral("startPageSearch"));
-  m_search->setPlaceholderText(tr("Find a recent design"));
+  m_search->setPlaceholderText(tr("Search designs in all projects"));
+  m_search->setAccessibleName(tr("Search designs in all projects"));
+  m_search->setToolTip(tr("Finds the designs whose name holds the text, in every project and in the recent designs"));
   m_search->setClearButtonEnabled(true);
   m_search->addAction(themeIcon(QStringLiteral("search")), QLineEdit::LeadingPosition);
-  m_search->setMinimumWidth(200);
-  m_search->setMaximumWidth(300);
+  m_search->setMinimumWidth(240);
   connect(m_search, &QLineEdit::textChanged, this, [this] { rebuildList(); });
   m_search->installEventFilter(this); // a press gives it the keyboard (eventFilter)
   recentHeader->addWidget(m_search, 1);
@@ -649,9 +732,8 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   auto* viewRow = new QHBoxLayout(views);
   viewRow->setContentsMargins(0, 0, 0, 0);
   viewRow->setSpacing(2);
-  m_cardsView = iconChoice(QStringLiteral("grid"), tr("Show the recent designs as cards"),
-                           QStringLiteral("startPageCards"));
-  m_listView = iconChoice(QStringLiteral("parts-list"), tr("Show the recent designs as a compact list"),
+  m_cardsView = iconChoice(QStringLiteral("grid"), tr("Show the designs as cards"), QStringLiteral("startPageCards"));
+  m_listView = iconChoice(QStringLiteral("parts-list"), tr("Show the designs as a compact list"),
                           QStringLiteral("startPageList"));
   (m_compact ? m_listView : m_cardsView)->setChecked(true);
   connect(m_cardsView, &QToolButton::clicked, this, [this] { setCompact(false); });
@@ -660,20 +742,107 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   viewRow->addWidget(m_listView);
   recentHeader->addWidget(views);
   recentColumn->addLayout(recentHeader);
+
+  auto* browser = new QHBoxLayout;
+  browser->setSpacing(18);
+  // Left: Recent, Pinned, the projects, Add project.
+  auto* rows = new QWidget;
+  rows->setObjectName(QStringLiteral("startPageRows"));
+  rows->setFixedWidth(kRowsWidth);
+  auto* rowColumn = new QVBoxLayout(rows);
+  rowColumn->setContentsMargins(0, 0, 0, 0);
+  rowColumn->setSpacing(2);
+  auto* recentRow = new StartNavRow(QStringLiteral("version-history"), tr("Recent"));
+  recentRow->setObjectName(QStringLiteral("startPageRecentRow"));
+  recentRow->setToolTip(tr("Every recent design"));
+  recentRow->setCheckable(true);
+  m_recentRow = recentRow;
+  auto* pinnedRow = new StartNavRow(QStringLiteral("star"), tr("Pinned"));
+  pinnedRow->setObjectName(QStringLiteral("startPagePinnedRow"));
+  pinnedRow->setToolTip(tr("Only the designs pinned with their star"));
+  pinnedRow->setCheckable(true);
+  m_pinnedRow = pinnedRow;
+  connect(m_recentRow, &QAbstractButton::clicked, this, [this] { selectRow(start::Row()); });
+  connect(m_pinnedRow, &QAbstractButton::clicked, this, [this] {
+    start::Row row;
+    row.kind = start::Row::Kind::Pinned;
+    selectRow(row);
+  });
+  rowColumn->addWidget(m_recentRow);
+  rowColumn->addWidget(m_pinnedRow);
+  rowColumn->addSpacing(12);
+  auto* projectsHeading = new QLabel(tr("Projects"));
+  projectsHeading->setObjectName(QStringLiteral("startPageProjectsTitle"));
+  QFont headingFont = scaledFont(projectsHeading, 0.85, true);
+  headingFont.setCapitalization(QFont::AllUppercase);
+  headingFont.setLetterSpacing(QFont::PercentageSpacing, 108);
+  projectsHeading->setFont(headingFont);
+  projectsHeading->setContentsMargins(10, 0, 0, 4);
+  setRoleStyleSheet(projectsHeading, ColorRole::TextSecondary);
+  rowColumn->addWidget(projectsHeading);
+  auto* projectRows = new QWidget;
+  m_projectRowsLayout = new QVBoxLayout(projectRows);
+  m_projectRowsLayout->setContentsMargins(0, 0, 0, 0);
+  m_projectRowsLayout->setSpacing(2);
+  rowColumn->addWidget(projectRows);
+  m_projectsNote = new QLabel(tr("Reading the projects…"));
+  m_projectsNote->setObjectName(QStringLiteral("startPageProjectsNote"));
+  m_projectsNote->setWordWrap(true);
+  m_projectsNote->setContentsMargins(10, 2, 4, 2);
+  setRoleStyleSheet(m_projectsNote, ColorRole::TextSecondary);
+  rowColumn->addWidget(m_projectsNote);
+  auto* addProject = new StartNavRow(QStringLiteral("add"), tr("Add project"));
+  addProject->setObjectName(QStringLiteral("startPageAddProject"));
+  addProject->setToolTip(tr("New Project: create a Local or Cloud project"));
+  m_addProject = addProject;
+  connect(m_addProject, &QAbstractButton::clicked, this, [this] {
+    choose(QStringLiteral("Add Project"), [this] { m_host.trigger(QStringLiteral("file.new_project")); });
+  });
+  rowColumn->addWidget(m_addProject);
+  rowColumn->addStretch(1);
+  browser->addWidget(rows, 0);
+
+  // Right: a title, or a project's breadcrumb and folders; the cards.
+  m_right = new QWidget;
+  m_right->setObjectName(QStringLiteral("startPageDesigns"));
+  auto* rightColumn = new QVBoxLayout(m_right);
+  rightColumn->setContentsMargins(0, 0, 0, 0);
+  rightColumn->setSpacing(10);
+  m_title = heading(tr("Recent designs"), 1.3, QStringLiteral("startPageRecentTitle"));
+  rightColumn->addWidget(m_title);
+  m_crumbs = new QWidget;
+  m_crumbs->setObjectName(QStringLiteral("startPageCrumbs"));
+  m_crumbLayout = new QHBoxLayout(m_crumbs);
+  m_crumbLayout->setContentsMargins(0, 0, 0, 0);
+  m_crumbLayout->setSpacing(2);
+  rightColumn->addWidget(m_crumbs);
+  m_folders = new QWidget;
+  m_folders->setObjectName(QStringLiteral("startPageFolders"));
+  m_folderGrid = new QGridLayout(m_folders);
+  m_folderGrid->setContentsMargins(0, 0, 0, 0);
+  m_folderGrid->setHorizontalSpacing(8);
+  m_folderGrid->setVerticalSpacing(6);
+  rightColumn->addWidget(m_folders);
   m_cards = new QWidget;
   m_cards->setObjectName(QStringLiteral("startPageCardsArea"));
   m_cardGrid = new QGridLayout(m_cards);
   m_cardGrid->setContentsMargins(0, 0, 0, 0);
   m_cardGrid->setHorizontalSpacing(12);
   m_cardGrid->setVerticalSpacing(10);
-  recentColumn->addWidget(m_cards);
+  rightColumn->addWidget(m_cards);
   m_empty = new QLabel;
   m_empty->setObjectName(QStringLiteral("startPageEmpty"));
   m_empty->setWordWrap(true);
   m_empty->setAlignment(Qt::AlignCenter);
   m_empty->setMinimumHeight(80);
   setRoleStyleSheet(m_empty, ColorRole::TextSecondary);
-  recentColumn->addWidget(m_empty);
+  rightColumn->addWidget(m_empty);
+  rightColumn->addStretch(1);
+  m_right->installEventFilter(this); // its width sets the grids' columns
+  browser->addWidget(m_right, 1);
+  recentColumn->addLayout(browser);
+  m_crumbs->hide();
+  m_folders->hide();
   m_dropArea = new StartDropArea;
   m_dropArea->setObjectName(QStringLiteral("startPageDrop"));
   recentColumn->addWidget(m_dropArea);
@@ -771,8 +940,13 @@ void StartPage::showPage() {
     const QSignalBlocker blocker(m_atLaunch);
     m_atLaunch->setChecked(recent::showAtLaunch());
   }
+  // Each show logs the page's lists again.
   m_loggedList.clear();
   m_loggedPlaces.clear();
+  m_loggedProjects.clear();
+  m_loggedPlace.clear();
+  m_loggedSearch.clear();
+  m_loggedCards.clear();
   refresh();
   place();
   show();
@@ -814,6 +988,8 @@ void StartPage::refresh() {
   qInfo().noquote() << QStringLiteral("Start page new design units: %1").arg(units);
   m_designs = recent::load();
   rebuildList();
+  // The projects again (a design saved, a project added or synced).
+  loadProjects();
 }
 
 void StartPage::place() {
@@ -861,6 +1037,90 @@ void StartPage::placeSoon() {
 }
 
 void StartPage::rebuildList() {
+  markRows();
+  const QString search = m_search->text().trimmed();
+  const QStringList pinned = recent::pinnedPaths();
+  if (!search.isEmpty()) {
+    // One search over every project and the recent list.
+    m_title->setText(tr("Search results"));
+    m_title->show();
+    rebuildPlace(nullptr, {});
+    const QVector<start::Card> found = start::searchCards(m_projects, m_keys, m_designs, search, pinned);
+    m_empty->setText(tr("No designs match."));
+    showCards(found);
+    const QString line = start::searchLine(found);
+    if (line != m_loggedSearch) {
+      m_loggedSearch = line;
+      qInfo().noquote() << line;
+      for (const start::Card& card : found) {
+        qInfo().noquote() << QStringLiteral("Start page search result: %1 (%2)").arg(card.key, card.location);
+      }
+    }
+    // The row's list is logged again when the search ends.
+    m_loggedList.clear();
+    m_loggedPlace.clear();
+    findPreviews();
+    return;
+  }
+  m_loggedSearch.clear();
+  if (m_row.kind == start::Row::Kind::Project) {
+    const ProjectRow* project = findProject(m_projects, m_row.root);
+    m_loggedList.clear();
+    if (project == nullptr) {
+      // Not read yet (projectsRead shows it, or the recent designs when it
+      // is gone).
+      m_title->setText(tr("Projects"));
+      m_title->show();
+      rebuildPlace(nullptr, {});
+      m_empty->setText(tr("Reading the projects…"));
+      showCards({});
+      return;
+    }
+    m_title->hide();
+    const QString key = m_keys.value(project->root);
+    const QVector<BrowserEntry> entries = folderContents(*project, key, m_row.folder);
+    rebuildPlace(project, start::placeFolders(entries));
+    m_empty->setText(tr("No designs in this folder."));
+    showCards(start::placeCards(entries, pinned));
+    const QString line = start::placeLine(placeKey(key, m_row.folder), entries);
+    if (line != m_loggedPlace) {
+      m_loggedPlace = line;
+      qInfo().noquote() << line;
+    }
+    findPreviews();
+    return;
+  }
+  m_loggedPlace.clear();
+  m_loggedCards.clear();
+  const bool pinnedOnly = m_row.kind == start::Row::Kind::Pinned;
+  m_title->setText(pinnedOnly ? tr("Pinned designs") : tr("Recent designs"));
+  m_title->show();
+  rebuildPlace(nullptr, {});
+  const QList<RecentDesign> shown = recent::filter(m_designs, pinnedOnly, QString());
+  QVector<start::Card> cards;
+  QStringList names;
+  for (const RecentDesign& design : shown) {
+    cards << start::recentCard(design);
+    names << QStringLiteral("%1 (%2)").arg(design.name, design.missing           ? QStringLiteral("missing")
+                                                        : design.preview.isEmpty() ? QStringLiteral("no preview")
+                                                                                   : QStringLiteral("preview"));
+  }
+  if (m_designs.isEmpty()) {
+    m_empty->setText(tr("No recent designs yet. A design you open or save shows here."));
+  } else {
+    m_empty->setText(tr("No pinned designs. The star on a design pins it."));
+  }
+  showCards(cards);
+  const QString line = QStringLiteral("Start page recent designs (%1): %2")
+                           .arg(pinnedOnly ? QStringLiteral("pinned") : QStringLiteral("all"),
+                                names.isEmpty() ? QStringLiteral("none") : names.join(QStringLiteral(" | ")));
+  if (line != m_loggedList) {
+    m_loggedList = line;
+    qInfo().noquote() << line;
+  }
+}
+
+void StartPage::showCards(const QVector<start::Card>& cards) {
   for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
     if (widget) {
       widget->hide();
@@ -869,12 +1129,7 @@ void StartPage::rebuildList() {
     }
   }
   m_cardWidgets.clear();
-  const QString search = m_search->text().trimmed();
-  const QList<RecentDesign> shown = recent::filter(m_designs, m_pinnedOnly, search);
-  const int columns = m_compact ? 1 : 2;
-  QStringList names;
-  for (int i = 0; i < shown.size(); ++i) {
-    const RecentDesign design = shown.at(i);
+  for (const start::Card& design : cards) {
     auto* card = new RecentCard(
         design, m_compact, [this, design] { togglePin(design); },
         [this, design](const QPoint& global) { showCardMenu(design, global); }, [this, design] { removeDesign(design); });
@@ -884,48 +1139,299 @@ void StartPage::rebuildList() {
         qInfo().noquote() << QStringLiteral("Start page card missing: %1").arg(design.name);
         return;
       }
+      // As a recent card: the design opens and joins the recent list.
       choose(QStringLiteral("open %1").arg(design.name), [this, path = design.path] { m_host.open(path); });
     });
-    m_cardGrid->addWidget(card, i / columns, i % columns);
     m_cardWidgets.append(card);
     new PlaceWatcher(card, [this] { logPlaces(); });
-    names << QStringLiteral("%1 (%2)").arg(design.name, design.missing           ? QStringLiteral("missing")
-                                                        : design.preview.isEmpty() ? QStringLiteral("no preview")
-                                                                                   : QStringLiteral("preview"));
   }
-  for (int column = 0; column < 2; ++column) {
-    m_cardGrid->setColumnStretch(column, column < columns ? 1 : 0);
-  }
-  m_cards->setVisible(!shown.isEmpty());
-  m_empty->setVisible(shown.isEmpty());
-  if (m_designs.isEmpty()) {
-    m_empty->setText(tr("No recent designs yet. A design you open or save shows here."));
-  } else if (m_pinnedOnly && search.isEmpty()) {
-    m_empty->setText(tr("No pinned designs. The star on a design pins it."));
-  } else {
-    m_empty->setText(tr("No recent design matches."));
-  }
-  QString filter = m_pinnedOnly ? QStringLiteral("pinned") : QStringLiteral("all");
-  if (!search.isEmpty()) {
-    filter += QStringLiteral(", \"%1\"").arg(search);
-  }
-  const QString line = QStringLiteral("Start page recent designs (%1): %2")
-                           .arg(filter, names.isEmpty() ? QStringLiteral("none") : names.join(QStringLiteral(" | ")));
-  if (line != m_loggedList) {
-    m_loggedList = line;
-    qInfo().noquote() << line;
-  }
+  m_cards->setVisible(!cards.isEmpty());
+  m_empty->setVisible(cards.isEmpty());
+  m_cardColumns = 0; // placed again
+  layoutGrids();
   logPlaces();
 }
 
-void StartPage::setFilterPinned(bool pinned) {
-  m_all->setChecked(!pinned);
-  m_pinned->setChecked(pinned);
-  m_pinnedOnly = pinned;
-  qInfo().noquote() << QStringLiteral("Start page filter: %1").arg(pinned ? QStringLiteral("pinned") : QStringLiteral("all"));
-  // Every choice logs the list, also one that changes nothing.
-  m_loggedList.clear();
+void StartPage::rebuildPlace(const ProjectRow* project, const QVector<BrowserEntry>& folders) {
+  clearLayout(m_crumbLayout);
+  m_crumbButtons.clear();
+  for (const auto& folder : std::as_const(m_folderButtons)) {
+    if (folder.first) {
+      folder.first->hide();
+      m_folderGrid->removeWidget(folder.first);
+      folder.first->deleteLater();
+    }
+  }
+  m_folderButtons.clear();
+  m_crumbs->setVisible(project != nullptr);
+  m_folders->setVisible(project != nullptr && !folders.isEmpty());
+  if (project == nullptr) {
+    return;
+  }
+  const QString root = project->root;
+  const QString key = m_keys.value(root);
+  // The breadcrumb: the project, then each folder down to the place; each
+  // part goes there.
+  const QVector<BrowserPathPart> parts = pathParts(*project, m_row.folder);
+  for (int i = 0; i < parts.size(); ++i) {
+    if (i > 0) {
+      auto* separator = new QLabel(QString(QChar(0x203A)));
+      separator->setFont(scaledFont(separator, 1.2, false));
+      setRoleStyleSheet(separator, ColorRole::TextSecondary);
+      m_crumbLayout->addWidget(separator);
+    }
+    auto* crumb = new QToolButton;
+    crumb->setObjectName(QStringLiteral("startPageCrumb"));
+    crumb->setText(parts[i].text);
+    crumb->setAutoRaise(true);
+    crumb->setCursor(Qt::PointingHandCursor);
+    crumb->setFocusPolicy(Qt::StrongFocus);
+    crumb->setFont(scaledFont(crumb, 1.2, i == parts.size() - 1));
+    crumb->setToolTip(QDir::toNativeSeparators(QDir(root).filePath(parts[i].place.folder)));
+    if (i == 0) {
+      crumb->setIcon(themeIcon(project->kind == ProjectRow::Kind::Cloud ? QStringLiteral("remote-open")
+                                                                        : QStringLiteral("folder")));
+      crumb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    }
+    const QString folder = parts[i].place.folder;
+    connect(crumb, &QToolButton::clicked, this, [this, root, folder] {
+      start::Row row;
+      row.kind = start::Row::Kind::Project;
+      row.root = root;
+      row.folder = folder;
+      selectRow(row);
+    });
+    m_crumbLayout->addWidget(crumb);
+    m_crumbButtons.append(qMakePair(QPointer<QAbstractButton>(crumb), placeKey(key, folder)));
+    new PlaceWatcher(crumb, [this] { logPlaces(); });
+  }
+  m_crumbLayout->addStretch(1);
+  // The place's sub-folders: low buttons in rows.
+  for (const BrowserEntry& entry : folders) {
+    auto* button = new QToolButton;
+    button->setObjectName(QStringLiteral("startPageFolder"));
+    button->setText(entry.name);
+    button->setIcon(themeIcon(QStringLiteral("folder")));
+    button->setIconSize(QSize(18, 18));
+    button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::StrongFocus);
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    button->setMinimumHeight(32);
+    button->setToolTip(QDir::toNativeSeparators(QDir(root).filePath(entry.path)));
+    const QString folder = entry.path;
+    connect(button, &QToolButton::clicked, this, [this, root, folder] {
+      start::Row row;
+      row.kind = start::Row::Kind::Project;
+      row.root = root;
+      row.folder = folder;
+      selectRow(row);
+    });
+    m_folderButtons.append(qMakePair(QPointer<QAbstractButton>(button), entry.key()));
+    new PlaceWatcher(button, [this] { logPlaces(); });
+  }
+  m_folderColumns = 0; // placed again
+  layoutGrids();
+}
+
+void StartPage::layoutGrids() {
+  const int across = m_right->width() > 0 ? m_right->width() : 2 * kCardWidth + 12;
+  const int cardColumns = m_compact ? 1 : std::clamp((across + 12) / (kCardWidth + 12), 1, 3);
+  if (cardColumns != m_cardColumns) {
+    m_cardColumns = cardColumns;
+    for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
+      if (widget) {
+        m_cardGrid->removeWidget(widget);
+      }
+    }
+    int index = 0;
+    for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
+      if (widget) {
+        m_cardGrid->addWidget(widget, index / cardColumns, index % cardColumns);
+        ++index;
+      }
+    }
+    for (int column = 0; column < 3; ++column) {
+      m_cardGrid->setColumnStretch(column, column < cardColumns ? 1 : 0);
+    }
+  }
+  const int folderColumns = std::clamp((across + 8) / (kFolderWidth + 8), 1, 8);
+  if (folderColumns != m_folderColumns) {
+    m_folderColumns = folderColumns;
+    for (const auto& folder : std::as_const(m_folderButtons)) {
+      if (folder.first) {
+        m_folderGrid->removeWidget(folder.first);
+      }
+    }
+    int index = 0;
+    for (const auto& folder : std::as_const(m_folderButtons)) {
+      if (folder.first) {
+        m_folderGrid->addWidget(folder.first, index / folderColumns, index % folderColumns);
+        ++index;
+      }
+    }
+    for (int column = 0; column < 8; ++column) {
+      m_folderGrid->setColumnStretch(column, column < folderColumns ? 1 : 0);
+    }
+  }
+}
+
+void StartPage::findPreviews() {
+  // Once the cards show: a project's are there at once with the type's
+  // icon, their previews follow from this computer's previews only.
+  if (m_previewsQueued) {
+    return;
+  }
+  m_previewsQueued = true;
+  TestSync::singleShot(0, this, [this] {
+    m_previewsQueued = false;
+    if (m_row.kind != start::Row::Kind::Project && m_search->text().trimmed().isEmpty()) {
+      return; // the recent list's cards have theirs (recent::load)
+    }
+    QStringList words;
+    for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
+      auto* card = static_cast<RecentCard*>(widget.data());
+      if (card == nullptr) {
+        continue;
+      }
+      start::Card found = card->design();
+      start::findLocally(&found);
+      card->setFound(found);
+      words << QStringLiteral("%1 (%2)").arg(found.key, found.missing           ? QStringLiteral("missing")
+                                                       : found.preview.isEmpty() ? QStringLiteral("no preview")
+                                                                                 : QStringLiteral("preview"));
+    }
+    const QString line = QStringLiteral("Start page cards: %1")
+                             .arg(words.isEmpty() ? QStringLiteral("none") : words.join(QStringLiteral(" | ")));
+    if (line != m_loggedCards) {
+      m_loggedCards = line;
+      qInfo().noquote() << line;
+    }
+  });
+}
+
+void StartPage::selectRow(const start::Row& row) {
+  m_row = row;
+  start::saveRow(row);
+  if (!m_search->text().isEmpty()) {
+    // A row chosen ends the search.
+    const QSignalBlocker blocker(m_search);
+    m_search->clear();
+  }
+  // Every choice logs its list or place, also one that changes nothing.
+  if (row.kind == start::Row::Kind::Project) {
+    m_loggedPlace.clear();
+  } else {
+    qInfo().noquote() << QStringLiteral("Start page filter: %1")
+                             .arg(row.kind == start::Row::Kind::Pinned ? QStringLiteral("pinned")
+                                                                       : QStringLiteral("all"));
+    m_loggedList.clear();
+  }
   rebuildList();
+}
+
+void StartPage::markRows() {
+  const bool project = m_row.kind == start::Row::Kind::Project;
+  m_recentRow->setChecked(m_row.kind == start::Row::Kind::Recent);
+  m_pinnedRow->setChecked(m_row.kind == start::Row::Kind::Pinned);
+  for (const QPointer<QAbstractButton>& row : std::as_const(m_projectRows)) {
+    if (row) {
+      row->setChecked(project && start::samePath(row->property(kRootProperty).toString(), m_row.root));
+    }
+  }
+}
+
+void StartPage::loadProjects() {
+  if (m_reading) {
+    m_readAgain = true;
+    return;
+  }
+  // As the Projects panel and Open from Project list them, on a thread.
+  const ProjectsSettings settings = ProjectsSettings::load();
+  const QStringList known = settings.known;
+  const QStringList hidden = settings.hidden;
+  const QString folder = projectsDirectory();
+  const QString session = m_host.session ? m_host.session() : QString();
+  RemoteTask* task = RemoteTask::custom(
+      QStringLiteral("project_tree"),
+      [known, folder, hidden, session](const SyncControl&) { return readProjects(known, folder, hidden, session); },
+      this);
+  m_reading = task;
+  connect(task, &RemoteTask::finished, this, [this, task] {
+    const QJsonObject answer = task->answer();
+    task->deleteLater();
+    m_reading = nullptr;
+    projectsRead(answer);
+    if (m_readAgain) {
+      m_readAgain = false;
+      loadProjects();
+    }
+  });
+  task->start();
+}
+
+void StartPage::projectsRead(const QJsonObject& answer) {
+  m_projects = browsableProjects(projectRows(answer));
+  m_keys = projectKeys(m_projects);
+  m_projectsRead = true;
+  const QString line = start::projectsLine(m_projects);
+  if (line != m_loggedProjects) {
+    m_loggedProjects = line;
+    qInfo().noquote() << line;
+  }
+  rebuildRows();
+  // A remembered project or folder that is gone: its top, or Recent.
+  const start::Row shown = start::shownRow(m_row, m_projects);
+  if (shown != m_row) {
+    m_row = shown;
+    start::saveRow(shown);
+  }
+  // The place's contents as read now (logged again only when they changed).
+  rebuildList();
+}
+
+void StartPage::rebuildRows() {
+  for (const QPointer<QAbstractButton>& row : std::as_const(m_projectRows)) {
+    if (row) {
+      row->hide();
+      m_projectRowsLayout->removeWidget(row);
+      row->deleteLater();
+    }
+  }
+  m_projectRows.clear();
+  for (const ProjectRow& project : std::as_const(m_projects)) {
+    const bool cloud = project.kind == ProjectRow::Kind::Cloud;
+    // The Projects panel's marks: a Cloud project's sync state, a warning.
+    const RowMarks marks = m_host.projectMarks ? m_host.projectMarks(project) : RowMarks();
+    const QString icon = !marks.icon.isEmpty() ? marks.icon
+                         : cloud               ? QStringLiteral("remote-open")
+                                               : QStringLiteral("folder");
+    auto* row = new StartNavRow(icon, project.name);
+    row->setObjectName(QStringLiteral("startPageProject"));
+    row->setCheckable(true);
+    row->setProperty(kRootProperty, project.root);
+    QStringList tip{project.name, cloud ? tr("Cloud project") : tr("Local project")};
+    if (!marks.full.isEmpty()) {
+      tip << marks.full;
+    }
+    tip << QDir::toNativeSeparators(project.root);
+    row->setToolTip(tip.join(QLatin1Char('\n')));
+    const QString root = project.root;
+    connect(row, &QAbstractButton::clicked, this, [this, root] {
+      start::Row chosen;
+      chosen.kind = start::Row::Kind::Project;
+      chosen.root = root;
+      selectRow(chosen);
+    });
+    m_projectRowsLayout->addWidget(row);
+    m_projectRows.append(row);
+    new PlaceWatcher(row, [this] { logPlaces(); });
+  }
+  m_projectsNote->setText(!m_projectsRead ? tr("Reading the projects…")
+                                          : tr("No projects yet. Add project makes one."));
+  m_projectsNote->setVisible(!m_projectsRead || m_projects.isEmpty());
+  markRows();
+  logPlaces();
 }
 
 void StartPage::setCompact(bool compact) {
@@ -939,10 +1445,10 @@ void StartPage::setCompact(bool compact) {
   }
 }
 
-void StartPage::togglePin(const RecentDesign& design) {
-  recent::setPinned(design.path, !design.pinned);
+void StartPage::togglePin(const start::Card& card) {
+  recent::setPinned(card.path, !card.pinned);
   qInfo().noquote() << QStringLiteral("Start page %1: %2")
-                           .arg(design.pinned ? QStringLiteral("unpinned") : QStringLiteral("pinned"), design.name);
+                           .arg(card.pinned ? QStringLiteral("unpinned") : QStringLiteral("pinned"), card.key);
   // After the click that pinned it: its card goes.
   QTimer::singleShot(0, this, [this] {
     m_designs = recent::load();
@@ -950,33 +1456,37 @@ void StartPage::togglePin(const RecentDesign& design) {
   });
 }
 
-void StartPage::removeDesign(const RecentDesign& design) {
-  recent::remove(design.path);
-  qInfo().noquote() << QStringLiteral("Start page removed: %1").arg(design.name);
+void StartPage::removeDesign(const start::Card& card) {
+  recent::remove(card.path);
+  qInfo().noquote() << QStringLiteral("Start page removed: %1").arg(card.key);
   QTimer::singleShot(0, this, [this] {
     m_designs = recent::load();
     rebuildList();
   });
 }
 
-void StartPage::showCardMenu(const RecentDesign& design, const QPoint& global) {
+void StartPage::showCardMenu(const start::Card& card, const QPoint& global) {
   QMenu menu(this);
   QAction* open = menu.addAction(tr("Open"));
-  open->setEnabled(!design.missing);
-  QAction* pin = menu.addAction(design.pinned ? tr("Unpin") : tr("Pin"));
-  QAction* remove = menu.addAction(tr("Remove from List"));
+  open->setEnabled(!card.missing);
+  QAction* pin = menu.addAction(card.pinned ? tr("Unpin") : tr("Pin"));
+  // A project's design is not on the list to remove it from.
+  QAction* remove = card.inProject ? nullptr : menu.addAction(tr("Remove from List"));
   QStringList entries;
   for (const QAction* entry : menu.actions()) {
     entries << entry->text();
   }
   qInfo().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
   QAction* chosen = execMenu(&menu, global);
+  if (chosen == nullptr) {
+    return;
+  }
   if (chosen == open) {
-    choose(QStringLiteral("open %1").arg(design.name), [this, path = design.path] { m_host.open(path); });
+    choose(QStringLiteral("open %1").arg(card.name), [this, path = card.path] { m_host.open(path); });
   } else if (chosen == pin) {
-    togglePin(design);
+    togglePin(card);
   } else if (chosen == remove) {
-    removeDesign(design);
+    removeDesign(card);
   }
 }
 
@@ -1012,9 +1522,21 @@ void StartPage::logPlaces() {
         add(QStringLiteral("resource ") + plain(tile->text()), tile);
       }
     }
-    add(QStringLiteral("filter All"), m_all);
-    add(QStringLiteral("filter Pinned"), m_pinned);
+    add(QStringLiteral("filter Recent"), m_recentRow);
+    add(QStringLiteral("filter Pinned"), m_pinnedRow);
+    for (const QPointer<QAbstractButton>& row : std::as_const(m_projectRows)) {
+      if (row) {
+        add(QStringLiteral("project ") + row->text(), row);
+      }
+    }
+    add(QStringLiteral("add project"), m_addProject);
     add(QStringLiteral("search"), m_search);
+    for (const auto& crumb : std::as_const(m_crumbButtons)) {
+      add(QStringLiteral("crumb ") + crumb.second, crumb.first);
+    }
+    for (const auto& folder : std::as_const(m_folderButtons)) {
+      add(QStringLiteral("folder ") + folder.second, folder.first);
+    }
     add(QStringLiteral("view Cards"), m_cardsView);
     add(QStringLiteral("view List"), m_listView);
     for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
@@ -1022,15 +1544,15 @@ void StartPage::logPlaces() {
       if (card == nullptr) {
         continue;
       }
-      add(QStringLiteral("card ") + card->design().name, card);
+      add(QStringLiteral("card ") + card->design().key, card);
       // The star's centre, while the card is in sight.
       QPoint at;
       if (placeOf(card, &at)) {
         const QPoint star = card->mapTo(card->window(), card->starRect().center());
-        lines << QStringLiteral("Start page star %1 at %2,%3").arg(card->design().name).arg(star.x()).arg(star.y());
+        lines << QStringLiteral("Start page star %1 at %2,%3").arg(card->design().key).arg(star.x()).arg(star.y());
       }
       if (card->removeButton() != nullptr) {
-        add(QStringLiteral("remove ") + card->design().name, card->removeButton());
+        add(QStringLiteral("remove ") + card->design().key, card->removeButton());
       }
     }
     add(QStringLiteral("drop area"), m_dropArea);
@@ -1055,6 +1577,10 @@ bool StartPage::eventFilter(QObject* watched, QEvent* event) {
   // only for the system's own mouse events.
   if (watched == m_search && event->type() == QEvent::MouseButtonPress && !m_search->hasFocus()) {
     m_search->setFocus(Qt::MouseFocusReason);
+  }
+  // The right side's width sets its grids' columns.
+  if (watched == m_right && event->type() == QEvent::Resize) {
+    layoutGrids();
   }
   if (!isHidden() && watched->isWidgetType() && m_bars.contains(static_cast<QWidget*>(watched))) {
     switch (event->type()) {

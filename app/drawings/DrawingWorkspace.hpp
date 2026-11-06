@@ -185,6 +185,10 @@ private:
   // is narrower than its row with names (`width`, pixels).
   void fitTools(int width);
   void showSheet(const QJsonObject& answer);
+  // Every corner the sheet's views show as a dot while Preferences ›
+  // Display › Always show corners in drawings is on (mitcad#1338: the
+  // model's `drawing_corners`); none while it is off, on a cut sheet.
+  void showCornerDots();
   void setTool(const DrawingToolDef* tool);
   void fillPanel();
   void fillToolPanel(const DrawingToolDef& tool);
@@ -370,6 +374,8 @@ private:
   // The hover's question waits for the job that computes the model
   // (mitcad#753).
   bool m_hoverWaits = false;
+  // The corner dots' question waits likewise (mitcad#1338).
+  bool m_cornersWait = false;
   // Dimension spacing (mitcad#1173): what is snapped next (the dragged
   // annotation, 0 while one is placed; the pointer or the drag; Alt), the
   // timer that spaces the questions, the snap logged last.

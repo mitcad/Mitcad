@@ -1533,3 +1533,17 @@ if(BUILD_TESTING)
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()
+
+# Geometry cases reported with a false warning (mitcad#1327) under
+# MITCAD_GEOMETRY_CASES: the features listed in the script build without a
+# warning (a three-fillet corner's 0.057 mm on R3, a ring that runs
+# smoothly onto a rounded face); skipped without the cases.
+if(BUILD_TESTING)
+  add_test(NAME cli.geometry_cases
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" -P "${CMAKE_CURRENT_SOURCE_DIR}/geometry-cases-test.cmake")
+  set_tests_properties(cli.geometry_cases PROPERTIES SKIP_REGULAR_EXPRESSION "geometry cases: skipped")
+  if(WIN32)
+    set_property(TEST cli.geometry_cases APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()

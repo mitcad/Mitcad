@@ -115,6 +115,13 @@ HOOKS=""
 [ -n "$BUILT" ] && HOOKS=$(ui_update_test_hooks "$BUILT")
 
 WORK=$(mktemp -d /tmp/mitcad-appimage.XXXXXX)
+# The AppImage runtime extracts into $TMPDIR with APPIMAGE_EXTRACT_AND_RUN
+# and removes the folder only when the app exits normally: a killed or
+# timed-out run left /tmp/appimage_extracted_* (about 600 MB of tmpfs each,
+# charged to the job's memory, mitcad#1340). Inside $WORK the cleanup trap
+# removes it whatever way the run ends.
+mkdir -p "$WORK/tmp"
+export TMPDIR=$WORK/tmp
 APPS=$WORK/apps
 COPY=$APPS/Mitcad.AppImage
 WWW=$WORK/www
@@ -125,6 +132,9 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+# A run stopped by a signal (a timeout, Ctrl+C) still cleans up.
+trap 'exit 143' TERM HUP
+trap 'exit 130' INT
 
 for tool in python3 openssl readelf objdump ldd; do
   command -v "$tool" > /dev/null || ui_fail "$tool is required"
@@ -358,7 +368,7 @@ cp "$IMAGE" "$COPY"
 chmod 755 "$COPY"
 plain() {
   env -i DISPLAY="$DISPLAY" HOME="$WORK/home" PATH=/usr/bin:/bin MITCAD_NO_UPDATE_CHECK=1 \
-    ${APPIMAGE_EXTRACT_AND_RUN:+APPIMAGE_EXTRACT_AND_RUN=1} "$@"
+    TMPDIR="$TMPDIR" ${APPIMAGE_EXTRACT_AND_RUN:+APPIMAGE_EXTRACT_AND_RUN=1} "$@"
 }
 if ! output=$(cd "$WORK" && plain "$COPY" --version 2>&1); then
   echo "note FUSE does not work here ($(echo "$output" | head -1)); APPIMAGE_EXTRACT_AND_RUN=1"

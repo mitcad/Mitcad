@@ -1342,6 +1342,25 @@ fn remap_value(value: &mut Value, uids: &HashMap<String, String>) {
     }
 }
 
+/// `geometry` with the copied features' uids in its names, as
+/// [`copy_def`] maps the references of the copied definitions (a linked
+/// design's kept joint frames, mitcad#1319, name what the copied joints
+/// name).
+pub(super) fn copy_geometry(
+    geometry: &crate::features::GeomRef,
+    uids: &HashMap<FeatureUid, FeatureUid>,
+) -> crate::features::GeomRef {
+    let text: HashMap<String, String> = uids
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    let Ok(mut value) = serde_json::to_value(geometry) else {
+        return geometry.clone();
+    };
+    remap_value(&mut value, &text);
+    serde_json::from_value(value).unwrap_or_else(|_| geometry.clone())
+}
+
 pub(super) fn remap_reference(text: &str, uids: &HashMap<String, String>) -> String {
     if text.parse::<FeatureUid>().is_ok() || text.parse::<BodyUid>().is_ok() {
         return remap_text(text, uids);

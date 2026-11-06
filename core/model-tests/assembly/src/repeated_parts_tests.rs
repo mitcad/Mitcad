@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use mitcad_model::Document;
 use mitcad_model::exchange::{ImportAssembly, ImportBody, ImportInstance, ImportPart};
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid};
+use mitcad_model::properties::PropertyOwner;
 use mitcad_model::testing::{MockKernel, MockShape};
 use mitcad_model::transform::Transform;
 use mitcad_model_api::DocumentApi;
@@ -374,4 +375,149 @@ fn import_file_finds_repeated_parts_with_either_structure() {
     assert_eq!(doc.undo_depth(), 1);
     command(&mut doc, json!({"cmd": "undo"})).unwrap();
     assert!(doc.assembly().components.is_empty());
+}
+
+/// Five bolts alike, 10 mm apart.
+fn bolts(doc: &Document<MockKernel>) {
+    let grey = Some([0.5, 0.5, 0.5]);
+    doc.kernel().files.borrow_mut().insert(
+        "bolts.step".to_owned(),
+        vec![
+            body("Bolt", "part(bolt;0,0,0)", 6, grey),
+            body("Bolt", "part(bolt;10,0,0)", 6, grey),
+            body("Bolt", "part(bolt;20,0,0)", 6, grey),
+            body("Bolt", "part(bolt;30,0,0)", 6, grey),
+            body("Bolt", "part(bolt;40,0,0)", 6, grey),
+        ],
+    );
+}
+
+/// The value of a body's own property.
+fn own_value(doc: &Document<MockKernel>, body: &str, set: &str, key: &str) -> Option<f64> {
+    let owner = PropertyOwner::Body(body.parse().unwrap());
+    doc.property_store()
+        .get(owner, set, key)
+        .and_then(|p| p.value.as_f64())
+}
+
+/// mitcad#1312: a copy's own print value, its print plate item and a
+/// comment on it are not lost. Of five bolts alike, the second has nine
+/// walls of its own, the third is on a plate four times, the fourth has a
+/// comment, the fifth copies the first; the third's copies print 4.
+#[test]
+fn a_copy_s_print_values_plate_items_and_comments_stay() {
+    let mut doc = Document::new(MockKernel::default());
+    bolts(&doc);
+    command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": "bolts.step"}),
+    )
+    .unwrap();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "set_property", "owner": "F1.b1", "set": "Print Process",
+             "key": "perimeters", "value": 9},
+            {"cmd": "add_print_plate"},
+            {"cmd": "place_on_plate", "plate": "plate1",
+             "items": [{"body": "F1.b2", "count": 4}]},
+            {"cmd": "add_comment", "text": "check this one", "target": {"body": "F1.b3"}},
+        ]),
+    )
+    .unwrap();
+    let before = histories(&doc);
+    let plates_before = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates_before["plates"][0]["items"][0]["count"], 4);
+
+    let found = command(
+        &mut doc,
+        json!({"cmd": "find_repeated_parts", "feature": "F1"}),
+    )
+    .unwrap();
+    // The first and the fifth make the component; the others stay.
+    let components = found["components"].as_array().unwrap();
+    assert_eq!(components.len(), 1, "{found}");
+    assert_eq!(components[0]["body"], "F1.b0");
+    assert_eq!(components[0]["copies"], json!(["F1.b4"]));
+    assert_eq!(found["kept"], json!(["F1.b1", "F1.b2", "F1.b3"]));
+
+    // The print value where the second prints: its own body still.
+    assert_eq!(
+        own_value(&doc, "F1.b1", "Print Process", "perimeters"),
+        Some(9.0)
+    );
+    assert!(doc.bodies().iter().any(|b| b.uid.to_string() == "F1.b1"));
+    // The plate item is there, four of it.
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    let item = &plates["plates"][0]["items"][0];
+    assert_eq!(item["body"], "F1.b2", "{plates}");
+    assert_eq!(item["count"], 4);
+    assert!(item.get("missing").is_none(), "{plates}");
+    // Four of the third, the second and the fourth, and the first in both
+    // of its occurrences.
+    assert_eq!(plates["plates"][0]["pieces"], 8, "{plates}");
+    // The comment still finds its body.
+    let comments = query(&doc, json!({"query": "comments"}));
+    let comment = &comments["comments"][0];
+    assert_eq!(comment["target"]["body"], "F1.b3", "{comments}");
+    assert_eq!(comment["orphaned"], false, "{comments}");
+
+    // One undo step takes it back; the value and the item were never
+    // touched.
+    command(&mut doc, json!({"cmd": "undo"})).unwrap();
+    assert_eq!(histories(&doc), before);
+    assert!(doc.assembly().components.is_empty());
+    assert_eq!(
+        own_value(&doc, "F1.b1", "Print Process", "perimeters"),
+        Some(9.0)
+    );
+    assert_eq!(query(&doc, json!({"query": "print_plates"})), plates_before);
+}
+
+/// mitcad#1312: a copy whose own properties are the first body's is still
+/// a copy, and its entry goes with it (the occurrence shows the first
+/// body's); one whose values differ stays.
+#[test]
+fn copies_with_the_first_s_properties_are_found() {
+    let mut doc = Document::new(MockKernel::default());
+    bolts(&doc);
+    command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": "bolts.step"}),
+    )
+    .unwrap();
+    let mut set = Vec::new();
+    for (body, walls) in [("F1.b0", 3), ("F1.b1", 3), ("F1.b2", 4)] {
+        set.push(
+            json!({"cmd": "set_property", "owner": body, "set": "Print Process",
+                        "key": "perimeters", "value": walls}),
+        );
+    }
+    command(&mut doc, Value::Array(set)).unwrap();
+    let found = command(
+        &mut doc,
+        json!({"cmd": "find_repeated_parts", "feature": "F1"}),
+    )
+    .unwrap();
+    // The first has three walls, as the second: a copy. The third has four
+    // and the fourth and fifth none: copies of each other.
+    let components = found["components"].as_array().unwrap();
+    assert_eq!(components.len(), 2, "{found}");
+    assert_eq!(components[0]["body"], "F1.b0");
+    assert_eq!(components[0]["copies"], json!(["F1.b1"]));
+    assert_eq!(components[1]["body"], "F1.b3");
+    assert_eq!(components[1]["copies"], json!(["F1.b4"]));
+    assert_eq!(found["kept"], json!(["F1.b2"]));
+    assert_eq!(
+        own_value(&doc, "F1.b0", "Print Process", "perimeters"),
+        Some(3.0)
+    );
+    assert_eq!(
+        own_value(&doc, "F1.b1", "Print Process", "perimeters"),
+        None
+    );
+    assert_eq!(
+        own_value(&doc, "F1.b2", "Print Process", "perimeters"),
+        Some(4.0)
+    );
 }

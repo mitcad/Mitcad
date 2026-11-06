@@ -501,7 +501,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     whenReady([indicator, status, setup] {
       return clientConnected(indicator, QStringLiteral("claude-code")) && stateOf(status) == QStringLiteral("connected") &&
           actionOf(setup) == QStringLiteral("disconnect") && !indicator->shownText().contains(QStringLiteral("blocked"));
-    }, 15, QStringLiteral("the scripted Claude Code client did not connect"), [this, dialog, again, mode] {
+    }, 15, QStringLiteral("the scripted Claude Code client did not connect"), [dialog, again, mode] {
       if (again) {
         // Every scripted client goes away (the first one's bridge too, which
         // may have connected again on its own).

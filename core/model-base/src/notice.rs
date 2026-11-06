@@ -16,9 +16,25 @@
 //! rolled back, inactive, hidden, pending, driven) are not severities.
 //!
 //! On the wire a notice is `{"level": "error" | "warning" | "info",
-//! "message": …, "target": …}` (`target` only when it names something: a
-//! feature, an annotation, a body, a sketch entity), and a result's notices
-//! are its `"notices"` array.
+//! "message": …, "target": …, "places": […]}` (`target` only when it names
+//! something: a feature, an annotation, a body, a sketch entity; `places`
+//! only when it has some), and a result's notices are its `"notices"`
+//! array.
+//!
+//! **Places** (mitcad#1327): a notice's message says what is wrong in the
+//! design's terms and never names faces, edges or vertices by their
+//! topological names (`E{…}`, `F4:side(…)`, `V{…}`), which the user sees
+//! nowhere. The places it is about go into its `places` instead
+//! ([`NoticePlace`]: a face, an edge or a vertex of a body by its name, a
+//! point, a box), where agents find the names and the application paints
+//! them in the view while the pointer is over the notice. A message given
+//! with such names ([`Notice::new`]) has them taken out into its places,
+//! each named in the text by its kind ("the fillet of an edge", "at a
+//! vertex"; [`plain_message`]). A sketch region's name (`r{…}`) is such a
+//! name too (mitcad#1334): a region of a sketch is a place, and a reference
+//! a sketch change renamed reads "an edge found again after a change in
+//! Sketch1", one sentence per feature for several of a kind
+//! ([`merge_found_again`]: "2 edges found again …").
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -57,6 +73,167 @@ impl NoticeLevel {
     }
 }
 
+/// A place a notice is about (mitcad#1327): a face, an edge or a vertex of
+/// a body by its topological name (the body's uid where it is known), a
+/// point, or a box (millimetres, in the body's component); or a region of
+/// a sketch by its key (the sketch's uid where it is known; mitcad#1334).
+/// On the wire `{"kind": "face", "body": "F2.b0", "name":
+/// "F7:fillet(E{…})"}`, `{"kind": "point", "at": [x, y, z]}`, `{"kind":
+/// "box", "min": […], "max": […]}`, `{"kind": "region", "sketch": "F1",
+/// "name": "r{…}"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NoticePlace {
+    Face {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        name: String,
+    },
+    Edge {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        name: String,
+    },
+    Vertex {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        name: String,
+    },
+    Point {
+        at: [f64; 3],
+    },
+    Box {
+        min: [f64; 3],
+        max: [f64; 3],
+    },
+    Region {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch: Option<String>,
+        name: String,
+    },
+}
+
+// (Coordinates are finite numbers: a place equals itself.)
+impl Eq for NoticePlace {}
+
+impl NoticePlace {
+    pub fn face(name: impl Into<String>) -> Self {
+        Self::Face {
+            body: None,
+            name: name.into(),
+        }
+    }
+
+    pub fn edge(name: impl Into<String>) -> Self {
+        Self::Edge {
+            body: None,
+            name: name.into(),
+        }
+    }
+
+    pub fn vertex(name: impl Into<String>) -> Self {
+        Self::Vertex {
+            body: None,
+            name: name.into(),
+        }
+    }
+
+    pub fn point(at: [f64; 3]) -> Self {
+        Self::Point { at }
+    }
+
+    /// A region of a sketch by its key, the sketch not known yet.
+    pub fn region(name: impl Into<String>) -> Self {
+        Self::Region {
+            sketch: None,
+            name: name.into(),
+        }
+    }
+
+    /// A region of the sketch `sketch` (its uid) by its key.
+    pub fn region_of(sketch: impl ToString, name: impl Into<String>) -> Self {
+        Self::Region {
+            sketch: Some(sketch.to_string()),
+            name: name.into(),
+        }
+    }
+
+    /// The topological name of a face, an edge or a vertex, or a region's
+    /// key; None for a point or a box.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Face { name, .. }
+            | Self::Edge { name, .. }
+            | Self::Vertex { name, .. }
+            | Self::Region { name, .. } => Some(name),
+            Self::Point { .. } | Self::Box { .. } => None,
+        }
+    }
+
+    /// The body of a face, an edge or a vertex, where it is known.
+    pub fn body(&self) -> Option<&str> {
+        match self {
+            Self::Face { body, .. } | Self::Edge { body, .. } | Self::Vertex { body, .. } => {
+                body.as_deref()
+            }
+            Self::Point { .. } | Self::Box { .. } | Self::Region { .. } => None,
+        }
+    }
+
+    /// The sketch of a region, where it is known.
+    pub fn sketch(&self) -> Option<&str> {
+        match self {
+            Self::Region { sketch, .. } => sketch.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The same region in `uid` when it is of no sketch yet; any other
+    /// place as it is.
+    pub fn in_sketch(mut self, uid: &str) -> Self {
+        if let Self::Region { sketch, .. } = &mut self
+            && sketch.is_none()
+        {
+            *sketch = Some(uid.to_owned());
+        }
+        self
+    }
+
+    /// Whether `other` is this place with its body or sketch given where
+    /// this one has none: the same kind and name.
+    fn completed_by(&self, other: &Self) -> bool {
+        let unknown = match self {
+            Self::Face { body, .. } | Self::Edge { body, .. } | Self::Vertex { body, .. } => {
+                body.is_none() && other.body().is_some()
+            }
+            Self::Region { sketch, .. } => sketch.is_none() && other.sketch().is_some(),
+            Self::Point { .. } | Self::Box { .. } => false,
+        };
+        unknown
+            && std::mem::discriminant(self) == std::mem::discriminant(other)
+            && self.name() == other.name()
+    }
+
+    /// The same place in `body` when it names a face, an edge or a vertex
+    /// of no body yet.
+    pub fn in_body(mut self, uid: &str) -> Self {
+        match &mut self {
+            Self::Face { body, .. } | Self::Edge { body, .. } | Self::Vertex { body, .. } => {
+                if body.is_none() {
+                    *body = Some(uid.to_owned());
+                }
+            }
+            Self::Point { .. } | Self::Box { .. } | Self::Region { .. } => {}
+        }
+        self
+    }
+}
+
+/// The places of a warning given with its message, for the feature that
+/// gave it (mitcad#1327): its message and the places, one entry per
+/// warning that has some.
+pub type WarningPlaces = Vec<(String, Vec<NoticePlace>)>;
+
 /// One thing the model tells the user, with its level and, when it is
 /// about something in particular, what it names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,14 +244,21 @@ pub struct Notice {
     /// a sketch entity; None for the result as a whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Where it is about (mitcad#1327): faces, edges, vertices, points.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub places: Vec<NoticePlace>,
 }
 
 impl Notice {
+    /// A notice of `message` in plain words: the topological names in it
+    /// become its places ([`plain_message`]).
     pub fn new(level: NoticeLevel, message: impl Into<String>) -> Self {
+        let (message, places) = plain_message(&message.into());
         Self {
             level,
-            message: message.into(),
+            message,
             target: None,
+            places,
         }
     }
 
@@ -96,14 +280,439 @@ impl Notice {
         self
     }
 
-    /// The notice as JSON (`level`, `message`, `target` when it has one).
+    /// The same notice with these places too (each once; a place its
+    /// message named takes the body or sketch given with the same name).
+    /// Where those places are of one body, the names its message gave
+    /// (of no body) are taken to be of that body too; regions likewise of
+    /// one sketch.
+    pub fn with_places(mut self, places: impl IntoIterator<Item = NoticePlace>) -> Self {
+        for place in places {
+            if self.places.contains(&place) {
+                continue;
+            }
+            match self
+                .places
+                .iter_mut()
+                .find(|known| known.completed_by(&place))
+            {
+                Some(known) => *known = place,
+                None => self.places.push(place),
+            }
+        }
+        let mut bodies = self.places.iter().filter_map(NoticePlace::body);
+        if let Some(body) = bodies.next().map(str::to_owned)
+            && bodies.all(|other| other == body)
+        {
+            self = self.in_body(&body);
+        }
+        let mut sketches = self.places.iter().filter_map(NoticePlace::sketch);
+        if let Some(sketch) = sketches.next().map(str::to_owned)
+            && sketches.all(|other| other == sketch)
+        {
+            self = self.in_sketch(&sketch);
+        }
+        self
+    }
+
+    /// The same notice, its places of no body yet in `body`.
+    pub fn in_body(mut self, body: &str) -> Self {
+        self.places = unique(
+            std::mem::take(&mut self.places)
+                .into_iter()
+                .map(|place| place.in_body(body)),
+        );
+        self
+    }
+
+    /// The same notice, its regions of no sketch yet in `sketch`.
+    pub fn in_sketch(mut self, sketch: &str) -> Self {
+        self.places = unique(
+            std::mem::take(&mut self.places)
+                .into_iter()
+                .map(|place| place.in_sketch(sketch)),
+        );
+        self
+    }
+
+    /// The notice as JSON (`level`, `message`, `target` and `places` when
+    /// it has them).
     pub fn to_json(&self) -> Value {
         let mut value = json!({"level": self.level.as_str(), "message": self.message});
         if let Some(target) = &self.target {
             value["target"] = json!(target);
         }
+        if !self.places.is_empty() {
+            value["places"] = serde_json::to_value(&self.places).unwrap_or(Value::Null);
+        }
         value
     }
+}
+
+/// Places each once, in their order.
+fn unique(places: impl IntoIterator<Item = NoticePlace>) -> Vec<NoticePlace> {
+    let mut out: Vec<NoticePlace> = Vec::new();
+    for place in places {
+        if !out.contains(&place) {
+            out.push(place);
+        }
+    }
+    out
+}
+
+/// The kinds of places a message names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NamedKind {
+    Face,
+    Edge,
+    Vertex,
+    Region,
+}
+
+impl NamedKind {
+    fn place(self, name: &str) -> NoticePlace {
+        match self {
+            Self::Face => NoticePlace::face(name),
+            Self::Edge => NoticePlace::edge(name),
+            Self::Vertex => NoticePlace::vertex(name),
+            Self::Region => NoticePlace::region(name),
+        }
+    }
+
+    /// The word of the kind, one and several.
+    fn words(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Face => ("face", "faces"),
+            Self::Edge => ("edge", "edges"),
+            Self::Vertex => ("vertex", "vertices"),
+            Self::Region => ("region", "regions"),
+        }
+    }
+
+    /// The kind its word (one) names.
+    fn of_word(word: &str) -> Option<Self> {
+        [Self::Face, Self::Edge, Self::Vertex, Self::Region]
+            .into_iter()
+            .find(|kind| kind.words().0 == word)
+    }
+}
+
+/// "a" or "an" before `word`.
+fn article(word: &str) -> &'static str {
+    if word.starts_with(|c: char| "aeiouAEIOU".contains(c)) {
+        "an"
+    } else {
+        "a"
+    }
+}
+
+/// The topological name starting at byte `i` of `text`, its kind and the
+/// byte after its end: `E{…}`, `V{…}`, `F<n>:<role>(…)` or a sketch
+/// region's key `r{…}` (brackets balanced, a piece's `#k` after them), not
+/// after a letter, a digit, `_` or `.`. None where none starts there.
+fn name_at(text: &str, i: usize) -> Option<(NamedKind, usize)> {
+    let bytes = text.as_bytes();
+    if i > 0 {
+        let before = bytes[i - 1];
+        if before.is_ascii_alphanumeric() || before == b'_' || before == b'.' {
+            return None;
+        }
+    }
+    let (kind, open) = match bytes.get(i)? {
+        b'E' if bytes.get(i + 1) == Some(&b'{') => (NamedKind::Edge, i + 1),
+        b'V' if bytes.get(i + 1) == Some(&b'{') => (NamedKind::Vertex, i + 1),
+        b'r' if bytes.get(i + 1) == Some(&b'{') => (NamedKind::Region, i + 1),
+        b'F' => {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j == i + 1 || bytes.get(j) != Some(&b':') {
+                return None;
+            }
+            j += 1;
+            let role = j;
+            while j < bytes.len() && (bytes[j].is_ascii_lowercase() || bytes[j] == b'_') {
+                j += 1;
+            }
+            if j == role || bytes.get(j) != Some(&b'(') {
+                return None;
+            }
+            (NamedKind::Face, j)
+        }
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    let mut j = open;
+    loop {
+        match bytes.get(j)? {
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    let mut end = j + 1;
+    if bytes.get(end) == Some(&b'#') {
+        let digits = bytes[end + 1..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        if digits > 0 {
+            end += 1 + digits;
+        }
+    }
+    Some((kind, end))
+}
+
+/// A message without the topological names in it, and the places they
+/// name (mitcad#1327): each name, or a list of names of one kind ("A, B and
+/// C"), is taken out; after the word of its kind ("edge", "faces", ...) the
+/// word stays, with "a" or "an" before a single one unless a word like
+/// "the" or "its" is there ("the fillet of an edge"); elsewhere the kind
+/// takes its place ("at a vertex", "edges"). Text without names is as it
+/// was. A reference a sketch change renamed (`edge E{…} found as E{…}
+/// after a change in Sketch1`, a region's `r{…} found as r{…} + r{…}`)
+/// reads "an edge found again after a change in Sketch1", "a region found
+/// as 2 regions after a change in Sketch1" (mitcad#1334).
+pub fn plain_message(text: &str) -> (String, Vec<NoticePlace>) {
+    if let Some(renamed) = found_again(text) {
+        return renamed;
+    }
+    enum Piece {
+        Text(String),
+        Names(NamedKind, usize),
+    }
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut places = Vec::new();
+    let mut plain = String::new();
+    let mut i = 0;
+    while i < text.len() {
+        if let Some((kind, end)) = name_at(text, i) {
+            places.push(kind.place(&text[i..end]));
+            // A list of names of one kind is one piece.
+            let joined = matches!(
+                (pieces.last(), plain.as_str()),
+                (Some(Piece::Names(last, _)), ", " | " and " | ", and " | " or " | ", or " | " + ")
+                    if *last == kind
+            );
+            if joined {
+                plain.clear();
+                if let Some(Piece::Names(_, count)) = pieces.last_mut() {
+                    *count += 1;
+                }
+            } else {
+                if !plain.is_empty() {
+                    pieces.push(Piece::Text(std::mem::take(&mut plain)));
+                }
+                pieces.push(Piece::Names(kind, 1));
+            }
+            i = end;
+            continue;
+        }
+        let c = text[i..].chars().next().expect("a character at a boundary");
+        plain.push(c);
+        i += c.len_utf8();
+    }
+    if places.is_empty() {
+        return (text.to_owned(), places);
+    }
+    if !plain.is_empty() {
+        pieces.push(Piece::Text(plain));
+    }
+    const KINDS: [&str; 12] = [
+        "face", "faces", "edge", "edges", "vertex", "vertices", "corner", "corners", "region",
+        "regions", "profile", "profiles",
+    ];
+    const DETERMINERS: [&str; 13] = [
+        "the", "a", "an", "its", "their", "this", "that", "each", "every", "one", "another",
+        "which", "no",
+    ];
+    // The last word of `text` and the byte where it starts.
+    fn last_word(text: &str) -> (&str, usize) {
+        let start = text
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !c.is_alphabetic())
+            .map_or(0, |(k, c)| k + c.len_utf8());
+        (&text[start..], start)
+    }
+    let mut out = String::new();
+    for piece in pieces {
+        match piece {
+            Piece::Text(text) => out.push_str(&text),
+            Piece::Names(kind, count) => {
+                let before = out.strip_suffix(' ').map_or(out.len(), str::len);
+                let (word, start) = {
+                    let (word, start) = last_word(&out[..before]);
+                    (word.to_owned(), start)
+                };
+                let lower = word.to_lowercase();
+                if before < out.len() && KINDS.contains(&lower.as_str()) {
+                    // "of edge E{…}": the word stays, without the name.
+                    out.truncate(before);
+                    let singular = !lower.ends_with('s');
+                    let previous = last_word(out[..start].trim_end()).0.to_lowercase();
+                    if singular && !DETERMINERS.contains(&previous.as_str()) {
+                        let capital = word.starts_with(|c: char| c.is_uppercase());
+                        let vowel = lower.starts_with(|c: char| "aeiou".contains(c));
+                        let article = match (vowel, capital) {
+                            (true, true) => "An ",
+                            (true, false) => "an ",
+                            (false, true) => "A ",
+                            (false, false) => "a ",
+                        };
+                        out.replace_range(start..start + word.len(), &format!("{article}{lower}"));
+                    }
+                } else {
+                    let (one, many) = kind.words();
+                    let phrase = if count > 1 {
+                        many.to_owned()
+                    } else {
+                        format!("{} {one}", article(one))
+                    };
+                    let starts = out.trim_end().is_empty()
+                        || out.trim_end().ends_with(|c: char| ".!?".contains(c));
+                    if starts {
+                        let mut chars = phrase.chars();
+                        let first = chars.next().map(|c| c.to_ascii_uppercase());
+                        out.extend(first);
+                        out.push_str(chars.as_str());
+                    } else {
+                        out.push_str(&phrase);
+                    }
+                }
+            }
+        }
+    }
+    // What taking the names out left: doubled spaces, empty brackets.
+    let mut message = out;
+    for (from, to) in [
+        ("()", ""),
+        ("( ", "("),
+        (" )", ")"),
+        (" ,", ","),
+        ("  ", " "),
+    ] {
+        while message.contains(from) {
+            message = message.replace(from, to);
+        }
+    }
+    (message.trim().to_owned(), places)
+}
+
+const FOUND_AS: &str = " found as ";
+const AFTER_CHANGE: &str = " after a change in ";
+const FOUND_AGAIN: &str = " found again after a change in ";
+
+/// A reference a sketch change renamed, in plain words with its places
+/// ([`plain_message`]): `[prefix ]<kind> <name> found as <name>[ + <name>…]
+/// after a change in <sketch>`, the names whole and of that kind (the
+/// warning of `renamed::warning` and `FoundRegions::warning`, which the
+/// warnings keep for Auto Fix). None for any other text.
+fn found_again(text: &str) -> Option<(String, Vec<NoticePlace>)> {
+    let (head, rest) = text.split_once(FOUND_AS)?;
+    let (found, sketch) = rest.split_once(AFTER_CHANGE)?;
+    let (before, stored) = head.rsplit_once(' ')?;
+    let (prefix, word) = match before.rsplit_once(' ') {
+        Some((prefix, word)) => (Some(prefix), word),
+        None => (None, before),
+    };
+    let lower = word.to_lowercase();
+    let kind = NamedKind::of_word(&lower)?;
+    let whole = |name: &str| name_at(name, 0) == Some((kind, name.len()));
+    let found: Vec<&str> = found.split(" + ").collect();
+    if sketch.is_empty() || !whole(stored) || !found.iter().all(|name| whole(name)) {
+        return None;
+    }
+    let (sketch, sketch_places) = plain_message(sketch);
+    let (one, many) = kind.words();
+    let an = match (article(one), word.starts_with(|c: char| c.is_uppercase())) {
+        ("an", true) => "An",
+        ("a", true) => "A",
+        (an, _) => an,
+    };
+    let said = if found.len() == 1 {
+        format!("{an} {one} found again after a change in {sketch}")
+    } else {
+        format!(
+            "{an} {one} found as {} {many} after a change in {sketch}",
+            found.len()
+        )
+    };
+    let (message, mut places) = match prefix {
+        Some(prefix) => {
+            let (prefix, places) = plain_message(prefix);
+            (format!("{prefix} {said}"), places)
+        }
+        None => (said, Vec::new()),
+    };
+    places.push(kind.place(stored));
+    places.extend(found.iter().map(|name| kind.place(name)));
+    places.extend(sketch_places);
+    Some((message, unique(places)))
+}
+
+/// The parts of a message [`found_again`] made for one reference: the
+/// text before it (with its space), its kind and the sketch.
+fn found_again_parts(message: &str) -> Option<(&str, NamedKind, &str)> {
+    let (head, sketch) = message.split_once(FOUND_AGAIN)?;
+    let (before, word) = head.rsplit_once(' ')?;
+    let kind = NamedKind::of_word(word)?;
+    let (prefix, said) = match before.rsplit_once(' ') {
+        Some((prefix, said)) => (&before[..prefix.len() + 1], said),
+        None => ("", before),
+    };
+    said.eq_ignore_ascii_case(article(word))
+        .then_some((prefix, kind, sketch))
+}
+
+/// Notices that say the same of several references (mitcad#1334): the
+/// references of one target a change in one sketch renamed, "an edge found
+/// again after a change in Sketch1" once per edge, are one notice, "2 edges
+/// found again after a change in Sketch1", with all their places, where the
+/// first one was. Other notices are as they were.
+pub fn merge_found_again(notices: Vec<Notice>) -> Vec<Notice> {
+    let mut merged: Vec<(Notice, usize)> = Vec::new();
+    for notice in notices {
+        let known = if found_again_parts(&notice.message).is_some() {
+            merged.iter().position(|(m, _)| {
+                m.level == notice.level && m.target == notice.target && m.message == notice.message
+            })
+        } else {
+            None
+        };
+        match known {
+            Some(k) => {
+                let (first, count) = &mut merged[k];
+                *count += 1;
+                first.places = unique(
+                    std::mem::take(&mut first.places)
+                        .into_iter()
+                        .chain(notice.places),
+                );
+            }
+            None => merged.push((notice, 1)),
+        }
+    }
+    merged
+        .into_iter()
+        .map(|(mut notice, count)| {
+            if count > 1
+                && let Some((prefix, kind, sketch)) = found_again_parts(&notice.message)
+            {
+                notice.message = format!(
+                    "{prefix}{count} {} found again after a change in {sketch}",
+                    kind.words().1
+                );
+            }
+            notice
+        })
+        .collect()
 }
 
 /// The worst level of `notices`; None when there are none.
@@ -349,5 +958,196 @@ mod tests {
         );
         let clean = [(Outcome::Built, 5), (Outcome::Skipped, 0)];
         assert!(outcome_notices(clean, level, describe).is_empty());
+    }
+
+    #[test]
+    fn topological_names_become_places_and_leave_plain_words() {
+        // After the word of its kind: the word stays, with an article.
+        let (text, places) = plain_message(
+            "the fillet of edge E{F4:side(c3[b{E{F2:a|F2:b}},c4])|F5:fillet(E{F2:c|F4:end(r{c1})})} \
+             reaches 0.057 mm past face F4:side(c3[b{…},c4]); check the result",
+        );
+        assert_eq!(
+            text,
+            "the fillet of an edge reaches 0.057 mm past a face; check the result"
+        );
+        assert_eq!(
+            places,
+            vec![
+                NoticePlace::edge(
+                    "E{F4:side(c3[b{E{F2:a|F2:b}},c4])|F5:fillet(E{F2:c|F4:end(r{c1})})}"
+                ),
+                NoticePlace::face("F4:side(c3[b{…},c4])"),
+            ]
+        );
+        // Elsewhere the kind; a list of one kind is one; a piece's #k is
+        // part of the name; "the" keeps its word.
+        let (text, places) = plain_message(
+            "the fault lies in the corner of the fillet at V{F1:import(1)|F1:import(2)|F1:import(5)}, \
+             ending against faces F1:import(2), F1:import(3) and F7:fillet(E{a|b})#2; \
+             Face F1:import(4) is turned over; the edge E{x|y} stays",
+        );
+        assert_eq!(
+            text,
+            "the fault lies in the corner of the fillet at a vertex, ending against faces; \
+             A face is turned over; the edge stays"
+        );
+        assert_eq!(places.len(), 6);
+        assert_eq!(places[3], NoticePlace::face("F7:fillet(E{a|b})#2"));
+        assert_eq!(places[5].name(), Some("E{x|y}"));
+        // A name at the start of a sentence, and in brackets.
+        let (text, _) = plain_message("E{a|b} could not be rounded (E{c|d})");
+        assert_eq!(text, "An edge could not be rounded (an edge)");
+        // Text without names, and words that only look like them, as it was.
+        for plain in [
+            "lost 2 of 5 edges",
+            "Fillet1: F2.b0 is gone",
+            "LINE{3} and F:side() and F2:Side(c1)",
+        ] {
+            assert_eq!(plain_message(plain), (plain.to_owned(), Vec::new()));
+        }
+    }
+
+    #[test]
+    fn a_notice_keeps_its_places_with_their_names_and_bodies() {
+        let notice = Notice::warning("the fillet of edge E{a|b} folds")
+            .with_target("F7")
+            .with_places([
+                NoticePlace::face("F7:fillet(E{a|b})"),
+                NoticePlace::point([1.0, 2.0, 3.0]),
+            ])
+            .in_body("F2.b0");
+        assert_eq!(notice.message, "the fillet of an edge folds");
+        assert_eq!(
+            notice.to_json(),
+            json!({"level": "warning", "message": "the fillet of an edge folds", "target": "F7",
+                   "places": [{"kind": "edge", "body": "F2.b0", "name": "E{a|b}"},
+                              {"kind": "face", "body": "F2.b0", "name": "F7:fillet(E{a|b})"},
+                              {"kind": "point", "at": [1.0, 2.0, 3.0]}]})
+        );
+        assert_eq!(serde_json::to_value(&notice).unwrap(), notice.to_json());
+        let read: Notice = serde_json::from_value(notice.to_json()).unwrap();
+        assert_eq!(read, notice);
+        // A plain message has none.
+        assert!(Notice::info("built 0.1 % smaller").places.is_empty());
+    }
+
+    #[test]
+    fn region_names_become_places_of_their_sketch() {
+        // A region a sketch change renamed is found again; its keys are
+        // the places.
+        let (text, places) = plain_message(
+            "region r{c7[c12,c13],c11[c9,c10]} found as r{c7[c12,c13],c15[c10,c9]} \
+             after a change in Sketch1",
+        );
+        assert_eq!(text, "a region found again after a change in Sketch1");
+        assert_eq!(
+            places,
+            vec![
+                NoticePlace::region("r{c7[c12,c13],c11[c9,c10]}"),
+                NoticePlace::region("r{c7[c12,c13],c15[c10,c9]}"),
+            ]
+        );
+        // Split in two, after a prefix.
+        let (text, places) = plain_message(
+            "section 2: region r{c3[c6,c8]} found as r{c1[c6,c8]} + r{c1[c6,c8],c3[c6,c8]} \
+             after a change in Sketch1",
+        );
+        assert_eq!(
+            text,
+            "section 2: a region found as 2 regions after a change in Sketch1"
+        );
+        assert_eq!(places.len(), 3);
+        // Elsewhere as the other names: after the word of a kind, in a list
+        // joined by `+`, inside a face's name.
+        let (text, places) = plain_message("Sketch1 has no profile r{c1}");
+        assert_eq!(text, "Sketch1 has no profile");
+        assert_eq!(places, vec![NoticePlace::region("r{c1}")]);
+        let (text, places) = plain_message("of the regions r{c1} + r{c2} the first is used");
+        assert_eq!(text, "of the regions the first is used");
+        assert_eq!(places.len(), 2);
+        let (text, _) = plain_message("of the pieces of r{c1} the first is used");
+        assert_eq!(text, "of the pieces of a region the first is used");
+        let (text, places) = plain_message("face F2:end(r{c1}) is gone");
+        assert_eq!(text, "a face is gone");
+        assert_eq!(places, vec![NoticePlace::face("F2:end(r{c1})")]);
+        // Words that only look like a key stay.
+        for plain in [
+            "for{a} and Sketch1 r(c1)",
+            "a found as b after a change in Sketch1",
+        ] {
+            assert_eq!(plain_message(plain), (plain.to_owned(), Vec::new()));
+        }
+        // With the sketch given, the regions its message named are of it.
+        let notice = Notice::warning("region r{a} found as r{b} after a change in Sketch1")
+            .with_target("F2")
+            .with_places([NoticePlace::region_of("F1", "r{a}")]);
+        assert_eq!(
+            notice.to_json(),
+            json!({"level": "warning", "message": "a region found again after a change in Sketch1",
+                   "target": "F2",
+                   "places": [{"kind": "region", "sketch": "F1", "name": "r{a}"},
+                              {"kind": "region", "sketch": "F1", "name": "r{b}"}]})
+        );
+        let read: Notice = serde_json::from_value(notice.to_json()).unwrap();
+        assert_eq!(read, notice);
+        assert_eq!(notice.places[0].name(), Some("r{a}"));
+        assert_eq!(notice.places[0].sketch(), Some("F1"));
+        assert_eq!(notice.places[0].body(), None);
+    }
+
+    #[test]
+    fn renamed_references_are_one_sentence_per_feature() {
+        let edge = |stored: &str, found: &str, target: &str| {
+            Notice::warning(format!(
+                "edge {stored} found as {found} after a change in Sketch1"
+            ))
+            .with_target(target)
+        };
+        let one = edge("E{F2:a|F2:b}", "E{F2:a|F2:c}", "F3");
+        assert_eq!(one.message, "an edge found again after a change in Sketch1");
+        assert_eq!(
+            one.places,
+            vec![
+                NoticePlace::edge("E{F2:a|F2:b}"),
+                NoticePlace::edge("E{F2:a|F2:c}")
+            ]
+        );
+        let notices = merge_found_again(vec![
+            one,
+            Notice::warning("lost 1 of 3 edges").with_target("F3"),
+            edge("E{F2:d|F2:e}", "E{F2:d|F2:f}", "F3"),
+            Notice::warning("face F2:side(g) found as F2:side(h) after a change in Sketch2")
+                .with_target("F3"),
+            edge("E{F2:d|F2:e}", "E{F2:d|F2:f}", "F4"),
+            Notice::warning("face F2:side(a) found as nothing after a change in Sketch1")
+                .with_target("F3"),
+        ]);
+        let messages: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "2 edges found again after a change in Sketch1",
+                "lost 1 of 3 edges",
+                "a face found again after a change in Sketch2",
+                "an edge found again after a change in Sketch1",
+                "a face found as nothing after a change in Sketch1",
+            ]
+        );
+        assert_eq!(notices[0].places.len(), 4);
+        assert_eq!(notices[0].places[2], NoticePlace::edge("E{F2:d|F2:e}"));
+        assert_eq!(notices[3].target.as_deref(), Some("F4"));
+        // A prefix stays before the count.
+        let section = |stored: &str| {
+            Notice::warning(format!(
+                "section 2: vertex {stored} found as V{{x|y|z}} after a change in Sketch1"
+            ))
+        };
+        let notices = merge_found_again(vec![section("V{a|b|c}"), section("V{d|e|f}")]);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].message,
+            "section 2: 2 vertices found again after a change in Sketch1"
+        );
     }
 }

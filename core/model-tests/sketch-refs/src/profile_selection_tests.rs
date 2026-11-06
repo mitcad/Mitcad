@@ -506,13 +506,15 @@ fn a_region_a_change_splits_selects_all_its_pieces() {
             .unwrap_or_else(|| panic!("no warning for {}: {warnings:?}", old.region));
         assert!(warning.contains("} + r{"), "{warning}");
         assert!(warning.ends_with("after a change in Sketch1"), "{warning}");
-        // Each a warning notice of the timeline's entry (mitcad#1040).
+        // Each a warning notice of the timeline's entry (mitcad#1040), in
+        // plain words, the keys its places in the sketch (mitcad#1334).
+        let place = json!({"kind": "region", "sketch": "F1", "name": old.region.to_string()});
         assert!(
-            entry["notices"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|n| n["level"] == "warning" && n["message"].as_str() == Some(*warning)),
+            entry["notices"].as_array().unwrap().iter().any(|n| {
+                n["level"] == "warning"
+                    && n["message"] == "a region found as 2 regions after a change in Sketch1"
+                    && n["places"].as_array().is_some_and(|p| p.contains(&place))
+            }),
             "{entry}"
         );
     }
@@ -612,9 +614,14 @@ fn a_region_found_by_the_best_match_warns() {
     let entry = timeline_entry(&doc, "F2");
     assert_eq!(entry["status"], json!("warning"), "{entry}");
     assert_eq!(entry["error"], Value::Null);
+    // The notice in plain words, the keys its places (mitcad#1334).
     assert_eq!(
         entry["notices"],
-        json!([{"level": "warning", "message": expected, "target": "F2"}])
+        json!([{"level": "warning",
+                "message": "a region found again after a change in Sketch1",
+                "target": "F2",
+                "places": [{"kind": "region", "sketch": "F1", "name": left.region.to_string()},
+                           {"kind": "region", "sketch": "F1", "name": whole.region.to_string()}]}])
     );
     let feature = query(&doc, json!({"query": "feature", "uid": "F2"}));
     assert_eq!(feature["warnings"], json!([expected]));

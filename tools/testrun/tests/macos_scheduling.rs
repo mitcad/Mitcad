@@ -71,8 +71,8 @@ include("${REPO}/cmake/MacUiTests.cmake")
     )
     .unwrap();
     let mut inventories = Vec::new();
-    for setting in ["ON", "OFF"] {
-        let build = f.0.join(setting);
+    for (setting, headless) in [("ON", "ON"), ("OFF", "ON"), ("ON", "OFF"), ("OFF", "OFF")] {
+        let build = f.0.join(format!("{setting}-{headless}"));
         f.run(
             Command::new("cmake")
                 .arg("-S")
@@ -80,7 +80,8 @@ include("${REPO}/cmake/MacUiTests.cmake")
                 .arg("-B")
                 .arg(&build)
                 .arg(format!("-DREPO={}", f.source().display()))
-                .arg(format!("-DMITCAD_MACOS_PARALLEL_HARNESSES={setting}")),
+                .arg(format!("-DMITCAD_MACOS_PARALLEL_HARNESSES={setting}"))
+                .arg(format!("-DMITCAD_MACOS_HEADLESS_TESTS={headless}")),
         );
         f.run(
             Command::new("python3")
@@ -112,7 +113,26 @@ include("${REPO}/cmake/MacUiTests.cmake")
                 })
             })
             .count();
-        assert_eq!(harnesses, if setting == "ON" { 10 } else { 0 });
+        assert_eq!(
+            harnesses,
+            if setting == "ON" {
+                if headless == "ON" { 9 } else { 10 }
+            } else {
+                0
+            }
+        );
+        let offscreen = tests
+            .iter()
+            .filter(|t| {
+                t["properties"].as_array().unwrap().iter().any(|p| {
+                    p["name"] == "LABELS"
+                        && p["value"]
+                            .as_array()
+                            .is_some_and(|v| v.iter().any(|l| l == "macos_headless"))
+                })
+            })
+            .count();
+        assert_eq!(offscreen, if headless == "ON" { 7 } else { 0 });
         inventories.push(
             tests
                 .iter()
@@ -120,10 +140,12 @@ include("${REPO}/cmake/MacUiTests.cmake")
                 .collect::<Vec<_>>(),
         );
     }
-    assert_eq!(
-        inventories[0], inventories[1],
-        "parallelism changed test coverage or commands"
-    );
+    for inventory in &inventories[1..] {
+        assert_eq!(
+            &inventories[0], inventory,
+            "parallelism changed test coverage or commands"
+        );
+    }
 }
 
 #[test]
@@ -306,4 +328,85 @@ endforeach()
             .unwrap()
             .contains("rerun")
     );
+}
+
+#[test]
+fn headless_qt_workflows_overlap_each_other_and_the_desktop_lane() {
+    let f = Fixture::new();
+    fs::write(
+        f.0.join("work.py"),
+        r#"
+import sys, time
+from pathlib import Path
+root = Path(sys.argv[1])
+(root / sys.argv[2]).touch()
+deadline = time.monotonic() + 10
+while len(list(root.glob('started-*'))) != 4:
+    assert time.monotonic() < deadline, 'headless work was held in the desktop/UI lane'
+    time.sleep(0.01)
+"#,
+    )
+    .unwrap();
+    fs::write(f.0.join("CMakeLists.txt"), r#"
+cmake_minimum_required(VERSION 3.25)
+project(HeadlessAdmission NONE)
+enable_testing()
+foreach(i RANGE 1 3)
+  add_test(NAME app.ui-macos-headless-${i} COMMAND python3 "${CMAKE_SOURCE_DIR}/work.py" "${CMAKE_SOURCE_DIR}" started-${i})
+  set_tests_properties(app.ui-macos-headless-${i} PROPERTIES LABELS macos_headless TIMEOUT 15)
+endforeach()
+add_test(NAME app.ui-macos-desktop COMMAND python3 "${CMAKE_SOURCE_DIR}/work.py" "${CMAKE_SOURCE_DIR}" started-desktop)
+set_tests_properties(app.ui-macos-desktop PROPERTIES RESOURCE_LOCK macos_desktop TIMEOUT 15)
+"#).unwrap();
+    let build = f.0.join("build");
+    f.run(
+        Command::new("cmake")
+            .arg("-S")
+            .arg(&f.0)
+            .arg("-B")
+            .arg(&build),
+    );
+    // Migrated workflows may have learned desktop contention in old runs.
+    fs::write(
+        f.0.join("profiles.json"),
+        r#"{"format":1,"tests":{
+          "app.ui-macos-headless-1":{"sensitive":true,"ui_room":0},
+          "app.ui-macos-headless-2":{"sensitive":true,"ui_room":0},
+          "app.ui-macos-headless-3":{"sensitive":true,"ui_room":0}
+        }}"#,
+    )
+    .unwrap();
+    let out = f.0.join("results");
+    f.run(
+        Command::new(env!("CARGO_BIN_EXE_mitcad-testrun"))
+            .arg("--build")
+            .arg(build)
+            .arg("--schedule")
+            .arg("--out")
+            .arg(&out)
+            .arg("--profiles")
+            .arg(f.0.join("profiles.json"))
+            .args([
+                "--no-record",
+                "-j",
+                "4",
+                "--memory-budget",
+                "24G",
+                "--memory-floor",
+                "0",
+                "--cpu-gate",
+                "1",
+                "--limit-factor",
+                "0",
+                "--sensitive",
+                "app.ui-*",
+                "--sensitive-max",
+                "1",
+                "--ui-max",
+                "1",
+            ]),
+    );
+    let rows = fs::read_to_string(out.join("results.tsv")).unwrap();
+    assert_eq!(rows.lines().count(), 5);
+    assert!(!rows.contains("rerun"));
 }

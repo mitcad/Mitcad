@@ -298,6 +298,10 @@ private:
   // (one undo step), its summary logged and shown in the status bar.
   bool autoFixable(const QStringList& uids) const;
   void autoFix(const QStringList& uids);
+  // Project Again (mitcad#1303): the sketch's linked projections that no
+  // longer follow their sources made anew (one undo step), what stays on
+  // the old curves shown in the status bar.
+  void projectAgain(const QString& sketch);
   void browserDoubleClicked(const BrowserNode& node);
   void toggleVisibility(const BrowserNode& node);
   // The names of a component's bodies that follow a Show When condition,

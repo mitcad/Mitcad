@@ -15,6 +15,11 @@ import struct
 import sys
 import tempfile
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import gui_lock
+
 
 def support_module():
     spec = importlib.util.spec_from_file_location(
@@ -28,6 +33,11 @@ MCP = support_module()
 
 
 def run(app, cli, out, qt_bin):
+    with gui_lock() as gui_options:
+        _run_locked(app, cli, out, qt_bin, gui_options)
+
+
+def _run_locked(app, cli, out, qt_bin, gui_options):
     out.mkdir(parents=True, exist_ok=True)
     for chrome in ("docked", "floating"):
         with tempfile.TemporaryDirectory(prefix=chrome + "-", dir=out) as directory:
@@ -67,7 +77,7 @@ def run(app, cli, out, qt_bin):
                 script += "screenshot '${MITCAD_SELECTION_WORK}/" + name + ".png'\n"
             script += "expect-file '${MITCAD_SELECTION_WORK}/finish' 60\nquit\n"
             step_count = len(script.splitlines())
-            gui = MCP.Gui(app, env, out, chrome, script, "qt", ["--chrome=" + chrome])
+            gui = MCP.Gui(app, env, out, chrome, script, "qt", ["--chrome=" + chrome], gui_options=gui_options)
             bridge = None
             try:
                 discovery = Path(env["MITCAD_MCP_DISCOVERY_DIR"])

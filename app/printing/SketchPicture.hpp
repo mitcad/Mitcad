@@ -46,7 +46,10 @@ constexpr double kSketchMargin = 2.0;
 // symbols drawn) and kSketchMargin round it; the sketch point (x, y) is at
 // (x - left + margin, top + margin - y) of the picture. `dimensions` are
 // drawn only with options.dimensions. A sketch with nothing to draw gives a
-// picture of no size, which is not valid() (mitcad#1156).
+// picture of no size, which is not valid() (mitcad#1156). The symbols,
+// values, arrowheads and crosses keep their paper size at any scale, so
+// below 1:1 they reach further: the picture's extent at each scale gives
+// where (mitcad#1308).
 PrintPicture sketchPicture(const sketch::SketchModel& model, const SketchPrintOptions& options,
                            const std::vector<SketchDimensionDrawing>& dimensions = {});
 

@@ -575,17 +575,30 @@ covers the view:
   (Preferences › General). **Open Design…**, **Open Project…** and
   **Import File…** do what the File menu's Open, Open Project and Import
   do. Each card shows its keyboard shortcut.
-- **Recent designs** shows the files of File › Open Recent as cards: a
-  preview of the design, its file name, its type, its folder and when you
-  last opened or saved it. Click a card to open the design. The star at
-  the top right of a card pins the design; **Pinned** shows only the
-  pinned designs, **All** all of them. A pinned design stays on the list
-  when ten newer files have pushed it out of Open Recent. Type in **Find
-  a recent design** to show only the designs whose name or folder holds
-  the text. The two buttons beside the field show the designs as cards
-  or as a compact list. A file that is no longer where it was shows as
-  missing: **Remove** takes it off the list. Right-click a card to open,
-  pin or remove it.
+- Below them, your designs in two columns. On the left, **Recent** and
+  **Pinned**, then under **Projects** the projects of the Projects panel,
+  each with its icon (a Cloud project shows whether it is synced), and
+  **Add project**, which starts New Project. The row you chose is
+  highlighted, and MitCad shows it again the next time it starts.
+- **Recent** shows the files of File › Open Recent as cards: a preview of
+  the design, its file name, its type, its folder and when you last
+  opened or saved it. Click a card to open the design. The star at the
+  top right of a card pins the design; **Pinned** shows only the pinned
+  designs. A pinned design stays on the list when ten newer files have
+  pushed it out of Open Recent. A file that is no longer where it was
+  shows as missing: **Remove** takes it off the list. Right-click a card
+  to open, pin or remove it.
+- Click a project to browse it: the path at the top (the project, then
+  each folder; click a part to go back up), its folders as buttons (click
+  one to go in), and its designs as cards with their preview, name, folder
+  and when they last changed. Click a card to open the design; it then
+  shows under Recent too. A design that has no preview on this computer
+  shows the icon of its type: MitCad downloads nothing to make one.
+- Type in **Search designs in all projects** to find designs by part of
+  their name, in every project and among the recent designs. Each result
+  names its project and folder, so designs with the same name tell apart.
+  Clear the field to go back to the row you chose. The two buttons beside
+  the field show the designs as cards or as a compact list.
 - Drop a CAD file anywhere on the page to open it, or to import it into
   the design, as on the window.
 - **Resources**: **Component Libraries** opens the component picker,
@@ -1522,6 +1535,25 @@ Start: Object can be a face or a body of another component, picked
 where an occurrence shows it. The extrusion then follows that object
 and both occurrences ([Components](#components)).
 
+**To Object at a point.** The object of To Object, and of Start:
+Object, can also be a point: a sketch point, a vertex of a body or a
+construction point. The extrusion then ends (or starts) on the plane
+through the point parallel to the sketch. A design laid out in two
+sketches at right angles to each other is so extruded without a
+construction plane: extrude a profile of one sketch up to a point of the
+other. **Offset** moves that plane as it moves any other object. The
+extrusion keeps the point by its name and follows it when the point
+moves. A point that is gone fails the extrusion, as a plane that is gone
+does. A straight line works too: a sketch line, a straight edge or an
+axis that is parallel to the sketch plane (at right angles to the
+extrusion). The extrusion ends (or starts) on the plane through the
+line parallel to the sketch. A line that is not parallel to the sketch
+plane is refused, and the panel says how many degrees off it is. Hole's
+To Object takes a point or a line too: the hole ends on the plane
+through it at right angles to the hole, and a line must lie in such a
+plane. The point or line must be in the extrusion's own component.
+Revolve's To Object takes neither a point nor a line.
+
 **A planar face as the profile.** Extrude also takes a planar face of a
 body as its profile, with no sketch. Select the face and press **E**.
 Or right-click the face and select Solid › Extrude. Or select the face
@@ -1828,7 +1860,9 @@ thread ends flat.
 
 A modeled thread in a design saved by an earlier version keeps the flat
 ends it had, so that chamfers and fillets on its ends stay as they
-were. Once you edit the thread, it gets the run-outs. An imported
+were. Once you edit the thread, it gets the run-outs. The same holds
+for the modeled thread of a tapped hole: under a countersink it keeps
+its flat lip until you edit the hole. An imported
 thread can keep flat ends where the program it comes from made them so.
 Earlier versions cannot open a design saved with this version that has
 a modeled thread.
@@ -2017,19 +2051,30 @@ a chamfer of 2 mm on the inner top edges of a wall that is 2 mm thick
 and 2 mm high meets the outer wall and the floor at one edge each. If
 the geometry kernel cannot make such a fillet or chamfer at its size,
 MitCad makes it 0.1 % smaller and removes the narrow strip that this
-leaves. The panel and the feature's details then show this as
-information, not as a warning.
+leaves; a strip along a long chain of edges (more than 16 faces beside
+it) stays, a thousandth of the size wide. The panel and the feature's
+details then show this as information, not as a warning.
 
 At a difficult corner, the geometry kernel can build a fillet or chamfer
 whose corner folds back on itself or ends in a spike. A rounding of
 convex edges only takes material away, so MitCad looks at the faces that
 the fillet or chamfer made. If one of them reaches out of the body (or,
-for concave edges, into it), the feature keeps its result and shows a
-warning that names the corner or edge and how far it reaches, for
-example "the corner of the fillet at vertex V{…} reaches 0.035 mm out of
-the body". Check the result there; a smaller radius often gives a clean
-corner. If the result is not a valid solid at all, the error says which
-corner or face is at fault.
+for concave edges, into it) farther than 3 % of the radius, the feature
+keeps its result and shows a warning that says what is wrong and how far
+it reaches, for example "The corner of the fillet reaches 0.035 mm out
+of the body … Check the result." Smaller deviations, which cannot be
+seen, give no warning. Hold the pointer over the warning (in the
+command's panel, on the Timeline, in the Browser or in the message
+band): the view paints the faces and the point it is about, until the
+pointer moves away. Check the result there; a smaller radius often gives
+a clean corner. If the result is not a valid solid at all, the error says
+which corner or face is at fault, and the pointer over it paints that
+place too.
+
+A fillet or chamfer of a hole's rim that runs over a neighboring face is
+built as a ring about the hole's axis. That is no warning by itself: only
+a rounding that leaves an edge or a sliver on the face it runs onto
+warns.
 
 In Fillet and Chamfer, click a selected face or edge again to remove it,
 including while the preview is visible. The Edges input's ✕ clears that
@@ -2776,7 +2821,7 @@ The Create menu of the Sketch tab groups the sketch curve tools:
 | Other Geometry | Ellipse, the polygons, the slots, the splines and Point |
 | Text | Text, QR Code |
 | Patterns | Rectangular Pattern, Circular Pattern and Mirror |
-| References | Project, Intersect, Clean Up Projections and Clean Up Stale Projections (references from the bodies) |
+| References | Project, Intersect, Clean Up Projections, Clean Up Stale Projections and Project Again (references from the bodies) |
 | Sketch Dimension | Sketch Dimension |
 
 On the toolbar, Line and Sketch Dimension are buttons. Rectangles,
@@ -3463,6 +3508,26 @@ while the sketch has stale projections. It removes the projected curves
 that no longer match their source and that nothing uses. It trims the
 projected curves that the profiles still use. It unlinks the
 projections that cannot follow.
+
+**Project Again** (Create › References) repairs a linked projection
+that no longer follows its source, for example after the source face
+changed its shape. It projects the source again and moves the
+constraints and dimensions of the old curves to the new curves that
+take their place, so that the geometry you drew around the projection
+follows it. The sketch palette shows a *Project Again* button beside
+*Clean Up Stale Projections* under the warning, and the context menu
+of the sketch in the timeline and in the browser has *Project Again*
+too.
+
+- A constraint or a dimension moves only when its curves and points
+  map clearly to new ones. One that does not stays on the old curve,
+  which stays in the sketch as construction geometry, and the panel
+  lists it. Check these and constrain the new curves as necessary.
+- The new curves keep the names of the curves they replace, so that
+  the profiles keep their names where their outline is the same. If a
+  profile that a later feature uses changes its name, the panel says so.
+- A projection that only moved or changed its size follows its source
+  without Project Again.
 
 ### Equal Spacing
 
@@ -6061,6 +6126,17 @@ setting.
 `mitcad-cli render` takes `--device auto|cpu|cuda|<id>`. The default is
 `auto`. The command does not read the settings of the application.
 `mitcad-cli render --list-devices` lists the devices.
+
+**Preferences › Display › Render worker** selects the renderer program.
+**Shipped** is the default. **Choose a Worker…** picks a worker that you
+built yourself, for example an OptiX worker that uses the ray tracing
+cores of NVIDIA RTX cards. MitCad keeps the choice, and the device list
+shows the devices of that worker. If the picked worker is not there,
+does not start or does not match this MitCad, the shipped worker renders
+instead, and the status bar says why. MitCad does not ship OptiX. You
+build an OptiX worker with the OptiX SDK that you download from NVIDIA
+yourself, for your own use
+([Building an OptiX worker yourself](rendering.md#building-an-optix-worker-yourself)).
 
 If the selected device cannot start, the CPU renders instead. This
 occurs when the driver or the kernels of the device are missing, or
@@ -8937,6 +9013,32 @@ The grid has its own **Supplier** filter (Alt+R) beside the search. It
 hides the components that the supplier sells in no size. MitCad
 remembers it.
 
+#### Your region and shops
+
+Choose where you buy in **Tools › Preferences › Suppliers** (on macOS
+**MitCad › Settings… › Suppliers**):
+
+- **Region** (Alt+R): the country whose shops the part numbers link to.
+  **None** makes no links. Until you choose, MitCad takes your system's
+  country when it knows a shop there.
+- **Shops you buy from** (Alt+S): the shops of that region, each with a
+  check box.
+
+The **Supplier** filters of the grid and of the size choosers then start
+with the shops you checked instead of **All**; several shops are one
+entry, **Your shops (…)**. Choose another supplier, or **All**, whenever
+you like; MitCad remembers that until you change your shops. In
+**Edit Options…** the filter starts with your shops only when they sell
+the component's size, so a default never changes a component.
+
+In the **Supplier Articles** table, a part number in the link color
+opens the product in the region's shop (a double click, Return or
+**Open Link**). The bills of materials get a column **Product Pages** with
+the links of each part's articles, also in CSV and PDF; a double click on
+it opens one (a menu when there are several). A supplier with no shop in
+your region gets no links. The libraries keep only the part numbers:
+MitCad makes the links from its own list of shops.
+
 When a community index offers a library that one of your libraries
 already is (under its old name, for example), MitCad does not list it a
 second time.
@@ -10262,6 +10364,9 @@ Print) opens a panel of the design's plates:
 Each change is a step of its own in the undo history; **Close** keeps
 them. MitCad lays each plate out by itself: every piece on its print bed
 face (or the automatic orientation's), side by side, centered on the plate.
+With **Center on Plate** off, the pieces stay where the design has them,
+but the copies of an item with a count still lie side by side, 5 mm
+apart, starting where the design has the first.
 
 **Settings order.** A plate's values come after the design's printer and
 process and before everything else: the design's process < the plate <

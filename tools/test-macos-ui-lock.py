@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -19,10 +20,24 @@ from pathlib import Path
 import sys
 import time
 root = Path(sys.argv[3])
-os.fstat(9)
+if os.environ.get("MITCAD_TEST_HEADLESS") == "1":
+    assert os.environ["MITCAD_TEST_STEP_MS"] == os.environ.get("EXPECTED_STEP", "10")
+    assert os.environ["MITCAD_TEST_SETTLE_MS"] == os.environ.get("EXPECTED_SETTLE", "20")
+    try:
+        os.fstat(9)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("headless app inherited the desktop lock")
+else:
+    os.fstat(9)
 (root / "started.json").write_text(json.dumps({"pid": os.getpid(), "parent": os.getppid(),
                                               "started_s": time.monotonic()}))
-if sys.argv[5] == "driver-fail":
+if sys.argv[5] == "driver-exit-fail":
+    print("Failed to create an OpenGL context", flush=True)
+    print("TestDriver: FAIL line 3: synthetic immediate assertion", flush=True)
+    os._exit(1)
+elif sys.argv[5] == "driver-fail":
     print("TestDriver: FAIL line 3: synthetic held modal loop", flush=True)
 elif sys.argv[5] == "trace-only":
     print("TestDriver: line 3: expect-never 'TestDriver: FAIL'", flush=True)
@@ -38,7 +53,7 @@ ui_init "$2" "$3"
 # A second harness may prepare its private files before it owns Aqua.
 printf '%s\\n' "$UI_ROOT" > "$3/prepared-root.txt"
 UI_TIMEOUT=$4
-ui_run_app fake "$3" "$5" "$6"
+ui_run_app fake "$3" "$5" "$6" --ui=qt
 if [ "$6" = post-hold ]; then
   : > "$3/verifying"
   while [ ! -f "$3/verified" ]; do sleep 0.02; done
@@ -77,16 +92,22 @@ def main():
         app.write_text(FAKE_APP)
         app.chmod(0o755)
 
-        def launch(name, timeout=10, exit_code=0, mode="normal"):
+        def launch(name, timeout=10, exit_code=0, mode="normal", headless=False, pacing=None):
             work = root / name
             work.mkdir()
             output = work / "harness.log"
             # HOME and the production lock path stay unchanged. Separate
             # checkout-like shells must contend on the real per-user lock.
+            env = dict(os.environ)
+            if headless:
+                env.update(MITCAD_TEST_HEADLESS="1", QT_QPA_PLATFORM="offscreen", MITCAD_TEST_INPUT="fixture")
+            if pacing:
+                env.update(MITCAD_TEST_STEP_MS=str(pacing[0]), MITCAD_TEST_SETTLE_MS=str(pacing[1]),
+                           EXPECTED_STEP=str(pacing[0]), EXPECTED_SETTLE=str(pacing[1]))
             with output.open("wb") as stream:
                 process = subprocess.Popen(
                     [args.bash, "-c", SHELL, "lock-test", str(args.lib.resolve()), str(app), str(work),
-                     str(timeout), str(exit_code), mode], stdout=stream, stderr=subprocess.STDOUT)
+                     str(timeout), str(exit_code), mode], env=env, stdout=stream, stderr=subprocess.STDOUT)
             launchers.append(process)
             return process, work
 
@@ -131,6 +152,15 @@ def main():
             # only the actual application lifetime counts against that cap.
             first = launch("owner")
             started(first)
+            # Headless Qt applications share neither the Aqua lock nor
+            # each other's isolated settings, even beside an active GUI.
+            headless_a = launch("headless-a", headless=True)
+            headless_b = launch("headless-b", headless=True, pacing=(37, 61))
+            started(headless_a)
+            started(headless_b)
+            assert first[0].poll() is None
+            release(headless_a)
+            release(headless_b)
             second = launch("queued", timeout=1)
             queued(second)
             first_root = (first[1] / "prepared-root.txt").read_text().strip()
@@ -164,6 +194,10 @@ def main():
             normal = launch("after-failure")
             started(normal)
             release(normal)
+
+            immediate = launch("immediate-driver-failure", mode="driver-exit-fail")
+            started(immediate)
+            release(immediate, expected_exit=1)
 
             # A real assertion can leave a native modal loop running after
             # Qt's exit request. Reap only our app, preserve its raw exit
@@ -241,6 +275,67 @@ def main():
             final = launch("after-timeout")
             started(final)
             release(final)
+
+            # The setup dialog's Python launcher must contend with the
+            # shell protocol on the same existing file. Its timeout starts
+            # after acquisition and the actual app inherits ownership.
+            python_app = root / "python-app"
+            python_app.write_text(FAKE_APP.replace("os.fstat(9)\n", ""))
+
+            def launch_python(name, timeout=10, exit_code=0):
+                work = root / name
+                work.mkdir()
+                env = dict(os.environ, PYTHONPATH=str(args.lib.resolve().parent))
+                code = ("import sys; from ui_macos_lock import run_gui; "
+                        "sys.exit(run_gui(sys.argv[2:], timeout=float(sys.argv[1])).returncode)")
+                with (work / "harness.log").open("wb") as stream:
+                    process = subprocess.Popen(
+                        [sys.executable, "-c", code, str(timeout), sys.executable, str(python_app),
+                         "unused", "unused", str(work), str(exit_code), "normal"],
+                        env=env, stdout=stream, stderr=subprocess.STDOUT)
+                launchers.append(process)
+                return process, work
+
+            owner = launch("shell-before-python")
+            started(owner)
+            python_run = launch_python("python-waiter", timeout=1)
+            remains_queued(python_run, 1.4)
+            release(owner)
+            started(python_run)
+            (python_run[1] / "release").touch()
+            assert python_run[0].wait(timeout=10) == 0
+
+            python_run = launch_python("python-failed", exit_code=7)
+            started(python_run)
+            shell_run = launch("shell-after-python-failure")
+            queued(shell_run)
+            remains_queued(shell_run, 0.3)
+            (python_run[1] / "release").touch()
+            assert python_run[0].wait(timeout=10) == 7
+            started(shell_run)
+            release(shell_run)
+
+            python_run = launch_python("python-timeout", timeout=1)
+            started(python_run)
+            assert python_run[0].wait(timeout=10) != 0
+            assert "TimeoutExpired" in (python_run[1] / "harness.log").read_text()
+            shell_run = launch("shell-after-python-timeout")
+            started(shell_run)
+            release(shell_run)
+
+            python_run = launch_python("python-killed")
+            app_pid = started(python_run)
+            python_run[0].kill()
+            python_run[0].wait(timeout=3)
+            os.kill(app_pid, 0)
+            orphan_pids.add(app_pid)
+            shell_run = launch("shell-after-python-kill")
+            queued(shell_run)
+            remains_queued(shell_run, 1.4)
+            os.kill(app_pid, signal.SIGTERM)
+            started(shell_run)
+            orphan_pids.discard(app_pid)
+            release(shell_run)
         finally:
             for process in launchers:
                 if process.poll() is None:
@@ -255,7 +350,7 @@ def main():
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-    print("PASS: global GUI exclusion, direct child PID, queued timeout, failure/assertion/trace classification, TERM, SIGKILL and timeout cleanup")
+    print("PASS: global GUI exclusion, direct child PID, queued timeout, failure/assertion/trace classification, TERM, SIGKILL and timeout cleanup, Python/shell exclusion and inherited ownership")
 
 
 if __name__ == "__main__":

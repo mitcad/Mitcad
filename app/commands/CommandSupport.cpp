@@ -352,6 +352,12 @@ bool isPointLike(const SelectionItem& item) {
          item.kind == SelectKind::SketchPoint;
 }
 
+bool isStraightLine(const SelectionItem& item) {
+  return item.kind == SelectKind::Axis ||
+         ((item.kind == SelectKind::Edge || item.kind == SelectKind::SketchCurve) &&
+          item.geometry == QStringLiteral("line"));
+}
+
 // ---------------------------------------------------------------------------
 // Operations
 
@@ -393,8 +399,12 @@ void loadOperation(const QJsonObject& def, CommandState& state) {
 // ---------------------------------------------------------------------------
 // Objects
 
-QVector<InputDef> objectInputs(const QString& suffix, std::function<bool(const CommandState&)> shown) {
+QVector<InputDef> objectInputs(const QString& suffix, std::function<bool(const CommandState&)> shown,
+                               bool points) {
   const QString object = QStringLiteral("object") + suffix;
+  // Points and straight lines stand for the plane through them (mitcad#1329).
+  const SelectFilter kinds = SelectKind::Plane | SelectKind::Face | SelectKind::Body |
+                             (points ? kPointKinds | kStraightLineKinds : SelectFilter(SelectKind::None));
   const auto kindIs = [object](SelectKind kind) {
     return [object, kind](const CommandState& state) {
       const Selection& items = state.items(object);
@@ -404,13 +414,18 @@ QVector<InputDef> objectInputs(const QString& suffix, std::function<bool(const C
   const auto faceShown = kindIs(SelectKind::Face);
   const auto bodyShown = kindIs(SelectKind::Body);
   return {
-      selectionInput(object, QObject::tr("Object"),
-                     SelectKind::Plane | SelectKind::Face | SelectKind::Body, 1, 1)
+      selectionInput(object, QObject::tr("Object"), kinds, 1, 1)
           .withoutMeshes()
           // A face of another component in front of an origin plane is
           // the pick while a component is active (mitcad#762).
           .withPlanesByDepth()
-          .withTooltip(QObject::tr("A plane, a face or a body the extent ends at"))
+          // Of edges and sketch curves only straight lines.
+          .withAccepts([](const SelectionItem& item) {
+            return (item.kind != SelectKind::Edge && item.kind != SelectKind::SketchCurve) || isStraightLine(item);
+          })
+          .withTooltip(points ? QObject::tr("A plane, face, body, point (sketch, vertex, construction) or straight "
+                                            "line the extent ends at")
+                              : QObject::tr("A plane, a face or a body the extent ends at"))
           .withVisible(shown),
       choiceInput(object + QStringLiteral("_extend"), QObject::tr("Extend"),
                   {{QStringLiteral("selected"), QStringLiteral("To Selected Face")},
@@ -447,6 +462,16 @@ QJsonObject objectOf(const CommandState& state, const QString& suffix) {
     }
     return object;
   }
+  case SelectKind::Vertex:
+  case SelectKind::SketchPoint:
+  case SelectKind::Point:
+    // The plane through the point (mitcad#1329), kept by the point's name.
+    return {{QStringLiteral("type"), QStringLiteral("point")}, {QStringLiteral("point"), item.reference()}};
+  case SelectKind::Edge:
+  case SelectKind::SketchCurve:
+  case SelectKind::Axis:
+    // The plane through a straight line parallel to the profiles (mitcad#1329).
+    return {{QStringLiteral("type"), QStringLiteral("line")}, {QStringLiteral("line"), item.reference()}};
   default:
     return {{QStringLiteral("type"), QStringLiteral("plane")}, {QStringLiteral("plane"), item.reference()}};
   }
@@ -459,6 +484,16 @@ bool loadObject(const QJsonObject& object, CommandState& state, const QString& s
   SelectionItem item;
   if (type == QStringLiteral("plane")) {
     item = itemOf(object.value(QStringLiteral("plane")), context);
+  } else if (type == QStringLiteral("point")) {
+    item = itemOf(object.value(QStringLiteral("point")), context);
+    if (!isPointLike(item)) {
+      return false;
+    }
+  } else if (type == QStringLiteral("line")) {
+    item = itemOf(object.value(QStringLiteral("line")), context);
+    if (!isStraightLine(item)) {
+      return false;
+    }
   } else if (type == QStringLiteral("face")) {
     item = itemOf(QJsonObject{{QStringLiteral("body"), object.value(QStringLiteral("body"))},
                               {QStringLiteral("face"), object.value(QStringLiteral("face"))}},
@@ -480,8 +515,17 @@ bool loadObject(const QJsonObject& object, CommandState& state, const QString& s
 }
 
 bool objectShowable(const QJsonObject& object, const CommandContext& context) {
-  return str(object, "type") != QStringLiteral("plane") ||
-         isShowable(object.value(QStringLiteral("plane")), context);
+  const QString type = str(object, "type");
+  if (type == QStringLiteral("point")) {
+    // A sketch point, a vertex or a construction point (mitcad#1329); a
+    // fixed point has no pick to show.
+    return isPointLike(itemOf(object.value(QStringLiteral("point")), context));
+  }
+  if (type == QStringLiteral("line")) {
+    // A sketch line, a straight edge or an axis; a fixed axis has no pick.
+    return isStraightLine(itemOf(object.value(QStringLiteral("line")), context));
+  }
+  return type != QStringLiteral("plane") || isShowable(object.value(QStringLiteral("plane")), context);
 }
 
 // Objects of other components (mitcad#762).
@@ -636,6 +680,35 @@ QString foreignPlane(const SelectionItem& item, const Selection& profiles, const
   }
   return QObject::tr("%1 is in %2: pick a plane of %3, or a face of %2.")
       .arg(name, componentName(at, context), componentName(own, context));
+}
+
+QString foreignPoint(const SelectionItem& item, const QString& here) {
+  // The origin point and axes are every component's own.
+  const bool origin = item.owner == QStringLiteral("origin") || item.owner == QStringLiteral("x") ||
+                      item.owner == QStringLiteral("y") || item.owner == QStringLiteral("z");
+  if ((!isPointLike(item) && !isStraightLine(item)) || origin || item.occurrence == here) {
+    return QString();
+  }
+  return QObject::tr("Pick a point or a line where the profiles are: one of another occurrence is not taken.");
+}
+
+QString slantedLine(const SelectionItem& item, const Selection& profiles, const CommandContext& context) {
+  if (!isStraightLine(item)) {
+    return QString();
+  }
+  const auto line = axisOf(item, context);
+  const auto normal = profileNormal(profiles, context);
+  if (!line || !normal) {
+    return QString(); // the model's check then says it
+  }
+  // How far the line leans out of the planes parallel to the profiles
+  // (the model's LINE_ANGLE, 1e-6 rad).
+  const double off = std::asin(std::min(1.0, std::abs(line->second.Dot(normal->second))));
+  if (off <= 1e-6) {
+    return QString();
+  }
+  return QObject::tr("The line is %1 degrees off the profiles' plane: pick a line parallel to it.")
+      .arg(off * 180.0 / 3.14159265358979323846, 0, 'f', 3);
 }
 
 // ---------------------------------------------------------------------------

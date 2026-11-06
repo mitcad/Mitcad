@@ -3,7 +3,8 @@
 // "The Start tab", files/StartPage.hpp): the ribbon's START tab before
 // SOLID, BUILD and MAKE shows the Start page over the 3D view, with the
 // window's cards (or docks) hidden while it is there; the page at launch
-// by its Show start page at launch; a save's preview of the design.
+// by its Show start page at launch; a save's preview of the design; the
+// projects' browser's session and state icons (mitcad#1301).
 #include "MainWindow.hpp"
 
 #include <utility>
@@ -25,9 +26,14 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/FloatingLayout.hpp"
 #include "framework/Ribbon.hpp"
+#include "files/Autosave.hpp"
 #include "files/FileFormats.hpp"
+#include "files/ProjectIndicator.hpp"
 #include "files/RecentDesigns.hpp"
+#include "files/RemoteController.hpp"
 #include "files/StartPage.hpp"
+#include "projects/ProjectRowText.hpp"
+#include "projects/ProjectsTree.hpp"
 #include "report/ReportCenter.hpp"
 
 #ifdef MITCAD_MACOS_NATIVE_UI
@@ -75,6 +81,18 @@ void MainWindow::createStartPage() {
   host.bottomBar = [this]() -> QWidget* {
     return m_floating != nullptr ? m_floating->findChild<QWidget*>(QStringLiteral("messageBandCard")) : nullptr;
   };
+  // The projects' browser (mitcad#1301): the projects read with this run's
+  // edit-lock session, their state icons as the Projects panel's (the
+  // current project's remote as the remote work knows it).
+  host.session = [this] { return m_autosave != nullptr ? m_autosave->session() : QString(); };
+  host.projectMarks = [this](const ProjectRow& row) {
+    if (m_remote != nullptr && m_project.isProject() && sameRoot(row.root, m_project.root)) {
+      const ProjectIndicator::Remote remote = m_remote->indicatorState();
+      return projectMarks(row, remote.ahead >= 0 ? remote.ahead : row.ahead,
+                          remote.behind >= 0 ? remote.behind : row.behind, remote.problem, remote.conflict);
+    }
+    return projectMarks(row, row.ahead, row.behind, QString(), false);
+  };
   host.version = QCoreApplication::applicationVersion();
   host.issuesUrl = issueList();
   // The version's release page; nothing is fetched (GitHub's releases of
@@ -92,6 +110,12 @@ void MainWindow::updateStartPage(const QString& tab) {
   }
   if (start) {
     createStartPage();
+    // The design's selection goes with the view out of sight (mitcad#1313):
+    // nothing selected behind the page, nothing for Delete to remove there
+    // or after it; a running command keeps its own selection.
+    if (m_mode == Mode::Idle && m_controller != nullptr) {
+      clearSelection();
+    }
     m_startPage->showPage();
     // The page takes the whole view: no card over it (Floating), no dock
     // beside it (Docked); they come back as they were.

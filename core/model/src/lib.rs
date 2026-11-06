@@ -351,3 +351,6 @@ pub use document::{AutoFix, AutoFixLeft, Repair};
 pub use document::RolledBackRun;
 // Find Repeated Parts (mitcad#1277).
 pub use document::{REPEATED_PARTS_TOLERANCE, RepeatedPart, RepeatedParts};
+// The suppliers' shops by region and the product links made from the
+// rows' part numbers (mitcad#950).
+pub mod supplier_shops;

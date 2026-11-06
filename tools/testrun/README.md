@@ -129,6 +129,15 @@ AppKit, native input, screenshots or Metal headless. Set
 `MITCAD_MACOS_PARALLEL_HARNESSES=OFF` at configure time to keep the entire
 harness under its original CTest desktop lock.
 
+Qt component workflows labelled `macos_headless` run on the offscreen
+platform without viewport rendering or an OpenGL context. Their processes have
+private settings, files and virtual screens. They use normal memory/CPU
+admission rather than the UI cap or sensitive lane, including when an old
+profile records desktop contention. Their assertions and test commands
+remain the same with `MITCAD_MACOS_HEADLESS_TESTS=OFF`, which restores the
+normal GUI for comparison. Actual Aqua input and viewport acceptance stay
+in the desktop lane.
+
 Cargo build fixtures keep a common `cargo_build` lock, their fixture
 dependencies, a minimum 6 GiB prediction and at most two compiler jobs
 (one when current free headroom requires it, or the caller requests one).

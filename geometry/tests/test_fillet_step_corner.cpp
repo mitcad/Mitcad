@@ -24,22 +24,29 @@
 // STEP import gives them. The check itself is tested on made faces placed
 // by hand.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
 #include <Standard_ErrorHandler.hxx>
@@ -47,6 +54,8 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
@@ -381,12 +390,32 @@ void test_check_on_placed_faces() {
   const ShapePtr out = named(bump, gp_Pnt(4.5, 4.5, 10.5));
   const std::string warning = detail::dressup_warning(*input, *out, "F2", "fillet", DressupSide::Within, 2.0);
   std::printf("  bump: %s\n", warning.c_str());
-  CHECK(contains(warning, "the corner of the fillet at vertex V{F1:import(1)|F1:import(3)|F1:import(5)} reaches 0.5 mm "
-                          "out of the body"));
+  // In plain words (mitcad#1327): the corner by its place, not its name.
+  CHECK(contains(warning, "The corner of the fillet reaches 0.5 mm out of the body, where a fillet of convex edges "
+                          "only takes material away: it folds back on itself or ends in a spike there"));
+  CHECK(contains(warning, "Check the result."));
+  CHECK(!contains(warning, "V{") && !contains(warning, "E{") && !contains(warning, "F1:import("));
+  // Its places: the corner's face and the deepest point, on the block.
+  const detail::DressupFinding found =
+      detail::dressup_check(*input, *out, "F2", "fillet", DressupSide::Within, 2.0);
+  CHECK(found.text == warning);
+  CHECK(found.places.size() == 2);
+  if (found.places.size() == 2) {
+    CHECK(found.places[0].kind == Shape::NotePlace::Kind::Face &&
+          found.places[0].name == "F2:corner(V{F1:import(1)|F1:import(3)|F1:import(5)})");
+    CHECK(found.places[1].kind == Shape::NotePlace::Kind::Point);
+    const auto& p = found.places[1].point;
+    CHECK(p[0] > 4.0 - 1e-6 && p[0] < 5.0 + 1e-6 && p[1] > 4.0 - 1e-6 && p[1] < 5.0 + 1e-6 && p[2] > 10.0);
+  }
   // The same block's faces where material may be added: no warning.
   CHECK(detail::dressup_warning(*input, *out, "F2", "fillet", DressupSide::Outside, 2.0).empty());
-  // Within 1 % of the size: no warning (0.5 of 100).
+  // Within 3 % of the size: no warning (mitcad#1327). 0.5 of 100, and of
+  // 26 (1.9 %, as a three-fillet corner's 0.057 mm on a radius of 3); of
+  // 10.6 (4.7 %, as the folded corner of mitcad#1253, 0.035 mm on 0.75) it
+  // warns.
   CHECK(detail::dressup_warning(*input, *out, "F2", "fillet", DressupSide::Within, 100.0).empty());
+  CHECK(detail::dressup_warning(*input, *out, "F2", "fillet", DressupSide::Within, 26.0).empty());
+  CHECK(!detail::dressup_warning(*input, *out, "F2", "fillet", DressupSide::Within, 10.6).empty());
   // A pocket 0.5 deep in the top, where material may only be added.
   const TopoDS_Shape pocket =
       BRepAlgoAPI_Cut(box, BRepPrimAPI_MakeBox(gp_Pnt(4.0, 4.0, 9.5), gp_Pnt(5.0, 5.0, 10.5)).Shape()).Shape();
@@ -408,11 +437,207 @@ void test_check_on_placed_faces() {
   CHECK(detail::made_face("F1:import(3)", "F2", "fillet", true) == "face F1:import(3)");
 }
 
+// The plane face of a named shape at `value` along axis `axis` (0 x, 1 y,
+// 2 z), its normal along that axis; -1 for none.
+int plane_face_at(const Shape& shape, int axis, double value) {
+  for (int f = 0; f < shape.face_count(); ++f) {
+    const BRepAdaptor_Surface surface(shape.face(f));
+    if (surface.GetType() != GeomAbs_Plane) {
+      continue;
+    }
+    const gp_Pln plane = surface.Plane();
+    const gp_Dir n = plane.Axis().Direction();
+    const gp_Pnt o = plane.Location();
+    const double normal[3] = {n.X(), n.Y(), n.Z()};
+    const double at[3] = {o.X(), o.Y(), o.Z()};
+    if (std::abs(std::abs(normal[axis]) - 1.0) < 1e-9 && std::abs(at[axis] - value) < 1e-6) {
+      return f;
+    }
+  }
+  return -1;
+}
+
+// The name of the edge between two faces of a named shape; empty for none.
+std::string edge_between(const Shape& shape, int a, int b) {
+  for (int e = 0; e < shape.edge_count(); ++e) {
+    const std::array<int, 2> faces = shape.edge_faces(e);
+    if ((faces[0] == a && faces[1] == b) || (faces[0] == b && faces[1] == a)) {
+      return shape.edge_name(e);
+    }
+  }
+  return {};
+}
+
+// An L of a floor [0, 20] x [0, 20] x [0, 10] and a wall [0, 20] x [0, 5] x
+// [10, 20] on it, the floor's top edge at y = 20 rounded `radius` (none: 0).
+TopoDS_Shape floor_and_wall(double radius) {
+  const TopoDS_Shape floor = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(20, 20, 10)).Shape();
+  const TopoDS_Shape wall = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 10), gp_Pnt(20, 5, 20)).Shape();
+  BRepAlgoAPI_Fuse fused(floor, wall);
+  fused.SimplifyResult();
+  const TopoDS_Shape both = fused.Shape();
+  if (!(radius > 0.0)) {
+    return both;
+  }
+  BRepFilletAPI_MakeFillet rounding(both);
+  for (TopExp_Explorer e(both, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+    const gp_Pnt a = BRep_Tool::Pnt(TopExp::FirstVertex(edge));
+    const gp_Pnt b = BRep_Tool::Pnt(TopExp::LastVertex(edge));
+    if (std::abs(a.Y() - 20) < 1e-9 && std::abs(b.Y() - 20) < 1e-9 && std::abs(a.Z() - 10) < 1e-9 &&
+        std::abs(b.Z() - 10) < 1e-9) {
+      rounding.Add(radius, edge);
+    }
+  }
+  rounding.Build();
+  return rounding.IsDone() ? rounding.Shape() : TopoDS_Shape();
+}
+
+// The result of a fillet of the L's concave edge (between the floor's top
+// and the wall's front) placed by hand: the L joined with a block whose
+// faces outside the L are named as the fillet's made faces.
+ShapePtr placed_fillet(const Shape& input, const std::string& edge, const gp_Pnt& low, const gp_Pnt& high) {
+  const TopoDS_Shape joined = BRepAlgoAPI_Fuse(input.occt(), BRepPrimAPI_MakeBox(low, high).Shape()).Shape();
+  std::vector<Shape::NamedFace> faces;
+  for (TopExp_Explorer f(joined, TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(f.Current());
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    const gp_Pnt mid = BRepAdaptor_Surface(face).Value(0.5 * (u0 + u1), 0.5 * (v0 + v1));
+    NameList names = {"F2:fillet(" + edge + ")"};
+    for (int k = 0; k < input.face_count(); ++k) {
+      BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(mid).Vertex(), input.face(k));
+      if (distance.IsDone() && distance.Value() < 1e-6) {
+        names = input.face_names(k);
+        break;
+      }
+    }
+    faces.push_back({face, names});
+  }
+  return std::make_shared<Shape>(joined, faces);
+}
+
+// A fillet of a concave edge whose made face runs on from the face beside
+// the edge onto the rounding of that face's far edge (mitcad#1327: at a
+// three-fillet corner, a tangent chain's fillet rests on the earlier
+// rounding there, 0.057 mm off the face's surface continued, and warned).
+// Placed by hand: a block above the rounding, 0.08 mm off the floor's top
+// continued but resting on the rounding, gives no warning; the same block
+// hanging past the floor's sharp edge (0.3 mm) warns with its places.
+void test_check_runs_onto_a_rounding() {
+  using detail::DressupSide;
+  const TopoDS_Shape rounded_l = floor_and_wall(1.0);
+  CHECK(!rounded_l.IsNull());
+  if (rounded_l.IsNull()) {
+    return;
+  }
+  const ShapePtr input = import_body(rounded_l, "F1", 0);
+  const std::string edge = edge_between(*input, plane_face_at(*input, 2, 10.0), plane_face_at(*input, 1, 5.0));
+  CHECK(!edge.empty());
+  const ShapePtr over_rounding = placed_fillet(*input, edge, gp_Pnt(8, 19.2, 9.95), gp_Pnt(12, 19.6, 10.3));
+  const detail::DressupFinding none =
+      detail::dressup_check(*input, *over_rounding, "F2", "fillet", DressupSide::Outside, 2.0);
+  std::printf("  over the rounding: %s\n", none.text.c_str());
+  CHECK(none.empty());
+
+  const ShapePtr sharp = import_body(floor_and_wall(0.0), "F1", 0);
+  const std::string sharp_edge = edge_between(*sharp, plane_face_at(*sharp, 2, 10.0), plane_face_at(*sharp, 1, 5.0));
+  CHECK(!sharp_edge.empty());
+  const ShapePtr hanging = placed_fillet(*sharp, sharp_edge, gp_Pnt(8, 19.8, 9.9), gp_Pnt(12, 20.3, 10.3));
+  const detail::DressupFinding past =
+      detail::dressup_check(*sharp, *hanging, "F2", "fillet", DressupSide::Outside, 2.0);
+  std::printf("  past the sharp edge: %s\n", past.text.c_str());
+  CHECK(contains(past.text, "The fillet hangs 0.3 mm past the edge of the face beside it"));
+  CHECK(!contains(past.text, "E{") && !contains(past.text, "F1:import("));
+  // The made face, the floor's top it hangs past, and the farthest point.
+  const std::string top = sharp->face_names(plane_face_at(*sharp, 2, 10.0)).front();
+  CHECK(std::any_of(past.places.begin(), past.places.end(), [&](const Shape::NotePlace& place) {
+    return place.kind == Shape::NotePlace::Kind::Face && place.name == "F2:fillet(" + sharp_edge + ")";
+  }));
+  CHECK(std::any_of(past.places.begin(), past.places.end(), [&](const Shape::NotePlace& place) {
+    return place.kind == Shape::NotePlace::Kind::Face && place.name == top;
+  }));
+  CHECK(std::any_of(past.places.begin(), past.places.end(), [](const Shape::NotePlace& place) {
+    return place.kind == Shape::NotePlace::Kind::Point && place.point[1] > 20.0;
+  }));
+}
+
+// A synthetic three-fillet corner built by the kernel (mitcad#1327): a
+// tower standing on a slab, its front edges rounded 5 (Fillet1) and the
+// slab's top back edge rounded 1 (Fillet2), then the tower's foot, the
+// concave edge chain between the slab's top and the tower (along its front
+// and round its rounded edges, down its sides to the slab's back), rounded
+// 3 with tangent chains: where it ends at the back, it runs from the
+// slab's top onto the rounding of 1. The result has no warning. (Skipped
+// with a message where the kernel cannot build it: the check, not the
+// fillet, is what is tested.)
+void test_three_fillet_corner() {
+  const TopoDS_Shape slab = BRepPrimAPI_MakeBox(gp_Pnt(-50, 0, 0), gp_Pnt(50, 20, 20)).Shape();
+  const TopoDS_Shape tower = BRepPrimAPI_MakeBox(gp_Pnt(-20, 0, 20), gp_Pnt(20, 10, 60)).Shape();
+  BRepAlgoAPI_Fuse fused(slab, tower);
+  fused.SimplifyResult();
+  const TopoDS_Shape both = fused.Shape();
+  BRepFilletAPI_MakeFillet first(both);
+  for (TopExp_Explorer e(both, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+    const gp_Pnt a = BRep_Tool::Pnt(TopExp::FirstVertex(edge));
+    const gp_Pnt b = BRep_Tool::Pnt(TopExp::LastVertex(edge));
+    // The tower's front vertical edges (x = +-20, y = 10).
+    if (std::abs(a.Y() - 10) < 1e-9 && std::abs(b.Y() - 10) < 1e-9 && std::abs(std::abs(a.X()) - 20) < 1e-9 &&
+        std::abs(a.X() - b.X()) < 1e-9 && a.Z() > 19.0 && b.Z() > 19.0) {
+      first.Add(5.0, edge);
+    }
+  }
+  first.Build();
+  if (!first.IsDone()) {
+    std::printf("test_three_fillet_corner: skipped (the tower's roundings of 5 failed)\n");
+    return;
+  }
+  const TopoDS_Shape towered = first.Shape();
+  BRepFilletAPI_MakeFillet back(towered);
+  for (TopExp_Explorer e(towered, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+    const gp_Pnt a = BRep_Tool::Pnt(TopExp::FirstVertex(edge));
+    const gp_Pnt b = BRep_Tool::Pnt(TopExp::LastVertex(edge));
+    // The slab's top back edges beside the tower (y = 0, z = 20).
+    if (std::abs(a.Y()) < 1e-9 && std::abs(b.Y()) < 1e-9 && std::abs(a.Z() - 20) < 1e-9 &&
+        std::abs(b.Z() - 20) < 1e-9) {
+      back.Add(1.0, edge);
+    }
+  }
+  back.Build();
+  if (!back.IsDone()) {
+    std::printf("test_three_fillet_corner: skipped (the slab's roundings of 1 failed)\n");
+    return;
+  }
+  const ShapePtr body = import_body(back.Shape(), "F1", 0);
+  // The foot's edge along the tower's front: between the slab's top (z = 20)
+  // and the tower's front (y = 10).
+  const std::string foot = edge_between(*body, plane_face_at(*body, 2, 20.0), plane_face_at(*body, 1, 10.0));
+  CHECK(!foot.empty());
+  if (foot.empty()) {
+    return;
+  }
+  FilletSet set;
+  set.edges = {foot};
+  set.radius = 3.0;
+  set.tangent_chain = true;
+  const ShapePtr result = rounded("F4", *body, {set});
+  if (!result) {
+    std::printf("test_three_fillet_corner: skipped (the foot's rounding of 3 failed)\n");
+    return;
+  }
+  std::printf("  three-fillet corner: %s\n", notes(*result).c_str());
+  CHECK(result->notes().empty());
+}
+
 } // namespace
 } // namespace test
 
 int main() {
   test::guarded("test_check_on_placed_faces", test::test_check_on_placed_faces);
+  test::guarded("test_check_runs_onto_a_rounding", test::test_check_runs_onto_a_rounding);
+  test::guarded("test_three_fillet_corner", test::test_three_fillet_corner);
   test::guarded("test_synthetic_corner_occt", test::test_synthetic_corner_occt);
   test::guarded("test_synthetic_corner", test::test_synthetic_corner);
   test::guarded("test_reported_part", test::test_reported_part);

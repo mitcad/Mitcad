@@ -1311,6 +1311,7 @@ bool BrowserPanel::eventFilter(QObject* watched, QEvent* event) {
       }
       hoverJoint(nodeOf(m_tree->itemAt(at)));
       hoverBodies(nodeOf(m_tree->itemAt(at))); // mitcad#1022
+      hoverFeature(nodeOf(m_tree->itemAt(at))); // mitcad#1327
       hoverBindings(m_tree->itemAt(at), at); // mitcad#862
       break;
     }
@@ -1318,6 +1319,7 @@ bool BrowserPanel::eventFilter(QObject* watched, QEvent* event) {
       m_tree->setHover(QModelIndex());
       hoverJoint(BrowserNode());
       hoverBodies(BrowserNode());
+      hoverFeature(BrowserNode());
       hoverBindings(nullptr, QPoint());
       break;
     case QEvent::MouseButtonPress:
@@ -1343,6 +1345,20 @@ BrowserNode BrowserPanel::nodeOf(const QTreeWidgetItem* item) const {
 void BrowserPanel::hoverNode(const BrowserNode& node) {
   hoverJoint(node);
   hoverBodies(node);
+  hoverFeature(node);
+}
+
+void BrowserPanel::hoverFeature(const BrowserNode& node) {
+  // A feature's, a sketch's or a construction feature's row: the places
+  // its notices name (mitcad#1327).
+  const bool feature = node.type == BrowserNode::Type::Feature || node.type == BrowserNode::Type::Sketch ||
+                       node.type == BrowserNode::Type::Datum;
+  const QString uid = feature ? node.uid : QString();
+  if (uid == m_hoveredFeature) {
+    return;
+  }
+  m_hoveredFeature = uid;
+  emit featureHovered(uid);
 }
 
 void BrowserPanel::hoverJoint(const BrowserNode& node) {

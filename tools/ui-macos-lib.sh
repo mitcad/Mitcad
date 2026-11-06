@@ -141,6 +141,22 @@ ui_init() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
+  if [ "${MITCAD_TEST_HEADLESS:-0}" = 1 ]; then
+    # Event-driven component tests need no compositor/input pacing. Keep
+    # explicit caller values; workflow defaults below may use these too.
+    export MITCAD_TEST_STEP_MS=${MITCAD_TEST_STEP_MS:-10}
+    export MITCAD_TEST_SETTLE_MS=${MITCAD_TEST_SETTLE_MS:-20}
+  fi
+
+  if [ "${MITCAD_TEST_HEADLESS:-0}" = 1 ] && [ "${QT_QPA_PLATFORM:-}" = offscreen ]; then
+    # A private virtual screen, independent of the console's resolution.
+    # The Qt plugin's default 800x800 screen clips normal CAD dialogs.
+    cat > "$UI_ROOT/offscreen.json" <<'JSON'
+{"screens":[{"name":"component-tests","width":1920,"height":1200,"logicalDpi":96,"logicalBaseDpi":96,"dpr":1}]}
+JSON
+    export QT_QPA_PLATFORM="offscreen:configfile=$UI_ROOT/offscreen.json"
+  fi
+
   # The app's own files in the root, not the user's ~/Library: Qt would use
   # a plist of the user defaults for QSettings otherwise.
   export MITCAD_SETTINGS_DIR=$UI_ROOT/settings
@@ -191,6 +207,10 @@ ui_init() {
 # console, a CI runner without a display). Not the app's fault.
 ui_gui_unavailable() {
   [ "$UI_EXIT" -ne 0 ] || return 1
+  [ "${MITCAD_TEST_HEADLESS:-0}" != 1 ] || return 1
+  # A real assertion is never an environmental skip, even if Qt also
+  # logged a missing context before the failed process exited.
+  if grep -Eq '^TestDriver: FAIL([[:space:]]|$)' "$UI_LOG_FILE"; then return 1; fi
   grep -Eiq 'could not connect to (the )?(display|window ?server)|connection to the window server|WindowServer|CGSConnection|CGSInitialize|_RegisterApplication|no Qt platform plugin could be initialized|failed to create (an )?(open ?gl )?context|Failed to initialize QPA platform' \
     "$UI_LOG_FILE"
 }
@@ -231,7 +251,22 @@ ui_run_app() {
   rm -f "$UI_LOG_FILE"
   # Cross-checkout exclusion starts before launching the app or counting
   # UI_TIMEOUT. UI_PID stays the actual app (or the existing lldb mode).
-  if ! ui_gui_lock; then return 1; fi
+  if [ "${MITCAD_TEST_HEADLESS:-0}" = 1 ]; then
+    case " $* " in
+      *' --ui=native '*) ui_fail "headless tests cannot launch AppKit"; return 1 ;;
+    esac
+    case " $* " in
+      *' --ui=qt '*) ;;
+      *) ui_fail "headless tests require explicit --ui=qt"; return 1 ;;
+    esac
+    case "${QT_QPA_PLATFORM:-}" in
+      offscreen|offscreen:*) ;;
+      *) ui_fail "headless tests require Qt offscreen"; return 1 ;;
+    esac
+    if [ -z "${MITCAD_TEST_INPUT:-}" ]; then
+      ui_fail "headless tests require Qt offscreen and a UI script"; return 1
+    fi
+  elif ! ui_gui_lock; then return 1; fi
   if [ "${MITCAD_UI_LLDB:-0}" = 1 ] && command -v lldb > /dev/null; then
     lldb --batch -o run -o 'bt all' -- "$UI_APP" -ApplePersistenceIgnoreState YES "$@" > "$UI_LOG_FILE" 2>&1 &
   else

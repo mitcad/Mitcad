@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <QCheckBox>
+#include <QEvent>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QHash>
@@ -76,9 +77,25 @@ SettingsForm::SettingsForm(QWidget* parent) : QWidget(parent) {
     m_scroll->verticalScrollBar()->setValue(0);
   });
   connect(m_scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, &SettingsForm::layoutChanged);
+  // The rows' places settle only after the layouts have run, which can be
+  // after the filter's layoutChanged was answered: a search that hides the
+  // window's own fields above the list moves the list up a moment later.
+  // Its move and its page's new layout say so again, so the places logged
+  // last are where the rows are (a click at a place logged too early hit
+  // the gap between rows).
+  m_scroll->installEventFilter(this);
 }
 
 SettingsForm::~SettingsForm() = default;
+
+bool SettingsForm::eventFilter(QObject* watched, QEvent* event) {
+  const QEvent::Type type = event->type();
+  if ((watched == m_scroll && (type == QEvent::Move || type == QEvent::Resize)) ||
+      (watched == m_page && (type == QEvent::Resize || type == QEvent::LayoutRequest))) {
+    emit layoutChanged();
+  }
+  return QWidget::eventFilter(watched, event);
+}
 
 void SettingsForm::clearRows() {
   m_rows.clear();
@@ -91,7 +108,8 @@ void SettingsForm::clearRows() {
   m_rowsLayout = new QVBoxLayout(m_page);
   m_rowsLayout->setContentsMargins(4, 4, 4, 4);
   m_rowsLayout->setSpacing(2);
-  m_scroll->setWidget(m_page); // the page before is deleted
+  m_page->installEventFilter(this); // its rows' places settled (eventFilter)
+  m_scroll->setWidget(m_page);      // the page before is deleted
 }
 
 void SettingsForm::setKeys(const PrintKeyTable& table, const QString& set, const QString& dialect) {

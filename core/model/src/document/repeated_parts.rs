@@ -11,8 +11,12 @@
 //! base feature. The components' features go right after the base
 //! feature; a later combine's tools among the bodies become the first body
 //! where each occurrence shows it, and the bodies other later features
-//! name stay as they are. One undo step. Matching is the kernel's
-//! ([`Kernel::rigid_copies`]): a mirror image is not a copy.
+//! name stay as they are, as do the bodies a print plate item or a comment
+//! names. A copy has the colour, attributes and own properties (print
+//! values among them) of the first body of its kind, which its occurrence
+//! shows, so nothing of it is lost (mitcad#1312). One undo step. Matching
+//! is the kernel's ([`Kernel::rigid_copies`]): a mirror image is not a
+//! copy.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -39,7 +43,8 @@ pub struct RepeatedParts {
     /// A component per kind of body found more than once.
     pub parts: Vec<RepeatedPart>,
     /// The base feature's bodies that copy none, or that a later feature
-    /// other than a combine's tools uses, left in it.
+    /// other than a combine's tools, a print plate item or a comment uses,
+    /// left in it.
     pub kept: Vec<BodyUid>,
     /// The combines whose tools are now the components' bodies where the
     /// occurrences show them.
@@ -64,13 +69,22 @@ pub struct RepeatedPart {
 }
 
 /// A body of the base feature that may be a copy: its place in the
-/// feature, its id and what it looks like (colour and attributes, which a
-/// copy must share with the first body of its kind).
+/// feature, its id and what it looks like (colour, attributes and its own
+/// properties, print values among them, which a copy must share with the
+/// first body of its kind: the occurrence that takes its place shows the
+/// first body, mitcad#1312).
 struct Candidate {
     index: usize,
     uid: BodyUid,
-    look: (Option<[u64; 3]>, super::BodyAttributes),
+    look: Look,
 }
+
+/// A body's colour (as bits), attributes and own property sets.
+type Look = (
+    Option<[u64; 3]>,
+    super::BodyAttributes,
+    Vec<crate::properties::PropertyGroup>,
+);
 
 /// The bodies of one component: the first, and the others with the
 /// placement from the first onto each.
@@ -200,6 +214,17 @@ impl<K: Kernel> Document<K> {
                 }
             }
         }
+        // A body that a print plate item or a comment names stays as it is
+        // (mitcad#1312): as a copy it would be gone, and as the first body
+        // it would print, or be found, where every occurrence shows it.
+        for plate in &self.state.print_plates {
+            for item in &plate.items {
+                if let crate::print_plates::PlateTarget::Body(uid) = item.target {
+                    pinned.insert(uid);
+                }
+            }
+        }
+        pinned.extend(self.state.comments.iter().filter_map(|c| c.target.body));
         // The bodies that can be copies: solids and sheets of the feature's
         // component without face-level looks, which a copy could not keep,
         // and that nothing pins.
@@ -219,10 +244,19 @@ impl<K: Kernel> Document<K> {
             {
                 continue;
             }
+            let properties = self
+                .state
+                .properties
+                .sets(crate::properties::PropertyOwner::Body(*uid))
+                .to_vec();
             candidates.push(Candidate {
                 index,
                 uid: *uid,
-                look: (body.color.map(|c| c.map(f64::to_bits)), attributes),
+                look: (
+                    body.color.map(|c| c.map(f64::to_bits)),
+                    attributes,
+                    properties,
+                ),
             });
             shapes.push(shape);
         }
@@ -294,6 +328,11 @@ impl<K: Kernel> Document<K> {
                 state.body_names.remove(uid);
                 state.body_attributes.remove(uid);
                 state.flat_patterns.remove(uid);
+                // The same as the first body's, which the occurrence shows.
+                state
+                    .properties
+                    .owners
+                    .remove(&crate::properties::PropertyOwner::Body(*uid));
             }
             // The components' features go right after the base feature, so
             // that the features after it find the bodies in them.

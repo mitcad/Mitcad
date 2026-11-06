@@ -779,3 +779,152 @@ fn a_body_that_departs_names_its_component_the_feature_and_how_far() {
         "{error}"
     );
 }
+
+#[test]
+fn the_move_after_a_base_feature_names_its_bodies_by_their_numbers() {
+    // As Find Repeated Parts leaves a base feature whose copy B of A was
+    // taken out (mitcad#1306): `[A, C]`, C still `F1.b2` with its faces
+    // from 12 on. The Move turns `F1.b0` and `F1.b2`, not the gone `F1.b1`.
+    let mut doc = Document::new(MockKernel::default());
+    let brep = serde_json::to_value(mitcad_model::features::Brep::new(b"6 box".to_vec())).unwrap();
+    run(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "base", "bodies": [
+            {"brep": brep, "name": "A"},
+            {"brep": brep, "name": "C", "number": 2, "first_face": 12}]}}),
+    );
+    let before: Vec<BoundingBox> = ["F1.b0", "F1.b2"]
+        .iter()
+        .map(|b| boxes_of(&doc, b))
+        .collect();
+    let reply = run(
+        &mut doc,
+        json!({"cmd": "reorient_design", "axis": "x", "degrees": 90}),
+    );
+    assert_eq!(reply["moves"], json!(["Move1"]), "{reply}");
+    let mv: &mitcad_model::FeatureEntry = doc
+        .features()
+        .find(|f| matches!(f.def, FeatureDef::Move(_)))
+        .expect("a Move after the base feature");
+    let FeatureDef::Move(def) = &mv.def else {
+        panic!("a move");
+    };
+    assert_eq!(def.bodies, vec![body("F1.b0"), body("F1.b2")]);
+    let uids: Vec<FeatureUid> = doc.features().map(|f| f.uid).collect();
+    for f in uids {
+        assert_eq!(doc.status(f), Some(&FeatureStatus::Ok), "{f}");
+    }
+    let turn = Turn::about(TurnAxis::X, 1);
+    for (b, was) in ["F1.b0", "F1.b2"].iter().zip(&before) {
+        assert!(near(&boxes_of(&doc, b), &turned_box(turn, was)), "{b}");
+    }
+}
+
+/// A 24-bit BMP file of `width` x `height` grey pixels, 4000 pixels per
+/// metre (0.25 mm each), as base64.
+fn bmp(width: u32, height: u32) -> String {
+    let row = (width * 3).div_ceil(4) * 4;
+    let pixels = row * height;
+    let mut bytes = b"BM".to_vec();
+    bytes.extend_from_slice(&(54 + pixels).to_le_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&54u32.to_le_bytes());
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&height.to_le_bytes());
+    bytes.extend_from_slice(&[1, 0, 24, 0]);
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&pixels.to_le_bytes());
+    bytes.extend_from_slice(&4000u32.to_le_bytes());
+    bytes.extend_from_slice(&4000u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 8]);
+    bytes.resize(bytes.len() + pixels as usize, 0x80);
+    mitcad_model::internal::base64::encode(&bytes)
+}
+
+fn points(value: &Value) -> Vec<[f64; 3]> {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("no points: {value}"))
+        .iter()
+        .map(|p| std::array::from_fn(|i| p[i].as_f64().unwrap()))
+        .collect()
+}
+
+fn near_point(a: [f64; 3], b: [f64; 3]) -> bool {
+    (0..3).all(|i| (a[i] - b[i]).abs() <= 1e-6)
+}
+
+/// A comment pinned to a point and an image reference on the XY plane turn
+/// with the design (mitcad#1315): the comment's place is its old place
+/// turned, in the query and in the file, and the image lies where the turn
+/// takes it.
+#[test]
+fn point_comments_and_image_references_turn_with_the_design() {
+    // A box from x 90 to 100, y -5 to 5, z 0 to 10.
+    let mut doc = Document::new(MockKernel::default());
+    run(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [90, -5], "width": 10, "height": 10},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": RECT}],
+              "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+        ]),
+    );
+    run(
+        &mut doc,
+        json!({"cmd": "add_comment", "text": "a hole here", "target": {"at": [95, 0, 5]}}),
+    );
+    run(
+        &mut doc,
+        json!({"cmd": "insert_image_reference", "data": bmp(40, 20), "plane": "xy",
+               "at": [95, 0, 0]}),
+    );
+    let image = |doc: &Document<MockKernel>| {
+        let images: Value =
+            serde_json::from_str(&doc.query(r#"{"query": "image_references"}"#).unwrap()).unwrap();
+        images[0].clone()
+    };
+    let comment = |doc: &Document<MockKernel>| {
+        let comments: Value =
+            serde_json::from_str(&doc.query(r#"{"query": "comments"}"#).unwrap()).unwrap();
+        comments["comments"][0].clone()
+    };
+    let corners = points(&image(&doc)["corners"]);
+    assert_eq!(corners.len(), 4);
+    assert!(near_point(
+        points(&json!([comment(&doc)["place"]]))[0],
+        [95.0, 0.0, 5.0]
+    ));
+
+    let turn = Turn::about(TurnAxis::Z, 1);
+    run(
+        &mut doc,
+        json!({"cmd": "reorient_design", "axis": "z", "degrees": 90}),
+    );
+    // The point (95, 0, 5) turned a quarter about Z: (0, 95, 5).
+    let turned = comment(&doc);
+    assert_eq!(turned["orphaned"], false, "{turned}");
+    let place = points(&json!([turned["place"]]))[0];
+    assert!(near_point(place, [0.0, 95.0, 5.0]), "{turned}");
+    let at = points(&json!([turned["target"]["at"]]))[0];
+    assert!(near_point(at, [0.0, 95.0, 5.0]), "{turned}");
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    let saved = points(&json!([file["comments"][0]["place"]]))[0];
+    assert!(
+        near_point(saved, [0.0, 95.0, 5.0]),
+        "{}",
+        file["comments"][0]
+    );
+    // The image's corners, each the old one turned.
+    let now = points(&image(&doc)["corners"]);
+    assert_eq!(now.len(), 4);
+    for corner in &corners {
+        let expected = turn.vector(*corner);
+        assert!(
+            now.iter().any(|c| near_point(*c, expected)),
+            "{expected:?} not in {now:?}"
+        );
+    }
+}

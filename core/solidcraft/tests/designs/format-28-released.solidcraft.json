@@ -1,0 +1,47 @@
+{
+  "format": "solidcraft/28",
+  "name": "Released format 28",
+  "units": "mm",
+  "params": [
+    {"name": "d1", "expr": "40", "unit": "mm", "model": true},
+    {"name": "d2", "expr": "30", "unit": "mm", "model": true}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Sketch1", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [0.0, 0.0]},
+          {"id": "p2", "pos": [40.0, 0.0]},
+          {"id": "p3", "pos": [40.0, 30.0]},
+          {"id": "p4", "pos": [0.0, 30.0]}
+        ],
+        "curves": [
+          {"id": "l5", "type": "line", "a": 1, "b": 2},
+          {"id": "l6", "type": "line", "a": 2, "b": 3},
+          {"id": "l7", "type": "line", "a": 3, "b": 4},
+          {"id": "l8", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": [
+          {"id": "k9", "type": "horizontal", "l": 0},
+          {"id": "k10", "type": "horizontal", "l": 2},
+          {"id": "k11", "type": "vertical", "l": 1},
+          {"id": "k12", "type": "vertical", "l": 3},
+          {"id": "k13", "type": "coincident", "p": 0, "q": 1},
+          {"id": "k14", "type": "length", "l": 0, "value": 40.0, "param": "d1"},
+          {"id": "k15", "type": "length", "l": 1, "value": 30.0, "param": "d2"}
+        ]
+      }
+    },
+    {
+      "id": 2, "name": "Two sides", "type": "extrude", "body_names": ["Slab"],
+      "param_names": ["d3", "d4"],
+      "sketch": 1, "profiles": {"type": "all"},
+      "extent": {"distance": "10 mm", "direction": "negative", "distance2": "5 mm"},
+      "operation": "new_body"
+    }
+  ],
+  "next_id": 3
+}

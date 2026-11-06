@@ -1020,24 +1020,35 @@ tools/test-macos.sh --build build/macos-release -R '^(app.unit|app.ui-macos)$'
 tools/test-macos.sh --build build/macos-release --measure -R '^tools.testrun$'
 ```
 
-The default is `--schedule`, at most four tests, an 85% memory budget and
-90% CPU gate. Aqua UI tests (`app.ui-*`) are timing-sensitive from the
-start: at most one, below 70% load. `--measure` defaults to one test at a
-time. Desktop tests share the `macos_desktop` resource lock, rather than
-stopping all tests with `RUN_SERIAL`; model, geometry and offscreen unit
-tests can run beside them. The shell harness also holds its per-user GUI
-file lock across separate test runs and checkouts. Headless XPC tests need
-neither desktop exclusion nor full serial execution. The Metal surface
-tests retain their existing serial execution; their parallel execution
-has not been validated.
-Cargo test builds remain serial because their process-tree memory is not
-bounded on macOS; timed Metal scene acceptance also runs alone.
-`repo.macos-test-resources` checks the configured desktop-lock coverage.
-Selections and other runner arguments pass through; there is no
-second test list. The machine profile file remains outside the build
-(default `~/.mitcad/test-profiles.json`). macOS records rusage CPU time
-and the largest process's peak RSS, without a hard per-test memory limit;
-it does not claim a simultaneous process-tree memory peak.
+The default is `--schedule --memory-budget free --corpus-children`, with
+history-based concurrency, a 90% CPU gate and current available memory
+less a desktop reserve (at least 4 GiB). macOS samples process-group and
+descendant RSS; this is accounting rather than a kernel memory limit.
+Profiles remain outside the disposable build tree, by default in
+`~/.mitcad/test-profiles.json`. `--measure` still defaults to one test.
+
+Qt component workflows that inspect controls, model values and saved
+files run on Qt's `offscreen` platform with `MITCAD_TEST_HEADLESS=1`.
+They keep the real document/model and widget event handlers, but never
+render the OpenGL viewport. Their captures show Qt components, not native
+window chrome or the 3D scene. The driver verifies the offscreen platform,
+Qt frontend and absence of an OpenGL context. These tests have the `macos_headless`
+label: they do not acquire Aqua's lock, consume a desktop/UI lane or
+inherit old desktop-contention restrictions. Normal memory and CPU
+admission still apply. Each harness owns its settings, files and a virtual
+screen configuration. `MITCAD_MACOS_HEADLESS_TESTS=OFF` at configure time
+runs these same commands and assertions in the normal GUI for comparison.
+
+The remaining Aqua tests share `macos_desktop` and the shell's per-user
+GUI lock, protecting focus, menus and native input across checkouts.
+Audited `macos_gui_harness` workflows may prepare fixtures or verify files
+in parallel, acquiring Aqua only for each application lifetime. Viewport
+pixels/picking, native controls, system dialogs and physical input retain
+their actual platform tests. Headless XPC and offscreen unit tests need no
+desktop exclusion. Cargo test builds share `cargo_build`, reserve compiler
+memory and allow at most two compiler jobs; timed Metal checks remain
+serial. `repo.macos-test-resources` checks the actual registrations and
+`repo.macos-ui-lock` checks both desktop exclusion and headless overlap.
 
 Windows (the VM, from the build's folder, `ctest` on `PATH` through
 `tools\dev-env\msvc.cmd`): a Job Object per test.
@@ -1096,7 +1107,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_PARSER_PANIC=<file name or path>` | The reader of that file panics as a parser bug would (mitcad#922; `core/model-base/src/reader_guard.rs`): in the application's guarded readers (`dxf_info`, `svg_info`, the DXF and SVG inserts, the print settings' read) the panic becomes their error; in the import process's listings (`--list-references`, `--list-links`) it ends that process (`core.bridge`, `tools/ui-import-listing-test.sh`). |
 | `MITCAD_CRASH_DIR` | Where crash reports go instead of `crashes` in the local app data (the app sets it for its workers, with `MITCAD_CRASH_PARENT`). |
 | `MITCAD_CORE_DUMPS=1` | Linux: `mitcad-cli`, `mitcad_run_parallel` and the corpus tests may leave core dumps (see *Core dumps* below). |
-| `MITCAD_RENDER_SAMPLES`, `MITCAD_RENDER_TEST_SCENE=1`, `MITCAD_RENDER_WORKER` | The rendered view's samples per pixel; the fixed test scene instead of the document; another render worker than `mitcad-render` next to the app ([rendering.md](rendering.md)). |
+| `MITCAD_RENDER_SAMPLES`, `MITCAD_RENDER_TEST_SCENE=1`, `MITCAD_RENDER_WORKER` | The rendered view's samples per pixel; the fixed test scene instead of the document; another render worker than `mitcad-render` next to the app, also over the one picked in Preferences ([rendering.md](rendering.md)). |
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
 | `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
@@ -1244,7 +1255,13 @@ visible/enabled checks.
 `qt-choice` sends real pointer move, press and release events to a populated
 combo popup. Each phase resolves the persistent item's current visual
 rectangle and screen point again: selecting a motion type can resize its
-floating command card during the press. The log records each phase's
+floating command card during the press. Before opening and before each
+phase it waits, within six seconds, until the popup is visible and the
+active popup and the row is laid out, inside its viewport and hit there:
+under load a popup can be visible to Qt while it is still being shown or
+its rows lack their geometry. A row that stays unavailable fails with the
+phase and each of those conditions, plus the window's exposure, which is
+reported only (a Windows service session never reports it). The log records each phase's
 rectangle, screen point, popup visibility and current caption. The driver
 then requires the original popup's actual closure within six seconds before
 advancing. It logs the resulting caption without assuming that an action
@@ -1440,7 +1457,13 @@ in the distro only:
   reads `caliper-pad028/body.brep` and `pad.brep` (a join that loses
   volume, mitcad#964), and `test_chamfer_kernel.cpp` reads
   `chamfer-open-shell/body.brep` (a chamfer that healing made an open
-  shell, mitcad#1182); skipped with a message without the variable.
+  shell, mitcad#1182); skipped with a message without the variable. The
+  ctest `cli.geometry_cases` (`tools/cli/geometry-cases-test.cmake`) opens
+  designs of such cases with `mitcad-cli info` and checks that the
+  features it lists build without a warning: in `fillet-corner-overhang/`,
+  a three-fillet corner (`fillet-corner.mitcad` Fillet3, 0.057 mm on R3)
+  and a rim rounding built as a ring (`fillet-corner-ring.mitcad` Fillet4),
+  mitcad#1327; skipped without them.
 - `MITCAD_STEP_REPORTED` (a folder): STEP files of parts from issue
   reports, never committed, named after their report
   (`github-<issue>-…`). `geometry/tests/test_fillet_step_corner.cpp`
@@ -2019,8 +2042,15 @@ runs one step after another. Build and lint use half the cores unless
   header code and calls the driver through its own runtime; it links only
   the driver's import library. NVIDIA's OptiX SDK headers
   (a proprietary licence: binary-only, NVIDIA hardware only, recipients
-  bound to its terms) would be compiled in, so MitCad does not use OptiX
-  (README, FAQ).
+  bound to its terms) would be compiled in, so MitCad does not build or
+  ship OptiX: no OptiX code, header or binary in the repository, the
+  packages or the downloads, and a release configure refuses a render
+  prefix with it (`cmake/RenderOptix.cmake`). A user may build an OptiX
+  worker for their own machine with the SDK they download from NVIDIA
+  themselves (`build-cycles.sh --optix`, `build-cycles.ps1 -Optix`) and
+  pick it in Preferences; passing it on is between that user and NVIDIA's
+  licence (README, FAQ; [rendering.md](rendering.md#building-an-optix-worker-yourself),
+  mitcad#1332).
 - HEIF images of image references (mitcad#850): libheif and its HEVC
   decoder libde265 (GNU LGPL version 3 or later, as their sources say;
   vcpkg's metadata names LGPL-3.0-only) from vcpkg, decode only. The

@@ -11,6 +11,7 @@
 #include <QString>
 
 #include "render/RenderProtocol.hpp"
+#include "render/RenderWorkerChoice.hpp"
 #include "platform/MacChrome.hpp"
 #ifdef __APPLE__
 #include "render/MacFrameSurface.hpp"
@@ -62,10 +63,15 @@ public:
   explicit RenderClient(QObject* parent = nullptr);
   ~RenderClient() override;
 
-  // The worker's executable: mitcad-render next to the application's
-  // executable, or MITCAD_RENDER_WORKER (tests). Empty when there is none:
-  // a build or package without the renderer.
-  static QString workerPath();
+  // The worker's executable: MITCAD_RENDER_WORKER (tests), else the one
+  // picked in Preferences (mitcad#1332) while it is there and has not
+  // failed in this run, else mitcad-render next to the application's
+  // executable. Empty when there is none: a build or package without the
+  // renderer.
+  static QString workerPath() { return workerChoice().path; }
+  // The same with whether it is the picked one, and why a picked one is
+  // not used (logged once).
+  static WorkerChoice workerChoice();
 
   // The render device the next start asks for (mitcad#50): "auto", "cpu"
   // or a device's id; the worker gets it as its first command.
@@ -104,10 +110,17 @@ signals:
   // The worker ended without being asked to: a crash, it could not start,
   // or it speaks another protocol version (incompatible()).
   void failed(const QString& reason);
+  // The picked worker is not there, did not start or speaks another
+  // protocol version: the shipped one starts instead (mitcad#1332). For
+  // the status bar.
+  void workerFallback(const QString& text);
 
 private:
   void readOutput();
   void handle(const QJsonObject& event);
+  // A picked worker that ended before its hello, of `reason`: the shipped
+  // one starts instead; false when there is none to fall back on.
+  bool fallBack(const QString& reason);
 
   QProcess* m_process = nullptr;
 #ifdef __APPLE__
@@ -127,6 +140,9 @@ private:
   bool m_frameWaiting = false;
   bool m_greeted = false; // the worker's "hello" had this protocol version
   bool m_incompatible = false;
+  QString m_program; // the worker started last
+  bool m_picked = false; // it is the one picked in Preferences
+  bool m_restartPending = false; // the shipped worker starts after a picked one failed
 };
 
 } // namespace mitcad::render

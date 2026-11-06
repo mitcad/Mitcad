@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::features::{EmbossDef, EmbossMode, FeatureDef, SketchPlane};
 use crate::ids::{BodyUid, FeatureUid};
+use crate::profile::SketchFrame;
 use crate::test_support::{block, def, extrude, num};
 use crate::testing::MockKernel;
 use crate::topo::RegionKey;
@@ -672,4 +673,109 @@ fn a_cylinder_or_a_plane_takes_the_projection_when_asked() {
         "{}",
         last_spec(&b.doc)
     );
+}
+
+fn near_frame(a: &SketchFrame, b: &SketchFrame) -> bool {
+    let near = |u: [f64; 3], v: [f64; 3]| (0..3).all(|i| (u[i] - v[i]).abs() <= 1e-9);
+    near(a.origin, b.origin) && near(a.x_axis, b.x_axis) && near(a.y_axis, b.y_axis)
+}
+
+/// Reorient Design keeps a wrap's offsets where the turn takes them
+/// (mitcad#1315): Along Axis and Around count along the face's axis made to
+/// point towards +Z, else +Y, else +X, so a turn that takes the counted
+/// direction to the other sense negates them. A rod along +Z turned so that
+/// it lies along -Y counts along +Y; every quarter turn, for axes of every
+/// sense and an oblique one, gives the wrapped frame turned.
+#[test]
+fn a_turn_keeps_a_wraps_offsets_where_it_takes_them() {
+    use crate::features::emboss::WrapOffsets;
+    use crate::kernel::Axis;
+    use crate::reorient::{Turn, TurnAxis, wrap_count_reversed};
+
+    let frame = SketchFrame {
+        origin: [0.0, -10.0, 6.0],
+        x_axis: [1.0, 0.0, 0.0],
+        y_axis: [0.0, 0.0, -1.0],
+    };
+    let offsets = WrapOffsets {
+        along: 10.0,
+        around: 0.3,
+        rotation: 0.0,
+    };
+    // The frame `offsets` place about `axis`, turned, against the frame the
+    // turned offsets place about the turned axis.
+    let kept = |turn: Turn, direction: [f64; 3]| {
+        let axis = Axis {
+            origin: [1.0, 2.0, 3.0],
+            direction,
+        };
+        let (was, _) = offsets.placed(frame, &[], &axis);
+        let sign = if wrap_count_reversed(turn, direction) {
+            -1.0
+        } else {
+            1.0
+        };
+        let turned = WrapOffsets {
+            along: sign * offsets.along,
+            around: sign * offsets.around,
+            rotation: 0.0,
+        };
+        let axis = Axis {
+            origin: turn.vector(axis.origin),
+            direction: turn.vector(direction),
+        };
+        let (now, _) = turned.placed(turn.frame(&frame), &[], &axis);
+        near_frame(&now, &turn.frame(&was))
+    };
+    // The rod along +Z turned a quarter about X: along -Y, counted +Y.
+    let turn = Turn::about(TurnAxis::X, 1);
+    assert_eq!(turn.vector([0.0, 0.0, 1.0]), [0.0, -1.0, 0.0]);
+    assert!(wrap_count_reversed(turn, [0.0, 0.0, 1.0]));
+    assert!(kept(turn, [0.0, 0.0, 1.0]));
+    // Its own axis pointing down (against the extrusion) counts the same.
+    assert!(wrap_count_reversed(turn, [0.0, 0.0, -1.0]));
+    for axis in [TurnAxis::X, TurnAxis::Y, TurnAxis::Z] {
+        for quarters in 1..4 {
+            let turn = Turn::about(axis, quarters);
+            for direction in [
+                [1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+                [0.0, 0.6, -0.8],
+            ] {
+                assert!(kept(turn, direction), "{turn:?} {direction:?}");
+            }
+        }
+    }
+}
+
+/// Reorient Design negates an Emboss's Along Axis and Around when the turn
+/// reverses the direction they count in (mitcad#1315): the rod along +Z
+/// turned to lie along -Y.
+#[test]
+fn reorient_design_negates_a_wraps_offsets_it_reverses() {
+    use crate::reorient::{Turn, TurnAxis};
+
+    let (mut doc, rod) = rod();
+    // The rod's wall has its axis along the extrusion, which the turn
+    // takes to -Y with the sketch (the mock's is +Z otherwise).
+    doc.kernel().extrusion_axes.set(true);
+    let (sketch, region) = rectangle(&mut doc, SketchPlane::Xz, [-2.0, -10.0], [4.0, 8.0]);
+    let mut value = emboss(sketch, &region, Some((rod, "F2:side(c1)")), 1.0, "raise");
+    value["along_axis"] = json!(10);
+    value["around_angle"] = json!(0.3);
+    let uid = doc.add_feature(&def(value), None).unwrap().uid;
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    let FeatureDef::Emboss(made) = &doc.feature(uid).unwrap().def else {
+        panic!("an emboss");
+    };
+    let (along, around) = (made.along_axis.unwrap(), made.around_angle.unwrap());
+    doc.reorient_design(Turn::about(TurnAxis::X, 1)).unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    let value = |id| doc.parameters().get(id).unwrap().value();
+    assert!((value(along) + 10.0).abs() < 1e-9, "{}", value(along));
+    assert!((value(around) + 0.3).abs() < 1e-9, "{}", value(around));
 }

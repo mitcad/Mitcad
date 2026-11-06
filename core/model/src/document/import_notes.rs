@@ -191,7 +191,8 @@ pub fn status_text(
 
 /// A feature's notices (mitcad#1040), the one place that decides its
 /// level: the error of a failed feature, a warning per warning of its
-/// evaluation, its evaluation's infos (mitcad#1106: a fillet built 0.1 %
+/// evaluation (one for the references a change in one sketch renamed,
+/// mitcad#1334), its evaluation's infos (mitcad#1106: a fillet built 0.1 %
 /// smaller than asked) and the importer's note as information, in that
 /// order. States (suppressed, rolled back, pending) are not severities: a
 /// suppressed placeholder has only its note.
@@ -202,16 +203,42 @@ pub fn feature_notices(
     note: Option<&str>,
     uid: FeatureUid,
 ) -> Vec<Notice> {
+    feature_notices_placed(status, warnings, infos, note, uid, &[])
+}
+
+/// [`feature_notices`] with the places of its warnings, by message
+/// (mitcad#1327: the faces of a fillet's corner that folds back on itself,
+/// its farthest point). Each notice's message is in plain words: the
+/// topological names in it go into its places too
+/// ([`Notice::new`](crate::notice::Notice::new)).
+pub fn feature_notices_placed(
+    status: Option<&FeatureStatus>,
+    warnings: &[String],
+    infos: &[String],
+    note: Option<&str>,
+    uid: FeatureUid,
+    places: &[(String, Vec<crate::notice::NoticePlace>)],
+) -> Vec<Notice> {
     let mut notices = Vec::new();
     if let Some(error) = status.and_then(FeatureStatus::error) {
         notices.push(Notice::error(error).with_target(uid));
     }
     if !matches!(status, Some(FeatureStatus::Failed(_))) {
-        notices.extend(
+        // References a change in one sketch renamed are one notice of
+        // their kind (mitcad#1334: "2 edges found again after a change in
+        // Sketch1"); the warnings keep one each.
+        notices.extend(crate::notice::merge_found_again(
             warnings
                 .iter()
-                .map(|w| Notice::warning(w.as_str()).with_target(uid)),
-        );
+                .map(|w| {
+                    let notice = Notice::warning(w.as_str()).with_target(uid);
+                    match places.iter().find(|(message, _)| message == w) {
+                        Some((_, places)) => notice.with_places(places.iter().cloned()),
+                        None => notice,
+                    }
+                })
+                .collect(),
+        ));
         notices.extend(
             infos
                 .iter()
@@ -349,6 +376,29 @@ mod tests {
         assert_eq!(
             feature_notices(Some(&failed), &[], &infos, None, F),
             vec![Notice::error("no result").with_target("F4")]
+        );
+    }
+
+    #[test]
+    fn renamed_references_are_one_notice_of_their_kind() {
+        // Two edges a sketch change renamed (mitcad#1334): one notice with
+        // all four names as its places; the warnings keep one each.
+        let ok = FeatureStatus::Ok;
+        let warned = [
+            "edge E{F2:a|F2:b} found as E{F2:a|F2:c} after a change in Sketch1".to_owned(),
+            "edge E{F2:d|F2:e} found as E{F2:d|F2:f} after a change in Sketch1".to_owned(),
+        ];
+        let notices = feature_notices(Some(&ok), &warned, &[], None, F);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].message,
+            "2 edges found again after a change in Sketch1"
+        );
+        assert_eq!(notices[0].target.as_deref(), Some("F4"));
+        assert_eq!(notices[0].places.len(), 4);
+        assert_eq!(
+            feature_level(Some(&ok), &warned, &[], None),
+            Some(NoticeLevel::Warning)
         );
     }
 }

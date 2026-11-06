@@ -187,12 +187,12 @@ MainWindow* WindowManager::openFile(MainWindow* source, const QString& path, QSt
       QPointer<MainWindow> waiting = target;
       const bool readOnly = source != nullptr && source->m_openingReadOnly;
       const bool newDesign = source != nullptr && source->m_openingNewDesign;
-      target->whenIdle(this, [this, waiting, path, readOnly, newDesign] {
+      target->whenIdle(this, [this, waiting, path, readOnly, newDesign, replaceAsked] {
         if (!waiting) return;
         waiting->m_openingReadOnly = readOnly;
         waiting->m_openingNewDesign = newDesign;
         QString failure;
-        if (!openFile(waiting, path, failure) && waiting && !failure.isEmpty()) waiting->showError(failure);
+        if (!openFile(waiting, path, failure, replaceAsked) && waiting && !failure.isEmpty()) waiting->showError(failure);
         if (waiting) { waiting->m_openingReadOnly = false; waiting->m_openingNewDesign = false; }
       });
       return nullptr;

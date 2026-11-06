@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "bridge/dressup.hpp"
 
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,6 +18,55 @@ std::vector<std::string> names(const rust::Vec<rust::String>& list) {
     result.emplace_back(name);
   }
   return result;
+}
+
+// A JSON string of text (quotes, backslashes and control characters
+// escaped).
+std::string json_text(const std::string& text) {
+  std::string out = "\"";
+  for (const char c : text) {
+    if (c == '"' || c == '\\') {
+      out += '\\';
+      out += c;
+    } else if (static_cast<unsigned char>(c) < 0x20) {
+      char escaped[8];
+      std::snprintf(escaped, sizeof escaped, "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+      out += escaped;
+    } else {
+      out += c;
+    }
+  }
+  return out + "\"";
+}
+
+// A note's places as the model's notices give them (mitcad#1327).
+std::string places_json(const std::vector<geometry::Shape::NotePlace>& places) {
+  using Kind = geometry::Shape::NotePlace::Kind;
+  std::string out = "[";
+  for (const geometry::Shape::NotePlace& place : places) {
+    if (out.size() > 1) {
+      out += ",";
+    }
+    switch (place.kind) {
+    case Kind::Face:
+      out += "{\"kind\":\"face\",\"name\":" + json_text(place.name) + "}";
+      break;
+    case Kind::Edge:
+      out += "{\"kind\":\"edge\",\"name\":" + json_text(place.name) + "}";
+      break;
+    case Kind::Vertex:
+      out += "{\"kind\":\"vertex\",\"name\":" + json_text(place.name) + "}";
+      break;
+    case Kind::Point: {
+      char at[128];
+      std::snprintf(at, sizeof at, "{\"kind\":\"point\",\"at\":[%.17g,%.17g,%.17g]}", place.point[0],
+                    place.point[1], place.point[2]);
+      out += at;
+      break;
+    }
+    }
+  }
+  return out + "]";
 }
 
 } // namespace
@@ -121,6 +171,14 @@ rust::Vec<rust::String> shape_notes(const geometry::Shape& shape) {
     notes.push_back(rust::String(note));
   }
   return notes;
+}
+
+rust::Vec<rust::String> shape_note_places(const geometry::Shape& shape) {
+  rust::Vec<rust::String> places;
+  for (const std::vector<geometry::Shape::NotePlace>& note : shape.note_places()) {
+    places.push_back(rust::String(places_json(note)));
+  }
+  return places;
 }
 
 rust::Vec<rust::String> shape_infos(const geometry::Shape& shape) {

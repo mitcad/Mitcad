@@ -193,6 +193,7 @@ QVector<ProjectRow> projectRows(const QJsonObject& answer) {
       d.path = design.value(QStringLiteral("path")).toString();
       d.recorded = design.value(QStringLiteral("recorded")).toBool();
       d.changed = design.value(QStringLiteral("changed")).toBool();
+      d.modified = QDateTime::fromString(design.value(QStringLiteral("modified")).toString(), Qt::ISODate);
       const QJsonObject version = design.value(QStringLiteral("version")).toObject();
       if (!version.isEmpty()) {
         d.version = version.value(QStringLiteral("number")).toInt();

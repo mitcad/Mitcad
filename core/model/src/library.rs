@@ -90,6 +90,11 @@ pub struct SupplierPart {
     pub finish: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checked: String,
+    /// The one region the article is sold under this part number in
+    /// (mitcad#950: an ISO 3166-1 alpha-2 code, `FI`), only where the
+    /// supplier's part numbers differ by country; empty: every region.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub region: String,
 }
 
 impl SupplierPart {
@@ -514,6 +519,7 @@ mod tests {
                 material: "8.8".to_owned(),
                 finish: "zinc-plated".to_owned(),
                 checked: "2026-10-30".to_owned(),
+                region: String::new(),
             }],
         };
         pattern

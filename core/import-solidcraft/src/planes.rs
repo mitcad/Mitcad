@@ -254,11 +254,23 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     notes,
                 }
             }
+            PlaneRef::ThroughPoint { base, point } => {
+                let base = self.plane_ref(base, names, component, None)?;
+                notes.extend(base.notes);
+                let point = self.geo(point, component, &mut notes)?;
+                self.constructed(
+                    json!({"type": "offset_through_point", "plane": base.geom, "point": point}),
+                    component,
+                    final_name,
+                    notes,
+                )?
+            }
             PlaneRef::AtAngle {
                 base,
                 axis_origin,
                 axis_dir,
                 angle,
+                line,
             } => {
                 let name = names.next();
                 let base = self.plane_ref(base, names, component, None)?;
@@ -273,9 +285,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 });
                 if in_plane {
                     let slot = self.params.slot(self.doc, name, angle.as_str())?;
+                    // An edge or round face of the model (format 39) is the
+                    // line where it is found, else where it was picked.
+                    let line = match line {
+                        Some(g) => self.geo(g, component, &mut notes)?,
+                        None => json!({"origin": axis_origin, "direction": axis_dir}),
+                    };
                     let def = json!({"type": "construction_plane", "definition": {"type": "angle",
-                        "line": {"origin": axis_origin, "direction": axis_dir},
-                        "angle": slot, "plane": base.geom}});
+                        "line": line, "angle": slot, "plane": base.geom}});
                     let uid = self.add_plane(&def, component, final_name)?;
                     PlaneMade {
                         geom: json!(uid),
@@ -295,13 +312,16 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     m
                 }
             }
-            PlaneRef::Construction { name } => {
-                let f = self.file_feature_named(name)?;
+            PlaneRef::Construction { feature } => {
+                let f = self
+                    .design
+                    .feature(*feature)
+                    .ok_or_else(|| format!("no construction plane {feature}"))?;
                 let uid = self
                     .made
                     .get(&f.id)
                     .and_then(|m| m.last())
-                    .ok_or_else(|| format!("construction plane {name} did not come in"))?;
+                    .ok_or_else(|| format!("construction plane {} did not come in", f.name))?;
                 let world = self.planes.get(&f.id).copied();
                 if let Some(n) = final_name {
                     let def = json!({"type": "construction_plane",
@@ -392,10 +412,36 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     notes,
                 )?
             }
-            PlaneRef::Tangent { face, at } => {
+            PlaneRef::Tangent {
+                face,
+                at,
+                reference: None,
+                ..
+            } => {
                 let face = self.geo(face, component, &mut notes)?;
                 self.constructed(
                     json!({"type": "tangent_at_point", "face": face, "point": {"point": at}}),
+                    component,
+                    final_name,
+                    notes,
+                )?
+            }
+            // Touching where the face turns towards a reference (format 48):
+            // SolidCraft's side of the face is the one of `at`, which
+            // MitCad's tangent plane does not take.
+            PlaneRef::Tangent {
+                reference: Some(_), ..
+            } => {
+                return Err(
+                    "a tangent plane turned from a reference plane on the side of a point, which MitCad's tangent plane does not take"
+                        .to_owned(),
+                );
+            }
+            PlaneRef::AxisPoint { axis, point } => {
+                let line = self.geo(axis, component, &mut notes)?;
+                let point = self.geo(point, component, &mut notes)?;
+                self.constructed(
+                    json!({"type": "edge_and_point", "line": line, "point": point}),
                     component,
                     final_name,
                     notes,

@@ -110,6 +110,23 @@ if("CUDA" IN_LIST MITCAD_RENDER_REQUIRED_DEVICES)
     message(FATAL_ERROR "The render prefix ${MITCAD_RENDER_DEPS} has no CUDA kernels (kernel_sm_*.cubin.zst)")
   endif()
 endif()
+# No OptiX in the shipped worker (mitcad#1332): a release configure stops on
+# a prefix built with it (cmake/RenderOptix.cmake). A development configure
+# with such a prefix is a user's own OptiX worker: mitcad-render-optix, for
+# that machine only, with no installer or AppImage (cmake/OptixWorker.cmake).
+include("${PROJECT_SOURCE_DIR}/cmake/RenderOptix.cmake")
+mitcad_render_optix_problem("${MITCAD_CYCLES_DEVICES}" "${MITCAD_CYCLES_KERNELS}" "${MITCAD_RENDER_REQUIRED_DEVICES}"
+                            mitcad_render_optix_error)
+if(mitcad_render_optix_error)
+  message(FATAL_ERROR "${mitcad_render_optix_error}")
+endif()
+set(MITCAD_RENDER_OPTIX FALSE)
+if("OPTIX" IN_LIST MITCAD_CYCLES_DEVICES)
+  set(MITCAD_RENDER_OPTIX TRUE)
+  message(STATUS "Cycles devices with OptiX: this build makes mitcad-render-optix for this machine only "
+                 "(docs/rendering.md, \"Building an OptiX worker yourself\"); no packages")
+endif()
+set_property(GLOBAL PROPERTY MITCAD_RENDER_OPTIX "${MITCAD_RENDER_OPTIX}")
 # For cmake/AppImage.cmake, which the top-level CMakeLists.txt includes.
 set_property(GLOBAL PROPERTY MITCAD_CYCLES_KERNELS "${MITCAD_CYCLES_KERNELS}")
 list(LENGTH MITCAD_CYCLES_KERNELS mitcad_cycles_kernel_count)

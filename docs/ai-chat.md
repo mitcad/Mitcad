@@ -151,6 +151,9 @@ closes. Type it in **New API key** in Preferences or, when the panel says
 **Anthropic API needs an API key.**, in its field and **Save Key**;
 **Remove Key** in Preferences removes it. For the Anthropic API, MitCad
 also uses `ANTHROPIC_API_KEY` from its environment when no key is kept.
+A key saved or removed in Preferences while a message runs is read again
+before the next request; the conversation keeps its key until then, and
+ends with a notice only when its key was removed.
 
 When the panel opens or the agent is chosen, MitCad asks the service for
 its models (`/models`). The answer makes the agent ready and fills
@@ -489,7 +492,9 @@ pictures), and the next request follows, until the model answers without
 a call (at most 100 requests for one message). A tool result's text is
 cut at 100 000 characters for the model. **Stop** ends the request in
 flight; calls still running are answered as stopped, and the message
-stays in the conversation for the next one to follow. Redirects are not
+stays in the conversation for the next one to follow. A call the model
+was still writing when the answer stopped, was cut at the output limit or
+failed is never made, and its row says so. Redirects are not
 followed (they would carry the key elsewhere).
 
 A refusal that names an account problem (an invalid key, a credit or rate

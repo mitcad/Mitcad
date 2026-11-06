@@ -40,11 +40,18 @@ namespace mitcad::printing {
 // them (x right, y down, the origin at its top left). `scale` is how many
 // millimetres of paper a millimetre of the picture takes (1 at 1:1), so
 // that texts, arrows and line widths can keep their size on paper.
+//
+// `extent`, when set, is the part of the picture's plane it paints at a
+// scale (picture mm, (0, 0, size) at 1:1): a picture whose symbols and
+// values keep their paper size reaches further below 1:1 (mitcad#1308).
+// Its size on paper (the extent times the scale) must grow with the scale.
 struct PrintPicture {
   QString name;
   QSizeF size;
   std::function<void(QPainter& painter, double scale)> paint;
+  std::function<QRectF(double scale)> extent;
   bool valid() const { return size.width() > 0.0 && size.height() > 0.0 && paint != nullptr; }
+  QRectF extentAt(double scale) const { return extent ? extent(scale) : QRectF(QPointF(0.0, 0.0), size); }
 };
 
 enum class PrintScale { Actual, Fit };
@@ -87,6 +94,11 @@ PrintPlan planActual(const QSizeF& picture, const QSizeF& printable, double over
 // A picture scaled to one page, centred, as large as fits.
 PrintPlan planFit(const QSizeF& picture, const QSizeF& printable);
 PrintPlan plan(PrintScale scale, const QSizeF& picture, const QSizeF& printable);
+// The same for a picture with its extent at each scale: fitted to one page
+// at the largest scale whose extent fits, the page's source that extent
+// (mitcad#1308); 1:1 tiles by its size.
+PrintPlan planFit(const PrintPicture& picture, const QSizeF& printable);
+PrintPlan plan(PrintScale scale, const PrintPicture& picture, const QSizeF& printable);
 
 // The printable area of a page layout (mm), and a layout of a paper with
 // the margins of a picture's page.
@@ -95,6 +107,7 @@ QPageLayout pictureLayout(QPageSize::PageSizeId paper, QPageLayout::Orientation 
 // The orientation of `paper` in which the picture needs fewer pages (1:1)
 // or is larger (fit); portrait when both are the same.
 QPageLayout::Orientation bestOrientation(PrintScale scale, const QSizeF& picture, QPageSize::PageSizeId paper);
+QPageLayout::Orientation bestOrientation(PrintScale scale, const PrintPicture& picture, QPageSize::PageSizeId paper);
 
 // A paper as the Print panel remembers it (`print/paper`): its key ("A4",
 // "Letter"), the same in every language of the UI (mitcad#1156).

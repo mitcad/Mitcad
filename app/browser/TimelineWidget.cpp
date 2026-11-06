@@ -450,6 +450,12 @@ public:
     if (!isHead(i) && !feature.suppressedWhen.isEmpty()) {
       state += tr("<br>Suppressed when %1").arg(feature.suppressedWhen.toHtmlEscaped());
     }
+    // A sketch whose linked projections no longer follow their sources
+    // (mitcad#1303): its context menu repairs them.
+    if (!isHead(i) && feature.projectAgain > 0) {
+      state += tr("<br>Project Again (right-click) projects them again, keeping their constraints and "
+                  "dimensions");
+    }
     const QString tip = isHead(i) ? state : details + state;
     if (tip != m_loggedTip) {
       m_loggedTip = tip;

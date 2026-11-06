@@ -6,14 +6,20 @@
 //! with the design, and the exports: a Bambu-family 3MF of two plates
 //! with the plate's spiral mode only on its plate, PrusaSlicer's beds
 //! where it lays them out, a Cura export of a file per plate (the tests
-//! read the files written) and a plate's layout beside the design.
+//! read the files written), the copies of an item apart also without
+//! centring and a plate's layout beside the design; and the items of a
+//! deleted last feature's body or a deleted last occurrence staying
+//! missing after a reload (mitcad#1320).
 
 use serde_json::{Map, Value, json};
 
-use crate::print_files_tests::{command, design};
+use crate::print_files_tests::{command, design, small_block};
 use mitcad_model::Document;
-use mitcad_model::ids::BodyUid;
+use mitcad_model::features::SketchPlane;
+use mitcad_model::ids::{BodyUid, ComponentUid, OccurrenceUid};
+use mitcad_model::test_support::{extrude, num};
 use mitcad_model::testing::MockKernel;
+use mitcad_model::transform::Transform;
 use mitcad_model_api::DocumentApi;
 
 /// A query's answer.
@@ -292,12 +298,22 @@ fn two_plates() -> Document<MockKernel> {
 
 /// The x range of a build object's mesh as the file places it.
 fn object_x(model: &mitcad_3mf::Model, object: &mitcad_3mf::BuildObject) -> (f64, f64) {
+    object_range(model, object, 0)
+}
+
+/// The range of a build object's mesh along `axis` (0 x, 1 y) as the file
+/// places it.
+fn object_range(
+    model: &mitcad_3mf::Model,
+    object: &mitcad_3mf::BuildObject,
+    axis: usize,
+) -> (f64, f64) {
     let mut range = (f64::INFINITY, f64::NEG_INFINITY);
     for &(part, k) in &object.components {
         let placement = model.parts[part].placements[k];
         for vertex in &model.parts[part].mesh.vertices {
-            let x = placement.apply(*vertex)[0];
-            range = (range.0.min(x), range.1.max(x));
+            let v = placement.apply(*vertex)[axis];
+            range = (range.0.min(v), range.1.max(v));
         }
     }
     range
@@ -474,6 +490,53 @@ fn a_cura_export_writes_a_file_per_plate() {
 }
 
 #[test]
+fn the_copies_of_an_item_lie_apart_also_without_centring() {
+    // mitcad#1311: the root's block twice on the first plate (with the
+    // arm's, on no plate), written with and without Center on Plate.
+    let (mut doc, root_body, _, _) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": root_body.to_string(), "count": 2}]}),
+    );
+    let export = |doc: &mut Document<MockKernel>, name: &str, center: bool| {
+        let path = folder(name).join("copies.3mf");
+        let result = command(
+            doc,
+            json!({"cmd": "export", "path": path.to_str().unwrap(), "format": "3mf",
+                   "plates": "one_file", "center": center}),
+        );
+        assert_eq!(result["plates"][0]["pieces"], 3, "{result}");
+        let read = mitcad_3mf::read(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(read.objects.len(), 3, "{result}");
+        read.objects
+            .iter()
+            .map(|object| object_x(&read, object))
+            .collect::<Vec<(f64, f64)>>()
+    };
+
+    // Not centred: the second copy beside the first, a gap of 5 mm
+    // between them, not on top of it.
+    let apart = export(&mut doc, "plates-copies-apart", false);
+    let (first, second) = (apart[0], apart[1]);
+    let width = first.1 - first.0;
+    assert!(width > 1.0, "{apart:?}");
+    assert!(second.0 - first.0 >= width - 1e-6, "{apart:?}");
+    assert!((second.0 - (first.1 + 5.0)).abs() < 1e-6, "{apart:?}");
+    assert!(((second.1 - second.0) - width).abs() < 1e-6, "{apart:?}");
+
+    // Centred, as before: the three pieces side by side, 5 mm apart, the
+    // row centred on the 256 mm plate.
+    let row = export(&mut doc, "plates-copies-centred", true);
+    for pair in row.windows(2) {
+        assert!((pair[1].0 - (pair[0].1 + 5.0)).abs() < 1e-6, "{row:?}");
+    }
+    let middle = (row[0].0 + row[2].1) / 2.0;
+    assert!((middle - 128.0).abs() < 1e-6, "{row:?}");
+}
+
+#[test]
 fn a_plate_s_layout_lies_beside_the_design() {
     let (mut doc, root_body, _, _) = plated();
     command(&mut doc, json!({"cmd": "add_print_plate"}));
@@ -506,4 +569,458 @@ fn a_plate_s_layout_lies_beside_the_design() {
         let x = rows[0][3].as_f64().unwrap();
         assert!(x >= left - 1e-6 && x <= left + 256.0 + 1e-6, "{rows}");
     }
+}
+
+/// A 4 mm box of the root at `x`, a new body.
+fn box_at(x: f64) -> Value {
+    json!({"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [x, 0],
+           "length": 4, "width": 4, "height": 4, "operation": "new_body"}})
+}
+
+/// The bodies of the `print_plates` query's placements on no plate.
+fn unplaced_bodies(plates: &Value) -> Vec<String> {
+    plates["unplaced"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["body"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// mitcad#1320: the uid of a deleted last feature is not given out again
+/// after a save and a load, so the plate item that keeps its body stays
+/// missing, and the new feature's body is not on the plate (it prints
+/// unplaced, on the first plate).
+#[test]
+fn a_deleted_last_feature_s_plate_item_stays_missing_after_a_reload() {
+    let mut doc = Document::new(MockKernel::default());
+    let first = command(&mut doc, box_at(0.0));
+    assert_eq!(first["uid"], "F1", "{first}");
+    let second = command(&mut doc, box_at(20.0));
+    assert_eq!(second["uid"], "F2", "{second}");
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": "F2.b0", "count": 5}]}),
+    );
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": "F2"}));
+    // The item stays on its plate, missing.
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["items"][0]["body"], "F2.b0", "{plates}");
+    assert_eq!(plates["plates"][0]["items"][0]["missing"], true, "{plates}");
+
+    // The file keeps the number the next feature takes.
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(file["next_feature"], json!(3), "{saved}");
+    assert!(file.get("next_occurrence").is_none());
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+    loaded.recompute();
+
+    // A new box is F3, not F2: the item stays missing and the new body is
+    // on no plate.
+    let added = command(&mut loaded, box_at(40.0));
+    assert_eq!(added["uid"], "F3", "{added}");
+    let plates = query(&loaded, json!({"query": "print_plates"}));
+    let items = plates["plates"][0]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{plates}");
+    assert_eq!(items[0]["body"], "F2.b0", "{plates}");
+    assert_eq!(items[0]["count"], 5, "{plates}");
+    assert_eq!(items[0]["missing"], true, "{plates}");
+    assert_eq!(unplaced_bodies(&plates), ["F1.b0", "F3.b0"], "{plates}");
+    // The missing item prints nothing: the two unplaced boxes only.
+    assert_eq!(plates["plates"][0]["pieces"], 2, "{plates}");
+    // One past the largest uid again: no number of its own in the file.
+    let file: Value = serde_json::from_str(&loaded.to_json()).unwrap();
+    assert!(file.get("next_feature").is_none());
+}
+
+/// mitcad#1320: likewise the uid of a deleted last occurrence: placing the
+/// component again after a save and a load makes a new occurrence, which
+/// is not on the plate that keeps the deleted one's item.
+#[test]
+fn a_deleted_last_occurrence_s_plate_item_stays_missing_after_a_reload() {
+    let (mut doc, _, arm_body, arm) = plated();
+    assert_eq!(arm, "O1");
+    let component: ComponentUid = doc
+        .instances()
+        .into_iter()
+        .find(|i| i.body == arm_body)
+        .expect("the arm's body is placed")
+        .component;
+    let second: OccurrenceUid = doc
+        .add_occurrence(
+            component,
+            ComponentUid::ROOT,
+            Transform::translation([80.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    assert_eq!(second.to_string(), "O2");
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"occurrence": "O2", "count": 5}]}),
+    );
+    doc.delete_occurrence(second).unwrap();
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(
+        plates["plates"][0]["items"][0]["occurrence"], "O2",
+        "{plates}"
+    );
+    assert_eq!(plates["plates"][0]["items"][0]["missing"], true, "{plates}");
+
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(file["next_occurrence"], json!(3), "{saved}");
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+    loaded.recompute();
+
+    // Placed again: O3, not O2. The item stays missing; the new
+    // occurrence's body is on no plate.
+    let third: OccurrenceUid = loaded
+        .add_occurrence(
+            component,
+            ComponentUid::ROOT,
+            Transform::translation([120.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    assert_eq!(third.to_string(), "O3");
+    loaded.recompute();
+    let plates = query(&loaded, json!({"query": "print_plates"}));
+    let items = plates["plates"][0]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{plates}");
+    assert_eq!(items[0]["occurrence"], "O2", "{plates}");
+    assert_eq!(items[0]["missing"], true, "{plates}");
+    let unplaced: Vec<(String, String)> = plates["unplaced"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            (
+                u["body"].as_str().unwrap().to_owned(),
+                u["occurrence"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        unplaced.contains(&(arm_body.to_string(), "O3".to_owned())),
+        "{plates}"
+    );
+    assert!(
+        unplaced.contains(&(arm_body.to_string(), "O1".to_owned())),
+        "{plates}"
+    );
+}
+
+/// The bodies an export's plate lists.
+fn plate_bodies(result: &Value, plate: usize) -> Vec<String> {
+    result["plates"][plate]["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_body_with_an_item_of_its_own_prints_on_one_plate() {
+    // mitcad#1310: the arm's body on the first plate as a body item, the
+    // arm's occurrence on the second.
+    let (mut doc, root_body, arm_body, arm) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "edit_print_plate", "plate": "plate2", "values": {"layer_height": 0.3}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": arm_body.to_string()}]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate2",
+               "items": [{"occurrence": arm.clone()}]}),
+    );
+    // The query counts what the export makes: nothing on the second.
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["pieces"], 2, "{plates}");
+    assert_eq!(plates["plates"][1]["pieces"], 0, "{plates}");
+
+    let path = folder("plates-own-item").join("plates.3mf");
+    let result = command(
+        &mut doc,
+        json!({"cmd": "export", "path": path.to_str().unwrap(), "dialect": "bambu_studio",
+               "plates": "one_file"}),
+    );
+    let first = plate_bodies(&result, 0);
+    assert!(first.contains(&arm_body.to_string()), "{result}");
+    assert!(first.contains(&root_body.to_string()), "{result}");
+    assert_eq!(plate_bodies(&result, 1), Vec::<String>::new(), "{result}");
+    assert_eq!(result["plates"][1]["pieces"], 0);
+    let warnings = result["plates"][1]["warnings"].to_string();
+    assert!(warnings.contains("print on Plate 1"), "{warnings}");
+    // Its settings are the first plate's, where it prints.
+    let on = query(
+        &doc,
+        json!({"query": "print_settings", "body": arm_body.to_string(), "occurrence": arm.clone()}),
+    );
+    assert_eq!(on["plate"]["id"], "plate1", "{on}");
+    let height = on["process"]["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"] == "layer_height")
+        .cloned()
+        .unwrap();
+    assert_eq!(height["value"], 0.2, "{height}");
+    // The second plate's block lists no object of it.
+    let package = mitcad_3mf::read_package(&std::fs::read(&path).unwrap()).unwrap();
+    let model = std::str::from_utf8(package.file("Metadata/model_settings.config").unwrap())
+        .unwrap()
+        .to_owned();
+    let blocks = plate_blocks(&model);
+    assert_eq!(blocks[0].matches("<model_instance>").count(), 2, "{model}");
+    assert_eq!(blocks[1].matches("<model_instance>").count(), 0, "{model}");
+    // Its layout alike.
+    let layout = query(&doc, json!({"query": "plate_layout", "plate": "plate2"}));
+    assert_eq!(layout["pieces"], 0, "{layout}");
+    assert_eq!(layout["bodies"], json!([]));
+}
+
+/// [`plated`] with a pin placed in the arm (a block of its own): the
+/// arm's body and occurrence, the pin's body and its occurrence's path
+/// from the root (`O1/O<n>`).
+fn with_pin() -> (Document<MockKernel>, BodyUid, String, BodyUid, String) {
+    let (mut doc, _, arm_body, arm) = plated();
+    let arm_uid: OccurrenceUid = arm.parse().unwrap();
+    let arm_component = doc.assembly().occurrence(arm_uid).unwrap().component;
+    doc.activate_component(arm_component).unwrap();
+    let (_, pin) = doc
+        .create_component(Some("Pin"), Transform::translation([0.0, 20.0, 0.0]), true)
+        .unwrap();
+    let pin_body = small_block(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let pin_path = format!("{arm}/{pin}");
+    (doc, arm_body, arm, pin_body, pin_path)
+}
+
+#[test]
+fn an_occurrence_item_inside_another_s_prints_on_one_plate() {
+    // mitcad#1310: the arm on the first plate, the pin inside it on the
+    // second: the outer item's plate takes the pin's body.
+    let (mut doc, arm_body, arm, pin_body, pin) = with_pin();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"occurrence": arm.clone()}]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate2",
+               "items": [{"occurrence": pin.clone(), "count": 2}]}),
+    );
+    let path = folder("plates-nested").join("plates.3mf");
+    let result = command(
+        &mut doc,
+        json!({"cmd": "export", "path": path.to_str().unwrap(), "dialect": "bambu_studio",
+               "plates": "one_file"}),
+    );
+    let first = plate_bodies(&result, 0);
+    assert!(first.contains(&pin_body.to_string()), "{result}");
+    assert!(first.contains(&arm_body.to_string()), "{result}");
+    assert_eq!(plate_bodies(&result, 1), Vec::<String>::new(), "{result}");
+    assert_eq!(result["plates"][1]["pieces"], 0, "{result}");
+    // Each placement once in the whole file: the root's block, the arm's
+    // and the pin's.
+    let read = mitcad_3mf::read(&std::fs::read(&path).unwrap()).unwrap();
+    let placements: usize = read.parts.iter().map(|p| p.placements.len()).sum();
+    assert_eq!(placements, 3, "{result}");
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][1]["pieces"], 0, "{plates}");
+    let layout = query(&doc, json!({"query": "plate_layout", "plate": "plate2"}));
+    assert_eq!(layout["bodies"], json!([]), "{layout}");
+}
+
+/// A `width` x `depth` x 5 block in the active component.
+fn block(doc: &mut Document<MockKernel>, width: f64, depth: f64) -> BodyUid {
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [0.0, 0.0], &num(width), &num(depth))
+        .unwrap()
+        .region;
+    let uid = doc
+        .add_feature(&extrude(sketch, &[&region], 5.0, "new_body", &[]), None)
+        .unwrap()
+        .uid;
+    BodyUid::new(uid, 0)
+}
+
+#[test]
+fn a_plate_s_row_of_pieces_wraps_within_its_bed() {
+    // mitcad#1316: ten 50 mm blocks on the first of two 256 mm plates
+    // (with the root's block, on no plate), the arm on the second. As the
+    // design has them (no automatic orientation): 50 x 20 mm each.
+    let (mut doc, _, _, arm) = plated();
+    let wide = block(&mut doc, 50.0, 20.0);
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": wide.to_string(), "count": 10}]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate2",
+               "items": [{"occurrence": arm.clone()}]}),
+    );
+    let path = folder("plates-wrap").join("plates.3mf");
+    let export = |doc: &mut Document<MockKernel>| {
+        command(
+            doc,
+            json!({"cmd": "export", "path": path.to_str().unwrap(), "dialect": "bambu_studio",
+                   "plates": "one_file", "auto_orient": false}),
+        )
+    };
+    let result = export(&mut doc);
+    assert_eq!(result["plates"][0]["pieces"], 11, "{result}");
+    assert_eq!(result["plates"][1]["origin"], json!([307.2, 0.0]));
+    // Every build item lies within its plate's bed: the first's on
+    // 0..256 mm, the second's a fifth of the width beyond; none across
+    // the gap between them.
+    let read = mitcad_3mf::read(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(read.objects.len(), 12);
+    let within =
+        |range: (f64, f64), from: f64| range.0 >= from - 1e-6 && range.1 <= from + 256.0 + 1e-6;
+    for object in &read.objects {
+        let (x, y) = (
+            object_range(&read, object, 0),
+            object_range(&read, object, 1),
+        );
+        assert!(within(y, 0.0), "{}: y {y:?}", object.name);
+        assert!(
+            within(x, 0.0) || within(x, 307.2),
+            "{}: x {x:?}",
+            object.name
+        );
+    }
+    let warnings = result["plates"][0]["warnings"].to_string();
+    assert!(!warnings.contains("do not fit"), "{warnings}");
+
+    // Sixty of them take fifteen rows: more than the bed's depth, named.
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": wide.to_string(), "count": 60}]}),
+    );
+    let result = export(&mut doc);
+    let warnings = result["plates"][0]["warnings"].to_string();
+    assert!(
+        warnings.contains("Plate 1: the 61 pieces do not fit on the 256 x 256 mm bed"),
+        "{warnings}"
+    );
+    assert!(result["warnings"].to_string().contains("do not fit"));
+    assert!(
+        !result["plates"][1]["warnings"]
+            .to_string()
+            .contains("do not fit")
+    );
+}
+
+#[test]
+fn plate_files_whose_names_clash_are_written_apart() {
+    // mitcad#1316: `A/B` and `A:B` both make `A_B`.
+    let (mut doc, root_body, _, arm) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate", "name": "A/B"}));
+    command(&mut doc, json!({"cmd": "add_print_plate", "name": "A:B"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "A/B",
+               "items": [{"body": root_body.to_string()}]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "A:B",
+               "items": [{"occurrence": arm}]}),
+    );
+    let dir = folder("plates-clash");
+    let path = dir.join("parts.3mf");
+    let result = command(
+        &mut doc,
+        json!({"cmd": "export", "path": path.to_str().unwrap(), "dialect": "cura",
+               "plates": "file_per_plate"}),
+    );
+    let first = dir.join("parts - A_B.3mf");
+    let second = dir.join("parts - A_B (2).3mf");
+    assert_eq!(
+        result["files"],
+        json!([first.to_str().unwrap(), second.to_str().unwrap()]),
+        "{result}"
+    );
+    assert_eq!(result["plates"][0]["path"], first.to_str().unwrap());
+    assert_eq!(result["plates"][1]["path"], second.to_str().unwrap());
+    // Each file is its plate's.
+    for (file, objects) in [(&first, 1), (&second, 1)] {
+        let read = mitcad_3mf::read(&std::fs::read(file).unwrap()).unwrap();
+        let placements: usize = read.parts.iter().map(|p| p.placements.len()).sum();
+        assert_eq!(placements, objects, "{}", file.display());
+    }
+}
+
+#[test]
+fn an_occurrence_item_follows_its_occurrence_to_another_parent() {
+    // mitcad#1318: three of the arm on the second plate; the arm moved
+    // into a cell placed in the root.
+    let (mut doc, _, _, arm) = plated();
+    let (_, cell) = doc
+        .create_component(Some("Cell"), Transform::IDENTITY, true)
+        .unwrap();
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let cell = cell.to_string();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate2",
+               "items": [{"occurrence": arm.clone(), "count": 3}]}),
+    );
+    let item = |doc: &Document<MockKernel>| {
+        query(doc, json!({"query": "print_plates"}))["plates"][1].clone()
+    };
+    assert_eq!(item(&doc)["pieces"], 3);
+
+    let moved = command(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": arm.clone(), "parent": cell.clone()}),
+    );
+    let updated = moved["updated"].as_array().unwrap();
+    assert!(updated.iter().any(|u| u == "Print plates"), "{moved}");
+    let plate = item(&doc);
+    let path = format!("{cell}/{arm}");
+    assert_eq!(plate["items"][0]["occurrence"], path, "{plate}");
+    assert_eq!(plate["items"][0]["count"], 3);
+    assert!(plate["items"][0].get("missing").is_none(), "{plate}");
+    assert_eq!(plate["pieces"], 3, "{plate}");
+    assert_eq!(
+        query(&doc, json!({"query": "print_plates"}))["unplaced"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the root's block alone"
+    );
+
+    // Undo puts the old path back.
+    command(&mut doc, json!({"cmd": "undo"}));
+    let plate = item(&doc);
+    assert_eq!(plate["items"][0]["occurrence"], arm, "{plate}");
+    assert_eq!(plate["pieces"], 3);
 }

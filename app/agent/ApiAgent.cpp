@@ -96,11 +96,9 @@ QList<ApiAgent::Preset> ApiAgent::presets() {
 
 ApiAgent::ApiAgent(const Preset& preset, QObject* parent) : ChatAgent(parent), m_preset(preset) {
   m_network = new QNetworkAccessManager(this);
-  // A key saved or removed in Preferences is read again.
-  connect(&ChatNotifier::instance(), &ChatNotifier::apiSettingsChanged, this, [this] {
-    m_keyKnown = false;
-    m_key.clear();
-  });
+  // A key saved or removed in Preferences is read again before its next use
+  // (mitcad#1309): a message running meanwhile keeps sending one.
+  connect(&ChatNotifier::instance(), &ChatNotifier::apiSettingsChanged, this, [this] { m_keyKnown = false; });
   const QJsonObject offered = chatRequest(
       {{QStringLiteral("op"), QStringLiteral("api_default_models")}, {QStringLiteral("agent"), m_preset.id}});
   QList<Model> models;
@@ -196,7 +194,8 @@ void ApiAgent::withKey(std::function<void(const QString& key)> done) {
       }
     }
     if (generation != m_generation && m_keyKnown) {
-      return; // a key given meanwhile wins
+      done(m_key); // a key given meanwhile wins
+      return;
     }
     m_key = key;
     m_keyKnown = true;
@@ -604,6 +603,38 @@ void ApiAgent::readMcp() {
 
 void ApiAgent::sendHttp(const QJsonObject& asked) {
   const quint64 id = static_cast<quint64>(asked.value(QStringLiteral("id")).toInteger());
+  if (m_keyKnown || asked.value(QStringLiteral("auth")).toString().isEmpty()) {
+    postHttp(asked, m_key);
+    return;
+  }
+  // The key changed in Preferences (or was not read yet): read before the
+  // request goes (mitcad#1309). It waits in m_requests, where Stop and the
+  // conversation's end find it.
+  m_requests.insert(id, Request{});
+  const int conversation = m_conversation;
+  const QString before = m_key;
+  withKey([this, conversation, id, asked, before](const QString& key) {
+    const auto waiting = m_requests.find(id);
+    if (conversation != m_conversation || waiting == m_requests.end() || !waiting->reply.isNull()) {
+      return; // stopped or ended meanwhile
+    }
+    m_requests.erase(waiting);
+    if (key.isEmpty() && !before.isEmpty()) {
+      // The conversation's key was removed: it ends, saying so (queued, as
+      // the stream's own end, so that no caller of the stream sees it go).
+      QTimer::singleShot(0, this, [this, conversation] {
+        if (conversation == m_conversation) {
+          endConversation(tr("The API key of %1 was removed in Preferences.").arg(name()));
+        }
+      });
+      return;
+    }
+    postHttp(asked, key);
+  });
+}
+
+void ApiAgent::postHttp(const QJsonObject& asked, const QString& key) {
+  const quint64 id = static_cast<quint64>(asked.value(QStringLiteral("id")).toInteger());
   const QUrl url(asked.value(QStringLiteral("url")).toString());
   QNetworkRequest request(url);
   const QJsonObject headers = asked.value(QStringLiteral("headers")).toObject();
@@ -612,10 +643,10 @@ void ApiAgent::sendHttp(const QJsonObject& asked) {
   }
   // The key only in its header; never logged.
   const QString auth = asked.value(QStringLiteral("auth")).toString();
-  if (!m_key.isEmpty() && auth == QStringLiteral("x-api-key")) {
-    request.setRawHeader("x-api-key", m_key.toUtf8());
-  } else if (!m_key.isEmpty() && auth == QStringLiteral("bearer")) {
-    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + m_key.toUtf8());
+  if (!key.isEmpty() && auth == QStringLiteral("x-api-key")) {
+    request.setRawHeader("x-api-key", key.toUtf8());
+  } else if (!key.isEmpty() && auth == QStringLiteral("bearer")) {
+    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + key.toUtf8());
   }
   // A redirect would carry the key elsewhere: not followed.
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);

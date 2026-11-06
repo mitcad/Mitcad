@@ -14,3 +14,5 @@ mod hole_size_tests;
 mod profile_feature_tests;
 // A thread's fit to its face and the wall behind it (mitcad#1262).
 mod thread_fit_tests;
+// Extents up to a point and starts from a point (mitcad#1329).
+mod extent_point_tests;

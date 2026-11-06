@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::geom_ref::{GeomRef, Want};
 use super::{CheckContext, EvalContext, References, is_false};
+use crate::datum::CurveGeometry;
 use crate::ids::BodyUid;
 use crate::kernel::{Axis, Kernel, Plane, Target};
 use crate::links::OccurrenceLink;
@@ -42,6 +43,33 @@ pub enum ExtentObject {
         #[serde(default, skip_serializing_if = "is_false")]
         through: bool,
     },
+    /// A point (mitcad#1329): a sketch point (`{"sketch", "point"}`), a
+    /// vertex (`{"body", "vertex"}`), a construction point (`"F5"`) or
+    /// another point reference. It stands for the plane through the point
+    /// parallel to the profile's plane (an extrusion's) or at right angles
+    /// to the axis (a hole's). Revolutions do not take one.
+    Point { point: GeomRef },
+    /// A straight line (mitcad#1329): a sketch line (`{"sketch",
+    /// "curve"}`), a straight edge (`{"body", "edge"}`), a construction or
+    /// origin axis or a fixed axis. It must lie in a plane parallel to the
+    /// profile's plane (an extrusion's; for a hole, at right angles to its
+    /// axis), within [`LINE_ANGLE`], and stands for that plane.
+    /// Revolutions do not take one.
+    Line { line: GeomRef },
+}
+
+/// How far a line object may lean out of the plane it stands for
+/// (mitcad#1329), in radians.
+pub const LINE_ANGLE: f64 = 1e-6;
+
+/// What a point or a line object stands for (mitcad#1329): the plane
+/// through it with this normal. `lies` says where a line must lie, for the
+/// message when it does not ("in a plane parallel to the profile's
+/// plane").
+#[derive(Debug, Clone, Copy)]
+pub struct Across<'a> {
+    pub normal: [f64; 3],
+    pub lies: &'a str,
 }
 
 impl ExtentObject {
@@ -53,12 +81,18 @@ impl ExtentObject {
                 references.features.extend(face.features());
             }
             Self::Body { body, .. } => references.body(*body),
+            Self::Point { point } => point.add_to(references),
+            Self::Line { line } => line.add_to(references),
         }
     }
 
     pub fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         match self {
             Self::Plane { plane } => plane.check(ctx, Want::Plane),
+            Self::Point { point } => point.check(ctx, Want::Point),
+            // A straight line; whether it lies in a plane parallel to the
+            // profile only evaluation can tell.
+            Self::Line { line } => line.check(ctx, Want::Line),
             Self::Face { body, face, .. } => {
                 ctx.body(*body)?;
                 for feature in face.features() {
@@ -71,15 +105,22 @@ impl ExtentObject {
         }
     }
 
-    /// True for the objects a sweep may start from.
+    /// True for the objects a sweep may start from (a point as the plane
+    /// through it).
     pub fn is_planar(&self) -> bool {
         !matches!(self, Self::Body { .. })
+    }
+
+    /// True for a point or a line (mitcad#1329), which only extrusions and
+    /// holes take.
+    pub fn is_point_or_line(&self) -> bool {
+        matches!(self, Self::Point { .. } | Self::Line { .. })
     }
 
     /// The bodies of the object (the face's or the body itself).
     pub fn body(&self) -> Option<BodyUid> {
         match self {
-            Self::Plane { .. } => None,
+            Self::Plane { .. } | Self::Point { .. } | Self::Line { .. } => None,
             Self::Face { body, .. } | Self::Body { body, .. } => Some(*body),
         }
     }
@@ -100,6 +141,23 @@ impl ExtentObject {
         ctx: &mut EvalContext<'_, K>,
         links: &BTreeMap<BodyUid, OccurrenceLink>,
     ) -> Result<Target<K::Shape>, String> {
+        self.resolve_across(ctx, links, None)
+    }
+
+    /// [`Self::resolve_linked`] where a point or a line stands for the
+    /// plane through it of `across` (mitcad#1329: an extrusion's profile
+    /// plane normal, a hole's axis). Without `across` both are refused.
+    pub fn resolve_across<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        links: &BTreeMap<BodyUid, OccurrenceLink>,
+        across: Option<Across<'_>>,
+    ) -> Result<Target<K::Shape>, String> {
+        let plane_normal = |what: &str| -> Result<[f64; 3], String> {
+            across
+                .and_then(|a| normalized(a.normal))
+                .ok_or_else(|| format!("only extrusions and holes end at or start from {what}"))
+        };
         // An extent up to a mesh body is refused (mitcad#399).
         let body_of = |ctx: &mut EvalContext<'_, K>, uid: BodyUid| match links.get(&uid) {
             None => ctx.surface_body(uid),
@@ -170,6 +228,43 @@ impl ExtentObject {
                 body: body_of(ctx, *body)?,
                 through: *through,
             },
+            Self::Point { point } => {
+                let normal = plane_normal("a point")?;
+                let origin = ctx.point(point)?;
+                // `+ 0.0` turns -0 into 0.
+                Target::Plane(Plane {
+                    origin: origin.map(|v| v + 0.0),
+                    normal: normal.map(|v| v + 0.0),
+                })
+            }
+            Self::Line { line } => {
+                let normal = plane_normal("a line")?;
+                let lies = across.map_or("", |a| a.lies);
+                // A straight edge only: a circular edge resolves to its
+                // axis, which is no line of the design.
+                if let GeomRef::Edge { edge, .. } = line
+                    && !matches!(ctx.curve(line)?, CurveGeometry::Line { .. })
+                {
+                    return Err(format!(
+                        "edge {edge} is not straight: a line object is a straight line"
+                    ));
+                }
+                let axis = ctx.axis(line)?;
+                let direction: [f64; 3] =
+                    normalized(axis.direction).ok_or_else(|| format!("{line} has no direction"))?;
+                // How far the line leans out of the planes of `normal`.
+                let off = dot(direction, normal).abs().min(1.0).asin();
+                if off > LINE_ANGLE {
+                    return Err(format!(
+                        "{line} does not lie {lies}: it is {:.3} degrees off",
+                        off.to_degrees()
+                    ));
+                }
+                Target::Plane(Plane {
+                    origin: axis.origin.map(|v| v + 0.0),
+                    normal: normal.map(|v| v + 0.0),
+                })
+            }
         })
     }
 }

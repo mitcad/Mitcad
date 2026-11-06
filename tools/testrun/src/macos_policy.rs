@@ -7,6 +7,7 @@ use crate::ctest::TestDef;
 use crate::profile::Prediction;
 
 pub const HARNESS_LABEL: &str = "macos_gui_harness";
+pub const HEADLESS_LABEL: &str = "macos_headless";
 pub const CARGO_LABEL: &str = "macos_cargo_build";
 pub const HARNESS_MAX: usize = 2;
 pub const CARGO_MEMORY: u64 = 6 << 30;

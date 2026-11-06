@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QImage>
+#include <QPalette>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -18,6 +19,7 @@
 #include <QtLogging>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
@@ -27,6 +29,7 @@
 #include "files/F3dImport.hpp"
 #include "files/FileOpenFilter.hpp"
 #include "framework/AppSettings.hpp"
+#include "framework/AppTheme.hpp"
 #include "framework/ChromeStyle.hpp"
 #include "framework/DebugLog.hpp"
 #include "framework/DesktopEntry.hpp"
@@ -37,6 +40,7 @@
 #include "framework/Restart.hpp"
 #include "framework/TestDriver.hpp"
 #include "framework/TestSync.hpp"
+#include "framework/Theme.hpp"
 #include "framework/TypedTextLog.hpp"
 #include "mitcad/geometry/guard.hpp"
 #include "mcp/AgentFolders.hpp"
@@ -50,6 +54,27 @@
 #include "update/OpenSslConfiguration.hpp"
 
 namespace {
+
+void setHeadlessTestPalette(bool dark) {
+  // Offscreen has no OS appearance provider. Exercise the same widgets
+  // with the application's actual light/dark colour roles instead.
+  using Role = mitcad::ColorRole;
+  QPalette palette(mitcad::themeColor(Role::Raised, dark));
+  const std::pair<QPalette::ColorRole, Role> roles[] = {
+      {QPalette::Window, Role::Surface}, {QPalette::Base, Role::Window},
+      {QPalette::AlternateBase, Role::Surface}, {QPalette::Button, Role::Raised},
+      {QPalette::WindowText, Role::Text}, {QPalette::Text, Role::Text},
+      {QPalette::ButtonText, Role::Text}, {QPalette::ToolTipBase, Role::Raised},
+      {QPalette::ToolTipText, Role::Text}, {QPalette::PlaceholderText, Role::TextSecondary},
+      {QPalette::Highlight, Role::Action}, {QPalette::HighlightedText, Role::AccentText},
+      {QPalette::Link, Role::Action}, {QPalette::LinkVisited, Role::Action},
+      {QPalette::Accent, Role::Action}};
+  for (const auto& [target, role] : roles) palette.setColor(target, mitcad::themeColor(role, dark));
+  for (const QPalette::ColorRole role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText}) {
+    palette.setColor(QPalette::Disabled, role, mitcad::themeColor(Role::TextHidden, dark));
+  }
+  QApplication::setPalette(palette);
+}
 
 // The names Qt keys the settings on, and the UI tests' own settings. Before
 // the application object exists: main() reads the frontend preference
@@ -169,7 +194,14 @@ int runApplication(int argc, char* argv[]) {
 #else
   bool nativeUiRequested = false;
 #endif
+  if (qEnvironmentVariableIntValue("MITCAD_TEST_HEADLESS") != 0 &&
+      !mitcad::headlessUiTest()) {
+    qCritical("MITCAD_TEST_HEADLESS requires a Qt offscreen UI script");
+    return 2;
+  }
+  if (mitcad::headlessUiTest()) QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
   QApplication app(argc, argv);
+  if (mitcad::headlessUiTest()) qInfo("Headless UI test: Qt offscreen; no viewport");
   // UI tests' sync key (MITCAD_TEST_SYNC), before the window's timers exist.
   mitcad::TestSync::installIfRequested();
   // What the UI tests type into text fields (MITCAD_LOG_TYPED_TEXT).
@@ -331,6 +363,10 @@ int runApplication(int argc, char* argv[]) {
       return 2;
     }
   }
+  if (mitcad::headlessUiTest() && nativeUiRequested) {
+    qCritical("Headless UI tests cannot use the native frontend");
+    return 2;
+  }
   qInfo().noquote() << QStringLiteral("Frontend: %1 (%2)")
                            .arg(nativeUiRequested ? QStringLiteral("native") : QStringLiteral("qt"), frontendSource);
 
@@ -364,6 +400,10 @@ int runApplication(int argc, char* argv[]) {
   // Windows 10's dark app mode (mitcad#1282): Qt's own style with a dark palette
   // while it is dark, before the first window; nothing elsewhere.
   mitcad::win::followAppColorScheme();
+  // Preferences' Theme (mitcad#1330): System, Light or Dark, before the
+  // first window too; after Windows 10's path, which reacts first to the
+  // scheme it asks for.
+  mitcad::startThemePreference();
   // What a restart keeps of this run's arguments (framework/Restart.hpp): its
   // settings, not its start actions nor --chrome.
   {
@@ -534,7 +574,10 @@ int runApplication(int argc, char* argv[]) {
   // window shows.
   const QString scheme = mitcad::testColorScheme();
   if (!scheme.isEmpty()) {
-    QTimer::singleShot(0, &window, [scheme] {
+    if (mitcad::headlessUiTest()) {
+      setHeadlessTestPalette(scheme == QStringLiteral("dark"));
+      qInfo().noquote() << QStringLiteral("Headless Qt component palette: %1").arg(scheme);
+    } else QTimer::singleShot(0, &window, [scheme] {
       qDebug().noquote() << QStringLiteral("Asking the platform for the %1 colour scheme").arg(scheme);
       QGuiApplication::styleHints()->setColorScheme(scheme == QStringLiteral("dark") ? Qt::ColorScheme::Dark
                                                                                     : Qt::ColorScheme::Light);

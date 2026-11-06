@@ -128,7 +128,17 @@ ui_expect_log "Browser background: card" "the Browser starts on its card (the se
 # Its 30 sketches do not fit: the design opens folded below the root
 # (mitcad#426); Bodies opened again for Body1's row.
 ui_expect_log "Browser opened folded: " "the design opens folded"
-ui_expect_log "Browser Root/Sketches/Sketch1 out of sight" "the sketches folded away"
+# Sketch1's row is not in sight: "out of sight" when the rows were logged
+# open before the fold, never logged when the fold came before the
+# panel's first layout (which of the two depends on the start's timing).
+ui_sync
+for _ in $(seq 1 30); do
+  ui_place_valid "Browser Root/Sketches/Sketch1" || break
+  sleep 0.2
+done
+ui_place_valid "Browser Root/Sketches/Sketch1" && ui_fail "Sketch1's row is still in sight after the fold"
+ui_place_valid "Browser Root/Sketches" || ui_fail "the Sketches folder is not in sight"
+echo "ok   the sketches folded away"
 ui_expect_log "Browser arrow Root/Bodies at" "the Bodies folder's arrow"
 ui_mark
 ui_step "open Bodies"                    arrow "Root/Bodies"

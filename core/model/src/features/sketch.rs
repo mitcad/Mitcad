@@ -337,13 +337,11 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             }
         }
         let def = followed.as_ref().unwrap_or(self);
-        let names: BTreeMap<ParamId, String> = def
-            .dimensions
-            .iter()
-            .filter_map(|d| d.value)
-            .map(|id| (id, ctx.param_name(id)))
-            .collect();
-        let name = |id| names.get(&id).cloned().unwrap_or_default();
+        // Every parameter's own name for the errors (mitcad#1314: a driven
+        // dimension's reference and an offset's distance too, not only the
+        // driving dimensions' values).
+        let params = ctx.env.params;
+        let name = |id: ParamId| params.name(id);
         // Driving dimensions that use the sketch's own driven ones are
         // solved after them (mitcad#1116).
         let uses = driven_uses(def, ctx.env.params);

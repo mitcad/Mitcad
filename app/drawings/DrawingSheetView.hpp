@@ -24,7 +24,10 @@
 // box, a dimension's lines, a leader), "Drawing selection: view 3, annotation
 // 1" when Ctrl+click adds to the selection or takes from it, "Drawing point
 // <n> at x,y" for each click of a line or an arc drawn outside the model
-// (mitcad#729). A view the
+// (mitcad#729), "Drawing corner marker at x,y, radius <r> px, filled" (sheet
+// mm) when a point under the pointer is marked, "Drawing corner dots: <n>,
+// radius <r> px" or "Drawing corner dots: none" when they change
+// (mitcad#1338). A view the
 // model could not draw keeps a red box at its place, as does an annotation
 // whose picks are gone, to be selected and deleted.
 //
@@ -144,8 +147,17 @@ public:
   // over the sheet (the `drawing_pick` query's `items`); empty: none.
   void setPickMarks(const QJsonArray& items);
   // What an annotation tool's click would pick where the pointer is
-  // (mitcad#725), drawn lighter; empty: nothing.
+  // (mitcad#725), drawn lighter; empty: nothing. A point (a corner, a
+  // centre) is a filled marker of kCornerMarkerRadius (mitcad#1338).
   void setHoverMarks(const QJsonArray& items);
+  // That marker's radius, logical pixels (which follow the display's
+  // scale): larger than the largest corner dot, so that it shows over them.
+  static constexpr double kCornerMarkerRadius = 6.0;
+  // The corners the views show (sheet mm), each drawn as a filled dot of
+  // `radius` logical pixels while Always show corners is on (mitcad#1338);
+  // empty: none. On the screen only.
+  void setCornerDots(const QVector<QPointF>& points, double radius);
+  int cornerDotCount() const { return static_cast<int>(m_cornerDots.size()); }
   // An annotation tool's picks are there (or it takes none): the next
   // click places what it makes.
   void startPlacing();
@@ -268,6 +280,8 @@ protected:
   bool event(QEvent* event) override;
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
+  void hideEvent(QHideEvent* event) override;
+  void showEvent(QShowEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
   void mouseReleaseEvent(QMouseEvent* event) override;
@@ -355,6 +369,9 @@ private:
   // click without a drag then selects it alone.
   bool m_dragSelection = false;
   QJsonArray m_hoverMarks;
+  QString m_loggedMarker;
+  QVector<QPointF> m_cornerDots;
+  double m_cornerDotRadius = 0.0;
   QString m_previewKind;
   QVector<QPointF> m_previewPoints;
   QPointF m_previewDirection; // a dimension's, mitcad#1272; null: H or V

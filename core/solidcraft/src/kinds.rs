@@ -62,16 +62,26 @@ pub enum PlaneRef {
         base: Box<PlaneRef>,
         distance: Expr,
     },
-    /// Turned about a line (world coordinates) by an angle.
+    /// Another plane moved along its normal through a point (format 36).
+    ThroughPoint {
+        base: Box<PlaneRef>,
+        point: Box<GeoRef>,
+    },
+    /// Turned about a line (world coordinates) by an angle; with `line`, an
+    /// edge or round face of the model found again (format 39), the axis
+    /// where it was when picked.
     AtAngle {
         base: Box<PlaneRef>,
         axis_origin: Vec3,
         axis_dir: Vec3,
         angle: Expr,
+        #[serde(default)]
+        line: Option<Box<GeoRef>>,
     },
-    /// A construction plane feature, by name.
+    /// A construction plane feature, by id (format 40; older designs' names
+    /// are ids after the upgrade).
     Construction {
-        name: String,
+        feature: u64,
     },
     /// Seen from its other side: a half turn about its x axis, or its y
     /// axis with `about_y`.
@@ -88,14 +98,25 @@ pub enum PlaneRef {
         a: Box<GeoRef>,
         b: Box<GeoRef>,
     },
+    /// Through a line and a point off it (format 47).
+    AxisPoint {
+        axis: Box<GeoRef>,
+        point: Box<GeoRef>,
+    },
     ThreePoints {
         a: Box<GeoRef>,
         b: Box<GeoRef>,
         c: Box<GeoRef>,
     },
+    /// Tangent to a round face over `at`; with a `reference` (format 48),
+    /// where the face turns towards it, turned by `angle`.
     Tangent {
         face: Box<GeoRef>,
         at: Vec3,
+        #[serde(default)]
+        reference: Option<Box<GeoRef>>,
+        #[serde(default)]
+        angle: Option<Expr>,
     },
     AlongPath {
         path: Box<GeoRef>,
@@ -279,6 +300,13 @@ pub struct Extent {
     /// From Object.
     #[serde(default)]
     pub from: Option<Vec3>,
+    /// How a taper closes sharp corners (format 49): `preserve_curvature`,
+    /// `tangent` or `round`; none: the kernel's choice per profile.
+    #[serde(default)]
+    pub corner: Option<String>,
+    /// A Join To Object leaves the body it runs to apart (format 49).
+    #[serde(default)]
+    pub to_body_apart: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -338,6 +366,14 @@ pub enum AxisRef {
     Line {
         origin: Vec3,
         dir: Vec3,
+    },
+    /// An edge or round face of the model, found again (format 39).
+    Model {
+        geo: GeoRef,
+    },
+    /// A construction axis feature, by name (format 31).
+    Construction {
+        name: String,
     },
 }
 
@@ -406,6 +442,20 @@ pub struct Fillet {
     /// `rolling` or `g2`.
     #[serde(default)]
     pub corner: Option<String>,
+    /// Corners set back by a distance along their edges.
+    #[serde(default)]
+    pub setbacks: Vec<CornerSetback>,
+    /// Each picked edge's tangent chain rounded with it (format 49: false
+    /// rounds only the picked edges).
+    #[serde(default = "yes")]
+    pub tangent_chain: bool,
+}
+
+/// A fillet corner at `vertex` set back `distance` along its edges.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CornerSetback {
+    pub vertex: Vec3,
+    pub distance: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -420,6 +470,9 @@ pub struct Chamfer {
     pub flip: bool,
     #[serde(default)]
     pub body: Option<String>,
+    /// As a fillet's (format 49).
+    #[serde(default = "yes")]
+    pub tangent_chain: bool,
 }
 
 fn z_axis() -> Vec3 {
@@ -445,6 +498,32 @@ pub struct Cylinder {
     pub height: Expr,
     #[serde(default)]
     pub operation: Operation,
+    /// Placed by distances from up to two straight edges of the face it
+    /// stands on (format 41); `base` is where it was placed.
+    #[serde(default)]
+    pub references: Vec<EdgeDistance>,
+}
+
+/// A cone or truncated cone (format 40): its base circle's centre and
+/// radius, the radius `height` along `axis` (0: an apex).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Cone {
+    pub base: [Expr; 3],
+    #[serde(default = "z_axis")]
+    pub axis: Vec3,
+    pub radius: Expr,
+    pub top_radius: Expr,
+    pub height: Expr,
+    #[serde(default)]
+    pub operation: Operation,
+}
+
+/// A distance from a straight edge of a face, by a point on the edge: a
+/// hole's or a cylinder's reference.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct EdgeDistance {
+    pub edge: Vec3,
+    pub distance: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -497,7 +576,8 @@ pub enum PatternKind {
         reversed2: bool,
     },
     Circular {
-        origin: Vec3,
+        /// A point on the axis: numbers, or length expressions (format 48).
+        origin: [Expr; 3],
         axis: Vec3,
         count: Expr,
         angle: Expr,
@@ -505,6 +585,12 @@ pub enum PatternKind {
         alignment: Option<String>,
         #[serde(default)]
         reversed: bool,
+        /// An edge or round face the copies turn about (format 39).
+        #[serde(default)]
+        axis_ref: Option<GeoRef>,
+        /// A construction axis the copies turn about, by name (format 31).
+        #[serde(default)]
+        axis_feature: Option<String>,
     },
     Path {
         path_sketch: u64,
@@ -520,9 +606,11 @@ pub enum PatternKind {
     },
 }
 
+/// The copied features are feature ids (format 40; older designs' names
+/// are ids after the upgrade, 0 for a name that found none).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Pattern {
-    pub features: Vec<String>,
+    pub features: Vec<u64>,
     pub pattern: PatternKind,
     #[serde(default)]
     pub bodies: Vec<String>,
@@ -530,7 +618,7 @@ pub struct Pattern {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Mirror {
-    pub features: Vec<String>,
+    pub features: Vec<u64>,
     pub plane: PlaneRef,
     #[serde(default)]
     pub bodies: Vec<String>,
@@ -546,14 +634,30 @@ pub enum HoleKind {
     Drilled {
         tip_angle: Expr,
     },
+    /// With a drill point below the bore when `tip_angle` is set (format
+    /// 36), else flat.
     Counterbore {
         cb_diameter: Expr,
         cb_depth: Expr,
+        #[serde(default)]
+        tip_angle: Option<Expr>,
     },
     Countersink {
         cs_diameter: Expr,
         cs_angle: Expr,
+        #[serde(default)]
+        tip_angle: Option<Expr>,
     },
+}
+
+/// A thread's runout at one end (format 49): `standard` (2.5 pitches),
+/// `short` (1.25) or a length.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadRunout {
+    Standard,
+    Short,
+    Length { length: Expr },
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -581,8 +685,25 @@ pub struct Hole {
     pub points: Option<SketchPoints>,
     #[serde(default)]
     pub thread: Option<String>,
+    /// The tapped thread's depth from the wall's entry (format 36); none:
+    /// the wall's useful length.
+    #[serde(default)]
+    pub thread_depth: Option<Expr>,
+    /// `right` (none) or `left` (format 49).
+    #[serde(default)]
+    pub hand: Option<String>,
+    /// The tapped thread cut into the wall (format 49).
+    #[serde(default)]
+    pub modeled: bool,
+    /// A modelled tapped thread's runout towards the bottom (format 49).
+    #[serde(default)]
+    pub ease_out: Option<ThreadRunout>,
     #[serde(default)]
     pub to: Option<Vec3>,
+    /// Placed by distances from up to two straight edges of its face
+    /// (format 35); `position` is where it was placed.
+    #[serde(default)]
+    pub references: Vec<EdgeDistance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -594,6 +715,40 @@ pub struct Thread {
     pub length: Option<Expr>,
     #[serde(default)]
     pub modeled: bool,
+    /// A point near the end it starts at (format 49).
+    #[serde(default)]
+    pub from: Option<Vec3>,
+    /// Where it runs up to instead of a length: `{"face": …}` or
+    /// `{"plane": …}`.
+    #[serde(default)]
+    pub up_to: Option<Value>,
+    /// `metric` (none), `trapezoidal`, `acme`, `buttress`, `buttress_asme`,
+    /// `square`, `bspp`, `rp`, `bspt` or `npt`.
+    #[serde(default)]
+    pub form: Option<String>,
+    /// `right` (none), `left` or `both`.
+    #[serde(default)]
+    pub hand: Option<String>,
+    #[serde(default = "one_start")]
+    pub starts: u32,
+    /// The runout at the end away from where it starts.
+    #[serde(default)]
+    pub ease_out: Option<ThreadRunout>,
+    /// The chamfered free ends: `none` (none), `start` or `both`.
+    #[serde(default)]
+    pub tip: Option<String>,
+    #[serde(default)]
+    pub chamfer_angle: Option<Expr>,
+    #[serde(default)]
+    pub chamfer_depth: Option<Expr>,
+    /// A thread without a designation sized by the tap drill its hole
+    /// matches (designs before format 50), not by its diameter.
+    #[serde(default)]
+    pub old_auto_size: bool,
+}
+
+fn one_start() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -612,6 +767,11 @@ pub struct Loft {
     pub operation: Operation,
     #[serde(default)]
     pub targets: Vec<String>,
+    /// Guide rails (format 28).
+    #[serde(default)]
+    pub rails: Vec<SweepRail>,
+    #[serde(default)]
+    pub rail_fit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -769,10 +929,18 @@ pub struct Coil {
     pub base: [Expr; 3],
     #[serde(default = "z_axis")]
     pub axis: Vec3,
-    pub diameter: Expr,
+    /// The sketch whose profile the coil sweeps (format 36), without
+    /// `diameter` and `section_size`.
+    #[serde(default)]
+    pub sketch: Option<u64>,
+    #[serde(default)]
+    pub profiles: ProfileSel,
+    #[serde(default)]
+    pub diameter: Option<Expr>,
     pub pitch: Expr,
     pub turns: Expr,
-    pub section_size: Expr,
+    #[serde(default)]
+    pub section_size: Option<Expr>,
     /// `circular` (default) or `square`.
     #[serde(default)]
     pub section: Option<String>,
@@ -929,7 +1097,8 @@ pub struct SheetFlange {
     pub angle: Expr,
     #[serde(default)]
     pub radius: Option<Expr>,
-    /// `inside`, `outside` or `middle`.
+    /// `inside`, `outside` or `middle`; `material_outside` or `tangent`
+    /// (format 37).
     #[serde(default = "inside")]
     pub position: String,
     #[serde(default)]
@@ -940,6 +1109,23 @@ pub struct SheetFlange {
     pub corner_relief_shape: Option<String>,
     #[serde(default)]
     pub corner_relief: Option<Expr>,
+    /// Where the heights are measured from (format 37): `inner` or
+    /// `tangent`; none: the outer virtual sharp.
+    #[serde(default)]
+    pub height_from: Option<String>,
+}
+
+/// A path flange (format 36): edge flanges on the sheet edge at `edge`
+/// along an open chain of sketch lines drawn across it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SheetPath {
+    pub edge: Vec3,
+    pub sketch: u64,
+    pub curves: Vec<String>,
+    #[serde(default)]
+    pub radius: Option<Expr>,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1048,6 +1234,13 @@ pub struct SnapFit {
     pub width: Expr,
     pub catch_depth: Expr,
     pub catch_length: Expr,
+    /// The base reaching this far below the face; none: the arm starts at
+    /// the face.
+    #[serde(default)]
+    pub base_height: Option<Expr>,
+    /// A body of its own instead of joined to the target.
+    #[serde(default)]
+    pub new_body: bool,
     #[serde(default)]
     pub body: Option<String>,
 }
@@ -1083,6 +1276,12 @@ pub struct SheetPerforate {
     pub pattern: Option<String>,
     #[serde(default)]
     pub body: Option<String>,
+    /// The field's outline (format 48): profiles of a sketch on a face of
+    /// the sheet; none: the whole sheet.
+    #[serde(default)]
+    pub sketch: Option<u64>,
+    #[serde(default)]
+    pub profiles: Option<ProfileSel>,
 }
 
 /// Profiles raised (or sunk with `deboss`) by `depth` on a planar face,
@@ -1295,6 +1494,11 @@ pub struct SurfaceLoft {
     pub continuity: Option<[String; 2]>,
     #[serde(default)]
     pub crown: Option<[f64; 2]>,
+    /// Guide rails (format 28).
+    #[serde(default)]
+    pub rails: Vec<SweepRail>,
+    #[serde(default)]
+    pub rail_fit: Option<String>,
 }
 
 /// Faces picked by points copied out along their normals.
@@ -1418,6 +1622,9 @@ pub struct SurfaceBlend {
     pub bulge: [f64; 2],
     #[serde(default)]
     pub align: Option<[Vec3; 2]>,
+    /// Where each chain's stations start (format 28): a point on each.
+    #[serde(default)]
+    pub seam: Option<[Vec3; 2]>,
     #[serde(default)]
     pub stitch: bool,
 }

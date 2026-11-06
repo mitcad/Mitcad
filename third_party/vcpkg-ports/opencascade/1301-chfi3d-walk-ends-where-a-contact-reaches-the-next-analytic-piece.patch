@@ -1,0 +1,84 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a walk ends where one of its contacts reached the point where
+the analytic piece after its guide starts (mitcad#1341).
+
+Across a slight kink of the spine the walked guide's sections lean against
+the analytic piece's: along a fin's top, coming to an arc's torus, the
+contact on the chamfer reached the chamfer's cone where the torus starts
+2.2 micrometres along the spine before the guide's end, the contact on the
+top 4 micrometres short of the top's crease. The walk stopped there, its
+contact across onto the cone, and the next step walked the 2.2 micrometres
+to the guide's end: a piece whose faces the result's build could not join
+to the torus, the arc's edge left on one face. The walk now ends where one
+of its contacts lies within ten times the spine's tolerance of the point
+on that side where the analytic piece after the guide starts (going back:
+where the piece before it ends), as where it reaches the guide's end within
+that tolerance (ChFi3d_ReachedAnalyticPiece).
+
+Test: geometry/tests/test_fillet_fin_top_creases.cpp, the rounding of a
+reported fin's top across creases of 1.4 and 2.2 degrees: built and closed,
+the stored body after it on the result within 0.01 mm (with patch 1300
+alone the result has an edge on one face only).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index b4782b19..a1d45e8e 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -4957,6 +4957,31 @@ static bool ChFi3d_ContactAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
+   return false;
+ }
+ 
++// Whether the piece theSD, at its end (theFirst: at its start), has a contact
++// within theTol of the point on the same side where the analytic piece
++// theNext after the guide starts (theFirst: where the one before it ends).
++// Across a slight kink of the spine the walked guide's sections lean against
++// that piece's: one contact reaches the piece's face, at its first point,
++// while the other is still a few micrometres short of it.
++static bool ChFi3d_ReachedAnalyticPiece(const occ::handle<ChFiDS_SurfData>& theSD,
++                                        const occ::handle<ChFiDS_SurfData>& theNext,
++                                        const bool                          theFirst,
++                                        const double                        theTol)
++{
++  if (theSD.IsNull() || theNext.IsNull() || theSD == theNext)
++  {
++    return false;
++  }
++  for (int k = 1; k <= 2; k++)
++  {
++    if (theSD->Vertex(theFirst, k).Point().Distance(theNext->Vertex(!theFirst, k).Point()) <= theTol)
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>&     HGuide,
+                                                occ::handle<ChFiDS_Stripe>&            Stripe,
+                                                occ::handle<BRepTopAdaptor_TopolTool>& It1,
+@@ -6449,6 +6474,11 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     {
+       fini =
+         ((wl - Last) <= 10. * tolesp || (intl && !(obstacleon1 || obstacleon2))); // General case
++      // (Or where a contact reached the start of the analytic piece after the
++      // guide, short of the guide's end only by the other contact's lag
++      // across a slight kink: a step on to the end would make a piece of a
++      // few micrometres whose faces the result's build cannot join.)
++      fini = fini || ChFi3d_ReachedAnalyticPiece(ref, HGuide->Next(), false, 10. * tolesp);
+       // (Or where the walk stopped at the vertex of the edge it rolls on,
+       // on the face at the end.)
+       fini = fini || aRolledToEnd;
+@@ -6565,6 +6595,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     if (!forward)
+     {
+       fini     = ((First - wf) <= 10. * tolesp || (intf && !(obstacleon1 || obstacleon2)));
++      // (Or where a contact reached the end of the analytic piece before the
++      // guide.)
++      fini = fini || ChFi3d_ReachedAnalyticPiece(ref, HGuide->Previous(), true, 10. * tolesp);
+       // (Or where the walk stopped at the vertex of the edge it rolls on,
+       // on the face at the end.)
+       fini = fini || aRolledToEnd;

@@ -11,6 +11,9 @@
 // every platform. (Qt::Test is not linked into the application.)
 //
 // Environment (besides MITCAD_TEST_INPUT=<script>):
+//   MITCAD_TEST_HEADLESS=1 Qt offscreen component workflows, without a
+//                          viewport (10 ms ticks, 20 ms settle by default);
+//                          requires QT_QPA_PLATFORM=offscreen and --ui=qt
 //   MITCAD_TEST_STEP_MS    the tick, in ms (default 50): one step, or one
 //                          event of a gesture, per tick
 //   MITCAD_TEST_SETTLE_MS  the pause after an input before the next step
@@ -97,6 +100,8 @@
 //   expect-dialog-gone <title-regex> no matching Qt tool window remains visible
 //   hover-logged <regex>       move to a logged control without clicking
 //   timeline-leave             leave the timeline and clear its preview
+//   leave-widget <objectName>  the pointer leaves that widget (its viewport
+//                              too): a notice's hover ends (mitcad#1327)
 //   expect-timeline-hover <uids|none>  actual preview feature identifiers
 //   expect-timeline-tooltip <regex>  actual visible tooltip plain text
 //   capture-view-image <path>  save only the OCCT framebuffer
@@ -371,6 +376,10 @@
 //                           <id> of a popover lies directly above or below
 //                           the document control <anchor-id> and across its
 //                           centre, in screen coordinates (6 s)
+//   expect-native-cube-arrows each shown orientation cube arrow's AppKit
+//                           card is at its hidden Qt arrow's place, inset
+//                           by 2 points: the view's place in the window
+//                           plus the arrow's in the view (mitcad#1317, 6 s)
 //   expect-native-style <id> <state,...> what a native table cell or label
 //                           shows: error (red text, and a red fill in a
 //                           cell), warning, normal, bold, regular, editable,

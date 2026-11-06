@@ -2742,6 +2742,12 @@ impl Kernel for OcctKernel {
             })
             .collect())
     }
+
+    // Notice places (mitcad#1327; dressup.rs).
+
+    fn note_places(&self, shape: &Self::Shape) -> Vec<Vec<mitcad_model::notice::NoticePlace>> {
+        occt(shape).map_or_else(|_| Vec::new(), dressup::note_places)
+    }
 }
 
 /// Face or edge indices for the bridge (mitcad#714).

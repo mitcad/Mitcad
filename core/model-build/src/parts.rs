@@ -22,7 +22,9 @@ use mitcad_model::{DocState, Document, ModelError};
 // What BUILD reads of a placed part (`Document::part_info`) and what a
 // list gives it are in the model, which the parts list and the
 // properties use (mitcad#777).
-pub use mitcad_model::internal::build::{PartInfo, designation, part_number, part_values};
+pub use mitcad_model::internal::build::{
+    PartInfo, designation, part_number, part_values, typed_section,
+};
 
 /// The document's BUILD methods of this block, as an extension trait
 /// (mitcad#777): BUILD planning lives in a crate above the model.

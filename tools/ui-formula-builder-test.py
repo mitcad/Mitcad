@@ -8,6 +8,11 @@ import subprocess
 import sys
 import tempfile
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import run_gui
+
 
 def main():
     app, cli, directory = sys.argv[1:4]
@@ -37,7 +42,7 @@ def main():
                        MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1", QT_FORCE_STDERR_LOGGING="1")
             log_path = out / (chrome + ".log")
             with log_path.open("wb") as log:
-                result = subprocess.run([app, "--ui=qt", "--chrome=" + chrome, "--no-recovery",
+                result = run_gui([app, "--ui=qt", "--chrome=" + chrome, "--no-recovery",
                                          "--no-mcp", "--open", str(design)], env=env,
                                         stdout=log, stderr=subprocess.STDOUT, timeout=180)
             text = log_path.read_text(encoding="utf-8", errors="replace")

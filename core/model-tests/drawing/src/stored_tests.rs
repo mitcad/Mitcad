@@ -1879,3 +1879,91 @@ fn a_view_of_an_older_design_file_is_pinned_to_what_it_showed() {
     let again = command(&mut old, json!({"cmd": "recompute"}));
     assert!(again.get("notices").is_none(), "{again}");
 }
+
+/// Arm (a 40 x 30 x 5 body, F2.b0) placed once in the root and a front
+/// view of the design, which records Arm's body at its occurrence
+/// (mitcad#1318): the document and the occurrence.
+fn placed_arm() -> (Document<MockKernel>, String) {
+    let mut doc = Document::new(MockKernel::default());
+    let arm = command(&mut doc, json!({"cmd": "create_component", "name": "Arm"}))["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+            {"cmd": "add_drawing", "size": "A3"},
+            {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+             "at": [150, 150], "scale": "1:1"},
+        ]),
+    );
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        json!({"type": "bodies", "bodies": [{"body": "F2.b0", "occurrence": arm}]})
+    );
+    (doc, arm)
+}
+
+/// The view draws its body: not broken, nothing gone, one body projected.
+fn draws_its_body(doc: &Document<MockKernel>) {
+    let base = view(doc, "D1", 1);
+    assert_ne!(base["broken"], true, "{base}");
+    assert_eq!(base["warnings"], Value::Null, "{base}");
+    assert_eq!(projected_bodies(doc)[0], (1, 1), "{base}");
+}
+
+#[test]
+fn a_view_s_bodies_follow_move_features_into_a_component() {
+    // mitcad#1318: Arm's body goes into a component placed in Arm.
+    let (mut doc, arm) = placed_arm();
+    draws_its_body(&doc);
+    let moved = command(
+        &mut doc,
+        json!({"cmd": "move_to_component", "component": "Arm"}),
+    );
+    let inner = moved["components"][0]["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        json!({"type": "bodies", "bodies": [{"body": "F2.b0", "occurrence": format!("{arm}/{inner}")}]})
+    );
+    draws_its_body(&doc);
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(
+        view(&doc, "D1", 1)["subject"],
+        json!({"type": "bodies", "bodies": [{"body": "F2.b0", "occurrence": arm}]})
+    );
+    draws_its_body(&doc);
+}
+
+#[test]
+fn a_view_s_bodies_follow_save_component_as_design_with_replace() {
+    // mitcad#1318: Arm replaced by a link to its own file; its body is the
+    // base feature's now.
+    let (mut doc, arm) = placed_arm();
+    let dir = mitcad_model::testing::unique_temp_dir("1318-replace");
+    let path = dir.join("Arm.mitcad");
+    let saved = command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": "Arm",
+               "path": path, "base": dir, "replace": true}),
+    );
+    assert_eq!(saved["replaced"], true, "{saved}");
+    let subject = view(&doc, "D1", 1)["subject"].clone();
+    let body = subject["bodies"][0]["body"].as_str().unwrap().to_owned();
+    assert_ne!(body, "F2.b0", "{subject}");
+    assert!(
+        doc.bodies().iter().any(|b| b.uid.to_string() == body),
+        "{subject}"
+    );
+    assert_eq!(subject["bodies"][0]["occurrence"], arm, "{subject}");
+    draws_its_body(&doc);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -140,7 +140,8 @@ impl<K: Kernel> Document<K> {
         let mut next = self.state.clone();
         let turned = turned_components(&next);
         let mut report = ReorientReport::default();
-        turn_state(&mut next, turn, &turned, &mut report)?;
+        let reversed = self.reversed_wraps(&old_whole, turn, &turned);
+        turn_state(&mut next, turn, &turned, &reversed, &mut report)?;
 
         // Sketches on faces, on construction planes and on other
         // components' planes: the frame they get from the turned design,
@@ -324,6 +325,60 @@ impl<K: Kernel> Document<K> {
             .map(|m| m.center)
             .filter(|c| c.iter().all(|v| v.is_finite()));
         BodyFacts { bounds, center }
+    }
+
+    /// The Embosses of turned components whose wrap the turn makes count
+    /// along its face's axis the other way (mitcad#1315,
+    /// [`crate::reorient::wrap_count_reversed`]), from the axis of the face
+    /// as each found it in the whole timeline before the turn: the face's
+    /// body as the last feature before it set it. Those without Along Axis
+    /// or Around, projected ones and those on a face that is no cylinder or
+    /// cone are left out.
+    fn reversed_wraps(
+        &self,
+        whole: &Recomputed<K::Shape>,
+        turn: Turn,
+        turned: &BTreeSet<ComponentUid>,
+    ) -> BTreeSet<FeatureUid> {
+        let mut reversed = BTreeSet::new();
+        for entry in &self.state.features {
+            let FeatureDef::Emboss(emboss) = &entry.def else {
+                continue;
+            };
+            let Some(face) = &emboss.face else {
+                continue;
+            };
+            let moved = emboss.along_axis.is_some() || emboss.around_angle.is_some();
+            let projected = emboss.projection || emboss.direction.is_some();
+            if !moved || projected || !turned.contains(&entry.component) {
+                continue;
+            }
+            let Some(shape) = whole
+                .results
+                .iter()
+                .take_while(|r| r.uid != entry.uid)
+                .filter_map(|r| r.shape_set(face.body))
+                .last()
+            else {
+                continue;
+            };
+            let name = match crate::features::renamed::find_face(&self.kernel, shape, &face.face) {
+                Ok(None) => face.face.clone(),
+                Ok(Some(found)) => found,
+                Err(_) => continue,
+            };
+            let axis = match self.kernel.face_cylinder(shape, &name) {
+                Ok(cylinder) => cylinder.axis.direction,
+                Err(_) => match self.kernel.face_cone(shape, &name) {
+                    Ok(cone) => cone.axis,
+                    Err(_) => continue,
+                },
+            };
+            if crate::reorient::wrap_count_reversed(turn, axis) {
+                reversed.insert(entry.uid);
+            }
+        }
+        reversed
     }
 
     /// `Body17 of Part (made by Base1)`; the root's bodies without their
@@ -716,6 +771,7 @@ fn turn_state(
     state: &mut DocState,
     turn: Turn,
     turned: &BTreeSet<ComponentUid>,
+    reversed: &BTreeSet<FeatureUid>,
     report: &mut ReorientReport,
 ) -> Result<(), ModelError> {
     let assembly = state.assembly.clone();
@@ -735,6 +791,18 @@ fn turn_state(
         let (def, negate) = crate::reorient::turn_definition(&entry.def, entry.component, &context)
             .map_err(|e| invalid(format!("Reorient Design cannot turn {}: {e}", entry.name)))?;
         negated.extend(negate.into_iter().map(|id| (entry.uid, id)));
+        // An Emboss whose wrap counts along its face's axis the other way
+        // now (mitcad#1315): its Along Axis and Around are negated.
+        if let FeatureDef::Emboss(emboss) = &entry.def
+            && reversed.contains(&entry.uid)
+        {
+            negated.extend(
+                [emboss.along_axis, emboss.around_angle]
+                    .into_iter()
+                    .flatten()
+                    .map(|id| (entry.uid, id)),
+            );
+        }
         if let FeatureDef::Base(base) = &entry.def {
             bases.push((entry.uid, base.clone()));
         }
@@ -779,6 +847,14 @@ fn turn_state(
         }
     }
     report.lights += crate::reorient::turn_lights(&mut state.render, turn);
+    // Image references' planes and comments' points and places
+    // (mitcad#1315).
+    for image in &mut state.image_references {
+        crate::reorient::turn_image_reference(image, &context);
+    }
+    for comment in &mut state.comments {
+        crate::reorient::turn_comment(comment, &context);
+    }
     // What split features remember of their pieces (centres of mass).
     crate::reorient::turn_split_pieces(state, turn, turned);
     Ok(())
@@ -872,13 +948,11 @@ fn add_base_move(
             }
         )));
     }
-    let bodies: Vec<BodyUid> = (0..def.bodies.len())
-        .map(|i| {
-            def.replaces
-                .get(i)
-                .copied()
-                .unwrap_or(BodyUid::new(base, i as u32))
-        })
+    // By the body's own id: a body kept after Find Repeated Parts took
+    // copies before it out keeps its number, not its place (mitcad#1306).
+    let bodies: Vec<BodyUid> = (0u32..)
+        .take(def.bodies.len())
+        .map(|i| def.body_uid(base, i))
         .collect();
     let matrix = crate::assembly::matrix_rows(&turn.transform());
     let mv: FeatureDef<crate::features::ValueInput> = FeatureDef::Move(crate::features::MoveDef {

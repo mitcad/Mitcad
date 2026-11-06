@@ -711,6 +711,9 @@ Afterwards, the document is that file. An existing file must have
   wrote, and drop its fields that this MitCad did not read (mitcad#1132).
   The error names the fields. Save the design in the application, which
   asks first, or give another `path`.
+- The `path` is the file of a design that another window has open
+  (mitcad#1323). The error names that window's document, also as
+  `open_document`.
 
 **`document_open`** opens a `.mitcad` design from a folder for designs in
 the window, as File > Open does. It replaces the open document. The tool
@@ -720,6 +723,9 @@ is refused in these cases:
 - The open document has unsaved changes, unless `discard` is true
 - A sketch or a command panel is open
 - The open would ask the user something
+- Another window has the design open (mitcad#1323): the error names that
+  window's document, also as `open_document`; work on that document, so
+  that one file is never open twice
 
 If `discard` is true, MitCad discards the unsaved changes and their
 recovery data.
@@ -957,6 +963,8 @@ queries do (`busy`, `retry_after_ms`).
 
 - Clean Up Stale Projections: `{"id": "sketch.clean_up_stale_projections"}`
   in an open sketch
+- Project Again: `{"id": "sketch.project_again"}` in an open sketch
+  (mitcad#1303)
 - Project: `sketch.project` with its `source` input
 - Finish Sketch: `sketch.finish`
 - Cancel the sketch: `{"finish": "cancel"}`

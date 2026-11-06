@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QDebug>
 #include <QHash>
 #include <QString>
 #include <QtGlobal>
@@ -66,6 +67,13 @@ namespace mitcad {
 //   Windows 11 too, the build VM's (platform/WindowsTheme.hpp;
 //   tools/ui-windows-windows10-dark-test.ps1).
 inline QString testColorScheme() { return qEnvironmentVariable("MITCAD_TEST_COLOR_SCHEME"); }
+// Component workflows keep the real model and Qt controls, without a GPU
+// viewport or system windows. Pixel/input acceptance uses the normal UI.
+inline bool headlessUiTest() {
+  return qEnvironmentVariableIntValue("MITCAD_TEST_HEADLESS") != 0 &&
+         !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") &&
+         qEnvironmentVariable("QT_QPA_PLATFORM").section(QLatin1Char(':'), 0, 0) == QStringLiteral("offscreen");
+}
 inline bool volumesLogged() {
   static const bool logged = qEnvironmentVariableIntValue("MITCAD_LOG_VOLUMES") != 0;
   return logged;

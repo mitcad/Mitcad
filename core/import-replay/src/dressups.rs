@@ -148,7 +148,11 @@ impl<K: ImportKernel> Importer<'_, K> {
         states: Option<geometric::States>,
     ) {
         let Some(dir) = directory() else { return };
-        if !(error.starts_with("fillet") || error.starts_with("chamfer")) {
+        // ("the fillet would leave the body open: ...", mitcad#1336, is a
+        // failure of the kernel's result too.)
+        let error_of =
+            |kind: &str| error.starts_with(kind) || error.starts_with(&format!("the {kind}"));
+        if !(error_of("fillet") || error_of("chamfer")) {
             return;
         }
         // (A candidate of several definitions, each on its own body: each

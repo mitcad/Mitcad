@@ -68,6 +68,8 @@ bool isPlanar(const SelectionItem& item);
 bool isAxial(const SelectionItem& item);
 // A point: the origin or a construction point, a vertex, a sketch point.
 bool isPointLike(const SelectionItem& item);
+// An axis, or a straight edge or sketch line (mitcad#1329: line objects).
+bool isStraightLine(const SelectionItem& item);
 bool isCircular(const SelectionItem& item); // circles and arcs (edges, sketch curves)
 constexpr SelectFilter kPlaneKinds = SelectKind::Plane | SelectKind::Face;
 constexpr SelectFilter kAxisKinds =
@@ -75,6 +77,8 @@ constexpr SelectFilter kAxisKinds =
 constexpr SelectFilter kPointKinds =
     SelectKind::Point | SelectKind::Vertex | SelectKind::SketchPoint;
 constexpr SelectFilter kPathKinds = SelectKind::SketchCurve | SelectKind::Edge;
+// Straight lines as extent objects (mitcad#1329); isStraightLine tells.
+constexpr SelectFilter kStraightLineKinds = SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve;
 
 // --- Operations of features that make or change bodies
 
@@ -86,11 +90,15 @@ void loadOperation(const QJsonObject& def, CommandState& state);
 
 // --- Objects that extents end at (extrudes, revolves, holes)
 
-// The inputs "object<suffix>" (a plane, face or body), how a face is
-// reached ("object<suffix>_extend": the selected face or the adjacent
+// The inputs "object<suffix>" (a plane, face or body; with `points` also a
+// sketch point, a vertex or a construction point, and a straight line: a
+// sketch line, a straight edge or an axis, mitcad#1329), how a face
+// is reached ("object<suffix>_extend": the selected face or the adjacent
 // faces) and a body ("object<suffix>_body": to it or through it).
-QVector<InputDef> objectInputs(const QString& suffix, std::function<bool(const CommandState&)> shown);
-// The model's <object>: a plane, a face or a body (commands.md, "extrude").
+QVector<InputDef> objectInputs(const QString& suffix, std::function<bool(const CommandState&)> shown,
+                               bool points = false);
+// The model's <object>: a plane, a face, a body or a point (commands.md,
+// "extrude").
 QJsonObject objectOf(const CommandState& state, const QString& suffix);
 bool loadObject(const QJsonObject& object, CommandState& state, const QString& suffix,
                 const CommandContext& context);
@@ -136,6 +144,18 @@ QString planeComponent(const SelectionItem& item, const CommandContext& context)
 // which the model reads only in its own component and no link carries (the
 // links carry bodies, `addObjectLink`); empty when it can be used.
 QString foreignPlane(const SelectionItem& item, const Selection& profiles, const CommandContext& context);
+// Why a point or a straight line picked as an extrusion's object or start
+// (mitcad#1329) cannot be used: it was picked in another occurrence than
+// `here`, where the profiles are seen, and no link carries one; empty when
+// it can be used (and for anything but a point or a line).
+QString foreignPoint(const SelectionItem& item, const QString& here);
+// Why a straight line picked as an extrusion's object or start
+// (mitcad#1329) cannot be used: it leans out of the planes parallel to the
+// profiles by more than the model's 1e-6 rad ("The line is 30.000 degrees
+// off the profiles' plane: …"); empty when it lies in one of them, when
+// the directions are not known here (the model checks it), and for
+// anything but a line.
+QString slantedLine(const SelectionItem& item, const Selection& profiles, const CommandContext& context);
 
 // --- Values
 

@@ -47,6 +47,10 @@ void noteOpened(const QString& path, const QDateTime& when = QDateTime::currentD
 QList<RecentDesign> load();
 // Pins or unpins a design (the star).
 void setPinned(const QString& path, bool pinned);
+// The pinned designs' paths (absolute), in the order they were pinned: also
+// a project's designs pinned on the Start page's project browser
+// (mitcad#1301).
+QStringList pinnedPaths();
 // Takes a design off the list and its pin (a missing file's Remove).
 void remove(const QString& path);
 // Clear Recent Files: the list and the times; the pins stay.

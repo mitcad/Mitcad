@@ -1271,6 +1271,12 @@ struct OcctViewer::Occluder {
 };
 
 OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
+  if (headlessUiTest()) {
+    QSizePolicy policy = sizePolicy();
+    policy.setRetainSizeWhenHidden(true);
+    setSizePolicy(policy);
+    setVisible(false);
+  }
   // The presentations' triangulations (BRepMesh through AIS) mesh the faces
   // of a shape on all cores instead of one after another (W1: a design of
   // many bodies displayed several times faster).
@@ -6039,7 +6045,14 @@ void OcctViewer::setDocumentVisible(bool visible) {
   emit documentVisibilityChanged(visible);
 }
 
+void OcctViewer::setVisible(bool visible) {
+  // An offscreen Qt plugin cannot compose QOpenGLWidget textures. Keep
+  // the CPU scene/model alive for controls, but never expose its surface.
+  QOpenGLWidget::setVisible(visible && !headlessUiTest());
+}
+
 void OcctViewer::requestFrame() {
+  if (headlessUiTest()) return;
   if (!m_documentVisible) return;
   update();
   const QWindow* handle = window()->windowHandle();
@@ -6526,6 +6539,13 @@ void OcctViewer::buttonsReleased() {
 }
 
 bool OcctViewer::event(QEvent* event) {
+  if (headlessUiTest()) {
+    // Reparenting and layout changes can show this widget without calling
+    // setVisible(). Bypass QOpenGLWidget's surface lifecycle as well: even
+    // a resize of an offscreen widget may otherwise initialize OpenGL.
+    if (event->type() == QEvent::Resize || event->type() == QEvent::Paint) return true;
+    return QWidget::event(event);
+  }
   if (event->type() == QEvent::NativeGesture) {
     nativeGesture(static_cast<QNativeGestureEvent*>(event));
     return true;

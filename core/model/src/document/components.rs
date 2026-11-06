@@ -390,10 +390,27 @@ impl<K: Kernel> Document<K> {
                 a.name(parent)
             )));
         }
+        // A feature that reads the assembly's structure (an Envelope of a
+        // component's occurrences, mitcad#1321) follows the new placement
+        // at once; otherwise nothing evaluation reads changed.
+        let recompute = self.reads_assembly();
         self.apply_with(|state| {
             let occurrence = state.assembly.place(component, parent, transform);
             let label = format!("Place {}", state.assembly.occurrence_name(occurrence));
-            Ok((label, occurrence, false))
+            Ok((label, occurrence, recompute))
+        })
+    }
+
+    /// Whether a feature's last evaluation read the assembly's structure
+    /// (`Read::Assembly`: an Envelope, a body transfer, an extrusion's cut
+    /// scope), which a placed occurrence changes.
+    fn reads_assembly(&self) -> bool {
+        self.result.results.iter().any(|r| {
+            r.output.as_ref().is_some_and(|o| {
+                o.reads
+                    .iter()
+                    .any(|read| matches!(read, crate::recompute::Read::Assembly(_)))
+            })
         })
     }
 

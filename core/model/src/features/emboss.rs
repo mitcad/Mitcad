@@ -264,7 +264,7 @@ fn optional_param<K: Kernel>(
 /// own axis may point either way (an extruded rod's cylinder has its axis
 /// against the extrusion), so a positive Along Axis moves up a rod however
 /// it was made.
-fn counted(direction: [f64; 3]) -> [f64; 3] {
+pub(crate) fn counted(direction: [f64; 3]) -> [f64; 3] {
     let d = unit(direction).unwrap_or(direction);
     let flip = if d[2].abs() > 1e-9 {
         d[2] < 0.0

@@ -10,6 +10,8 @@
 //! body share one frozen copy; links inside an unsaved design are recorded
 //! from the command's folder; a component placed twice inside refuses
 //! Replace; annotations on the replaced bodies follow the base feature.
+//! A linked design shown by its envelope keeps its joints' kept frames in
+//! the saved design (mitcad#1319).
 
 use serde_json::{Value, json};
 
@@ -931,5 +933,149 @@ fn replace_with_a_link_refuses_outer_datums_on_its_datums() {
         "{error}"
     );
     assert!(!path.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Whether two placements are the same within 1e-6 mm.
+fn same_placement(a: Transform, b: Transform) -> bool {
+    let near = |x: &f64, y: &f64| (x - y).abs() <= 1e-6;
+    a.linear
+        .iter()
+        .zip(&b.linear)
+        .all(|(ra, rb)| ra.iter().zip(rb).all(|(x, y)| near(x, y)))
+        && a.translation
+            .iter()
+            .zip(&b.translation)
+            .all(|(x, y)| near(x, y))
+}
+
+/// Cell holds a linked machine and a grounded plate, and a rigid joint
+/// from a face of the machine's body to the plate's top. The machine shown
+/// by its envelope keeps the joint's frame on that face (mitcad#1276);
+/// Cell saved as a design keeps that frame in its copy of the link, named
+/// as the copied joint names the face, so the joint places the machine
+/// there as in this design (mitcad#1319).
+#[test]
+fn a_linked_design_shown_by_its_envelope_keeps_its_joint_frames() {
+    use mitcad_model::FeatureStatus;
+    use mitcad_model::datum::SurfaceGeometry;
+
+    let dir = mitcad_model::testing::unique_temp_dir("1319-envelope-frames");
+    let mut machine = Document::new(MockKernel::default());
+    machine
+        .add_feature(
+            &def(
+                json!({"type": "box", "plane": "xy", "corner": [0, 0], "length": 4,
+                        "width": 4, "height": 4, "operation": "new_body"}),
+            ),
+            None,
+        )
+        .unwrap();
+    std::fs::write(dir.join("Machine.mitcad"), machine.to_json()).unwrap();
+
+    let mut doc = Document::new(MockKernel::default());
+    doc.add_parameter("height", 10.0, "").unwrap();
+    let (cell, _) = doc
+        .create_component(Some("Cell"), Transform::IDENTITY, true)
+        .unwrap();
+    let (_, plate) = doc
+        .create_component(Some("Plate"), shift(0.0, 0.0, -50.0), true)
+        .unwrap();
+    let (plate_body, plate_top) = block(&mut doc);
+    doc.activate_component(cell).unwrap();
+    doc.set_occurrence_grounded(plate, true).unwrap();
+    let options = InsertOptions {
+        base: Some(dir.clone()),
+        name: Some("Machine".to_owned()),
+        ..InsertOptions::default()
+    };
+    let (linked, placed) = doc.insert_component("Machine.mitcad", &options).unwrap();
+    let machine_body = doc
+        .bodies()
+        .iter()
+        .find(|b| doc.body_component(b.uid) == Some(linked))
+        .unwrap()
+        .uid;
+    // A face of the machine's body: a plane at its bottom.
+    let machine_face = doc.body_shape(machine_body).unwrap().faces[0].to_string();
+    doc.kernel().surfaces.borrow_mut().insert(
+        machine_face.clone(),
+        SurfaceGeometry::Plane {
+            origin: [2.0, 2.0, 0.0],
+            normal: [0.0, 0.0, -1.0],
+        },
+    );
+    let joint = command(
+        &mut doc,
+        json!({"cmd": "add_joint", "kind": "rigid",
+               "a": {"occurrence": placed.to_string(),
+                     "geometry": {"body": machine_body, "face": machine_face}},
+               "b": {"occurrence": plate.to_string(),
+                     "geometry": {"body": plate_body, "face": plate_top}}}),
+    );
+    assert_eq!(joint["error"], Value::Null, "{joint}");
+    let joint: FeatureUid = joint["uid"].as_str().unwrap().parse().unwrap();
+    assert_eq!(doc.feature(joint).unwrap().component, cell);
+    assert_eq!(doc.status(joint), Some(&FeatureStatus::Ok));
+    let joined = doc.placement(placed).unwrap();
+    assert!(!same_placement(joined, Transform::IDENTITY));
+
+    // The machine, its component's only occurrence, by its envelope: the
+    // link keeps the joint's frame and the joint its placement.
+    let shown = command(
+        &mut doc,
+        json!({"cmd": "set_link_envelope", "occurrence": placed.to_string(),
+               "detail": 4, "base": dir}),
+    );
+    assert_eq!(shown["changed"], json!(true), "{shown}");
+    let link = |doc: &Document<MockKernel>, component: ComponentUid| {
+        doc.assembly()
+            .component(component)
+            .and_then(|c| c.link.clone())
+            .unwrap()
+    };
+    assert_eq!(link(&doc, linked).envelope, Some(4.0));
+    assert_eq!(link(&doc, linked).frames.len(), 1);
+    assert_eq!(doc.status(joint), Some(&FeatureStatus::Ok));
+    assert!(same_placement(doc.placement(placed).unwrap(), joined));
+
+    // Cell saved as a design and opened: its link keeps the frame, on the
+    // face the copied joint names, and the joint places the machine there.
+    let path = dir.join("Cell.mitcad");
+    command(
+        &mut doc,
+        json!({"cmd": "save_component_as_design", "component": cell,
+               "path": path, "base": dir}),
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut opened = Document::from_json(&text, MockKernel::default()).unwrap();
+    opened.recompute();
+    let copied = component_named(&opened, "Machine");
+    let kept = link(&opened, copied);
+    assert_eq!(kept.envelope, Some(4.0));
+    assert_eq!(kept.frames.len(), 1, "{:?}", kept.frames);
+    let copied_joint = opened
+        .features()
+        .find(|f| matches!(f.def, FeatureDef::Joint(_)))
+        .unwrap();
+    let FeatureDef::Joint(origins) = &copied_joint.def else {
+        unreachable!()
+    };
+    assert!(
+        [&origins.a.geometry, &origins.b.geometry].contains(&&kept.frames[0].geometry),
+        "{:?} not in {origins:?}",
+        kept.frames[0].geometry
+    );
+    assert_eq!(
+        opened.status(copied_joint.uid),
+        Some(&FeatureStatus::Ok),
+        "{:?}",
+        opened.status(copied_joint.uid)
+    );
+    let occurrence = opened.assembly().occurrences_of(copied).next().unwrap().uid;
+    assert!(same_placement(
+        opened.placement(occurrence).unwrap(),
+        joined
+    ));
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -60,6 +60,9 @@ qt_add_executable(mitcad
   # The command framework (COMMANDS.md).
   framework/Appearances.cpp
   framework/Appearances.hpp
+  # Preferences' Theme: System, Light or Dark (mitcad#1330).
+  framework/AppTheme.cpp
+  framework/AppTheme.hpp
   framework/AutoselectPanel.cpp
   framework/AutoselectPanel.hpp
   framework/ChromeStyle.cpp
@@ -781,6 +784,9 @@ if(BUILD_TESTING)
   # The render device's choice and the CPU's fallback (mitcad#50): plain
   # C++.
   target_sources(test_app PRIVATE render/RenderDevices.cpp render/RenderDevices.hpp)
+  # Which render worker starts: the picked one, the shipped one, the
+  # override (mitcad#1332): plain Qt Core.
+  target_sources(test_app PRIVATE render/RenderWorkerChoice.cpp render/RenderWorkerChoice.hpp)
   # Feedback and error reports (mitcad#61, mitcad#62): masking, crash files,
   # duplicate keys, the issue form's address.
   target_sources(test_app PRIVATE report/ReportText.cpp report/ReportText.hpp)
@@ -980,6 +986,9 @@ target_sources(mitcad PRIVATE
   render/RenderScene.hpp
   render/Renderer.hpp)
 target_include_directories(mitcad SYSTEM PRIVATE "${MITCAD_CGLTF_INCLUDE_DIR}")
+# The render worker picked in Preferences (mitcad#1332): a worker the user
+# built, such as an OptiX one, else the shipped one.
+target_sources(mitcad PRIVATE render/RenderWorkerChoice.cpp render/RenderWorkerChoice.hpp)
 # File > Render Image (mitcad#48): the final render in the worker's batch
 # mode; RenderBatch is shared with mitcad-cli render.
 target_sources(mitcad PRIVATE
@@ -1022,6 +1031,11 @@ add_executable(mitcad-render
   render/RenderScene.cpp
   render/RenderScene.hpp
   render/Renderer.hpp)
+# A user's own OptiX worker (mitcad#1332, cmake/RenderOptix.cmake) has a
+# name of its own, so that it never replaces the shipped mitcad-render.
+if(MITCAD_RENDER_OPTIX)
+  set_target_properties(mitcad-render PROPERTIES OUTPUT_NAME mitcad-render-optix)
+endif()
 # Crash reports (mitcad#62), with the worker's functions named in their
 # stacks as the application's are.
 target_sources(mitcad-render PRIVATE report/CrashHandler.cpp report/CrashHandler.hpp)
@@ -1378,6 +1392,14 @@ endif()
 target_sources(mitcad PRIVATE
   library/SupplierPartsDialog.cpp
   library/SupplierPartsDialog.hpp)
+# The suppliers' shops (mitcad#950): the region and the shops chosen in
+# Preferences (its Suppliers page), and the product links of the
+# suppliers' part numbers (the model's `supplier_shops`, `supplier_links`).
+target_sources(mitcad PRIVATE
+  library/SupplierPreferences.cpp
+  library/SupplierPreferences.hpp
+  library/SupplierShops.cpp
+  library/SupplierShops.hpp)
 # The web viewer's pages (mitcad#423, app/web, app/COMMANDS.md "Web
 # page"): a design as one self-contained HTML file, File > Export > Web
 # page. The viewer's files (app/web/viewer, its libraries in
@@ -2159,6 +2181,22 @@ if(BUILD_TESTING)
   add_test(NAME app.chat_tool_groups COMMAND test_chat_tool_groups)
   set_tests_properties(app.chat_tool_groups PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  # An API agent's key across a change in Preferences while a message runs
+  # (mitcad#1309): ApiAgent against a local service and a stand-in of the
+  # live listener, keys for the run only.
+  add_executable(test_api_agent tests/api_agent.cpp agent/ApiAgent.cpp agent/ApiAgent.hpp agent/ChatAgent.hpp
+    agent/ChatSettings.cpp agent/ChatSettings.hpp mcp/LocalEndpoint.cpp mcp/LocalEndpoint.hpp)
+  if(WIN32)
+    target_sources(test_api_agent PRIVATE mcp/WindowsEndpointSecurity.cpp mcp/WindowsEndpointSecurity.hpp)
+    target_link_libraries(test_api_agent PRIVATE advapi32)
+  endif()
+  target_include_directories(test_api_agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(test_api_agent PRIVATE mitcad_ffi Qt6::Core Qt6::Network qt6keychain mitcad_warnings)
+  mitcad_utf8_code_page(test_api_agent)
+  add_test(NAME app.api_agent COMMAND test_api_agent)
+  set_tests_properties(app.api_agent PROPERTIES TIMEOUT 120
+    ENVIRONMENT "MITCAD_TEST_KEYCHAIN=off"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 
 # A stored view's height set as OCCT's camera scale through the view's
@@ -2577,4 +2615,54 @@ if(BUILD_TESTING)
   # Where it jumps, the positions the view gets, queued moves, a refused
   # jump, the jump's own move: plain Qt Core.
   target_sources(test_app PRIVATE tests/orbit_wrap.cpp view/OrbitWrap.hpp)
+endif()
+
+# The Start page's project browser (mitcad#1301, app/COMMANDS.md "The Start
+# tab"): Recent, Pinned and the projects on the left, a project's breadcrumb,
+# folders and design cards on the right, one search over every project and
+# the recent list, the row and folder remembered.
+target_sources(mitcad PRIVATE files/StartBrowser.cpp files/StartBrowser.hpp)
+if(BUILD_TESTING)
+  # The rows remembered, a project's cards, the search over the projects and
+  # the recent list, the logs' lines: plain Qt Core (ProjectBrowserData and
+  # RecentDesigns are in test_app).
+  target_sources(test_app PRIVATE tests/start_browser.cpp files/StartBrowser.cpp files/StartBrowser.hpp)
+endif()
+# The Start tab on macOS (tools/ui-macos-start-page-test.sh: the shared
+# scripts of tools/ui-start-page-test.sh), the Qt frontend and AppKit's.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
+  # The CLI sibling is added later; TARGET_FILE resolves at generation time.
+  add_test(NAME app.ui-macos-start-page
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-start-page-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-start-page" qt)
+  set_tests_properties(app.ui-macos-start-page PROPERTIES
+    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-start-page
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-start-page-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-start-page" native)
+    set_tests_properties(app.ui-macos-native-start-page PROPERTIES
+      TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
+  endif()
+endif()
+
+# The places of the model's notices (mitcad#1327, docs/ui-conventions.md
+# "Messages and severity"): painted in the view while the pointer is over a
+# notice (the command panel's message, a Timeline item, a Browser row, the
+# message band, the Docked status line).
+target_sources(mitcad PRIVATE framework/NoticePlaces.cpp framework/NoticePlaces.hpp MainWindowNoticeHover.cpp)
+if(BUILD_TESTING)
+  # Their places and plain messages read from notices: plain Qt Core (the
+  # document snapshot's too).
+  target_sources(test_app PRIVATE tests/notice_places.cpp framework/NoticePlaces.cpp framework/NoticePlaces.hpp)
+endif()
+
+# Preferences › Display › Always show corners in drawings and its dot size
+# (mitcad#1338, app/COMMANDS.md "Drawings"): every corner of an open
+# drawing's views as a dot on the screen.
+target_sources(mitcad PRIVATE drawings/DrawingPreferences.cpp drawings/DrawingPreferences.hpp)
+if(BUILD_TESTING)
+  # Its load and save: plain Qt Core.
+  target_sources(test_app PRIVATE tests/drawing_preferences.cpp drawings/DrawingPreferences.cpp
+                                  drawings/DrawingPreferences.hpp)
 endif()

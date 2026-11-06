@@ -614,9 +614,12 @@ ui_expect_new "Preview Thread: ok" "M8 previewed, its class still a hole's"
 # M8x1.25's minor diameter is far from the 5 mm hole (mitcad#1262): the
 # preview says so in its warning and the panel's message, and the thread
 # is made all the same.
+# The preview logs the model's warning; the panel shows it without the
+# face's topological name (mitcad#1334).
 M8_ON_BORE="M8x1.25 (Ø8 mm, minor Ø6.647 mm) on face $BORE_B (Ø5 mm): the hole's diameter is 1.647 mm smaller than the thread's minor diameter"
+M8_ON_BORE_SHOWN="M8x1.25 (Ø8 mm, minor Ø6.647 mm) on a face (Ø5 mm): the hole's diameter is 1.647 mm smaller than the thread's minor diameter"
 ui_expect_new "Preview Thread: ok, warning: $M8_ON_BORE" "the preview warns of the size"
-ui_expect_new "Panel Thread message box: warning: $M8_ON_BORE" "the panel's message shows the warning"
+ui_expect_new "Panel Thread message box: warning: $M8_ON_BORE_SHOWN" "the panel's message shows the warning"
 ui_focus_main
 ui_mark
 ui_step "OK (Enter)"                       ui_key Return

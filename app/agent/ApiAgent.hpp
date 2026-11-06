@@ -118,7 +118,10 @@ private:
   void handle(const QJsonArray& events);
   void writeMcp(const QByteArray& line);
   void readMcp();
+  // A request of the stream; when the key is to be read again (changed in
+  // Preferences, mitcad#1309), it is read first.
   void sendHttp(const QJsonObject& request);
+  void postHttp(const QJsonObject& request, const QString& key);
   void readHttp(quint64 id, bool finished);
   void abortHttp(quint64 id);
   void keepTranscript(const QString& session, const QString& content);
@@ -131,6 +134,8 @@ private:
   QString m_detail;
   int m_generation = 0;
   QList<Model> m_models;
+  // The key read last; m_keyKnown false: read it again before it is used
+  // (the key of a running conversation stays until then).
   QString m_key;
   bool m_keyKnown = false;
 

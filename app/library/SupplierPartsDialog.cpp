@@ -21,6 +21,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "../report/ReportCenter.hpp"
+#include "SupplierShops.hpp"
 
 namespace mitcad {
 namespace {
@@ -40,6 +41,8 @@ QString columnHeading(SupplierColumn column) {
     return SupplierPartsDialog::tr("Material");
   case SupplierColumn::Finish:
     return SupplierPartsDialog::tr("Finish");
+  case SupplierColumn::Region:
+    return SupplierPartsDialog::tr("Region");
   case SupplierColumn::Checked:
     return SupplierPartsDialog::tr("Checked");
   case SupplierColumn::ProductPage:
@@ -65,9 +68,16 @@ SupplierPartsDialog::SupplierPartsDialog(const SupplierPartsRequest& request, QW
                                          : tr("%1 articles of %2 in the library.").arg(m_articles.size()).arg(of);
   intro += QLatin1Char(' ') + tr("Click a heading to sort.");
   if (!m_articles.isEmpty() && !request.firstSupplier.trimmed().isEmpty() &&
-      m_articles.first().supplier.compare(request.firstSupplier.trimmed(), Qt::CaseInsensitive) == 0) {
+      supplierInFilter(request.firstSupplier, m_articles.first().supplier)) {
     intro += QLatin1Char(' ') +
              tr("The articles of %1 come first, as the Supplier filter chose.").arg(m_articles.first().supplierName);
+  }
+  // The part numbers that link to a shop of the region chosen in
+  // Preferences (mitcad#950).
+  const auto linked = std::count_if(m_articles.cbegin(), m_articles.cend(),
+                                    [](const SupplierArticle& article) { return !article.productUrl.isEmpty(); });
+  if (linked > 0) {
+    intro += QLatin1Char(' ') + tr("A part number in the link color opens its product page in the shop.");
   }
   auto* label = new QLabel(intro);
   label->setObjectName(QStringLiteral("supplierPartsIntro"));
@@ -96,7 +106,9 @@ SupplierPartsDialog::SupplierPartsDialog(const SupplierPartsRequest& request, QW
       const QString link = supplierCellLink(article, m_columns[c]);
       if (!link.isEmpty() && !item->text().isEmpty()) {
         item->setData(kLinkRole, link);
-        item->setToolTip(tr("%1 (double-click, Return or Open Link)").arg(link));
+        item->setToolTip(m_columns[c] == SupplierColumn::PartNumber && !article.shop.isEmpty()
+                             ? tr("%1 in %2 (double-click, Return or Open Link)").arg(link, article.shop)
+                             : tr("%1 (double-click, Return or Open Link)").arg(link));
         item->setForeground(palette().brush(QPalette::Link));
         QFont font = item->font();
         font.setUnderline(true);
@@ -133,7 +145,7 @@ SupplierPartsDialog::SupplierPartsDialog(const SupplierPartsRequest& request, QW
   m_copyNumber->setToolTip(tr("Copy the current line's part number on its own"));
   m_openLink = new QPushButton(tr("Open &Link"));
   m_openLink->setObjectName(QStringLiteral("supplierPartsOpenLink"));
-  m_openLink->setToolTip(tr("Open the supplier's site or the product page in the browser"));
+  m_openLink->setToolTip(tr("Open the supplier's site, the product in the shop or the product page in the browser"));
   QPushButton* const actions[] = {copy, m_copyNumber, m_openLink};
   for (QPushButton* button : actions) {
     buttons->addButton(button, QDialogButtonBox::ActionRole);
@@ -282,7 +294,11 @@ void setSupplierPartsCount(QPushButton* button, qsizetype count) {
 }
 
 void showSupplierParts(QWidget* parent, const SupplierPartsRequest& request) {
-  SupplierPartsDialog dialog(request, parent);
+  // The articles' product links in the region chosen in Preferences
+  // (mitcad#950), made when the table opens.
+  SupplierPartsRequest linked = request;
+  linked.parts = withProductLinks(request.parts, QStringLiteral("Supplier parts of %1").arg(request.row));
+  SupplierPartsDialog dialog(linked, parent);
   prepareModal(&dialog);
   execDialog(&dialog);
 }

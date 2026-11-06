@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/projects app/files app/framework/AppSettings.cpp app/framework/FloatingLayout.cpp app/framework/QuickAccessGroup.cpp
+# check-all sources: app/projects app/files app/framework/AppSettings.cpp app/framework/FloatingLayout.cpp app/framework/QuickAccessGroup.cpp app/WindowManager.cpp
 # check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/projects.rs tools/cli
 # The Projects panel (mitcad#145) through the real UI, with a bare
 # repository in a folder standing in for the cloud (no network), checked
@@ -18,6 +18,8 @@
 #      context menu (cancelled); the toolbar has no Rename button.
 #   5. Delete (Del, confirmed) of a design, and of the open design, which
 #      closes; the history keeps them. A double-click opens a design.
+#      New Design over unsaved changes asks once; Don't Save opens the new
+#      design in the window (mitcad#1317).
 #   6. A Cloud project added with Add Existing Project Folder is listed
 #      at the top of the tree (mitcad#173: no location row above it), shown
 #      by its shared folder's path, with its sync state; Remove from List
@@ -283,6 +285,32 @@ ui_expect_new "Projects tree: Shop (local, current): parts/ | parts/plate.mitcad
 row "Shop/parts/plate.mitcad"
 ui_double_click_expect "Projects row Shop/parts/plate.mitcad" "Opened $SHOP/parts/plate.mitcad" \
   "a double-click opens a design"
+ui_focus_main
+
+echo "--- New Design with unsaved changes: one question; Don't Save opens it (mitcad#1317)"
+# Open designs in the current window is on (ui_open_in_current_window): the
+# panel asks once, and the new design replaces the changed one.
+ui_step "new component (search)"         ui_command "New Component"
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "New component " "a change to save"
+row "Shop/parts/"
+ui_mark
+ui_step "right-click the folder"         ui_click_logged "Projects row Shop/parts/" 3
+ui_step "new design"                     ui_menu_choose "New Design"
+ui_expect_new "Projects panel: naming a new design in Shop/parts/" "in the folder" 20
+name_it "bolt"
+ui_expect_new "Save question: plate" "asked about the changes" 20
+ui_focus_dialog '^MitCad$'
+ui_step "don't save (Alt+D)"             ui_key alt+d
+opened "$SHOP/parts/bolt.mitcad" "the new design opened after Don't Save"
+questions=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -c "^Save question: ")
+[ "$questions" = 1 ] || ui_fail "New Design asked $questions times about the changes"
+echo "ok   one question about the changes"
+expect_git "$SHOP" "log -1 --format=%s" "Add parts/bolt.mitcad" "a version of its own"
+# plate again, as opened last (the next start opens it).
+row "Shop/parts/plate.mitcad"
+ui_double_click_expect "Projects row Shop/parts/plate.mitcad" "Opened $SHOP/parts/plate.mitcad" \
+  "plate opened again, its change not kept"
 ui_focus_main
 
 echo "--- A Cloud project: Add Existing Project Folder, Remove from List"

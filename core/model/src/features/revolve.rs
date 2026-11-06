@@ -186,6 +186,13 @@ impl FeatureInfo for RevolveDef {
         check_participants(ctx, self.operation, &self.participants)?;
         self.axis.check(ctx, Want::Line)?;
         if let RevolveExtent::ToObject { object } = &self.extent {
+            // A point or a line is an extrusion's or a hole's object (mitcad#1329).
+            if object.is_point_or_line() {
+                return Err(
+                    "a revolution ends at a plane, a face or a body, not a point or a line"
+                        .to_owned(),
+                );
+            }
             object.check(ctx)?;
         }
         Ok(())

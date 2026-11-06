@@ -15,6 +15,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -45,8 +46,10 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
 
+#include "../src/face_join.hpp"
 #include "../src/history.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/import.hpp"
@@ -875,6 +878,60 @@ void test_join_that_loses_volume_is_retried() {
   }
 }
 
+// (mitcad#1336) A reported design's plate, whose end is a half round of
+// the radius of a pin joined onto its top flush with that end: the pin's
+// side, extruded from two regions, is one face closed round the axis (the
+// extrusion's join), its seam where the regions met, along the edge of the
+// plate's end with the plate's side. OCCT's merge leaves that closed face
+// apart from the plate's end, an open piece of its cylinder; the join of
+// faces on one surface cuts the closed face in two first, and the merge
+// then joins the pieces into one face closed round the axis, holding the
+// names of both. The body is the case `pin-plate-end-join` of
+// MITCAD_GEOMETRY_CASES (`body.brep`, the body after the pin's join as the
+// boolean left it); no synthetic layout reproduced the merge's refusal.
+void test_closed_face_joined_with_a_piece_of_its_surface() {
+  const std::string cases = geometry_cases();
+  if (cases.empty()) {
+    std::printf("test_closed_face_joined_with_a_piece_of_its_surface: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  const std::string folder = cases + "/pin-plate-end-join/";
+  const ShapePtr body = case_body(folder + "body.brep", "F1");
+  CHECK(body != nullptr);
+  if (body == nullptr) {
+    std::printf("test_closed_face_joined_with_a_piece_of_its_surface: %sbody.brep not read\n", folder.c_str());
+    return;
+  }
+  // The faces on the pin's cylinder (radius 4.5, the pin on the plate's
+  // side x > 0).
+  const auto pin_faces = [](const Shape& shape) {
+    std::vector<int> faces;
+    for (int i = 0; i < shape.face_count(); ++i) {
+      const BRepAdaptor_Surface surface(shape.face(i));
+      if (surface.GetType() == GeomAbs_Cylinder && std::abs(surface.Cylinder().Radius() - 4.5) < 1e-6 &&
+          surface.Cylinder().Location().X() > 0.0) {
+        faces.push_back(i);
+      }
+    }
+    return faces;
+  };
+  const std::vector<int> pieces = pin_faces(*body);
+  CHECK(pieces.size() == 2);
+  const ShapePtr joined = detail::join_same_surfaces(body);
+  CHECK(joined != nullptr);
+  if (joined == nullptr) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(joined->occt()).IsValid());
+  CHECK(joined->face_count() == body->face_count() - 1);
+  CHECK_NEAR_TOL(volume(*joined), volume(*body), 1e-9);
+  const std::vector<int> pin = pin_faces(*joined);
+  CHECK(pin.size() == 1);
+  for (const int f : pieces) {
+    CHECK(joined->find_faces(body->face_names(f).front()) == pin);
+  }
+}
+
 } // namespace
 
 void boolean_tests() {
@@ -901,6 +958,9 @@ void boolean_tests() {
   test_join_within_a_tolerance_of_a_boss_touching_a_wall_tangentially();
   // A join that loses volume (mitcad#964), on a reported model's bodies.
   guarded("test_join_that_loses_volume_is_retried", test_join_that_loses_volume_is_retried);
+  // A closed face joined with a piece of its surface (mitcad#1336), on a
+  // reported design's body.
+  guarded("test_closed_face_joined_with_a_piece_of_its_surface", test_closed_face_joined_with_a_piece_of_its_surface);
 }
 
 } // namespace test

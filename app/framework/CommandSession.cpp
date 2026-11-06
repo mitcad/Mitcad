@@ -37,6 +37,7 @@
 #include "PreviewBodies.hpp"
 #include "RememberedValues.hpp"
 #include "NoticeLevel.hpp"
+#include "NoticePlaces.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
 
@@ -1100,6 +1101,9 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
     });
   };
   actions.detached = [this] { presenterDetached(); };
+  // The pointer over the panel's message (mitcad#1327): the places of the
+  // preview's notices are painted in the view while it stays.
+  actions.messageHovered = [this](bool on) { hoverMessage(on); };
   // A link of an inspection's result ("point:x,y,z", Print Analysis'
   // thinnest wall, mitcad#620): the view shows that point of the design,
   // 20 mm across.
@@ -1767,6 +1771,10 @@ void CommandSession::updateHighlights() {
     qDebug().noquote() << QStringLiteral("%1 picks not drawn beside the marks: %2").arg(m_def.name, unmarkedText);
   }
   m_loggedUnmarked = unmarkedText;
+  // The places of a notice under the pointer (mitcad#1327).
+  for (HighlightDisplay& place : m_host.noticeHighlights()) {
+    highlights.push_back(std::move(place));
+  }
   batch.reset();
   m_host.viewer().setHighlights(highlights);
   updateGhosts();
@@ -2891,9 +2899,23 @@ bool CommandSession::refreshRowNotes() {
   return changed;
 }
 
+void CommandSession::hoverMessage(bool on) {
+  if (on == m_messageHovered && !on) {
+    return;
+  }
+  m_messageHovered = on;
+  m_host.hoverNoticePlaces(QStringLiteral("panel"), on ? m_messagePlaces : QJsonArray(),
+                           on ? m_messageBodies : std::vector<BodyDisplay>());
+}
+
 QString CommandSession::okMessage(const QJsonObject& report) {
-  // A feature that succeeds with a caveat says so (P9), not in red.
-  QStringList message = report.value(QStringLiteral("warnings")).toVariant().toStringList();
+  // A feature that succeeds with a caveat says so (P9), not in red: its
+  // warning notices in plain words (mitcad#1327: no topological names; the
+  // places they name are painted while the pointer is over the message).
+  QStringList message = noticeMessages(report, QStringLiteral("warning"));
+  if (message.isEmpty()) {
+    message = report.value(QStringLiteral("warnings")).toVariant().toStringList();
+  }
   // Then what is worth knowing of how it was built (mitcad#1106: a fillet
   // built 0.1 % smaller than asked), information unless there are warnings.
   message << report.value(QStringLiteral("infos")).toVariant().toStringList();
@@ -2972,8 +2994,18 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
   } else {
     clearPreview();
     const QString problem = preview.report.value(QStringLiteral("error")).toString();
-    m_presenter->setMessage(problem, NoticeLevel::Error);
+    // In plain words where the model gave its notice (mitcad#1327); the
+    // log keeps the model's own text.
+    const QStringList shown = noticeMessages(preview.report, QStringLiteral("error"));
+    m_presenter->setMessage(shown.isEmpty() ? problem : shown.join(QLatin1Char('\n')), NoticeLevel::Error);
     qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, problem);
+  }
+  // The places the message's notices name, and the bodies they are on
+  // (mitcad#1327): painted while the pointer is over the message.
+  m_messagePlaces = noticePlaces(preview.report.value(QStringLiteral("notices")).toArray());
+  m_messageBodies = m_previewOk ? preview.bodies : std::vector<BodyDisplay>();
+  if (m_messageHovered) {
+    m_host.hoverNoticePlaces(QStringLiteral("panel"), m_messagePlaces, m_messageBodies);
   }
   // Failed cuts still expose their candidates so a cleared or unavailable
   // target list can be corrected without restarting the command.

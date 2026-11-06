@@ -2607,10 +2607,17 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             .collect()
     }
 
-    /// An extent object: an origin or construction plane, a face or a
-    /// body.
+    /// An extent object: an origin or construction plane, a face, a body,
+    /// or a point (mitcad#1329: a vertex, a sketch point or a construction
+    /// point, the plane through it).
     fn extent_object(&self, entity: &Option<Reference>, def: &Definition) -> Option<Value> {
         match entity.as_ref()? {
+            r @ (Reference::Vertex(_)
+            | Reference::SketchEntity(_)
+            | Reference::ConstructionPoint(_)) => {
+                let point = self.point_options(Some(r)).into_iter().next()?;
+                Some(json!({"type": "point", "point": point}))
+            }
             Reference::ConstructionPlane(c) => match c.origin.clone().flatten().as_deref() {
                 Some(o @ ("XY" | "XZ" | "YZ")) => {
                     Some(json!({"type": "plane", "plane": o.to_lowercase()}))
@@ -3760,6 +3767,9 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         let point = match one.entity.as_ref()? {
             Reference::Face(fp) => fp.point_on_face,
             Reference::ConstructionPlane(c) => c.geometry.as_ref().and_then(|g| g.origin),
+            // A point the extent ends at (mitcad#1329).
+            Reference::Vertex(fp) => fp.point,
+            Reference::ConstructionPoint(c) => c.geometry.as_ref().and_then(|g| g.origin),
             _ => None,
         };
         let frame = self
@@ -6334,7 +6344,12 @@ fn section_fits<K: Kernel>(
 
 /// Edges (by name) in tangent chains, as a fillet follows them: edges
 /// that share an end where their tangents are parallel, in the order of
-/// their first edges.
+/// their first edges. Ends within the import's geometric tolerance are one
+/// (mitcad#1343): two edges of a vertex end on their curves within the
+/// vertex's tolerance, and an extrusion's end face whose loop joins the
+/// sketch's curves with the edges of the face it lies on (mitcad#1138)
+/// has its curves' ends 1 to 2 µm apart there, which split a rounding of
+/// 44 edges round a ring into 9 features that no longer built.
 fn tangent_chains<K: Kernel>(kernel: &K, shape: &K::Shape, names: &[String]) -> Vec<Vec<String>> {
     use mitcad_model::EdgeName;
     use mitcad_model::datum::PathParameter;
@@ -6357,6 +6372,7 @@ fn tangent_chains<K: Kernel>(kernel: &K, shape: &K::Shape, names: &[String]) -> 
             Some([at(0.0)?, at(1.0)?])
         })
         .collect();
+    let within = refs::geometric_tolerance().max(1e-6);
     let mut chain: Vec<usize> = (0..names.len()).collect();
     fn root(chain: &mut [usize], mut i: usize) -> usize {
         while chain[i] != i {
@@ -6375,7 +6391,7 @@ fn tangent_chains<K: Kernel>(kernel: &K, shape: &K::Shape, names: &[String]) -> 
                     let parallel = geom::unit(*ta)
                         .zip(geom::unit(*tb))
                         .is_some_and(|(u, v)| geom::norm(geom::cross(u, v)) < 1e-3);
-                    geom::distance(*pa, *pb) < 1e-6 && parallel
+                    geom::distance(*pa, *pb) < within && parallel
                 })
             });
             if joined {
@@ -7082,5 +7098,93 @@ mod tests {
         }));
         assert!(area_subsets(&areas, 1000.0, 6).is_empty());
         assert!(area_subsets(&[], 10.0, 6).is_empty());
+    }
+
+    use mitcad_model::KernelError;
+
+    /// Straight edges along x by name, for [`tangent_chains`]: each name's
+    /// start and end.
+    struct Lines(Vec<(String, [f64; 3], [f64; 3])>);
+
+    impl Kernel for Lines {
+        type Shape = ();
+
+        fn extrude(&self, _: &mitcad_model::ExtrudeSpec<'_>) -> Result<(), KernelError> {
+            Err(KernelError::Unsupported("extrude"))
+        }
+
+        fn solids(&self, _: &()) -> Result<Vec<()>, KernelError> {
+            Ok(vec![()])
+        }
+
+        fn boolean(
+            &self,
+            _: mitcad_model::BooleanOp,
+            _: &[&()],
+            _: &(),
+        ) -> Result<mitcad_model::BooleanOutput<()>, KernelError> {
+            Err(KernelError::Unsupported("boolean"))
+        }
+
+        fn fillet(
+            &self,
+            _: mitcad_model::FeatureUid,
+            _: &(),
+            _: &[mitcad_model::FilletSet<'_>],
+            _: bool,
+        ) -> Result<(), KernelError> {
+            Err(KernelError::Unsupported("fillet"))
+        }
+
+        fn count_edges(&self, _: &(), _: &mitcad_model::EdgeName) -> usize {
+            0
+        }
+
+        fn path_point(
+            &self,
+            _: &(),
+            edges: &[mitcad_model::EdgeName],
+            at: mitcad_model::datum::PathParameter,
+        ) -> Result<mitcad_model::datum::PathPoint, KernelError> {
+            let mitcad_model::datum::PathParameter::Fraction(f) = at else {
+                return Err(KernelError::Unsupported("paths"));
+            };
+            let name = edges[0].to_string();
+            let (_, a, b) = self
+                .0
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .ok_or(KernelError::Unsupported("paths"))?;
+            Ok(mitcad_model::datum::PathPoint {
+                point: [
+                    a[0] + f * (b[0] - a[0]),
+                    a[1] + f * (b[1] - a[1]),
+                    a[2] + f * (b[2] - a[2]),
+                ],
+                tangent: [1.0, 0.0, 0.0],
+            })
+        }
+    }
+
+    /// Edges whose ends lie 1 to 2 µm apart, as an extrusion's end face
+    /// gives them where its loop joins the sketch's curves with the edges of
+    /// the face it lies on, are one tangent chain (mitcad#1343: a rounding
+    /// of 44 edges round a ring was split into 9 features, which no longer
+    /// built); edges farther apart than the import's geometric tolerance are
+    /// not.
+    #[test]
+    fn tangent_chains_join_ends_within_the_geometric_tolerance() {
+        let name = |k: usize| format!("E{{F1:import({k})|F2:end(r{{c1}})}}");
+        let kernel = Lines(vec![
+            (name(1), [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+            (name(2), [1.0 + 1.7e-6, 0.0, 0.0], [2.0, 0.0, 0.0]),
+            (name(3), [2.0 + 0.5e-6, 0.0, 0.0], [3.0, 0.0, 0.0]),
+            (name(4), [3.5, 0.0, 0.0], [4.0, 0.0, 0.0]),
+        ]);
+        let names: Vec<String> = (1..=4).map(name).collect();
+        let chains = tangent_chains(&kernel, &(), &names);
+        assert_eq!(chains, vec![names[..3].to_vec(), vec![names[3].clone()]]);
+        let _tight = refs::GeometricTolerance::set(1e-7);
+        assert_eq!(tangent_chains(&kernel, &(), &names).len(), 3);
     }
 }

@@ -485,3 +485,21 @@ fn an_import_reports_invalid_rows_and_decides_name_conflicts() {
     );
     assert!(error.contains("keep_both or ask"), "{error}");
 }
+
+/// Keep Both numbers a name that differs from the design's only in case,
+/// as the clash is found (mitcad#1315): `steel` beside the built-in
+/// `Steel` is `steel (2)`.
+#[test]
+fn keep_both_numbers_a_name_that_differs_only_in_case() {
+    let mut doc = block();
+    let both = command(
+        &mut doc,
+        json!({"cmd": "import_materials", "text": "name,density [g/cm3]\r\nsteel,7.9\r\n",
+               "format": "csv", "conflict": "keep_both"}),
+    );
+    assert_eq!(both["added"].as_array().unwrap().len(), 1, "{both}");
+    let added = named(&doc, "steel (2)");
+    assert!(close(&added["density"], 7.9), "{added}");
+    assert!(named(&doc, "steel").is_null());
+    assert_eq!(material(&doc, "steel")["name"], "Steel");
+}

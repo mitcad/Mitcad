@@ -824,6 +824,16 @@ impl Manifest {
                 } else if part.checked.is_empty() {
                     out.warn(format!("{at}: no date it was checked"));
                 }
+                // The one region of an article whose supplier's part
+                // numbers differ by country (mitcad#950).
+                if !part.region.is_empty()
+                    && !mitcad_model::supplier_shops::valid_region(&part.region)
+                {
+                    out.error(format!(
+                        "{at}: region {} is no region code (two letters A-Z: FI)",
+                        part.region
+                    ));
+                }
             }
         }
     }

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <QFont>
 #include <QLineF>
@@ -319,6 +320,38 @@ void paint(QPainter& painter, double scale, const Drawn& drawn) {
   }
 }
 
+// A part of the picture's extent: a box in sketch mm (y up) and how far the
+// part reaches beyond it on paper (mm), whatever the scale.
+struct Reach {
+  double left = 0.0;
+  double right = 0.0;
+  double bottom = 0.0;
+  double top = 0.0;
+  double outLeft = 0.0;
+  double outRight = 0.0;
+  double outBottom = 0.0;
+  double outTop = 0.0;
+};
+
+// The extent in sketch mm of the geometry and the paper-sized parts painted
+// at `scale`, with kSketchMargin round it.
+Reach reachAt(const Reach& geometry, const std::vector<Reach>& paperSized, double scale) {
+  const double s = scale > 0.0 ? scale : 1.0;
+  Reach out = geometry;
+  for (const Reach& r : paperSized) {
+    out.left = std::min(out.left, r.left - r.outLeft / s);
+    out.right = std::max(out.right, r.right + r.outRight / s);
+    out.bottom = std::min(out.bottom, r.bottom - r.outBottom / s);
+    out.top = std::max(out.top, r.top + r.outTop / s);
+  }
+  out.left -= kSketchMargin;
+  out.right += kSketchMargin;
+  out.bottom -= kSketchMargin;
+  out.top += kSketchMargin;
+  out.outLeft = out.outRight = out.outBottom = out.outTop = 0.0;
+  return out;
+}
+
 } // namespace
 
 bool printsConstraint(const QString& type) { return type != QStringLiteral("coincident"); }
@@ -415,24 +448,36 @@ PrintPicture sketchPicture(const SketchModel& model, const SketchPrintOptions& o
     drawn->dimensions = dimensions;
   }
 
-  // The extent at 1:1, with the texts, values and symbols at their size.
-  // (Bounds kept by hand: QRectF's union drops a rectangle of no size, a
-  // point's.)
-  double left = 0.0;
-  double right = 0.0;
-  double bottom = 0.0;
-  double top = 0.0;
-  bool any = false;
+  // The extent: the geometry's in sketch mm, and the parts drawn at their
+  // paper size (crosses, values, arrowheads, symbols) each as a box round
+  // its place that reaches so many paper mm beyond it, divided by the scale
+  // it is painted at (mitcad#1308). (Bounds kept by hand: QRectF's union
+  // drops a rectangle of no size, a point's.)
+  Reach geometry;
+  bool hasGeometry = false;
   const auto includePoint = [&](const QPointF& p) {
-    left = any ? std::min(left, p.x()) : p.x();
-    right = any ? std::max(right, p.x()) : p.x();
-    bottom = any ? std::min(bottom, p.y()) : p.y();
-    top = any ? std::max(top, p.y()) : p.y();
-    any = true;
+    geometry.left = hasGeometry ? std::min(geometry.left, p.x()) : p.x();
+    geometry.right = hasGeometry ? std::max(geometry.right, p.x()) : p.x();
+    geometry.bottom = hasGeometry ? std::min(geometry.bottom, p.y()) : p.y();
+    geometry.top = hasGeometry ? std::max(geometry.top, p.y()) : p.y();
+    hasGeometry = true;
   };
   const auto include = [&includePoint](const QRectF& r) {
     includePoint(r.topLeft());
     includePoint(r.bottomRight());
+  };
+  auto paperSized = std::make_shared<std::vector<Reach>>();
+  // Round the point `p`: `outLeft` mm to its left on paper, and so on.
+  const auto includePaper = [&paperSized](const V2& p, double outLeft, double outRight, double outBottom,
+                                          double outTop) {
+    Reach r;
+    r.left = r.right = p.x;
+    r.bottom = r.top = p.y;
+    r.outLeft = outLeft;
+    r.outRight = outRight;
+    r.outBottom = outBottom;
+    r.outTop = outTop;
+    paperSized->push_back(r);
   };
   for (const QLineF& l : drawn->lines) {
     includePoint(l.p1());
@@ -457,7 +502,7 @@ PrintPicture sketchPicture(const SketchModel& model, const SketchPrintOptions& o
   includeCircles(drawn->circles);
   includeCircles(drawn->thinCircles);
   for (const QPointF& p : drawn->crosses) {
-    include(QRectF(p.x() - kPointArm, p.y() - kPointArm, 2.0 * kPointArm, 2.0 * kPointArm));
+    includePaper(V2{p.x(), p.y()}, kPointArm, kPointArm, kPointArm, kPointArm);
   }
   for (const QPainterPath& path : drawn->outlines) {
     include(path.boundingRect());
@@ -475,30 +520,60 @@ PrintPicture sketchPicture(const SketchModel& model, const SketchPrintOptions& o
         includePoint(at(p));
       }
     }
+    for (const auto& [tip, towards] : d.arrows) {
+      // The head's corners from its tip, as paint() draws it.
+      const V2 u = sketch::unit(towards);
+      const V2 n = sketch::perp(u);
+      const V2 corners[] = {V2{}, u * -kArrowLength + n * kArrowWidth, u * -kArrowLength - n * kArrowWidth};
+      double outLeft = 0.0;
+      double outRight = 0.0;
+      double outBottom = 0.0;
+      double outTop = 0.0;
+      for (const V2& c : corners) {
+        outLeft = std::max(outLeft, -c.x);
+        outRight = std::max(outRight, c.x);
+        outBottom = std::max(outBottom, -c.y);
+        outTop = std::max(outTop, c.y);
+      }
+      includePaper(tip, outLeft, outRight, outBottom, outTop);
+    }
     const double half = 0.3 * kDimensionText * static_cast<double>(d.text.size());
-    include(QRectF(d.textAt.x - half, d.textAt.y - kDimensionText / 2.0, 2.0 * half, kDimensionText));
+    includePaper(d.textAt, half, half, kDimensionText / 2.0, kDimensionText / 2.0);
   }
   for (const auto& [anchor, types] : drawn->glyphRows) {
     const double length = kGlyphOffset + static_cast<double>(types.size()) * (kGlyph + kGlyphGap);
-    include(QRectF(anchor.x, anchor.y, length, kGlyphOffset + kGlyph));
+    includePaper(anchor, 0.0, length, 0.0, kGlyphOffset + kGlyph);
   }
 
-  // `top`: the sketch's largest y, as its y runs up.
   PrintPicture picture;
   picture.name = model.name;
-  if (!any) {
+  if (!hasGeometry && paperSized->empty()) {
     // Nothing drawn: no size, so that it is not valid() and nothing is
     // printed ("There is nothing to print."), not a blank page of the
     // margins alone.
     return picture;
   }
-  picture.size = QSizeF(right - left + 2.0 * kSketchMargin, top - bottom + 2.0 * kSketchMargin);
+  if (!hasGeometry) {
+    // Only parts at their paper size (lone points): round the first's place.
+    geometry = paperSized->front();
+    geometry.outLeft = geometry.outRight = geometry.outBottom = geometry.outTop = 0.0;
+  }
+  // The extent at 1:1 is the picture, its top left at (left, top) of the
+  // sketch, as the sketch's y runs up.
+  const Reach whole = reachAt(geometry, *paperSized, 1.0);
+  const double left = whole.left;
+  const double top = whole.top;
+  picture.size = QSizeF(whole.right - whole.left, whole.top - whole.bottom);
   picture.paint = [drawn, left, top](QPainter& painter, double scale) {
     painter.save();
-    // Sketch (x, y) to the picture's (x - left + margin, top + margin - y).
-    painter.setTransform(QTransform(1.0, 0.0, 0.0, -1.0, kSketchMargin - left, top + kSketchMargin), true);
+    // Sketch (x, y) to the picture's (x - left, top - y).
+    painter.setTransform(QTransform(1.0, 0.0, 0.0, -1.0, -left, top), true);
     paint(painter, scale, *drawn);
     painter.restore();
+  };
+  picture.extent = [geometry, paperSized, left, top](double scale) {
+    const Reach r = reachAt(geometry, *paperSized, scale);
+    return QRectF(r.left - left, top - r.top, r.right - r.left, r.top - r.bottom);
   };
   return picture;
 }

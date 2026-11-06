@@ -104,6 +104,11 @@ import tempfile
 import threading
 import time
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import gui_lock
+
 INSTALL_PAGE = "Open URL (test, not opened): https://code.claude.com/docs/en/setup"
 
 
@@ -131,15 +136,16 @@ def run(app, name, work, out, chrome, script, extra_args=(), on_log=None, timeou
     source.write_text("\n".join(script) + "\n", encoding="utf-8")
     env["MITCAD_TEST_INPUT"] = str(source)
     log_path = out / (name + ".log")
-    with log_path.open("wb") as log:
+    with gui_lock() as gui_options, log_path.open("wb") as log:
         process = subprocess.Popen([app, "--ui=qt", "--chrome=" + chrome, "--no-recovery",
                                     "--mcp-folder", str(work / "designs"), *extra_args],
-                                   env=env, stdout=log, stderr=subprocess.STDOUT)
+                                   env=env, stdout=log, stderr=subprocess.STDOUT, **gui_options)
         deadline = time.monotonic() + timeout
         acted = False
         while process.poll() is None:
             if time.monotonic() > deadline:
                 process.kill()
+                process.wait()
                 raise RuntimeError(name + ": timed out; see " + str(log_path))
             if on_log is not None and not acted:
                 if on_log(log_path.read_text(encoding="utf-8", errors="replace")):

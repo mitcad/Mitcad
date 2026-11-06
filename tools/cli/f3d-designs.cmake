@@ -23,6 +23,11 @@
 # - where a design gives a volume tolerance (a sixth field, relative), every
 #   body stored in the file has a body in the import whose volume is within
 #   it, and every body the file hides is hidden (mitcad#1175).
+# - where a design names items in a seventh field, those items may be
+#   parametric after a retry on the file's exact state (an item whose
+#   replay deviates within the tolerance but whose operation builds only on
+#   the file's state; mitcad#1336): they must come in parametric, as any
+#   other item named parametric.
 #
 # With SLOWER the imports also try an item from its own start, the route
 # tried first, SLOWER times as long (mitcad-cli import-f3d
@@ -57,7 +62,8 @@ cmake_minimum_required(VERSION 3.24)
 
 # <id>|<items parametric, comma separated>|<items that fall back>[|<items
 # whose inputs may be inferred>[|<time limit, seconds in a release build>[|<volume
-# tolerance of the final bodies, relative>]]]; an
+# tolerance of the final bodies, relative>[|<items that may be parametric after a
+# retry on the file's exact state>]]]]; an
 # item may be named by its place on the timeline, `#<index>` (in every list
 # since mitcad#719: names a user gave items stay out of this file).
 set(designs
@@ -161,7 +167,27 @@ set(designs
     # mitcad#1177): the sketch (#6) gives the text along its path, and the
     # emboss (#24) selects the text's 59 letters (read), with no base
     # feature after it.
-    "528e5029|#5,#6,#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#24,#25,#26||#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#25,#26||1e-6")
+    "528e5029|#5,#6,#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#24,#25,#26||#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#25,#26||1e-6"
+    # A bracket of three components with its reference designs (98 items,
+    # mitcad#343, mitcad#1336, mitcad#1341, mitcad#1345). The pin's foot
+    # (#51) is rounded where the sides of the plate's rounded end, tangent to
+    # the pin, end it (port patch 0911): parametric on the replay, the pin
+    # and the plate's end one face (the join of a closed face with an open
+    # piece of its surface) and the rounding's ends cut by the corner (port
+    # patch 1290). The fin's top (#87, port patches 0980, 1020 and 1300 to
+    # 1302) is rounded on the replay's body, its edges read by their names,
+    # and runs on past the vertices at the fin's end face, which goes on
+    # from the top tangentially, cut by that face (port patch 1310). The
+    # fin's end (#89, radius 1) is rounded on the replay's body: its sides'
+    # roundings walk on past the top over the end face's surface beyond the
+    # profile stretch it is made of (port patch 1311). The rounding of the
+    # plate's side outlines (#91, radius 0.3), which ran on the file's state
+    # while #89 was retried there, builds only on the file's exact state
+    # (state 61): on the replay its walk along an earlier rounding of the
+    # plate's top edge ends in a point where that rounding vanishes into the
+    # side, and the result's wires there cross. The corner of #30 is the
+    # file kernel's own construction (round 19): it falls back.
+    "5ef2dbd5|#51,#87,#89|#30|#5,#11,#24,#39,#85,#86,#90|||#91")
 
 # Seconds as the trace gives them (two decimals) in hundredths.
 function(hundredths seconds out)
@@ -323,9 +349,14 @@ foreach(design IN LISTS designs)
   if(field_count GREATER 5)
     list(GET fields 5 volumes)
   endif()
+  set(retried "")
+  if(field_count GREATER 6)
+    list(GET fields 6 retried)
+  endif()
   string(REPLACE "," ";" parametric "${parametric}")
   string(REPLACE "," ";" falling "${falling}")
   string(REPLACE "," ";" inferred "${inferred}")
+  string(REPLACE "," ";" retried "${retried}")
   list(FIND found_ids "${id}" at)
   if(at EQUAL -1)
     if(NOT DEFINED DESIGN)
@@ -380,7 +411,11 @@ foreach(design IN LISTS designs)
         list(APPEND fell "${name}")
       endif()
     endif()
-    if(outcome STREQUAL "parametric" AND NOT retry_missing)
+    list(FIND retried "${name}" may_retry)
+    if(may_retry EQUAL -1)
+      list(FIND retried "#${index}" may_retry)
+    endif()
+    if(outcome STREQUAL "parametric" AND NOT retry_missing AND may_retry EQUAL -1)
       list(APPEND problems "${id}: ${name} is parametric after a retry on the file's exact state")
     endif()
     list(FIND inferred "${name}" may_infer)

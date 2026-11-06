@@ -149,11 +149,11 @@ void PrintPanel::refresh(bool remake) {
     m_picture = m_pictureFor(options());
   }
   if (!m_orientationChosen) {
-    const QPageLayout::Orientation best = bestOrientation(scale(), m_picture.size, paper());
+    const QPageLayout::Orientation best = bestOrientation(scale(), m_picture, paper());
     const QSignalBlocker block(m_orientation);
     m_orientation->setCurrentIndex(m_orientation->findData(static_cast<int>(best)));
   }
-  m_plan = printing::plan(scale(), m_picture.size, printableSize(pageLayout()));
+  m_plan = printing::plan(scale(), m_picture, printableSize(pageLayout()));
   const int pages = m_plan.pageCount();
   // A picture of nothing (mitcad#1156) is not printed: no blank page.
   m_print->setEnabled(m_picture.valid());

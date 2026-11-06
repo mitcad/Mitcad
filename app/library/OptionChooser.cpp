@@ -19,6 +19,7 @@
 
 #include "../framework/Json.hpp"
 #include "../framework/Theme.hpp"
+#include "PartSuppliers.hpp"
 
 namespace mitcad {
 namespace {
@@ -94,7 +95,7 @@ void appendFieldEdges(QStringList& out, const QFormLayout* form, QWidget* top) {
 
 } // namespace
 
-OptionChooser::OptionChooser(QWidget* parent) : QWidget(parent) {
+OptionChooser::OptionChooser(QWidget* parent) : QWidget(parent), m_wantedSupplier(preferredSupplierFilter()) {
   // The "fields at x" line once the layout is done (mitcad#1007).
   m_edgeTimer = new QTimer(this);
   m_edgeTimer->setSingleShot(true);
@@ -277,6 +278,7 @@ void OptionChooser::say(const QString& text, bool problem) {
 void OptionChooser::setTable(const QJsonObject& configurations, const QString& row, const QJsonObject& parameters) {
   m_table = configurations;
   m_tableParameters = parameters;
+  m_startRow = row;
   if (!m_ownFilterRows) {
     m_filterRows = configurations.value(QStringLiteral("rows")).toArray();
     m_filterOrder.clear();
@@ -399,6 +401,7 @@ void OptionChooser::setFilterRows(const QJsonArray& rows, const QStringList& sta
 
 void OptionChooser::setSupplierFilter(const QString& supplier, bool apply) {
   m_wantedSupplier = supplier;
+  m_preferredSupplier = false;
   if (!apply) {
     return;
   }
@@ -425,8 +428,17 @@ void OptionChooser::fillFilters() {
   const QList<RowSupplier> suppliers = rowSuppliers(m_filterRows);
   const QString keepStandard = m_filter.standard;
   // The supplier chosen last (here or in the part grid), also when the
-  // rows before had none of it.
-  const QString keepSupplier = m_wantedSupplier;
+  // rows before had none of it. The shops of Preferences (mitcad#950)
+  // only where they sell the row asked for, if one is.
+  QString keepSupplier = m_wantedSupplier;
+  if (m_preferredSupplier && !m_startRow.isEmpty()) {
+    RowFilter preferred;
+    preferred.supplier = keepSupplier;
+    const QJsonObject asked = filterRow(m_startRow);
+    if (!asked.isEmpty() && !rowPasses(asked, preferred)) {
+      keepSupplier.clear();
+    }
+  }
   {
     const QSignalBlocker standardBlocker(m_standardFilter);
     const QSignalBlocker supplierBlocker(m_supplierFilter);
@@ -437,14 +449,33 @@ void OptionChooser::fillFilters() {
     }
     m_supplierFilter->clear();
     m_supplierFilter->addItem(tr("All"), QString());
+    // The shops chosen in Preferences as one entry, when they are several
+    // (mitcad#950).
+    QList<PartSupplier> offered;
+    for (const RowSupplier& supplier : suppliers) {
+      offered.append({supplier.id, supplier.name});
+    }
+    const PartSupplier yours = yourShopsChoice(offered, preferredShops());
+    if (!yours.id.isEmpty()) {
+      m_supplierFilter->addItem(yours.name, yours.id);
+    }
     for (const RowSupplier& supplier : suppliers) {
       m_supplierFilter->addItem(supplier.name, supplier.id);
     }
     m_standardFilter->setCurrentIndex(std::max(0, m_standardFilter->findData(keepStandard)));
-    m_supplierFilter->setCurrentIndex(std::max(0, m_supplierFilter->findData(keepSupplier)));
+    const QString shownSupplier = supplierChoiceFor(offered, keepSupplier);
+    m_supplierFilter->setCurrentIndex(std::max(0, m_supplierFilter->findData(shownSupplier)));
   }
   m_filter.standard = m_standardFilter->currentData().toString();
   m_filter.supplier = m_supplierFilter->currentData().toString();
+  // A filter the rows start with (the part grid's, the shops chosen in
+  // Preferences: mitcad#950).
+  if (!m_filter.isAll()) {
+    qInfo().noquote() << QStringLiteral("%1 filters start: %2: %3 of %4 rows")
+                             .arg(m_logName, rowFilterText(m_filter))
+                             .arg(filteredRows(m_filterRows, m_filter).size())
+                             .arg(m_filterRows.size());
+  }
   m_standardFilter->setEnabled(!standards.isEmpty());
   m_supplierFilter->setEnabled(!suppliers.isEmpty());
   m_filters->setVisible(!standards.isEmpty() || !suppliers.isEmpty());
@@ -461,6 +492,7 @@ void OptionChooser::filterChosen() {
   }
   if (chosen.supplier != m_filter.supplier) {
     m_wantedSupplier = chosen.supplier;
+    m_preferredSupplier = false;
   }
   m_filter = chosen;
   qInfo().noquote() << QStringLiteral("%1 filter: %2: %3 of %4 rows")

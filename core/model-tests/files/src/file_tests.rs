@@ -1309,3 +1309,84 @@ fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
         &["library_sources[0]: invalid library source id S4293918720 (at most S4293918719"],
     );
 }
+
+/// A design's saved file as JSON.
+fn saved_top(doc: &Document<MockKernel>) -> Value {
+    serde_json::from_str(&doc.to_json()).unwrap()
+}
+
+/// mitcad#1320: the numbers the next feature and occurrence take are
+/// written only where they are past one beyond the largest uid listed,
+/// read back as the larger of the two, and refused when malformed or in
+/// the reserve of mitcad#944.
+#[test]
+fn the_next_feature_and_occurrence_numbers_are_kept_where_needed() {
+    // One past the largest (F3): neither is written.
+    let saved = saved_top(&load(EXAMPLE).unwrap());
+    assert!(saved.get("next_feature").is_none(), "{saved}");
+    assert!(saved.get("next_occurrence").is_none(), "{saved}");
+
+    // A larger number is read and written back; the next feature takes it,
+    // and the file then needs none.
+    let ahead = edited(EXAMPLE, |v| v["next_feature"] = json!(7));
+    let mut doc = load(&ahead).unwrap();
+    assert_eq!(saved_top(&doc)["next_feature"], json!(7));
+    assert_eq!(doc.add_sketch(SketchPlane::Xy).unwrap().uid, FeatureUid(7));
+    assert!(saved_top(&doc).get("next_feature").is_none());
+
+    // A number below the largest listed counts on from the largest.
+    let behind = edited(EXAMPLE, |v| v["next_feature"] = json!(2));
+    let mut doc = load(&behind).unwrap();
+    assert!(saved_top(&doc).get("next_feature").is_none());
+    assert_eq!(doc.add_sketch(SketchPlane::Xy).unwrap().uid, FeatureUid(4));
+
+    // Occurrences alike.
+    let placed = edited(EXAMPLE, |v| {
+        v["components"] = json!([{"uid": "C1", "name": "Part"}]);
+        v["occurrences"] = json!([{"uid": "O1", "component": "C1",
+                                   "parent": "C0", "number": 1}]);
+        v["next_occurrence"] = json!(5);
+    });
+    let mut doc = load(&placed).unwrap();
+    assert_eq!(saved_top(&doc)["next_occurrence"], json!(5));
+    let placed_again: OccurrenceUid = doc
+        .add_occurrence(ComponentUid(1), ComponentUid::ROOT, Transform::IDENTITY)
+        .unwrap();
+    assert_eq!(placed_again, OccurrenceUid(5));
+    assert!(saved_top(&doc).get("next_occurrence").is_none());
+
+    // Malformed: a schema error naming the field.
+    for (field, value) in [
+        ("next_feature", json!(0)),
+        ("next_feature", json!("F7")),
+        ("next_occurrence", json!(0)),
+        ("next_occurrence", json!(4_294_967_296_u64)),
+    ] {
+        let error = rejected(&edited(EXAMPLE, |v| v[field] = value));
+        assert!(matches!(error, FileError::Schema(_)), "{field}: {error:?}");
+        assert_message(error, &[field]);
+    }
+
+    // At the largest a file may use, read; one past it, refused.
+    let largest = edited(EXAMPLE, |v| {
+        v["next_feature"] = json!(LARGEST_U64_ID + 1);
+        v["next_occurrence"] = json!(LARGEST_U32_ID + 1);
+    });
+    assert!(load(&largest).is_ok());
+    let feature: u64 = LARGEST_U64_ID + 2;
+    let message: String =
+        format!("next_feature: invalid feature id F{feature} (at most F{LARGEST_U64_ID}");
+    assert_invalid(
+        rejected(&edited(EXAMPLE, |v| v["next_feature"] = json!(feature))),
+        &[message.as_str()],
+    );
+    let occurrence: u32 = LARGEST_U32_ID + 2;
+    let message: String =
+        format!("next_occurrence: invalid occurrence id O{occurrence} (at most O{LARGEST_U32_ID}");
+    assert_invalid(
+        rejected(&edited(EXAMPLE, |v| {
+            v["next_occurrence"] = json!(occurrence)
+        })),
+        &[message.as_str()],
+    );
+}

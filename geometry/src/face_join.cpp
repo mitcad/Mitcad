@@ -55,7 +55,9 @@
 #include <Precision.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
 #include <ShapeBuild_ReShape.hxx>
+#include <ShapeExtend_Status.hxx>
 #include <ShapeFix_Face.hxx>
+#include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <TopAbs.hxx>
@@ -1810,10 +1812,17 @@ TopoDS_Shape on_reference_surfaces(const Shape& body, const std::vector<SurfaceG
 // the merge joined none of them or the faces it changed are not valid
 // (`invalid` then set) or a group joined into a face winding round its
 // axis (winds_round: `winding` gets those, to be joined again without
-// them); `unjoined` gets the chosen groups the merge left in pieces.
+// them); `unjoined` gets the chosen groups the merge left in pieces. With
+// `divide_closed` the faces closed round their surface (their seam) are cut
+// in two first (ShapeUpgrade_ShapeDivideClosed), each piece then open:
+// OCCT's merge leaves a closed face apart from an open piece of its surface
+// that meets it where the closed face's seam runs on along the piece's edge
+// (a pin's ring whose seam goes on along the edge of the strip of its
+// cylinder below it, mitcad#1336), but joins the open pieces into one face
+// closed round it.
 ShapePtr joined_groups(const Shape& body, const std::vector<SurfaceGroup>& groups,
                        const std::vector<std::size_t>& chosen, std::vector<std::size_t>& unjoined,
-                       std::vector<std::size_t>& winding, bool& invalid) {
+                       std::vector<std::size_t>& winding, bool& invalid, bool divide_closed = false) {
   winding.clear();
   unjoined.clear();
   invalid = false;
@@ -1838,6 +1847,18 @@ ShapePtr joined_groups(const Shape& body, const std::vector<SurfaceGroup>& group
       }
     }
   }
+  if (divide_closed) {
+    // (Every closed face's seam, as the cuts below make two pieces of
+    // every closed face, which the merge joins again across their cut and
+    // their seam into one face closed round its surface.)
+    for (int f = 0; f < own->face_count(); ++f) {
+      for (TopExp_Explorer x(own->face(f), TopAbs_EDGE); x.More(); x.Next()) {
+        if (BRep_Tool::IsClosed(TopoDS::Edge(x.Current()), own->face(f))) {
+          free_edge[static_cast<std::size_t>(own->edge_index(x.Current()))] = 1;
+        }
+      }
+    }
+  }
   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> keep;
   for (int e = 0; e < own->edge_count(); ++e) {
     if (free_edge[static_cast<std::size_t>(e)] == 0) {
@@ -1850,7 +1871,29 @@ ShapePtr joined_groups(const Shape& body, const std::vector<SurfaceGroup>& group
     }
   }
   const occ::handle<BRepTools_ReShape> reshape = new BRepTools_ReShape();
-  const TopoDS_Shape input = on_reference_surfaces(*own, groups, chosen, reshape);
+  TopoDS_Shape input = on_reference_surfaces(*own, groups, chosen, reshape);
+  occ::handle<BRepTools_History> divided;
+  if (divide_closed) {
+    ShapeUpgrade_ShapeDivideClosed divide(input);
+    divide.SetNbSplitPoints(1);
+    divide.Perform();
+    if (!divide.Status(ShapeExtend_DONE) || divide.Result().IsNull()) {
+      unjoined = chosen;
+      return nullptr;
+    }
+    input = divide.Result();
+    divided = divide.GetContext()->History();
+    // (The kept edges the cuts split: their pieces kept.)
+    NCollection_List<TopoDS_Shape> pieces;
+    for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator k(keep); k.More(); k.Next()) {
+      for (const TopoDS_Shape& piece : divided->Modified(k.Key())) {
+        pieces.Append(piece);
+      }
+    }
+    for (const TopoDS_Shape& piece : pieces) {
+      keep.Add(piece);
+    }
+  }
   ShapeUpgrade_UnifySameDomain unify(input, true, true, false);
   unify.KeepShapes(keep);
   unify.SetLinearTolerance(kOneSurface);
@@ -1864,6 +1907,9 @@ ShapePtr joined_groups(const Shape& body, const std::vector<SurfaceGroup>& group
     return nullptr;
   }
   const occ::handle<BRepTools_History> history = reshape->History();
+  if (!divided.IsNull()) {
+    history->Merge(divided);
+  }
   history->Merge(unify.History());
   ShapeMap result_faces;
   TopExp::MapShapes(result, TopAbs_FACE, result_faces);
@@ -2119,10 +2165,11 @@ ShapePtr joined_on_surfaces(const ShapePtr& body) {
   // face winding round its axis, stays apart without a word: nothing is
   // wrong with it.)
   std::vector<std::size_t> winding;
+  bool divide_closed = false;
   const auto attempt = [&](const std::vector<std::size_t>& chosen, std::vector<std::size_t>& left,
                            bool& bad) -> ShapePtr {
     try {
-      return joined_groups(*body, groups, chosen, left, winding, bad);
+      return joined_groups(*body, groups, chosen, left, winding, bad, divide_closed);
     } catch (const Standard_Failure&) {
       bad = true;
       return nullptr;
@@ -2131,6 +2178,32 @@ ShapePtr joined_on_surfaces(const ShapePtr& body) {
   std::vector<std::size_t> unjoined;
   bool invalid = false;
   ShapePtr joined = attempt(all, unjoined, invalid);
+  // (A group the merge left apart that holds a face closed round its
+  // surface: all of them again with the closed faces cut in two first,
+  // where that joins more of them.)
+  const auto closed_face = [&](std::size_t g) {
+    return std::any_of(groups[g].faces.begin(), groups[g].faces.end(), [&](int f) {
+      for (TopExp_Explorer x(body->face(f), TopAbs_EDGE); x.More(); x.Next()) {
+        if (BRep_Tool::IsClosed(TopoDS::Edge(x.Current()), body->face(f))) {
+          return true;
+        }
+      }
+      return false;
+    });
+  };
+  if (!invalid && winding.empty() && std::any_of(unjoined.begin(), unjoined.end(), closed_face)) {
+    divide_closed = true;
+    std::vector<std::size_t> left;
+    bool bad = false;
+    const ShapePtr divided = attempt(all, left, bad);
+    if (divided && !bad && winding.empty() && left.size() < unjoined.size()) {
+      joined = divided;
+      unjoined = left;
+    } else {
+      divide_closed = false;
+      winding.clear();
+    }
+  }
   while (!joined && !invalid && !winding.empty()) {
     for (const std::size_t g : winding) {
       all.erase(std::remove(all.begin(), all.end(), g), all.end());

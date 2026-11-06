@@ -86,11 +86,15 @@ fn classify(
             None => (Class::Read, "read", None),
         },
         "model_command" => {
-            let undo = arguments
-                .get("command")
-                .and_then(|command| command.get("cmd"))
-                .and_then(Value::as_str)
-                == Some("undo");
+            // One command, or an array of them (mitcad#689). The app runs an
+            // undo only alone, but any undo entry of an array counts
+            // (mitcad#1322).
+            let is_undo = |entry: &Value| entry.get("cmd").and_then(Value::as_str) == Some("undo");
+            let undo = match arguments.get("command") {
+                Some(Value::Array(entries)) => entries.iter().any(is_undo),
+                Some(command) => is_undo(command),
+                None => false,
+            };
             if undo && past_start {
                 (Class::Guarded, "undo_past_start", None)
             } else {

@@ -3,15 +3,19 @@
 
 #include <algorithm>
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QSettings>
 #include <QStringList>
 
+#include "PartOptions.hpp"
+
 namespace mitcad {
 namespace {
 
 const QString kSupplierKey = QStringLiteral("partPicker/supplierFilter");
+const QString kShopsKey = QStringLiteral("suppliers/shops");
 
 QString textOf(const QJsonObject& object, const char* key) { return object.value(QLatin1String(key)).toString(); }
 
@@ -72,12 +76,29 @@ QList<PartSupplier> supplierChoices(const QList<QList<PartSupplier>>& lists) {
 }
 
 bool soldBy(const QList<PartSupplier>& suppliers, const QString& id) {
-  if (id.isEmpty()) {
+  if (supplierFilterIds(id).isEmpty()) {
     return true;
   }
-  return std::any_of(suppliers.cbegin(), suppliers.cend(), [&id](const PartSupplier& one) {
-    return one.id.compare(id, Qt::CaseInsensitive) == 0;
-  });
+  return std::any_of(suppliers.cbegin(), suppliers.cend(),
+                     [&id](const PartSupplier& one) { return supplierInFilter(id, one.id); });
+}
+
+PartSupplier yourShopsChoice(const QList<PartSupplier>& suppliers, const QStringList& preferred) {
+  QStringList ids;
+  QStringList names;
+  for (const QString& wanted : preferred) {
+    for (const PartSupplier& one : suppliers) {
+      if (one.id.compare(wanted.trimmed(), Qt::CaseInsensitive) == 0 && !ids.contains(one.id)) {
+        ids << one.id;
+        names << one.name;
+      }
+    }
+  }
+  if (ids.size() < 2) {
+    return {};
+  }
+  return {supplierFilterOf(ids),
+          QCoreApplication::translate("PartSuppliers", "Your shops (%1)").arg(names.join(QStringLiteral(", ")))};
 }
 
 QString supplierNames(const QList<PartSupplier>& suppliers) {
@@ -88,15 +109,53 @@ QString supplierNames(const QList<PartSupplier>& suppliers) {
   return names.join(QStringLiteral(", "));
 }
 
-QString savedSupplierFilter() { return QSettings().value(kSupplierKey).toString(); }
-
-void saveSupplierFilter(const QString& id) {
-  QSettings settings;
-  if (id.isEmpty()) {
-    settings.remove(kSupplierKey);
-  } else {
-    settings.setValue(kSupplierKey, id);
+QString supplierChoiceFor(const QList<PartSupplier>& suppliers, const QString& wanted) {
+  const QStringList ids = supplierFilterIds(wanted);
+  if (ids.size() < 2) {
+    return wanted;
   }
+  const PartSupplier yours = yourShopsChoice(suppliers, ids);
+  if (!yours.id.isEmpty()) {
+    return yours.id;
+  }
+  for (const QString& id : ids) {
+    for (const PartSupplier& one : suppliers) {
+      if (one.id.compare(id, Qt::CaseInsensitive) == 0) {
+        return one.id;
+      }
+    }
+  }
+  return {};
+}
+
+QString savedSupplierFilter() {
+  const QSettings settings;
+  // All is kept as an empty text: chosen, unlike a filter never chosen.
+  return settings.contains(kSupplierKey) ? settings.value(kSupplierKey).toString() : preferredSupplierFilter();
+}
+
+void saveSupplierFilter(const QString& id) { QSettings().setValue(kSupplierKey, id); }
+
+QStringList preferredShops() {
+  QStringList out;
+  for (const QString& id : QSettings().value(kShopsKey).toStringList()) {
+    if (!id.trimmed().isEmpty()) {
+      out << id.trimmed();
+    }
+  }
+  return out;
+}
+
+QString preferredSupplierFilter() { return supplierFilterOf(preferredShops()); }
+
+void savePreferredShops(const QStringList& ids) {
+  QSettings settings;
+  if (ids.isEmpty()) {
+    settings.remove(kShopsKey);
+  } else {
+    settings.setValue(kShopsKey, ids);
+  }
+  settings.remove(kSupplierKey);
 }
 
 } // namespace mitcad

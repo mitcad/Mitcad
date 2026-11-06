@@ -570,8 +570,11 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
   QString error;
   // With its Component1 active, as the file stores it (mitcad#844): its
   // first sketch and feature go into it, as in the untitled new design.
+  // In this window it replaces the design already asked about above: no
+  // second question, which could leave the new design made but unopened
+  // (mitcad#1317).
   m_openingNewDesign = true;
-  MainWindow* target = m_windowManager != nullptr ? m_windowManager->openFile(this, file, error) : nullptr;
+  MainWindow* target = m_windowManager != nullptr ? m_windowManager->openFile(this, file, error, replacing) : nullptr;
   const bool opened = m_windowManager != nullptr ? target != nullptr : openFile(file, error);
   m_openingNewDesign = false;
   if (!opened) {

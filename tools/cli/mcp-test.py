@@ -320,6 +320,13 @@ class FakeWindow:
                     self.messages.append(message)
                 if "id" not in message:
                     continue
+                ident = message["id"]
+                if isinstance(ident, bool) or not isinstance(ident, (str, int)):
+                    # As the window's server (core/mcp/src/lib.rs valid_id):
+                    # an id it cannot use is answered with a null id.
+                    connection.sendall(json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                        "code": -32600, "message": "id must be a string or integer"}}).encode("utf-8") + b"\n")
+                    continue
                 method = message.get("method")
                 if method == "initialize" and self.refuse:
                     connection.sendall(json.dumps({"jsonrpc": "2.0", "id": message["id"], "error": {
@@ -588,6 +595,23 @@ class McpTest(unittest.TestCase):
                                  ["initialize", "notifications/initialized", "resources/subscribe"])
                 client.finish()
             self.assertFalse(refusing.errors + second.errors, refusing.errors + second.errors)
+
+    def test_connect_ends_after_a_request_with_an_unusable_id(self):
+        # mitcad#1317: the window answers a request whose id is neither a
+        # string nor an integer with a null id; at the end of its input the
+        # bridge still ends, after that one error.
+        discovery, env = self.private_discovery()
+        with FakeWindow(discovery, "f" * 32) as window:
+            result = subprocess.run([CLI, "mcp", "--connect"], env=env,
+                                    input=b'{"jsonrpc":"2.0","id":true,"method":"ping"}\n',
+                                    capture_output=True, timeout=TIMEOUT)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            answers = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            self.assertEqual(len(answers), 1, answers)
+            self.assertIsNone(answers[0]["id"])
+            self.assertIn("error", answers[0])
+            self.assertEqual(window.methods(), ["ping"])
+        self.assertFalse(window.errors, window.errors)
 
     def test_cli_arguments(self):
         for args in ([], ["--workspace"], ["--workspace", str(self.workspace / "missing")],

@@ -17,10 +17,16 @@ fn design(path: &str) -> SolidcraftFile {
 fn a_current_design_reads_as_it_is() {
     let file = design("box-fillet-hole.solidcraft.json");
     assert_eq!(file.saved_format, 27);
+    // Only the steps of the changes after format 27 (no hand-written one).
+    assert!(
+        file.upgrades.iter().all(|u| !u.contains(" to ")),
+        "{:?}",
+        file.upgrades
+    );
     assert!(
         file.upgrades
             .iter()
-            .all(|u| u == "two-sided-extrude-direction")
+            .any(|u| u == "two-sided-extrude-direction")
     );
     let d = &file.design;
     assert_eq!(d.params.len(), 5);
@@ -115,11 +121,73 @@ fn pending_changes_run_once() {
     let newer = SolidcraftFile::from_value(with(json!(["a-change-from-the-future"])));
     assert!(newer.unwrap_err().contains("newer"));
     let too_new = SolidcraftFile::from_json(
-        r#"{"format": "solidcraft/29", "name": "A", "params": [], "features": []}"#,
+        r#"{"format": "solidcraft/51", "name": "A", "params": [], "features": []}"#,
     );
-    assert!(too_new.unwrap_err().contains("up to format 28"));
+    assert!(too_new.unwrap_err().contains("up to format 50"));
     assert!(SolidcraftFile::from_json(r#"{"format": "other/3"}"#).is_err());
     assert!(SolidcraftFile::from_json("[1, 2]").is_err());
+    // A drawing is a file of its own, refused as one.
+    let drawing = SolidcraftFile::from_json(
+        r#"{"format": "solidcraft-drawing/1", "sheets": [], "sources": []}"#,
+    );
+    assert!(drawing.unwrap_err().contains("drawing"));
+}
+
+/// A released format 28 (no `format_pending`) has all thirteen changes of
+/// its format, the two-sided extrude's direction among them: the step of
+/// `two-sided-extrude-direction` does not run on it again (mitcad#1331),
+/// as SolidCraft's own upgrade runs a format's changes only for a design
+/// that lists the ones it has.
+#[test]
+fn a_released_format_28_is_not_upgraded_to_28_again() {
+    let file = design("format-28-released.solidcraft.json");
+    assert_eq!(file.saved_format, 28);
+    assert!(file.saved_pending.is_empty());
+    assert!(
+        !file
+            .upgrades
+            .iter()
+            .any(|u| u == "two-sided-extrude-direction"),
+        "{:?}",
+        file.upgrades
+    );
+    assert_eq!(
+        file.design.features[1].def["extent"]["direction"],
+        "negative"
+    );
+    // Written while the changes were pending, without that one: it runs.
+    let mut v: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/designs/format-28-released.solidcraft.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    v["format_pending"] = json!(["component-metadata", "joint-relations"]);
+    let pending = SolidcraftFile::from_value(v).unwrap();
+    assert!(
+        pending
+            .upgrades
+            .iter()
+            .any(|u| u == "two-sided-extrude-direction")
+    );
+    assert_eq!(
+        pending.design.features[1].def["extent"]["direction"],
+        "positive"
+    );
+    // The steps of the later formats run on it.
+    assert!(file.upgrades.iter().any(|u| u == "face-pieces-by-place"));
+    // The four changes format 28 got at its release are known too.
+    for name in [
+        "joint-origin-point-x",
+        "line-circle-distance",
+        "loft-guide-rails",
+        "surface-blend-seam",
+    ] {
+        let v = json!({"format": "solidcraft/28", "format_pending": [name], "name": "A", "params": [], "features": []});
+        assert!(SolidcraftFile::from_value(v).is_ok(), "{name}");
+    }
 }
 
 /// Feature inputs are named in timeline order with the next `d<n>` not

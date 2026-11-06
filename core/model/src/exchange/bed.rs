@@ -25,7 +25,10 @@
 //! assembled, and the rest the file's own object; each lies on the bed by
 //! the rule above, and those turned are set side by side along X with a
 //! gap of [`GAP`], the row centred on the plate (overlaps with objects
-//! kept as designed are left to the slicer's arrange).
+//! kept as designed are left to the slicer's arrange). A row wider than
+//! the bed wraps into rows along Y ([`wrap_rows`], mitcad#1316), the rows
+//! centred on the plate too; when they are still wider or deeper than the
+//! bed, the export warns.
 //!
 //! A piece kept as assembled because several bed faces apply to it,
 //! counted per placement, lists them as its choices (mitcad#857,
@@ -186,10 +189,42 @@ pub(crate) struct Piece {
     /// (index of the body among those written, index of its placement).
     pub members: Vec<(usize, usize)>,
     pub plan: OnBed,
+    /// Whether it is a further copy of the piece before it (a print
+    /// plate's item with a count, mitcad#1311): without centring, set
+    /// beside that one along X, [`GAP`] apart.
+    pub copy: bool,
 }
 
 /// The gap between the objects set side by side on the bed, mm.
 pub(super) const GAP: f64 = 5.0;
+
+/// How far (mm) a row may pass the bed's size and still fit: the baseline
+/// tolerance of geometric comparisons.
+pub(super) const FIT: f64 = 1e-6;
+
+/// The pieces (`spans`: each one's x and y range) in rows, in order: a
+/// piece goes on the row before while the row, with the gaps, stays
+/// within `width` (mitcad#1316); a piece wider than the bed has a row of
+/// its own. Indices into `spans`; at least one row.
+pub(super) fn wrap_rows(spans: &[[(f64, f64); 2]], width: f64) -> Vec<Vec<usize>> {
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut used = 0.0;
+    for (k, [(lo, hi), _]) in spans.iter().enumerate() {
+        let size = hi - lo;
+        let row = rows.last_mut().expect("a row");
+        if row.is_empty() {
+            row.push(k);
+            used = size;
+        } else if used + GAP + size <= width + FIT {
+            row.push(k);
+            used += GAP + size;
+        } else {
+            rows.push(vec![k]);
+            used = size;
+        }
+    }
+    rows
+}
 
 /// The turn that takes the unit vector `down` straight down (−Z): about
 /// the axis square to both, by the angle between them; half a turn about X
@@ -564,6 +599,7 @@ impl<K: Kernel> Document<K> {
                     name,
                     members,
                     plan,
+                    copy: false,
                 })
             })
             .collect()

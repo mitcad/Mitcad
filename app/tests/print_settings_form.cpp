@@ -10,6 +10,7 @@
 #include <limits>
 
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
@@ -339,6 +340,31 @@ int printSettingsFormTests() {
     CHECK(filtered.isEmpty());
     generalSearch->clear();
     CHECK(filtered.isEmpty());
+  }
+  // The rows' places are said again once the layouts have settled: the
+  // window's own fields above the list shrink after a search a moment
+  // after its own layoutChanged, moving the list up; the places logged
+  // before that were where the rows no longer are.
+  {
+    SettingsForm settled;
+    auto* own = new QWidget;
+    own->setMinimumHeight(300);
+    settled.setGeneralPage(own, QStringLiteral("General"));
+    settled.setKeys(table, QStringLiteral("process"));
+    settled.setGeneralNames({QStringLiteral("Layer count")});
+    settled.resize(600, 900);
+    settled.show();
+    QLineEdit* search = settled.findChild<QLineEdit*>(QStringLiteral("settingsSearch"));
+    CHECK(search != nullptr);
+    if (search != nullptr) {
+      search->setText(QStringLiteral("layer")); // the own fields and the list shown
+      QCoreApplication::processEvents();
+      int said = 0;
+      QObject::connect(&settled, &SettingsForm::layoutChanged, &settled, [&said] { ++said; });
+      own->setMinimumHeight(60); // no filter: only the layout moves the list
+      QCoreApplication::processEvents();
+      CHECK(said > 0);
+    }
   }
 
   // Round 6 (mitcad#655): [mm | %] only where the design's slicer takes a

@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# Delete on the Start page (mitcad#1313): the page over the view has no key
+# handler of its own, and Delete (on macOS also Backspace) used to reach the
+# window, which deleted the selection of the design hidden behind the page.
+# MitCad starts with the block of tools/ui-scripts/start-page-delete.json
+# (--open: no Start page at launch):
+#   1. Sketch1 is selected in the timeline.
+#   2. The Start tab: the page shows and the design's selection is cleared.
+#   3. Delete and Backspace with the focus on the page, then on its New
+#      Design card: nothing is deleted, no question asked, no undo step.
+#   4. Back on the Solid tab the block is there, nothing selected, the
+#      undo depth as before.
+# Run by tools/ui-start-page-delete-test.sh (Linux) and
+# tools/ui-windows-start-page-delete-test.ps1 (Windows), in the Floating
+# and the Docked layout.
+expect-ever '^Start page at launch: off \(a file opens\)$' 30
+expect-ever 'View area' 30
+wait-idle
+expect-ever '^Ribbon tab START at ' 10
+expect-ever '^Timeline Sketch1 at ' 10
+expect-model-bodies 1 24000
+capture-undo-depth beforeStart
+
+# 1. Sketch1 selected.
+mark
+click-logged '^Timeline Sketch1 at '
+wait-log '^Selected: .*\[.*\]$' 10
+wait-idle
+sleep 300
+
+# 2. The Start tab clears the selection behind the page.
+mark
+click-logged '^Ribbon tab START at '
+expect-log '^Ribbon tab shown: START$'
+expect-log '^Start page shown$'
+wait-log '^Timeline selected: nothing$' 10
+expect-selection 0 0
+wait-idle
+
+# 3. Delete and Backspace on the page and on one of its cards.
+key Delete
+key Backspace
+wait-idle
+focus-main
+focus-widget startPageAction_file.new_design
+key Delete
+key Backspace
+wait-idle
+sleep 500
+expect-no-log '^Delete'
+expect-no-qt-popup
+expect-undo-depth ${beforeStart} 0
+expect-model-bodies 1 24000
+
+# 4. Back on Solid: the block as it was.
+mark
+click-logged '^Ribbon tab SOLID at '
+expect-log '^Ribbon tab shown: SOLID$'
+expect-log '^Start page hidden$'
+wait-idle
+expect-no-log '^Delete'
+expect-undo-depth ${beforeStart} 0
+expect-model-bodies 1 24000
+expect-selection 0 0
+expect-never 'TestDriver: FAIL'

@@ -31,7 +31,9 @@
 #include <QImage>
 #include <QLayout>
 #include <QPainter>
+#include <QProxyStyle>
 #include <QStyle>
+#include <QStyleFactory>
 #include <QStyleOptionButton>
 #include <QStyledItemDelegate>
 
@@ -41,6 +43,20 @@
 #endif
 
 namespace mitcad::mac {
+
+#ifdef Q_OS_MACOS
+// The offscreen platform has no Cocoa theme to supply macOS button order.
+// Keep the actual Qt controls in their platform roles in component tests.
+class OffscreenDialogButtonOrder final : public QProxyStyle {
+public:
+  explicit OffscreenDialogButtonOrder(QStyle* base) : QProxyStyle(base) {}
+  int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
+                const QWidget* widget = nullptr, QStyleHintReturn* result = nullptr) const override {
+    if (hint == QStyle::SH_DialogButtonLayout) return QDialogButtonBox::MacLayout;
+    return QProxyStyle::styleHint(hint, option, widget, result);
+  }
+};
+#endif
 
 inline void auxiliaryButton(QPushButton* button) {
   button->setAutoDefault(false);
@@ -55,6 +71,15 @@ inline void auxiliaryButton(QPushButton* button) {
 // `primary` the default on every platform (Open, Insert, Create), and Close
 // keeps its underlined letter (Alt+C).
 inline void styleDialogButtons(QDialogButtonBox* box, QPushButton* primary = nullptr, bool everywhere = false) {
+#ifdef Q_OS_MACOS
+  if (QGuiApplication::platformName() == QStringLiteral("offscreen") &&
+      !box->property("mitcad.offscreenButtonOrder").toBool()) {
+    box->setProperty("mitcad.offscreenButtonOrder", true);
+    auto* style = new OffscreenDialogButtonOrder(QStyleFactory::create(box->style()->name()));
+    style->setParent(box);
+    box->setStyle(style);
+  }
+#endif
   if (primary == nullptr) {
     for (QAbstractButton* button : box->buttons()) {
       if (box->buttonRole(button) == QDialogButtonBox::AcceptRole) {

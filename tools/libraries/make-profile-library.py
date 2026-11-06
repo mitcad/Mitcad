@@ -1509,17 +1509,39 @@ def circle_sketch(diameter, env):
             "dimensions": [{"id": "k3", "type": "diameter", "curve": "c2", "value": diameter}]}
 
 
-def tube_radii(rules, thickness, what):
+def tube_radii(rules, thickness, what, scale=1.0):
     """A square tube's corner radii (outer, inner) for a wall `thickness`
-    by the rules `[[up_to, outer, inner], …]` (each radius a factor of the
-    thickness): the first whose `up_to` is the thickness or more, or
-    null."""
+    (mm) by the rules `[[up_to, outer, inner], …]` (each radius a factor of
+    the thickness; `up_to` in the sizes' unit, `scale` mm each): the first
+    whose `up_to` is the thickness or more, or null."""
     for rule in rules or []:
         if not isinstance(rule, list) or len(rule) != 3:
             fail(f"{what}: sizes.radii is a list of [up_to, outer, inner]")
-        if rule[0] is None or thickness <= rule[0] + 1e-9:
+        if rule[0] is None or thickness <= rule[0] * scale + 1e-9:
             return rule[1] * thickness, rule[2] * thickness
     fail(f"{what}: no rule of sizes.radii takes the wall thickness {thickness:g}")
+
+
+# The sizes of a tube's table in inches (mitcad#1328: ASTM A500): 25.4 mm
+# each.
+INCH = 25.4
+
+
+def inch_value(text, what):
+    """A size in inches as the tables write it: a decimal (`0.120`), a
+    fraction (`3/16`) or a whole number and a fraction (`2-1/2`); in
+    inches."""
+    if not isinstance(text, str):
+        fail(f"{what}: a size in inches is written as text ('3', '2-1/2', '3/16', '0.120'), not {text!r}")
+    found = re.fullmatch(r"\s*(?:(\d+)-)?(\d+)/(\d+)\s*", text)
+    if found:
+        whole, numerator, denominator = found.groups()
+        if int(denominator) == 0 or int(numerator) >= int(denominator) and whole:
+            fail(f"{what}: {text!r} is no fraction of an inch")
+        return int(whole or 0) + int(numerator) / int(denominator)
+    if re.fullmatch(r"\s*\d+(\.\d+)?\s*", text) or re.fullmatch(r"\s*\.\d+\s*", text):
+        return float(text)
+    fail(f"{what}: {text!r} is no size in inches ('3', '2-1/2', '3/16', '0.120')")
 
 
 def tube_area(shape, size, thickness, outer=0.0, inner=0.0, height=None):
@@ -1586,6 +1608,156 @@ def tube_start(entry, dimensions, parameters):
     if missing:
         fail(f"{entry['id']}: the tube's parameters {', '.join(missing)} have no values")
     return out, sharp, rounded
+
+
+def radius_formula(rules, thickness, column, what):
+    """A corner radius as an expression of the wall `thickness` by the
+    rules of tube_radii (`column` 1 the outer, 2 the inner factor):
+    `if(T <= 6 mm; 2 * T; if(T <= 10 mm; 2.5 * T; 3 * T))`."""
+    text = None
+    for rule in reversed(rules):
+        term = f"{rule[column]:g} * {thickness}"
+        if rule[0] is None:
+            if text is not None:
+                fail(f"{what}: only the last rule of typed.radii has up_to null")
+            text = term
+        elif text is None:
+            fail(f"{what}: the last rule of typed.radii has up_to null")
+        else:
+            text = f"if({thickness} <= {mm(float(rule[0]))}; {term}; {text})"
+    return text
+
+
+def typed_tube(entry, dimensions, parameters):
+    """A square or rectangular tube of a typed size (mitcad#1328): its
+    `typed` block's `options` (the shape's sides and wall, in that order,
+    each `{"name", "min", "max"}` in mm) are the options of an open table,
+    so that any size within their limits and the `rules` (the table's
+    rules) can be typed; `radii` (tube_radii's rules) make the corner radii
+    formulas of the wall; `area` names a parameter whose formula is the
+    section's exact area (mm²), which the cut list's mass reads
+    (`build.area_parameter`); `rows` (`{option: mm}`) are the table's named
+    presets, named `<B>x<B>x<T>` or `<W>x<H>x<T>`, and `default` one of them.
+
+    Returns the design's parameters in order (those of `parameters` first)
+    with their values in the default row (mm, the area mm²), the
+    `add_parameter` command of each one it makes, whether its corners are
+    sharp and rounded, the rows' build blocks by name and the default row.
+    Sets the entry's open table (`_table`) and its rows' values
+    (`_typed_rows`, for typed_checked)."""
+    what = entry["id"]
+    shape = dimensions["shape"]
+    typed = entry["typed"]
+    if shape not in ("square_tube", "rect_tube") or not isinstance(typed, dict):
+        fail(f"{what}: typed sizes are a square or rectangular tube's, as an object")
+    if entry.get("rows"):
+        fail(f"{what}: a tube has typed sizes, or rows or sizes, not both")
+    names = {key: dimensions[key].strip() for key in TUBE_SHAPES[shape]}
+    square = shape == "square_tube"
+    sides = ("size",) if square else ("width", "height")
+    wanted = [names[k] for k in sides + ("thickness",)]
+    options = typed.get("options")
+    if not isinstance(options, list) or [o.get("name") if isinstance(o, dict) else None
+                                         for o in options] != wanted:
+        fail(f"{what}: typed.options are {', '.join(wanted)} in that order, each {{\"name\", \"min\", \"max\"}}")
+    for option in options:
+        if not all(isinstance(option.get(k), (int, float)) for k in ("min", "max")) or not (
+                0 < option["min"] < option["max"]):
+            fail(f"{what}: typed.options' {option['name']} has a min and a max above it, above 0 (mm)")
+    rules = typed.get("radii")
+    if not isinstance(rules, list) or not rules or not all(isinstance(r, list) and len(r) == 3 for r in rules):
+        fail(f"{what}: typed.radii is a list of [up_to, outer, inner]")
+    area_name = typed.get("area")
+    if not isinstance(area_name, str) or not mitcad_name(area_name) or area_name in names.values() or (
+            area_name in parameters):
+        fail(f"{what}: typed.area names a parameter of its own for the section's area")
+    density = density_of(entry)
+    if density is None:
+        fail(f"{what}: a tube's mass per metre needs a density (the part's or its group file's)")
+    presets = typed.get("rows")
+    if not isinstance(presets, list) or not presets:
+        fail(f"{what}: typed.rows lists the table's presets, {{option: mm}}")
+    w, h, t = names[sides[0]], names[sides[-1]], names["thickness"]
+    ro, ri = names["outer_radius"], names["inner_radius"]
+    text = lambda v: f"{v:g}"
+    rows, checks, builds = [], [], {}
+    for preset in presets:
+        if not isinstance(preset, dict) or sorted(preset) != sorted(wanted) or not all(
+                isinstance(v, (int, float)) for v in preset.values()):
+            fail(f"{what}: a row of typed.rows gives {', '.join(wanted)} in mm")
+        n = {name: float(preset[name]) for name in wanted}
+        name = "x".join(text(n[k]) for k in ((w, w, t) if square else (w, h, t)))
+        for option in options:
+            if not option["min"] <= n[option["name"]] <= option["max"]:
+                fail(f"{what} {name}: {option['name']} is not within {option['min']:g} to {option['max']:g} mm")
+        outer, inner = (round(r, 4) for r in tube_radii(rules, n[t], f"{what} {name}"))
+        n[ro], n[ri] = outer, inner
+        check_tube(shape, n[w], n[t], outer, inner, f"{what} {name}", n[h])
+        area = tube_area(shape, n[w], n[t], outer, inner, n[h])
+        n[area_name] = area
+        rows.append({"name": name, "values": {k: mm(n[k]) for k in wanted}})
+        checks.append((name, n))
+        builds[name] = {"section": {"width": mm(n[w]), "height": mm(n[h])},
+                        "mass_per_metre": f"{area * density * 1e-6:.3f} kg",
+                        "tube": {"shape": "square" if square else "rectangular", "thickness": mm(n[t]),
+                                 "outer_radius": mm(outer), "inner_radius": mm(inner), "area": round(area, 3)}}
+    if len(builds) != len(rows):
+        fail(f"{what}: typed.rows make a row twice")
+    default = typed.get("default", rows[0]["name"])
+    if default not in builds:
+        fail(f"{what}: typed.default {default} is no row of typed.rows")
+    rules_of_table = typed.get("rules") or []
+    if not isinstance(rules_of_table, list):
+        fail(f"{what}: typed.rules is a list of the table's rules")
+    entry["_table"] = {"options": wanted, "closed": False, "default": default, "rows": rows,
+                       "rules": rules_of_table}
+    entry["_typed_rows"] = checks
+    start = next(n for name, n in checks if name == default)
+    values = dict(parameters)
+    commands = {}
+    for option in options:
+        name = option["name"]
+        values[name] = start[name]
+        commands[name] = {"cmd": "add_parameter", "name": name, "expression": mm(start[name]),
+                          "min": mm(float(option["min"])), "max": mm(float(option["max"]))}
+    for name, column in ((ro, 1), (ri, 2)):
+        values[name] = start[name]
+        commands[name] = {"cmd": "add_parameter", "name": name,
+                          "expression": radius_formula(rules, t, column, what)}
+    # The exact area: the outside less the bore, each corner r² (4 - π)
+    # less than its rectangle's (tube_area).
+    values[area_name] = start[area_name]
+    commands[area_name] = {"cmd": "add_parameter", "name": area_name, "expression":
+                           f"{w} * {h} - (4 - pi) * {ro} * {ro} - "
+                           f"(({w} - 2 * {t}) * ({h} - 2 * {t}) - (4 - pi) * {ri} * {ri})"}
+    sharp = any(rule[2] == 0 for rule in rules)
+    rounded = any(rule[2] != 0 for rule in rules)
+    return values, commands, sharp, rounded, builds, default
+
+
+def typed_checked(mcp, document, entry, dimensions):
+    """A typed tube's design in each of its rows: its volume the exact area
+    times the length, and its area parameter that area; the default row
+    again after."""
+    shape = dimensions["shape"]
+    names = {key: dimensions[key].strip() for key in TUBE_SHAPES[shape]}
+    area_name = entry["typed"]["area"]
+    for name, n in entry["_typed_rows"]:
+        mcp.command(document, {"cmd": "apply_configuration", "name": name})
+        size = n[names.get("size", names.get("width"))]
+        height = n[names["height"]] if "height" in names else None
+        area = tube_area(shape, size, n[names["thickness"]], n[names["outer_radius"]], n[names["inner_radius"]],
+                         height)
+        params = {p.get("name"): p for p in mcp.query(document, {"query": "parameters"}) or []}
+        length = (params.get(names["length"]) or {}).get("value") or 0.0
+        volume = (mcp.query(document, {"query": "properties"}).get("total") or {}).get("volume") or 0.0
+        if abs(volume - area * length) > 1e-6 * area * length:
+            raise PartError(f"{name}: the section's volume {volume:.3f} mm3 is not its area {area:.3f} mm2 "
+                            f"times its length {length:g} mm")
+        found = (params.get(area_name) or {}).get("value")
+        if found is None or abs(found - area) > 1e-6 * area:
+            raise PartError(f"{name}: the parameter {area_name} is {found}, not the section's area {area:.3f} mm2")
+    mcp.command(document, {"cmd": "apply_configuration", "name": entry["_table"]["default"]})
 
 
 def mitcad_name(text):
@@ -1920,14 +2092,26 @@ def make_model(ctx, mcp, entry, build):
     if thread is not None and (shape != "rod" or not isinstance(thread, dict) or not thread.get("designation")):
         fail(f"{entry['id']}: dimensions.thread is a rod's thread size with a designation")
     sharp = rounded = False
-    if shape in TUBE_SHAPES:
+    # A tube of a typed size (mitcad#1328): its options, radii and area
+    # made by their own commands (typed_tube).
+    typed_commands, typed_builds, typed_default = {}, {}, None
+    if shape in TUBE_SHAPES and entry.get("typed") is not None:
+        parameters, typed_commands, sharp, rounded, typed_builds, typed_default = typed_tube(
+            entry, dimensions, parameters)
+    elif shape in TUBE_SHAPES:
         # Its parameters take a row's values (tube_start).
         parameters, sharp, rounded = tube_start(entry, dimensions, parameters)
+    elif entry.get("typed") is not None:
+        fail(f"{entry['id']}: typed sizes are a square or rectangular tube's")
     document = mcp.create()
     dress = None
     try:
         names = set()
         for name, value in parameters.items():
+            if name in typed_commands:
+                mcp.command(document, typed_commands[name])
+                names.add(name)
+                continue
             # A length, or an angle in degrees (a profiled board's bevel).
             angle = angle_value(value)
             mcp.command(document, {"cmd": "add_parameter", "name": name, "expression": angle[0] if angle
@@ -2099,6 +2283,13 @@ def make_model(ctx, mcp, entry, build):
                     # The cut first: its sketch is suppressed after it.
                     for uid in (cut, sketch):
                         mcp.command(document, {"cmd": "suppress_feature", "uid": uid, "expression": suppressed_when})
+            if typed_builds:
+                # A typed size's block (mitcad#1328): its default row's
+                # fields, its rows' own, and the parameter whose value is
+                # the area of any size typed, for the cut list's mass.
+                build.update(merged_block(build, typed_builds[typed_default]))
+                build["rows"] = typed_builds
+                build["area_parameter"] = entry["typed"]["area"]
         elif shape == "fastener":
             d = size(dimensions["diameter"], "D")
             length = size(dimensions["length"], "L")
@@ -2169,6 +2360,8 @@ def make_model(ctx, mcp, entry, build):
         finish_design(mcp, document, entry, apply_default=shape in TUBE_SHAPES)
         if shape in TUBE_SHAPES:
             tube_checked(mcp, document, entry, dimensions, parameters, sharp, rounded)
+        if typed_builds:
+            typed_checked(mcp, document, entry, dimensions)
         return save(ctx, mcp, document, entry), {"kind": "model"}
     finally:
         mcp.close(document)
@@ -2176,9 +2369,14 @@ def make_model(ctx, mcp, entry, build):
 
 def finish_design(mcp, document, entry, apply_default=False):
     """The configuration table of the rows (with `apply_default`, its
-    default row applied), and a recompute's check."""
+    default row applied), and a recompute's check. A typed tube's open
+    table (typed_tube) as it is made."""
     rows = entry.get("rows") or []
-    if rows:
+    if entry.get("_table"):
+        mcp.command(document, {"cmd": "set_configurations", "configurations": entry["_table"]})
+        if apply_default:
+            mcp.command(document, {"cmd": "apply_configuration", "name": entry["_table"]["default"]})
+    elif rows:
         selectors, parameters = [], []
         table_rows = []
         for i, row in enumerate(rows):
@@ -2452,7 +2650,12 @@ def tube_rows(entry, dimensions, sizes, spec, what):
     Thickness.
     Its values are the sizes' parameters, a square tube's corner radii by
     `sizes.radii`; its block the section, the mass per metre (the exact
-    area times the density), its `tube` sizes and its tolerance."""
+    area times the density), its `tube` sizes and its tolerance.
+
+    With `sizes.unit` "in" (mitcad#1328) the sizes are inches written as
+    text, as the tables write them (`2-1/2`, `3/16`, `0.120`): the rows'
+    names and options are those texts (`3x3x3/16`), their values and blocks
+    millimetres, and the rules' lengths (`up_to`, `plus_minus`) inches."""
     shape = dimensions["shape"]
     names = {key: dimensions.get(key) for key in TUBE_SHAPES[shape]}
     if not all(isinstance(n, str) and mitcad_name(n) for n in names.values()):
@@ -2464,28 +2667,42 @@ def tube_rows(entry, dimensions, sizes, spec, what):
     rect = shape == "rect_tube"
     key = "diameter" if round_tube else "width" if rect else "size"
     keys = (key, "height") if rect else (key,)
-    if not all(isinstance(spec.get(k), (int, float)) for k in keys) or not isinstance(spec.get("thicknesses"), list):
-        fail(f"{what}: a {shape}'s row of sizes has {' and '.join(keys)} and thicknesses")
-    size = float(spec[key])
-    height = float(spec["height"]) if rect else size
+    unit = sizes.get("unit", "mm")
+    if unit not in ("mm", "in"):
+        fail(f"{what}: sizes.unit is mm or in, not {unit!r}")
+    scale = INCH if unit == "in" else 1.0
+    kinds = (str,) if unit == "in" else (int, float)
+    if not all(isinstance(spec.get(k), kinds) for k in keys) or not isinstance(spec.get("thicknesses"), list):
+        fail(f"{what}: a {shape}'s row of sizes has {' and '.join(keys)} and thicknesses"
+             + (" (inches as text)" if unit == "in" else ""))
     text = lambda v: f"{v:g}"
+
+    def length(value, part):
+        """A size of the table in mm, and its text in the rows' names."""
+        if unit == "in":
+            return inch_value(value, f"{what}: {part}") * INCH, value.strip()
+        return float(value), text(float(value))
+
+    size, size_text = length(spec[key], key)
+    height, height_text = length(spec["height"], "height") if rect else (size, size_text)
 
     def tolerance(thickness):
         """The wall's tolerance: the first rule [up_to, plus_minus, factor]
         whose up_to is the thickness or more, or null; plus or minus the
         smaller of plus_minus and factor times the thickness."""
         for rule in (sizes.get("tolerance") or {}).get("thickness") or []:
-            if rule[0] is None or thickness <= rule[0] + 1e-9:
-                value = rule[1] if len(rule) < 3 else min(rule[1], rule[2] * thickness)
+            if rule[0] is None or thickness <= rule[0] * scale + 1e-9:
+                value = rule[1] * scale if len(rule) < 3 else min(rule[1] * scale, rule[2] * thickness)
                 return [-round(value, 4), round(value, 4)]
         return None
 
     rows = []
-    for thickness in spec["thicknesses"]:
-        thickness = float(thickness)
-        outer, inner = (0.0, 0.0) if round_tube else tube_radii(sizes.get("radii"), thickness, what)
+    for wall in spec["thicknesses"]:
+        thickness, thickness_text = length(wall, "thickness")
+        outer, inner = (0.0, 0.0) if round_tube else tube_radii(sizes.get("radii"), thickness, what, scale)
         outer, inner = round(outer, 4), round(inner, 4)
-        name = f"{text(size)}x{text(thickness)}" if round_tube else f"{text(size)}x{text(height)}x{text(thickness)}"
+        name = (f"{size_text}x{thickness_text}" if round_tube
+                else f"{size_text}x{height_text}x{thickness_text}")
         check_tube(shape, size, thickness, outer, inner, f"{what} {name}", height)
         area = tube_area(shape, size, thickness, outer, inner, height)
         values = {names[key]: mm(size), names["thickness"]: mm(thickness)}
@@ -2501,15 +2718,18 @@ def tube_rows(entry, dimensions, sizes, spec, what):
         limits = {}
         if spec.get("tolerance") is not None:
             for k in keys:
-                limits[k] = [-float(spec["tolerance"]), float(spec["tolerance"])]
+                limits[k] = [-round(float(spec["tolerance"]) * scale, 4), round(float(spec["tolerance"]) * scale, 4)]
         if tolerance(thickness):
             limits["thickness"] = tolerance(thickness)
         if limits:
             build["tolerance"] = limits
         rows.append({"name": name,
-                     "select": {"Diameter" if round_tube else "Size": f"{text(size)}x{text(height)}" if rect else text(size),
-                                "Thickness": text(thickness)},
-                     "values": values, "build": build})
+                     "select": {"Diameter" if round_tube else "Size":
+                                f"{size_text}x{height_text}" if rect else size_text,
+                                "Thickness": thickness_text},
+                     "values": values, "build": build,
+                     # The rows' order: by size (width, height), then wall.
+                     "_order": (size, height, thickness)})
     return rows
 
 
@@ -2616,8 +2836,11 @@ def expand_sizes(entry, group):
         # Thickness by thickness, each by its widths (the pickers' order).
         rows.sort(key=lambda r: (float(r["select"]["Thickness"]), float(r["select"]["Width"])))
     if shape in TUBE_SHAPES:
-        # Size by size, each by its wall thicknesses.
-        rows.sort(key=lambda r: tuple(float(n) for v in r["select"].values() for n in v.split("x")))
+        # Size by size, each by its wall thicknesses (in mm: an inch
+        # table's texts are fractions).
+        rows.sort(key=lambda r: r["_order"])
+        for row in rows:
+            row.pop("_order")
     entry["rows"] = rows
     names = [r["name"] for r in rows]
     if len(set(names)) != len(names):

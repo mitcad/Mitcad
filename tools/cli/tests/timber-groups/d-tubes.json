@@ -72,6 +72,58 @@
       "appearance": "steel_satin",
       "build": {"role": "profile", "material": {"density": 7850},
                 "length": {"parameter": "L", "min": 10, "max": 6000, "default": 1000, "stock": [2000, 6000]}}
+    },
+    {
+      "id": "test-hss", "name": "Test inch square tube", "category": "steel-tubes", "make": "model",
+      "data_source": "sizes of ASTM A500 for the test",
+      "designation": "HSS {Size}x{Size}x{Thickness} L={L}",
+      "dimensions": {"shape": "square_tube", "size": "B", "thickness": "T", "outer_radius": "RO",
+                     "inner_radius": "RI", "length": "L", "parameters": {"L": 1000}},
+      "default": "3x3x3/16",
+      "sizes": {"unit": "in", "radii": [[null, 2.0, 1.0]],
+                "rows": [{"size": "3", "thicknesses": ["3/16"]}, {"size": "1", "thicknesses": ["0.083"]},
+                         {"size": "1-1/2", "thicknesses": ["0.120"]}]},
+      "appearance": "steel_satin",
+      "build": {"role": "profile", "material": {"density": 7850},
+                "length": {"parameter": "L", "min": 10, "max": 12192, "default": 1000, "stock": [6096, 7315.2]}}
+    },
+    {
+      "id": "test-hss-rect", "name": "Test inch rectangular tube", "category": "steel-tubes", "make": "model",
+      "data_source": "sizes of ASTM A500 for the test",
+      "designation": "HSS {Size}x{Thickness} L={L}",
+      "dimensions": {"shape": "rect_tube", "width": "W", "height": "H", "thickness": "T", "outer_radius": "RO",
+                     "inner_radius": "RI", "length": "L", "parameters": {"L": 1000}},
+      "default": "4x2x1/4",
+      "sizes": {"unit": "in", "radii": [[null, 2.0, 1.0]],
+                "rows": [{"width": "4", "height": "2", "thicknesses": ["1/4"]},
+                         {"width": "2", "height": "1", "thicknesses": ["0.120"]}]},
+      "appearance": "steel_satin",
+      "build": {"role": "profile", "material": {"density": 7850},
+                "length": {"parameter": "L", "min": 10, "max": 12192, "default": 1000, "stock": [6096, 7315.2]}}
+    },
+    {
+      "id": "test-typed-shs", "name": "Test square tube of a typed size", "category": "steel-tubes", "make": "model",
+      "data_source": "typed sizes with the corner radii of EN 10219-2 for the test",
+      "designation": "Square tube {B}x{B}x{T} L={L}",
+      "dimensions": {"shape": "square_tube", "size": "B", "thickness": "T", "outer_radius": "RO",
+                     "inner_radius": "RI", "length": "L", "parameters": {"L": 1000}},
+      "typed": {
+        "options": [{"name": "B", "min": 10, "max": 400}, {"name": "T", "min": 0.5, "max": 20}],
+        "radii": [[6, 2.0, 1.0], [10, 2.5, 1.5], [null, 3.0, 2.0]],
+        "area": "A",
+        "default": "40x40x3",
+        "rows": [{"B": 40, "T": 3}, {"B": 100, "T": 8}],
+        "rules": [
+          {"name": "Wall under a third of the side",
+           "then": [{"require": "T < B / 3", "message": "the wall T is a third of the side B or more"}]},
+          {"name": "Corners fit the side",
+           "then": [{"require": "and(RO < B / 2; RI < B / 2 - T)",
+                     "message": "the corner radii for this wall do not fit the side B"}]}
+        ]
+      },
+      "appearance": "steel_satin",
+      "build": {"role": "profile", "material": {"density": 7850},
+                "length": {"parameter": "L", "min": 10, "max": 12000, "default": 1000, "stock": [6000]}}
     }
   ]
 }

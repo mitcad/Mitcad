@@ -1279,7 +1279,10 @@ impl<K: Kernel> Document<K> {
                 })
                 .collect();
             // Side by side along X, the row centred on the plate (only when
-            // the pieces are centred, mitcad#1109).
+            // the pieces are centred, mitcad#1109); a row wider than the bed
+            // wraps into rows along Y, the rows centred on the plate too
+            // (mitcad#1316), and pieces that still do not fit are named in
+            // a warning.
             let turned: Vec<usize> = moved
                 .iter()
                 .zip(&placed)
@@ -1287,28 +1290,100 @@ impl<K: Kernel> Document<K> {
                 .filter(|(_, (t, members))| t.is_some() && !members.is_empty())
                 .map(|(i, _)| i)
                 .collect();
+            // The x range of a piece's placements moved by `t`.
+            let x_span = |t: Transform, members: &[(usize, usize)]| -> (f64, f64) {
+                points(members)
+                    .into_iter()
+                    .map(|p| t.apply_point(p)[0])
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                        (lo.min(x), hi.max(x))
+                    })
+            };
             let centred = pieces.iter().all(|piece| piece.plan.settle.center);
             if turned.len() > 1 && centred {
-                let spans: Vec<(f64, f64)> = turned
+                // Each piece's box in X and Y as it lies now.
+                let spans: Vec<[(f64, f64); 2]> = turned
                     .iter()
                     .map(|&i| {
                         let t = moved[i].unwrap_or(Transform::IDENTITY);
+                        let empty = (f64::INFINITY, f64::NEG_INFINITY);
                         points(&placed[i])
                             .into_iter()
-                            .map(|p| t.apply_point(p)[0])
-                            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
-                                (lo.min(x), hi.max(x))
+                            .map(|p| t.apply_point(p))
+                            .fold([empty, empty], |[x, y], p| {
+                                [
+                                    (x.0.min(p[0]), x.1.max(p[0])),
+                                    (y.0.min(p[1]), y.1.max(p[1])),
+                                ]
                             })
                     })
                     .collect();
-                let widths: f64 = spans.iter().map(|(lo, hi)| hi - lo).sum();
-                let total = widths + bed::GAP * (spans.len() - 1) as f64;
-                let mut cursor = pieces[turned[0]].plan.plate[0] - total / 2.0;
-                for (&i, (lo, hi)) in turned.iter().zip(spans) {
-                    if let Some(t) = moved[i].as_mut() {
-                        *t = Transform::translation([cursor - lo, 0.0, 0.0]).after(t);
+                let bed_size = self.plate_size();
+                let rows = bed::wrap_rows(&spans, bed_size[0]);
+                let centre = pieces[turned[0]].plan.plate;
+                let width = |row: &[usize]| -> f64 {
+                    row.iter()
+                        .map(|&k| spans[k][0].1 - spans[k][0].0)
+                        .sum::<f64>()
+                        + bed::GAP * (row.len() - 1) as f64
+                };
+                let depth = |row: &[usize]| -> f64 {
+                    row.iter()
+                        .map(|&k| spans[k][1].1 - spans[k][1].0)
+                        .fold(0.0, f64::max)
+                };
+                let total_depth = rows.iter().map(|row| depth(row)).sum::<f64>()
+                    + bed::GAP * (rows.len() - 1) as f64;
+                let mut row_start = centre[1] - total_depth / 2.0;
+                for row in &rows {
+                    let mut cursor = centre[0] - width(row) / 2.0;
+                    let middle = row_start + depth(row) / 2.0;
+                    for &k in row {
+                        let ((lo, hi), (y_lo, y_hi)) = (spans[k][0], spans[k][1]);
+                        // One row stays where the pieces lie in Y.
+                        let dy = if rows.len() > 1 {
+                            middle - (y_lo + y_hi) / 2.0
+                        } else {
+                            0.0
+                        };
+                        if let Some(t) = moved[turned[k]].as_mut() {
+                            *t = Transform::translation([cursor - lo, dy, 0.0]).after(t);
+                        }
+                        cursor += hi - lo + bed::GAP;
                     }
-                    cursor += hi - lo + bed::GAP;
+                    row_start += depth(row) + bed::GAP;
+                }
+                let widest = rows.iter().map(|row| width(row)).fold(0.0, f64::max);
+                if widest > bed_size[0] + bed::FIT || total_depth > bed_size[1] + bed::FIT {
+                    exported.warnings.push(format!(
+                        "the {} pieces do not fit on the {:.0} x {:.0} mm bed (they take {:.0} x \
+                         {:.0} mm): arrange them in the slicer, or put some on another plate",
+                        turned.len(),
+                        bed_size[0],
+                        bed_size[1],
+                        widest,
+                        total_depth
+                    ));
+                }
+            }
+            // Not centred, the further copies of a print plate's item
+            // (mitcad#1311) each beside the one before it along X, from the
+            // first copy's place: the copies would otherwise lie in one
+            // place. The other pieces keep theirs.
+            if !centred {
+                for (i, piece) in pieces.iter().enumerate().skip(1) {
+                    if !piece.copy || placed[i].is_empty() || placed[i - 1].is_empty() {
+                        continue;
+                    }
+                    let before: Transform = moved[i - 1].unwrap_or(Transform::IDENTITY);
+                    let here: Transform = moved[i].unwrap_or(Transform::IDENTITY);
+                    let (_, end) = x_span(before, &placed[i - 1]);
+                    let (start, _) = x_span(here, &placed[i]);
+                    if end.is_finite() && start.is_finite() {
+                        moved[i] = Some(
+                            Transform::translation([end + bed::GAP - start, 0.0, 0.0]).after(&here),
+                        );
+                    }
                 }
             }
             for ((piece, members), t) in pieces.iter_mut().zip(&placed).zip(&moved) {

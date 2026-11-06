@@ -1,0 +1,86 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: patch 1140's end past the spine's end vertex not where the face
+of the other contact, Fo, is closed round its surface (mitcad#1336).
+
+The case: a pin of radius 4.5 standing on a plate's top, flush with the
+plate's end, a half round of the pin's radius whose sides are tangent to
+the pin; the pin's cylinder and that end are one face, closed round the
+axis. The pin's foot on the top is rounded with 1 along its arc of 302
+degrees, between the two tangent points V1 and V2, where the sides start.
+The rounding's contact on the top leaves it across the sides' edges with
+the top, and the sides cut the blend (ChFi3d_KPartCutToEnd); the other
+contact's line on the pin, Fo, meets the side's edge with the pin, Eq,
+only beyond V, along Eq's line up the pin. Patch 1140 (and 1170) took that
+end past V there and prolonged Eq beyond V. But the other contact's line
+is a closed circle: the analytic piece's parameters at its ends were the
+whole line's, a period apart (each end's section on the line at the
+period's end, the last one at the start), so the pieces cut from it ran the
+wrong way round; and at V2 Eq's line beyond V is the pin's seam, which Eq
+was prolonged over. The result was not valid (two tori, one inside out, or
+an unorientable face), where before patch 1140 the corner (PerformOneCorner,
+OnSame, patch 0911) cut both ends by the sides, which grow up to the
+rounding, as the stored design's body has it.
+
+Now the end past V is not taken where Fo has a seam (an edge closed on
+it): the corner closes such an end as before patch 1140. Every case of
+patches 1140 and 1170 (a floor, a wall and a corner's cylinder, none closed
+round its surface) builds as before.
+
+On the stored design's body before the item (a pin on a plate's rounded
+end, rounded with 1): valid, one torus, the material added 4.76572 against
+the file's 4.76602 mm3 (patch 0911's result), where the end past V made an
+invalid shape. Test: geometry/tests/test_fillet_tangent_end_face.cpp, the
+pin on a plate's end whose seam runs along a side at V2: valid, one torus,
+the material added within 1e-6 of the ring at the foot within the sides'
+planes (without the patch: not valid, two tori).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index bbb12d78..29c22146 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -10371,6 +10371,24 @@ static bool ChFi3d_NarrowsAtOtherEnd(const TopoDS_Face&  F,
+   return false;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_HasSeam
++// purpose  : Whether face F is closed round its surface: an edge of it is
++//            a seam (closed on F).
++//=======================================================================
++
++static bool ChFi3d_HasSeam(const TopoDS_Face& F)
++{
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    if (BRep_Tool::IsClosed(TopoDS::Edge(ex.Current()), F))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ static bool ChFi3d_KPartCutToEnd(
+   TopOpeBRepDS_DataStructure&                                             DStr,
+   const occ::handle<ChFiDS_Spine>&                                        Spine,
+@@ -10650,8 +10668,15 @@ static bool ChFi3d_KPartCutToEnd(
+   // another blend's contact leaves across E as well, e.g. a window's floor
+   // rounded on both edges up to a pillar's rounded end: the corner cuts
+   // them.)
++  // (Nor where Fo is closed round its surface, its seam an edge of it: a
++  // pin's foot rounded round most of the pin, where a slot's sides tangent
++  // to the pin end the rounding. The other contact's line is closed there,
++  // the blend's parameters at its ends those of the whole line a period
++  // apart, and Eq's line beyond V may run along Fo's seam; the corner cuts
++  // such an end by B, which grows up to it, as the stored bodies have it
++  // (patch 0911, mitcad#1336).)
+   bool isPastV = false;
+-  if (!found && !ChFi3d_NarrowsAtOtherEnd(N, B, E, V, EFMap))
++  if (!found && !ChFi3d_NarrowsAtOtherEnd(N, B, E, V, EFMap) && !ChFi3d_HasSeam(Fo))
+   {
+     occ::handle<Geom_Curve> aBasisEq = CEq;
+     if (const occ::handle<Geom_TrimmedCurve> aTrim = occ::down_cast<Geom_TrimmedCurve>(CEq))

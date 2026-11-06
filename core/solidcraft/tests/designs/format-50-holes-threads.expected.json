@@ -1,0 +1,9 @@
+{
+  "comment": "Worked out by hand (mitcad#1331): a 100 x 60 x 10 plate (60000); a hole of 6.8 through it at (30, 30) with a cosmetic left-hand M8x1.25 over 8 mm (the hole keeps its diameter), patterned four times about (cx, 30) = (50, 30), the pattern seed named by its feature id: 4 * pi * 3.4^2 * 10 = 462.4 pi; a counterbored hole of 6 through at (85, 15), its bore 10 wide and 3 deep (its drill point does not show through a through hole): pi * 9 * 10 + pi * (25 - 9) * 3 = 138 pi; a pin of radius 4 and 12 high joined on top at (15, 45): 192 pi, with a cosmetic left-hand two-start M8 on it (no geometry). 60000 - 408.4 pi = 58716.9736.",
+  "body_count": 1,
+  "total": {"volume_mm3": 58716.9736},
+  "bbox": {"min": [0, 0, 0], "max": [100, 60, 22]},
+  "bodies": [{"name": "Plate", "volume_mm3": 58716.9736}],
+  "timeline": [{"name": "Plate"}, {"name": "Tapped"}, {"name": "Around"}, {"name": "Counterbored"}, {"name": "Pin"}, {"name": "Pin thread"}],
+  "parametric": 4
+}

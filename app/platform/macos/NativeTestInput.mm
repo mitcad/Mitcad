@@ -40,6 +40,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QRegion>
+#include <QRect>
 #include <QRectF>
 #include <QTemporaryDir>
 #include <QToolButton>
@@ -7197,6 +7198,32 @@ bool layoutContract(QString& error) {
   if (!layoutWidthContract(error) || !columnSizingContract(error)) return false;
   qInfo().noquote() << QStringLiteral("Native layout contract: widths, stretch, spans, alignment and hiding verified");
   return buttonOrderContract(error);
+}
+
+bool viewportFrame(const QString& identifier, const QRect& expected, QString& detail) {
+  NSWindow* window = documentWindow();
+  NSView* content = window.contentView;
+  [content layoutSubtreeIfNeeded];
+  NSView* host = content != nil ? identifiedView(content, QStringLiteral("native.viewportHost")) : nil;
+  NSView* view = content != nil ? identifiedView(content, identifier) : nil;
+  if (host == nil || !viewVisible(view)) {
+    detail = QStringLiteral("no visible native view '%1' over the 3D view").arg(identifier);
+    return false;
+  }
+  NSRect rect = [view convertRect:view.bounds toView:host];
+  if (!host.flipped) rect.origin.y = NSHeight(host.bounds) - NSMaxY(rect);
+  detail = QStringLiteral("native '%1' at %2,%3 %4x%5 in the 3D view's host, expected %6,%7 %8x%9")
+               .arg(identifier)
+               .arg(double(NSMinX(rect)))
+               .arg(double(NSMinY(rect)))
+               .arg(double(NSWidth(rect)))
+               .arg(double(NSHeight(rect)))
+               .arg(expected.x())
+               .arg(expected.y())
+               .arg(expected.width())
+               .arg(expected.height());
+  return std::abs(NSMinX(rect) - expected.x()) <= 1 && std::abs(NSMinY(rect) - expected.y()) <= 1 &&
+         std::abs(NSWidth(rect) - expected.width()) <= 1 && std::abs(NSHeight(rect) - expected.height()) <= 1;
 }
 
 } // namespace mitcad::mac::test

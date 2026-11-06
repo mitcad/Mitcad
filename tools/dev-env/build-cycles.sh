@@ -29,6 +29,17 @@
 #   --oidn-gpu        Open Image Denoise's devices for the chosen GPUs
 #                     (CUDA: Turing and newer; HIP; SYCL), so that Cycles
 #                     denoises on the GPU
+#   --optix SDK       NVIDIA OptiX (mitcad#1332), for a worker of your own:
+#                     SDK is the folder of the OptiX SDK you downloaded from
+#                     NVIDIA yourself, under NVIDIA's licence (it must have
+#                     include/optix.h; this script never downloads it).
+#                     Implies --cuda. The default prefix is then
+#                     ~/mitcad-render-deps-optix, never MITCAD_RENDER_DEPS:
+#                     MitCad's builds stay without OptiX, and a release
+#                     configure refuses a prefix with it. A MitCad build
+#                     against this prefix makes mitcad-render-optix for
+#                     your own machine (docs/rendering.md, "Building an
+#                     OptiX worker yourself"); never pass it on.
 # Apple Metal is part of Cycles' macOS build (WITH_CYCLES_DEVICE_METAL);
 # this script builds for Linux only so far.
 #
@@ -60,16 +71,12 @@ REPO=$(cd "$SCRIPT_DIR/../.." && pwd)
 # shellcheck source=tools/dev-env/versions.sh
 . "$SCRIPT_DIR/versions.sh"
 
-if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
-  echo "build-cycles.sh builds for x86-64 Linux only (so far)." >&2
-  exit 1
-fi
-
 WITH_CUDA=0
 CUDA_ARCH=$CUDA_ARCHITECTURES
 WITH_HIP=0
 WITH_ONEAPI=0
 OIDN_GPU=0
+OPTIX_SDK=
 PREFIX_ARG=
 while [ $# -gt 0 ]; do
   case $1 in
@@ -78,6 +85,11 @@ while [ $# -gt 0 ]; do
     --hip) WITH_HIP=1 ;;
     --oneapi) WITH_ONEAPI=1 ;;
     --oidn-gpu) OIDN_GPU=1 ;;
+    --optix)
+      [ $# -ge 2 ] || { echo "--optix needs the folder of the OptiX SDK (see --help)" >&2; exit 2; }
+      OPTIX_SDK=$2
+      shift
+      ;;
     -h|--help) sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "Unknown option $1 (see --help)" >&2; exit 2 ;;
     *) PREFIX_ARG=$1 ;;
@@ -85,7 +97,38 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-PREFIX=${PREFIX_ARG:-${MITCAD_RENDER_DEPS:-$HOME/mitcad-render-deps}}
+# OptiX (mitcad#1332): the user's own SDK, checked before anything is
+# fetched or built; nothing of it is ever downloaded here.
+if [ -n "$OPTIX_SDK" ]; then
+  if [ ! -f "$OPTIX_SDK/include/optix.h" ]; then
+    echo "--optix: $OPTIX_SDK has no include/optix.h. Give the folder of the OptiX SDK you downloaded" \
+      "from NVIDIA yourself; this script never downloads it." >&2
+    exit 2
+  fi
+  OPTIX_SDK=$(cd "$OPTIX_SDK" && pwd)
+  # Cycles' OptiX device is built on its CUDA device.
+  WITH_CUDA=1
+fi
+
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+  echo "build-cycles.sh builds for x86-64 Linux only (so far)." >&2
+  exit 1
+fi
+
+if [ -n "$OPTIX_SDK" ]; then
+  # A prefix of its own: the ordinary one (MITCAD_RENDER_DEPS) stays
+  # without OptiX for MitCad's own builds.
+  PREFIX=${PREFIX_ARG:-$HOME/mitcad-render-deps-optix}
+  for ordinary in "${MITCAD_RENDER_DEPS:-}" "$HOME/mitcad-render-deps"; do
+    if [ -n "$ordinary" ] && [ "${PREFIX%/}" = "${ordinary%/}" ]; then
+      echo "--optix: $PREFIX is the ordinary render prefix; give the OptiX worker a prefix of its own" \
+        "(default ~/mitcad-render-deps-optix)" >&2
+      exit 2
+    fi
+  done
+else
+  PREFIX=${PREFIX_ARG:-${MITCAD_RENDER_DEPS:-$HOME/mitcad-render-deps}}
+fi
 JOBS=${MITCAD_RENDER_JOBS:-12}
 VCPKG_ROOT=${VCPKG_ROOT:-$HOME/vcpkg}
 TRIPLET=x64-linux-dynamic
@@ -214,6 +257,7 @@ DEVICES=cpu
 [ "$WITH_CUDA" = 1 ] && DEVICES="$DEVICES cuda($CUDA_ARCH)"
 [ "$WITH_HIP" = 1 ] && DEVICES="$DEVICES hip"
 [ "$WITH_ONEAPI" = 1 ] && DEVICES="$DEVICES oneapi"
+[ -n "$OPTIX_SDK" ] && DEVICES="$DEVICES optix"
 DEVICES_STAMP=$(printf '%s' "$DEVICES" | sha256sum | cut -c1-12)
 echo "== Devices: $DEVICES$([ "$OIDN_GPU" = 1 ] && echo ", Open Image Denoise on the GPUs")"
 
@@ -297,9 +341,10 @@ CYCLES_DONE=$INSTALL/cycles/.done-$CYCLES_VERSION
 # whose headers it was built with (OIDN_DEVICE_CUDA in OIDN's config.h): a
 # rebuilt Open Image Denoise rebuilds Cycles too (mitcad#202).
 [ "$OIDN_GPU" = 1 ] && CYCLES_DONE=$CYCLES_DONE-oidn-$OIDN_STAMP
-# The GPU devices asked for (off by default; never OptiX, whose licence
-# does not fit open source: README, FAQ). Cycles loads the drivers at
-# run time (cuew, hipew; Level Zero through SYCL), so a GPU build runs on
+# The GPU devices asked for (off by default; OptiX only with --optix, for
+# the user's own worker: its SDK's licence does not let MitCad ship it,
+# README, FAQ). Cycles loads the drivers at run time (cuew, hipew, the
+# driver's OptiX library; Level Zero through SYCL), so a GPU build runs on
 # machines without them, with the CPU only.
 CYCLES_GPU_ARGS=(-DWITH_CYCLES_DEVICE_CUDA=OFF -DWITH_CYCLES_DEVICE_OPTIX=OFF -DWITH_CYCLES_DEVICE_HIP=OFF
   -DWITH_CYCLES_DEVICE_HIPRT=OFF -DWITH_CYCLES_DEVICE_METAL=OFF -DWITH_CYCLES_DEVICE_ONEAPI=OFF)
@@ -310,6 +355,11 @@ if [ "$WITH_CUDA" = 1 ]; then
   if [ -n "$CUDA_EXTRA_FLAGS" ]; then
     CYCLES_GPU_ARGS+=(-DCUDA_NVCC_FLAGS="$CUDA_EXTRA_FLAGS")
   fi
+fi
+if [ -n "$OPTIX_SDK" ]; then
+  # The OptiX kernels are compiled to PTX with the SDK's headers, next to
+  # the CUDA kernels (kernel_optix*.ptx.zst).
+  CYCLES_GPU_ARGS+=(-DWITH_CYCLES_DEVICE_OPTIX=ON -DOPTIX_ROOT_DIR="$OPTIX_SDK")
 fi
 if [ "$WITH_HIP" = 1 ]; then
   CYCLES_GPU_ARGS+=(-DWITH_CYCLES_DEVICE_HIP=ON -DWITH_CYCLES_HIP_BINARIES=ON -DWITH_HIP_DYNLOAD=ON)

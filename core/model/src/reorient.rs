@@ -750,6 +750,35 @@ pub(crate) fn turn_analysis(def: &mut AnalysisDef, ctx: &Turned<'_>) -> bool {
     }
 }
 
+/// An image reference's plane, in the component its occurrence ends in, as
+/// a section analysis's (mitcad#1315): an origin plane becomes the one the
+/// turn takes it onto, frame included, so its centre and angle on the plane
+/// stay; a fixed plane turns.
+pub(crate) fn turn_image_reference(image: &mut crate::document::ImageReference, ctx: &Turned<'_>) {
+    let component = match &image.occurrence {
+        Some(path) => ctx
+            .end(ComponentUid::ROOT, path)
+            .unwrap_or(ComponentUid::ROOT),
+        None => ComponentUid::ROOT,
+    };
+    image.plane = ctx.of(component).reference(&image.plane);
+}
+
+/// A comment's places (mitcad#1315): a free point (`at`) in its component's
+/// coordinates, which turn unless it is linked, and its last known place in
+/// the design's. Comments on faces, edges, bodies and the rest follow their
+/// targets by name; their places turn too, so that an orphan stays at its
+/// target's last place.
+pub(crate) fn turn_comment(comment: &mut crate::document::Comment, ctx: &Turned<'_>) {
+    if let Some(at) = &mut comment.target.at {
+        let component = comment.target.component.unwrap_or(ComponentUid::ROOT);
+        *at = ctx.of(component).vector(*at);
+    }
+    if let Some(place) = &mut comment.place {
+        *place = ctx.of(ComponentUid::ROOT).vector(*place);
+    }
+}
+
 /// The lights placed in the design (not those that follow the camera).
 /// Returns how many turned.
 pub(crate) fn turn_lights(render: &mut RenderSettings, turn: Turn) -> usize {
@@ -788,6 +817,20 @@ pub(crate) fn turn_split_pieces(
         }
         *groups = std::sync::Arc::new(changed);
     }
+}
+
+/// Whether the turn reverses the direction an Emboss counts its Along Axis
+/// and Around in, for a wrap about a face's axis along `axis` (mitcad#1315):
+/// that direction is the axis made to point towards +Z of the component,
+/// else +Y, else +X ([`crate::features::emboss::counted`]), and the turned
+/// axis may point the other way about it (a rod along +Z turned to lie
+/// along -Y counts along +Y). Its two values are then negated, so that the
+/// wrapped profiles stay where the turn takes them.
+pub(crate) fn wrap_count_reversed(turn: Turn, axis: Vec3) -> bool {
+    use crate::features::emboss::counted;
+    let carried = turn.vector(counted(axis));
+    let now = counted(turn.vector(axis));
+    mitcad_vec3::dot(carried, now) < 0.0
 }
 
 /// The origin plane whose frame has exactly these axes.

@@ -138,6 +138,17 @@ impl EnvelopeDef {
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<Sources<K::Shape>, String> {
         let own = ctx.component();
+        // Which component the occurrence places and which occurrences are
+        // placed in it depend on the assembly's structure, which the
+        // placements and bodies read do not show: an occurrence placed
+        // since, or one that now places another component (Show as
+        // Envelope, mitcad#1276), makes the cached result stale
+        // (mitcad#1321).
+        if !self.occurrence.is_empty() || self.bodies.is_empty() {
+            ctx.reads.push(crate::recompute::Read::Assembly(
+                crate::features::extrude_scope::assembly_key(&ctx.env),
+            ));
+        }
         let (component, placement) = if self.occurrence.is_empty() {
             (own, Transform::IDENTITY)
         } else {

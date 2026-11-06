@@ -189,6 +189,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
     fn surface_loft(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let l: k::SurfaceLoft = f.typed()?;
         let mut notes = Vec::new();
+        if !l.rails.is_empty() {
+            // Format 28: guide rails between the sections.
+            return Err(NotMapped::Unmapped(
+                "a surface loft along guide rails is not mapped".to_owned(),
+            ));
+        }
         if l.sections.len() < 2 {
             return Err("a surface loft needs two or more sections".into());
         }
@@ -595,6 +601,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 "the alignment points are left out: the blend leaves the faces beside its chains"
                     .to_owned(),
             );
+        }
+        if b.seam.is_some() {
+            // Format 28: where the stations of two closed chains start.
+            notes.push("the seam points are left out: MitCad pairs the chains itself".to_owned());
         }
         if b.stitch {
             def["stitch"] = json!(true);

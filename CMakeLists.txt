@@ -26,7 +26,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.47.0
+  VERSION 0.48.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -277,6 +277,8 @@ include(cmake/SelectionUiTests.cmake)
 include(cmake/TimberUiTests.cmake)
 include(cmake/Packaging.cmake)
 include(cmake/AppImage.cmake)
+# A user's own OptiX render worker (mitcad#1332): the target optix-worker.
+include(cmake/OptixWorker.cmake)
 
 if(BUILD_TESTING)
   # Every own source file carries an SPDX licence identifier.
@@ -284,6 +286,19 @@ if(BUILD_TESTING)
   if(BASH_EXECUTABLE AND NOT WIN32)
     add_test(NAME repo.spdx COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check-spdx.sh")
   endif()
+  # A user's own OptiX worker (mitcad#1332): the dependency builder refuses
+  # a folder without the OptiX SDK's header (no SDK needed), and the release
+  # gate refuses a render prefix with OptiX.
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BASH_EXECUTABLE)
+    add_test(NAME repo.build_cycles_optix_args
+             COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-cycles-optix-test.sh")
+  elseif(WIN32)
+    add_test(NAME repo.build_cycles_optix_args
+             COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                     -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-cycles-optix-test.ps1")
+  endif()
+  add_test(NAME repo.render_optix_gate
+           COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/render-optix-gate-test.cmake")
   # Every tooltip of the app is one short line (tools/tooltip-check).
   add_subdirectory(tools/tooltip-check)
   # The user-facing texts keep the UI conventions (tools/ui-strings-check).

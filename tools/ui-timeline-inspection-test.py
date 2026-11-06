@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 
+from ui_macos_lock import run_gui
+
 
 def main():
     app, cli, output = sys.argv[1:4]
@@ -82,7 +84,7 @@ def main():
             case_env.update(MITCAD_TEST_INPUT=str(fixture), MITCAD_TEST_SHOTS=str(shots),
                 MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1", QT_FORCE_STDERR_LOGGING="1")
             with (out / (chrome + ".log")).open("wb") as log:
-                result = subprocess.run([app, "--ui=qt", "--chrome=" + chrome,
+                result = run_gui([app, "--ui=qt", "--chrome=" + chrome,
                     "--no-recovery", "--no-mcp", "--open", str(design)], env=case_env,
                     stdout=log, stderr=subprocess.STDOUT, timeout=120)
             text = (out / (chrome + ".log")).read_text(encoding="utf-8", errors="replace")

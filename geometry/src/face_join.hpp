@@ -68,8 +68,13 @@ inline constexpr double kOneSurfaceAngle = 1.0e-9;
 // group whose joined faces would not be valid stay apart, each such group
 // named in an info of the result (its reason); a group that would make a
 // face winding round its axis more than once (a thread's turns) stays
-// apart. `body` itself where nothing changes. B-spline pieces (a thread's
-// flanks) are join_surface_pieces' and are left as they are.
+// apart. A group with a face closed round its surface that OCCT's merge
+// leaves apart from the group's open pieces (a pin's ring whose seam runs
+// on along the edge of the strip of its cylinder below it) is joined with
+// every closed face cut in two first, the merge then joining the open
+// pieces into one face closed round it (mitcad#1336). `body` itself where
+// nothing changes. B-spline pieces (a thread's flanks) are
+// join_surface_pieces' and are left as they are.
 ShapePtr join_same_surfaces(const ShapePtr& body);
 
 } // namespace mitcad::geometry::detail

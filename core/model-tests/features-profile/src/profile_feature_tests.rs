@@ -976,6 +976,98 @@ fn tapped_holes_take_the_thread_size_and_list_their_threads() {
     );
 }
 
+/// A countersunk tapped hole's modelled thread (mitcad#1307): one added by
+/// a command runs out into the countersink (`ends` `run_out`); one in a
+/// design file written before `ends` existed keeps the flat ends it was
+/// cut with, and is written so from then on.
+#[test]
+fn a_saved_countersunk_holes_modelled_thread_keeps_its_flat_ends() {
+    let mut b = block();
+    let on_top = json!({"type": "face", "body": "F2.b0", "face": TOP, "points": [[10, 10, 20]]});
+    let countersink = json!({"type": "countersink", "diameter": 10,
+                             "angle": std::f64::consts::FRAC_PI_2});
+    // A cosmetic thread has no ends to cut.
+    let uid = b
+        .doc
+        .add_feature(
+            &hole_def(
+                on_top.clone(),
+                json!({"kind": countersink, "thread": {"designation": "M6x1"}}),
+            ),
+            None,
+        )
+        .unwrap()
+        .uid;
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let cosmetic = b.doc.to_json();
+    assert!(!cosmetic.contains("\"ends\""), "{cosmetic}");
+    b.doc.undo();
+
+    let uid = b
+        .doc
+        .add_feature(
+            &hole_def(
+                on_top.clone(),
+                json!({"kind": countersink, "thread": {"designation": "M6x1", "modeled": true}}),
+            ),
+            None,
+        )
+        .unwrap()
+        .uid;
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(b.doc.kernel().count("thread"), 1);
+    assert!(
+        !last_spec(&b.doc).contains("flat ends"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    let text = b.doc.to_json();
+    let field = "\"ends\": \"run_out\"";
+    assert!(text.contains(field), "{text}");
+    let loaded = Document::from_json(&text, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), text);
+
+    // The same design as a file written before `ends` existed.
+    let old_form = {
+        let at = text.find(field).unwrap();
+        let comma = text[..at].rfind(',').unwrap();
+        format!("{}{}", &text[..comma], &text[at + field.len()..])
+    };
+    assert!(!old_form.contains("\"ends\""), "{old_form}");
+    let mut old = Document::from_json(&old_form, MockKernel::default()).unwrap();
+    old.recompute();
+    assert_eq!(status(&old, uid), FeatureStatus::Ok);
+    assert_eq!(old.kernel().count("thread"), 1);
+    assert!(
+        last_spec(&old).contains(" flat ends"),
+        "{}",
+        last_spec(&old)
+    );
+    let saved = old.to_json();
+    assert!(saved.contains("\"ends\": \"flat\""), "{saved}");
+    assert!(!saved.contains("run_out"), "{saved}");
+    // Read again, it stays flat.
+    let again = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(again.to_json(), saved);
+
+    // An edit of the hole without `ends` gives it the run-outs.
+    old.edit_feature(
+        uid,
+        &hole_def(
+            on_top,
+            json!({"kind": countersink, "thread": {"designation": "M6x1", "modeled": true}}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(status(&old, uid), FeatureStatus::Ok);
+    assert!(
+        !last_spec(&old).contains("flat ends"),
+        "{}",
+        last_spec(&old)
+    );
+    assert!(old.to_json().contains(field), "{}", old.to_json());
+}
+
 fn thread_def(face: &str, extra: Value) -> FeatureDef<mitcad_model::ValueInput> {
     let mut value = json!({"type": "thread", "faces": [{"body": "F2.b0", "face": face}],
                            "thread": {"designation": "M10x1.5", "class": "6g"}});

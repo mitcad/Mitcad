@@ -52,6 +52,7 @@
 #include "../framework/Theme.hpp"
 #include "../view/AnnotationDialogs.hpp"
 #include "../view/VersionWatermark.hpp"
+#include "DrawingPreferences.hpp"
 #include "DrawingSheetView.hpp"
 
 namespace mitcad::drawings {
@@ -495,6 +496,13 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   m_hoverTimer->setSingleShot(true);
   m_hoverTimer->setInterval(60);
   connect(m_hoverTimer, &QTimer::timeout, this, &DrawingWorkspace::hoverPick);
+  // Always show corners turned on or off, or its dots' size changed
+  // (mitcad#1338): the open sheet's dots come, go or change at once.
+  connect(&CornerDotsNotifier::instance(), &CornerDotsNotifier::changed, this, [this] {
+    if (isOpen()) {
+      showCornerDots();
+    }
+  });
   // Dimension spacing (mitcad#1173).
   m_snapTimer = new QTimer(this);
   m_snapTimer->setSingleShot(true);
@@ -667,6 +675,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   m_tabs->setMinimumWidth(std::min(fewTabs, m_tabs->sizeHint().width()));
   const QJsonObject sheet = sheets.at(m_sheet).toObject();
   m_sheetView->setSheet(sheet);
+  showCornerDots();
   logTitleBlock(sheet);
   // The views the model could not draw, in the status bar when that
   // changes (their boxes show on the sheet).
@@ -718,6 +727,43 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
       fillPanel();
     }
   });
+}
+
+void DrawingWorkspace::showCornerDots() {
+  const CornerDots dots = savedCornerDots();
+  QVector<QPointF> points;
+  if (dots.always && isOpen() && !m_cutSheet) {
+    if (m_host.modelBusy()) {
+      // A job computes the model: asked once it is done (mitcad#753), the
+      // dots kept meanwhile.
+      if (!m_cornersWait) {
+        m_cornersWait = true;
+        m_host.whenIdle(this, [this] {
+          m_cornersWait = false;
+          if (isOpen()) {
+            showCornerDots();
+          }
+        });
+      }
+      return;
+    }
+    const QJsonObject query{{QStringLiteral("query"), QStringLiteral("drawing_corners")},
+                            {QStringLiteral("drawing"), m_drawing},
+                            {QStringLiteral("sheet"), m_sheet}};
+    try {
+      const QJsonObject answer = m_host.model().queryObject(query);
+      for (const QJsonValue& view : answer.value(QStringLiteral("views")).toArray()) {
+        for (const QJsonValue& point : view.toObject().value(QStringLiteral("points")).toArray()) {
+          const QJsonArray xy = point.toArray();
+          points.append(QPointF(xy.at(0).toDouble(), xy.at(1).toDouble()));
+        }
+      }
+    } catch (const std::exception& e) {
+      // No dots, said in the log: the sheet itself is drawn.
+      qDebug().noquote() << QStringLiteral("Drawing corners not shown: %1").arg(QString::fromUtf8(e.what()));
+    }
+  }
+  m_sheetView->setCornerDots(points, cornerDotRadius(dots.size));
 }
 
 void DrawingWorkspace::startTool(const QString& id) {
@@ -1658,6 +1704,10 @@ void DrawingWorkspace::hoverPick() {
       const QJsonObject answer = m_host.model().queryObject(query);
       if (answer.value(QStringLiteral("pick")).isObject()) {
         seen = answer.value(QStringLiteral("seen")).toString();
+        // A centre picked on its centre mark's line (mitcad#1338).
+        if (answer.value(QStringLiteral("center_line")).toBool()) {
+          seen = QStringLiteral("center line");
+        }
         items = answer.value(QStringLiteral("items")).toArray();
       }
     } catch (const std::exception&) {
@@ -1725,8 +1775,11 @@ void DrawingWorkspace::addPick(const QJsonObject& answer, int view, QPointF at) 
   m_pickPoints.append(point.size() == 2 ? QPointF(point.at(0).toDouble(), point.at(1).toDouble()) : at);
   m_sheetView->setHoverMarks(QJsonArray());
   m_sheetView->setPickMarks(m_pickItems);
+  // A centre picked on its centre mark's line says so (mitcad#1338).
   qDebug().noquote() << QStringLiteral("Drawing picked %1 (%2): %3")
-                            .arg(answer.value(QStringLiteral("seen")).toString())
+                            .arg(answer.value(QStringLiteral("center_line")).toBool()
+                                     ? QStringLiteral("center line")
+                                     : answer.value(QStringLiteral("seen")).toString())
                             .arg(m_toolPicks.size())
                             .arg(compact(pick.toObject()));
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "TestDriver.hpp"
+#include "Diagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QAction>
+#include <QAbstractScrollArea>
 #include <QApplication>
 #include <QColor>
 #include <QComboBox>
@@ -56,6 +58,7 @@
 #include <QTextDocument>
 #include <QWheelEvent>
 #include <QWidget>
+#include <QWindow>
 #include <QtGlobal>
 #include <QtLogging>
 
@@ -147,6 +150,7 @@ const StepSpec kSpecs[] = {
     {"trackpad-scroll", 5, 6, kInputOfMain},
     {"hover-logged", 1, 1, kInputOfMain},
     {"timeline-leave", 0, 0, kInputOfMain},
+    {"leave-widget", 1, 1, kInputOfMain},
     {"expect-timeline-hover", 1, 1, kIdle},
     {"expect-timeline-tooltip", 1, 1, kIdle},
     {"capture-view-image", 1, 1, kIdle},
@@ -254,6 +258,7 @@ const StepSpec kSpecs[] = {
     {"expect-native-visible", 2, 2, kIdle},
     {"expect-native-present", 2, 2, kIdle},
     {"expect-native-attached", 3, 3, kIdle},
+    {"expect-native-cube-arrows", 0, 0, kIdle},
     {"expect-native-style", 2, 2, kIdle},
     {"expect-native-columns", 1, 2, kIdle},
     {"native-dialog-size", 2, 2, kInputOfTarget},
@@ -667,6 +672,10 @@ TestDriver::TestDriver() {
     return;
   }
   m_active = true;
+  if (headlessUiTest()) {
+    m_stepMs = 10;
+    m_settleMs = 20;
+  }
   bool ok = false;
   const int stepMs = qEnvironmentVariableIntValue("MITCAD_TEST_STEP_MS", &ok);
   if (ok && stepMs > 0) {
@@ -953,6 +962,7 @@ QWidget* TestDriver::topWindow() const {
 }
 
 QWidget* TestDriver::viewer() const {
+  if (headlessUiTest()) return nullptr;
   if (m_viewer.isNull() && !m_main.isNull()) {
     const QList<QWidget*> children = m_main->findChildren<QWidget*>();
     for (QWidget* child : children) {
@@ -1038,6 +1048,15 @@ void TestDriver::leave(int code) {
 }
 
 void TestDriver::finish() {
+  if (headlessUiTest()) {
+    auto* window = qobject_cast<MainWindow*>(m_main.data());
+    if (QGuiApplication::platformName() != QStringLiteral("offscreen") || !window ||
+        window->usesNativeUi() || window->viewer().context() != nullptr) {
+      fail(m_line, QStringLiteral("headless workflow requires Qt offscreen without an OpenGL context"));
+      return;
+    }
+    qInfo("Headless UI test verified: Qt offscreen without an OpenGL context");
+  }
   if (!m_jobPickLabel.isEmpty()) {
     fail(m_jobPickLine, QStringLiteral("the armed pick's job '%1' never started").arg(m_jobPickLabel));
     return;
@@ -1314,8 +1333,9 @@ bool TestDriver::triggerShortcut(QWidget* window, const KeyPress& press) {
   }
 #ifdef Q_OS_MACOS
   // AppKit dispatches the global menu's Close even when a Qt tool window is key.
-  if (window != m_main.data() && wanted == QKeySequence(QKeySequence::Close) && m_main) {
-    if (auto* close = m_main->findChild<QAction*>(QStringLiteral("command_file.close")); close && close->isEnabled()) {
+  if (window != m_main.data() && m_main) {
+    if (auto* close = m_main->findChild<QAction*>(QStringLiteral("command_file.close"));
+        close && close->isEnabled() && close->shortcuts().contains(wanted)) {
       close->trigger();
       return true;
     }
@@ -2247,6 +2267,22 @@ void TestDriver::run(const Step& step) {
     if (!strip) { fail(line, QStringLiteral("timeline strip missing")); return; }
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(strip, &leave);
+  } else if (name == QLatin1String("leave-widget")) {
+    // The pointer leaves a widget by its object name (mitcad#1327: a
+    // notice's hover ends), in the main window or a panel over it.
+    QWidget* widget = m_main->findChild<QWidget*>(a.at(0));
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+      if (widget == nullptr && top != nullptr) {
+        widget = top->findChild<QWidget*>(a.at(0));
+      }
+    }
+    if (widget == nullptr) { fail(line, QStringLiteral("no widget named '%1'").arg(a.at(0))); return; }
+    if (auto* area = qobject_cast<QAbstractScrollArea*>(widget)) {
+      QEvent leaveViewport(QEvent::Leave);
+      QCoreApplication::sendEvent(area->viewport(), &leaveViewport);
+    }
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(widget, &leave);
   } else if (name == QLatin1String("expect-timeline-hover")) {
     auto* timeline = m_main->findChild<TimelineWidget*>();
     const QString actual = timeline ? timeline->hoveredFeatures().join(QLatin1Char(',')) : QStringLiteral("missing");
@@ -2980,6 +3016,28 @@ void TestDriver::run(const Step& step) {
     const bool above = a.at(2) == QLatin1String("above");
     whenReady([this, id, anchor, above] { return mac::test::attached(id, anchor, above, m_waitDetail); }, 6,
               QStringLiteral("native '%1' is not directly %2 '%3'").arg(id, a.at(2), anchor));
+  } else if (name == QLatin1String("expect-native-cube-arrows")) {
+    // The cube's AppKit arrows at the hidden Qt arrows' places, also below
+    // a notice bar (mitcad#1317).
+    if (!mac::test::active()) {
+      fail(line, QStringLiteral("'%1' requires the native macOS UI").arg(name));
+      return;
+    }
+    whenReady([this] {
+      auto* view = qobject_cast<OcctViewer*>(viewer());
+      if (view == nullptr || view->shownCubeArrows().empty()) {
+        m_waitDetail = QStringLiteral("the view shows no cube arrows");
+        return false;
+      }
+      for (const OcctViewer::CubeArrow& arrow : view->shownCubeArrows()) {
+        const QRect place(view->mapTo(view->window(), arrow.geometry.topLeft()), arrow.geometry.size());
+        if (!mac::test::viewportFrame(QStringLiteral("native.cubeArrow.") + arrow.id, place.adjusted(2, 2, -2, -2),
+                                      m_waitDetail)) {
+          return false;
+        }
+      }
+      return true;
+    }, 6, QStringLiteral("the cube's AppKit arrows are not at the Qt arrows' places"));
   } else if (name == QLatin1String("expect-native-style") || name == QLatin1String("expect-native-columns") ||
              name == QLatin1String("native-dialog-size")) {
     // Native table semantics and sizing (mitcad#814).
@@ -3352,79 +3410,109 @@ void TestDriver::run(const Step& step) {
             .arg(label, identifier, combo ? combo->currentText() : QStringLiteral("<deleted>"));
       });
     };
-    // Install the wait before opening: a native style may track its popup
-    // in a nested loop. A key sent to the main window must never confirm
-    // the command when its NoFocus combo did not receive that key.
-    whenReady([this, combo, list, index, nativeSelected] {
-      if (*nativeSelected) return true;
-      if (!combo || !list || !index.isValid() || !list->isVisible()) {
-        m_waitDetail = QStringLiteral("the combo's item view is not a visible popup");
+    // The live state of the persistent row in the real popup. Under load
+    // (several UI tests at once) a popup can be visible to Qt while it is
+    // still being shown or laying out its rows, so the opening and each
+    // pointer phase wait for this state instead of failing on one look.
+    // The window's exposure is reported only: a Windows service session
+    // (session 0) never reports the popup's window as exposed.
+    struct LiveRow {
+      QRect rect;
+      QRect exposed;
+      QPoint point;
+    };
+    const auto liveRow = [this, list, index](const QString& phase, bool scroll, LiveRow& live) {
+      if (!list || !index.isValid()) {
+        m_waitDetail = QStringLiteral("%1: the combo's popup row was destroyed").arg(phase);
         return false;
       }
-      list->scrollTo(index, QAbstractItemView::PositionAtCenter);
+      if (!list->isVisible()) {
+        m_waitDetail = QStringLiteral("%1: the combo's item view is not a visible popup").arg(phase);
+        return false;
+      }
+      if (scroll) list->scrollTo(index, QAbstractItemView::PositionAtCenter);
       list->doItemsLayout();
-      const QRect rect = list->visualRect(index);
       QWidget* viewport = list->viewport();
+      const QWindow* handle = list->window()->windowHandle();
+      const bool windowExposed = handle != nullptr && handle->isExposed();
+      const bool activePopup = QApplication::activePopupWidget() == list->window();
+      live.rect = list->visualRect(index);
       // A macOS menu-style row can include trailing layout space beyond
       // its narrow viewport while its label is fully shown. Hit the real
       // exposed row, not the center of that non-visible layout space.
-      const QRect exposed = rect.intersected(viewport->rect());
-      const QPoint point = exposed.center();
-      QWidget* hit = QApplication::widgetAt(viewport->mapToGlobal(point));
-      m_waitDetail = QStringLiteral("popup row %1 at %2,%3, viewport %4x%5, exposed %6x%7, index-hit=%8, widget-hit=%9")
-          .arg(index.row()).arg(point.x()).arg(point.y()).arg(viewport->width()).arg(viewport->height())
-          .arg(exposed.width()).arg(exposed.height()).arg(list->indexAt(point) == index)
-          .arg(hit == viewport || (hit && viewport->isAncestorOf(hit)));
-      return !exposed.isEmpty() && list->indexAt(point) == index &&
-          QApplication::activePopupWidget() == list->window() &&
-          (hit == viewport || (hit && viewport->isAncestorOf(hit)));
-    }, 6, QStringLiteral("the real Qt choice popup did not display '%1'").arg(label),
-    [this, combo, list, index, identifier, label, nativeSelected, rowInputSent, waitClosed, line] {
-      waitClosed();
-      if (*nativeSelected) {
-        qInfo().noquote() << QStringLiteral("Qt choice: selected '%1' in '%2' native popup").arg(label, identifier);
-        return;
-      }
-      const auto send = [this, combo, list, index, identifier, label, rowInputSent, line](QEvent::Type type) {
+      live.exposed = live.rect.intersected(viewport->rect());
+      live.point = live.exposed.center();
+      QWidget* hit = QApplication::widgetAt(viewport->mapToGlobal(live.point));
+      const bool indexHit = list->indexAt(live.point) == index;
+      const bool widgetHit = hit == viewport || (hit && viewport->isAncestorOf(hit));
+      m_waitDetail = QStringLiteral("%1: popup row %2 at %3,%4, viewport %5x%6, exposed %7x%8, window exposed=%9, "
+                                    "active popup=%10, index-hit=%11, widget-hit=%12")
+          .arg(phase).arg(index.row()).arg(live.point.x()).arg(live.point.y())
+          .arg(viewport->width()).arg(viewport->height()).arg(live.exposed.width()).arg(live.exposed.height())
+          .arg(windowExposed).arg(activePopup).arg(indexHit).arg(widgetHit);
+      return !live.exposed.isEmpty() && indexHit && activePopup && widgetHit;
+    };
+    // One pointer phase: wait within the step's limit until the row is live
+    // again, then send the event from that same look. A press can change
+    // the motion type, shrink the floating card and move its popup before
+    // the release, so an earlier phase's screen point is never reused.
+    const auto sendWhenLive = [this, combo, list, index, identifier, label, rowInputSent, line, liveRow]
+        (QEvent::Type type, const std::function<void()>& beforeSend) {
+      const QString phase = type == QEvent::MouseMove ? QStringLiteral("move") : type == QEvent::MouseButtonPress
+          ? QStringLiteral("press") : QStringLiteral("release");
+      const auto live = std::make_shared<LiveRow>();
+      whenReady([combo, list, index, liveRow, phase, live] {
+        // A destroyed combo or row fails at once below, without waiting.
+        return !combo || !list || !index.isValid() || liveRow(phase, false, *live);
+      }, 6, QStringLiteral("Qt choice '%1' in '%2' has no exposed popup row").arg(label, identifier),
+      [this, combo, list, index, identifier, label, rowInputSent, line, type, beforeSend, phase, live] {
         if (!combo || !list || !index.isValid()) {
           fail(line, QStringLiteral("Qt choice '%1' in '%2' lost its live popup row").arg(label, identifier)); return;
         }
         const QPointer<QWidget> receiver(list->viewport());
-        list->doItemsLayout();
-        const QRect rect = list->visualRect(index);
-        const QRect exposed = rect.intersected(receiver->rect());
-        const QPoint point = exposed.center();
-        QWidget* hit = QApplication::widgetAt(receiver->mapToGlobal(point));
-        if (!list->isVisible() || exposed.isEmpty() || list->indexAt(point) != index ||
-            QApplication::activePopupWidget() != list->window() ||
-            (hit != receiver && (!hit || !receiver->isAncestorOf(hit)))) {
-          fail(line, QStringLiteral("Qt choice '%1' in '%2' has no exposed popup row").arg(label, identifier)); return;
-        }
-        // Resolve every phase from the persistent row's current geometry.
-        // A press can change the motion type, shrink the floating card and
-        // move its popup before the release; the old screen point is stale.
-        const QPoint global = receiver->mapToGlobal(point);
+        const QPoint global = receiver->mapToGlobal(live->point);
         QWidget* popup = receiver->window();
-        const bool moved = type == QEvent::MouseMove;
-        const QString phase = moved ? QStringLiteral("move") : type == QEvent::MouseButtonPress
-            ? QStringLiteral("press") : QStringLiteral("release");
         qInfo().noquote() << QStringLiteral("Qt choice pointer: %1 phase=%2 row=%3 rect=%4,%5 %6x%7 global=%8,%9 popup-visible=%10 current='%11' exposed=%12,%13 %14x%15 index-hit=1 widget-hit=1")
-            .arg(identifier, phase).arg(index.row()).arg(rect.x()).arg(rect.y()).arg(rect.width()).arg(rect.height())
-            .arg(global.x()).arg(global.y()).arg(popup->isVisible()).arg(combo->currentText())
-            .arg(exposed.x()).arg(exposed.y()).arg(exposed.width()).arg(exposed.height());
+            .arg(identifier, phase).arg(index.row()).arg(live->rect.x()).arg(live->rect.y()).arg(live->rect.width())
+            .arg(live->rect.height()).arg(global.x()).arg(global.y()).arg(popup->isVisible()).arg(combo->currentText())
+            .arg(live->exposed.x()).arg(live->exposed.y()).arg(live->exposed.width()).arg(live->exposed.height());
         QMouseEvent event(type, receiver->mapFromGlobal(global), popup->mapFromGlobal(global), global,
-                          moved ? Qt::NoButton : Qt::LeftButton,
+                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                           type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
         // Mark only after the release passed every live row/hit guard, just
         // before dispatch: its handler may open a dialog in a nested loop.
         if (type == QEvent::MouseButtonRelease) *rowInputSent = true;
+        if (beforeSend) beforeSend();
         QCoreApplication::sendEvent(receiver, &event);
-      };
-      queue([send] { send(QEvent::MouseMove); });
-      queue([send] { send(QEvent::MouseButtonPress); });
-      queue([send, identifier, label] {
-        send(QEvent::MouseButtonRelease);
-        qInfo().noquote() << QStringLiteral("Qt choice: clicked '%1' in '%2' popup").arg(label, identifier);
+        if (type == QEvent::MouseButtonRelease) {
+          qInfo().noquote() << QStringLiteral("Qt choice: clicked '%1' in '%2' popup").arg(label, identifier);
+        }
+      });
+    };
+    // Install the wait before opening: a native style may track its popup
+    // in a nested loop. A key sent to the main window must never confirm
+    // the command when its NoFocus combo did not receive that key.
+    const auto opened = std::make_shared<LiveRow>();
+    whenReady([nativeSelected, liveRow, opened] {
+      return *nativeSelected || liveRow(QStringLiteral("open"), true, *opened);
+    }, 6, QStringLiteral("the real Qt choice popup did not display '%1'").arg(label),
+    [this, identifier, label, nativeSelected, waitClosed, sendWhenLive] {
+      if (*nativeSelected) {
+        waitClosed();
+        qInfo().noquote() << QStringLiteral("Qt choice: selected '%1' in '%2' native popup").arg(label, identifier);
+        return;
+      }
+      // Each phase starts in its own driver tick; the next phase is queued
+      // just before this one's event. The close wait is installed before
+      // the release is dispatched, as that release may run a nested loop.
+      queue([this, waitClosed, sendWhenLive] {
+        sendWhenLive(QEvent::MouseMove, [this, waitClosed, sendWhenLive] {
+          queue([this, waitClosed, sendWhenLive] {
+            sendWhenLive(QEvent::MouseButtonPress, [this, waitClosed, sendWhenLive] {
+              queue([waitClosed, sendWhenLive] { sendWhenLive(QEvent::MouseButtonRelease, waitClosed); });
+            });
+          });
+        });
       });
     }, window);
     if (!list->isVisible()) {

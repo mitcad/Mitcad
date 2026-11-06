@@ -1372,7 +1372,12 @@ impl SketchEdit<'_> {
                     EntityKind::Line { .. } => {
                         self.add_constraint(ConstraintKind::Collinear { a: id, b: copy });
                     }
-                    EntityKind::Arc { .. } | EntityKind::EllipticalArc { .. } => {}
+                    // The pieces share the centre (and an ellipse's major
+                    // point); Equal keeps them on one curve, their radius or
+                    // minor radius as one (mitcad#1314).
+                    EntityKind::Arc { .. } | EntityKind::EllipticalArc { .. } => {
+                        self.add_constraint(ConstraintKind::Equal { a: id, b: copy });
+                    }
                     _ => {}
                 }
                 let joined: Vec<EntityUid> = joined0.into_iter().chain(joined1).collect();

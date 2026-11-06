@@ -8,6 +8,8 @@
 
 #include <QContextMenuEvent>
 #include <QEnterEvent>
+#include <QHideEvent>
+#include <QShowEvent>
 #include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QKeyEvent>
@@ -520,6 +522,38 @@ void DrawingSheetView::setHoverMarks(const QJsonArray& items) {
     return;
   }
   m_hoverMarks = items;
+  // The corner (or centre) under the pointer, marked (mitcad#1338).
+  QString marker;
+  for (const QJsonValue& value : items) {
+    const QJsonObject item = value.toObject();
+    if (item.contains(QStringLiteral("point"))) {
+      const QPointF at = pointOf(item.value(QStringLiteral("point")));
+      marker = QStringLiteral("Drawing corner marker at %1,%2, radius %3 px, filled")
+                   .arg(at.x(), 0, 'f', 1)
+                   .arg(at.y(), 0, 'f', 1)
+                   .arg(kCornerMarkerRadius, 0, 'f', 1);
+      break;
+    }
+  }
+  if (marker != m_loggedMarker) {
+    m_loggedMarker = marker;
+    if (!marker.isEmpty()) {
+      qDebug().noquote() << marker;
+    }
+  }
+  update();
+}
+
+void DrawingSheetView::setCornerDots(const QVector<QPointF>& points, double radius) {
+  if (points == m_cornerDots && (points.isEmpty() || radius == m_cornerDotRadius)) {
+    return;
+  }
+  m_cornerDots = points;
+  m_cornerDotRadius = radius;
+  qDebug().noquote() << (points.isEmpty() ? QStringLiteral("Drawing corner dots: none")
+                                          : QStringLiteral("Drawing corner dots: %1, radius %2 px")
+                                                .arg(points.size())
+                                                .arg(radius, 0, 'f', 1));
   update();
 }
 
@@ -936,6 +970,19 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
       }
     }
   }
+  // Every corner the views show while Always show corners is on
+  // (mitcad#1338): on the screen only, under what is hovered and picked.
+  if (!m_cornerDots.isEmpty()) {
+    painter.save();
+    painter.setPen(Qt::NoPen);
+    QColor dot = kHovered;
+    dot.setAlpha(210);
+    painter.setBrush(dot);
+    for (const QPointF& p : std::as_const(m_cornerDots)) {
+      painter.drawEllipse(toWidget(p), m_cornerDotRadius, m_cornerDotRadius);
+    }
+    painter.restore();
+  }
   paintAnnotations(painter);
   // A selected detail's circle on its parent, which a drag moves.
   QPointF circleCenter;
@@ -1095,7 +1142,19 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
       }
       painter.drawPolyline(points);
     } else if (item.contains(QStringLiteral("point"))) {
-      painter.drawEllipse(toWidget(pointOf(item.value(QStringLiteral("point")))), 4.0, 4.0);
+      // A corner or a centre: filled, ringed in the paper's white so that
+      // it shows on the lines that end there (mitcad#1338: an unfilled
+      // circle of 4 pixels went unnoticed on a high-DPI screen).
+      painter.save();
+      QPen ring(Qt::white, 1.5);
+      ring.setCosmetic(true);
+      painter.setPen(ring);
+      QColor fill = mark.color();
+      fill.setAlpha(230);
+      painter.setBrush(fill);
+      painter.drawEllipse(toWidget(pointOf(item.value(QStringLiteral("point")))), kCornerMarkerRadius,
+                          kCornerMarkerRadius);
+      painter.restore();
     }
   }
   painter.restore();
@@ -1195,6 +1254,18 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
     painter.drawText(QPointF(x, 0.0), label.text);
     painter.restore();
   }
+}
+
+// A sheet closed and opened again says where it is again, even in the
+// same place: the tests wait for its place after opening a drawing.
+void DrawingSheetView::hideEvent(QHideEvent* event) {
+  QWidget::hideEvent(event);
+  m_loggedPlaces.clear();
+}
+
+void DrawingSheetView::showEvent(QShowEvent* event) {
+  QWidget::showEvent(event);
+  logPlaces();
 }
 
 void DrawingSheetView::resizeEvent(QResizeEvent* event) {

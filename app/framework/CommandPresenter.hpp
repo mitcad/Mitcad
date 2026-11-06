@@ -43,6 +43,11 @@ public:
     // A link in an inspection's result was clicked ("point:x,y,z": Print
     // Analysis' thinnest wall, mitcad#620).
     std::function<void(const QString&)> resultLinkActivated;
+    // The pointer came over the panel's message (true) or left it
+    // (mitcad#1327): the places its notices name are painted meanwhile. A
+    // frontend that cannot tell leaves it uncalled (the AppKit form, for
+    // now).
+    std::function<void(bool)> messageHovered;
   };
 
   virtual ~CommandPresenter() {

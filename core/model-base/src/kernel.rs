@@ -1895,6 +1895,17 @@ pub trait Kernel: Send {
     ) -> Result<Vec<RigidCopy>, KernelError> {
         Err(KernelError::Unsupported("repeated parts"))
     }
+
+    // Notice places (mitcad#1327).
+
+    /// Where each of [`Kernel::notes`] is about, in the same order: the
+    /// faces, edges and vertices of the shape by name and points in its
+    /// coordinates (a fillet's corner that folds back on itself, the face
+    /// it hangs past and its farthest point), without a body (the feature
+    /// gives it). Empty, or shorter than the notes, where they have none.
+    fn note_places(&self, _shape: &Self::Shape) -> Vec<Vec<crate::notice::NoticePlace>> {
+        Vec::new()
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of

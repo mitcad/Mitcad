@@ -387,9 +387,38 @@ label.
 Every notice has one of these levels, with one word, icon and color per
 level on every surface and in both frontends. No level is signaled by
 color alone. The model carries the level as data (mitcad#1040): a
-`Notice { level, message, target }` of `core/model-base` (`notice.rs`),
-with the levels `error`, `warning` and `info`; success, hint and progress
-are the frontends' own.
+`Notice { level, message, target, places }` of `core/model-base`
+(`notice.rs`), with the levels `error`, `warning` and `info`; success,
+hint and progress are the frontends' own.
+
+**What a message says** (mitcad#1327):
+
+- A warning reports a fault in the result, never the internal method that
+  built it. A fillet built as rings, with the faces' cut-outs cleared, or
+  with the kernel's own tangent chains has no warning for that; it warns
+  only where its result is faulty (an edge or a sliver left on a face it
+  runs onto, a corner that folds back on itself), and a deviation no one
+  can see (a three-fillet corner's 0.057 mm on a radius of 3) is no fault.
+- A message says what is wrong in the design's terms, never with
+  topological names (`E{…}`, `F4:side(…)`, `V{…}`) or sketch region keys
+  (`r{…}`, mitcad#1334), which the user sees nowhere: "The fillet hangs
+  0.06 mm past the edge of the face beside it.
+  Check the result.", not "the fillet of edge E{…} reaches … past the edge
+  of face F4:side(…)".
+- The places a notice is about (faces, edges and vertices of a body, a
+  region of a sketch, a point, a small box) are its `places`, which keep
+  the names for agents
+  and logs. Where a notice is shown, the pointer over it paints its places
+  in the view as the selection preview draws them, seen through what
+  hides them and never picked, and moving away clears them: the command
+  panel's message (the preview's made faces too), a Timeline item with
+  its tooltip, a feature's Browser row, the Floating message band and the
+  Docked status line, in both chromes. A place out of sight is painted
+  all the same; the view does not move. The AppKit command panel's message
+  follows in a ticket of its own (its presenter bridge has no hover yet).
+- The model takes the names out of a message built with them and puts
+  them into its places, naming their kind in the text ("the fillet of an
+  edge"); new messages are written without them from the start.
 
 | Level | Qualifies when | Examples | Word in the UI |
 |---|---|---|---|

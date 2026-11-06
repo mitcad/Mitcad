@@ -85,11 +85,26 @@ pub mod ffi {
             corner: ChamferCornerKind,
         ) -> Result<SharedPtr<Shape>>;
 
-        /// What the operation that made a shape gave up (P9: a fillet or
-        /// chamfer built as rings), for the feature's warnings.
+        /// What is wrong with a shape the operation kept (P9: a fillet's
+        /// corner that folds back on itself), for the feature's warnings.
         fn shape_notes(shape: &Shape) -> Vec<String>;
         /// What is worth knowing of how it was made (mitcad#1106: a fillet
         /// or chamfer built 0.1 % smaller), for the feature's information.
         fn shape_infos(shape: &Shape) -> Vec<String>;
+        /// The places of each of its notes, in their order (mitcad#1327):
+        /// a JSON array of places as the model's notices give them
+        /// (`{"kind": "face", "name": …}`, `{"kind": "point", "at": […]}`).
+        fn shape_note_places(shape: &Shape) -> Vec<String>;
     }
+}
+
+/// The places of a shape's notes (mitcad#1327), from their JSON; a note
+/// whose places cannot be read has none.
+pub(crate) fn note_places(
+    shape: &crate::kernel::shape::ffi::Shape,
+) -> Vec<Vec<mitcad_model::notice::NoticePlace>> {
+    ffi::shape_note_places(shape)
+        .iter()
+        .map(|json| serde_json::from_str(json).unwrap_or_default())
+        .collect()
 }

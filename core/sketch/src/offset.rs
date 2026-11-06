@@ -2033,7 +2033,7 @@ pub fn regenerate(
             .collect::<Result<_, _>>()?;
         let structure = Structure {
             knots: kinds.iter().map(stored_knots).collect(),
-            joins: stored_joins(offset, &chain, closed),
+            joins: stored_joins(offset, &chain, closed, d),
             dropped: offset.dropped_indices(),
             next: offset.links(closed),
         };
@@ -3111,17 +3111,23 @@ fn joined_by_ends(chain: &[(Curve2, bool)]) -> (Vec<(Curve2, bool)>, bool) {
 }
 
 /// The joins as the offset was made, between the curves that have a result
-/// (mitcad#1234): round where it has a corner arc, else shared when the
-/// sources join smoothly, else trimmed (always across a curve that
-/// vanished).
+/// (mitcad#1234): round where it has a corner arc, else shared where the
+/// offsets of the two curves meet at their shared point, by the very test
+/// that made the join ([`join_kind`], mitcad#1314: a near-smooth corner
+/// judged by its angle alone was trimmed here although it was shared when
+/// made), else trimmed (always across a curve that vanished). `d` is the
+/// signed distance the offset is computed with.
 fn stored_joins(
     offset: &SketchOffset<ParamId>,
     chain: &[(Curve2, bool)],
     closed: bool,
+    d: f64,
 ) -> Vec<Join> {
     let n = chain.len();
     let dropped = offset.dropped_indices();
     let kept: Vec<usize> = (0..n).filter(|i| !dropped.contains(i)).collect();
+    let pieces = pieces_of(chain, d);
+    let size = chain_size(&pieces);
     // Along the results' links (mitcad#1244: across a split).
     offset
         .links(closed)
@@ -3137,22 +3143,7 @@ fn stored_joins(
             if (i + 1) % n != k {
                 return Join::Trim;
             }
-            let (a, b) = (chain[i].0.clone(), chain[k].0.clone());
-            // A smooth join of the sources gives a smooth join of the
-            // offsets.
-            let ta = {
-                let (lo, hi) = a.domain();
-                let t = if chain[i].1 { hi } else { lo };
-                let d = a.eval(t)[1];
-                unit(if chain[i].1 { d } else { scale(d, -1.0) })
-            };
-            let tb = {
-                let (lo, hi) = b.domain();
-                let t = if chain[k].1 { lo } else { hi };
-                let d = b.eval(t)[1];
-                unit(if chain[k].1 { d } else { scale(d, -1.0) })
-            };
-            if cross(ta, tb).abs() <= 1e-7 && dot(ta, tb) > 0.0 {
+            if join_kind(&pieces[i], &pieces[k], d, size) == Join::Shared {
                 Join::Shared
             } else {
                 Join::Trim
@@ -4237,7 +4228,7 @@ impl SketchEdit<'_> {
                 let (chain, closed) = sources(offset, &index, &solved.curves)?;
                 let structure = Structure {
                     knots: Vec::new(),
-                    joins: stored_joins(offset, &chain, closed),
+                    joins: stored_joins(offset, &chain, closed, d),
                     dropped: offset.dropped_indices(),
                     next: offset.links(closed),
                 };

@@ -67,6 +67,12 @@ const TRANSCRIPT_FORMAT: &str = "mitcad-chat-api";
 const PREFACE: &str = "You are the assistant in the chat panel of MitCad, a parametric CAD application. The user's messages ask about or for changes to the design open in MitCad's window. Make the changes with MitCad's tools (the only tools you have), check the result, and answer briefly in the user's language. Lengths are millimetres.";
 /// Why a call ended without its result.
 const STOPPED: &str = "The user stopped the message before this call finished.";
+/// Why a call shown as it streamed was not made (mitcad#1317).
+const NOT_MADE_STOPPED: &str = "The user stopped the message before this call was made.";
+const NOT_MADE_CUT: &str =
+    "The answer was cut at the model's output limit before this call was made.";
+const NOT_MADE_FAILED: &str = "The answer ended before this call was made.";
+const NOT_MADE_REFUSED: &str = "The model declined this request; the call was not made.";
 
 /// The kind of service an agent speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -888,10 +894,12 @@ impl ApiStream {
             return events;
         };
         if !(200..300).contains(&answer.status) {
+            events.extend(not_made(&answer, NOT_MADE_FAILED));
             events.extend(self.refused(&answer, &network));
             return events;
         }
         if let Some((message, details)) = answer.error.clone() {
+            events.extend(not_made(&answer, NOT_MADE_FAILED));
             events.extend(self.failed(&message, &details, 0));
             return events;
         }
@@ -908,6 +916,7 @@ impl ApiStream {
                     cut(&network, 500)
                 )
             };
+            events.extend(not_made(&answer, NOT_MADE_FAILED));
             events.extend(self.finish("error", true, text));
             return events;
         }
@@ -1011,6 +1020,14 @@ impl ApiStream {
 
     fn anthropic_answered(&mut self, answer: Answer) -> Vec<Value> {
         let cut_short = answer.stop_reason == "max_tokens";
+        // Calls shown as they streamed that are not made: their rows end.
+        let dropped = if cut_short {
+            not_made(&answer, NOT_MADE_CUT)
+        } else if answer.stop_reason == "refusal" {
+            not_made(&answer, NOT_MADE_REFUSED)
+        } else {
+            Vec::new()
+        };
         let invalid_inputs = answer.invalid;
         let mut blocks: Vec<Value> = answer
             .blocks
@@ -1056,18 +1073,22 @@ impl ApiStream {
             }
         }
         if answer.stop_reason == "refusal" {
-            return self.finish(
+            let mut events = dropped;
+            events.extend(self.finish(
                 "refusal",
                 true,
                 "The model declined this request.".to_owned(),
-            );
+            ));
+            return events;
         }
         if cut_short {
-            return self.finish(
+            let mut events = dropped;
+            events.extend(self.finish(
                 "max_tokens",
                 true,
                 "The answer was cut at the model's output limit.".to_owned(),
-            );
+            ));
+            return events;
         }
         if calls.is_empty() {
             return self.finish("success", false, String::new());
@@ -1370,6 +1391,7 @@ impl ApiStream {
         let mut events = Vec::new();
         if let Some(answer) = turn.answer.take() {
             events.push(json!({"kind": "http_abort", "id": answer.id}));
+            events.extend(not_made(&answer, NOT_MADE_STOPPED));
         }
         turn.answered = true;
         let ids: Vec<String> = turn.calls.iter().map(|call| call.id.clone()).collect();
@@ -1412,6 +1434,22 @@ fn provider_name(provider: Provider) -> &'static str {
         Provider::Anthropic => "anthropic",
         Provider::OpenAi => "openai",
     }
+}
+
+/// The failed results of an answer's calls that are not made (it was
+/// stopped, cut or failed): each was shown with `tool_start` as it
+/// streamed, and its row ends with this result (mitcad#1317).
+fn not_made(answer: &Answer, reason: &str) -> Vec<Value> {
+    answer
+        .blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .map(|block| {
+            json!({"kind": "tool_result",
+                   "id": cut(block.get("id").and_then(Value::as_str).unwrap_or_default(), 200),
+                   "error": true, "text": reason})
+        })
+        .collect()
 }
 
 fn mcp_line(message: Value) -> Value {

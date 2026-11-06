@@ -129,8 +129,11 @@ QJsonObject finalJob(const QJsonObject& settings, const QString& documentFolder,
                      const QString& previewPath);
 
 // The worker's executable: MITCAD_RENDER_WORKER, else mitcad-render next to
-// the running executable; empty when there is none.
+// the running executable (shippedWorkerExecutable); empty when there is
+// none. mitcad-cli's; the application also takes the worker picked in
+// Preferences (RenderClient::workerChoice, mitcad#1332).
 QString workerExecutable();
+QString shippedWorkerExecutable();
 
 // A final render in the render worker (mitcad-render --batch --control):
 // writes nothing itself; starts the process with a job file, checks its
@@ -154,6 +157,9 @@ public:
   // The device the worker renders on (its "ready", then any "device": the
   // CPU took over; mitcad#50).
   QString deviceLabel() const { return m_deviceLabel; }
+  // The worker said hello in this protocol version: it started (a picked
+  // worker that did not gives way to the shipped one, mitcad#1332).
+  bool greeted() const { return m_greeted; }
 
 signals:
   void ready(const QString& renderer);

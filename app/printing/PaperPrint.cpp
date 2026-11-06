@@ -212,6 +212,65 @@ PrintPlan plan(PrintScale scale, const QSizeF& picture, const QSizeF& printable)
   return scale == PrintScale::Fit ? planFit(picture, printable) : planActual(picture, printable);
 }
 
+PrintPlan planFit(const PrintPicture& picture, const QSizeF& printable) {
+  if (!picture.extent) {
+    return planFit(picture.size, printable);
+  }
+  // The scales whose extent fits on the page run from 0 to the largest, as
+  // the extent's size on paper grows with the scale: bracketed from the fit
+  // of the 1:1 size, then halved down to it.
+  const auto fits = [&](double scale) {
+    const QRectF extent = picture.extentAt(scale);
+    return extent.width() * scale <= printable.width() + kEpsilon &&
+           extent.height() * scale <= printable.height() + kEpsilon;
+  };
+  bool found = false;
+  double low = 0.0; // fits, when found
+  double high = planFit(picture.size, printable).scale;
+  for (int i = 0; i < 60 && fits(high); ++i) {
+    found = true;
+    low = high;
+    high *= 2.0;
+  }
+  for (int i = 0; i < 60 && !found; ++i) {
+    const double half = high / 2.0;
+    if (fits(half)) {
+      found = true;
+      low = half;
+    } else {
+      high = half;
+    }
+  }
+  if (!found) {
+    // Its paper-sized parts alone are larger than the page: the 1:1 fit.
+    return planFit(picture.size, printable);
+  }
+  for (int i = 0; i < 60; ++i) {
+    const double middle = (low + high) / 2.0;
+    if (fits(middle)) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  PrintPlan out;
+  out.printable = printable;
+  out.scale = low;
+  PrintPage page;
+  page.source = picture.extentAt(low);
+  const QSizeF shown(page.source.width() * low, page.source.height() * low);
+  const QPointF offset((printable.width() - shown.width()) / 2.0, (printable.height() - shown.height()) / 2.0);
+  page.area = QRectF(offset, shown);
+  page.toPage = QTransform(low, 0.0, 0.0, low, offset.x() - low * page.source.left(),
+                           offset.y() - low * page.source.top());
+  out.pages.push_back(page);
+  return out;
+}
+
+PrintPlan plan(PrintScale scale, const PrintPicture& picture, const QSizeF& printable) {
+  return scale == PrintScale::Fit ? planFit(picture, printable) : planActual(picture.size, printable);
+}
+
 QSizeF printableSize(const QPageLayout& layout) { return layout.paintRect(QPageLayout::Millimeter).size(); }
 
 QPageLayout pictureLayout(QPageSize::PageSizeId paper, QPageLayout::Orientation orientation) {
@@ -226,6 +285,15 @@ QPageLayout::Orientation bestOrientation(PrintScale scale, const QSizeF& picture
     return landscape.scale > portrait.scale + kEpsilon ? QPageLayout::Landscape : QPageLayout::Portrait;
   }
   return landscape.pageCount() < portrait.pageCount() ? QPageLayout::Landscape : QPageLayout::Portrait;
+}
+
+QPageLayout::Orientation bestOrientation(PrintScale scale, const PrintPicture& picture, QPageSize::PageSizeId paper) {
+  if (scale != PrintScale::Fit) {
+    return bestOrientation(scale, picture.size, paper);
+  }
+  const PrintPlan portrait = planFit(picture, printableSize(pictureLayout(paper, QPageLayout::Portrait)));
+  const PrintPlan landscape = planFit(picture, printableSize(pictureLayout(paper, QPageLayout::Landscape)));
+  return landscape.scale > portrait.scale + kEpsilon ? QPageLayout::Landscape : QPageLayout::Portrait;
 }
 
 QString paperSetting(QPageSize::PageSizeId paper) { return QPageSize::key(paper); }
@@ -297,7 +365,7 @@ int printPicture(QPrinter& printer, const PrintPicture& picture, PrintScale scal
     error = QObject::tr("There is nothing to print.");
     return -1;
   }
-  const PrintPlan pages = plan(scale, picture.size, printableSize(printer.pageLayout()));
+  const PrintPlan pages = plan(scale, picture, printableSize(printer.pageLayout()));
   std::vector<int> wanted; // from 1
   if (offered != nullptr && printer.printRange() == QPrinter::PageRange) {
     // The range counts the offered pages: mapped onto these, which differ

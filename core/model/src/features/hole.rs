@@ -24,11 +24,11 @@ use super::extrude::{Operation, apply_operation, check_participants, participant
 use super::geom_ref::{GeomRef, Want};
 use super::hole_sizes::ClearanceFit;
 use super::place_at::PlaceAt;
-use super::reference::{ExtentObject, normalized};
+use super::reference::{Across, ExtentObject, normalized};
 use super::thread::{
-    CustomSize, ThreadSize, check_clearance, check_custom, check_starts, clearance_value,
-    fitted_clearance, flank_from_fit, size_of, starts_value, thread_clearance, thread_part,
-    thread_starts,
+    CustomSize, ThreadEnds, ThreadSize, check_clearance, check_custom, check_starts,
+    clearance_value, fitted_clearance, flank_from_fit, size_of, starts_value, thread_clearance,
+    thread_part, thread_starts,
 };
 use super::thread_table::ThreadStandard;
 use super::{
@@ -217,6 +217,16 @@ pub struct HoleThread<P = ParamId> {
     /// thread feature's; 1 without (or the designation's).
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub starts: Option<P>,
+    /// How a modelled thread's ends are cut (mitcad#1300, mitcad#1307), as
+    /// the thread feature's ([`ThreadEnds`]): `run_out` runs the grooves
+    /// out into a countersink or counterdrill cone that opens away from
+    /// the thread, `flat` stops them flat with a lip there. A stored
+    /// modelled thread always has it, except in design files written
+    /// before it existed, which are read as `flat`; a command without it
+    /// means `run_out` ([`HoleDef::settle_thread_ends`]). Ignored on a
+    /// cosmetic thread.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub ends: Option<ThreadEnds>,
 }
 
 /// A clearance hole's screw size and fit (mitcad#903): `{"size": "M6",
@@ -257,6 +267,12 @@ impl<P> HoleThread<P> {
             class: self.class.clone(),
             right_handed: self.right_handed,
         }
+    }
+
+    /// Whether a modelled thread's ends are cut flat, as before
+    /// mitcad#1300 ([`ThreadEnds::Flat`]).
+    pub fn flat_ends(&self) -> bool {
+        self.ends == Some(ThreadEnds::Flat)
     }
 }
 
@@ -312,6 +328,19 @@ fn map_option<P, Q, E>(
 impl<P> HoleDef<P> {
     pub const TYPE: &'static str = "hole";
     pub const BASE_NAME: &'static str = "Hole";
+
+    /// Gives a modelled thread without `ends` `ends`, as the thread
+    /// feature's (mitcad#1307): `run_out` for a command (a hole made or
+    /// edited from now on), `flat` for a design file written before
+    /// mitcad#1300, whose holes' threads were cut so.
+    pub(crate) fn settle_thread_ends(&mut self, ends: ThreadEnds) {
+        if let Some(thread) = &mut self.thread
+            && thread.modeled
+            && thread.ends.is_none()
+        {
+            thread.ends = Some(ends);
+        }
+    }
 
     // Written by hand: placement, kind, extent and thread map by their kind.
     pub fn map_params<Q, E>(
@@ -419,6 +448,7 @@ impl<P> HoleDef<P> {
                     .map(|c| c.map_params("thread.custom.", &mut *f))
                     .transpose()?,
                 starts: map_option("thread.starts", &thread.starts, f)?,
+                ends: thread.ends,
             }),
         };
         let taper = map_option("taper", &self.taper, f)?;
@@ -1046,8 +1076,14 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             HoleExtent::ThroughAll => HoleEnd::ThroughAll,
             HoleExtent::ToObject { object, offset } => {
                 let offset = offset.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
+                // A point or a line stands for the plane through it at
+                // right angles to the hole's axis (mitcad#1329).
+                let across = positions.first().map(|p| Across {
+                    normal: p.direction,
+                    lies: "in a plane at right angles to the hole's axis",
+                });
                 HoleEnd::Target(Bound {
-                    target: object.resolve(ctx)?,
+                    target: object.resolve_across(ctx, &Default::default(), across)?,
                     offset,
                 })
             }
@@ -1178,7 +1214,7 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
                 }),
                 starts,
                 flank_angle,
-                flat_ends: false,
+                flat_ends: thread.flat_ends(),
             };
             let cut = ctx
                 .kernel

@@ -255,6 +255,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     control,
                     degree,
                     periodic,
+                    nurbs,
                 } => {
                     let ids: Vec<String> = pts.iter().map(|p| pid(*p)).collect::<Result<_, _>>()?;
                     if *periodic {
@@ -262,7 +263,17 @@ impl<K: Kernel> Importer<'_, '_, K> {
                             .push(format!("{}: periodic (taken as an open spline)", c.id));
                     }
                     if *control {
-                        json!({"id": id, "type": "spline", "degree": degree, "control": ids})
+                        let mut e =
+                            json!({"id": id, "type": "spline", "degree": degree, "control": ids});
+                        // Its own knots and weights (format 49), as MitCad's
+                        // spline takes them.
+                        if let Some(n) = nurbs {
+                            e["knots"] = json!(n.knots);
+                            if !n.weights.is_empty() {
+                                e["weights"] = json!(n.weights);
+                            }
+                        }
+                        e
                     } else {
                         json!({"id": id, "type": "fitted_spline", "points": ids})
                     }
@@ -485,6 +496,13 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .push(format!("{n} {what}{}", if n > 1 { "s" } else { "" }));
             }
         }
+        if !s.equations.is_empty() {
+            t.dropped.push(format!(
+                "the formulas of {} equation curve{} (each stays the spline it placed)",
+                s.equations.len(),
+                if s.equations.len() > 1 { "s" } else { "" }
+            ));
+        }
         for l in &s.links {
             let kind = l.get("type").and_then(Value::as_str).unwrap_or("link");
             let what = match kind {
@@ -628,6 +646,7 @@ fn constraint_points(c: &ConstraintKind) -> Vec<usize> {
         | C::Midpoint { p, .. }
         | C::Fix { p }
         | C::PointLineDistance { p, .. }
+        | C::PointCircleDistance { p, .. }
         | C::LinearDiameter { p, .. } => vec![p],
         _ => Vec::new(),
     }

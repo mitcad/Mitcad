@@ -8,12 +8,21 @@
 //! shown placements, all of them when none is shown) once per copy, one
 //! piece each copy. The first plate also prints every placement on no
 //! plate (`Document::unplaced`), each a piece of its own. An item whose
-//! body or occurrence is gone is left out with a warning.
+//! body or occurrence is gone is left out with a warning. Each placement
+//! prints on one plate, its body's (`Document::plate_of_body`,
+//! mitcad#1310): an occurrence item leaves out the bodies under it that
+//! have an item of their own, or lie under an outer occurrence item, on
+//! another plate (with a warning when that leaves it nothing).
 //!
 //! **Layout.** Within each plate by the export's arranger (`bed.rs`): each
 //! piece on its print bed face, else the automatic orientation's, dropped
 //! onto the bed, the pieces side by side along X and the row centred on
-//! the plate, as Center on Plate and Drop to Bed say.
+//! the plate, as Center on Plate and Drop to Bed say; a row wider than the
+//! bed wraps into rows along Y, and pieces that still do not fit are named
+//! in the plate's warnings (mitcad#1316). Without centring the pieces keep
+//! their places, but the further copies of an item each lie beside the one
+//! before it along X, `bed::GAP` apart (`Piece::copy`, mitcad#1311), not on
+//! top of the first.
 //!
 //! **Settings.** Every body on a plate takes that plate's values in the
 //! settings order (`document/print_settings.rs`, `effective_print_on`).
@@ -88,13 +97,18 @@ type Placed = (Transform, Option<Vec<OccurrenceUid>>);
 
 /// What a plate prints: its bodies in order, each body's placements (the
 /// transform and the occurrence path, None for a body not placed) and its
-/// pieces, each a name and its members (index of the body, index of its
-/// placement).
+/// pieces, each a name, its members (index of the body, index of its
+/// placement) and whether it is a further copy of the piece before it (an
+/// item with a count, mitcad#1311).
+/// One piece of a plate: its name, its (body, placement) pairs and whether
+/// it is a further copy of the piece before it.
+type PlatePiece = (String, Vec<(usize, usize)>, bool);
+
 #[derive(Default)]
 struct PlateContent {
     bodies: Vec<BodyUid>,
     placed: Vec<Vec<Placed>>,
-    pieces: Vec<(String, Vec<(usize, usize)>)>,
+    pieces: Vec<PlatePiece>,
     warnings: Vec<String>,
 }
 
@@ -171,6 +185,25 @@ fn plate_path(path: &str, plate: &str) -> String {
     )
 }
 
+/// [`plate_path`], made unique among the files `taken` (compared ignoring
+/// case, as file systems may): ` (2)`, ` (3)`, … after the plate's name when
+/// another plate's name gives the same file (`A/B` and `A:B`, mitcad#1316).
+/// The path is added to `taken`.
+fn unique_plate_path(path: &str, plate: &str, taken: &mut Vec<String>) -> String {
+    let base = file_part(plate);
+    let mut file = plate_path(path, &base);
+    let mut n = 2;
+    while taken
+        .iter()
+        .any(|t| t.to_lowercase() == file.to_lowercase())
+    {
+        file = plate_path(path, &format!("{base} ({n})"));
+        n += 1;
+    }
+    taken.push(file.clone());
+    file
+}
+
 /// The placements as the design shows them: the shown ones, all of them
 /// when none is shown.
 fn shown_first(found: Vec<&InstanceView>) -> Vec<&InstanceView> {
@@ -199,6 +232,20 @@ impl<K: Kernel> Document<K> {
             }
             _ => DEFAULT_PLATE,
         }
+    }
+
+    /// The pieces plate `index` prints, as its export makes them
+    /// (`print_plates` query).
+    pub(crate) fn plate_piece_count(&self, index: usize, instances: &[InstanceView]) -> usize {
+        self.plate_content(index, instances).pieces.len()
+    }
+
+    /// A plate's name for warnings, by its index.
+    fn plate_label(&self, index: usize) -> String {
+        self.state()
+            .print_plates
+            .get(index)
+            .map_or_else(|| format!("plate {}", index + 1), |p| p.name.clone())
     }
 
     /// What plate `index` prints (see the module's documentation).
@@ -231,27 +278,58 @@ impl<K: Kernel> Document<K> {
                         ));
                         continue;
                     }
+                    // A body prints on one plate (`plate_of_body`): an item
+                    // of it on another plate as well (a design file written
+                    // so) is left out here.
+                    if let Some(other) = self.plate_of_body(*uid, None)
+                        && other != index
+                    {
+                        content.warnings.push(format!(
+                            "{}: {name} prints on {}; left out",
+                            plate.name,
+                            self.plate_label(other)
+                        ));
+                        continue;
+                    }
                     let first = shown_first(instances.iter().filter(|i| i.body == *uid).collect())
                         .first()
                         .map(|i| (i.transform, Some(i.path.clone())))
                         .unwrap_or((Transform::IDENTITY, None));
                     for n in 0..item.count {
                         let member = content.place(*uid, first.clone());
-                        content.pieces.push((copy_name(n), vec![member]));
+                        content.pieces.push((copy_name(n), vec![member], n > 0));
                     }
                 }
                 PlateTarget::Occurrence(path) => {
-                    let inside = shown_first(
+                    let placed = shown_first(
                         instances
                             .iter()
                             .filter(|i| i.path.starts_with(path) && self.printed_body(i.body))
                             .collect(),
                     );
+                    // Each placement prints on one plate (mitcad#1310): a
+                    // body with an item of its own, or under an outer
+                    // occurrence item, prints on that item's plate.
+                    let elsewhere: Vec<usize> = placed
+                        .iter()
+                        .filter_map(|i| self.plate_of_body(i.body, Some(&i.path)))
+                        .filter(|p| *p != index)
+                        .collect();
+                    let inside: Vec<&InstanceView> = placed
+                        .iter()
+                        .copied()
+                        .filter(|i| self.plate_of_body(i.body, Some(&i.path)) == Some(index))
+                        .collect();
                     if inside.is_empty() {
-                        content.warnings.push(format!(
-                            "{}: {name} places no printed bodies; left out",
-                            plate.name
-                        ));
+                        let why = match elsewhere.first() {
+                            Some(other) => {
+                                format!("'s bodies print on {}", self.plate_label(*other))
+                            }
+                            None => " places no printed bodies".to_owned(),
+                        };
+                        content
+                            .warnings
+                            .push(format!("{}: {name}{why}; left out", plate.name));
                         continue;
                     }
                     for n in 0..item.count {
@@ -259,7 +337,7 @@ impl<K: Kernel> Document<K> {
                             .iter()
                             .map(|i| content.place(i.body, (i.transform, Some(i.path.clone()))))
                             .collect();
-                        content.pieces.push((copy_name(n), members));
+                        content.pieces.push((copy_name(n), members, n > 0));
                     }
                 }
             }
@@ -277,7 +355,7 @@ impl<K: Kernel> Document<K> {
                     _ => body,
                 };
                 let member = content.place(uid, (transform, path));
-                content.pieces.push((name, vec![member]));
+                content.pieces.push((name, vec![member], false));
             }
         }
         content
@@ -293,7 +371,7 @@ impl<K: Kernel> Document<K> {
         content
             .pieces
             .iter()
-            .map(|(name, members)| {
+            .map(|(name, members, copy)| {
                 let mine: Vec<BodyUid> = content
                     .bodies
                     .iter()
@@ -320,6 +398,7 @@ impl<K: Kernel> Document<K> {
                     name: Some(name.clone()),
                     members: members.clone(),
                     plan,
+                    copy: *copy,
                 })
             })
             .collect()
@@ -360,7 +439,7 @@ impl<K: Kernel> Document<K> {
                 .or_else(|| self.imported_color(uid))
         };
         let paths = |uid: BodyUid| content.paths(uid);
-        let built = self.build_3mf(
+        let mut built = self.build_3mf(
             model_name,
             &chosen,
             true,
@@ -380,6 +459,11 @@ impl<K: Kernel> Document<K> {
                 shift,
             },
         )?;
+        // What the layout says (pieces that do not fit, mitcad#1316) is
+        // the plate's.
+        for warning in &mut built.exported.warnings {
+            *warning = format!("{}: {warning}", plate.name);
+        }
         let on_bed = self.merged_bed(pieces, rules.settle);
         Ok((built, on_bed))
     }
@@ -507,7 +591,7 @@ impl<K: Kernel> Document<K> {
                                 name: content
                                     .pieces
                                     .first()
-                                    .map_or_else(|| plate.name.clone(), |(n, _)| n.clone()),
+                                    .map_or_else(|| plate.name.clone(), |(n, _, _)| n.clone()),
                                 components: every,
                             });
                         }
@@ -523,6 +607,9 @@ impl<K: Kernel> Document<K> {
                         written.bodies = built.exported.bodies.clone();
                         written.pieces = content.pieces.len();
                         written.on_bed = Some(on_bed);
+                        written
+                            .warnings
+                            .extend(built.exported.warnings.iter().cloned());
                         merge(&mut exported, built.exported);
                     }
                     on_plates.push(objects_here);
@@ -565,6 +652,8 @@ impl<K: Kernel> Document<K> {
                     PlateFiles::Only(index) => vec![index],
                     _ => (0..plates.len()).collect(),
                 };
+                // The file names written, to keep each plate's its own.
+                let mut taken: Vec<String> = Vec::new();
                 for i in indices {
                     let (plate, content) = (&plates[i], &contents[i]);
                     let mut written = ExportedPlate {
@@ -583,7 +672,7 @@ impl<K: Kernel> Document<K> {
                     }
                     let file = match files {
                         PlateFiles::Only(_) => path.to_owned(),
-                        _ => plate_path(path, &plate.name),
+                        _ => unique_plate_path(path, &plate.name, &mut taken),
                     };
                     let (built, on_bed) = self.build_plate(
                         stem_of(&file),
@@ -597,6 +686,9 @@ impl<K: Kernel> Document<K> {
                         [0.0, 0.0],
                     )?;
                     let objects = built.model.objects.len();
+                    written
+                        .warnings
+                        .extend(built.exported.warnings.iter().cloned());
                     // The plate's own block, for the slicers that keep
                     // plate settings (the Bambu family).
                     let one = [crate::print_files::ExportPlate {
@@ -673,6 +765,7 @@ impl<K: Kernel> Document<K> {
             ]
         };
         let content = self.plate_content(index, &instances);
+        let mut warnings = content.warnings.clone();
         let rules = BedRules {
             chosen: &[],
             auto_orient: true,
@@ -694,6 +787,7 @@ impl<K: Kernel> Document<K> {
                 shift,
             )?;
             pieces = content.pieces.len();
+            warnings.extend(built.exported.warnings.iter().cloned());
             for ((uid, name), part) in built.exported.parts.iter().zip(&built.model.parts) {
                 let rows: Vec<Value> = part
                     .placements
@@ -728,7 +822,7 @@ impl<K: Kernel> Document<K> {
             "shift": shift,
             "pieces": pieces,
             "bodies": bodies,
-            "warnings": content.warnings,
+            "warnings": warnings,
         }))
     }
 }

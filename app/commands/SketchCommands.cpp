@@ -603,6 +603,28 @@ void addCleanUpStaleProjections(CommandRegistry& registry, SketchController& c) 
   registry.add(def);
 }
 
+// Project Again (mitcad#1303): the linked projections that no longer follow
+// their sources (their curves kept their last geometry, or some found
+// nothing like them) projected anew from their sources, the constraints and
+// dimensions on the old curves carried over to the new ones where they map;
+// what does not map stays on the old curves, kept as construction
+// references, and the preview lists it (the command's warnings). OK keeps it
+// as one undo step. The Sketch Palette offers it under the warning, beside
+// Clean Up Stale Projections, and so do the sketch's context menus.
+void addProjectAgain(CommandRegistry& registry, SketchController& c) {
+  CommandDef def = sketchCommand("sketch.project_again", QObject::tr("Project Again"), "project",
+                                 "CREATE/References", CommandDef::Kind::Feature);
+  def.sketchCommand = true;
+  def.tooltip = QObject::tr("Projects again what no longer follows, keeping its constraints");
+  def.keywords = {QStringLiteral("reproject"), QStringLiteral("repair"), QStringLiteral("stale"),
+                  QStringLiteral("follow")};
+  def.build = [&c](const CommandState&, const CommandContext&) -> Built {
+    return Built::of(base(c, "sketch.project_again"));
+  };
+  def.describe = [](const CommandState&, const CommandContext&) { return QStringLiteral("Projected again"); };
+  registry.add(def);
+}
+
 // Convert to Sketch Geometry (mitcad#257): the selected projected curves and
 // points become ordinary free sketch geometry that no longer follows its
 // source, at once, as one undo step. Enabled while the selection holds
@@ -1441,6 +1463,7 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   addIntersect(registry, c);
   addCleanUpProjections(registry, c);
   addCleanUpStaleProjections(registry, c);
+  addProjectAgain(registry, c);
   add({"sketch.dimension", QObject::tr("Sketch Dimension"), "dimension", "CREATE",
        [&c] {
          // A viewport click's queued pick must reach the selection before

@@ -157,7 +157,9 @@ struct NativeMacCubeArrow {
   QString id; // up, down, left, right, cw, ccw (OcctViewer::pressCubeArrow)
   QString toolTip;
   QString symbol; // SF Symbol
-  QRect geometry; // Logical viewport coordinates, origin at its top-left corner.
+  // Logical coordinates in the 3D view, origin at its top-left corner; the
+  // shell places it below the notice bars (setViewportContentTop).
+  QRect geometry;
 };
 
 // The quick-access group (mitcad#1113, the Qt QuickAccessGroup of

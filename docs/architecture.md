@@ -1082,7 +1082,14 @@ the `Shape` type.
   them finds it. A group whose joined faces would not be valid stays
   apart, with an info of the result naming it; a group that would make a
   face winding round its axis more than once (the turns of a thread's
-  root, a face each) stays apart without one. B-spline pieces (a thread's
+  root, a face each) stays apart without one. OCCT's merge leaves a face
+  closed round its surface apart from an open piece of it that meets it
+  where the closed face's seam runs on along the piece's edge (a pin
+  extruded from two regions, its side one face with its seam where the
+  regions met, on a plate's end of the pin's radius): such groups are
+  joined again with every closed face cut in two first
+  (`ShapeUpgrade_ShapeDivideClosed`), which the merge joins with the open
+  pieces into one face closed round the axis (mitcad#1336). B-spline pieces (a thread's
   flanks) are `join_surface_pieces`' and are not joined here.
 - Local booleans (`geometry/src/local_boolean.hpp`, modelled threads):
   OCCT's booleans rebuild the whole shell of a solid whose faces they
@@ -1728,7 +1735,21 @@ source's current curves); Clean Up Stale Projections (`sketch/stale.rs`,
 mitcad#252) removes those nothing uses, trims stale lines to the regions
 later features use (only when those keep their names and areas) and
 unlinks the projections that still cannot follow; it never links one
-again by geometry, as following would move its curves.
+again by geometry, as following would move its curves. Project Again
+(`sketch/again.rs`, mitcad#1303) is the repair the user asks for: the
+evaluation also keeps, per projection that did not follow, its source's
+curves as they are now (`ProjectionFollow::current`), and the command
+makes the projection anew from them, moving each old curve's constraints
+and dimensions to the new curve of its kind that covers it once the old
+outline is laid over the new one; new curves take the old ids, and what
+does not map stays on the old curves, kept as construction references.
+A projection that only moved or was resized follows without it: when the
+nearest-first pairing would tear its arcs, the order of the lists or the
+nearest once the outline's bounds are laid over the new ones is tried
+(`project.rs`, `aligned_pairs`). So does one whose run of arcs of one
+circle the source now lists as one arc of their sweep: when the pairing
+leaves anything over, that arc is split as the projection's run is, at
+the same angles (`split_like`, mitcad#1325).
 Two kinds of linked record share this machinery (mitcad#389): section
 curves (`Projection::section`, `sketch.project` with `section`), where
 the sketch's plane cuts a face, computed by the kernel
@@ -2394,7 +2415,9 @@ not recompute.
   render worker `mitcad-render`, an executable of its own next to
   `mitcad`. Only the worker links Cycles and its libraries (Embree, Open
   Image Denoise, OpenImageIO, OpenColorIO); the application links none of
-  them and offers View > Rendered when the worker is installed. Commands
+  them and offers View > Rendered when the worker is installed. A worker
+  the user built (an OptiX one, which MitCad never ships, mitcad#1332)
+  can be picked in Preferences; the shipped one is its fallback. Commands
   go over its stdin and stdout as JSON lines (its first line names its
   protocol version, which the application checks); frames come back
   through anonymous shared memory (a `memfd` whose file descriptor goes
@@ -2570,7 +2593,12 @@ not recompute.
   changes. The palette is the platform's, except on Windows 10, whose
   default style keeps a light palette in the dark app mode: there, while
   the app mode is dark, Qt's own style (QFusionStyle) with a dark palette
-  of the neutral roles (`app/platform/WindowsTheme`, mitcad#1282). The SVG icons are rendered on demand at the asked size and
+  of the neutral roles (`app/platform/WindowsTheme`, mitcad#1282).
+  Preferences › Display › Theme (`app/framework/AppTheme`, mitcad#1330)
+  asks the platform for a light or a dark scheme whatever the desktop's
+  (`QStyleHints::setColorScheme`; System: the platform's own), and where
+  the platform keeps its palette, sets the same palette of the neutral
+  roles itself (`themePalette`), light or dark. The SVG icons are rendered on demand at the asked size and
   device pixel ratio. Their colours are roles (`IconRole`): each source
   `#rrggbb` stands for one role (outline, lit top, side and far faces, pale
   surface, hollow, construction, action, sketch, pencil, muted, status), and
@@ -2719,6 +2747,10 @@ tab*): a page without groups, for which the window shows the Start page,
 a child of the 3D view covering it as a drawing does, the cards and docks
 hidden meanwhile; the AppKit frontend shows the same page over its
 embedded view and hides its cards (`NativeMacWindow::setStartPageShown`).
+Its designs' browser (mitcad#1301, `app/files/StartBrowser`) lists the
+recent designs and the projects as File › Open from Project's data does
+(`app/projects/ProjectBrowserData`, `readProjects` on a thread), with one
+search over every project and the recent list.
 
 Docked has a look of its own, `WindowStyle` (`app/framework/WindowStyle`,
 mitcad#251), the same on every platform and in both themes: the docks and
@@ -3532,6 +3564,14 @@ expressions). Formats: [libraries.md](libraries.md).
   found (`build_junctions`) and parts to a picker's role and system. The
   model never reads a library for this: the app asks the library side for
   candidates and passes the chosen part to the BUILD commands.
+- **Suppliers' shops** (mitcad#950, `core/model/src/supplier_shops.rs`):
+  libraries store their suppliers' part numbers only; MitCad's own list
+  of the suppliers' shops by region (each supplier's part number form
+  and product address patterns) makes the product links when articles
+  are shown (`supplier_links`), for the region the user chose in
+  Preferences. The list is MitCad's data and not a library's, since a
+  design keeps its library version and the links must follow the shops.
+  Nothing about shops is stored in a design.
 - **Mount frames** (mitcad#525, `core/model/src/document/mounts.rs`,
   `core/vcs/src/library/mounts.rs`): any part's joint origins with a
   `mount` (face, shaft, hole, grid, foot; the joint a placement makes).

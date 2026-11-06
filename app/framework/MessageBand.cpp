@@ -231,7 +231,42 @@ MessageBand::MessageBand(MessageCenter& center, QWidget* parent) : QWidget(paren
   // Where to click, logged again when the band moves (the UI tests).
   new PlaceWatcher(m_close, [this] { logPlaces(); });
   new PlaceWatcher(m_stub, [this] { logPlaces(); });
+  new PlaceWatcher(m_text, [this] { logPlaces(); });
+  // The pointer over the message paints its feature's notice places
+  // (mitcad#1327).
+  for (QWidget* shown : {static_cast<QWidget*>(m_text), static_cast<QWidget*>(m_stub)}) {
+    shown->setMouseTracking(true);
+    shown->installEventFilter(this);
+  }
   refresh();
+}
+
+bool MessageBand::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == m_text || watched == m_stub) {
+    switch (event->type()) {
+    case QEvent::Enter:
+    case QEvent::MouseMove:
+    case QEvent::HoverMove: {
+      const MessageLog& log = m_center.log();
+      const MessageEntry* entry = watched == m_text ? log.full() : log.stub();
+      if (entry != nullptr && !entry->feature.isEmpty() && !m_noticeHovered) {
+        m_noticeHovered = true;
+        emit noticeHovered(entry->feature);
+      }
+      break;
+    }
+    case QEvent::Leave:
+    case QEvent::Hide:
+      if (m_noticeHovered) {
+        m_noticeHovered = false;
+        emit noticeHovered(QString());
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  return QWidget::eventFilter(watched, event);
 }
 
 int MessageBand::fullHeight() const {
@@ -342,6 +377,12 @@ void MessageBand::logPlaces() {
   if (!places.isEmpty() && places != m_loggedPlaces) {
     m_loggedPlaces = places;
     qDebug().noquote() << places;
+  }
+  // Where its message is, for a hover (mitcad#1327).
+  const QString text = m_text->isVisible() ? QStringLiteral("Message band text at %1").arg(placeText(m_text)) : QString();
+  if (!text.isEmpty() && text != m_loggedTextPlace) {
+    m_loggedTextPlace = text;
+    qDebug().noquote() << text;
   }
 }
 

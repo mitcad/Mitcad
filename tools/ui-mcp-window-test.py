@@ -17,6 +17,11 @@ import sys
 import tempfile
 import time
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import gui_lock
+
 
 def private_record(path):
     if os.name != "nt":
@@ -49,7 +54,7 @@ def run(app, cli, output, binary_path=None):
     live = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(live)
     guis, logs, bridges = [], [], []
-    with tempfile.TemporaryDirectory(prefix="session-", dir=out) as temporary:
+    with gui_lock() as gui_options, tempfile.TemporaryDirectory(prefix="session-", dir=out) as temporary:
         work = Path(temporary)
         discovery = work / "discovery"
         env = dict(os.environ, MITCAD_MCP_DISCOVERY_DIR=str(discovery),
@@ -117,7 +122,7 @@ def run(app, cli, output, binary_path=None):
                 log = log_path.open("wb")
                 logs.append(log)
                 gui = subprocess.Popen([app, "--ui=qt", "--chrome=floating", "--no-recovery"],
-                                       env=own_env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                                       env=own_env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **gui_options)
                 guis.append((gui, log_path))
             wait(lambda: len(list(discovery.glob("*.json"))) == 2, "two real listeners")
             (work / "activate-first").touch()

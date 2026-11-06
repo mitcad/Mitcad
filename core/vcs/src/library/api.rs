@@ -77,9 +77,71 @@ pub fn command(
         "index_entry" => publish::index_entry_command(&command)?,
         "library_build_candidates" => build_candidates(cache, &command)?,
         "library_configure" => configure(cache, &command)?,
+        // The suppliers' shops by region and the product links of
+        // articles (mitcad#950, `mitcad_model::supplier_shops`).
+        "supplier_shops" => supplier_shops(&command),
+        "supplier_links" => supplier_links(&command),
         other => return Err(invalid(format!("unknown library command “{other}”"))),
     };
     Ok(answer.to_string())
+}
+
+/// The `supplier_shops` command (mitcad#950): MitCad's suppliers with
+/// their shops by region; with `region` and `shops` (supplier ids) also
+/// `chosen`, those of the shops that sell in the region.
+fn supplier_shops(command: &Value) -> Value {
+    use mitcad_model::supplier_shops::{chosen_shops, shops_json};
+    let mut answer = shops_json(optional(command, "locale").unwrap_or(""));
+    if let Some(region) = optional(command, "region") {
+        let shops: Vec<String> = command["shops"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str().map(str::to_owned))
+            .collect();
+        answer["chosen"] = json!(chosen_shops(region, &shops));
+    }
+    answer
+}
+
+/// The `supplier_links` command (mitcad#950): the articles given
+/// (`parts`, as `supplier_parts` has them) with each one's `product_url`
+/// and `shop` in `region` where it has a link; `rows` (each with its
+/// `supplier_parts`, as `parts_list` gives them) likewise, each row with
+/// the links of its articles as `product_urls`.
+fn supplier_links(command: &Value) -> Value {
+    use mitcad_model::supplier_shops::with_links;
+    let region = optional(command, "region").unwrap_or("");
+    let parts = |value: &Value| -> Vec<Value> { value.as_array().cloned().unwrap_or_default() };
+    let mut answer = json!({"region": region});
+    if command.get("parts").is_some() {
+        answer["parts"] = json!(with_links(&parts(&command["parts"]), region));
+    }
+    if let Some(rows) = command.get("rows").and_then(Value::as_array) {
+        let linked: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let mut row = row.clone();
+                let articles = with_links(&parts(&row["supplier_parts"]), region);
+                let mut urls: Vec<&str> = Vec::new();
+                for url in articles.iter().filter_map(|a| a["product_url"].as_str()) {
+                    if !urls.contains(&url) {
+                        urls.push(url);
+                    }
+                }
+                let urls: Vec<String> = urls.into_iter().map(str::to_owned).collect();
+                if let Some(object) = row.as_object_mut() {
+                    if object.contains_key("supplier_parts") {
+                        object.insert("supplier_parts".to_owned(), json!(articles));
+                    }
+                    object.insert("product_urls".to_owned(), json!(urls));
+                }
+                row
+            })
+            .collect();
+        answer["rows"] = json!(linked);
+    }
+    answer
 }
 
 /// The repository a command names by `url` (else `id`).

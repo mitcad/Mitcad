@@ -14,7 +14,8 @@ use crate::ids::{ID_RESERVE, LARGEST_U32_ID, LARGEST_U64_ID, leaves_reserve};
 /// Refuses a design one of whose counted ids is in the reserve: the ids of
 /// components, occurrences and features, occurrences' numbers, sketch
 /// entities and constraints, library sources, drawings and their views,
-/// annotations, cut-sheet parts, export counts and comments.
+/// annotations, cut-sheet parts, export counts and comments, and the
+/// numbers the next feature, occurrence and comment take.
 pub(super) fn check(state: &DocState) -> Result<(), FileError> {
     let assembly = &state.assembly;
     for (i, c) in assembly.components.iter().enumerate() {
@@ -159,6 +160,24 @@ pub(super) fn check(state: &DocState) -> Result<(), FileError> {
             "comment id",
             format!("C{}", state.next_comment),
             format!("C{LARGEST_U32_ID}"),
+        ));
+    }
+    // The numbers the next feature and occurrence count on from, which a
+    // file keeps where the largest was deleted (mitcad#1320).
+    if !leaves_reserve(state.next_uid.saturating_sub(1)) {
+        return Err(refused(
+            "next_feature",
+            "feature id",
+            format!("F{}", state.next_uid),
+            format!("F{LARGEST_U64_ID}"),
+        ));
+    }
+    if !leaves_reserve(assembly.next_occurrence.saturating_sub(1)) {
+        return Err(refused(
+            "next_occurrence",
+            "occurrence id",
+            format!("O{}", assembly.next_occurrence),
+            format!("O{LARGEST_U32_ID}"),
         ));
     }
     Ok(())

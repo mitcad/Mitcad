@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: MIT
 # The Start tab (mitcad#1258, GitHub mitcad/Mitcad#125) with Show start page
-# at launch on (its default) and the fixture's three saved designs
-# (start-page-fixture.mitcad-ui) in the recent list:
+# at launch on (its default), the fixture's three saved designs
+# (start-page-fixture.mitcad-ui) in the recent list and its two projects
+# (mitcad#1301, made by the test: Shop, Local, with plate at its top,
+# parts/gear and parts/sub/pin; Team, Cloud where git can make one, with
+# bolts/hex-bolt):
 #   1. MitCad starts on the Start tab: the page shows the three designs,
 #      newest first, each with its preview, and New Design in the default
 #      units for new designs (inches, set by the fixture).
-#   2. The star pins start-b; Pinned shows it alone, All the three again.
+#   2. The star pins start-b; Pinned shows it alone, Recent the three again.
 #   3. The search finds start-a alone; cleared, the three again.
 #   4. Show start page at launch is turned off (for start-page-off).
-#   5. start-c's card opens it: the Solid tab, the page gone.
-#   6. The Start tab again: New Design gives an empty design in inches.
+#   5. The projects: Shop, its folder parts and its sub-folder, back up by
+#      the breadcrumb; the search finds Team's hex-bolt with its project
+#      and folder, cleared it returns to Shop; gear's card opens it, and
+#      on the Start tab again Shop/parts is shown and gear is first in
+#      Recent.
+#   6. start-c's card opens it: the Solid tab, the page gone.
+#   7. The Start tab again: New Design gives an empty design in inches.
 # Run with MITCAD_START_PAGE=1 by tools/ui-start-page-test.sh (Linux) and
 # tools/ui-windows-start-page-test.ps1 (Windows).
 expect-ever '^Start page at launch: shown$' 30
@@ -38,17 +46,17 @@ expect-log '^Start page recent designs \(pinned\): start-b\.mitcad \(preview\)$'
 wait-idle
 sleep 300
 mark
-click-logged '^Start page filter All at '
+click-logged '^Start page filter Recent at '
 expect-log '^Start page filter: all$'
 expect-log '^Start page recent designs \(all\): start-c\.mitcad \(preview\) \| start-b\.mitcad \(preview\) \| start-a\.mitcad \(preview\)$'
 
-# 3. The search.
+# 3. The search (of every project and the recent list).
 wait-idle
 sleep 300
 mark
 click-logged '^Start page search at '
 type start-a
-expect-log '^Start page recent designs \(all, "start-a"\): start-a\.mitcad \(preview\)$'
+expect-log '^Start page search results: 1 \(start-a\.mitcad\)$'
 mark
 key ctrl+a
 key Backspace
@@ -62,7 +70,81 @@ click-logged '^Start page show at launch at '
 expect-log '^Start page at launch: off$'
 expect-setting start/showAtLaunch false
 
-# 5. A card opens its design.
+# 5. The projects.
+wait-idle
+expect-ever '^Start page projects: Shop \(local\) \| Team \((cloud|local)\)$' 30
+expect-ever '^Start page project Shop at ' 10
+sleep 300
+mark
+click-logged '^Start page project Shop at '
+expect-log '^Start page place: Shop \(1 folders, 1 designs\)$'
+wait-log '^Start page cards: Shop/plate\.mitcad \(no preview\)$' 10
+expect-setting start/browseRow project
+wait-idle
+sleep 300
+mark
+click-logged '^Start page folder Shop/parts/ at '
+expect-log '^Start page place: Shop/parts/ \(1 folders, 1 designs\)$'
+wait-idle
+sleep 300
+mark
+click-logged '^Start page folder Shop/parts/sub/ at '
+expect-log '^Start page place: Shop/parts/sub/ \(0 folders, 1 designs\)$'
+wait-log '^Start page cards: Shop/parts/sub/pin\.mitcad \(no preview\)$' 10
+expect-setting start/browseFolder parts/sub
+wait-idle
+# Back up by the breadcrumb.
+sleep 300
+mark
+click-logged '^Start page crumb Shop/parts/ at '
+expect-log '^Start page place: Shop/parts/ \(1 folders, 1 designs\)$'
+wait-idle
+sleep 300
+mark
+click-logged '^Start page crumb Shop at '
+expect-log '^Start page place: Shop \(1 folders, 1 designs\)$'
+wait-idle
+# The search over every project: Team's design, with its project and
+# folder; cleared, Shop again.
+sleep 300
+mark
+click-logged '^Start page search at '
+type hex
+expect-log '^Start page search results: 1 \(Team/bolts/hex-bolt\.mitcad\)$'
+expect-log '^Start page search result: Team/bolts/hex-bolt\.mitcad \(Team / bolts\)$'
+mark
+key ctrl+a
+key Backspace
+expect-log '^Start page place: Shop \(1 folders, 1 designs\)$'
+wait-idle
+# A project's card opens its design, which joins Recent.
+sleep 300
+mark
+click-logged '^Start page folder Shop/parts/ at '
+expect-log '^Start page place: Shop/parts/ \(1 folders, 1 designs\)$'
+wait-idle
+sleep 300
+mark
+click-logged '^Start page card Shop/parts/gear\.mitcad at '
+expect-log '^Start page chosen: open gear\.mitcad$'
+wait-log '^Opened .*parts/gear\.mitcad$' 60
+wait-log '^Ribbon tab shown: SOLID$' 10
+expect-log '^Start page hidden$'
+wait-idle
+mark
+click-logged '^Ribbon tab START at '
+expect-log '^Ribbon tab shown: START$'
+expect-log '^Start page shown$'
+expect-log '^Start page place: Shop/parts/ \(1 folders, 1 designs\)$'
+wait-idle
+sleep 300
+mark
+click-logged '^Start page filter Recent at '
+expect-log '^Start page filter: all$'
+expect-log '^Start page recent designs \(all\): gear\.mitcad \(no preview\) \| start-c\.mitcad \(preview\) \| start-b\.mitcad \(preview\) \| start-a\.mitcad \(preview\)$'
+wait-idle
+
+# 6. A card opens its design.
 sleep 300
 mark
 click-logged '^Start page card start-c\.mitcad at '
@@ -72,7 +154,7 @@ wait-log '^Ribbon tab shown: SOLID$' 10
 expect-log '^Start page hidden$'
 wait-idle
 
-# 6. New Design from the page: an empty design in inches.
+# 7. New Design from the page: an empty design in inches.
 mark
 click-logged '^Ribbon tab START at '
 expect-log '^Ribbon tab shown: START$'

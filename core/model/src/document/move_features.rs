@@ -35,7 +35,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use super::{DocState, Document, ModelError, invalid};
+use super::{DocState, Document, Follow, ModelError, invalid};
 use crate::features::extrude_scope::{ComponentMove, MovedFeature};
 use crate::features::{FeatureDef, JointOrigin, OccurrencePath, References, SketchPlane};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
@@ -987,7 +987,8 @@ fn follow_cut_scopes(state: &mut DocState, moved: &[FeatureUid], m: &ComponentMo
 
 /// The occurrence paths that lead to `source` and name geometry of the
 /// moved features take the new occurrence: sketch planes and projections
-/// of other components, combines' tools, joint origins and Isolate. Links
+/// of other components, combines' tools, joint origins, Isolate, and
+/// comments and drawings' recorded bodies and picks (mitcad#1318). Links
 /// of the moved features to geometry elsewhere are now seen from the new
 /// occurrence. In a move of everything, a joint's side that is `source`
 /// itself becomes the new occurrence.
@@ -1205,6 +1206,12 @@ fn follow_references(
         })
         .collect();
     state.display.isolated = isolated;
+    // Comments and drawings' recorded bodies and picks (mitcad#1318).
+    state.follow(&Follow::Into {
+        source,
+        occurrence,
+        bodies,
+    });
 }
 
 fn follow_origin(

@@ -283,6 +283,10 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
                            node.occurrence);
     }
   });
+  // The pointer over a feature's row paints the places its notices name
+  // (mitcad#1327).
+  connect(m_browser, &BrowserPanel::featureHovered, this,
+          [this](const QString& uid) { m_host.previewNoticePlaces(QStringLiteral("browser"), uid); });
   connect(m_timeline, &TimelineWidget::searchStarted, this, [this] {
     m_searchItems = m_shownItems;
     m_searchFeatures = m_shownFeatures;
@@ -1562,6 +1566,11 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       m_host.startCommand(QStringLiteral("sketch.redefine_plane"),
                           {SelectionItem{SelectKind::Sketch, node.uid, QString(), QString()}}, nullptr);
     });
+    // Its linked projections that no longer follow (mitcad#1303).
+    if (const DocumentSnapshot::Feature* sketch = m_snapshot.feature(node.uid);
+        sketch != nullptr && sketch->projectAgain > 0) {
+      menu.add(QStringLiteral("project"), tr("Project Again"), [this, node] { projectAgain(node.uid); });
+    }
     menu.add(QStringLiteral("look-at"), tr("Look At"), [this, item] { m_host.lookAt(item); });
     menu.add(QStringLiteral("export"), tr("Export DXF…"), [this, node] { m_host.exportSketch(node.uid); });
     // The timeline's Move to Component (mitcad#218): the sketch from the
@@ -2190,6 +2199,11 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
       menu.add(QStringLiteral("ok"), tr("Auto Fix"), [this, fixing] { autoFix(fixing); });
     }
   }
+  // Project Again (mitcad#1303): a sketch's linked projections that no
+  // longer follow their sources, made anew with their constraints.
+  if (feature->isSketch() && feature->projectAgain > 0) {
+    menu.add(QStringLiteral("project"), tr("Project Again"), [this, uid] { projectAgain(uid); });
+  }
   // Renamed in place where the menu was opened.
   menu.add(QStringLiteral("edit"), tr("Rename"), [this, uid, row] {
     if (!canChange()) {
@@ -2370,6 +2384,31 @@ void BrowserController::autoFix(const QStringList& uids) {
   const bool left = !result.value(QStringLiteral("left")).toArray().isEmpty();
   qDebug().noquote() << message;
   m_host.showStatus(message, left ? NoticeLevel::Warning : NoticeLevel::Success);
+}
+
+void BrowserController::projectAgain(const QString& sketch) {
+  if (!canChange()) {
+    return;
+  }
+  QJsonObject result;
+  if (!m_host.runModelCommand(cmd("sketch.project_again", {{QStringLiteral("sketch"), sketch}}), &result)) {
+    qDebug().noquote() << QStringLiteral("Project Again refused: %1").arg(m_host.lastError());
+    m_host.showStatus(m_host.lastError(), NoticeLevel::Warning);
+    return;
+  }
+  // "Project Again in Sketch2: done" or with what stays on the old curves
+  // (the model's warnings), for the status line and UI tests.
+  QStringList warnings;
+  for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
+    warnings << warning.toString();
+  }
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(sketch);
+  const QString name = feature != nullptr ? feature->name : sketch;
+  const QString message = warnings.isEmpty()
+                              ? tr("Project Again in %1: done").arg(name)
+                              : tr("Project Again in %1: %2").arg(name, warnings.join(QStringLiteral("; ")));
+  qDebug().noquote() << message;
+  m_host.showStatus(message, warnings.isEmpty() ? NoticeLevel::Success : NoticeLevel::Warning);
 }
 
 void BrowserController::findInBrowser(const SelectionItem& item) {

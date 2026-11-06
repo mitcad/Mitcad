@@ -46,6 +46,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
 #include "BuildModel.hpp"
+#include "../library/SupplierShops.hpp"
 #include "../printing/PaperPrint.hpp"
 
 #include "../platform/MacDialogs.hpp"
@@ -417,8 +418,16 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
       }
     }
   }
+  // The product links in the region chosen in Preferences (mitcad#950),
+  // after the suppliers' part numbers, when a row has any.
+  const QJsonArray listed = answer.value(QStringLiteral("rows")).toArray();
+  const bool linked = std::any_of(listed.cbegin(), listed.cend(),
+                                  [](const QJsonValue& row) { return !productUrls(row.toObject()).isEmpty(); });
+  if (linked) {
+    parts.columns.insert(5, QObject::tr("Product Pages"));
+  }
   parts.columns << keys;
-  for (const QJsonValue& value : answer.value(QStringLiteral("rows")).toArray()) {
+  for (const QJsonValue& value : listed) {
     const QJsonObject row = value.toObject();
     // The suppliers' articles of the part's row (mitcad#949): "Würth 0084 6
     // 8 (8.8 zinc-plated); ...".
@@ -430,6 +439,9 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
                       text(row, "library"),
                       text(row, "version"),
                       text(row, "license")};
+    if (linked) {
+      cells.insert(5, productUrls(row).join(QLatin1Char(' ')));
+    }
     if (timber) {
       const QJsonObject own = material.value(text(row, "component"));
       cells << text(own, "species") << text(own, "grade");
@@ -632,6 +644,17 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   });
   connect(pdf, &QPushButton::clicked, this, &BuildListsDialog::savePdf);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+  // A double click or Return on a row's product pages opens one (a menu
+  // of them when there are several, mitcad#950).
+  connect(m_partsTable, &QAbstractItemView::activated, this, [this](const QModelIndex& index) {
+    const QTableWidgetItem* heading = m_partsTable->horizontalHeaderItem(index.column());
+    if (heading == nullptr || heading->text() != QObject::tr("Product Pages")) {
+      return;
+    }
+    const QRect cell = m_partsTable->visualRect(index);
+    openProductLinks(this, m_partsTable->viewport()->mapToGlobal(cell.bottomLeft()),
+                     index.data().toString().split(QLatin1Char(' '), Qt::SkipEmptyParts));
+  });
   connect(m_kerf, &QDoubleSpinBox::valueChanged, this, [this] { load(); });
   connect(m_columns, &QLineEdit::editingFinished, this, [this] {
     if (propertyKeys(m_columns->text()) != propertyKeys(lastPropertyColumns())) {
@@ -664,6 +687,8 @@ void BuildListsDialog::load() {
       query.insert(QStringLiteral("properties"), QJsonArray::fromStringList(keys));
     }
     parts = m_model.queryObject(query);
+    // The articles' product links (mitcad#950).
+    parts.insert(QStringLiteral("rows"), rowsWithProductLinks(parts.value(QStringLiteral("rows")).toArray()));
   } catch (const std::exception& error) {
     qWarning().noquote() << QStringLiteral("Parts list not read: %1").arg(errorText(error));
   }
@@ -728,6 +753,14 @@ void BuildListsDialog::load() {
                            .arg(m_cut[2].rows.size())
                            .arg(m_kerf->value());
   qInfo().noquote() << QStringLiteral("Build parts list: %1 row(s)").arg(m_parts.first().rows.size());
+  const qsizetype pages = m_parts.first().columns.indexOf(QObject::tr("Product Pages"));
+  if (pages >= 0) {
+    for (const QStringList& row : std::as_const(m_parts.first().rows)) {
+      if (!row.value(pages).isEmpty()) {
+        qInfo().noquote() << QStringLiteral("Build BOM product pages: %1: %2").arg(row.value(1), row.value(pages));
+      }
+    }
+  }
   for (const QStringList& row : std::as_const(m_parts.first().rows)) {
     qInfo().noquote() << QStringLiteral("Build BOM row: %1 x %2").arg(row.value(0), row.value(1));
   }

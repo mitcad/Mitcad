@@ -223,6 +223,17 @@ public:
   // component (the Construct commands) and do so with
   // CommandSession::runActivation. The default asks nothing.
   virtual void pickComing(const CommandDef& /*def*/, const SelectionItem& /*item*/) {}
+  // The places of a notice under the pointer (mitcad#1327,
+  // docs/ui-conventions.md "Messages and severity"): painted in the view
+  // as the selection preview is until they are cleared (empty places);
+  // `source` says where the notice is shown (for the log). Faces, edges
+  // and vertices are looked for first in `preview`, the bodies of the
+  // command's preview shown, where a warning's made faces are.
+  virtual void hoverNoticePlaces(const QString& /*source*/, const QJsonArray& /*places*/,
+                                 const std::vector<BodyDisplay>& /*preview*/) {}
+  // The view's highlights of the places hovered, for a command's own
+  // highlights (CommandSession::updateHighlights adds them).
+  virtual std::vector<HighlightDisplay> noticeHighlights() const { return {}; }
 };
 
 // A feature command from start to OK or Cancel: its inputs' state and
@@ -263,6 +274,9 @@ public:
   // before the session; destruction automatically detaches its callbacks.
   void setPresenter(CommandPresenter& presenter);
   const CommandState& state() const { return m_state; }
+  // Draws the inputs' highlights again (with the notice places hovered,
+  // CommandHost::noticeHighlights, mitcad#1327).
+  void refreshHighlights() { updateHighlights(); }
   // Whether everything to pick was there when the panel opened: the
   // keyboard then goes to the first value, else the view keeps it.
   bool startsWithValues() const { return m_selectionsComplete; }
@@ -679,6 +693,12 @@ private:
   bool m_failed = false; // the model could not compute the preview
   QByteArray m_shownKey; // the command whose preview is shown
   QString m_shownNote;   // the command's note shown with it
+  // The places of the shown preview's notices and its bodies, painted
+  // while the pointer is over the panel's message (mitcad#1327).
+  QJsonArray m_messagePlaces;
+  std::vector<BodyDisplay> m_messageBodies;
+  bool m_messageHovered = false;
+  void hoverMessage(bool on);
   // The edited feature's profiles that were deleted from their sketch and
   // left out of the selection, and those sketches' names (mitcad#1264).
   int m_missingProfiles = 0;

@@ -355,8 +355,6 @@ QString title(QString text) {
   text.replace(QStringLiteral("&&"), QStringLiteral("\x01"));
   text.remove(QLatin1Char('&'));
   text.replace(QChar(1), QLatin1Char('&'));
-  // A Qt menu's second column (the assistant menu's states, mitcad#1299).
-  text.replace(QLatin1Char('\t'), QStringLiteral(" — "));
   return text;
 }
 QString plain(const QString& text) {
@@ -4579,7 +4577,14 @@ public:
           [native addItem:NSMenuItem.separatorItem];
           separatorPending = false;
         }
-        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(title(action->text()))
+        QString text = title(action->text());
+        // Only assistant connection rows use the shortcut column for state
+        // (mitcad#1299). Other menus retain their tab-separated hints, such
+        // as Appearance's fx marker, and their original action titles.
+        if (action->property("agentRow").isValid()) {
+          text.replace(QLatin1Char('\t'), QStringLiteral(" — "));
+        }
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(text)
                                                     action:@selector(perform:) keyEquivalent:@""];
         item.target = m_target;
         item.tag = actionIndex(action);

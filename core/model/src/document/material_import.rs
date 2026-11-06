@@ -191,10 +191,22 @@ impl<K: Kernel> Document<K> {
                 if row.density.is_none() {
                     return Err(invalid("a new material needs its density"));
                 }
+                // Numbered past every name the design shows in any case,
+                // as the clash above is found (mitcad#1315: `steel` beside
+                // the built-in `Steel` is `steel (2)`).
                 let state = &self.state;
-                change.name = Some(material::numbered_name(name, |candidate| {
-                    state.material_name_taken(candidate, "", None)
-                }));
+                let shown = |candidate: &str| {
+                    let candidate = candidate.trim();
+                    state
+                        .materials
+                        .iter()
+                        .any(|m| m.name.trim().eq_ignore_ascii_case(candidate))
+                        || material::built_in()
+                            .iter()
+                            .filter(|m| state.materials.iter().all(|own| own.id != m.id))
+                            .any(|m| m.name.trim().eq_ignore_ascii_case(candidate))
+                };
+                change.name = Some(material::numbered_name(name, shown));
                 outcome.added.push(self.create_material(&change)?);
             }
         }

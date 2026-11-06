@@ -726,6 +726,50 @@ fn grouped_parts_list_keeps_every_components_balloon_number_and_material() {
     );
 }
 
+/// A grouped parts list counts the placements of a component it cannot
+/// measure in one row (mitcad#1315): the mock kernel's measures are off, so
+/// no placement has a signature to group by.
+#[test]
+fn grouped_parts_list_counts_an_unmeasured_components_placements_once() {
+    let (mut doc, [plate, second, _]) = assembly();
+    let third = command(
+        &mut doc,
+        json!({"cmd": "copy_occurrence", "occurrence": plate,
+               "transform": {"translation": [100, 0, 0]}}),
+    )["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The view takes the third placement in (mitcad#1293).
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "subject": {"type": "design"}}),
+    );
+    let list = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+            "type": "parts_list", "at": [300, 280], "table": {"group_identical": true}
+        }),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(annotation(&doc, list)["label"], "1 Pin x1; 2 Plate x3");
+    // One number for the three Plates.
+    let edge = edge_of(&doc, "F2.b0");
+    for occurrence in [&plate, &second, &third] {
+        let balloon = command(
+            &mut doc,
+            json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+                "type": "balloon", "picks": [{"body": "F2.b0", "occurrence": occurrence, "edge": edge}]
+            }),
+        )["annotation"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(annotation(&doc, balloon)["label"], "2", "{occurrence}");
+    }
+}
+
 #[test]
 fn grouped_drawing_parts_use_materials_in_the_actual_assembly_paths() {
     let mut doc = Document::new(MockKernel::default());

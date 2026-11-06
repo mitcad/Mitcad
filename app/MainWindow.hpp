@@ -341,6 +341,14 @@ public:
   void animateJoint(const QString& uid) override;
   void previewJoint(const QString& uid, const QString& occurrence) override;
   void previewBodies(const QString& row, const QString& body, const QString& occurrence) override;
+  // The places a notice names, painted while the pointer is over it
+  // (mitcad#1327; MainWindowNoticeHover.cpp): from the command panel's
+  // message (CommandHost), a feature's notices from the Browser's row, the
+  // message band and the Docked status line (empty uid: left).
+  void hoverNoticePlaces(const QString& source, const QJsonArray& places,
+                         const std::vector<BodyDisplay>& preview) override;
+  std::vector<HighlightDisplay> noticeHighlights() const override;
+  void previewNoticePlaces(const QString& source, const QString& feature) override;
   // Motion studies and contact sets (mitcad#454; MainWindowMotion.cpp).
   void openMotionStudy(const QString& name) override;
   void editContactSet(const QString& name) override;
@@ -1575,6 +1583,18 @@ private:
   QStringList m_timelineSelection;
   QStringList m_timelineHover;
   QString m_loggedTimelineHover;
+  // The notice places painted (mitcad#1327, hoverNoticePlaces): where the
+  // notice is shown, its places, a command preview's bodies to find them
+  // in, the line last logged; the feature the status line's message is
+  // about (its places when the pointer is over it).
+  QString m_noticeHoverSource;
+  QJsonArray m_noticeHover;
+  std::vector<BodyDisplay> m_noticeHoverBodies;
+  QString m_loggedNoticeHover = QStringLiteral("none");
+  QString m_statusFeature;
+  // The pointer over the Docked status line or the message band's text:
+  // the places of the feature its message is about.
+  void installNoticeHover();
   Selection m_autoselectPreview; // hover only; never part of the actual selection
   SelectionCreatePanel* m_selectionCreate = nullptr; // the card's Create row (mitcad#619)
   QString m_loggedSelectionCreate = QStringLiteral("none"); // its log line last logged (UI tests)

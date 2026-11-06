@@ -135,5 +135,26 @@ int drawingSheetViewTests() {
   const QPixmap after = sheet.grab();
   CHECK(!after.isNull());
   CHECK(sheet.sheetPaints() == painted + 1);
+
+  // Corner dots (mitcad#1338): a filled dot at each corner given, on the
+  // screen only, gone when they are cleared; the corner under the pointer
+  // a filled marker.
+  sheet.fit();
+  const QPointF corner(200.0, 150.0); // on the paper, away from the items
+  const QPoint pixel = sheet.toWidget(corner).toPoint();
+  const auto grey = [&sheet, pixel] { return qGray(sheet.grab().toImage().pixel(pixel)); };
+  CHECK(grey() > 192);
+  sheet.setCornerDots({corner}, 3.0);
+  CHECK(sheet.cornerDotCount() == 1);
+  CHECK(grey() < 192);
+  sheet.setCornerDots({}, 3.0);
+  CHECK(sheet.cornerDotCount() == 0);
+  CHECK(grey() > 192);
+  QJsonArray hovered;
+  hovered.append(QJsonObject{{QStringLiteral("point"), xy(corner.x(), corner.y())}});
+  sheet.setHoverMarks(hovered);
+  CHECK(grey() < 192);
+  sheet.setHoverMarks(QJsonArray());
+  CHECK(grey() > 192);
   return failures;
 }

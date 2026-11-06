@@ -527,10 +527,18 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
                     // A section a sketch change split (mitcad#407) lofts its
                     // main piece, the one listed first in the warning.
                     if regions.len() > 1 {
-                        ctx.warn(at(format!(
-                            "a loft section is one region; of the pieces of {} the first is used",
-                            profile.region
-                        )));
+                        let place = crate::notice::NoticePlace::region_of(
+                            profile.sketch,
+                            profile.region.to_string(),
+                        );
+                        ctx.warn_at(
+                            at(format!(
+                                "a loft section is one region; of the pieces of {} the first is \
+                                 used",
+                                profile.region
+                            )),
+                            vec![place],
+                        );
                     }
                     let region = regions.remove(0);
                     if region.loops.len() > 1 {

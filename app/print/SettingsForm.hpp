@@ -136,8 +136,12 @@ signals:
   void valueChanged(const QString& key, const QJsonValue& value);
   // A typed text that is not a value of its key: the one-line reason.
   void refused(const QString& key, const QString& reason);
-  // The rows in sight changed (a tab, the search, Advanced, a scroll).
+  // The rows in sight changed (a tab, the search, Advanced, a scroll), or
+  // their places did once the layouts settled (the list moved or resized).
   void layoutChanged();
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
   struct Row {

@@ -203,7 +203,7 @@ QVector<InputDef> sideInputs(const QString& suffix, std::function<bool(const Com
             return arrow(base->first, direction);
           }),
   };
-  inputs += objectInputs(suffix, when(kToObject));
+  inputs += objectInputs(suffix, when(kToObject), true);
   inputs.append(valueInput(QStringLiteral("offset") + suffix, QObject::tr("Offset"), ValueKind::Length,
                            QStringLiteral("0 mm"))
                     .withTooltip(QObject::tr("Beyond the object (negative: short of it)"))
@@ -295,9 +295,13 @@ CommandDef extrudeCommand(const CommandContext& context) {
             const auto base = profileBase(state.items(QStringLiteral("profiles")), model);
             return base ? std::optional<Manipulator>(arrow(base->first, base->second)) : std::nullopt;
           }),
-      selectionInput(QStringLiteral("start_object"), QObject::tr("Start Object"), kPlaneKinds, 1, 1)
-          .withTooltip(QObject::tr("The plane or planar face the profiles are projected onto"))
-          .withAccepts(isPlanar)
+      // A point stands for the plane through it (mitcad#1329).
+      selectionInput(QStringLiteral("start_object"), QObject::tr("Start Object"),
+                     kPlaneKinds | kPointKinds | kStraightLineKinds, 1, 1)
+          .withTooltip(QObject::tr(
+              "The plane, planar face, point or straight line (its parallel plane) the profiles start at"))
+          .withAccepts(
+              [](const SelectionItem& item) { return isPlanar(item) || isPointLike(item) || isStraightLine(item); })
           .withPlanesByDepth() // another component's face before an origin plane behind it (mitcad#762)
           .withVisible(choiceIs(QStringLiteral("start"), QStringLiteral("object"))),
       choiceInput(QStringLiteral("direction"), QObject::tr("Direction"), kDirections, kOneSide),
@@ -565,6 +569,16 @@ CommandDef extrudeCommand(const CommandContext& context) {
       if (!foreign.isEmpty()) {
         return Built::failure(foreign, QStringLiteral("object") + suffix);
       }
+      // A point or a line of another occurrence: no link carries it, and a
+      // line must lie in a plane parallel to the profiles (mitcad#1329).
+      const QString foreignAt = foreignPoint(objects.first(), here);
+      if (!foreignAt.isEmpty()) {
+        return Built::failure(foreignAt, QStringLiteral("object") + suffix);
+      }
+      const QString slanted = slantedLine(objects.first(), picked, model);
+      if (!slanted.isEmpty()) {
+        return Built::failure(slanted, QStringLiteral("object") + suffix);
+      }
       if (!addObjectLink(links, objects.first(), here)) {
         return Built::failure(twice(objects.first()), QStringLiteral("object") + suffix);
       }
@@ -609,8 +623,23 @@ CommandDef extrudeCommand(const CommandContext& context) {
       if (!foreign.isEmpty()) {
         return Built::failure(foreign, QStringLiteral("start_object"));
       }
+      const QString foreignAt = foreignPoint(item, here);
+      if (!foreignAt.isEmpty()) {
+        return Built::failure(foreignAt, QStringLiteral("start_object"));
+      }
+      const QString slanted = slantedLine(item, picked, model);
+      if (!slanted.isEmpty()) {
+        return Built::failure(slanted, QStringLiteral("start_object"));
+      }
       QJsonObject plane{{QStringLiteral("type"), QStringLiteral("plane")},
                         {QStringLiteral("plane"), item.reference()}};
+      if (isPointLike(item)) {
+        // The plane through the point parallel to the profiles (mitcad#1329).
+        plane = {{QStringLiteral("type"), QStringLiteral("point")}, {QStringLiteral("point"), item.reference()}};
+      } else if (isStraightLine(item)) {
+        // The plane through the line parallel to the profiles (mitcad#1329).
+        plane = {{QStringLiteral("type"), QStringLiteral("line")}, {QStringLiteral("line"), item.reference()}};
+      }
       if (item.kind == SelectKind::Face && item.occurrence != here) {
         plane = {{QStringLiteral("type"), QStringLiteral("face")},
                  {QStringLiteral("body"), item.owner},
@@ -722,12 +751,15 @@ CommandDef extrudeCommand(const CommandContext& context) {
       if (startType == QStringLiteral("object")) {
         const QJsonObject object = start.value(QStringLiteral("object")).toObject();
         // A face of another occurrence goes as a face (mitcad#762).
+        // A point or a line by its reference (mitcad#1329).
+        const QString objectType = str(object, "type");
+        const bool pointOrLine = objectType == QStringLiteral("point") || objectType == QStringLiteral("line");
         const SelectionItem item =
-            str(object, "type") == QStringLiteral("face")
+            objectType == QStringLiteral("face")
                 ? itemOf(QJsonObject{{QStringLiteral("body"), object.value(QStringLiteral("body"))},
                                      {QStringLiteral("face"), object.value(QStringLiteral("face"))}},
                          context)
-                : itemOf(object.value(QStringLiteral("plane")), context);
+                : itemOf(object.value(pointOrLine ? objectType : QStringLiteral("plane")), context);
         if (item.isValid()) {
           state.setItems(QStringLiteral("start_object"), {item});
         }
@@ -866,6 +898,8 @@ CommandDef extrudeCommand(const CommandContext& context) {
       // A face of another occurrence goes as a face (mitcad#762).
       const QString objectType = str(object, "type");
       ok = ok && ((objectType == QStringLiteral("plane") && isShowable(object.value(QStringLiteral("plane")), context)) ||
+                  ((objectType == QStringLiteral("point") || objectType == QStringLiteral("line")) &&
+                   objectShowable(object, context)) ||
                   (objectType == QStringLiteral("face") && !object.value(QStringLiteral("chained")).toBool() &&
                    isShowable(QJsonObject{{QStringLiteral("body"), object.value(QStringLiteral("body"))},
                                           {QStringLiteral("face"), object.value(QStringLiteral("face"))}},

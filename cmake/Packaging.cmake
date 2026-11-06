@@ -11,6 +11,12 @@
 if(NOT WIN32)
   return()
 endif()
+# A build with a user's own OptiX worker (mitcad#1332, cmake/RenderOptix.cmake)
+# makes no installer: MitCad never ships OptiX.
+get_property(mitcad_render_optix GLOBAL PROPERTY MITCAD_RENDER_OPTIX)
+if(mitcad_render_optix)
+  return()
+endif()
 
 # file(GET_RUNTIME_DEPENDENCIES) matches its regexes against normalized paths.
 if(POLICY CMP0207)

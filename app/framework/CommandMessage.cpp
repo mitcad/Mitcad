@@ -38,6 +38,8 @@ CommandMessage::CommandMessage(QWidget* parent) : QTextEdit(parent) {
   QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
   policy.setHeightForWidth(true);
   setSizePolicy(policy);
+  // The pointer over it without a button pressed (mitcad#1327).
+  viewport()->setMouseTracking(true);
   hide();
 }
 
@@ -92,7 +94,34 @@ bool CommandMessage::event(QEvent* event) {
       return true;
     }
   }
+  if (event->type() == QEvent::Leave || event->type() == QEvent::Hide) {
+    setHovered(false);
+  }
   return QTextEdit::event(event);
+}
+
+bool CommandMessage::viewportEvent(QEvent* event) {
+  switch (event->type()) {
+  case QEvent::Enter:
+  case QEvent::MouseMove:
+  case QEvent::HoverMove:
+    setHovered(!m_text.isEmpty());
+    break;
+  case QEvent::Leave:
+    setHovered(false);
+    break;
+  default:
+    break;
+  }
+  return QTextEdit::viewportEvent(event);
+}
+
+void CommandMessage::setHovered(bool on) {
+  if (on == m_hovered) {
+    return;
+  }
+  m_hovered = on;
+  emit hovered(on);
 }
 
 QString breakableText(const QString& text, int longest) {

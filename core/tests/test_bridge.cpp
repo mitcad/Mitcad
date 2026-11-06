@@ -7,8 +7,10 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1548,6 +1551,100 @@ void test_out_of_memory_in_an_operation() {
   CHECK(!memory.limit_kind.empty());
 }
 
+// A cgroup's memory files in a fake cgroup v2 tree (mitcad#1339): its limit
+// (memory.max, bytes or "max"), what it uses (memory.current) and its page
+// cache (memory.stat).
+void write_cgroup(const std::filesystem::path& dir, const std::string& max, std::uint64_t current,
+                  std::uint64_t cache) {
+  std::filesystem::create_directories(dir);
+  std::ofstream(dir / "memory.max") << max << "\n";
+  std::ofstream(dir / "memory.current") << current << "\n";
+  std::ofstream(dir / "memory.stat") << "anon " << current - cache << "\nactive_file " << cache / 2
+                                      << "\ninactive_file " << cache - cache / 2 << "\n";
+}
+
+// The memory guard's cgroup limit in a fake tree (mitcad#1339): a slice of
+// 36 GiB shared by other jobs, the import's process in a scope of its own
+// below it. A small import under a full slice is not low on memory (the
+// share at which the import gives items up, f3d_import.rs's MEMORY_LOW, is
+// 0.85; it drops caches from MEMORY_TIGHT, 0.70); one that grows past its
+// share still is; and the report says whose memory it was.
+void test_memory_guard_in_a_shared_slice() {
+  constexpr std::uint64_t kGiB = std::uint64_t{1} << 30;
+  constexpr double kTight = 0.70;
+  constexpr double kLow = 0.85;
+  const auto share = [](const mitcad::bridge::CgroupMemory& m) {
+    return m.limit == 0 ? 0.0 : static_cast<double>(m.used) / static_cast<double>(m.limit);
+  };
+  const std::filesystem::path root =
+      std::filesystem::temp_directory_path() /
+      ("mitcad-test-cgroup-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const std::filesystem::path slice = root / "user.slice" / "jobs.slice";
+  const std::filesystem::path scope = slice / "run-1.scope";
+  // A line of cgroup v1 first, which does not count.
+  const std::string self = "1:name=systemd:/elsewhere\n0::/user.slice/jobs.slice/run-1.scope\n";
+  const std::string tree = root.string();
+  write_cgroup(root / "user.slice", "max", 40 * kGiB, 2 * kGiB);
+
+  // Other jobs hold the slice: 34.5 GiB, 1 GiB of it page cache. The
+  // import holds 1 GiB in its scope (no limit there).
+  write_cgroup(slice, std::to_string(36 * kGiB), 34 * kGiB + kGiB / 2, kGiB);
+  write_cgroup(scope, "max", kGiB + kGiB / 8, kGiB / 8);
+  {
+    const auto small = mitcad::bridge::cgroup_memory(tree, self, kGiB);
+    CHECK(share(small) < kTight);
+    CHECK(small.used == kGiB && small.limit == 18 * kGiB);
+    CHECK(small.kind == "half of a parent cgroup's memory limit of 36.0 GiB, shared with other processes "
+                        "using 32.5 GiB");
+    // As measured before: the slice's usage against its limit.
+    CHECK(static_cast<double>(33 * kGiB + kGiB / 2) / static_cast<double>(36 * kGiB) >= kLow);
+  }
+  // The import grows past its share: 16 GiB of the 33.5 GiB in use.
+  {
+    const auto grown = mitcad::bridge::cgroup_memory(tree, self, 16 * kGiB);
+    CHECK(share(grown) >= kLow);
+    CHECK(contains(grown.kind, "shared with other processes using 17.5 GiB"));
+  }
+  // Most of the slice's usage is the import's own: the usage counts.
+  {
+    const auto own = mitcad::bridge::cgroup_memory(tree, self, 20 * kGiB);
+    CHECK(share(own) >= kLow);
+    CHECK(own.used == 33 * kGiB + kGiB / 2 && own.limit == 36 * kGiB);
+    CHECK(own.kind == "a parent cgroup's memory limit, mostly the process's own memory");
+  }
+
+  // A limit on the import's own scope: 5.5 GiB of 6 GiB, the process's own
+  // 5 GiB; tighter than the slice's (the slice now nearly empty).
+  write_cgroup(slice, std::to_string(36 * kGiB), 8 * kGiB, kGiB);
+  write_cgroup(scope, std::to_string(6 * kGiB), 6 * kGiB, kGiB / 2);
+  {
+    const auto own = mitcad::bridge::cgroup_memory(tree, self, 5 * kGiB);
+    CHECK(share(own) >= kLow);
+    CHECK(own.limit == 6 * kGiB);
+    CHECK(own.kind == "its own cgroup's memory limit, mostly the process's own memory");
+  }
+  // The scope shared with other processes (5.5 GiB of it theirs): the
+  // import's 0.5 GiB against half the scope's limit.
+  {
+    const auto scoped = mitcad::bridge::cgroup_memory(tree, self, kGiB / 2);
+    CHECK(share(scoped) < kTight);
+    CHECK(scoped.limit == 3 * kGiB);
+    CHECK(scoped.kind == "half of its own cgroup's memory limit of 6.0 GiB, shared with other processes "
+                         "using 5.0 GiB");
+  }
+
+  // Without a cgroup v2 line or a limit: none.
+  CHECK(mitcad::bridge::cgroup_memory(tree, "1:name=systemd:/x\n", kGiB).limit == 0);
+  CHECK(mitcad::bridge::cgroup_memory(tree, "0::/user.slice\n", kGiB).limit == 0);
+  // The decision alone.
+  CHECK(mitcad::bridge::cgroup_pressure(10 * kGiB, 0, kGiB, true).limit == 0);
+  CHECK(mitcad::bridge::cgroup_pressure(10 * kGiB, 12 * kGiB, 5 * kGiB, false).used == 10 * kGiB);
+  CHECK(mitcad::bridge::cgroup_pressure(10 * kGiB, 12 * kGiB, 5 * kGiB - 1, false).used == 5 * kGiB - 1);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+}
+
 // Live updates (mitcad#89): the hub's commands and events through the
 // bridge, a connection's thread reporting a broker that cannot be reached,
 // TLS set up with the system's root certificates, and a read of the events
@@ -1797,6 +1894,12 @@ std::string timeline_entry(const mitcad::Document& document, const std::string& 
   return timeline.substr(begin);
 }
 
+// Whether a timeline entry's notices name this face, edge or vertex as one
+// of their places (mitcad#1327).
+bool has_place(const std::string& entry, const std::string& name) {
+  return contains(entry, "\"name\":\"" + name + "\"");
+}
+
 bool feature_ok(const mitcad::Document& document, const std::string& name) {
   const std::string entry = timeline_entry(document, name);
   if (!contains(entry, R"("status":"ok")")) {
@@ -1848,13 +1951,18 @@ void test_thread_end_pieces_keep_their_names() {
     // with a notice.
     CHECK(feature_ok(*document, "Chamfer1"));
     CHECK(contains(timeline_entry(*document, "Fillet1"), R"("status":"warning")"));
-    CHECK(contains(timeline_entry(*document, "Fillet1"), " found as E{" + kBore + "|" + chamfer_face + "}"));
+    // The notice says it was found, the names in its places (mitcad#1327:
+    // no topological names in a notice's message).
+    CHECK(contains(timeline_entry(*document, "Fillet1"), " found again "));
+    CHECK(has_place(timeline_entry(*document, "Fillet1"), "E{" + kBore + "|" + chamfer_face + "}"));
     // 58 pieces (#58 to #115): #50 is none of them; 42 (#42 to #83): #50
     // lies in the middle. The end's edge either way, with a notice.
     for (const double height : {23.0, 17.0}) {
       CHECK(contains(run(*document, set("d2", height)), R"("error":null)"));
       CHECK(contains(timeline_entry(*document, "Chamfer1"), R"("status":"warning")"));
-      CHECK(contains(timeline_entry(*document, "Chamfer1"), "edge " + saved + " found as " + end));
+      CHECK(contains(timeline_entry(*document, "Chamfer1"), " found again "));
+      CHECK(has_place(timeline_entry(*document, "Chamfer1"), saved));
+      CHECK(has_place(timeline_entry(*document, "Chamfer1"), end));
       CHECK(contains(timeline_entry(*document, "Fillet1"), R"("status":"warning")"));
       const auto body = document->body_shape("F2.b0");
       CHECK(!body->find_faces("F4:chamfer(" + end + ")").empty());
@@ -1919,6 +2027,10 @@ int main(int argc, char** argv) {
     test_thread_end_pieces_keep_their_names();
     return failures == 0 ? 0 : 1;
   }
+  if (argc > 1 && std::string(argv[1]) == "memory-guard") {
+    test_memory_guard_in_a_shared_slice();
+    return failures == 0 ? 0 : 1;
+  }
   test_block_fillet_and_dimension_change();
   test_join_boss_fillet_follows_the_boss();
   test_cut_hole_lost_edge_and_split_body();
@@ -1946,6 +2058,7 @@ int main(int argc, char** argv) {
   test_reader_panic_is_an_error();
   test_segment_crossings();
   test_out_of_memory_in_an_operation();
+  test_memory_guard_in_a_shared_slice();
   test_live_hub();
   test_pattern_of_features_in_one_boolean();
   test_exceptions_across_the_bridge();

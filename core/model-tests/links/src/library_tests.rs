@@ -759,6 +759,7 @@ fn library_parts_follow_the_rows_standards_and_list_supplier_parts() {
         material: "8.8".to_owned(),
         finish: "zinc-plated".to_owned(),
         checked: "2026-10-30".to_owned(),
+        region: String::new(),
     };
     {
         let mut rows = library.rows.lock().unwrap();

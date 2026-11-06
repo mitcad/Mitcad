@@ -183,6 +183,57 @@ without a part number, a supplier without an id or a name, and a row
 name that the design's table does not have. MitCad of before mitcad#949
 ignores `rows` and `suppliers`, and reads the library as before.
 
+### Shops and product links
+
+A library stores its suppliers' part numbers and no addresses. MitCad
+makes the product links when it shows the articles (mitcad#950), from its
+own list of the suppliers' shops by region
+(`core/model/src/supplier_shops.rs`; the commands are in commands.md,
+[Suppliers' shops and product links](../core/model-api/src/commands.md#suppliers-shops-and-product-links)).
+The list lives in MitCad, not in a library: a design keeps the library
+version it was inserted from, so addresses stored with that version would
+never follow a shop that moves, and the parts list shows the articles a
+design keeps also without its library. A library's supplier id
+(`suppliers[].id`) names MitCad's supplier of that id; a supplier the list
+does not have gets no links, and its part numbers are shown as before.
+
+Per supplier the list has:
+
+- how its canonical part number (the groups separated by single spaces,
+  as the rows write it) is written in its shops' addresses: each group
+  but the last filled with spaces to a width, and the text between the
+  groups;
+- its shops, at most one per region (an ISO 3166-1 alpha-2 code), each
+  with a product address pattern; `{part_number}` in it is the part
+  number in that form, percent-encoded.
+
+| Supplier | Region | Shop | Part number in the address |
+|---|---|---|---|
+| Würth (`wurth`) | FI | Würth eShop: `https://eshop.wurth.fi/product/{part_number}.sku/fi/FI/EUR/` | The shop's article key: the second group filled to three characters when a third follows (`0084 6 8` is `00846  8`, in the address `00846%20%208`); two groups are joined (`0317 910` is `0317910`) |
+| Etra (`etra`) | | none: its product addresses are not known | As written |
+
+An article whose part number is the supplier's in one country only has
+`region` (`"region": "SE"`), and links only there; without it the part
+number is the same in every region. Use it only where a supplier's part
+numbers differ by country. `library check` refuses a `region` that is no
+region code.
+
+**What the user chooses.** Preferences › Suppliers: the **Region** whose
+shops the links go to (None: no links; until it is chosen, the system's
+country when a shop sells there), and the **Shops you buy from**, the
+region's shops with a check box each. The part grid's and the size
+choosers' Supplier filters start with the shops checked instead of All
+(several as one entry, *Your shops (Würth, Etra)*), until the user
+chooses another; with none checked they start with All, as before. In the
+Supplier Articles table a part number with a link is in the link color
+and opens the product in the shop; the bills of materials get a column
+Product Pages with the links of each part's articles, also in their CSV
+and PDF ([the user guide](user-guide.md#component-libraries)).
+
+A new supplier or shop is a change to MitCad's list: its id as the
+libraries name it, the part number's form and the shop's pattern, written
+from the shop's own product addresses (nothing copied from a catalogue).
+
 ### Groups
 
 The categories make the tree of groups. Insert from Library and the
@@ -433,6 +484,13 @@ The fields of the block:
 - Profiles have `section` (the outer size), `slot` (the depth from the
   face, the opening and the inner width) and `mass_per_metre`. MitCad
   uses `slot` to size panels and to fit nuts.
+- `area_parameter` (optional; mitcad#1328): a section of a typed size,
+  whose design's sizes are options that any value within their limits
+  can take. It names the design's parameter whose value is the section's
+  area in mm². The cut list's mass is that area in the part's combination
+  times `material.density` and the length, in place of
+  `mass_per_metre`. Each typed size is a row and a stock entry of its
+  own in the cut list.
 - `frames` names the design's **mount frames**. Each frame is a
   `joint_origin` feature of the design, named `mount:<name>`
   (`mount:slot_x+_1`), or one with a `mount` of that name
@@ -1053,11 +1111,20 @@ that MitCad offers. It is kept in a repository of its own
   - Round stainless steel tubes in the sizes of EN ISO 1127 Table 3
     (EN 10216-5 seamless, EN 10217-7 welded), 6x1 to 323.9x12.5, at the
     standard's conventional density 7970 kg/m³ (mitcad#892)
+  - Square and rectangular tubes to ASTM A500 (HSS) in inch sizes,
+    1x1x0.065 to 12x12x7/8 and 1-1/2x3/4x0.083 to 12x10x5/8, named in
+    inches (`HSS 3x3x3/16`) and sized in mm (mitcad#1328)
+  - A square and a rectangular tube of a typed size: sides 10 to 400 mm
+    and a wall of 0.5 to 20 mm, with EN 10219-2's corner radii
+    (mitcad#1328)
 
   Each is one component with its outside size and wall thickness as rows.
   The section is exact, with the standard's corner radii. Thus a row's
   mass per metre is the standard's. The Build tab cuts them to length as
-  profiles.
+  profiles. A tube of a typed size takes any size its options' limits and
+  rules allow; its rows are presets. ASTM A513 mechanical tubing is not
+  in the library: no published size table with the corner radii for
+  calculation could be checked.
 - The base library of materials and print profiles (mitcad#640,
   [Materials and print profiles](#materials-and-print-profiles)): the
   generic filaments PLA, PETG, ABS, ASA, TPU and PA, the common Bambu Lab
@@ -1105,7 +1172,7 @@ Three generators make the library with `mitcad-cli`:
 
 ```
 tools/libraries/make-parts-library.py --cli <mitcad-cli> --source <folder of the supplier's files>
-    --out <clone of the parts repository> [--groups <folder>] [--version 2.9.0] [--work <folder>]
+    --out <clone of the parts repository> [--groups <folder>] [--version 2.10.0] [--work <folder>]
     [--render-worker <mitcad-render>] [--no-render] [--rerender] [--commit]
 tools/libraries/make-fastener-library.py --cli <mitcad-cli> --out <folder> [--sizes M3,M5]
     [--standards iso4762,iso4032] [--version 1.0.0] [--render-worker <mitcad-render>] [--no-render]
@@ -1122,7 +1189,7 @@ tools/libraries/library_previews.py   the fasteners' studio and finishes (both g
   `LICENSE`, `README.md` and `SOURCES.md`. Then it checks the folder.
   `--out` is a clone of the components repository, so that its versions
   stay. `--commit` records the result on top of them and tags it. The
-  default tag is `v2.9.0`, the next version to publish.
+  default tag is `v2.10.0`, the next version to publish.
 - `make-fastener-library.py` builds the fasteners from the standards'
   dimension tables. Each fastener has its finish as its appearance and
   a rendered preview ([Previews](#previews)).
@@ -1509,6 +1576,54 @@ or a tube) makes the rows from a compact table:
   which the component or its group file names), `tolerance` and `tube`
   (`shape`, `thickness`, a square tube's `outer_radius` and
   `inner_radius`, and `area` in mm²).
+- A tube's sizes in inches (mitcad#1328: ASTM A500) have `"unit": "in"`.
+  Their sizes and walls are texts as the tables write them: a decimal
+  (`"0.120"`), a fraction (`"3/16"`) or a whole number and a fraction
+  (`"2-1/2"`). The rows' names and options are those texts
+  (`3x3x3/16`, Size `4x2`, Thickness `3/16`), so that a designation
+  `HSS {Size}x{Size}x{Thickness} L={L}` reads in inches. Their values and
+  blocks are millimetres, 25.4 mm to the inch. The rules' lengths
+  (`up_to`, `plus_minus`, a row's `tolerance`) are inches.
+
+**`typed`** (instead of `sizes` or `rows`, for a `square_tube` or a
+`rect_tube`; mitcad#1328) makes a tube of a typed size: an open
+configuration table whose options are its sizes, so that any size within
+their limits and its rules can be typed.
+
+```json
+"typed": {
+  "options": [{"name": "B", "min": 10, "max": 400}, {"name": "T", "min": 0.5, "max": 20}],
+  "radii": [[6, 2.0, 1.0], [10, 2.5, 1.5], [null, 3.0, 2.0]],
+  "area": "A",
+  "default": "40x40x3",
+  "rows": [{"B": 20, "T": 2}, {"B": 40, "T": 3}],
+  "rules": [{"name": "Wall under a third of the side",
+             "then": [{"require": "T < B / 3", "message": "the wall T is a third of the side B or more"}]}]
+}
+```
+
+- `options` are the shape's sides and wall, in that order (a square
+  tube's `size` and `thickness`, a rectangular one's `width`, `height`
+  and `thickness`, by their parameters' names), each with its `min` and
+  `max` in mm: the parameters' limits.
+- `radii` are a square tube's rules. The corner radii become formulas
+  of the wall: `RO = if(T <= 6 mm; 2 * T; if(T <= 10 mm; 2.5 * T; 3 * T))`.
+  The last rule's `up_to` is null.
+- `area` names a parameter whose formula is the section's exact area in
+  mm². The component's `build.area_parameter` names it, and the cut list's
+  mass is its value in the part's combination times the density and the
+  length ([Build components](#build-components)).
+- `rows` (`{option: mm}`) are the table's named presets, `<B>x<B>x<T>` or
+  `<W>x<H>x<T>`. `default` is one of them. Each has its own build block,
+  as a tube's `sizes` make it.
+- `rules` are the table's rules
+  ([commands.md](../core/model-api/src/commands.md#rules)). They should
+  refuse the sizes that make no section, such as corners that do not fit
+  the side: `and(RO < B / 2; RI < B / 2 - T)`.
+- `designation` names the options: `Square tube {B}x{B}x{T} L={L}`. A
+  size typed reads `Square tube 76.2x76.2x4.8 L=500`.
+- The generator checks the design's volume and its area parameter
+  against the exact area in each row.
 
 A row's `build`, as `sizes` makes it or as written, is the row's own
 block: the manifest's `build.rows`. The component's block takes its default
@@ -1592,7 +1707,8 @@ is the default.
 - A profiled board's `build.board`: its rows', and without rows, the
   component's.
 - A tube's rows' `section`, `mass_per_metre`, `tolerance` and `tube`,
-  from its `sizes`.
+  from its `sizes`; a typed size's from its `typed.rows`, and its
+  `area_parameter` (mitcad#1328).
 
 **The designs.** The designs hold their features in the root, as a
 component: no components, occurrences, active component or root policy. Each
@@ -1677,7 +1793,11 @@ MitCad's one library of components. MitCad fetches it when you ask.
   - A lead screw with its nut
   - The steel tubes in the standards' check sizes. Their cut-list masses
     are within 1 % of the standards'. A square tube goes on another's
-    face.
+    face. The ASTM A500 tubes in inch rows (HSS 3x3x3/16, 4x4x1/4,
+    4x2x1/4, 8x4x3/8) within 1 % of the tables' weights (mitcad#1328).
+  - The tubes of a typed size in a preset row and in sizes typed (76.2 x
+    76.2 x 4.8 mm, 101.6 x 50.8 x 4.8 mm): their designations, sizes and
+    masses by their exact areas.
 - ctest `cli.timber-library` (`tools/cli/timber-library-test.cmake`)
   runs the generator on small timber group files: a board family with a
   re-sawn and a less common size, wood screws, a bracket, a hanger, a
@@ -1699,6 +1819,21 @@ MitCad's one library of components. MitCad fetches it when you ask.
   volumes against the exact areas and the standards' masses. It checks
   that the furniture tube's rows switch its bores, and that the tubes are
   among the profiles in the pickers.
+
+  It also runs on an inch square and an inch rectangular tube and a
+  square tube of a typed size (mitcad#1328). It checks the inch rows'
+  names, sizes in mm (HSS 3x3x3/16: 76.2 mm, a 4.7625 mm wall), corner
+  radii and masses within 1 % of the tables' weights; that the typed
+  size takes 76.2 x 76.2 x 4.8 with its exact area and area parameter,
+  takes a preset over 6 mm with the wider corners, and refuses a wall of
+  a third of its side. BUILD places the inch tube with its cut-list
+  designation and mass, and the typed size in a size typed and in a
+  preset, each its own row and stock.
+
+  Rust: `core/model-tests/build-frames/src/options_tests.rs`
+  (`a_typed_size_s_cut_list_mass_and_stock_follow_its_options`) checks
+  the cut list's mass by `area_parameter` and the rows and stock per
+  typed size.
 - ctest `build.timber` (`tools/cli/build-timber-test.cmake`, on
   `MITCAD_PROFILES_LIBRARY`) checks every timber part of the generated
   library:

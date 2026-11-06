@@ -11,6 +11,11 @@ import sys
 import tempfile
 import zipfile
 
+# python3 -I (the Linux wrappers) leaves this script's folder off the
+# path; ui_macos_lock lives beside it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui_macos_lock import run_gui
+
 
 def main():
     app, cli, stub, output = sys.argv[1:5]
@@ -100,7 +105,7 @@ def main():
                     arguments = [app, "--ui=qt", "--chrome=" + chrome, "--no-recovery"]
                     if not reconnect:
                         arguments.append("--no-mcp")
-                    result = subprocess.run(arguments,
+                    result = run_gui(arguments,
                         env=env, stdout=log, stderr=subprocess.STDOUT, timeout=120)
                 text = log_path.read_text(encoding="utf-8", errors="replace")
                 if result.returncode or "TestDriver: done" not in text or any(line.startswith("TestDriver: FAIL") for line in text.splitlines()):

@@ -246,6 +246,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
         self.params.make_rest(self.doc, &mut self.report);
         assembly::joints(self);
         self.visibility();
+        // Point clouds (format 43): references only, which MitCad keeps none of.
+        let clouds = self.design.point_clouds.len();
+        if clouds > 0 {
+            self.report.notes.push(format!(
+                "{clouds} point cloud{} (scanned reference points): not mapped",
+                if clouds > 1 { "s" } else { "" }
+            ));
+        }
         if let Some(position) = marker
             && let Err(e) = self.doc.set_marker(position)
         {

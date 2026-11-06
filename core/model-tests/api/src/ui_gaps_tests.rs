@@ -31,9 +31,9 @@ fn timeline_item(doc: &Document<MockKernel>, name: &str) -> Value {
 }
 
 #[test]
-fn a_fillet_built_as_rings_is_a_warning() {
+fn a_fillet_whose_corner_folds_is_a_warning() {
     let mut b = block();
-    const NOTE: &str = "the fillet is built as rings about its circles";
+    const NOTE: &str = "the corner of the fillet folds back on itself";
     b.doc
         .kernel()
         .notes
@@ -72,7 +72,7 @@ fn a_fillet_built_as_rings_is_a_warning() {
     assert!(b.doc.stats().error.is_none());
     // Scripts can expect it.
     let script = json!([{"expect": {"feature": "Fillet1", "status": "warning",
-                                    "error_contains": "rings"}}]);
+                                    "error_contains": "folds"}}]);
     b.doc.run_script(&script.to_string()).unwrap();
 
     // Other features are not affected; a chamfer without a note is ok.
@@ -84,6 +84,71 @@ fn a_fillet_built_as_rings_is_a_warning() {
     let item = timeline_item(&b.doc, "Chamfer1");
     assert_eq!(item["status"], "ok");
     assert_eq!(item["error"], Value::Null);
+}
+
+#[test]
+fn a_warning_says_what_is_wrong_and_gives_its_places() {
+    // mitcad#1327: the geometry's note with the places it is about (the
+    // made face, the face beside it, the farthest point). The notices say
+    // what is wrong without topological names; the names are in their
+    // places, of the body the fillet makes, for agents and the view's
+    // highlight. `warnings` keeps the model's own text.
+    use mitcad_model::notice::NoticePlace;
+    let mut b = block();
+    const NOTE: &str = "the fillet of edge E{F2:a|F2:b} hangs 0.06 mm past face F2:side(c1)";
+    const PLAIN: &str = "the fillet of an edge hangs 0.06 mm past a face";
+    b.doc
+        .kernel()
+        .notes
+        .borrow_mut()
+        .insert("fillet", NOTE.to_owned());
+    b.doc.kernel().note_places.borrow_mut().insert(
+        "fillet",
+        vec![
+            NoticePlace::face("F3:fillet(E{F2:a|F2:b})"),
+            NoticePlace::point([1.0, 2.0, 3.0]),
+        ],
+    );
+    let places = json!([
+        {"kind": "edge", "body": "F2.b0", "name": "E{F2:a|F2:b}"},
+        {"kind": "face", "body": "F2.b0", "name": "F2:side(c1)"},
+        {"kind": "face", "body": "F2.b0", "name": "F3:fillet(E{F2:a|F2:b})"},
+        {"kind": "point", "at": [1.0, 2.0, 3.0]}
+    ]);
+    let fillet = json!({"type": "fillet", "body": "F2.b0",
+                        "edges": [corner(b.extrude, 1, 0)], "radius": 2});
+    // The command panel's preview.
+    let preview: Value = serde_json::from_str(
+        &b.doc
+            .preview(&json!({"cmd": "add_feature", "def": fillet}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["status"], "ok");
+    assert_eq!(preview["warnings"], json!([NOTE]));
+    assert_eq!(
+        preview["notices"],
+        json!([{"level": "warning", "message": PLAIN, "places": places}])
+    );
+    command(&mut b.doc, json!({"cmd": "add_feature", "def": fillet}));
+    // The timeline and the feature query.
+    let item = timeline_item(&b.doc, "Fillet1");
+    assert_eq!(item["status"], "warning");
+    assert_eq!(
+        item["notices"],
+        json!([{"level": "warning", "message": PLAIN, "target": "F3", "places": places}])
+    );
+    let feature = query(&b.doc, json!({"query": "feature", "uid": "F3"}));
+    assert_eq!(feature["notices"], item["notices"]);
+    assert_eq!(feature["warnings"], json!([NOTE]));
+    // No user-facing message names a face, an edge or a vertex.
+    for notice in item["notices"].as_array().unwrap() {
+        let message = notice["message"].as_str().unwrap();
+        assert!(
+            !message.contains("E{") && !message.contains(":side(") && !message.contains("V{"),
+            "{message}"
+        );
+    }
 }
 
 #[test]

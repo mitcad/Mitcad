@@ -308,7 +308,7 @@ bool claudeDesktopKeepsClaudeCode(const QString& program) {
   }
   static const QRegularExpression version(QStringLiteral("^[0-9]+(\\.[0-9]+)*$"));
   // `claude-code/<version>/claude`, or a build folder between.
-  const auto keptAt = [&parts, count](qsizetype versionAt) {
+  const auto keptAt = [&parts](qsizetype versionAt) {
     return versionAt >= 1 && parts.at(versionAt - 1).compare(QStringLiteral("claude-code"), Qt::CaseInsensitive) == 0 &&
         version.match(parts.at(versionAt)).hasMatch();
   };

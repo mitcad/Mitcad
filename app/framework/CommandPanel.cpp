@@ -502,6 +502,12 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
   m_message = new CommandMessage;
   m_message->setObjectName(QStringLiteral("commandMessage"));
   layout->addWidget(m_message);
+  // The pointer over it paints the places its notices name (mitcad#1327).
+  connect(m_message, &CommandMessage::hovered, this, [this](bool hovered) {
+    if (CommandPresenter::actions().messageHovered) {
+      CommandPresenter::actions().messageHovered(hovered);
+    }
+  });
 
   auto* buttons = new QDialogButtonBox;
   m_buttonBox = buttons;
@@ -1634,6 +1640,8 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
     m_message->setMessage(message);
   }
   m_message->setProperty("noticeLevel", noticeLevelName(level));
+  // Where it is now, for the UI tests' hover (mitcad#1327).
+  scheduleMovedCheck();
   // What the panel says in its box, for UI tests (mitcad#531: the model's
   // refusal of a preview shown on the panel; mitcad#1040: its level).
   if (level == NoticeLevel::Error && !message.isEmpty()) {
@@ -1987,6 +1995,11 @@ QStringList CommandPanel::layoutLines() const {
   lines << (clipped.isEmpty() ? QStringLiteral("Panel %1 inputs: none clipped").arg(m_def.name)
                               : QStringLiteral("Panel %1 inputs clipped: %2")
                                     .arg(m_def.name, clipped.join(QStringLiteral(", "))));
+  // Where its message is, while it shows one (mitcad#1327: the pointer
+  // over it paints the places its notices name).
+  if (m_message != nullptr && m_message->isVisibleTo(this)) {
+    lines << QStringLiteral("Panel %1 message at %2").arg(m_def.name, position(m_message));
+  }
   // What a long panel's page shows of it: a place outside the view is
   // scrolled away, and a wheel over the bar scrolls it (UI tests in a low
   // window; MainWindow logs the places again when it scrolls).

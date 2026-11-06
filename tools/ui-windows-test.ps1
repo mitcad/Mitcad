@@ -642,7 +642,8 @@ Write-Host '--- A fillet whose edges a sketch change renamed (mitcad#272)'
 # lines next to the arc; then the arc goes and the circle c15 takes its
 # place, which renames the lines' faces. Opened, the fillet finds its edges
 # under their new names and the timeline and the warnings badge show its
-# warning. A plane at 90 radians warns too: the warning's level is the same
+# warning, one sentence for both edges and the extrusion's region without
+# its key (mitcad#1334). A plane at 90 radians warns too: the warning's level is the same
 # in its Browser row, the status line and
 # the Floating pill (mitcad#1040).
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
@@ -689,9 +690,10 @@ else {
   else {
     $driver = Join-Path $Out 'renamed.script'
     @'
-expect-log 'Feature warnings: .*Fillet1: edge E\{F2:side\(c14\[c9,c8\]\)\|F2:side\(c9\[c14,c11\]\)\} found as E\{F2:side\(c14\[c9,c8\]\)\|F2:side\(c9\[c14,c15\]\)\} after a change in Sketch1' 30
-expect-log 'Warnings badge: .*Fillet1: edge E\{F2:side\(c14\[c9,c8\]\)\|F2:side\(c9\[c14,c11\]\)\} found as ' 30
-expect-log 'found as E\{F2:side\(c10\[c15,c12\]\)\|F2:side\(c12\[c7,c10\]\)\} after a change in Sketch1' 30
+expect-log 'Feature warnings: .*Fillet1: 2 edges found again after a change in Sketch1' 30
+expect-log 'Warnings badge: .*Fillet1: 2 edges found again after a change in Sketch1' 30
+expect-log 'Warnings badge: .*Extrude1: a region found again after a change in Sketch1; Fillet1: 2 edges found again after a change in Sketch1' 30
+expect-never '^(Feature warnings|Warnings badge): .*r[{]'
 expect-ever 'Browser level .*/Tilted: warning'
 test-status-message warning 'A warning stays a warning'
 expect-log 'Status warning: A warning stays a warning' 10

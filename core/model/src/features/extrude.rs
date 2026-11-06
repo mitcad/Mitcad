@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::base::apply_tool;
 use super::path::{self, SketchCurves};
-use super::reference::ExtentObject;
+use super::reference::{Across, ExtentObject};
 // Surface extrusions (mitcad#455).
 use super::surface_sweeps;
 use super::{
@@ -559,18 +559,23 @@ pub fn selected_regions<'a>(
     found_regions(sketch, profiles, "").map(|(regions, _)| regions)
 }
 
+/// The regions of `found_regions` and the warnings of the references found
+/// under other keys, each with the reference it is about.
+pub(crate) type FoundRegionsOf<'a> = (Vec<ProfileRegion>, Vec<(String, &'a ProfileRef)>);
+
 /// `selected_regions` with the warnings of the references found under
-/// other keys (`FoundRegions::warning`, for the sketch named `name`).
+/// other keys (`FoundRegions::warning`, for the sketch named `name`), each
+/// with the reference it is about.
 pub(crate) fn found_regions<'a>(
     sketch: &SketchOutput,
     profiles: &'a [ProfileRef],
     name: &str,
-) -> Result<(Vec<ProfileRegion>, Vec<String>), &'a ProfileRef> {
+) -> Result<FoundRegionsOf<'a>, &'a ProfileRef> {
     let mut regions: Vec<ProfileRegion> = Vec::new();
     let mut warnings = Vec::new();
     for p in profiles {
         let found = sketch.found(&p.region).ok_or(p)?;
-        warnings.extend(found.warning(&p.region, name));
+        warnings.extend(found.warning(&p.region, name).map(|w| (w, p)));
         for region in found.profiles(&p.region) {
             if !regions.iter().any(|r| r.loops == region.loops) {
                 regions.push(region);
@@ -583,7 +588,8 @@ pub(crate) fn found_regions<'a>(
 /// The evaluated sketch of the profiles and the regions they select
 /// (`selected_regions`). A reference found under other keys warns
 /// (`region r{…} found as r{…} + r{…} after a change in Sketch1`), as
-/// renamed faces do (mitcad#272, mitcad#407).
+/// renamed faces do (mitcad#272, mitcad#407); its notice has the regions
+/// as places of the sketch (mitcad#1334).
 pub(crate) fn profile_regions<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     profiles: &[ProfileRef],
@@ -593,8 +599,9 @@ pub(crate) fn profile_regions<K: Kernel>(
     let name = ctx.feature_name(sketch_uid);
     let (regions, warnings) = found_regions(&sketch, profiles, &name)
         .map_err(|p| format!("{name} has no profile {}", p.region))?;
-    for warning in warnings {
-        ctx.warn(warning);
+    for (warning, p) in warnings {
+        let place = crate::notice::NoticePlace::region_of(p.sketch, p.region.to_string());
+        ctx.warn_at(warning, vec![place]);
     }
     Ok((sketch, regions))
 }
@@ -1085,6 +1092,12 @@ impl ExtrudeDef {
     ) -> Result<K::Shape, String> {
         let frame = placement.apply_frame(&sketch.frame);
         let normal = frame.normal();
+        // A point or a line object stands for the plane through it parallel
+        // to the profile's (mitcad#1329).
+        let across = Across {
+            normal,
+            lies: "in a plane parallel to the profile's plane",
+        };
         // The sketch normal, or a direction of its own (mitcad#539) moved
         // with the profile.
         let along = match self.direction {
@@ -1107,7 +1120,7 @@ impl ExtrudeDef {
             }
             Start::Object { object, offset } => {
                 let offset = offset.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
-                let target = object.resolve_linked(ctx, &self.object_links)?;
+                let target = object.resolve_across(ctx, &self.object_links, Some(across))?;
                 (ExtrudeStart::Object(Bound { target, offset }), 0.0)
             }
         };
@@ -1211,7 +1224,7 @@ impl ExtrudeDef {
                 SideView::ToObject(object, offset) => {
                     let offset = offset.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
                     SideEnd::Target(Bound {
-                        target: object.resolve_linked(ctx, &self.object_links)?,
+                        target: object.resolve_across(ctx, &self.object_links, Some(across))?,
                         offset,
                     })
                 }

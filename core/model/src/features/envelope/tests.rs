@@ -242,6 +242,124 @@ fn an_envelope_wraps_an_occurrences_bodies() {
     ));
 }
 
+/// An occurrence placed after the Envelope was built (mitcad#1321): the
+/// Envelope reads the assembly's structure, so it wraps the new placement
+/// at once and keeps it through an unrelated recompute, as the design
+/// opened from its file does, instead of taking its cached result.
+#[test]
+fn an_envelope_wraps_an_occurrence_placed_since() {
+    let mut doc = Document::new(MockKernel::default());
+    let (machine, _) = doc
+        .create_component(Some("Machine"), Transform::IDENTITY, true)
+        .unwrap();
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [0.0, 0.0], &num(60.0), &num(40.0))
+        .unwrap()
+        .region;
+    doc.add_feature(&extrude(sketch, &[&region], 20.0, "new_body", &[]), None)
+        .unwrap();
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let envelope = doc
+        .add_feature(&def(json!({"type": "envelope", "detail": 10})), None)
+        .unwrap()
+        .uid;
+    assert_eq!(doc.status(envelope), Some(&FeatureStatus::Ok));
+    let body = BodyUid::new(envelope, 0);
+    assert_eq!(shape(&doc, body).faces.len(), 6);
+
+    // Machine placed again 1000 mm away: two boxes, twelve faces.
+    doc.add_occurrence(
+        machine,
+        ComponentUid::ROOT,
+        Transform::translation([1000.0, 0.0, 0.0]),
+    )
+    .unwrap();
+    assert_eq!(shape(&doc, body).faces.len(), 12);
+    // An unrelated edit that recomputes keeps both.
+    doc.add_sketch(SketchPlane::Xy).unwrap();
+    assert_eq!(doc.status(envelope), Some(&FeatureStatus::Ok));
+    assert_eq!(shape(&doc, body).faces.len(), 12);
+    // As the design opened from its file has them.
+    let mut opened = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+    opened.recompute();
+    assert_eq!(shape(&opened, body).faces.len(), 12);
+}
+
+/// An Envelope naming an occurrence follows when the occurrence comes to
+/// place another component (mitcad#1321): a linked machine's second
+/// occurrence shown by its envelope goes into a component of its own
+/// (mitcad#1276), whose one envelope body the Envelope then wraps,
+/// although the occurrence's placement and the bodies of the component it
+/// placed before have not changed. (The mock gives a linked design's
+/// bodies one box each at the origin, so the Envelope's sources are told
+/// apart by its meshes, at a quarter of its detail size: the design's two
+/// bodies, then the one envelope body.)
+#[test]
+fn an_envelope_follows_its_occurrence_into_another_component() {
+    let dir = crate::testing::unique_temp_dir("1321-envelope-occurrence");
+    // A machine of two 10 mm blocks 90 mm apart.
+    let mut machine = Document::new(MockKernel::default());
+    for x in [0.0, 100.0] {
+        let sketch = machine.add_sketch(SketchPlane::Xy).unwrap().uid;
+        let region = machine
+            .add_rectangle(sketch, [x, 0.0], &num(10.0), &num(10.0))
+            .unwrap()
+            .region;
+        machine
+            .add_feature(&extrude(sketch, &[&region], 5.0, "new_body", &[]), None)
+            .unwrap();
+    }
+    std::fs::write(dir.join("machine.mitcad"), machine.to_json()).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    let options = crate::InsertOptions {
+        base: Some(dir.clone()),
+        ..crate::InsertOptions::default()
+    };
+    let (linked, first) = doc.insert_component("machine.mitcad", &options).unwrap();
+    let second = doc
+        .copy_occurrence(first, Some(Transform::translation([0.0, 200.0, 0.0])))
+        .unwrap();
+    // The Envelope's meshes (detail 4 mm: within 1 mm).
+    let meshed = |doc: &Document<MockKernel>| {
+        let tolerances = doc.kernel().mesh_tolerances.take();
+        tolerances
+            .iter()
+            .filter(|t| (t.deviation - 1.0).abs() < 1e-12)
+            .count()
+    };
+    doc.kernel().mesh_tolerances.take();
+    let envelope = doc
+        .add_feature(
+            &def(json!({"type": "envelope", "occurrence": second.to_string(), "detail": 4})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    assert_eq!(doc.status(envelope), Some(&FeatureStatus::Ok));
+    let body = BodyUid::new(envelope, 0);
+    // The linked design's two bodies.
+    assert_eq!(meshed(&doc), 2);
+    assert!(doc.body_shape(body).is_some());
+
+    // The second occurrence by its envelope at 100 mm, which closes the
+    // gap: it places a component of its own with one body.
+    let shown = doc
+        .set_link_envelope(second, true, Some(100.0), Some(&dir), false)
+        .unwrap();
+    assert_ne!(shown.component, linked);
+    assert_eq!(
+        doc.assembly().occurrence(second).map(|o| o.component),
+        Some(shown.component)
+    );
+    assert_eq!(doc.status(envelope), Some(&FeatureStatus::Ok));
+    // Built again from that component's one body, not taken from the
+    // cache.
+    assert_eq!(meshed(&doc), 1);
+    assert!(doc.body_shape(body).is_some());
+    crate::testing::remove_temp(&dir);
+}
+
 /// With no bodies there is nothing to wrap.
 #[test]
 fn an_envelope_needs_bodies() {

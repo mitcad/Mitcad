@@ -288,6 +288,10 @@ signals:
   // (mitcad#1022), or left them (an invalid node: another row, or out of
   // the rows). The root's row stands for no bodies of its own here.
   void bodiesHovered(const mitcad::BrowserNode& node);
+  // The pointer came over a feature's, a sketch's or a construction
+  // feature's row, or left them (an empty uid; mitcad#1327: the view paints
+  // the places its notices name).
+  void featureHovered(const QString& uid);
   // The fx badge of a bound row (mitcad#862): the pointer rests on it
   // (`pinned` false) or it was clicked; `anchor` is the badge in global
   // coordinates. The controller shows the row's bindings card.
@@ -400,6 +404,10 @@ private:
   // bodiesHovered when it changes (its key, empty: none).
   void hoverBodies(const BrowserNode& node);
   QString m_hoveredBodies;
+  // The feature row under the pointer (mitcad#1327): featureHovered when
+  // it changes (its uid, empty: none).
+  void hoverFeature(const BrowserNode& node);
+  QString m_hoveredFeature;
   QWidget* m_topBar = nullptr; // setTopBar (mitcad#807)
   // The pointer resting on a row's fx badge (mitcad#862): after a moment
   // bindingsRequested (not pinned). The row's key, empty: on no badge.

@@ -1,4 +1,4 @@
-# Fillet corners where a rounding ends: 0130–0540, 1140, 1170, 1210, 1220, 1240
+# Fillet corners where a rounding ends: 0130–0540, 1140, 1170, 1210, 1220, 1240, 1290
 
 The corners OCCT's rolling ball fillet builds where a rounding ends at a
 vertex (`PerformIntersectionAtEnd`, `PerformOneCorner`), in the rounds of
@@ -688,6 +688,36 @@ fail on the faces 2 µm apart). Against the file's body, the material within
 a wedge of 6 degrees round a mouth is 0.04 mm³ more, within the arc beside
 it (39 degrees) 0.19 mm³ more. The rounding of the rim takes about 10 s.
 
+## 1290: no end past the vertex on a face closed round its surface
+
+The patch 1290 restricts 1140 and 1170 (mitcad#1336): a pin of radius 4.5
+standing on a plate's top flush with the plate's end, a half round of the
+pin's radius whose sides are tangent to the pin, the pin's cylinder and
+the plate's end one face, closed round the axis. The pin's foot is rounded
+with 1 along its arc of 302 degrees; its ends lie where the sides start,
+and patch 0911 has the corner cut them by the sides, which grow up to the
+rounding, as the stored design's body has it (`5ef2dbd5` item 51,
+round 12 of mitcad#343).
+
+### 1290-chfi3d-cut-to-end-past-the-vertex-not-on-a-face-closed-round-its-axis
+
+From patch 1140 on, `ChFi3d_KPartCutToEnd` took those ends past the
+vertex: the side's edge with the pin, Eq, meets the other contact's line
+only beyond the vertex, along its line up the pin. But that line is a
+closed circle there: the analytic piece's parameters at its ends were the
+whole line's, a period apart (the last end's section on the line at the
+start of the period), so the pieces cut from it ran the wrong way round;
+and at one end Eq's line beyond the vertex is the pin's seam, which Eq was
+prolonged over. The fillet came out not valid (two tori, one inside out,
+or an unorientable cylinder), and the import's check refused it ("the
+fillet would leave the body open"). The end past the vertex is no longer
+taken where the other contact's face Fo has a seam: the corner closes it
+as before 1140. The cases of 1140 and 1170 (a floor, a wall, a corner's
+cylinder, none closed round its surface) build as before.
+
+On the stored body before the item: valid, one torus, the material added
+4.76572 against the file's 4.76602 mm³, as with 0911 alone.
+
 ## Reports and tests
 
 - 0130 to 0139, 0210 to 0219, 0280 to 0289, 0290 to 0299, 0340 to 0349 and
@@ -733,3 +763,8 @@ it (39 degrees) 0.19 mm³ more. The rounding of the rim takes about 10 s.
   fillet, also after its floor is rounded; the reported part
   (`MITCAD_STEP_REPORTED`, skipped without it) at both corners and on the
   sliver, clean at every radius.
+- 1290: mitcad#1336 and, in `geometry/tests/test_fillet_tangent_end_face.cpp`,
+  a pin on a plate's end, the pin and the end one face with its seam along
+  a side, rounded at its foot with OCCT alone: valid, one torus, the
+  material added within 1e-6 of the ring at the foot within the sides'
+  planes (failing without the patch: not valid, two tori).

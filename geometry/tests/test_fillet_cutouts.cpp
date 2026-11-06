@@ -203,7 +203,8 @@ void test_rounding_over_lugs_is_the_faces_with_the_lugs_joined_again() {
   CHECK(!bevel.empty());
   const ShapePtr rounded = fillet("F2", *body, {bevel}, 0.9);
   CHECK(detail::is_valid(rounded->occt()));
-  CHECK(rounded->notes().size() == 1);
+  // (Built with the lugs cleared and put back: no note on how, mitcad#1327.)
+  CHECK(rounded->notes().empty());
   // The face rounded without the lugs, the lugs joined to it after.
   const TopoDS_Shape plain = wall();
   BRepFilletAPI_MakeFillet whole(plain);

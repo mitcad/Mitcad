@@ -9,6 +9,7 @@
 // (readProjects); the panel turns the answer into rows (projectRows) on
 // the UI thread.
 
+#include <QDateTime>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -32,6 +33,9 @@ struct ProjectDesignRow {
   QString lockOwner;
   bool lockMine = false;
   bool lockSameOwner = false;
+  // When the file last changed (`project_tree`'s `modified`; invalid: not
+  // given), the Start page's cards (mitcad#1301).
+  QDateTime modified;
 };
 
 // A project as the panel shows it.

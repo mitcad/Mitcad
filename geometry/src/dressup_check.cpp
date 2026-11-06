@@ -8,14 +8,20 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
 #include <BRepTools.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_Surface.hxx>
@@ -37,10 +43,13 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 
+#include "face_select.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry::detail {
 namespace {
+
+using Place = Shape::NotePlace;
 
 // Points looked at on all the made faces together, and at most on one.
 constexpr int kPoints = 600;
@@ -49,10 +58,17 @@ constexpr int kFacePoints = 49;
 // all the made faces together and at most on one.
 constexpr int kDistances = 60;
 constexpr int kFaceDistances = 6;
-// How far to the wrong side counts, of the dressup's size.
-constexpr double kReach = 0.01;
-// How far the made faces' tolerances may widen that at most, of the size.
+// How far to the wrong side counts, of the dressup's size (mitcad#1327:
+// 1 % before, which a three-fillet corner's 1.9 % tripped).
+constexpr double kReach = kDressupReach;
+// How far the made faces' tolerances may widen that at most, of the size,
+// and a corner patch's (a made face beside three or more dressup faces,
+// whose surface OCCT approximates within its tolerances).
 constexpr double kTolerated = 0.05;
+constexpr double kPatchTolerated = 0.25;
+// A face a ring's dressup leaves of a face it ran over, smaller across
+// than this of the size, is a sliver (the area of a square that wide).
+constexpr double kSliver = 0.01;
 // How far a ray from a point of a made face looks for the input's boundary,
 // of the size, and the least cosine of its angle with the boundary's normal
 // there that tells the side.
@@ -204,11 +220,12 @@ std::string millimetres(double value) {
   return text;
 }
 
-// The worst made face of a kind found, how far it reaches, how many faces
-// are of the kind, and the input's face it reaches past.
+// The worst made face of a kind found, how far it reaches and where, how
+// many faces are of the kind, and the input's face it reaches past.
 struct Outcome {
   int worst = -1;
   double reach = 0.0;
+  gp_Pnt at;
   int faces = 0;
   int beside = -1;
 };
@@ -231,6 +248,26 @@ std::string own_edge(const std::string& name, const std::string& feature, const 
   return text.compare(0, 2, "E{") == 0 ? text : std::string();
 }
 
+// The names of the two faces in an edge's name E{a|b} (split at its bar
+// outside brackets); none for another name.
+std::vector<std::string> named_faces_of_edge(const std::string& edge) {
+  if (edge.size() < 4 || edge.compare(0, 2, "E{") != 0 || edge.back() != '}') {
+    return {};
+  }
+  int depth = 0;
+  for (std::size_t i = 2; i + 1 < edge.size(); ++i) {
+    const char c = edge[i];
+    if (c == '{' || c == '(' || c == '[') {
+      ++depth;
+    } else if (c == '}' || c == ')' || c == ']') {
+      --depth;
+    } else if (c == '|' && depth == 0) {
+      return {edge.substr(2, i - 2), edge.substr(i + 1, edge.size() - i - 2)};
+    }
+  }
+  return {};
+}
+
 // Whether the face's surface is a plane, cylinder, cone, sphere or torus.
 bool elementary(const TopoDS_Face& face) {
   switch (BRepAdaptor_Surface(face, false).GetType()) {
@@ -245,38 +282,140 @@ bool elementary(const TopoDS_Face& face) {
   }
 }
 
-// Whether a point of a made face of a concave edge lies over the input's
-// face `face` beside the edge (mitcad#1260): a ray from it to its foot on
-// the face's surface meets the input's boundary (`boundary`, loaded into
-// `rays`) by the foot. None where it does, or where the point lies on that
-// surface; else how far the foot lies from the input (the made face hangs
-// out past the body's original extent there).
-std::optional<double> past_extent(IntCurvesFace_ShapeIntersector& rays, const TopoDS_Shape& boundary,
-                                  const gp_Pnt& point, const TopoDS_Face& face, double allowed) {
+// Whether a face's name is a dressup's: <feature>:fillet(…), :chamfer(…)
+// or :corner(…), of any feature.
+bool dressup_name(const std::string& name) {
+  const std::size_t colon = name.find(':');
+  if (colon == std::string::npos || name.find('(') < colon) {
+    return false;
+  }
+  for (const char* role : {"fillet(", "chamfer(", "corner("}) {
+    if (name.compare(colon + 1, std::char_traits<char>::length(role), role) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether a face of the result lies beside three or more faces of
+// dressups (this one's or earlier ones'): a corner patch where they meet,
+// whose surface OCCT approximates (mitcad#1327).
+bool corner_patch(const Shape& result, int f) {
+  std::set<int> beside;
+  for (TopExp_Explorer e(result.face(f), TopAbs_EDGE); e.More(); e.Next()) {
+    const int edge = result.edge_index(e.Current());
+    if (edge < 0) {
+      continue;
+    }
+    for (const int other : result.edge_faces(edge)) {
+      if (other >= 0 && other != f && !result.face_names(other).empty() &&
+          dressup_name(result.face_names(other).front())) {
+        beside.insert(other);
+      }
+    }
+  }
+  return beside.size() >= 3;
+}
+
+// The foot of a made face's point on the surface of the input's face
+// `face`, and whether the point lies over that face: a ray from it to the
+// foot meets the input's boundary (loaded into `rays`) by the foot, or the
+// point lies on the surface. None where no foot is found.
+struct Foot {
+  gp_Pnt at;
+  bool over = true;
+};
+std::optional<Foot> foot_on(IntCurvesFace_ShapeIntersector& rays, const gp_Pnt& point, const TopoDS_Face& face,
+                            double allowed) {
   const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
   if (surface.IsNull()) {
     return std::nullopt;
   }
-  GeomAPI_ProjectPointOnSurf foot(point, surface);
-  if (foot.NbPoints() == 0 || foot.LowerDistance() <= allowed) {
+  GeomAPI_ProjectPointOnSurf projected(point, surface);
+  if (projected.NbPoints() == 0) {
     return std::nullopt;
   }
-  const gp_Pnt on = foot.NearestPoint();
-  rays.Perform(gp_Lin(point, gp_Dir(gp_Vec(point, on))), 0.0, foot.LowerDistance() + allowed);
-  if (rays.IsDone() && rays.NbPnt() > 0) {
-    return std::nullopt;
+  Foot foot;
+  foot.at = projected.NearestPoint();
+  if (projected.LowerDistance() <= allowed) {
+    return foot;
   }
-  BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(on).Vertex(), boundary);
-  return distance.IsDone() ? std::optional<double>(distance.Value()) : std::nullopt;
+  rays.Perform(gp_Lin(point, gp_Dir(gp_Vec(point, foot.at))), 0.0, projected.LowerDistance() + allowed);
+  foot.over = rays.IsDone() && rays.NbPnt() > 0;
+  return foot;
+}
+
+// The input's faces that continue face `face` smoothly across one of its
+// edges (a rounding of that edge, tangent to it): a dressup of a tangent
+// chain runs on over them where it leaves the face (mitcad#1327).
+std::vector<int> smooth_neighbours(const Shape& input, int face) {
+  std::vector<int> found;
+  for (TopExp_Explorer e(input.face(face), TopAbs_EDGE); e.More(); e.Next()) {
+    const int edge = input.edge_index(e.Current());
+    if (edge < 0) {
+      continue;
+    }
+    for (const int other : input.edge_faces(edge)) {
+      if (other < 0 || other == face || std::find(found.begin(), found.end(), other) != found.end()) {
+        continue;
+      }
+      try {
+        if (is_smooth(input.edge(edge), input.face(face), input.face(other))) {
+          found.push_back(other);
+        }
+      } catch (const std::runtime_error&) {
+        // (No normal there: not told smooth.)
+      }
+    }
+  }
+  return found;
+}
+
+// A face of `shape` as a place, by its first name (none without one).
+void add_face(std::vector<Place>& places, const Shape& shape, int f) {
+  if (f >= 0 && f < shape.face_count() && !shape.face_names(f).empty()) {
+    places.push_back(Place::of(Place::Kind::Face, shape.face_names(f).front()));
+  }
+}
+
+void add_point(std::vector<Place>& places, const gp_Pnt& point) {
+  places.push_back(Place::at(point.X(), point.Y(), point.Z()));
+}
+
+// A made face as the subject of a warning's sentence, without its name:
+// "The corner of the fillet", "The fillet", "A face of the fillet".
+std::string subject(const std::string& name, const std::string& feature, const char* role) {
+  const std::string corner = feature + ":corner(";
+  const std::string own = feature + ":" + role + "(";
+  if (name.compare(0, corner.size(), corner) == 0) {
+    return std::string("The corner of the ") + role;
+  }
+  if (name.compare(0, own.size(), own) == 0) {
+    return std::string("The ") + role;
+  }
+  return std::string("A face of the ") + role;
+}
+
+// " (and on 2 more faces)" for three faces; nothing for one.
+std::string more_faces(int faces) {
+  return faces > 1 ? " (and on " + std::to_string(faces - 1) + " more " + (faces == 2 ? "face" : "faces") + ")"
+                   : std::string();
+}
+
+double face_area(const TopoDS_Face& face) {
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props);
+  return props.Mass();
 }
 
 // The faces of a dressup's result of concave edges that lie on the surface
 // of the input's face they are named after but face the other way
 // (mitcad#1260: the underside of a chamfer hanging out past a narrow face,
-// named after that face): "face F… is turned over …" for the first, with
-// how many more; empty for none. Made faces (`made`) and faces of the
-// input kept as they are are not looked at.
-std::string turned_over(const Shape& input, const Shape& result, const std::vector<int>& made, const char* role) {
+// named after that face): "A face beside the chamfer is turned over on its
+// surface …" for the first, with how many more, its places the face and a
+// point of it; empty for none. Made faces (`made`) and faces of the input
+// kept as they are are not looked at.
+DressupFinding turned_over(const Shape& input, const Shape& result, const std::vector<int>& made, const char* role) {
   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> kept;
   std::map<std::string, int> by_name;
   for (int f = 0; f < input.face_count(); ++f) {
@@ -285,7 +424,8 @@ std::string turned_over(const Shape& input, const Shape& result, const std::vect
       by_name.emplace(name, f);
     }
   }
-  std::string first;
+  int first = -1;
+  gp_Pnt at;
   int turned = 0;
   for (int f = 0; f < result.face_count(); ++f) {
     const NameList& names = result.face_names(f);
@@ -317,17 +457,26 @@ std::string turned_over(const Shape& input, const Shape& result, const std::vect
       const std::optional<gp_Dir> normal = outward_normal(BRepAdaptor_Surface(original, false), original, u, v);
       if (normal && normal->Dot(*sample.normal) < -0.5) {
         if (turned++ == 0) {
-          first = "face " + names.front() + " is turned over on its surface (it faces into the body), where the " +
-                  role + " hangs out past it";
+          first = f;
+          at = sample.point;
         }
       }
       break;
     }
   }
-  if (turned > 1) {
-    first += " (and " + std::to_string(turned - 1) + " more " + (turned == 2 ? "face" : "faces") + ")";
+  DressupFinding found;
+  if (turned == 0) {
+    return found;
   }
-  return first;
+  found.text = std::string("A face beside the ") + role +
+               " is turned over on its surface (it faces into the body), where the " + role + " hangs out past it";
+  if (turned > 1) {
+    found.text += " (and " + std::to_string(turned - 1) + " more " + (turned == 2 ? "face" : "faces") + ")";
+  }
+  found.text += ".";
+  add_face(found.places, result, first);
+  add_point(found.places, at);
+  return found;
 }
 
 } // namespace
@@ -388,15 +537,17 @@ std::optional<DressupSide> dressup_side(const Shape& body, const std::vector<int
   return side;
 }
 
-std::string dressup_warning(const Shape& input, const Shape& result, const std::string& feature, const char* role,
-                            DressupSide side, double size) {
+
+DressupFinding dressup_check(const Shape& input, const Shape& result, const std::string& feature, const char* role,
+                             DressupSide side, double size) {
+  DressupFinding none;
   if (!(size > 0.0)) {
-    return {};
+    return none;
   }
   try {
     OCC_CATCH_SIGNALS
     if (!closed_solids(input.occt())) {
-      return {};
+      return none;
     }
     const std::string prefix = feature + ":";
     std::vector<int> made;
@@ -408,7 +559,7 @@ std::string dressup_warning(const Shape& input, const Shape& result, const std::
       }
     }
     if (made.empty()) {
-      return {};
+      return none;
     }
     // The corners first: where a rounding goes wrong, it is mostly there.
     const std::string corner = feature + ":corner(";
@@ -449,20 +600,25 @@ std::string dressup_warning(const Shape& input, const Shape& result, const std::
     }
     const int per_face = std::clamp(kPoints / static_cast<int>(made.size()), 1, kFacePoints);
     int distances = 0;
-    int worst = -1;
-    double worst_reach = 0.0;
-    int faces_out = 0;
-    // Of concave edges (mitcad#1260): made faces hanging out past the
-    // body's original extent, and faces of the input turned over.
+    // Made faces reaching to the wrong side of the body; of concave edges
+    // (mitcad#1260) also made faces hanging out past the body's original
+    // extent, and faces of the input turned over.
+    Outcome wrong;
     Outcome past;
+    // The input's faces that continue each face beside an edge smoothly.
+    std::map<int, std::vector<int>> smooth;
     for (const int f : made) {
       throw_if_cancelled();
       const TopoDS_Face& face = result.face(f);
       // (Within the face's tolerances, but never by more than a twentieth of
       // the size: a corner OCCT gave tolerances wider than its rounding,
-      // 1.8 mm on one of 1 mm, is no excuse.)
-      const double allowed = std::max(kReach * size, std::min(2.0 * face_tolerance(face), kTolerated * size));
+      // 1.8 mm on one of 1 mm, is no excuse. A corner patch where three or
+      // more dressup faces meet, whose surface OCCT approximates, up to a
+      // quarter of it, mitcad#1327.)
+      const double tolerated = corner_patch(result, f) ? kPatchTolerated : kTolerated;
+      const double allowed = std::max(kReach * size, std::min(2.0 * face_tolerance(face), tolerated * size));
       double deepest = 0.0;
+      gp_Pnt deepest_at;
       int measured = 0;
       // The faces of the made face's edge in the input, where it has one:
       // a dressup of a concave edge fills the corner between them, every
@@ -483,6 +639,7 @@ std::string dressup_warning(const Shape& input, const Shape& result, const std::
         }
       }
       double farthest_past = 0.0;
+      gp_Pnt past_at;
       int past_measured = 0;
       int past_face = -1;
       for (const FacePoint& sample : face_points(face, per_face)) {
@@ -491,14 +648,33 @@ std::string dressup_warning(const Shape& input, const Shape& result, const std::
           if (distances >= kDistances || past_measured >= kFaceDistances) {
             break;
           }
-          const std::optional<double> out = past_extent(rays, boundary, point, input.face(b), allowed);
-          if (out) {
-            ++distances;
-            ++past_measured;
-            if (*out > allowed && *out > farthest_past) {
-              farthest_past = *out;
-              past_face = b;
-            }
+          const std::optional<Foot> foot = foot_on(rays, point, input.face(b), allowed);
+          if (!foot || foot->over) {
+            continue;
+          }
+          // Over a face that continues it smoothly (a rounding of its edge)
+          // the dressup of a tangent chain runs on: not past the body's
+          // extent (mitcad#1327: a fillet's contact running from a face onto
+          // the rounding of its edge, 0.057 mm off the face's surface).
+          auto neighbours = smooth.find(b);
+          if (neighbours == smooth.end()) {
+            neighbours = smooth.emplace(b, smooth_neighbours(input, b)).first;
+          }
+          const bool continued =
+              std::any_of(neighbours->second.begin(), neighbours->second.end(), [&](int n) {
+                const std::optional<Foot> on = foot_on(rays, point, input.face(n), allowed);
+                return on && on->over;
+              });
+          if (continued) {
+            continue;
+          }
+          ++distances;
+          ++past_measured;
+          BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(foot->at).Vertex(), boundary);
+          if (distance.IsDone() && distance.Value() > allowed && distance.Value() > farthest_past) {
+            farthest_past = distance.Value();
+            past_face = b;
+            past_at = point;
           }
         }
         // (The ray into what a rounding of convex edges takes away, or out
@@ -509,23 +685,25 @@ std::string dressup_warning(const Shape& input, const Shape& result, const std::
           told = ray_side(rays, point, side == DressupSide::Within ? *sample.normal : sample.normal->Reversed(),
                           allowed, kRayReach * size);
         }
-        const bool wrong = told ? *told == (side == DressupSide::Within ? RaySide::Outside : RaySide::Inside)
-                                : classified_wrong(point);
-        if (!wrong || distances >= kDistances || measured >= kFaceDistances) {
+        const bool on_wrong_side = told ? *told == (side == DressupSide::Within ? RaySide::Outside : RaySide::Inside)
+                                        : classified_wrong(point);
+        if (!on_wrong_side || distances >= kDistances || measured >= kFaceDistances) {
           continue;
         }
         ++distances;
         ++measured;
         BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(point).Vertex(), boundary);
-        if (distance.IsDone() && distance.Value() > allowed) {
-          deepest = std::max(deepest, distance.Value());
+        if (distance.IsDone() && distance.Value() > allowed && distance.Value() > deepest) {
+          deepest = distance.Value();
+          deepest_at = point;
         }
       }
       if (deepest > 0.0) {
-        ++faces_out;
-        if (deepest > worst_reach) {
-          worst_reach = deepest;
-          worst = f;
+        ++wrong.faces;
+        if (deepest > wrong.reach) {
+          wrong.reach = deepest;
+          wrong.worst = f;
+          wrong.at = deepest_at;
         }
       }
       if (farthest_past > 0.0) {
@@ -533,48 +711,187 @@ std::string dressup_warning(const Shape& input, const Shape& result, const std::
         if (farthest_past > past.reach) {
           past.reach = farthest_past;
           past.worst = f;
+          past.at = past_at;
           past.beside = past_face;
         }
       }
     }
-    const auto more = [](int faces) {
-      return faces > 1 ? " (and on " + std::to_string(faces - 1) + " more " + (faces == 2 ? "face" : "faces") + ")"
-                       : std::string();
+    const auto name_of = [&](int f) {
+      const NameList& names = result.face_names(f);
+      return names.empty() ? std::string() : names.front();
     };
-    std::vector<std::string> found;
-    if (worst >= 0) {
-      const NameList& names = result.face_names(worst);
-      found.push_back(made_face(names.empty() ? std::string("?") : names.front(), feature, role, true) + " reaches " +
-                      millimetres(worst_reach) + " mm " +
-                      (side == DressupSide::Within ? "out of the body, where a " : "into the body, where a ") + role +
-                      (side == DressupSide::Within ? " of convex edges only takes material away"
-                                                   : " of concave edges only adds material") +
-                      ": its surface is folded or spiked there" + more(faces_out));
+    DressupFinding found;
+    std::vector<std::string> sentences;
+    if (wrong.worst >= 0) {
+      sentences.push_back(subject(name_of(wrong.worst), feature, role) + " reaches " + millimetres(wrong.reach) +
+                          " mm " + (side == DressupSide::Within ? "out of the body, where a " : "into the body, where a ") +
+                          role +
+                          (side == DressupSide::Within ? " of convex edges only takes material away"
+                                                       : " of concave edges only adds material") +
+                          ": it folds back on itself or ends in a spike there" + more_faces(wrong.faces) + ".");
+      add_face(found.places, result, wrong.worst);
+      add_point(found.places, wrong.at);
     }
     if (past.worst >= 0) {
-      const NameList& names = result.face_names(past.worst);
-      const NameList& beside = input.face_names(past.beside);
-      found.push_back(made_face(names.empty() ? std::string("?") : names.front(), feature, role, true) + " reaches " +
-                      millimetres(past.reach) + " mm past the body's original extent, where a " + role +
-                      " of concave edges only fills the corner between its faces: it hangs out past the edge of " +
-                      "face " + (beside.empty() ? std::string("?") : beside.front()) + more(past.faces));
+      sentences.push_back(subject(name_of(past.worst), feature, role) + " hangs " + millimetres(past.reach) +
+                          " mm past the edge of the face beside it, where a " + role +
+                          " of concave edges only fills the corner between its faces" + more_faces(past.faces) + ".");
+      add_face(found.places, result, past.worst);
+      add_face(found.places, input, past.beside);
+      add_point(found.places, past.at);
     }
     if (side == DressupSide::Outside) {
-      const std::string turned = turned_over(input, result, made, role);
+      DressupFinding turned = turned_over(input, result, made, role);
       if (!turned.empty()) {
-        found.push_back(turned);
+        sentences.push_back(turned.text);
+        found.places.insert(found.places.end(), turned.places.begin(), turned.places.end());
       }
     }
-    if (found.empty()) {
-      return {};
+    if (sentences.empty()) {
+      return none;
     }
-    std::string text = found.front();
-    for (std::size_t k = 1; k < found.size(); ++k) {
-      text += "; " + found[k];
+    for (const std::string& sentence : sentences) {
+      found.text += (found.text.empty() ? "" : " ") + sentence;
     }
-    return text + "; check the result";
+    found.text += " Check the result.";
+    return found;
   } catch (const Standard_Failure&) {
-    return {};
+    return none;
+  }
+}
+
+std::string dressup_warning(const Shape& input, const Shape& result, const std::string& feature, const char* role,
+                            DressupSide side, double size) {
+  return dressup_check(input, result, feature, role, side, size).text;
+}
+
+DressupFinding ring_check(const Shape& input, const Shape& result, const std::string& feature, const char* role,
+                          double size) {
+  DressupFinding none;
+  if (!(size > 0.0)) {
+    return none;
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    const std::string prefix = feature + ":";
+    const auto made = [&](int f) {
+      const NameList& names = result.face_names(f);
+      return !names.empty() && names.front().compare(0, prefix.size(), prefix) == 0;
+    };
+    // A rounding meets the faces beside it tangentially; a bevel at an
+    // angle, which is no edge left.
+    const bool rounding = std::string(role) == "fillet";
+    const double least = kSliver * size * kSliver * size;
+    double sharpest = 0.0;
+    int sharp_edge = -1;
+    int sharp_made = -1;
+    int sharp_face = -1;
+    int sharp_edges = 0;
+    double smallest = 0.0;
+    int sliver = -1;
+    int sliver_made = -1;
+    int slivers = 0;
+    std::set<int> looked;
+    for (int e = 0; e < result.edge_count(); ++e) {
+      throw_if_cancelled();
+      const std::array<int, 2> faces = result.edge_faces(e);
+      if (faces[0] < 0 || faces[1] < 0 || made(faces[0]) == made(faces[1])) {
+        continue;
+      }
+      const int m = made(faces[0]) ? faces[0] : faces[1];
+      const int other = m == faces[0] ? faces[1] : faces[0];
+      const NameList& names = result.face_names(other);
+      if (names.empty()) {
+        continue;
+      }
+      // (The two faces of the made face's own edge: the ring rounds the
+      // edge between them, meeting them as it should.)
+      const std::vector<std::string> own =
+          named_faces_of_edge(own_edge(result.face_names(m).front(), feature, role));
+      if (std::find(own.begin(), own.end(), names.front()) != own.end()) {
+        continue;
+      }
+      // A face it ran over: met at an angle, a rounding leaves an edge.
+      if (rounding && !BRep_Tool::Degenerated(result.edge(e))) {
+        double angle = 0.0;
+        try {
+          for (const double t : {0.1, 0.5, 0.9}) {
+            angle = std::max(angle, normal_angle(result.edge(e), result.face(m), result.face(other), t));
+          }
+        } catch (const std::runtime_error&) {
+          angle = 0.0; // (No normal there: not told.)
+        }
+        if (angle > kRingEdgeAngle) {
+          ++sharp_edges;
+          if (angle > sharpest) {
+            sharpest = angle;
+            sharp_edge = e;
+            sharp_made = m;
+            sharp_face = other;
+          }
+        }
+      }
+      // And cut down to a sliver, a notch is left of it. (A face that was
+      // as small in the input is none the ring left.)
+      if (looked.insert(other).second) {
+        const double area = face_area(result.face(other));
+        if (area < least) {
+          double before = 0.0;
+          for (const int k : input.find_faces(names.front())) {
+            before = std::max(before, face_area(input.face(k)));
+          }
+          if (before > least) {
+            ++slivers;
+            if (sliver < 0 || area < smallest) {
+              smallest = area;
+              sliver = other;
+              sliver_made = m;
+            }
+          }
+        }
+      }
+    }
+    std::vector<std::string> sentences;
+    DressupFinding found;
+    if (sharp_edge >= 0) {
+      char degrees[16];
+      std::snprintf(degrees, sizeof degrees, "%.0f", sharpest * 57.29577951308232);
+      std::string text = std::string("The ") + role + " runs onto a face beside it and leaves an edge there, " +
+                         degrees + " degrees between the faces";
+      if (sharp_edges > 1) {
+        text += " (and " + std::to_string(sharp_edges - 1) + " more " + (sharp_edges == 2 ? "edge" : "edges") + ")";
+      }
+      sentences.push_back(text + ".");
+      add_face(found.places, result, sharp_made);
+      add_face(found.places, result, sharp_face);
+      if (!result.edge_name(sharp_edge).empty()) {
+        found.places.push_back(Place::of(Place::Kind::Edge, result.edge_name(sharp_edge)));
+      }
+      const BRepAdaptor_Curve curve(result.edge(sharp_edge));
+      add_point(found.places, curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())));
+    }
+    if (sliver >= 0) {
+      std::string text = std::string("The ") + role + " cuts a face it runs over down to a sliver: it leaves a notch there";
+      if (slivers > 1) {
+        text += " (and " + std::to_string(slivers - 1) + " more)";
+      }
+      sentences.push_back(text + ".");
+      add_face(found.places, result, sliver);
+      add_face(found.places, result, sliver_made);
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(result.face(sliver), props);
+      add_point(found.places, props.CentreOfMass());
+    }
+    if (sentences.empty()) {
+      return none;
+    }
+    for (const std::string& sentence : sentences) {
+      found.text += (found.text.empty() ? "" : " ") + sentence;
+    }
+    found.text += " Check the result.";
+    return found;
+  } catch (const Standard_Failure&) {
+    return none;
   }
 }
 

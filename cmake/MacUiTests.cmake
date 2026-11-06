@@ -936,3 +936,5 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE AND TAR
       TIMEOUT 210 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
   endif()
 endif()
+
+mitcad_macos_headless_tests()

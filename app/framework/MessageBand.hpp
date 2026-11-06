@@ -99,9 +99,14 @@ signals:
   void historyRequested();
   // Its size or what it shows changed: placed again.
   void layoutChanged();
+  // The pointer came over the message shown (in full or in the stub) about
+  // `feature`, or left it (an empty uid; mitcad#1327: the view paints the
+  // places of the feature's notices meanwhile).
+  void noticeHovered(const QString& feature);
 
 protected:
   void changeEvent(QEvent* event) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
   void refresh();
@@ -117,6 +122,8 @@ private:
   int m_width = 0;
   bool m_refreshing = false;
   QString m_loggedPlaces;
+  QString m_loggedTextPlace;
+  bool m_noticeHovered = false; // noticeHovered with a feature last
 };
 
 // The session's message history (mitcad#1042): a panel over the window,

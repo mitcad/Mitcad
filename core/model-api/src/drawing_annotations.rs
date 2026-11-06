@@ -28,7 +28,7 @@
 //! foreshortened: they are refused there, and an aligned dimension
 //! measures the true distance of its picks in 3D.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ use mitcad_model_drawing::def::{
 };
 use mitcad_model_drawing::internal::BodyInView;
 use mitcad_model_drawing::internal::sketch_dimension;
-use mitcad_model_drawing::sheet::Group;
+use mitcad_model_drawing::sheet::{Group, Item};
 use mitcad_model_drawing::tables::{
     HOLE_COLUMNS, Levels, PARTS_COLUMNS, TableSettings, header, lay_out_table,
 };
@@ -238,6 +238,16 @@ pub(super) struct PickQuery {
     want: Option<Want>,
 }
 
+/// The `drawing_corners` query (mitcad#1338): the corners each drawn view
+/// of a sheet shows, sheet mm.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CornersQuery {
+    drawing: String,
+    #[serde(default)]
+    sheet: usize,
+}
+
 /// A sheet's annotations worked out: their groups to draw, their entries
 /// for the `drawing` query, why those that are broken are, and the sketch
 /// dimensions its views retrieved (indices into the list given).
@@ -262,6 +272,9 @@ struct Found {
 struct Candidate {
     pick: ViewPick,
     found: Found,
+    /// A centre's pick made on the line of its centre mark (mitcad#1338):
+    /// that line (view mm), shown under the pointer with the centre.
+    line: Option<[P2; 2]>,
 }
 
 /// A view drawn, with what its annotations need: its index among the
@@ -286,6 +299,11 @@ pub(super) struct ViewAt<'a> {
     /// How many occurrences below the drawing's component its subject lies
     /// (an occurrence's path; 0 for the design or chosen bodies).
     pub(super) subject_depth: usize,
+    /// Whether it draws its automatic centre marks, and the picks of its
+    /// centre mark annotations (mitcad#1338: a click on a mark's line
+    /// picks its circle's centre).
+    center_marks: bool,
+    marked: Vec<ViewPick>,
 }
 
 impl ViewAt<'_> {
@@ -1167,6 +1185,10 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
     /// it on the sheet (`items`, sheet mm), or `"pick": null`.
     fn drawing_pick_json(&self, query: &PickQuery) -> Result<Value, ApiError>;
 
+    /// `drawing_corners` (mitcad#1338): the corners each drawn view of a
+    /// sheet shows on its visible lines, the points a click there picks.
+    fn drawing_corners_json(&self, query: &CornersQuery) -> Result<Value, ApiError>;
+
     /// A sheet's annotations worked out for drawing it: each view's (and
     /// its automatic centre marks and retrieved dimensions) and the text
     /// notes. `sketches`: the design's sketch dimensions (what views
@@ -1388,7 +1410,24 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let sheet = &drawing.sheets[si];
         let square = self.square_bodies(sheet, id, &shown, &placed.spec);
         let from_an_angle = angled(&placed.spec);
+        let def = sheet.view(id);
+        let marked = def
+            .map(|v| {
+                v.annotations
+                    .iter()
+                    .filter(|a| {
+                        matches!(
+                            a.kind,
+                            AnnotationType::CenterMark | AnnotationType::CenterPattern
+                        )
+                    })
+                    .flat_map(|a| a.picks.iter().cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(ViewAt {
+            center_marks: def.is_some_and(|v| v.center_marks),
+            marked,
             component: drawing.component,
             placed,
             shown,
@@ -2057,13 +2096,60 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         } else {
             what
         };
-        Ok(json!({
+        let mut answer = json!({
             "view": id,
             "pick": found.pick,
             "seen": what,
             "at": map.at(seen.point()),
             "items": items,
-        }))
+        });
+        // A centre picked on its centre mark's line (mitcad#1338): the line
+        // shown with it.
+        if let Some([a, b]) = found.line {
+            answer["center_line"] = json!(true);
+            if let Some(items) = answer["items"].as_array_mut() {
+                items.insert(0, json!({"line": [map.at(a), map.at(b)]}));
+            }
+        }
+        Ok(answer)
+    }
+
+    fn drawing_corners_json(&self, query: &CornersQuery) -> Result<Value, ApiError> {
+        let drawing = self.find_drawing(&query.drawing)?;
+        let si = query.sheet;
+        if si >= drawing.sheets.len() {
+            return Err(ApiError(format!("{} has no sheet {si}", drawing.name)));
+        }
+        let evaluated = self.evaluate_views(drawing, si);
+        let mut views = Vec::new();
+        for v in &drawing.sheets[si].views {
+            // A view the model could not draw shows no corners.
+            let Ok(view) = self.view_at(drawing, si, &evaluated, v.id) else {
+                continue;
+            };
+            let map = &view.placed.map;
+            // The ends of edges, as a click picks them (the same candidates
+            // as `drawing_pick`'s), each place once: the ends of the edges
+            // that meet there are one corner.
+            let mut taken = HashSet::new();
+            let mut points = Vec::new();
+            for c in self.candidates(&view) {
+                if !matches!(c.pick.point, Some(PickPoint::Start | PickPoint::End)) {
+                    continue;
+                }
+                let p = c.found.seen.point();
+                if !view.sees(p) || !view.on_visible(p) {
+                    continue;
+                }
+                let at = map.at(p);
+                let key = ((at[0] * 1e4).round() as i64, (at[1] * 1e4).round() as i64);
+                if taken.insert(key) {
+                    points.push(json!(at));
+                }
+            }
+            views.push(json!({"view": v.id, "points": points}));
+        }
+        Ok(json!({"views": views}))
     }
 
     fn annotate_sheet(
@@ -2576,6 +2662,16 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// section's plane; on a view without hidden lines, only of what it
     /// draws (mitcad#1286: not of the holes inside the part).
     fn automatic_marks(&self, view: &ViewAt<'_>) -> Vec<Group>;
+
+    /// The lines of the centre marks a view draws (mitcad#1338), sheet mm,
+    /// each from its circle's centre outward, with the pick of that centre
+    /// among `candidates`: its automatic marks while they are on, and its
+    /// centre mark annotations' (as `annotate::center_mark` draws them).
+    fn center_mark_lines<'c>(
+        &self,
+        view: &ViewAt<'_>,
+        candidates: &'c [Candidate],
+    ) -> Vec<(&'c Candidate, [P2; 2])>;
 }
 
 impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
@@ -2636,6 +2732,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                         out.push(Candidate {
                             pick: pick(Some(edge), None, *point),
                             found,
+                            line: None,
                         });
                     }
                 }
@@ -2645,6 +2742,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     out.push(Candidate {
                         pick: pick(None, Some(&face.face), None),
                         found,
+                        line: None,
                     });
                 }
             }
@@ -2655,6 +2753,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                         out.push(Candidate {
                             pick: pick(None, Some(&face.face), None),
                             found,
+                            line: None,
                         });
                     }
                 }
@@ -2725,17 +2824,37 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             c.pick.point.is_none()
                 && matches!(c.found.seen, Seen::Circle { .. } | Seen::Axis { .. })
         };
+        // A centre mark's line (mitcad#1338): a click on a line of a centre
+        // mark the view draws (its automatic ones, or a centre mark
+        // annotation's) picks that circle's or arc's centre, so that a
+        // corner is dimensioned to a hole's centre line. Only when no edge
+        // or point is within reach (a round face seen from the side is
+        // picked on its axis anyway).
+        let center_line = || {
+            let marks = self.center_mark_lines(view, &candidates);
+            let (_, centre, [a, b]) = marks
+                .into_iter()
+                .map(|(c, line)| (annotate::segment_distance(at, line[0], line[1]), c, line))
+                .filter(|(d, ..)| *d <= annotate::PICK_REACH)
+                .min_by(|x, y| x.0.total_cmp(&y.0))?;
+            let mut centre = centre.clone();
+            centre.line = Some([map.view_point(a), map.view_point(b)]);
+            Some(centre)
+        };
         match want {
             Want::Any => nearest(&is_point, point_reach)
-                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach)),
-            Want::Point => nearest(&is_point, point_reach.max(reach)).or_else(|| {
-                // A circle's rim or a round face: its centre.
-                nearest(&is_round, reach).map(|mut c| {
-                    c.pick.point = Some(PickPoint::Center);
-                    c.found.seen = Seen::Point(c.found.seen.point());
-                    c
+                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach))
+                .or_else(center_line),
+            Want::Point => nearest(&is_point, point_reach.max(reach))
+                .or_else(|| {
+                    // A circle's rim or a round face: its centre.
+                    nearest(&is_round, reach).map(|mut c| {
+                        c.pick.point = Some(PickPoint::Center);
+                        c.found.seen = Seen::Point(c.found.seen.point());
+                        c
+                    })
                 })
-            }),
+                .or_else(center_line),
             Want::Line => nearest(&is_line, reach),
             Want::Circle => nearest(&is_round, reach),
             Want::Snap => nearest(&is_point, point_reach.max(reach)),
@@ -2828,6 +2947,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                             seen: Seen::Point(spec.project(at)),
                             at,
                         },
+                        line: None,
                     },
                 ));
             }
@@ -3653,6 +3773,71 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             let mut g = Group::new("center-mark");
             annotate::centerline(&mut g, map.at(a), map.at(b), 0.0, 0.0);
             out.push(g);
+        }
+        out
+    }
+
+    fn center_mark_lines<'c>(
+        &self,
+        view: &ViewAt<'_>,
+        candidates: &'c [Candidate],
+    ) -> Vec<(&'c Candidate, [P2; 2])> {
+        let map = &view.placed.map;
+        let mut groups = if view.center_marks {
+            self.automatic_marks(view)
+        } else {
+            Vec::new()
+        };
+        // A centre mark annotation's circle, as it is seen now.
+        for pick in &view.marked {
+            let rim = candidates.iter().find(|c| {
+                c.pick.point.is_none()
+                    && c.pick
+                        == ViewPick {
+                            point: None,
+                            ..pick.clone()
+                        }
+            });
+            if let Some(Candidate {
+                found:
+                    Found {
+                        seen:
+                            Seen::Circle {
+                                center,
+                                radius,
+                                end_on: true,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            }) = rim
+            {
+                let mut g = Group::new("center-mark");
+                annotate::center_mark(&mut g, map.at(*center), radius * map.scale);
+                groups.push(g);
+            }
+        }
+        // The centres a click picks, where they are on the sheet; a line
+        // from one is a mark's (a centreline's run from its middle is not).
+        let centres: Vec<(&Candidate, P2)> = candidates
+            .iter()
+            .filter(|c| c.pick.point == Some(PickPoint::Center))
+            .map(|c| (c, map.at(c.found.seen.point())))
+            .collect();
+        let mut out = Vec::new();
+        for g in &groups {
+            for item in &g.items {
+                let Item::Line { a, b, .. } = item else {
+                    continue;
+                };
+                if let Some((c, _)) = centres
+                    .iter()
+                    .find(|(_, p)| (p[0] - a[0]).abs() < 1e-6 && (p[1] - a[1]).abs() < 1e-6)
+                {
+                    out.push((*c, [*a, *b]));
+                }
+            }
         }
         out
     }

@@ -1,0 +1,43 @@
+{
+  "format": "solidcraft/50",
+  "name": "Format 50 sheet flange",
+  "units": "mm",
+  "params": [{"name": "t", "expr": "2 mm", "unit": "mm"}],
+  "sheet": {
+    "rules": [{"name": "Plate", "thickness": "t", "k_factor": "0.5", "bend_radius": "Thickness"}],
+    "active": "Plate"
+  },
+  "features": [
+    {
+      "id": 1, "name": "Outline", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p2", "pos": [100.0, 0.0], "fixed": true},
+          {"id": "p3", "pos": [100.0, 50.0], "fixed": true},
+          {"id": "p4", "pos": [0.0, 50.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 2, "name": "Base", "type": "sheet_base", "body_names": ["Tray"],
+      "sketch": 1, "profiles": {"type": "all"}
+    },
+    {
+      "id": 3, "name": "Flange1", "type": "sheet_flange",
+      "param_names": ["d1", "d2"],
+      "edges": [[50.0, 0.0, 2.0]], "height": "20", "angle": "90 deg",
+      "position": "material_outside", "height_from": "inner"
+    }
+  ],
+  "next_id": 4
+}

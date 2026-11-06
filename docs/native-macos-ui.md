@@ -365,8 +365,11 @@ The Start tab (mitcad#1258) is the retained ribbon's first tab, so the
 workspace selector lists it before Solid, Build and Make (`Native
 workspaces: Start, Solid, Build, Make (shown Start)`). Its content is the
 shared Qt Start page (`files/StartPage.hpp`), a child of the embedded 3D
-view, with the same quick actions, recent designs (previews, pins, search,
-compact list), resources and footer as in the Qt frontend.
+view, with the same quick actions, designs' browser (mitcad#1301: Recent,
+Pinned, the projects and Add project, a project's breadcrumb, folders and
+cards, the one search over every project, previews, pins, compact list),
+resources and footer as in the Qt frontend
+(`app.ui-macos-native-start-page`).
 `NativeMacWindow::setStartPageShown` hides every card over the canvas,
 the Browser too, while it shows (`Native cards: none (the Start page is
 shown)`) and shows each as it was asked to be when it is left.

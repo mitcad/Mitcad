@@ -6,3 +6,15 @@ expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
 expect-ever '^Frontend: native \((preference|--ui)\)$'
 wait-idle
 expect-model-bodies 1 48000
+# Assistant connection states keep their native menu presentation. These
+# real enabled leaves toggle the underlying row; other menus' tab hints
+# are covered by the unchanged bindings-parity workflow.
+set-setting assistant/rows claude-code
+set-setting assistant/blocked claude-code
+mark
+native-popup native.agentMenu 'Claude Code — blocked'
+expect-log '^Agent indicator: Claude Code allowed$'
+mark
+native-popup native.agentMenu 'Claude Code — not connected'
+expect-log '^Agent indicator: Claude Code blocked$'
+expect-setting assistant/blocked claude-code

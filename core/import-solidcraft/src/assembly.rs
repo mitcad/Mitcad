@@ -816,6 +816,13 @@ fn origin<K: Kernel>(
             if let Some(z) = vec3(&snap["z"]) {
                 out["frame_override"] = json!({"z_axis": z});
             }
+            // The direction its frame's x takes (format 28).
+            if let Some(x) = vec3(&snap["x"]) {
+                if out.get("frame_override").is_none() {
+                    out["frame_override"] = json!({});
+                }
+                out["frame_override"]["x_axis"] = json!(x);
+            }
         }
         "edge" => {
             let pick = vec3(&snap["pick"]).ok_or("an edge origin without its pick")?;
@@ -823,6 +830,12 @@ fn origin<K: Kernel>(
             out["geometry"] = json!({"body": body.to_string(), "edge": edge});
             if snap.get("corner").is_some_and(|c| !c.is_null()) {
                 notes.push("an origin at an edge's corner is at the edge's middle".to_owned());
+            }
+            // Its z (format 38): a fixed direction, or along the edge.
+            if let Some(z) = vec3(&snap["axis"]["fixed"]) {
+                out["frame_override"] = json!({"z_axis": z});
+            } else if snap["axis"].get("along").is_some() {
+                notes.push("an origin's z along its edge is MitCad's edge frame".to_owned());
             }
         }
         other => return Err(format!("a joint origin of the kind `{other}`")),

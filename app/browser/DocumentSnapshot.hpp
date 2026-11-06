@@ -53,6 +53,13 @@ struct DocumentSnapshot {
     // How many of its warnings Auto Fix can write into its definition
     // (mitcad#1223: the timeline's `auto_fix`); 0: Auto Fix is not offered.
     int autoFix = 0;
+    // How many of a sketch's linked projections Project Again repairs
+    // (mitcad#1303: the timeline's `project_again`); 0: not offered.
+    int projectAgain = 0;
+    // The places its notices name (mitcad#1327: the faces of a fillet's
+    // corner that folds, its farthest point), painted in the view while
+    // the pointer is over the feature's notice; empty for none.
+    QJsonArray places;
 
     // Whether it has something to tell as information: an import note, or
     // infos of a feature that built (mitcad#1106: a fillet built 0.1 %

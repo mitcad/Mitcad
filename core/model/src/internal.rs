@@ -17,7 +17,9 @@ pub use mitcad_model_base::internal::*;
 /// reads a command's value.
 pub mod build {
     pub use crate::build::geometry::*;
-    pub use crate::build::part_info::{PartInfo, designation, part_number, part_values};
+    pub use crate::build::part_info::{
+        PartInfo, TypedSection, designation, part_number, part_values, typed_section,
+    };
     pub use crate::build::{round, value_in};
 }
 
@@ -38,9 +40,9 @@ pub mod document {
     pub use crate::document::{
         Carried, DocResolver, FrameAt, MaterialWrite, MoveDestination, MovedDestination,
         ReparentPlan, TimelineBefore, check_minimum_wall, check_overhang_angle, deleted_views,
-        feature_level, feature_notices, library_kind, normalized_color, noted_message,
-        noted_status, print_material, purge_defaults_json, status_message, status_text,
-        with_warnings, writable_library,
+        feature_level, feature_notices, feature_notices_placed, library_kind, normalized_color,
+        noted_message, noted_status, print_material, purge_defaults_json, status_message,
+        status_text, with_warnings, writable_library,
     };
 }
 

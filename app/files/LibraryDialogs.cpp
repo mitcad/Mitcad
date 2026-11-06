@@ -44,6 +44,7 @@
 #include "../framework/Json.hpp"
 #include "../library/PartFavourites.hpp"
 #include "../library/PartPicker.hpp"
+#include "../library/SupplierShops.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "Libraries.hpp"
 #include "LibraryAutoUpdate.hpp"
@@ -1253,29 +1254,52 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
 
   auto* listPage = new QWidget;
   auto* listLayout = new QVBoxLayout(listPage);
-  auto* bom = new QTableWidget(0, 6);
+  // The articles' product links in the region chosen in Preferences
+  // (mitcad#950): a column Product Pages when a row has any.
+  const QJsonArray rows = rowsWithProductLinks(list);
+  const bool linked = std::any_of(rows.cbegin(), rows.cend(),
+                                  [](const QJsonValue& row) { return !productUrls(row.toObject()).isEmpty(); });
+  QStringList headings{tr("Qty"), tr("Component"), tr("Library"), tr("Version"), tr("License"),
+                       tr("Supplier Part Numbers")};
+  QString csvHeadings = QStringLiteral("Quantity,Component,Library,Version,License,Supplier Part Numbers");
+  if (linked) {
+    headings << tr("Product Pages");
+    csvHeadings += QStringLiteral(",Product Pages");
+  }
+  auto* bom = new QTableWidget(0, int(headings.size()));
   bom->setObjectName(QStringLiteral("partsList"));
-  bom->setHorizontalHeaderLabels(
-      {tr("Qty"), tr("Component"), tr("Library"), tr("Version"), tr("License"), tr("Supplier Part Numbers")});
+  bom->setHorizontalHeaderLabels(headings);
   bom->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   bom->setEditTriggers(QAbstractItemView::NoEditTriggers);
   mac::styleListTable(bom);
-  bom->setRowCount(int(list.size()));
-  QStringList csv{QStringLiteral("Quantity,Component,Library,Version,License,Supplier Part Numbers")};
-  for (int i = 0; i < list.size(); ++i) {
-    const QJsonObject r = list[i].toObject();
+  bom->setRowCount(int(rows.size()));
+  QStringList csv{csvHeadings};
+  for (int i = 0; i < rows.size(); ++i) {
+    const QJsonObject r = rows[i].toObject();
     // The suppliers' articles of the part's row (mitcad#949).
     const QString numbers = str(r, "supplier_parts_text").isEmpty()
                                 ? supplierPartsText(r.value(QStringLiteral("supplier_parts")).toArray())
                                 : str(r, "supplier_parts_text");
-    const QStringList cells{QString::number(r.value(QStringLiteral("quantity")).toInt()),
-                            str(r, "designation"),
-                            str(r, "library"),
-                            str(r, "version"),
-                            str(r, "license"),
-                            numbers};
+    QStringList cells{QString::number(r.value(QStringLiteral("quantity")).toInt()),
+                      str(r, "designation"),
+                      str(r, "library"),
+                      str(r, "version"),
+                      str(r, "license"),
+                      numbers};
+    const QStringList urls = productUrls(r);
+    if (linked) {
+      cells << urls.join(QLatin1Char(' '));
+    }
     for (int c = 0; c < cells.size(); ++c) {
-      bom->setItem(i, c, new QTableWidgetItem(cells[c]));
+      auto* item = new QTableWidgetItem(cells[c]);
+      if (linked && c == cells.size() - 1 && !urls.isEmpty()) {
+        item->setToolTip(tr("%1 (double-click or Return opens it)").arg(urls.join(QLatin1Char('\n'))));
+        item->setForeground(palette().brush(QPalette::Link));
+      }
+      bom->setItem(i, c, item);
+    }
+    if (!urls.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Parts list product pages: %1: %2").arg(cells[1], urls.join(QLatin1Char(' ')));
     }
     QStringList quoted;
     for (const QString& cell : cells) {
@@ -1289,6 +1313,18 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
                                   numbers.isEmpty() ? QString() : QStringLiteral("; %1").arg(numbers));
   }
   bom->resizeColumnsToContents();
+  // A double click or Return on a row's product pages opens one (a menu of
+  // them when there are several).
+  if (linked) {
+    const int pages = int(headings.size()) - 1;
+    connect(bom, &QAbstractItemView::activated, this, [this, bom, pages](const QModelIndex& index) {
+      if (index.column() != pages) {
+        return;
+      }
+      openProductLinks(this, bom->viewport()->mapToGlobal(bom->visualRect(index).bottomLeft()),
+                       index.data().toString().split(QLatin1Char(' '), Qt::SkipEmptyParts));
+    });
+  }
   listLayout->addWidget(bom, 1);
   auto* copy = new QPushButton(tr("&Copy as CSV"));
   mac::auxiliaryButton(copy);

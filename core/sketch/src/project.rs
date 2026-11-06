@@ -1184,6 +1184,10 @@ pub struct ProjectionFollow {
     /// current curves (all of them for a lost source): stale curves Clean
     /// Up Stale Projections tidies (mitcad#252).
     pub stale: Vec<EntityUid>,
+    /// The source's curves as they are now, projected onto the sketch's
+    /// plane without repeats ([`distinct`]): what Project Again projects
+    /// in their place (mitcad#1303). Empty for a lost source.
+    pub current: Vec<Projected>,
 }
 
 impl ProjectionFollow {
@@ -1300,10 +1304,33 @@ pub fn follow_links(
             // entity (mitcad#249).
             let fresh = entities(&project(&curves, frame), &mut fresh_id);
             if shape_of(&fresh) != shape_of(&old) {
+                // Or the same curves listed in another order or from
+                // another start, only moved or resized (mitcad#1303): every
+                // entity pairs with a fresh one of its kind, none is left
+                // over and nothing tears; then it follows by geometry.
+                let current = distinct(project(&curves, frame));
+                let fresh = entities(&current, &mut fresh_id);
+                let pairing = pair(&old, &old_at, &fresh);
+                if !pairing.kept
+                    && pairing.unfollowed.is_empty()
+                    && pairing.unmatched == 0
+                    && kinds(&old) == kinds(&fresh)
+                {
+                    for (id, kind) in pairing.kinds {
+                        if let Some(target) = at.get(&id).map(|&i| &mut updated.entities[i])
+                            && target.kind != kind
+                        {
+                            target.kind = kind;
+                            changed = true;
+                        }
+                    }
+                    continue;
+                }
                 out.reports.push(ProjectionFollow {
                     projection: k,
                     kept: true,
                     stale: stale_curves(&updated, projection, &fresh),
+                    current,
                     ..ProjectionFollow::default()
                 });
                 continue;
@@ -1333,7 +1360,8 @@ pub fn follow_links(
             }
             continue;
         }
-        let fresh = entities(&distinct(project(&curves, frame)), &mut fresh_id);
+        let current = distinct(project(&curves, frame));
+        let fresh = entities(&current, &mut fresh_id);
         let pairing = pair(&old, &old_at, &fresh);
         if pairing.kept {
             // A pairing that tears the projection's joints moves nothing
@@ -1342,6 +1370,7 @@ pub fn follow_links(
                 projection: k,
                 kept: true,
                 stale: stale_curves(&updated, projection, &fresh),
+                current,
                 ..ProjectionFollow::default()
             });
             continue;
@@ -1366,6 +1395,7 @@ pub fn follow_links(
                 unfollowed: pairing.unfollowed,
                 unmatched: pairing.unmatched,
                 stale,
+                current,
                 ..ProjectionFollow::default()
             });
         }
@@ -1601,8 +1631,226 @@ type Pair = (usize, usize, f64, bool);
 /// each time) and nearest first otherwise, so that a projection of some of
 /// a source's curves, or of curves listed in another order or from another
 /// start, follows. An entity the same as another of the projection (a
-/// curve projected twice) follows the same fresh one.
+/// curve projected twice) follows the same fresh one. When that pairing
+/// tears the points its arcs share, the other of the two is taken where
+/// everything follows with it, and for the same curves only moved or
+/// resized the nearest once the old outline's bounds are laid over the new
+/// one's ([`aligned_pairs`], mitcad#1303); else nothing follows (`kept`).
+/// When that leaves anything over, the source's arcs that run as several of
+/// the projection's arcs of one circle run are split as those are
+/// ([`split_like`], mitcad#1325), and that pairing is taken where
+/// everything follows with it.
 fn pair(old: &[Entity], old_at: &dyn Fn(EntityUid) -> Option<P2>, fresh: &[Entity]) -> Pairing {
+    let whole = |p: &Pairing| !p.kept && p.unfollowed.is_empty() && p.unmatched == 0;
+    let out = pair_once(old, old_at, fresh);
+    if whole(&out) {
+        return out;
+    }
+    if let Some(split) = split_like(old, old_at, fresh) {
+        let again = pair_once(old, old_at, &split);
+        if whole(&again) {
+            return again;
+        }
+    }
+    out
+}
+
+/// `fresh` with the arc nearest to each run of the projection's arcs
+/// (`old`) about one circle, end to end, that sweeps the run's angle split
+/// where the run's arcs join, at the same angles from its start: a source
+/// whose kernel now lists in one piece an arc the projection has in several
+/// (where its seam was, or a fillet's ends), as on a face whose rounded end
+/// came back as one arc where it was two (mitcad#1325). An arc two runs
+/// would split differently stays whole. None when no arc is split.
+fn split_like(
+    old: &[Entity],
+    old_at: &dyn Fn(EntityUid) -> Option<P2>,
+    fresh: &[Entity],
+) -> Option<Vec<Entity>> {
+    let fresh_points: BTreeMap<EntityUid, P2> = fresh
+        .iter()
+        .filter_map(|e| match e.kind {
+            EntityKind::Point { at } => Some((e.id, at)),
+            _ => None,
+        })
+        .collect();
+    let fresh_at = |id: EntityUid| fresh_points.get(&id).copied();
+    // An arc's centre, radius, start angle and sweep.
+    let round = |kind: &EntityKind, at: &dyn Fn(EntityUid) -> Option<P2>| {
+        let EntityKind::Arc { center, start, end } = *kind else {
+            return None;
+        };
+        let (c, s, e) = (at(center)?, at(start)?, at(end)?);
+        let from = (s[1] - c[1]).atan2(s[0] - c[0]);
+        let to = angle_after(from, (e[1] - c[1]).atan2(e[0] - c[0]));
+        Some((c, dist(c, s), from, to - from))
+    };
+    let mut size = 1.0_f64;
+    for e in old {
+        for p in anchors(&e.kind, old_at).map(|a| a.0).unwrap_or_default() {
+            size = size.max(norm(p));
+        }
+    }
+    let tol = MATCH * size;
+    // How many of the projection's curves end on each point: a run joins
+    // only where nothing else does.
+    let mut uses: BTreeMap<EntityUid, usize> = BTreeMap::new();
+    for e in old.iter().filter(|e| !e.is_point()) {
+        for id in e.kind.points() {
+            *uses.entry(id).or_default() += 1;
+        }
+    }
+    let arcs: Vec<(EntityUid, EntityUid, P2, f64, f64)> = old
+        .iter()
+        .filter_map(|e| match e.kind {
+            EntityKind::Arc { start, end, .. } => {
+                round(&e.kind, old_at).map(|(c, r, _, sweep)| (start, end, c, r, sweep))
+            }
+            _ => None,
+        })
+        .collect();
+    let same_circle = |a: usize, b: usize| {
+        dist(arcs[a].2, arcs[b].2) <= tol && (arcs[a].3 - arcs[b].3).abs() <= tol
+    };
+    let next = |a: usize| {
+        (0..arcs.len()).find(|&b| {
+            b != a
+                && arcs[b].0 == arcs[a].1
+                && uses.get(&arcs[a].1) == Some(&2)
+                && same_circle(a, b)
+        })
+    };
+    // The runs of two or more arcs, from those no arc of them runs into:
+    // their centre, radius, start and end, and their pieces' sweeps.
+    struct Run {
+        center: P2,
+        radius: f64,
+        ends: [P2; 2],
+        sweeps: Vec<f64>,
+    }
+    let mut runs: Vec<Run> = Vec::new();
+    for head in 0..arcs.len() {
+        if (0..arcs.len()).any(|a| next(a) == Some(head)) {
+            continue;
+        }
+        let mut sweeps = vec![arcs[head].4];
+        let mut at = head;
+        while let Some(b) = next(at) {
+            if sweeps.len() > arcs.len() {
+                break;
+            }
+            sweeps.push(arcs[b].4);
+            at = b;
+        }
+        if sweeps.len() > 1
+            && let (Some(first), Some(last)) = (old_at(arcs[head].0), old_at(arcs[at].1))
+        {
+            runs.push(Run {
+                center: arcs[head].2,
+                radius: arcs[head].3,
+                ends: [first, last],
+                sweeps,
+            });
+        }
+    }
+    if runs.is_empty() {
+        return None;
+    }
+    // Each run splits the fresh arc of its sweep nearest to it (by centre,
+    // ends and radius); a fresh arc two runs would split differently stays
+    // whole.
+    let fresh_arcs: Vec<Option<(P2, f64, f64, f64)>> =
+        fresh.iter().map(|e| round(&e.kind, &fresh_at)).collect();
+    let mut splits: BTreeMap<usize, Vec<&[f64]>> = BTreeMap::new();
+    for run in &runs {
+        let whole: f64 = run.sweeps.iter().sum();
+        let nearest = fresh
+            .iter()
+            .zip(&fresh_arcs)
+            .enumerate()
+            .filter_map(|(j, (e, found))| {
+                let (c, r, _, sweep) = (*found)?;
+                if (whole - sweep).abs() * r.max(run.radius) > tol {
+                    return None;
+                }
+                let EntityKind::Arc { start, end, .. } = e.kind else {
+                    return None;
+                };
+                let cost = dist(c, run.center)
+                    + dist(fresh_at(start)?, run.ends[0])
+                    + dist(fresh_at(end)?, run.ends[1])
+                    + (r - run.radius).abs();
+                Some((j, cost))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((j, _)) = nearest {
+            splits.entry(j).or_default().push(&run.sweeps);
+        }
+    }
+    let mut top = old.iter().chain(fresh).map(|e| e.id.0).max().unwrap_or(0);
+    let mut out: Vec<Entity> = Vec::with_capacity(fresh.len());
+    let mut split = false;
+    for (j, e) in fresh.iter().enumerate() {
+        let (Some((c, r, from, _)), Some(wanted)) = (fresh_arcs[j], splits.get(&j)) else {
+            out.push(e.clone());
+            continue;
+        };
+        let EntityKind::Arc { center, start, end } = e.kind else {
+            unreachable!("only arcs have a sweep");
+        };
+        let pieces = wanted[0];
+        let alike = |other: &&[f64]| {
+            other.len() == pieces.len()
+                && other
+                    .iter()
+                    .zip(pieces)
+                    .all(|(x, y)| (x - y).abs() * r <= tol)
+        };
+        if !wanted.iter().all(alike) {
+            out.push(e.clone());
+            continue;
+        }
+        split = true;
+        let mut angle = from;
+        let mut first = start;
+        for (k, piece) in pieces.iter().enumerate() {
+            let last = if k + 1 == pieces.len() {
+                end
+            } else {
+                angle += piece;
+                top += 1;
+                let mut joint = Entity::point(
+                    EntityUid(top),
+                    [c[0] + r * angle.cos(), c[1] + r * angle.sin()],
+                );
+                joint.fixed = true;
+                joint.reference = true;
+                out.push(joint);
+                EntityUid(top)
+            };
+            let mut arc = e.clone();
+            if k > 0 {
+                top += 1;
+                arc.id = EntityUid(top);
+            }
+            arc.kind = EntityKind::Arc {
+                center,
+                start: first,
+                end: last,
+            };
+            out.push(arc);
+            first = last;
+        }
+    }
+    split.then_some(out)
+}
+
+/// [`pair`]'s pairings of `old` with `fresh` as they are.
+fn pair_once(
+    old: &[Entity],
+    old_at: &dyn Fn(EntityUid) -> Option<P2>,
+    fresh: &[Entity],
+) -> Pairing {
     let fresh_points: BTreeMap<EntityUid, P2> = fresh
         .iter()
         .filter_map(|e| match e.kind {
@@ -1633,16 +1881,72 @@ fn pair(old: &[Entity], old_at: &dyn Fn(EntityUid) -> Option<P2>, fresh: &[Entit
     })
     .flatten();
     // Nearest first.
+    let nearest = nearest_first(olds.len(), news.len(), &cost);
+    let total = |pairs: &[Pair]| pairs.iter().map(|p| p.2).sum::<f64>();
+    // The pairing taken, then the other one when that tears (mitcad#1303).
+    let mut tries: Vec<Vec<Pair>> = Vec::new();
+    match in_order {
+        Some(in_order)
+            if in_order.len() > nearest.len()
+                || total(&in_order) <= total(&nearest) * (1.0 + 1e-9) + 1e-12 =>
+        {
+            tries.push(in_order);
+            tries.push(nearest);
+        }
+        Some(in_order) => {
+            tries.push(nearest);
+            tries.push(in_order);
+        }
+        None => tries.push(nearest),
+    }
+    // What counts as the same, by the size of the projection's geometry.
+    let mut size = 1.0_f64;
+    for e in &olds {
+        for p in anchors(&e.kind, old_at).map(|a| a.0).unwrap_or_default() {
+            size = size.max(norm(p));
+        }
+    }
+    for (k, pairs) in tries.into_iter().enumerate() {
+        let out = settle_pairs(&olds, old_at, &news, &fresh_at, pairs, &cost, size);
+        // The other pairing only when everything follows with it.
+        if !out.kept && (k == 0 || out.unfollowed.is_empty()) {
+            return out;
+        }
+    }
+    // An outline that only moved or was resized, of the same curves
+    // (mitcad#1303): each with the nearest once the old outline's bounds
+    // are laid over the new one's, when everything follows so.
+    if kinds(&olds) == kinds(&news)
+        && let Some(pairs) = aligned_pairs(&olds, old_at, &news, &fresh_at)
+    {
+        let out = settle_pairs(&olds, old_at, &news, &fresh_at, pairs, &cost, size);
+        if !out.kept && out.unfollowed.is_empty() && out.unmatched == 0 {
+            return out;
+        }
+    }
+    Pairing {
+        kept: true,
+        ..Pairing::default()
+    }
+}
+
+/// The pairs of old and fresh entities (indices) by `cost`, cheapest first,
+/// each entity once.
+fn nearest_first(
+    olds: usize,
+    news: usize,
+    cost: &dyn Fn(usize, usize) -> Option<(f64, bool)>,
+) -> Vec<Pair> {
     let mut candidates: Vec<Pair> = Vec::new();
-    for i in 0..olds.len() {
-        for j in 0..news.len() {
+    for i in 0..olds {
+        for j in 0..news {
             if let Some((c, back)) = cost(i, j) {
                 candidates.push((i, j, c, back));
             }
         }
     }
     candidates.sort_by(|a, b| a.2.total_cmp(&b.2));
-    let (mut old_taken, mut new_taken) = (vec![false; olds.len()], vec![false; news.len()]);
+    let (mut old_taken, mut new_taken) = (vec![false; olds], vec![false; news]);
     let mut nearest: Vec<Pair> = Vec::new();
     for (i, j, c, back) in candidates {
         if !old_taken[i] && !new_taken[j] {
@@ -1651,23 +1955,81 @@ fn pair(old: &[Entity], old_at: &dyn Fn(EntityUid) -> Option<P2>, fresh: &[Entit
             nearest.push((i, j, c, back));
         }
     }
-    let total = |pairs: &[Pair]| pairs.iter().map(|p| p.2).sum::<f64>();
-    let mut pairs = match in_order {
-        Some(in_order)
-            if in_order.len() > nearest.len()
-                || total(&in_order) <= total(&nearest) * (1.0 + 1e-9) + 1e-12 =>
-        {
-            in_order
+    nearest
+}
+
+/// The kinds of a list's curves and of the points no curve of it uses,
+/// sorted: two lists of the same curves (mitcad#1303).
+fn kinds(list: &[Entity]) -> Vec<&'static str> {
+    let used: BTreeSet<EntityUid> = list.iter().flat_map(|e| e.kind.points()).collect();
+    let mut out: Vec<&'static str> = list
+        .iter()
+        .filter(|e| !e.is_point() || !used.contains(&e.id))
+        .map(|e| e.kind.type_name())
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// [`nearest_first`] of a projection's entities (`olds`) and fresh ones
+/// once the old geometry's bounds are laid over the fresh geometry's
+/// (moved, and scaled along each axis where both have an extent there):
+/// an outline that only moved or was resized pairs each curve with its own
+/// although another of the fresh ones lies nearer to it (mitcad#1303).
+/// None when either has no points.
+fn aligned_pairs(
+    olds: &[Entity],
+    old_at: &dyn Fn(EntityUid) -> Option<P2>,
+    news: &[Entity],
+    fresh_at: &dyn Fn(EntityUid) -> Option<P2>,
+) -> Option<Vec<Pair>> {
+    let bounds = |list: &[Entity], at: &dyn Fn(EntityUid) -> Option<P2>| -> Option<(P2, P2)> {
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for e in list {
+            for p in anchors(&e.kind, at).map(|a| a.0).unwrap_or_default() {
+                for i in 0..2 {
+                    lo[i] = lo[i].min(p[i]);
+                    hi[i] = hi[i].max(p[i]);
+                }
+            }
         }
-        _ => nearest,
+        lo[0].is_finite().then_some((lo, hi))
     };
-    // What counts as the same, by the size of the projection's geometry.
-    let mut size = 1.0_f64;
-    for e in &olds {
-        for p in anchors(&e.kind, old_at).map(|a| a.0).unwrap_or_default() {
-            size = size.max(norm(p));
+    let (old_lo, old_hi) = bounds(olds, old_at)?;
+    let (new_lo, new_hi) = bounds(news, fresh_at)?;
+    let factor: [f64; 2] = std::array::from_fn(|i| {
+        let (was, now) = (old_hi[i] - old_lo[i], new_hi[i] - new_lo[i]);
+        if was > 1e-12 && now > 1e-12 {
+            now / was
+        } else {
+            1.0
         }
-    }
+    });
+    let laid = |id: EntityUid| -> Option<P2> {
+        old_at(id).map(|p| {
+            std::array::from_fn(|i| {
+                0.5 * (new_lo[i] + new_hi[i]) + (p[i] - 0.5 * (old_lo[i] + old_hi[i])) * factor[i]
+            })
+        })
+    };
+    let cost = |i: usize, j: usize| unlikeness(&olds[i].kind, &laid, &news[j].kind, fresh_at);
+    Some(nearest_first(olds.len(), news.len(), &cost))
+}
+
+/// The kinds a pairing of a projection's entities (`olds`) with fresh ones
+/// (`news`) gives them, with the repeats of a paired entity (a curve
+/// projected twice) following its fresh one, or `kept` when the pairs tear
+/// the points its arcs share (mitcad#249). `size` is the size of the
+/// projection's geometry.
+fn settle_pairs(
+    olds: &[Entity],
+    old_at: &dyn Fn(EntityUid) -> Option<P2>,
+    news: &[Entity],
+    fresh_at: &dyn Fn(EntityUid) -> Option<P2>,
+    mut pairs: Vec<Pair>,
+    cost: &dyn Fn(usize, usize) -> Option<(f64, bool)>,
+    size: f64,
+) -> Pairing {
     // Repeats of a paired entity follow its fresh one.
     let paired: Vec<(usize, usize)> = pairs.iter().map(|p| (p.0, p.1)).collect();
     for i in 0..olds.len() {

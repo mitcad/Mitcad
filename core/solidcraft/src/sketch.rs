@@ -30,6 +30,10 @@ pub struct Sketch {
     /// 3D curves.
     #[serde(default)]
     pub wires: Vec<Value>,
+    /// Equation curves (format 44): the fit splines of `curves` they
+    /// place, with their formulas.
+    #[serde(default)]
+    pub equations: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -87,6 +91,10 @@ pub enum CurveKind {
         degree: u8,
         #[serde(default)]
         periodic: bool,
+        /// A control spline's own knots and weights (format 49); none: the
+        /// clamped uniform B-spline.
+        #[serde(default)]
+        nurbs: Option<Nurbs>,
     },
     /// A conic from `a` to `b` shaped by `apex` and `rho`.
     Conic {
@@ -99,6 +107,15 @@ pub enum CurveKind {
 
 fn three() -> u8 {
     3
+}
+
+/// A control spline's knots (clamped: the point count plus the degree plus
+/// one) and weights (one per point; none: all 1).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Nurbs {
+    pub knots: Vec<f64>,
+    #[serde(default)]
+    pub weights: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -272,6 +289,36 @@ pub enum ConstraintKind {
         output: String,
         value: f64,
     },
+    /// From line `l` to the edge of circle or arc `c` (format 28); with
+    /// `inside`, how far the edge reaches past the line.
+    LineCircleDistance {
+        l: usize,
+        c: usize,
+        value: f64,
+        #[serde(default)]
+        inside: bool,
+    },
+    /// From point `p` to the edge of circle or arc `c` (format 36).
+    PointCircleDistance {
+        p: usize,
+        c: usize,
+        value: f64,
+        #[serde(default)]
+        inside: bool,
+    },
+    /// Between the edges of circles or arcs `a` and `b` (format 36):
+    /// `circles` apart (none), `crossing` or `nested`.
+    CircleCircleDistance {
+        a: usize,
+        b: usize,
+        value: f64,
+        #[serde(default)]
+        circles: Option<String>,
+    },
+    /// A kind of a later format than this reader knows: left out of the
+    /// sketch, which keeps the rest.
+    #[serde(other)]
+    Other,
 }
 
 impl ConstraintKind {
@@ -295,6 +342,9 @@ impl ConstraintKind {
             | ArcLength { value, .. }
             | LinearDiameter { value, .. }
             | OffsetDistance { value, .. }
+            | LineCircleDistance { value, .. }
+            | PointCircleDistance { value, .. }
+            | CircleCircleDistance { value, .. }
             | Angle { value, .. } => Some(value),
             _ => None,
         }
@@ -345,6 +395,10 @@ impl ConstraintKind {
             ArcLength { .. } => "arc_length",
             LinearDiameter { .. } => "linear_diameter",
             OffsetDistance { .. } => "offset_distance",
+            LineCircleDistance { .. } => "line_circle_distance",
+            PointCircleDistance { .. } => "point_circle_distance",
+            CircleCircleDistance { .. } => "circle_circle_distance",
+            Other => "a constraint of a later format",
         }
     }
 }

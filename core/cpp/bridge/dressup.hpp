@@ -24,5 +24,7 @@ std::shared_ptr<geometry::Shape> chamfer(rust::Str feature, const geometry::Shap
 
 rust::Vec<rust::String> shape_notes(const geometry::Shape& shape);
 rust::Vec<rust::String> shape_infos(const geometry::Shape& shape);
+// The places of each note as a JSON array (mitcad#1327).
+rust::Vec<rust::String> shape_note_places(const geometry::Shape& shape);
 
 } // namespace mitcad::bridge

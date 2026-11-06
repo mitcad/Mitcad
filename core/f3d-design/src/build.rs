@@ -2093,7 +2093,9 @@ impl Builder<'_> {
     /// The object an extrusion's side up to an object goes to, from the
     /// item's input slot for it ([`decode::extent_slots`], mitcad#96): a
     /// face (by its names) or a plane (role 5 with an entity input: the
-    /// reference models' writer). A side up to an object is the first
+    /// reference models' writer), or a point (mitcad#1329: a vertex by the
+    /// faces that meet there, a construction or sketch point by its entity
+    /// input). A side up to an object is the first
     /// side, which the extent parameters (`Side1Offset`) make an extent up
     /// to an entity; without them it is one now, without an offset.
     ///
@@ -2146,7 +2148,10 @@ impl Builder<'_> {
         }
         for ((role, input), side) in inputs.into_iter().zip(sides) {
             let entity = match seg.guid_of(input) {
-                Some(FACE_REF) => face_input(seg, input),
+                // A vertex input names the faces that meet at it, as a face
+                // input names its face (mitcad#1329: an extent up to a point).
+                Some(FACE_REF) => face_input(seg, input).or_else(|| vertex_input(seg, input)),
+                // Planes, construction points and sketch points.
                 Some(ENTITY_REF) => self.entity_target(input),
                 Some(BODY_REF) => self.body_input(input),
                 _ => None,

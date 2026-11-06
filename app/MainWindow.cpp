@@ -726,8 +726,23 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   });
   connect(m_controller->timeline(), &TimelineWidget::featuresHovered, this, [this](const QStringList& features) {
     m_timelineHover = features;
+    // The places its warning names (mitcad#1327), with its tooltip.
+    QJsonArray places;
+    for (const QString& uid : features) {
+      if (const auto* feature = m_snapshot.feature(uid)) {
+        for (const QJsonValue& place : feature->places) {
+          places.append(place);
+        }
+      }
+    }
+    if (!places.isEmpty() || m_noticeHoverSource == QStringLiteral("timeline")) {
+      hoverNoticePlaces(QStringLiteral("timeline"), places, {});
+    }
     if (!modelBusy()) updateIdleView();
   });
+  // The status line's message paints its feature's notice places while
+  // the pointer is over it (mitcad#1327).
+  installNoticeHover();
   installMacToolButtonStyle(this);
   if (!m_nativeUi && chromeStyle() == ChromeStyle::Docked) {
     statusBar()->insertPermanentWidget(0, m_controller->failures());
@@ -1749,6 +1764,10 @@ void MainWindow::createFloatingPanels() {
   m_floating->setMessageBand(m_messageBand);
   connect(m_messageBand, &MessageBand::historyRequested, this,
           [this] { toggleMessageHistory(m_messageBand->stubRect(), m_messageBand); });
+  // The pointer over its message paints the places of the feature it is
+  // about (mitcad#1327).
+  connect(m_messageBand, &MessageBand::noticeHovered, this,
+          [this](const QString& feature) { previewNoticePlaces(QStringLiteral("message band"), feature); });
   connect(m_controller->browser(), &BrowserPanel::contentHeightChanged, m_floating,
           &FloatingLayout::requestLayout);
   // Its card, or a box behind each row (Preferences, mitcad#419).
@@ -4348,6 +4367,7 @@ void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, co
   // mitcad#1042, mitcad#1098) and its history.
   m_statusIsHint = level == NoticeLevel::Hint || level == NoticeLevel::Progress;
   m_statusLevel = level;
+  m_statusFeature = feature; // its notice places on hover (mitcad#1327)
   if (level == NoticeLevel::Error) {
     setErrorStyleSheet(m_statusLabel);
   } else if (level == NoticeLevel::Warning) {
@@ -4805,6 +4825,12 @@ void MainWindow::updateIdleView() {
   if (m_mode != Mode::Idle) {
     m_annotationPick.reset();
   }
+  // The command panel's notice places go with the command (mitcad#1327).
+  if (m_mode != Mode::Command && m_noticeHoverSource == QStringLiteral("panel")) {
+    m_noticeHoverSource.clear();
+    m_noticeHover = QJsonArray();
+    m_noticeHoverBodies.clear();
+  }
   m_autoselect->setActive(m_mode == Mode::Idle);
   updateSelectionCreate();
   updateMakeCard(); // the Make tab's body card (mitcad#1049)
@@ -4949,6 +4975,10 @@ void MainWindow::updateIdleHighlights() {
   if (hovered != m_loggedTimelineHover) {
     m_loggedTimelineHover = hovered;
     qDebug().noquote() << QStringLiteral("Timeline hover highlighted: %1").arg(hovered);
+  }
+  // The places of a notice under the pointer (mitcad#1327).
+  for (HighlightDisplay& place : noticeHighlights()) {
+    highlights.push_back(std::move(place));
   }
   // The selected joints' sides and frames, and the hovered joint row's
   // (mitcad#523).
@@ -5351,6 +5381,15 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       menu.addSeparator();
       add(redefine);
     }
+    // Linked projections that no longer follow their sources (mitcad#1303):
+    // Project Again for those whose sources are there, Clean Up Stale
+    // Projections for all of them.
+    if (m_sketch->model().projectAgain) {
+      add(m_registry->action(QStringLiteral("sketch.project_again")));
+    }
+    if (m_sketch->model().staleProjections) {
+      add(m_registry->action(QStringLiteral("sketch.clean_up_stale_projections")));
+    }
     menu.addSeparator();
     add(m_registry->action(QStringLiteral("sketch.finish")));
     add(m_registry->action(QStringLiteral("edit.undo")));
@@ -5653,6 +5692,12 @@ void MainWindow::keyPressEvent(QKeyEvent* event) {
 #ifdef Q_OS_MACOS
   remove = remove || event->key() == Qt::Key_Backspace;
 #endif
+  if (remove && !editing && event->modifiers() == Qt::NoModifier && startPageShown()) {
+    // The Start page over the view (mitcad#1313): the design behind it is
+    // out of sight, so the key deletes nothing.
+    event->accept();
+    return;
+  }
   if (remove && !editing && event->modifiers() == Qt::NoModifier && m_mode == Mode::Idle && !modelBusy()) {
     m_controller->deleteSelection(m_selection);
     event->accept();
@@ -6312,6 +6357,8 @@ bool MainWindow::maybeSave() {
   if (!isModified()) {
     return true;
   }
+  // The UI tests count the questions (mitcad#1317: New Design asks once).
+  qInfo().noquote() << QStringLiteral("Save question: %1").arg(documentName());
   QMessageBox box(QMessageBox::Warning, tr("MitCad"), tr("Save changes to %1?").arg(documentName()),
                   QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
   box.setInformativeText(tr("Your changes will be lost if you don't save them."));

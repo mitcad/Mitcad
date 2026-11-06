@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Notice places (mitcad#1327), on notice-places.json (Body1 F1.b0, a hole
+# by the rounding of its top front edge, Rim F4 rounding its top rim and
+# warning that it leaves an edge on that rounding): the warning reads in
+# plain words, and
+# the pointer over it paints its places (the rounding's face of the body,
+# a point) in the view until it leaves:
+#   1. the Timeline item, with its tooltip;
+#   2. the message band, the warnings badge's message about Rim;
+#   3. the command panel's message while Rim is edited (its preview's
+#      faces), Esc then.
+# Run by tools/ui-notice-places-test.sh (Linux) and
+# tools/ui-windows-notice-places-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The Timeline item and its tooltip.
+expect-ever '^Timeline Rim at '
+mark
+hover-logged '^Timeline Rim at '
+expect-timeline-hover F4
+wait-log '^Notice hover highlighted: timeline: .*face F4:fillet[(][^ ]* of F1[.]b0.*point .*[(][1-9][0-9]* drawn[)]$' 10
+expect-timeline-tooltip '(?s)Rim.*The fillet runs onto a face beside it and leaves an edge there'
+screenshot '${MITCAD_TEST_SHOTS}/notice-places-timeline.png'
+mark
+timeline-leave
+wait-log '^Notice hover highlighted: none$' 10
+
+# 2. The message band: the warnings badge says what is wrong with Rim.
+mark
+button '.*' warningsBadge
+wait-log '^Message band full: warning Rim: The fillet runs onto a face beside it and leaves an edge there' 10
+expect-never '^Message band full: .*[EV][{]'
+wait-log '^Message band text at ' 10
+mark
+hover-logged '^Message band text at '
+wait-log '^Notice hover highlighted: message band: .*face F4:fillet[(][^ ]* of F1[.]b0.*point ' 10
+screenshot '${MITCAD_TEST_SHOTS}/notice-places-band.png'
+mark
+leave-widget messageBandText
+wait-log '^Notice hover highlighted: none$' 10
+key Escape
+wait-idle
+
+# 3. The command panel's message while Rim is edited.
+mark
+dblclick-logged '^Timeline Rim at '
+wait-log '^Editing F4 with Fillet' 20
+wait-log '^Preview Fillet: ok, warning: ' 120
+wait-log '^Panel Fillet message box: warning: The fillet runs onto a face beside it' 20
+expect-never '^Panel Fillet message box: .*[EV][{]'
+wait-log '^Panel Fillet message at ' 10
+mark
+hover-logged '^Panel Fillet message at '
+wait-log '^Notice hover highlighted: panel: .*face F4:fillet[(][^ ]* of F1[.]b0.*point .*[(][1-9][0-9]* drawn[)]$' 10
+screenshot '${MITCAD_TEST_SHOTS}/notice-places-panel.png'
+mark
+leave-widget commandMessage
+wait-log '^Notice hover highlighted: none$' 10
+key Escape
+wait-log '^Command Fillet cancelled' 20
+wait-idle

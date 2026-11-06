@@ -42,6 +42,11 @@ pub struct BuildMeta {
     pub wood: Option<WoodMeta>,
     /// A profiled board's section (mitcad#477).
     pub board: Option<BoardMeta>,
+    /// A section of typed sizes (mitcad#1328: a steel tube of any size
+    /// within its options' limits): the source design's parameter whose
+    /// value is the section's area in mm². The cut list's mass is that
+    /// area in the part's combination times the density and the length.
+    pub area_parameter: Option<String>,
 }
 
 impl BuildMeta {

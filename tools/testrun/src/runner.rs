@@ -485,7 +485,10 @@ impl<'o> Runner<'o> {
             let prediction = crate::macos_policy::prediction(&def, prediction);
             let history = profiles.tests.get(&def.name).cloned().unwrap_or_default();
             let harness = crate::macos_policy::labelled(&def, crate::macos_policy::HARNESS_LABEL);
-            let seeded = !harness && o.sensitive.iter().any(|p| ctest::glob_match(p, &def.name));
+            let headless = crate::macos_policy::labelled(&def, crate::macos_policy::HEADLESS_LABEL);
+            let seeded = !harness
+                && !headless
+                && o.sensitive.iter().any(|p| ctest::glob_match(p, &def.name));
             let score = history.failure_score;
             let kind = profile::kind_of(&def.name, &def.labels);
             let limit_facts = LimitFacts {
@@ -501,8 +504,8 @@ impl<'o> Runner<'o> {
                 rank: prediction.wall,
                 score,
                 lane: schedule::in_lane(scheduling, score, o.lane_score),
-                sensitive: (!harness && history.sensitive) || seeded,
-                ui: kind == profile::Kind::Ui,
+                sensitive: (!harness && !headless && history.sensitive) || seeded,
+                ui: kind == profile::Kind::Ui && !headless,
                 ui_room: concurrency::scheduled_room(history.ui_room, ui_bound),
                 again: None,
                 limit_facts,

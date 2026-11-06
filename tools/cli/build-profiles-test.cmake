@@ -30,7 +30,9 @@
 # 5. The steel tubes (mitcad#873, mitcad#892): round, square, rectangular,
 #    furniture and stainless tubes in the standards' check sizes placed,
 #    their cut-list designations and masses within 1 % of the standards',
-#    their frames; a square tube on another's face.
+#    their frames; a square tube on another's face. The ASTM A500 inch
+#    tubes in the same way (mitcad#1328), and the tubes of a typed size in
+#    a preset row and in sizes typed, their masses by their exact areas.
 #
 # cmake -DCLI=<mitcad-cli> -DWORK=<folder> -P build-profiles-test.cmake
 
@@ -473,7 +475,8 @@ message("the lead screw's design lists its Tr8x1.5 thread")
 #    furniture tube's rows 30x30x1.5 (a sharp inner corner) and 35x35x3 (a
 #    rounded one) each switch its bores in the placed part, the rectangular
 #    one's 40x20x2 and 100x50x3 (mitcad#892) too. The stainless tube's
-#    masses are at EN ISO 1127's 7.97 kg/dm3.
+#    masses are at EN ISO 1127's 7.97 kg/dm3. An inch row's name has
+#    slashes, so its script's file has dashes.
 foreach(entry IN ITEMS "chs-en10219|48.3x3.2|CHS 48.3x3.2 L=500|1.78|0.01|axis"
                        "chs-en10219|114.3x5|CHS 114.3x5 L=500|6.75|0.01|axis"
                        "shs-en10219|40x40x3|SHS 40x40x3 L=500|1.65|0.01|face_xp"
@@ -486,7 +489,16 @@ foreach(entry IN ITEMS "chs-en10219|48.3x3.2|CHS 48.3x3.2 L=500|1.78|0.01|axis"
                        "rect-tube-en10305|40x20x2|Rectangular tube 40x20x2 EN 10305-5 L=500|0.875|0.00875|face_yn"
                        "rect-tube-en10305|100x50x3|Rectangular tube 100x50x3 EN 10305-5 L=500|3.315|0.01|face_xp"
                        "stainless-tube-iso1127|42.4x2|Stainless tube 42.4x2 L=500|1.01|0.01|axis"
-                       "stainless-tube-iso1127|114.3x2|Stainless tube 114.3x2 L=500|2.81|0.01|axis")
+                       "stainless-tube-iso1127|114.3x2|Stainless tube 114.3x2 L=500|2.81|0.01|axis"
+                       # ASTM A500 in inches (mitcad#1328), the tables' nominal weights:
+                       # 6.87, 12.21, 8.81 and 27.48 lb/ft.
+                       "hss-square-a500|3x3x3/16|HSS 3x3x3/16 L=500|5.112|0.01|face_xp"
+                       "hss-square-a500|4x4x1/4|HSS 4x4x1/4 L=500|9.085|0.01|face_yn"
+                       "hss-rect-a500|4x2x1/4|HSS 4x2x1/4 L=500|6.555|0.01|face_yp"
+                       "hss-rect-a500|8x4x3/8|HSS 8x4x3/8 L=500|20.447|0.01|face_xn"
+                       # A typed size in a row of its presets: its exact area.
+                       "shs-typed|40x40x3|Square tube 40x40x3 L=500|1.6517|0.001|face_xp"
+                       "rhs-typed|100x50x4|Rectangular tube 100x50x4 L=500|4.2971|0.001|face_yp")
   string(REPLACE "|" ";" fields "${entry}")
   list(GET fields 0 id)
   list(GET fields 1 row)
@@ -501,7 +513,9 @@ foreach(entry IN ITEMS "chs-en10219|48.3x3.2|CHS 48.3x3.2 L=500|1.78|0.01|axis"
   endif()
   part("${id}" spec)
   string(REGEX REPLACE "}$" ", \"config\": \"${row}\"}" spec "${spec}")
-  file(WRITE "${WORK}/${id}-${row}.json" "[
+  # An inch row's name has slashes (3x3x3/16).
+  string(REPLACE "/" "-" row_file "${row}")
+  file(WRITE "${WORK}/${id}-${row_file}.json" "[
   {\"cmd\": \"build_place\", \"part\": ${spec}, \"at\": {\"point\": [0, 0, 0]}, \"length\": 500},
   {\"expect\": {\"feature\": \"F1\", \"status\": \"ok\"}},
   {\"expect\": {\"query\": {\"query\": \"joint_frame\", \"occurrence\": \"O1\",
@@ -512,7 +526,33 @@ foreach(entry IN ITEMS "chs-en10219|48.3x3.2|CHS 48.3x3.2 L=500|1.78|0.01|axis"
                \"tolerance\": ${tolerance}}}
 ]
 ")
-  cli(run "${WORK}/${id}-${row}.json")
+  cli(run "${WORK}/${id}-${row_file}.json")
+  message("${designation}: placed, about ${mass} kg")
+endforeach()
+# A tube of a typed size (mitcad#1328) placed in sizes that are no row
+# (3 x 1.5 in and 3 in square, 4.8 mm wall): the cut list names it by
+# the sizes typed, its mass the exact area of the EN 10219-2 corners
+# times 7850 kg/m3 (the area parameter), its size apart.
+foreach(entry IN ITEMS "shs-typed|\"B\": \"76.2 mm\", \"T\": \"4.8 mm\"|Square tube 76.2x76.2x4.8 L=500|5.1478|B 76.2, T 4.8"
+                       "rhs-typed|\"W\": \"101.6 mm\", \"H\": \"50.8 mm\", \"T\": \"4.8 mm\"|Rectangular tube 101.6x50.8x4.8 L=500|5.1478|W 101.6, H 50.8, T 4.8")
+  string(REPLACE "|" ";" fields "${entry}")
+  list(GET fields 0 id)
+  list(GET fields 1 values)
+  list(GET fields 2 designation)
+  list(GET fields 3 mass)
+  list(GET fields 4 size)
+  part("${id}" spec)
+  string(REGEX REPLACE "}$" ", \"parameters\": {${values}}}" spec "${spec}")
+  file(WRITE "${WORK}/${id}-typed.json" "[
+  {\"cmd\": \"build_place\", \"part\": ${spec}, \"at\": {\"point\": [0, 0, 0]}, \"length\": 500},
+  {\"expect\": {\"feature\": \"F1\", \"status\": \"ok\"}},
+  {\"expect\": {\"query\": {\"query\": \"build_cut_list\"},
+               \"result\": {\"rows\": [{\"designation\": \"${designation}\", \"length\": 500, \"mass\": ${mass},
+                                       \"size\": \"${size}\"}]},
+               \"tolerance\": 0.0001}}
+]
+")
+  cli(run "${WORK}/${id}-typed.json")
   message("${designation}: placed, about ${mass} kg")
 endforeach()
 part(shs-en10219 shs)

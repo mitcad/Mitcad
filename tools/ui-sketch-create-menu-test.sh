@@ -9,9 +9,9 @@
 # the Docked and the Floating layout:
 #   - the CREATE menu: Line, Rectangles, Circles, Arcs, Other Geometry,
 #     Text, Patterns, References (Project, Intersect, Clean Up
-#     Projections, Clean Up Stale Projections) and Sketch Dimension, every
-#     sketch creation command exactly once; Offset (and Edit Text) in
-#     MODIFY, not in CREATE;
+#     Projections, Clean Up Stale Projections, Project Again) and Sketch
+#     Dimension, every sketch creation command exactly once; Offset (and
+#     Edit Text) in MODIFY, not in CREATE;
 #   - split buttons for Rectangles, Circles and Arcs, none for Other
 #     Geometry and Patterns: the Circles button starts Center Diameter
 #     Circle, its arrow opens the circle variants, which start from there;
@@ -51,7 +51,7 @@ OTHER="Ellipse | Circumscribed Polygon | Inscribed Polygon | Edge Polygon | Cent
 OTHER="$OTHER | Center Point Slot | Three Point Arc Slot | Center Point Arc Slot | Fit Point Spline"
 OTHER="$OTHER | Control Point Spline | Point"
 PATTERNS="Rectangular Pattern | Circular Pattern | Mirror"
-REFERENCES="Project | Intersect | Clean Up Projections | Clean Up Stale Projections"
+REFERENCES="Project | Intersect | Clean Up Projections | Clean Up Stale Projections | Project Again"
 CREATE="Line | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES] | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
 CREATE="$CREATE | Text > [Text | QR Code] | Patterns > [$PATTERNS] | References > [$REFERENCES] | Sketch Dimension"
 # The SOLID CREATE menu (mitcad#579), up to the Machine Elements submenu's

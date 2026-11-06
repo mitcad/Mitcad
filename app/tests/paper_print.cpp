@@ -8,10 +8,12 @@
 // page gives one page; the orientation chosen for each. mitcad#1156: an
 // empty sketch prints nothing; the page range of the panel's paper mapped
 // onto another paper's pages; the paper remembered by its key whatever the
-// language's name for it.
+// language's name for it. mitcad#1308: a sketch fitted to its page keeps
+// its constraint symbols whole inside the page's area.
 #include "printing/PaperPrint.hpp"
 #include "printing/SketchPicture.hpp"
 
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -19,8 +21,10 @@
 #include <initializer_list>
 #include <vector>
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QFile>
+#include <QImage>
 #include <QLineF>
 #include <QPageRanges>
 #include <QPaintDevice>
@@ -28,8 +32,11 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPointF>
 #include <QPrinter>
+#include <QRectF>
 #include <QRegularExpression>
+#include <QSize>
 #include <QSizeF>
 #include <QString>
 #include <QStringList>
@@ -329,6 +336,134 @@ void sketchPdfTests() {
   CHECK(!printsConstraint(QStringLiteral("coincident")) && printsConstraint(QStringLiteral("horizontal")));
 }
 
+// A sketch fitted to its page keeps its symbols at their paper size and
+// whole (mitcad#1308): a 400 x 200 mm rectangle with Horizontal on its top
+// line and Vertical on its right one, fitted to A4 portrait (a scale under
+// a half) and painted into an image. Everything drawn lies inside the
+// page's area, so the clip cuts nothing; the boxes' far sides stand 1.5 +
+// 2.8 mm beyond the right and top lines on paper, each side drawn whole.
+void fitSymbolTests() {
+  sk::SketchModel model;
+  model.name = QStringLiteral("Wide");
+  const sk::V2 corners[] = {{0, 0}, {400, 0}, {400, 200}, {0, 200}};
+  for (int i = 0; i < 4; ++i) {
+    sk::PointData p;
+    p.id = QStringLiteral("p%1").arg(i + 1);
+    p.at = corners[i];
+    model.points.push_back(p);
+  }
+  for (int i = 0; i < 4; ++i) {
+    sk::CurveData c;
+    c.id = QStringLiteral("c%1").arg(i + 1);
+    c.type = QStringLiteral("line");
+    c.curve = sk::Curve2::line(corners[i], corners[(i + 1) % 4]);
+    c.start = QStringLiteral("p%1").arg(i + 1);
+    c.end = QStringLiteral("p%1").arg((i + 1) % 4 + 1);
+    c.points = QStringList{c.start, c.end};
+    model.curves.push_back(c);
+  }
+  sk::ConstraintData horizontal;
+  horizontal.id = QStringLiteral("k1");
+  horizontal.type = QStringLiteral("horizontal");
+  horizontal.refs = QStringList{QStringLiteral("c3")}; // the top line
+  model.constraints.push_back(horizontal);
+  sk::ConstraintData vertical;
+  vertical.id = QStringLiteral("k2");
+  vertical.type = QStringLiteral("vertical");
+  vertical.refs = QStringList{QStringLiteral("c2")}; // the right line
+  model.constraints.push_back(vertical);
+  SketchPrintOptions options;
+  options.constraints = true;
+  const PrintPicture picture = sketchPicture(model, options);
+  CHECK(picture.valid());
+  // At 1:1 the picture is its 1:1 extent.
+  CHECK(picture.extentAt(1.0) == QRectF(QPointF(0.0, 0.0), picture.size));
+  const QSizeF printable = printableSize(pictureLayout(QPageSize::A4, QPageLayout::Portrait));
+  const PrintPlan fit = plan(PrintScale::Fit, picture, printable);
+  CHECK(fit.pageCount() == 1 && fit.scale > 0.4 && fit.scale < 0.5);
+  if (fit.pageCount() != 1) {
+    return;
+  }
+  const PrintPage& page = fit.pages[0];
+  CHECK(page.area.left() >= -1e-9 && page.area.top() >= -1e-9);
+  CHECK(page.area.right() <= printable.width() + 1e-9 && page.area.bottom() <= printable.height() + 1e-9);
+  // Wider than tall: the page's width is filled.
+  CHECK(near(page.area.width(), printable.width(), 1e-6));
+
+  const double pixelsPerMm = 8.0;
+  const QSize pixels(static_cast<int>(std::ceil(printable.width() * pixelsPerMm)),
+                     static_cast<int>(std::ceil(printable.height() * pixelsPerMm)));
+  QImage printed(pixels, QImage::Format_RGB32);
+  printed.fill(Qt::white);
+  {
+    QPainter painter(&printed);
+    paintPage(painter, pixelsPerMm, fit, page, picture);
+  }
+  // The same without the page's clip.
+  QImage whole(pixels, QImage::Format_RGB32);
+  whole.fill(Qt::white);
+  {
+    QPainter painter(&whole);
+    painter.scale(pixelsPerMm, pixelsPerMm);
+    painter.setTransform(page.toPage, true);
+    picture.paint(painter, fit.scale);
+  }
+  CHECK(printed == whole);
+
+  // The dark pixels per column and row, and where the drawing reaches.
+  std::vector<int> columns(static_cast<std::size_t>(pixels.width()), 0);
+  std::vector<int> rows(static_cast<std::size_t>(pixels.height()), 0);
+  int left = pixels.width();
+  int right = -1;
+  int top = pixels.height();
+  int bottom = -1;
+  for (int y = 0; y < whole.height(); ++y) {
+    for (int x = 0; x < whole.width(); ++x) {
+      if (qGray(whole.pixel(x, y)) < 128) {
+        ++columns[static_cast<std::size_t>(x)];
+        ++rows[static_cast<std::size_t>(y)];
+        left = std::min(left, x);
+        right = std::max(right, x);
+        top = std::min(top, y);
+        bottom = std::max(bottom, y);
+      }
+    }
+  }
+  CHECK(right >= 0);
+  if (right < 0) {
+    return;
+  }
+  // Inside the page's area, a pixel's rounding aside.
+  CHECK(left >= std::floor(page.area.left() * pixelsPerMm) && right <= std::ceil(page.area.right() * pixelsPerMm));
+  CHECK(top >= std::floor(page.area.top() * pixelsPerMm) && bottom <= std::ceil(page.area.bottom() * pixelsPerMm));
+  // The rectangle's right line: the last column dark over half its height;
+  // its top line the first row dark over half its width.
+  const double tall = 200.0 * fit.scale * pixelsPerMm;
+  const double wide = 400.0 * fit.scale * pixelsPerMm;
+  int rightLine = -1;
+  for (int x = 0; x < pixels.width(); ++x) {
+    if (columns[static_cast<std::size_t>(x)] > tall / 2.0) {
+      rightLine = x;
+    }
+  }
+  int topLine = -1;
+  for (int y = pixels.height() - 1; y >= 0; --y) {
+    if (rows[static_cast<std::size_t>(y)] > wide / 2.0) {
+      topLine = y;
+    }
+  }
+  CHECK(rightLine >= 0 && topLine >= 0);
+  // From the line's outer edge (0.35 mm wide) to the box's (0.18 mm): 4.3
+  // mm less half the one plus half the other, as at 1:1.
+  const double expected = 1.5 + 2.8 - 0.35 / 2.0 + 0.18 / 2.0;
+  CHECK(near((right - rightLine) / pixelsPerMm, expected, 0.3));
+  CHECK(near((topLine - top) / pixelsPerMm, expected, 0.3));
+  // The boxes' far sides drawn whole: 2.8 mm of dark pixels in the right
+  // box's last column and the top box's first row.
+  CHECK(columns[static_cast<std::size_t>(right)] >= 2.5 * pixelsPerMm);
+  CHECK(rows[static_cast<std::size_t>(top)] >= 2.5 * pixelsPerMm);
+}
+
 // A fresh sketch prints nothing, not a blank page of its margins
 // (mitcad#1156): no picture, "There is nothing to print.", no file.
 void emptySketchTests() {
@@ -569,6 +704,7 @@ int paperPrintTests() {
   tilePlanTests();
   sketchTileTests();
   sketchPdfTests();
+  fitSymbolTests();
   emptySketchTests();
   pageRangeMapTests();
   paperSettingTests();

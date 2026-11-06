@@ -10,7 +10,7 @@
 #
 # Usage, in the Visual Studio x64 environment (cl, Ninja):
 #   tools\dev-env\msvc.cmd powershell -ExecutionPolicy Bypass -File tools\dev-env\build-cycles.ps1
-#     [-Prefix dir] [-Cuda [-CudaArch list]]
+#     [-Prefix dir] [-Cuda [-CudaArch list]] [-Optix SDK]
 #
 # Without -Cuda Cycles has its CPU device only. -Cuda (mitcad#202,
 # docs/rendering.md "Devices") adds Cycles' NVIDIA CUDA device and its
@@ -21,8 +21,17 @@
 # its host compiler is the environment's cl. The driver (nvcuda.dll) is
 # loaded at run time (Cycles' cuew), so a CUDA build renders on the CPU on
 # a machine without an NVIDIA GPU. -Cuda also builds Open Image Denoise's
-# CUDA device (GPU denoising on Turing and newer). OptiX stays off (its
-# licence, README FAQ).
+# CUDA device (GPU denoising on Turing and newer).
+#
+# -Optix SDK (mitcad#1332) adds NVIDIA OptiX, for a worker of your own: SDK
+# is the folder of the OptiX SDK you downloaded from NVIDIA yourself, under
+# NVIDIA's licence (it must have include\optix.h; this script never
+# downloads it). It implies -Cuda, and the default prefix is then
+# C:\dev\mitcad-render-deps-optix, never MITCAD_RENDER_DEPS: MitCad's builds
+# stay without OptiX, and a release configure refuses a prefix with it. A
+# MitCad build against this prefix makes mitcad-render-optix.exe for your
+# own machine (docs/rendering.md, "Building an OptiX worker yourself");
+# never pass it on. Without -Optix OptiX stays off (its licence, README FAQ).
 #
 # The prefix (default: MITCAD_RENDER_DEPS, else C:\dev\mitcad-render-deps)
 # gets the same layout as on Linux:
@@ -46,7 +55,7 @@
 # Environment: MITCAD_RENDER_JOBS (parallel compile jobs, default 12),
 # MITCAD_CUDA_JOBS (parallel CUDA kernel compiles, default 3: each nvcc
 # needs about 2 GB), VCPKG_ROOT (default C:\dev\vcpkg).
-param([string]$Prefix = '', [switch]$Cuda, [string]$CudaArch = '')
+param([string]$Prefix = '', [switch]$Cuda, [string]$CudaArch = '', [string]$Optix = '')
 
 $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -57,6 +66,28 @@ foreach ($line in Get-Content (Join-Path $PSScriptRoot 'versions.sh')) {
   if ($line -match '^([A-Z0-9_]+)="?([^"]*)"?$') { $Pins[$Matches[1]] = $Matches[2] }
 }
 
+# OptiX (mitcad#1332): the user's own SDK, checked before anything is
+# fetched or built; nothing of it is ever downloaded here.
+if ($PSBoundParameters.ContainsKey('Optix')) {
+  if (-not $Optix -or -not (Test-Path -PathType Leaf (Join-Path $Optix 'include\optix.h'))) {
+    [Console]::Error.WriteLine("-Optix: '$Optix' has no include\optix.h. Give the folder of the OptiX SDK you " +
+      'downloaded from NVIDIA yourself; this script never downloads it.')
+    exit 2
+  }
+  $Optix = (Resolve-Path $Optix).Path
+  # Cycles' OptiX device is built on its CUDA device.
+  $Cuda = $true
+  # A prefix of its own: the ordinary one (MITCAD_RENDER_DEPS) stays without
+  # OptiX for MitCad's own builds.
+  if (-not $Prefix) { $Prefix = 'C:\dev\mitcad-render-deps-optix' }
+  foreach ($ordinary in @($env:MITCAD_RENDER_DEPS, 'C:\dev\mitcad-render-deps')) {
+    if ($ordinary -and ($Prefix.TrimEnd('\', '/') -eq $ordinary.TrimEnd('\', '/'))) {
+      [Console]::Error.WriteLine("-Optix: $Prefix is the ordinary render prefix; give the OptiX worker a prefix " +
+        'of its own (default C:\dev\mitcad-render-deps-optix)')
+      exit 2
+    }
+  }
+}
 if (-not $Prefix) { $Prefix = if ($env:MITCAD_RENDER_DEPS) { $env:MITCAD_RENDER_DEPS } else { 'C:\dev\mitcad-render-deps' } }
 $Jobs = if ($env:MITCAD_RENDER_JOBS) { $env:MITCAD_RENDER_JOBS } else { '12' }
 $VcpkgRoot = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { 'C:\dev\vcpkg' }
@@ -149,6 +180,7 @@ if ($Cuda) {
 # What the devices are built with; a change builds Cycles again.
 $Devices = 'cpu'
 if ($Cuda) { $Devices = "$Devices cuda($CudaArch)" }
+if ($Optix) { $Devices = "$Devices optix" }
 $sha = [Security.Cryptography.SHA256]::Create()
 $DevicesStamp = (-join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Devices)) |
   ForEach-Object { $_.ToString('x2') })).Substring(0, 12)
@@ -220,11 +252,17 @@ if ($Devices -ne 'cpu') { $cyclesDone = "$cyclesDone-$DevicesStamp" }
 # whose headers it was built with (OIDN_DEVICE_CUDA in OIDN's config.h): a
 # rebuilt Open Image Denoise rebuilds Cycles too (mitcad#202).
 if ($Cuda) { $cyclesDone = "$cyclesDone-oidn-$oidnStamp" }
-# The GPU devices asked for (never OptiX, HIP, Metal or oneAPI here).
+# The GPU devices asked for (never HIP, Metal or oneAPI here; OptiX only
+# with -Optix, for the user's own worker).
 $cyclesGpuArgs = @('-DWITH_CYCLES_DEVICE_CUDA=OFF')
 if ($Cuda) {
   $cyclesGpuArgs = @('-DWITH_CYCLES_DEVICE_CUDA=ON', '-DWITH_CYCLES_CUDA_BINARIES=ON', '-DWITH_CUDA_DYNLOAD=ON',
     "-DCYCLES_CUDA_BINARIES_ARCH=$CudaArch", "-DCUDA_TOOLKIT_ROOT_DIR=$($CudaToolkit -replace '\\', '/')")
+}
+if ($Optix) {
+  # The OptiX kernels are compiled to PTX with the SDK's headers, next to
+  # the CUDA kernels (kernel_optix*.ptx.zst); later options win.
+  $cyclesGpuArgs += @('-DWITH_CYCLES_DEVICE_OPTIX=ON', "-DOPTIX_ROOT_DIR=$($Optix -replace '\\', '/')")
 }
 if (-not (Test-Path $cyclesDone)) {
   Remove-Item -Force (Join-Path $cyclesInstall '.done-*') -ErrorAction SilentlyContinue

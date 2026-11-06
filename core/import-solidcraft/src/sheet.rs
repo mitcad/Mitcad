@@ -56,6 +56,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "sheet_contour" => self.sheet_contour(f, component),
             "sheet_perforate" => self.sheet_perforate(f, component),
             "sheet_convert" => self.sheet_convert(f, component),
+            // Format 36: a chain of edge flanges along sketch lines drawn
+            // across an edge.
+            "sheet_path" => Err(NotMapped::Unmapped(
+                "MitCad has no path flange (edge flanges along a chain of sketch lines, a bend at each corner)".to_owned(),
+            )),
             other => Err(NotMapped::Unmapped(format!(
                 "`{other}` is not a sheet feature this import knows"
             ))),
@@ -192,6 +197,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// goes on the newest sheet, as in the file's own evaluation.
     fn sheet_perforate(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let p: k::SheetPerforate = f.typed()?;
+        if p.sketch.is_some() {
+            // Format 48: the holes only inside the profiles of a sketch.
+            return Err(NotMapped::Unmapped(
+                "its field is bounded by the profiles of a sketch, and MitCad's perforation covers the whole sheet".to_owned(),
+            ));
+        }
         let body = match p.body.as_deref() {
             Some(name) => self.body(name)?,
             None => self
@@ -373,7 +384,29 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 );
                 "bend_line"
             }
-            _ => "inside",
+            // Format 37: the inner virtual sharp on the edge (the flange's
+            // inside flush with the edge's face at 90 degrees), and the
+            // bend's outside touching the edge's face.
+            "material_outside" => "outside",
+            "tangent" => "side_tangent",
+            "inside" => "inside",
+            other => {
+                return Err(NotMapped::Unmapped(format!(
+                    "a flange at `{other}` is not one of MitCad's positions"
+                )));
+            }
+        };
+        // Where the heights are measured from (format 37): the outer
+        // virtual sharp (none) or the inner one; past 90 degrees the line
+        // touching the bend's outside is not one of MitCad's.
+        let length_mode = match fl.height_from.as_deref() {
+            None | Some("outer") => "outer",
+            Some("inner") => "inner",
+            Some(other) => {
+                return Err(NotMapped::Unmapped(format!(
+                    "its heights are measured from `{other}`, which MitCad's flange lengths do not take"
+                )));
+            }
         };
         if fl.corner_relief_shape.is_some() || fl.corner_relief.is_some() {
             notes.push("the corner relief is the rule's".to_owned());
@@ -404,7 +437,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 self.slot_of(f, &angle_ptr, |n| format!("-{n}"))?
             };
             let mut def = json!({"type": "sheet_flange", "body": body.to_string(), "boundary": boundary,
-                "angle": angle, "length": {"mode": "outer", "value": self.slot(f, &height_ptr)?},
+                "angle": angle, "length": {"mode": length_mode, "value": self.slot(f, &height_ptr)?},
                 "position": position});
             if fl.radius.is_some() {
                 def["radius"] = json!(self.slot(f, "/radius")?);

@@ -187,6 +187,15 @@ struct RowFilter {
   bool operator!=(const RowFilter& other) const { return !(*this == other); }
 };
 
+// A Supplier filter's value (mitcad#950): one supplier's id, or the
+// shops chosen in Preferences as their ids separated by '|'
+// ("wurth|etra", the entry Your shops); empty for All.
+QStringList supplierFilterIds(const QString& filter);
+QString supplierFilterOf(const QStringList& ids);
+// Whether a supplier (by its id, or by its name when one is given) is one
+// the filter names; every one for All.
+bool supplierInFilter(const QString& filter, const QString& id, const QString& name = QString());
+
 // A supplier the filter offers: its id and its name for people.
 struct RowSupplier {
   QString id;
@@ -246,28 +255,36 @@ struct SupplierArticle {
   QString finish;
   QString checked;      // the date the article was read ("2026-10-30")
   QString productPage;  // the row's or the component's `supplier_url`
+  // The article's product link in the region chosen in Preferences
+  // (mitcad#950: `supplier_links`' `product_url`), and its shop's name.
+  QString productUrl;
+  QString shop;
+  QString region;       // the one region of its part number, if any
 };
 
-// The table's columns, in their order.
-enum class SupplierColumn { Supplier, PartNumber, Material, Finish, Checked, ProductPage };
+// The table's columns, in their order (Region only where an article's
+// part number is of one region, mitcad#950).
+enum class SupplierColumn { Supplier, PartNumber, Material, Finish, Region, Checked, ProductPage };
 
 // The articles of a row's `supplier_parts`, with each supplier's site from
 // `suppliers` (the library's `suppliers` or the component's: {id, name,
-// url}) and the row's product page. Those of `firstSupplier` (the Supplier
-// filter's id, compared without case; empty: All) come first; otherwise
-// the order given.
+// url}) and the row's product page; an article's `product_url` and `shop`
+// where `supplier_links` gave them (mitcad#950). Those of `firstSupplier`
+// (the Supplier filter's: an id, or several separated by '|'; compared
+// without case; empty: All) come first; otherwise the order given.
 QList<SupplierArticle> supplierArticles(const QJsonArray& parts, const QJsonArray& suppliers,
                                         const QString& productPage, const QString& firstSupplier = QString());
 // The columns that some article fills, in their order: a column no article
 // fills is left out.
 QList<SupplierColumn> supplierColumns(const QList<SupplierArticle>& articles);
 // A column's heading: "Supplier", "Supplier Part Number", "Material", "Finish",
-// "Checked", "Product Page".
+// "Region", "Checked", "Product Page".
 QString supplierColumnName(SupplierColumn column);
 // An article's text in a column.
 QString supplierCell(const SupplierArticle& article, SupplierColumn column);
 // The address a cell links to: the supplier's site in Supplier, the
-// product page in Product page; empty for the others and for none.
+// product link in the chosen region in Supplier Part Number (mitcad#950),
+// the product page in Product page; empty for the others and for none.
 QString supplierCellLink(const SupplierArticle& article, SupplierColumn column);
 // Tab-separated text: the headings, then a line per article (each ending
 // with a line break); a tab or line break in a cell becomes a space.

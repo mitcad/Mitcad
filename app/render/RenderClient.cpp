@@ -28,7 +28,40 @@ RenderClient::RenderClient(QObject* parent) : QObject(parent) {}
 
 RenderClient::~RenderClient() { stop(); }
 
-QString RenderClient::workerPath() { return workerExecutable(); }
+WorkerChoice RenderClient::workerChoice() {
+  const WorkerChoice choice = chooseWorker(qEnvironmentVariable("MITCAD_RENDER_WORKER"), pickedWorker(),
+                                           failedPickedWorker(), shippedWorkerExecutable());
+  // A picked worker that is not there: said once per run.
+  static QString logged;
+  if (!choice.fallback.isEmpty() && choice.fallback != logged) {
+    logged = choice.fallback;
+    qWarning().noquote() << QStringLiteral("Render worker fallback: %1").arg(choice.fallback);
+  }
+  return choice;
+}
+
+bool RenderClient::fallBack(const QString& reason) {
+  if (!m_picked || m_greeted || m_stopping) {
+    return false;
+  }
+  m_picked = false;
+  const QString text = pickedWorkerFailed(m_program, reason);
+  if (workerChoice().path.isEmpty()) {
+    return false; // reported as the picked worker's failure
+  }
+  emit workerFallback(text);
+  m_restartPending = true;
+  QMetaObject::invokeMethod(
+      this,
+      [this] {
+        if (m_restartPending) {
+          m_restartPending = false;
+          start();
+        }
+      },
+      Qt::QueuedConnection);
+  return true;
+}
 
 void RenderClient::start() {
   if (isRunning()) {
@@ -41,10 +74,25 @@ void RenderClient::start() {
   m_pending.clear();
   m_memory.reset();
   m_frameWaiting = false;
+  m_restartPending = false;
+  const WorkerChoice choice = workerChoice();
+  m_picked = choice.picked;
+  m_program = choice.path;
+  if (!choice.fallback.isEmpty()) {
+    // A picked worker that is not there (mitcad#1332): the status bar says
+    // so once per run.
+    static QString reported;
+    if (choice.fallback != reported) {
+      reported = choice.fallback;
+      const QString text = choice.fallback;
+      QMetaObject::invokeMethod(this, [this, text] { emit workerFallback(text); }, Qt::QueuedConnection);
+    }
+  }
 #ifdef __APPLE__
   m_native.reset();
-  // Explicit worker overrides keep their existing POSIX process semantics.
-  if (qEnvironmentVariableIsEmpty("MITCAD_RENDER_WORKER")) {
+  // Explicit worker overrides and a picked worker keep their existing POSIX
+  // process semantics.
+  if (qEnvironmentVariableIsEmpty("MITCAD_RENDER_WORKER") && !m_picked) {
     m_native = std::make_unique<MacRenderClient>(this);
     m_activity.start("Rendering the view");
     if (!m_native->start([this](const QJsonObject& event) { handle(event); }, [this](const QString& reason) {
@@ -58,7 +106,7 @@ void RenderClient::start() {
     return;
   }
 #endif
-  const QString program = workerPath();
+  const QString program = m_program;
   QStringList arguments;
 #ifndef _WIN32
   // The socket the frame memory's file descriptors go through.
@@ -102,6 +150,9 @@ void RenderClient::start() {
     }
     const QString reason = workerExitReason(m_lastError, exitCode, status == QProcess::CrashExit, m_incompatible);
     qWarning().noquote() << QStringLiteral("Render worker stopped: %1").arg(reason);
+    if (fallBack(reason)) {
+      return;
+    }
     emit failed(reason);
   });
   connect(m_process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
@@ -118,6 +169,9 @@ void RenderClient::start() {
     m_channel.reset();
 #endif
     qWarning().noquote() << QStringLiteral("Render worker stopped: %1").arg(m_lastError);
+    if (fallBack(m_lastError)) {
+      return;
+    }
     emit failed(m_lastError);
   });
 #ifndef _WIN32
@@ -151,6 +205,7 @@ void RenderClient::start() {
 }
 
 void RenderClient::stop() {
+  m_restartPending = false;
   if (!isRunning()) {
     return;
   }

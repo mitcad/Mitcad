@@ -560,3 +560,122 @@ fn a_part_s_row_sets_the_suppression_its_source_binds() {
     all_ok(&doc);
     assert!((width(&doc, &wide) - 40.0).abs() < 1e-6);
 }
+
+/// A profile of a typed size (mitcad#1328, the steel tubes of any size): an
+/// open table whose option W sets the section's width, its parameter A
+/// the section's area, which the build block names as `area_parameter`.
+fn typed_size_profile() -> Document<MockKernel> {
+    let mut source = Document::new(MockKernel::default());
+    for (name, expression) in [("W", "20 mm"), ("L", "1000 mm"), ("A", "W * 10 mm")] {
+        let mut add = json!({"cmd": "add_parameter", "name": name, "expression": expression});
+        if name == "W" {
+            add["min"] = json!("10 mm");
+            add["max"] = json!("100 mm");
+        }
+        command(&mut source, add).unwrap();
+    }
+    let sketch = source.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = source
+        .add_rectangle(
+            sketch,
+            [0.0, 0.0],
+            &ValueInput::Name("W".into()),
+            &ValueInput::Number(10.0),
+        )
+        .unwrap()
+        .region;
+    let solid = source
+        .add_feature(
+            &def(
+                json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+                        "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}),
+            ),
+            None,
+        )
+        .unwrap()
+        .uid;
+    fixed_frame(
+        &mut source,
+        "end_a",
+        [0.0; 3],
+        [0.0, 0.0, -1.0],
+        [1.0, 0.0, 0.0],
+    );
+    source
+        .add_feature(
+            &def(
+                json!({"type": "joint_origin", "geometry": {"body": format!("{solid}.b0"),
+                        "face": format!("{solid}:end({region})")}}),
+            ),
+            Some("mount:end_b"),
+        )
+        .unwrap();
+    command(
+        &mut source,
+        json!({"cmd": "set_configurations", "configurations": {
+            "options": ["W"], "closed": false, "default": "20",
+            "rows": [{"name": "20", "values": {"W": "20 mm"}}]}}),
+    )
+    .unwrap();
+    source.recompute();
+    all_ok(&source);
+    // The default row's mass per metre is 0.9 kg (profile_build's), which
+    // the area at 7850 kg/m3 replaces.
+    let mut build = profile_build("I", 5.0, 20.0, &[]);
+    build["material"] = json!({"density": 7850});
+    build["area_parameter"] = json!("A");
+    let mut library = TestLibrary::default();
+    library.parts.insert(
+        ("typed-profile".into(), V1.into()),
+        Part {
+            text: source.to_json(),
+            build: Some(build),
+            part_number: String::new(),
+            name: "Typed bar".into(),
+            designation: "Bar {W}x10 L={L}".into(),
+        },
+    );
+    let mut doc = Document::new(MockKernel::default());
+    doc.set_link_resolver(Some(Arc::new(library)));
+    doc
+}
+
+#[test]
+fn a_typed_size_s_cut_list_mass_and_stock_follow_its_options() {
+    let mut doc = typed_size_profile();
+    place(
+        &mut doc,
+        json!({"part": part("typed-profile"), "at": {"point": [0, 0, 0]}, "length": 500}),
+    );
+    let mut typed = part("typed-profile");
+    typed["parameters"] = json!({"W": "30 mm"});
+    place(
+        &mut doc,
+        json!({"part": typed, "at": {"point": [300, 0, 0]}, "length": 500}),
+    );
+    all_ok(&doc);
+    let list = query(&doc, json!({"query": "build_cut_list"}));
+    let rows = list["rows"].as_array().unwrap();
+    // Two rows of the same source, row and length: each its own size.
+    assert_eq!(rows.len(), 2, "{list}");
+    let row = |designation: &str| -> &Value {
+        rows.iter()
+            .find(|r| r["designation"] == designation)
+            .unwrap_or_else(|| panic!("no row {designation}: {list}"))
+    };
+    // 20 x 10 mm and 30 x 10 mm at 7850 kg/m3, 500 mm long.
+    let mass = |designation: &str| -> f64 { row(designation)["mass"].as_f64().unwrap() };
+    assert!((mass("Bar 20x10 L=500") - 0.785).abs() < 1e-9, "{list}");
+    assert!((mass("Bar 30x10 L=500") - 1.1775).abs() < 1e-9, "{list}");
+    assert_eq!(row("Bar 30x10 L=500")["size"], "W 30");
+    assert_eq!(row("Bar 30x10 L=500")["quantity"], 1);
+    // Each size is cut from its own stock.
+    let stock = list["stock"].as_array().unwrap();
+    assert_eq!(stock.len(), 2, "{list}");
+    assert!(
+        stock
+            .iter()
+            .any(|s| s["designation"] == "Typed bar (W 30)" && s["needed"] == 1),
+        "{list}"
+    );
+}

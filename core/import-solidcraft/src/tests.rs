@@ -191,6 +191,60 @@ fn unmapped_features_are_placeholders() {
     );
 }
 
+/// A design of the newest format opens (mitcad#1331): the kinds of the
+/// later formats MitCad has no feature for (a cone, frame members, a path
+/// flange, Repair Part) and the options it has not (a hole placed by edge
+/// distances, a coil of a sketch's profile) are placeholders with their
+/// reasons, and the timeline goes on; a pattern names its seed by id.
+#[test]
+fn a_format_50_design_opens_with_placeholders_for_what_has_no_counterpart() {
+    let v = json!({"format": "solidcraft/50", "name": "N50", "params": [], "features": [
+        {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "40", "width": "40", "height": "10",
+         "body_names": ["B"]},
+        {"id": 2, "name": "Cone1", "type": "cone", "base": [60, 0, 0], "radius": "5", "top_radius": "0", "height": "10"},
+        {"id": 3, "name": "Frame1", "type": "frame_member", "path_sketch": 9, "lines": ["l1"],
+         "profile": {"source": "library", "profile": {"kind": "rect_tube", "width": 40, "height": 40, "wall": 3}}},
+        {"id": 4, "name": "Repair1", "type": "repair", "body": "B", "gap": "0.1"},
+        {"id": 5, "name": "Path1", "type": "sheet_path", "edge": [0, 0, 0], "sketch": 9, "curves": ["l1"]},
+        {"id": 6, "name": "Hole1", "type": "hole", "position": [10, 10, 10], "direction": [0, 0, -1],
+         "diameter": "3", "references": [{"edge": [0, 5, 10], "distance": "10"}]},
+        {"id": 7, "name": "Coil1", "type": "coil", "base": [0, 0, 0], "sketch": 9, "pitch": "2", "turns": "3"},
+        {"id": 8, "name": "Copies", "type": "pattern", "features": [1],
+         "pattern": {"type": "rectangular", "dir1": [1, 0, 0], "count1": "2", "spacing1": "50"}}]});
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    assert_eq!(file.saved_format, 50);
+    assert!(file.upgrades.is_empty(), "{:?}", file.upgrades);
+    let mut doc = Document::new(MockKernel::default());
+    let report = import_solidcraft_file(
+        &mut doc,
+        file,
+        "n.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    for name in ["Cone1", "Frame1", "Repair1", "Path1", "Hole1", "Coil1"] {
+        assert_eq!(outcome(&report, name), Outcome::Unmapped, "{name}");
+    }
+    assert_eq!(outcome(&report, "Box1"), Outcome::Parametric);
+    assert_eq!(outcome(&report, "Copies"), Outcome::Parametric);
+    let cone = doc.features().find(|f| f.name == "Cone1").unwrap();
+    assert!(
+        doc.import_note(cone.uid)
+            .unwrap()
+            .contains("no cone primitive")
+    );
+}
+
+/// A SolidCraft drawing is a file of its own: refused as a drawing.
+#[test]
+fn a_drawing_is_refused_as_one() {
+    let e = mitcad_solidcraft::SolidcraftFile::from_value(
+        json!({"format": "solidcraft-drawing/1", "sheets": [], "sources": []}),
+    )
+    .unwrap_err();
+    assert!(e.contains("drawing"), "{e}");
+}
+
 /// A design whose expected values disagree fails the check.
 #[test]
 fn the_check_compares_with_expected_values() {

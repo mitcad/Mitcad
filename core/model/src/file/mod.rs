@@ -103,6 +103,17 @@
 //! name when renamed) and a feature's `component` when it is not the root
 //! (`C0`). Files without them load with every feature in the root.
 //!
+//! The numbers the next feature and occurrence take (mitcad#1320):
+//! `next_feature` and `next_occurrence`, each only where it is not one past
+//! the largest uid listed (the largest was deleted), so that a reload does
+//! not give a deleted last feature's or occurrence's uid to a new one: a
+//! plate item, a comment and a drawing's recorded bodies keep what they
+//! referred to on purpose and would attach to it. Reading takes the larger
+//! of the stored number and one past the largest uid listed; a file
+//! without them (older versions wrote none) counts on from the largest.
+//! Builds before mitcad#1320 ignore both with the warning of a newer
+//! MitCad's fields (mitcad#1132).
+//!
 //! A component from a library (mitcad#64) has `library` (`library`, `url`,
 //! `rev`, `label`, `component`, `path`, `config`, `license`, `authors`,
 //! `designation`; [`crate::library::LibraryRef`]); a design with a table of
@@ -242,7 +253,9 @@
 //! `flat`, mitcad#1300). One without it, in a file written before it
 //! existed, is read as `flat`, the ends threads were cut with then, so
 //! that what refers to them keeps working; commands give a new or edited
-//! thread `run_out` ([`crate::features::ThreadDef::settle_ends`]).
+//! thread `run_out` ([`crate::features::ThreadDef::settle_ends`]). So
+//! does a hole's modelled thread (`thread.ends`, mitcad#1307,
+//! [`crate::features::HoleDef::settle_thread_ends`]).
 //!
 //! A sketch stores its entities with their last solved positions (the
 //! start of the next solve), constraints, dimensions, linked projections

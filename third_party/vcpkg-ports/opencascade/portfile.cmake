@@ -248,6 +248,12 @@ vcpkg_from_github(
         1283-intcurvesface-only-points-in-range-classified.patch
         1284-bopalgo-buildersolid-solid-edges-mapped-once-for-its-holes.patch
         1285-brepclass3d-point-classified-along-fixed-lines-once-the-segments-run-out.patch
+        1290-chfi3d-cut-to-end-past-the-vertex-not-on-a-face-closed-round-its-axis.patch
+        1300-chfi3d-concave-crease-beyond-judged-at-the-edge.patch
+        1301-chfi3d-walk-ends-where-a-contact-reaches-the-next-analytic-piece.patch
+        1302-chfi3d-narrow-parts-pieces-generated-by-their-spine-edges.patch
+        1310-chfi3d-kpart-blend-runs-past-the-end-where-the-end-face-goes-on-tangentially.patch
+        1311-chfi3d-onsame-end-walked-on-past-the-end-of-an-extruded-stretch.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

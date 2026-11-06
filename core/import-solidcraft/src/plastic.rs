@@ -14,7 +14,7 @@ use mitcad_solidcraft::Feature;
 use mitcad_solidcraft::kinds as k;
 use serde_json::{Value, json};
 
-use super::{Importer, MapResult, Mapped};
+use super::{Importer, MapResult, Mapped, NotMapped};
 
 impl<K: Kernel> Importer<'_, '_, K> {
     /// The rule that applies to a body, made as a feature when it is not
@@ -189,6 +189,16 @@ pub(super) fn snap_fit<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let s: k::SnapFit = f.typed()?;
+    if s.base_height.is_some() {
+        return Err(NotMapped::Unmapped(
+            "its base reaches below the face, which MitCad's snap fit does not take".to_owned(),
+        ));
+    }
+    if s.new_body {
+        return Err(NotMapped::Unmapped(
+            "it is a body of its own, and MitCad's snap fit joins the body it stands on".to_owned(),
+        ));
+    }
     let (body, face) = im.face_named(
         component,
         s.body.as_deref(),

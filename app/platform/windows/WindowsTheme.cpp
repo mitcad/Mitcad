@@ -50,63 +50,22 @@ QString paletteStyleKey() {
   return key;
 }
 
-// The dark palette of Qt's own style: the theme's neutral roles of a dark
-// theme (mitcad#1041), as the Docked and Floating chrome draw them on
-// Windows 11 and macOS. Every role of every group is set, so that nothing
-// resolves from the light palette of the platform's theme under it.
-QPalette darkPalette() {
-  const auto role = [](ColorRole r) { return themeColor(r, true); };
-  const QColor window = role(ColorRole::Surface); // the panels' and the dialogs' colour
-  const QColor base = role(ColorRole::Window);    // fields and lists, recessed below it
-  const QColor raised = role(ColorRole::Raised);  // buttons and tooltips
-  const QColor text = role(ColorRole::Text);
-  const QColor secondary = role(ColorRole::TextSecondary);
-  const QColor disabledText = secondary.darker(150);
-  const QColor action = role(ColorRole::Action);
-  const QColor accentText = role(ColorRole::AccentText);
-
-  QPalette palette;
-  const auto set = [&palette](QPalette::ColorRole which, const QColor& enabled, const QColor& disabled) {
-    palette.setColor(QPalette::Active, which, enabled);
-    palette.setColor(QPalette::Inactive, which, enabled);
-    palette.setColor(QPalette::Disabled, which, disabled);
-  };
-  set(QPalette::Window, window, window);
-  set(QPalette::WindowText, text, disabledText);
-  set(QPalette::Base, base, window);
-  set(QPalette::AlternateBase, window, window);
-  set(QPalette::ToolTipBase, raised, raised);
-  set(QPalette::ToolTipText, text, text);
-  set(QPalette::PlaceholderText, secondary, disabledText);
-  set(QPalette::Text, text, disabledText);
-  set(QPalette::Button, raised, window);
-  set(QPalette::ButtonText, text, disabledText);
-  set(QPalette::BrightText, QColor(Qt::white), QColor(Qt::white));
-  set(QPalette::Light, raised.lighter(150), raised.lighter(150));
-  set(QPalette::Midlight, raised.lighter(125), raised.lighter(125));
-  set(QPalette::Mid, raised.darker(130), raised.darker(130));
-  set(QPalette::Dark, raised.darker(200), raised.darker(200));
-  set(QPalette::Shadow, QColor(Qt::black), QColor(Qt::black));
-  set(QPalette::Highlight, action, raised);
-  set(QPalette::HighlightedText, accentText, secondary);
-  set(QPalette::Link, action, secondary);
-  set(QPalette::LinkVisited, action, secondary);
-  set(QPalette::Accent, action, raised);
-  return palette;
-}
-
 // The app mode now: the dark style and palette, or the default style with
-// its own palette (the platform theme's, as before any switch).
-void follow() {
+// its own palette (the platform theme's, as before any switch). `again`:
+// set them even when the app mode is the one last followed (another part
+// replaced the application's palette meanwhile).
+void follow(bool again = false) {
   AppModeState& current = state();
   const bool dark = QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
-  if (dark == current.dark) {
+  if (dark == current.dark && !again) {
     return;
   }
   current.dark = dark;
   if (dark) {
     QApplication::setStyle(paletteStyleKey());
-    const QPalette palette = darkPalette();
+    // The theme's neutral roles of a dark theme (mitcad#1041), as the Docked
+    // and Floating chrome draw them on Windows 11 and macOS.
+    const QPalette palette = themePalette(true);
     QApplication::setPalette(palette);
     qInfo().noquote() << QStringLiteral("Windows 10 app mode: dark, the style %1 with a dark palette (window %2)")
                              .arg(QApplication::style()->name(), palette.color(QPalette::Window).name());
@@ -147,6 +106,13 @@ void followAppColorScheme() {
   // this switch comes first when the app mode changes.
   QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, qApp, [] { follow(); });
   follow();
+}
+
+void followAppColorSchemeAgain() {
+  // Only where the path is taken (followAppColorScheme set the default style).
+  if (!state().defaultStyle.isEmpty()) {
+    follow(true);
+  }
 }
 
 } // namespace mitcad::win

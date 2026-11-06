@@ -164,6 +164,55 @@ pub fn designation(
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A part's section of a typed size in its combination (mitcad#1328: a
+/// steel tube of any size within its options' limits).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedSection {
+    /// The value of the source's area parameter, mm²; None when it has no
+    /// such parameter or its value is not above 0.
+    pub area: Option<f64>,
+    /// The options' values in the table's order, the length's left out
+    /// (`B 76.2, T 4.8`).
+    pub size: String,
+}
+
+/// The typed section of a part made in the row `config` (the default row
+/// when None) with its `values` applied: the source's parameter `area`
+/// and its options but the parameter `length`; None when the source
+/// cannot be configured so.
+pub fn typed_section(
+    source: &LibrarySourceDef,
+    config: Option<&str>,
+    values: &BTreeMap<String, f64>,
+    area: &str,
+    length: Option<&str>,
+) -> Option<TypedSection> {
+    let state = source.design.state().ok()?;
+    let table = &state.configurations;
+    let named = match config {
+        Some(row) => table.row(row).map(|r| r.name.clone()),
+        None => table.default_row().map(|r| r.name.clone()),
+    };
+    let list: Vec<(String, f64)> = values.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    let configured =
+        crate::features::derived_part::configured(source, named.as_deref(), &list).ok()?;
+    let parameters = &configured.parameters;
+    let texts = configured.configurations.designation_values(parameters);
+    let size = configured
+        .configurations
+        .options
+        .iter()
+        .filter(|option| Some(option.as_str()) != length)
+        .filter_map(|option| Some(format!("{option} {}", texts.get(option)?)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let area = parameters
+        .find(area)
+        .and_then(|id| parameters.value(id))
+        .filter(|a| a.is_finite() && *a > 0.0);
+    Some(TypedSection { area, size })
+}
+
 /// The part number of a part made in a row: the row's own, else the
 /// source's.
 pub fn part_number(source: &LibrarySourceDef, config: Option<&str>) -> String {

@@ -65,10 +65,16 @@ public:
   // The render device's choice in Preferences changed (mitcad#50): a
   // running worker starts again on it.
   void deviceChanged();
+  // The render worker's choice in Preferences changed (mitcad#1332): a
+  // running worker starts again as the chosen one.
+  void workerChanged();
 
 signals:
   // The mode ended by itself (the worker died).
   void stopped();
+  // The picked render worker gave way to the shipped one (mitcad#1332):
+  // a message for the status bar.
+  void workerFallback(const QString& text);
 
 private:
   void workerReady(const QString& renderer);

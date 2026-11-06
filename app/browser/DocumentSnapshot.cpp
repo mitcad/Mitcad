@@ -12,6 +12,7 @@
 #include <QtLogging>
 
 #include "../framework/Diagnostics.hpp"
+#include "../framework/NoticePlaces.hpp"
 
 namespace mitcad {
 namespace {
@@ -218,6 +219,19 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.level = text(f, "level");
     feature.error = text(f, "error");
     const QJsonArray notices = f.value(QStringLiteral("notices")).toArray();
+    // The places its notices name, painted while the pointer is over it
+    // (mitcad#1327), and a failure's error in plain words, as its notice
+    // gives it (the model's `error` keeps the topological names).
+    feature.places = noticePlaces(notices);
+    if (!feature.error.isEmpty()) {
+      for (const QJsonValue& value : notices) {
+        const QJsonObject notice = value.toObject();
+        if (notice.value(QStringLiteral("level")).toString() == QStringLiteral("error")) {
+          feature.error = notice.value(QStringLiteral("message")).toString();
+          break;
+        }
+      }
+    }
     if (feature.error.isEmpty() && !notices.isEmpty()) {
       QStringList notes;
       QStringList others;
@@ -239,6 +253,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.suppressedWhen = text(f, "suppressed_when");
     // Warnings Auto Fix can fix (mitcad#1223).
     feature.autoFix = f.value(QStringLiteral("auto_fix")).toInt();
+    // Linked projections Project Again repairs (mitcad#1303).
+    feature.projectAgain = f.value(QStringLiteral("project_again")).toInt();
     // A joint origin's light bulb is construction geometry's (mitcad#55).
     if (feature.isSketch() || feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
       snapshot.featureShown.insert(feature.uid, feature.visible);

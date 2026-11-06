@@ -48,9 +48,11 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::components::{design_digest, file_label, recorded_link_path, resolve_path};
-use super::copy::CopySource;
-use super::{Annotation, BodyAttributes, ComponentCopy, DocState, Document, ModelError, invalid};
-use crate::assembly::{Assembly, ExternalLink, inverse};
+use super::copy::{CopySource, copy_geometry};
+use super::{
+    Annotation, BodyAttributes, ComponentCopy, DocState, Document, Follow, ModelError, invalid,
+};
+use crate::assembly::{Assembly, EnvelopeFrame, ExternalLink, inverse};
 use crate::datum::Datum;
 use crate::exchange::ImportBody;
 use crate::features::construction::{AxisDefinition, PlaneDefinition, PointDefinition};
@@ -1426,6 +1428,11 @@ impl<K: Kernel> Document<K> {
             for annotation in &mut state.annotations {
                 rename_picks(annotation, &rename)?;
             }
+            // And the print plate items, comments and drawings' recorded
+            // bodies and picks (mitcad#1318).
+            state.follow(&Follow::Renamed(&|value: &mut Value| {
+                rename_value(value, &rename)
+            }));
             Ok((label, ()))
         })
     }
@@ -1779,8 +1786,9 @@ fn keep_body_names(design: &mut DocState, names: &BTreeMap<BodyUid, String>, cop
 }
 
 /// Linked and library components inside the saved one stay linked: their
-/// copies keep the link (its path recorded from the new file's folder),
-/// the library record and BUILD's record.
+/// copies keep the link (its path recorded from the new file's folder;
+/// one shown by its envelope with its detail size and its joints' kept
+/// frames), the library record and BUILD's record.
 fn keep_links(
     design: &mut DocState,
     source: &DocState,
@@ -1807,7 +1815,18 @@ fn keep_links(
                 digest: l.digest.clone(),
                 feature: copy.features.get(&l.feature).copied().unwrap_or(l.feature),
                 envelope: l.envelope,
-                frames: Vec::new(),
+                // The joints' kept frames on the design's geometry
+                // (mitcad#1276), named as the copied joints name it; the
+                // frames are in the component's own coordinates
+                // (mitcad#1319).
+                frames: l
+                    .frames
+                    .iter()
+                    .map(|f| EnvelopeFrame {
+                        geometry: copy_geometry(&f.geometry, &copy.features),
+                        frame: f.frame,
+                    })
+                    .collect(),
             }
         });
         if let Some(c) = design.assembly.component_mut(target) {

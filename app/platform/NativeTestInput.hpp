@@ -12,6 +12,7 @@ class QRegularExpression;
 class QOpenGLWidget;
 class QPointF;
 class QJsonObject;
+class QRect;
 
 namespace mitcad { class CommandHost; }
 
@@ -208,6 +209,10 @@ bool toolTipOf(const QString& identifier, QString& text);
 // the bottom of the free column, above the timeline.
 bool dragColumnSplit(const QString& handle, int height, QString& error);
 bool cardHeight(const QString& card, int minimum, int maximum, QString& detail);
+// A native view's frame in the 3D view's host (top-left origin, logical
+// points), within a point of `expected` (mitcad#1317: the cube's arrows at
+// the hidden Qt arrows' places). Read only.
+bool viewportFrame(const QString& identifier, const QRect& expected, QString& detail);
 #else
 inline bool active() { return false; }
 inline bool nativeFocused() { return false; }
@@ -314,6 +319,7 @@ inline bool layoutContract(QString&) { return false; }
 inline bool toolTipOf(const QString&, QString&) { return false; }
 inline bool dragColumnSplit(const QString&, int, QString&) { return false; }
 inline bool cardHeight(const QString&, int, int, QString&) { return false; }
+inline bool viewportFrame(const QString&, const QRect&, QString&) { return false; }
 #endif
 
 } // namespace mitcad::mac::test

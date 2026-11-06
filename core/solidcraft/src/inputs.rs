@@ -65,6 +65,11 @@ impl Walk<'_> {
                 Some("along_path") => {
                     return self.expr(&format!("{at}/t"), "Distance (0 to 1)", Kind::Unitless);
                 }
+                // A tangent plane's turn from its reference (format 48).
+                Some("tangent") => return self.expr(&format!("{at}/angle"), "Angle", Kind::Angle),
+                // A plane seen from behind, or moved through a point, keeps
+                // its base's expressions.
+                Some("flipped" | "through_point") => at = format!("{at}/base"),
                 _ => return,
             }
         }
@@ -89,6 +94,22 @@ impl Walk<'_> {
         self.expr(&format!("{p}/start_offset"), "Start offset", Kind::Length);
         self.expr(&format!("{p}/taper"), "Taper angle", Kind::Angle);
         self.expr(&format!("{p}/to_offset"), "To offset", Kind::Length);
+    }
+
+    /// A thread's runout given as a length (`{"length": {"length": …}}`).
+    fn runout(&mut self, pointer: &str) {
+        self.expr(&format!("{pointer}/length/length"), "Runout", Kind::Length);
+    }
+
+    /// Distances from reference edges (a hole's, a cylinder's).
+    fn references(&mut self, pointer: &str) {
+        for k in 0..self.count(pointer) {
+            self.expr(
+                &format!("{pointer}/{k}/distance"),
+                "Reference distance",
+                Kind::Length,
+            );
+        }
     }
 
     fn count(&self, pointer: &str) -> usize {
@@ -130,6 +151,8 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
         }
         "surface_extrude" => w.extent("/extent"),
         "revolve" | "surface_revolve" => {
+            // An axis on the model (format 39) walks its reference first.
+            w.geo("/axis/geo");
             w.expr("/angle", "Angle", Angle);
             w.expr("/angle2", "Angle 2", Angle);
         }
@@ -155,6 +178,9 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
                 }
                 _ => {}
             }
+            for k in 0..w.count("/setbacks") {
+                w.expr(&format!("/setbacks/{k}/distance"), "Setback", Length);
+            }
         }
         "chamfer" => {
             w.expr("/distance", "Distance", Length);
@@ -168,6 +194,12 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
         }
         "cylinder" => {
             w.expr("/radius", "Radius", Length);
+            w.expr("/height", "Height", Length);
+            w.references("/references");
+        }
+        "cone" => {
+            w.expr("/radius", "Radius", Length);
+            w.expr("/top_radius", "Top radius", Length);
             w.expr("/height", "Height", Length);
         }
         "sphere" => w.expr("/radius", "Radius", Length),
@@ -185,6 +217,7 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             Some("circular") => {
                 w.expr("/pattern/count", "Quantity", Unitless);
                 w.expr("/pattern/angle", "Total angle", Angle);
+                w.geo("/pattern/axis_ref");
             }
             Some("path") => {
                 w.expr("/pattern/count", "Quantity", Unitless);
@@ -200,15 +233,26 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
                 Some("counterbore") => {
                     w.expr("/hole/cb_diameter", "Counterbore diameter", Length);
                     w.expr("/hole/cb_depth", "Counterbore depth", Length);
+                    w.expr("/hole/tip_angle", "Tip angle", Angle);
                 }
                 Some("countersink") => {
                     w.expr("/hole/cs_diameter", "Countersink diameter", Length);
                     w.expr("/hole/cs_angle", "Countersink angle", Angle);
+                    w.expr("/hole/tip_angle", "Tip angle", Angle);
                 }
                 _ => {}
             }
+            w.expr("/thread_depth", "Thread depth", Length);
+            w.runout("/ease_out");
+            w.references("/references");
         }
-        "thread" => w.expr("/length", "Length", Length),
+        "thread" => {
+            w.expr("/length", "Length", Length);
+            w.plane("/up_to/plane");
+            w.runout("/ease_out");
+            w.expr("/chamfer_angle", "Chamfer angle", Angle);
+            w.expr("/chamfer_depth", "Chamfer depth", Length);
+        }
         "sweep" | "surface_sweep" => {
             w.expr("/twist", "Twist", Angle);
             w.expr("/scale", "Scale", Unitless);
@@ -253,6 +297,21 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             w.expr("/diameter", "Diameter", Length);
             w.expr("/wall", "Wall", Length);
         }
+        "frame_member" => {
+            // A library profile's dimensions in the order of their names
+            // (`kind` is none).
+            if let Some(dims) = feature
+                .pointer("/profile/profile")
+                .and_then(Value::as_object)
+            {
+                let mut names: Vec<&String> = dims.keys().filter(|k| *k != "kind").collect();
+                names.sort();
+                for name in names {
+                    w.expr(&format!("/profile/profile/{name}"), "Dimension", Length);
+                }
+            }
+            w.expr("/angle", "Rotation", Angle);
+        }
         "emboss" => w.expr("/depth", "Depth", Length),
         "rib" => {
             w.expr("/thickness", "Thickness", Length);
@@ -289,6 +348,7 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             w.expr("/angle", "Angle", Angle);
             w.expr("/radius", "Bend radius", Length);
         }
+        "sheet_path" => w.expr("/radius", "Bend radius", Length),
         "boss" => {
             w.expr("/diameter", "Diameter", Length);
             w.expr("/height", "Height", Length);
@@ -312,6 +372,7 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             w.expr("/width", "Width", Length);
             w.expr("/catch_depth", "Catch depth", Length);
             w.expr("/catch_length", "Catch length", Length);
+            w.expr("/base_height", "Base height", Length);
         }
         "rest" => {
             w.expr("/width", "Width", Length);
@@ -342,6 +403,14 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             w.expr("/angle", "Angle", Angle);
         }
         "mesh_convert" => w.expr("/tolerance", "Tolerance", Length),
+        // Planes the bodies move with or onto (format 29), and a turn after
+        // the move (format 50).
+        "align" => {
+            w.plane("/from_plane");
+            w.plane("/to_plane");
+            w.expr("/angle", "Angle", Angle);
+        }
+        "repair" => w.expr("/gap", "Gap", Length),
         _ => {}
     }
     w.out
@@ -403,5 +472,107 @@ mod tests {
             ["Margin"]
         );
         assert_eq!(labels(json!({"type": "combine"})), Vec::<&str>::new());
+    }
+
+    /// The kinds and inputs of the later formats, in the golden record's
+    /// order (mitcad#1331).
+    #[test]
+    fn later_formats_inputs_follow_the_feature_walk() {
+        let o = [0, 0, 0];
+        assert_eq!(
+            labels(
+                json!({"type": "cylinder", "base": o, "radius": "r", "height": "h",
+                "references": [{"edge": o, "distance": "a"}, {"edge": o, "distance": "b"}]})
+            ),
+            [
+                "Radius",
+                "Height",
+                "Reference distance",
+                "Reference distance"
+            ]
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "cone", "base": ["x", "y", "z"], "radius": "r", "top_radius": "t", "height": "h"})
+            ),
+            ["Radius", "Top radius", "Height"]
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "hole", "position": o, "direction": [0, 0, 1], "diameter": "d", "depth": "e",
+                "hole": {"type": "counterbore", "cb_diameter": "c", "cb_depth": "f", "tip_angle": "t"},
+                "thread": "M6x1", "thread_depth": "g", "modeled": true, "ease_out": {"length": {"length": "q"}},
+                "references": [{"edge": o, "distance": "a"}]})
+            ),
+            [
+                "Diameter",
+                "Depth",
+                "Counterbore diameter",
+                "Counterbore depth",
+                "Tip angle",
+                "Thread depth",
+                "Runout",
+                "Reference distance"
+            ]
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "thread", "face": o, "length": "l", "ease_out": "standard",
+                "tip": "both", "chamfer_angle": "a", "chamfer_depth": "d"})
+            ),
+            ["Length", "Chamfer angle", "Chamfer depth"]
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "frame_member", "path_sketch": 1, "lines": ["l1"],
+                "profile": {"source": "library", "profile": {"kind": "rect_tube", "width": 40, "height": 40, "wall": 3}},
+                "angle": "r"})
+            ),
+            ["Dimension", "Dimension", "Dimension", "Rotation"]
+        );
+        let walked = inputs(&json!({"type": "frame_member", "path_sketch": 1,
+            "profile": {"source": "library", "profile": {"kind": "rect_tube", "width": 40, "height": 41, "wall": 3}}}));
+        let exprs: Vec<&str> = walked.iter().map(|i| i.expr.as_str()).collect();
+        assert_eq!(exprs, ["41", "3", "40"], "height, wall, width");
+        assert_eq!(
+            labels(json!({"type": "coil", "base": ["x", "y", "z"], "sketch": 1,
+                "profiles": {"type": "indices", "indices": [0]}, "pitch": "p", "turns": "t"})),
+            ["Pitch", "Revolutions"]
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "sheet_path", "edge": o, "sketch": 1, "curves": ["l1"], "radius": "r"})
+            ),
+            ["Bend radius"]
+        );
+        assert_eq!(
+            labels(json!({"type": "repair", "body": "B", "gap": "g"})),
+            ["Gap"]
+        );
+        assert_eq!(
+            labels(json!({"type": "fillet", "edges": [o], "radius": "r",
+                "setbacks": [{"vertex": o, "distance": "s"}]})),
+            ["Radius", "Setback"]
+        );
+        // A plane seen from behind keeps its base's offset; a tangent
+        // plane's angle.
+        let flipped = json!({"type": "flipped", "base": {"type": "offset", "distance": "o",
+            "base": {"type": "origin", "name": "XY"}}});
+        assert_eq!(
+            labels(json!({"type": "sketch", "plane": flipped})),
+            ["Offset"]
+        );
+        let tangent =
+            json!({"type": "tangent", "face": {"type": "face", "at": o}, "at": o, "angle": "a"});
+        assert_eq!(
+            labels(json!({"type": "construction_plane", "plane": tangent})),
+            ["Angle"]
+        );
+        assert_eq!(
+            labels(json!({"type": "align", "bodies": ["B"], "from": o, "to": o,
+                "to_plane": {"type": "offset", "distance": "d", "base": {"type": "origin", "name": "XY"}},
+                "angle": "a"})),
+            ["Offset", "Angle"]
+        );
     }
 }

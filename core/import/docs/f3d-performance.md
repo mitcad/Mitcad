@@ -203,7 +203,8 @@ limit, the memory the system has left (available memory and free swap)
 or a cgroup's memory limit (`memory.max` of the process's cgroup v2 and
 those above it, against what the cgroup uses less its page cache: a
 systemd scope's `MemoryMax` or a container's limit, beyond which the
-kernel kills the process, mitcad#885) on Linux; a job's memory limit or
+kernel kills the process, mitcad#885; counted as below when others share
+it, mitcad#1339) on Linux; a job's memory limit or
 the commit the system has left on Windows; the physical memory on macOS;
 and the `memory_limit` option (MiB, against the resident memory). Near an
 address-space or data limit the memory the C library's allocator holds
@@ -218,6 +219,51 @@ of 6 GB killed it. The guard gives it back once the process has grown by
 256 MiB (or an eighth, when that is more) since it last did, and before
 it tells the import that memory is tight; at most once a second (it
 takes the arenas' locks, 30–90 ms on 5 GB of them).
+
+A cgroup's limit is shared by every process under it: a parent slice's
+by all its jobs, and a scope's by the processes started in it. Counted
+as the cgroup's usage against its limit, the import's result depended on
+unrelated work: in a slice of 36 GiB that other jobs held, 39 of 325
+designs, each using a few GiB, saw "33.5 GiB of 36.0 GiB", gave up and
+let 613 items take the file's bodies; run in a scope of their own they
+gave up none (mitcad#1339). So the guard tells its own pressure from
+others' (`cgroup_pressure` in `core/cpp/bridge/memory.cpp`), per cgroup
+on the process's path:
+
+- While the process's resident memory is at least half of what the
+  cgroup uses (less its page cache), the usage counts against the limit
+  as before: the memory is mostly its own.
+- Below that, others' memory counts only up to as much as the process's
+  own: its resident memory against half the limit. An import of a few
+  GiB under a full slice is not tight; one that grows past half the
+  slice still gives items up. (The measure is continuous at the switch:
+  at half the usage both give the usage over the limit.)
+- The cgroup with the largest share is the one the guard acts on.
+
+The reason for this rule rather than waiting for the others' memory to
+go back: at a cgroup's limit the kernel takes back page cache and then
+kills the process with the most memory in it, so the import is at risk
+from its own size, not from the slice's total; and the other jobs may
+hold their memory for hours, so an import that waited would only spend
+its time budget. Many processes of under half each can still fill a
+slice to its limit together; the kernel then kills one of them while
+each import's guard counts only its own part, and that is the slice's
+configuration to fix (as the test runner does with scopes of their own,
+mitcad#872).
+
+The report says whose memory was tight (`limit_kind`): "its own
+cgroup's memory limit, mostly the process's own memory" or "a parent
+cgroup's memory limit, mostly the process's own memory", or for a
+shared one, e.g. "9.2 GiB of 18.0 GiB (half of a parent cgroup's memory
+limit of 36.0 GiB, shared with other processes using 24.3 GiB)" (its own
+scope: "half of its own cgroup's memory limit …"). The reading of the
+cgroup files stays Linux-only; the decision and the walk up the tree
+(`cgroup_memory`, given the hierarchy's root and the text of
+`/proc/self/cgroup`) run on every platform, and `test_bridge`
+(`core.bridge`, `test_bridge memory-guard`) checks them on a fake tree:
+a small import under a full shared slice, one that grew past its share,
+one that holds most of the usage, and a limit on its own scope, shared
+or not.
 
 - At 70 % of the limit (and each 5 % more) memory is *tight*
   (`Progress::tight_on_memory`): before its next item the import drops
@@ -280,6 +326,19 @@ bodies of the 69 states it built (5 000 faces each, healed) and what the
 comparisons with them kept on them (their faces' classifiers and grids,
 edge geometries) took 1.3 GB and more to the import's end; dropped, none
 was asked for again and the import was the same.
+
+A kernel call that neither returns nor reports progress is a hang for
+the watchdog, and the try it gives up keeps the call's memory while the
+call goes on: every long OCCT algorithm a definition runs takes a
+progress range that a stop stops (`geometry::detail::build`). On the
+same design a fillet's retry 0.1 % smaller removed the strip it left with
+OCCT's defeaturing (mitcad#1106), without a range: a strip 2 µm wide
+along 44 rounded edges, 88 faces beside it, which the defeaturing grew by
+the strip's 124 mm extent and intersected each with each. Two fillets
+hung 300 s each, their abandoned tries grew the import from 2 to 12 GiB,
+and 40 items after them took the file's bodies on low memory
+(mitcad#1337). Such strips now stay (more than 16 faces beside them), and
+the defeaturing stops on a stop.
 
 ## Definitions evaluated in parallel
 

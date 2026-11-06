@@ -30,9 +30,16 @@ namespace mitcad::win {
 // style (windows11). Logs "Windows 10 app mode: ..." (app/COMMANDS.md).
 void followAppColorScheme();
 
+// Sets the path's style and palette for the app mode now again, even when
+// that mode was followed already: after another part replaced the
+// application's palette (the Theme preference's own palette taken away,
+// framework/AppTheme, mitcad#1330). Nothing where the path is not taken.
+void followAppColorSchemeAgain();
+
 #else
 
 inline void followAppColorScheme() {}
+inline void followAppColorSchemeAgain() {}
 
 #endif
 

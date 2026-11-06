@@ -16,7 +16,9 @@
 #      shape of a face (stale): the Sketch Palette offers Clean Up Stale
 #      Projections under its warning, which is a link: a click selects the
 #      projection's 8 curves and points (mitcad#264), again the same, Esc
-#      clears them. Clean Up Stale Projections started from there, the preview
+#      clears them. Project Again (mitcad#1303) beside it starts its command,
+#      whose preview projects the face again; Esc leaves the sketch as it was.
+#      Clean Up Stale Projections started from there, the preview
 #      highlights the curve it removes and the lines it trims, Esc takes the
 #      highlights away; again (F9) and OK keeps it, the highlights gone.
 #   6. A design (mitcad-cli, mitcad#287): a rectangle standing on a projected
@@ -184,6 +186,15 @@ Ui-ExpectNew 'Palette: warning 0 selects 8 entities' 'a second click selects the
 Ui-Mark
 Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
 Ui-ExpectNew 'Selected: nothing' 'the selection is cleared'
+
+Write-Host '--- Project Again from the warning (mitcad#1303)'
+Ui-ExpectLog 'Palette paletteProjectAgain at' 'the palette offers Project Again beside the clean-up'
+Ui-Mark
+Ui-Step 'project again from the palette' { Ui-ClickLogged 'Palette paletteProjectAgain' }
+Ui-ExpectNew 'Palette: Project Again from the warning' 'the warning started the command'
+Ui-ExpectNew 'Preview Project Again: ok' 'the preview projects the face again'
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Project Again cancelled' 'the sketch is left stale for the clean-up'
 
 Write-Host '--- Clean Up Stale Projections from the warning'
 Ui-Mark

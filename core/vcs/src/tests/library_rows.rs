@@ -8,6 +8,11 @@
 //! offers whose repository an enabled source has, or whose id a fetched
 //! library replaces, is not listed beside it. Nothing goes over the
 //! network; the parts that fetch are skipped without git.
+//!
+//! The suppliers' shops (mitcad#950): `supplier_shops` lists MitCad's
+//! suppliers with their shops by region, `supplier_links` gives articles
+//! and parts list rows their product links in a region, and `library
+//! check` refuses an article's region that is no region code.
 
 use serde_json::{Value, json};
 
@@ -404,5 +409,120 @@ fn an_index_library_of_a_sources_repository_is_left_out() {
         answer["components"].as_array().unwrap().len(),
         1,
         "{answer}"
+    );
+}
+
+#[test]
+fn supplier_shops_and_links_follow_the_region() {
+    let scratch = Scratch::new("library-rows-shops");
+    let cache = LibraryCache::new(scratch.join("cache"));
+    // The list: the regions with shops, each supplier's shops and part
+    // number form, and the region of the locale.
+    let shops = library_command(
+        &cache,
+        None,
+        json!({"cmd": "supplier_shops", "locale": "fi_FI"}),
+    );
+    assert_eq!(shops["default_region"], "FI", "{shops}");
+    assert_eq!(shops["regions"], json!([{"id": "FI", "name": "Finland"}]));
+    let wurth = shops["suppliers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "wurth")
+        .unwrap();
+    assert_eq!(wurth["shops"][0]["region"], "FI");
+    let none = library_command(
+        &cache,
+        None,
+        json!({"cmd": "supplier_shops", "locale": "en_US"}),
+    );
+    assert_eq!(none["default_region"], "");
+    assert_eq!(none.get("chosen"), None);
+    // The shops chosen that sell in the region.
+    let chosen = library_command(
+        &cache,
+        None,
+        json!({"cmd": "supplier_shops", "region": "FI", "shops": ["acme", "wurth"]}),
+    );
+    assert_eq!(chosen["chosen"], json!(["wurth"]));
+
+    // Articles: Würth's linked in FI, an unknown supplier's and Etra's
+    // (no shop) as they were; nothing in another region.
+    let parts = json!([
+        {"supplier": "wurth", "supplier_name": "Würth", "part_number": "0084 6 8", "material": "8.8"},
+        {"supplier": "acme", "part_number": "A 6 8"},
+        {"supplier": "etra", "part_number": "701200206008"}
+    ]);
+    let answer = library_command(
+        &cache,
+        None,
+        json!({"cmd": "supplier_links", "region": "FI", "parts": parts}),
+    );
+    assert_eq!(
+        answer["parts"][0]["product_url"],
+        "https://eshop.wurth.fi/product/00846%20%208.sku/fi/FI/EUR/",
+        "{answer}"
+    );
+    assert_eq!(answer["parts"][0]["shop"], "Würth eShop");
+    assert_eq!(answer["parts"][1], parts[1]);
+    assert_eq!(answer["parts"][2], parts[2]);
+    let elsewhere = library_command(
+        &cache,
+        None,
+        json!({"cmd": "supplier_links", "region": "SE", "parts": parts}),
+    );
+    assert_eq!(elsewhere["parts"], parts);
+
+    // Parts list rows: each with its articles' links, once each.
+    let rows = json!([
+        {"designation": "ISO 4762 M6x8", "supplier_parts": [
+            {"supplier": "wurth", "part_number": "0084 6 8"},
+            {"supplier": "wurth", "part_number": "0084 6 8", "material": "A2"},
+            {"supplier": "etra", "part_number": "701200206008"}]},
+        {"designation": "Pin"}
+    ]);
+    let answer = library_command(
+        &cache,
+        None,
+        json!({"cmd": "supplier_links", "region": "FI", "rows": rows}),
+    );
+    assert_eq!(
+        answer["rows"][0]["product_urls"],
+        json!(["https://eshop.wurth.fi/product/00846%20%208.sku/fi/FI/EUR/"]),
+        "{answer}"
+    );
+    assert_eq!(
+        answer["rows"][0]["supplier_parts"][2].get("product_url"),
+        None
+    );
+    assert_eq!(answer["rows"][1]["product_urls"], json!([]));
+    assert_eq!(answer["rows"][1].get("supplier_parts"), None);
+}
+
+#[test]
+fn an_articles_region_is_a_region_code() {
+    let mut tagged = tagged_manifest("test-screws");
+    tagged["components"][0]["rows"]["M6x8"]["supplier_parts"][0]["region"] = json!("FI");
+    let manifest: Manifest = serde_json::from_value(tagged.clone()).unwrap();
+    assert_eq!(manifest.problems().errors, Vec::<String>::new());
+    let screw = manifest.component("iso4762").unwrap();
+    assert_eq!(screw.rows["M6x8"].supplier_parts[0].region, "FI");
+    // Written back as read.
+    let again = serde_json::to_value(&manifest).unwrap();
+    assert_eq!(
+        again["components"][0]["rows"]["M6x8"]["supplier_parts"][0]["region"],
+        "FI"
+    );
+    // A region that is no code: an error.
+    tagged["components"][0]["rows"]["M6x8"]["supplier_parts"][0]["region"] = json!("Finland");
+    let manifest: Manifest = serde_json::from_value(tagged).unwrap();
+    let errors = manifest.problems().errors.join("\n");
+    assert!(
+        errors.contains(
+            "iso4762: the row M6x8's supplier_parts[0]: region Finland is no region code \
+             (two letters A-Z: FI)"
+        ),
+        "{errors}"
     );
 }

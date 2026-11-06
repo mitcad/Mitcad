@@ -50,9 +50,17 @@ struct FileOut<'a> {
     components: Vec<ComponentOut<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     occurrences: Vec<OccurrenceOut>,
+    // The number the next occurrence takes where it is not one past the
+    // largest listed (the largest was deleted, mitcad#1320).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_occurrence: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_component: Option<ComponentUid>,
     features: Vec<FeatureOut<'a>>,
+    // The number the next feature takes where it is not one past the
+    // largest listed (mitcad#1320).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_feature: Option<u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     bodies: Vec<BodyOut<'a>>,
     // Named views (U5), when there are any.
@@ -410,6 +418,7 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
                 transparent: o.transparent,
             })
             .collect(),
+        next_occurrence: next_occurrence_out(assembly),
         active_component: (!assembly.active.is_root()).then_some(assembly.active),
         features: state
             .features
@@ -433,6 +442,7 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
                     .expect("names never fail"),
             })
             .collect(),
+        next_feature: next_feature_out(state),
         bodies: state
             .body_names
             .iter()
@@ -537,6 +547,27 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
 fn next_comment_out(state: &DocState) -> Option<u32> {
     let largest = state.comments.iter().map(|c| c.id).max()?;
     (state.next_comment > largest.saturating_add(1)).then_some(state.next_comment)
+}
+
+/// The `next_feature` a file keeps (mitcad#1320): only where it is not one
+/// past the largest feature uid listed, which reading takes, so that the
+/// uid of a deleted last feature is not given out again after a reload (a
+/// plate item, a comment or a drawing's recorded body keeps it on purpose).
+fn next_feature_out(state: &DocState) -> Option<u64> {
+    let largest: u64 = state.features.iter().map(|f| f.uid.0).max().unwrap_or(0);
+    (state.next_uid > largest.saturating_add(1)).then_some(state.next_uid)
+}
+
+/// The `next_occurrence` a file keeps (mitcad#1320), as [`next_feature_out`]
+/// for occurrences.
+fn next_occurrence_out(assembly: &Assembly) -> Option<u32> {
+    let largest: u32 = assembly
+        .occurrences
+        .iter()
+        .map(|o| o.uid.0)
+        .max()
+        .unwrap_or(0);
+    (assembly.next_occurrence > largest.saturating_add(1)).then_some(assembly.next_occurrence)
 }
 
 fn no_appearances(appearances: &[Appearance]) -> bool {
@@ -812,7 +843,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 41] = [
+const TOP_FIELDS: [&str; 43] = [
     "format",
     "version",
     "units",
@@ -874,6 +905,9 @@ const TOP_FIELDS: [&str; 41] = [
     "next_comment",
     // The print plates (mitcad#1050).
     "print_plates",
+    // The numbers the next feature and occurrence take (mitcad#1320).
+    "next_feature",
+    "next_occurrence",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1048,6 +1082,17 @@ fn assembly_in(
             number: o.number,
             pattern: o.pattern,
         });
+    }
+    // The number the next occurrence takes, kept where the largest was
+    // deleted (mitcad#1320); older files have none, and a smaller one
+    // than the largest listed counts on from that.
+    if let Some(value) = top.remove("next_occurrence") {
+        let next: u32 = value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| schema("\"next_occurrence\" must be a number from 1"))?;
+        assembly.next_occurrence = assembly.next_occurrence.max(next);
     }
     match top.remove("active_component") {
         None => {}
@@ -1495,6 +1540,15 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 .ok_or_else(|| schema("\"marker\" must be a feature count"))?,
         ),
     };
+    // The number the next feature takes, kept where the largest was
+    // deleted (mitcad#1320); older files have none.
+    let next_feature: u64 = match top.remove("next_feature") {
+        None => 1,
+        Some(value) => value
+            .as_u64()
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| schema("\"next_feature\" must be a number from 1"))?,
+    };
     // Tables (mitcad#667), before the parameters that look values up in
     // them.
     let mut tables = Vec::new();
@@ -1550,6 +1604,11 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         // flat ends, so that what refers to them keeps working.
         if let FeatureDef::Thread(thread) = &mut def {
             thread.settle_ends(crate::features::thread::ThreadEnds::Flat);
+        }
+        // So does a hole's modelled thread (mitcad#1307): a countersink
+        // above it keeps its lip.
+        if let FeatureDef::Hole(hole) = &mut def {
+            hole.settle_thread_ends(crate::features::thread::ThreadEnds::Flat);
         }
         if let FeatureDef::SheetFace(face) = &mut def {
             face.settle(None);
@@ -1714,12 +1773,15 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         Some(m) => m,
         None => state.features.len(),
     };
+    // One past the largest uid listed, or the file's `next_feature` when it
+    // is past that (mitcad#1320): a deleted last feature's uid stays unused.
     state.next_uid = state
         .features
         .iter()
         .map(|f| f.uid.0 + 1)
         .max()
-        .unwrap_or(1);
+        .unwrap_or(1)
+        .max(next_feature);
     for (i, view) in views.iter().enumerate() {
         if views[..i].iter().any(|v| v.name == view.name) {
             return Err(invalid(format!(

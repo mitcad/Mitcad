@@ -463,6 +463,15 @@ QJsonObject MainWindow::mcpSave(const QJsonObject& arguments) {
     if (target.isEmpty()) {
       refuse(reason);
     }
+    // A file another window has open is not written over (mitcad#1323):
+    // that window's save would overwrite this one's, or this one's its.
+    MainWindow* other = m_windowManager != nullptr ? m_windowManager->findByPath(target) : nullptr;
+    if (other != nullptr && other != this) {
+      refuseWith(tr("%1 is open in another window as the document %2: save to another path, or work on that "
+                    "document.")
+                     .arg(QDir::toNativeSeparators(target), other->mcpDocumentId()),
+                 {{QStringLiteral("open_document"), other->mcpDocumentId()}});
+    }
   } else if (m_filePath.isEmpty()) {
     refuse(tr("%1 has never been saved: it has no path to save to. Give a path in a folder for designs "
               "(document_list lists them), or save it in the application (File › Save As).")
@@ -499,6 +508,15 @@ QJsonObject MainWindow::mcpOpen(const QJsonObject& arguments) {
   const QString path = mcp::agentDesignPath(arguments.value(QStringLiteral("path")).toString(), false, false, reason);
   if (path.isEmpty()) {
     refuse(reason);
+  }
+  // A design another window has open is worked on there, as File › Open
+  // presents that window (mitcad#1323): a second copy's save would
+  // overwrite the other's.
+  MainWindow* other = m_windowManager != nullptr ? m_windowManager->findByPath(path) : nullptr;
+  if (other != nullptr && other != this) {
+    refuseWith(tr("%1 is open in another window as the document %2: work on that document.")
+                   .arg(QDir::toNativeSeparators(path), other->mcpDocumentId()),
+               {{QStringLiteral("open_document"), other->mcpDocumentId()}});
   }
   if (!m_session && m_mode == Mode::PickPlane) {
     refuse(tr("Create Sketch waits for a plane to be picked: pick one or cancel it first."));
@@ -600,7 +618,11 @@ QJsonObject MainWindow::mcpNew(const QJsonObject& arguments) {
     root = project.root;
   }
   const QString relative = project.hasHistory() ? QDir(root).relativeFilePath(file) : QString();
-  if (project.hasHistory() && (relative.isEmpty() || relative.startsWith(QStringLiteral("..")))) {
+  // Outside it: a parent reference (Qt's separator is "/"), not a name that
+  // starts with two dots, such as "..draft.mitcad" (mitcad#1317).
+  const bool outside = relative == QStringLiteral("..") || relative.startsWith(QStringLiteral("../")) ||
+                       QDir::isAbsolutePath(relative);
+  if (project.hasHistory() && (relative.isEmpty() || outside)) {
     refuse(tr("%1 is not inside its project %2.").arg(QDir::toNativeSeparators(file), QDir::toNativeSeparators(root)));
   }
   const QString before = m_mcpDocumentId;

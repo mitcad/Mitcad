@@ -19,10 +19,6 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
-#include <algorithm>
-#include <cstdlib>
-#include <fstream>
-#include <string>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -30,6 +26,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 #include "mitcad/geometry/guard.hpp"
 #include "mitcad_bridge/memory.h"
@@ -43,7 +44,7 @@ namespace {
 struct Tightest {
   MemoryUse out{};
 
-  void consider(std::uint64_t used, std::uint64_t limit, const char* kind) {
+  void consider(std::uint64_t used, std::uint64_t limit, const std::string& kind) {
     if (limit == 0) {
       return;
     }
@@ -53,10 +54,36 @@ struct Tightest {
     if (share > best) {
       out.used = used;
       out.limit = limit;
-      out.limit_kind = kind;
+      out.limit_kind = rust::String(kind);
     }
   }
 };
+
+// A size in MiB, or in GiB from 1 GiB on (as memory.rs's `size`).
+std::string size_text(std::uint64_t bytes) {
+  const double mib = static_cast<double>(bytes) / static_cast<double>(1u << 20);
+  char text[32];
+  if (mib < 1024.0) {
+    std::snprintf(text, sizeof text, "%.0f MiB", mib);
+  } else {
+    std::snprintf(text, sizeof text, "%.1f GiB", mib / 1024.0);
+  }
+  return text;
+}
+
+// The page cache of a cgroup (memory.stat's active_file and inactive_file).
+std::uint64_t cgroup_page_cache(const std::string& dir) {
+  std::ifstream stat(dir + "/memory.stat");
+  std::string key;
+  std::uint64_t value = 0;
+  std::uint64_t cache = 0;
+  while (stat >> key >> value) {
+    if (key == "active_file" || key == "inactive_file") {
+      cache += value;
+    }
+  }
+  return cache;
+}
 
 #if !defined(_WIN32) && !defined(__APPLE__)
 // A field of /proc/self/status or /proc/meminfo in bytes ("VmData:",
@@ -99,72 +126,6 @@ std::uint64_t allocator_free() {
 #endif
 }
 
-// A cgroup v2 memory limit the process runs under (mitcad#885): the
-// tightest of its cgroup's and those above it (memory.max), with what the
-// cgroup uses (memory.current) less the page cache, which the kernel
-// reclaims under the limit (as the test runner counts it, mitcad#872).
-// Beyond it the kernel kills a process of the cgroup rather than refuse
-// memory: a job's or a service's scope (systemd's MemoryMax, a container's
-// memory limit) did so to an import that measured only the memory the
-// system had left.
-struct CgroupLimit {
-  std::uint64_t used = 0;
-  std::uint64_t limit = 0;
-};
-
-// The page cache of a cgroup (memory.stat's active_file and inactive_file).
-std::uint64_t cgroup_page_cache(const std::string& dir) {
-  std::ifstream stat(dir + "/memory.stat");
-  std::string key;
-  std::uint64_t value = 0;
-  std::uint64_t cache = 0;
-  while (stat >> key >> value) {
-    if (key == "active_file" || key == "inactive_file") {
-      cache += value;
-    }
-  }
-  return cache;
-}
-
-CgroupLimit cgroup_limit() {
-  CgroupLimit out;
-  std::ifstream groups("/proc/self/cgroup");
-  std::string line;
-  while (std::getline(groups, line)) {
-    if (line.rfind("0::", 0) != 0) {
-      continue;
-    }
-    std::string group = line.substr(3);
-    for (;;) {
-      const std::string dir = "/sys/fs/cgroup" + group;
-      std::string max;
-      std::ifstream(dir + "/memory.max") >> max;
-      if (!max.empty() && max != "max") {
-        std::uint64_t current = 0;
-        std::ifstream(dir + "/memory.current") >> current;
-        const std::uint64_t limit = std::strtoull(max.c_str(), nullptr, 10);
-        const std::uint64_t cache = cgroup_page_cache(dir);
-        const std::uint64_t used = current > cache ? current - cache : 0;
-        // The one with the least left.
-        const auto left = [](std::uint64_t u, std::uint64_t l) { return l - std::min(u, l); };
-        if (limit > 0 && (out.limit == 0 || left(used, limit) < left(out.used, out.limit))) {
-          out.used = used;
-          out.limit = limit;
-        }
-      }
-      const std::size_t slash = group.find_last_of('/');
-      if (slash == std::string::npos || group.size() <= 1) {
-        break;
-      }
-      group.resize(slash == 0 ? 1 : slash);
-      if (group == "/") {
-        break;
-      }
-    }
-  }
-  return out;
-}
-
 // The share of a limit beyond which allocator_free is asked.
 constexpr double kNearLimit = 0.6;
 
@@ -181,6 +142,85 @@ std::uint64_t in_use(std::uint64_t used, std::uint64_t limit, std::uint64_t& spa
 #endif
 
 } // namespace
+
+// A cgroup v2 memory limit the process runs under (mitcad#885): beyond it
+// the kernel kills a process of the cgroup rather than refuse memory (a
+// job's or a service's scope, systemd's MemoryMax, a container's memory
+// limit, did so to an import that measured only the memory the system had
+// left). A limit above the process's own cgroup is shared with every
+// process under it (mitcad#1339): in a slice of 36 GiB that other jobs
+// filled, imports of a few GiB each gave items up at "33.5 GiB of 36.0 GiB"
+// although they were not the ones growing. At the limit the kernel takes
+// back page cache and then kills the process with the most memory, so the
+// usage counts as the process's own only while it holds at least half of
+// it; below that others' memory counts only up to as much as its own (its
+// resident memory against half the limit), and an import that does grow
+// past that share still gives items up.
+CgroupMemory cgroup_pressure(std::uint64_t used, std::uint64_t limit, std::uint64_t resident, bool own_cgroup) {
+  CgroupMemory out;
+  if (limit == 0) {
+    return out;
+  }
+  const std::string which = own_cgroup ? "its own cgroup's" : "a parent cgroup's";
+  // (At least half: twice the resident memory is the usage or more.)
+  if (resident >= used - used / 2) {
+    out.used = used;
+    out.limit = limit;
+    out.kind = which + " memory limit, mostly the process's own memory";
+    return out;
+  }
+  out.used = resident;
+  out.limit = limit / 2;
+  out.kind = "half of " + which + " memory limit of " + size_text(limit) + ", shared with other processes using " +
+             size_text(used - resident);
+  return out;
+}
+
+CgroupMemory cgroup_memory(const std::string& root, const std::string& proc_cgroup, std::uint64_t resident) {
+  CgroupMemory out;
+  std::istringstream groups(proc_cgroup);
+  std::string line;
+  while (std::getline(groups, line)) {
+    if (line.rfind("0::", 0) != 0) {
+      continue;
+    }
+    std::string group = line.substr(3);
+    bool own = true;
+    for (;;) {
+      const std::string dir = root + group;
+      std::string max;
+      std::ifstream(dir + "/memory.max") >> max;
+      if (!max.empty() && max != "max") {
+        std::uint64_t current = 0;
+        std::ifstream(dir + "/memory.current") >> current;
+        const std::uint64_t limit = std::strtoull(max.c_str(), nullptr, 10);
+        // What the cgroup uses less the page cache, which the kernel
+        // reclaims under the limit (as the test runner counts it,
+        // mitcad#872).
+        const std::uint64_t cache = cgroup_page_cache(dir);
+        const std::uint64_t used = current > cache ? current - cache : 0;
+        const CgroupMemory here = cgroup_pressure(used, limit, resident, own);
+        // The one with the largest share.
+        const auto share = [](const CgroupMemory& m) {
+          return m.limit == 0 ? -1.0L : static_cast<long double>(m.used) / static_cast<long double>(m.limit);
+        };
+        if (share(here) > share(out)) {
+          out = here;
+        }
+      }
+      own = false;
+      const std::size_t slash = group.find_last_of('/');
+      if (slash == std::string::npos || group.size() <= 1) {
+        break;
+      }
+      group.resize(slash == 0 ? 1 : slash);
+      if (group == "/") {
+        break;
+      }
+    }
+  }
+  return out;
+}
 
 void release_free_memory() {
 #if defined(__GLIBC__)
@@ -255,8 +295,13 @@ MemoryUse memory_use() {
   if (left > 0) {
     tightest.consider(resident, resident + left, "memory the system has left");
   }
-  const CgroupLimit group = cgroup_limit();
-  tightest.consider(group.used, group.limit, "cgroup memory limit");
+  std::ostringstream proc_cgroup;
+  std::ifstream self_cgroup("/proc/self/cgroup");
+  if (self_cgroup) {
+    proc_cgroup << self_cgroup.rdbuf();
+  }
+  const CgroupMemory group = cgroup_memory("/sys/fs/cgroup", proc_cgroup.str(), resident);
+  tightest.consider(group.used, group.limit, group.kind);
 #endif
   tightest.out.failed_allocations = static_cast<std::uint64_t>(geometry::failed_allocations());
   return tightest.out;

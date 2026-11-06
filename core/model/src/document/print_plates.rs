@@ -440,6 +440,7 @@ impl<K: Kernel> Document<K> {
     /// which print on the first.
     pub fn print_plates_json(&self) -> Value {
         let unplaced = self.unplaced();
+        let instances = self.instances();
         let plates: Vec<Value> = self
             .state
             .print_plates
@@ -471,13 +472,9 @@ impl<K: Kernel> Document<K> {
                                     "text": value_text(def, value)}))
                     })
                     .collect();
-                let pieces: u32 = plate
-                    .items
-                    .iter()
-                    .filter(|item| self.plate_target_exists(&item.target))
-                    .map(|item| item.count)
-                    .sum::<u32>()
-                    + if index == 0 { unplaced.len() as u32 } else { 0 };
+                // As the export makes them: an item whose bodies print on
+                // another plate adds none (mitcad#1310).
+                let pieces = self.plate_piece_count(index, &instances);
                 json!({
                     "id": plate.id,
                     "name": plate.name,
