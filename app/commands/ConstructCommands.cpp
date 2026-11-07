@@ -179,7 +179,7 @@ InputDef fieldInput(const FieldSpec& field) {
         });
   case Field::Path:
     return selectionInput(key, name, kPathKinds, 1, 0)
-        .withTooltip(QObject::tr("A sketch line, arc or circle, or connected edges"));
+        .withTooltip(QObject::tr("A sketch line, arc or circle, connected edges, or an intersection curve"));
   case Field::Distance:
     return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"));
   case Field::Angle:
@@ -662,7 +662,8 @@ CommandDef construction(const Spec& spec) {
       const QJsonValue slot = definition.value(QString::fromLatin1(field.key));
       if (field.kind == Field::Path) {
         const QJsonObject path = slot.toObject();
-        if (!path.contains(QStringLiteral("sketch")) && !path.contains(QStringLiteral("edges"))) {
+        if (!path.contains(QStringLiteral("sketch")) && !path.contains(QStringLiteral("edges")) &&
+            !path.contains(QStringLiteral("feature"))) {
           return false; // a fixed line
         }
       } else if (isSelection(field.kind)) {

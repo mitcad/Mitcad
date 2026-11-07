@@ -1,0 +1,58 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where the face at a spine's end cuts an analytic blend to a point
+on an edge of that face (ChFi3d_KPartCutToEnd), the point's parameters on a
+periodic face are taken in the period of the cut's other end, the blend's
+contact on the edge it crossed into the face, instead of the edge's own
+(mitcad#1422).
+
+The plate's top edge rounded up to a boss whose cylinder the plate's side
+goes on into tangentially, the cylinder's seam running up from the vertex
+on the vertical edge the cut ends on: that edge's curve on the cylinder
+lies on the seam's one side (u = 5 pi / 2), the cut runs from it to the
+foot on the other (u = 2.07 at 3): its curve on the cylinder was made a
+period off (from 7.85 to 8.35) and the face's wire did not close in its
+parameters (an unorientable face).
+
+Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
+picked at its other side rounded with 1, 3 and 6 on the synthetic body
+whose seam runs up at the side picked first (y = 25).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index b86ef96f..7506d4d7 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -11540,6 +11540,30 @@ static bool ChFi3d_KPartCutToEnd(
+   anEnd.P   = Q;
+   anEnd.uvS = FullEnd->Interference(opp).PCurveOnSurf()->Value(tQ);
+   anEnd.uvB = pcB->Value(wQ);
++  {
++    // (B periodic: the end on B in the period of the cut's other end, P's
++    // contact on E, the cut lying between them. Where B's seam runs from V
++    // along Eq's line, Eq's curve on B lies a period off on the seam's
++    // other side.)
++    BRepAdaptor_Surface             aBs(BF, false);
++    double                          fe = 0., le = 0.;
++    const occ::handle<Geom2d_Curve> pcE =
++      BRep_Tool::IsClosed(E, BF) ? occ::handle<Geom2d_Curve>() : BRep_Tool::CurveOnSurface(E, BF, fe, le);
++    if (!pcE.IsNull())
++    {
++      const gp_Pnt2d uvE = pcE->Value(CPn.ParameterOnArc());
++      double         u = anEnd.uvB.X(), v = anEnd.uvB.Y();
++      if (aBs.IsUPeriodic())
++      {
++        u = ElCLib::InPeriod(u, uvE.X() - 0.5 * aBs.UPeriod(), uvE.X() + 0.5 * aBs.UPeriod());
++      }
++      if (aBs.IsVPeriodic())
++      {
++        v = ElCLib::InPeriod(v, uvE.Y() - 0.5 * aBs.VPeriod(), uvE.Y() + 0.5 * aBs.VPeriod());
++      }
++      anEnd.uvB.SetCoord(u, v);
++    }
++  }
+   anEnd.tO  = tQ;
+   anEnd.V   = V;
+   // (Beyond V: the end is a new vertex VQ at Q, on no edge; Eq's curve on B

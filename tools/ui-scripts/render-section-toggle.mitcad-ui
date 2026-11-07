@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: MIT
+# The rendered view while a section analysis is shown and hidden
+# (mitcad#1432), on render-section-toggle.json: a box and a cylinder,
+# Section1 cutting both, hidden at the start. With the rendered view on
+# (Cycles on the CPU, more samples than the test waits for, so that the
+# worker is always tracing a batch), Section1 is shown and hidden twelve
+# times, each change while the worker renders the last one: each gives the
+# bodies other meshes and the ground other bounds, and the worker deletes
+# the Cycles meshes it no longer shows only once its render thread has
+# built the scene without them ("render-retired"). Before the fix the
+# worker freed meshes whose arrays Embree still traced and could crash in
+# rtcIntersect1. The worker runs to the end ("Render worker stopped"
+# never) and renders after the last change.
+# Run by tools/ui-render-section-toggle-test.sh (Linux) and
+# tools/ui-windows-render-section-toggle-test.ps1 (Windows).
+wait-idle 600
+command view.rendered
+wait-log '^Render worker ready: Cycles' 120
+wait-log '^Render view \d+: first frame' 300
+sleep 500
+
+# 1
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+# 2
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+# 3
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+# 4
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+# 5
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+# 6
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+# 7, the changes closer together
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+# 8
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+# 9
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+# 10
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+# 11
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 150
+# 12
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":true}'
+wait-log '^Render scene \d+ applied in ' 300
+sleep 400
+
+# Rendering goes on after the last change, and the worker deleted the
+# meshes the render left.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Section1","visible":false}'
+wait-log '^Render scene \d+ applied in ' 300
+mark
+wait-log '^Render frame view \d+ \d+x\d+ samples ' 300
+expect-ever '^Render worker: render-retired: [1-9]\d* geometries deleted'
+expect-never '^Render worker stopped'
+expect-never 'TestDriver: FAIL'

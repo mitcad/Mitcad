@@ -27,6 +27,7 @@
 #include <QStringList>
 #include <QtLogging>
 
+#include "../framework/HandleStep.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Theme.hpp"
 #include "PlaceGeometry.hpp"
@@ -186,16 +187,15 @@ bool offeredIn(const PlacePanel& panel, const CommandState& state) {
 
 double roundTo(double value, double step) { return std::round(value / step) * step; }
 
-// A step a few pixels long, 1, 2 or 5 times a power of ten: what a
-// dimension's drag rounds to (ManipulatorOverlay).
-double dragStep(double size) {
-  const double power = std::pow(10.0, std::floor(std::log10(std::max(size, 1e-6))));
-  for (const double factor : {1.0, 2.0, 5.0}) {
-    if (factor * power >= size) {
-      return factor * power;
-    }
-  }
-  return 10.0 * power;
+// The step a dimension's drag rounds to at a pixel's size (mm): the
+// overlay's own rule (framework/HandleStep.hpp) for an arrow without a
+// scale whose value does not count as one (Manipulator::valueScale off on
+// the dimensions), the zoom's step, so that a click and a drag round alike
+// (mitcad#1431).
+double dragStep(double pixel) {
+  HandleStepInput input;
+  input.zoom = 3.0 * pixel;
+  return handleStep(input);
 }
 
 // --- Components (mitcad#578): a shaft of another
@@ -665,7 +665,7 @@ bool placeOnFace(CommandState& state, const CommandContext& context, const Selec
   // A click rounds its distances to the step a drag takes at this zoom
   // (mitcad#656: 40 mm, not 39.82); a snap keeps them exact.
   const double pixel = context.pixelSize(point);
-  double step = !snapIt ? 1e-6 : std::isfinite(pixel) && pixel > 0.0 ? dragStep(3.0 * pixel) : 0.01;
+  double step = !snapIt ? 1e-6 : std::isfinite(pixel) && pixel > 0.0 ? dragStep(pixel) : 0.01;
   if (snapIt) {
     const double tolerance = std::isfinite(pixel) && pixel > 0.0 ? 10.0 * pixel : 0.5;
     if (const auto snapped = place::snap(point, info->snaps, tolerance)) {
@@ -1018,6 +1018,9 @@ std::function<std::optional<Manipulator>(const CommandState&, const CommandConte
     const gp_Dir& side = which == 0 ? sides->first : sides->second;
     Manipulator m = arrow(point->Translated(-gp_Vec(side) * value), side);
     m.valueBox = true;
+    // Dragged by the zoom's step, as a click rounds it (dragStep,
+    // mitcad#1431).
+    m.valueScale = false;
     return m;
   };
 }

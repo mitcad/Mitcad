@@ -1,0 +1,58 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the walk on from a standing ball's sphere (0670) starts from a
+section where the guide's normal planes pass the ball's contacts'
+mid-point forwards (mitcad#1428).
+
+A concave groove's rim rounded with 0.5 along a tangent chain that runs
+over an earlier convex rounding of 0.5 (the corner between a flange's top
+and a slanted side), the slanted side and an earlier rounding of 2 to a
+wall square to the groove. Over the corner rounded with 0.5 the ball's
+centre stays on that rounding's axis and 0670 makes the rounding a piece
+of the ball's sphere; the walk over the slanted side goes on from the
+section where the walk's own rule (the contacts' mid-point in the guide's
+normal plane) puts that ball, the root of the mid-point's signed distance
+from the guide's normal plane nearest to the gap's far end. The guide
+turns round the rounding of 2 further on, and its normal plane swings back
+through the ball there: a second root, 7.8 along the guide past the right
+one (spine parameter 11.66 against 3.86). The walk over the slanted side
+started there, its sections' tangents against the guide's, and the stripe
+failed as twisted (ChFiDS_TwistedSurface).
+
+- ChFi3d_StandingBallSection takes only the roots where that distance
+  decreases along the guide (the normal planes passing the mid-point
+  forwards); where it increases the guide turns back past the ball and the
+  walk from there would be twisted.
+
+On the design's stored body before the item: the chain rounds, the sphere
+piece from spine parameter 2.12 to 3.86, the walked faces on the rolling
+ball's envelope within 1e-5 mm and within 0.0013 mm of the stored body's.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 98682918..cae1cba9 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -21374,7 +21374,12 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_StandingBallPiece(TopOpeBRepDS_DataSt
+ // purpose  : Where the walk (its section's rule: the mid-point of the
+ //            contacts in the guide's normal plane) has the ball touching P
+ //            and q: the spine's parameter in [Wa, Wb] nearest to Wb
+-//            (towardB) or to Wa.
++//            (towardB) or to Wa. Only where the guide's normal planes pass
++//            the contacts' mid-point forwards (ahead of the plane before,
++//            behind it after): where they pass it backwards (the guide
++//            turning away round a later corner, its normal plane swinging
++//            back through the ball) the walk from there would be twisted
++//            (mitcad#1428).
+ //=======================================================================
+ 
+ static bool ChFi3d_StandingBallSection(const occ::handle<ChFiDS_Spine>& Spine,
+@@ -21400,7 +21405,7 @@ static bool ChFi3d_StandingBallSection(const occ::handle<ChFiDS_Spine>& Spine,
+   {
+     const double a = Wa + (Wb - Wa) * (i - 1) / n, b = Wa + (Wb - Wa) * i / n;
+     const double gb = g(b);
+-    if (ga * gb <= 0.)
++    if (ga * gb <= 0. && ga > gb)
+     {
+       double lo = a, hi = b, glo = ga;
+       for (int it = 0; it < 60; it++)

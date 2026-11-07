@@ -555,7 +555,13 @@ design in a project.
   cut faces); a detail and a broken view the parts of edges they show; of
   picks as near, the one the projection draws visible, then the one nearest
   the eye; a pictorial view measures aligned dimensions in 3D and refuses
-  foreshortened ones. Tables (phase 3, `drawing/tables_def.rs`,
+  foreshortened ones. A view may also bring in the model's own
+  annotations it sees square on (mitcad#1406, `model_annotations`): the
+  model lays them out (`api/annotations.rs`, `model_items`), and the view
+  draws each, once per sheet, as an annotation of the drawing's engine
+  made from the model's measured points and words, not stored; one kept
+  as the drawing's own becomes a stored annotation with picks of its own
+  (`kept_from`). Tables (phase 3, `drawing/tables_def.rs`,
   `core/model-drawing/src/tables.rs`,
   `api/drawing_tables.rs`) are annotations of a view too: a hole table
   (`Kernel::round_holes` of the bodies it shows, seen end on) and a parts
@@ -2565,7 +2571,17 @@ not recompute.
   by its size (mitcad#1275): a thousandth of its bounding box's diagonal,
   at least 0.01 mm (parts under 10 mm across) and at most 0.5 mm, in steps
   of the square root of 2 (`io::shape_deviation`); its edges with 12° (cut
-  in steps of 6°), its faces' insides with 15°. A machine of 257 bodies
+  in steps of 6°), its faces' insides with 15°. Small circles and arcs
+  (Preferences › Display › Small circles, Adaptive by default, mitcad#879)
+  are cut by that deviation alone where it allows fewer pieces than the
+  angle, in at least 12 a turn: their edges' angular deflection widened
+  and the edges discretized again, cones, tori and spheres of such a
+  radius with their angles widened as far
+  (`MeshOptions::small_circle_segments`); Full Detail keeps the angle
+  for every circle. The choice keys the stored display meshes, and a
+  change re-meshes the shown bodies on copies and gives them the new
+  triangulations once the job ends (`remeshForDisplay`, `giveRemeshed`).
+  The exports' presets do not take it. A machine of 257 bodies
   took 5.3 million triangles at 0.01 mm everywhere. Every face that is not
   a plane is held within 20 000 triangles, a small face within a quarter
   of a triangle per square of its deviation in its area: one that comes

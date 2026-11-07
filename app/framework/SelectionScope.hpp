@@ -55,7 +55,8 @@ enum class FilterRow {
   Bodies,
   Components,
   ReferenceGeometry, // planes, axes and points (origin and construction)
-  // Other sketches' curves and points (mitcad#904): only Project's and
+  // Other sketches' curves and points (mitcad#904), and the curves of
+  // Intersection Curves (mitcad#1417, isFeatureCurve): only Project's and
   // Intersect's scopes have the row (mitcad#1031); everywhere else they
   // are never selectable.
   OtherSketchGeometry,

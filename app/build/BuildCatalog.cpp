@@ -444,6 +444,9 @@ void Catalog::refresh(const QString& role, const CommandContext& context) {
   if (answer.contains(QStringLiteral("error"))) {
     problem = answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
   }
+  // Which clones the picker reads: one per repository, removed sources'
+  // left out (mitcad#1436).
+  logLibraryClones(answer);
   for (const QJsonValue& value : answer.value(QStringLiteral("components")).toArray()) {
     for (Part part : partsOf(value.toObject())) {
       if (!part.build.isEmpty() && !keep(part)) {
@@ -479,6 +482,18 @@ void Catalog::refresh(const QString& role, const CommandContext& context) {
                            .arg(role)
                            .arg(all.size())
                            .arg(recorded.size());
+  // Which version of each library the picker reads (mitcad#1423): the
+  // newest each fetched library has.
+  QStringList versions;
+  for (const Part& part : fetched) {
+    const QString version = QStringLiteral("%1 %2").arg(part.library, part.version);
+    if (!versions.contains(version)) {
+      versions << version;
+    }
+  }
+  if (!versions.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("BUILD parts %1 read from %2").arg(role, versions.join(QStringLiteral(", ")));
+  }
   const std::lock_guard<std::mutex> lock(m_mutex);
   m_byRole.insert(role, all);
   m_problems.insert(role, problem);
@@ -569,6 +584,7 @@ QVector<Part> Catalog::forJunction(const QJsonObject& junction, QStringList* ref
   }
   const QJsonObject answer = libraryCommand({{QStringLiteral("cmd"), QStringLiteral("library_build_candidates")},
                                              {QStringLiteral("junction"), junction}});
+  logLibraryClones(answer); // which clones it read (mitcad#1436)
   QVector<Part> parts;
   QStringList nearly;
   QHash<QString, QStringList> rows;

@@ -1,0 +1,9 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The rendered view while a section analysis is shown and hidden (mitcad#1432, tools/ui-render-section-toggle-test.sh): a 40 mm box (F1.b0) from the origin, a cylinder (F2.b0) of diameter 30 and height 50 beside it, and Section1 at the YZ plane moved 20 (it cuts both), hidden."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":40,"width":40,"height":40,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":"xy","center":[20,70],"diameter":30,"height":50,"operation":"new_body"}},
+  {"cmd":"set_body_appearance","uid":"F1.b0","appearance":"paint_red"},
+  {"cmd":"add_analysis","name":"Section1","def":{"type":"section","plane":"yz","offset":20}},
+  {"cmd":"set_analysis_visible","name":"Section1","visible":false}
+]

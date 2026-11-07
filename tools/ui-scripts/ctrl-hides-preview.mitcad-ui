@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: MIT
+# Ctrl held alone hides a command's preview while its inputs are picked
+# (mitcad#1421), on ctrl-hides-preview.json (four circles in Sketch1, F1;
+# the block F2.b0 whose top edge on side0 Fillet1, F3, rounds with 2 mm):
+#   1. Extrude, a new feature, on three circles: Ctrl pressed alone hides
+#      its preview at once (the view shows the bodies at the marker, the
+#      block alone), a fourth circle Ctrl+clicked then joins Profiles and
+#      its preview is computed but not drawn; Ctrl's release draws the
+#      extrude of all four. Ctrl+Z and Ctrl+S: Ctrl hides it, the key shows
+#      it again at once; a Ctrl+scroll keeps it hidden until the release.
+#      OK adds the four bodies.
+#   2. Fillet1 edited from the timeline: Ctrl held hides the rounding (the
+#      block drawn whole), the opposite top edge Ctrl+clicked joins Edges;
+#      the release draws both roundings, OK keeps them.
+# "Preview bodies:" is read before, during and after each hold, and the
+# block's shape the view draws (its volume: 4000 mm3 whole, less
+# 20 (4 - pi) mm3 for each rounding of 2 mm along a 20 mm edge).
+# Run by tools/ui-ctrl-hides-preview-test.sh (Linux) and
+# tools/ui-windows-ctrl-hides-preview-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+expect-model-bodies 1 3982.831853
+
+# 1. Extrude on three circles; the newest profile it starts with cleared.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Pick places:' 20
+# The four circles' profiles, whatever their names.
+capture p1 '^Pick profile (F1/\S+) at '
+capture p2 '^Pick profile (?!${p1:re} )(F1/\S+) at '
+capture p3 '^Pick profile (?!(?:${p1:re}|${p2:re}) )(F1/\S+) at '
+capture p4 '^Pick profile (?!(?:${p1:re}|${p2:re}|${p3:re}) )(F1/\S+) at '
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+qt-choice input_operation 'New Body'
+click-pick 'profile ${p1:re} at '
+wait-log '^Extrude Profiles: 1 profile'
+click-pick 'profile ${p2:re} at '
+wait-log '^Extrude Profiles: 2 profiles'
+click-pick 'profile ${p3:re} at '
+wait-log '^Extrude Profiles: 3 profiles'
+wait-log '^Preview Extrude: ok' 30
+wait-idle 30
+expect-log '^Preview bodies: (?=(?:.*? new(?:;|$)){3})(?!(?:.*? new(?:;|$)){4})'
+expect-no-log '^Preview hidden'
+
+# Ctrl pressed alone: the extrude's bodies go at once, the block stays.
+mark
+key-down ctrl
+expect-log '^Preview hidden [(]Ctrl held[)]$'
+expect-log '^Preview bodies: F2[.]b0 at 0,0,0$'
+# The fourth circle Ctrl+clicked while it is hidden joins Profiles; its
+# preview is computed, not drawn.
+mark
+click-pick 'profile ${p4:re} at ' ctrl
+wait-log '^Extrude Profiles: 4 profiles'
+wait-log '^Preview Extrude: ok' 30
+wait-idle 30
+expect-no-log '^Preview shown|^Preview bodies: '
+# Released: the extrude of all four.
+mark
+key-up ctrl
+expect-log '^Preview shown [(]Ctrl released[)]$'
+expect-log '^Preview bodies: (?=(?:.*? new(?:;|$)){4})(?!(?:.*? new(?:;|$)){5})'
+
+# Ctrl+Z and Ctrl+S: Ctrl hides the preview, the key shows it again at once
+# and its shortcut runs (Ctrl+Z changes nothing while the panel is open);
+# the release shows nothing more. A Ctrl+scroll keeps it hidden until Ctrl
+# is released.
+mark
+key-chord ctrl z
+expect-log '^Preview hidden [(]Ctrl held[)]$'
+expect-log '^Preview shown [(]a key pressed[)]$'
+wait-idle 30
+expect-no-log '^Preview shown [(]Ctrl released[)]$'
+mark
+key-chord ctrl s
+expect-log '^Preview hidden [(]Ctrl held[)]$'
+expect-log '^Preview shown [(]a key pressed[)]$'
+wait-idle 30
+expect-no-log '^Preview shown [(]Ctrl released[)]$'
+mark
+key-chord ctrl wheel 50 50 1
+expect-log '^Preview hidden [(]Ctrl held[)]$'
+expect-log '^Preview shown [(]Ctrl released[)]$'
+wait-idle 30
+expect-no-log '^Preview shown [(]a key pressed[)]$|^Command Extrude (cancelled|finished)'
+expect-log '^Preview bodies: (?=(?:.*? new(?:;|$)){4})(?!(?:.*? new(?:;|$)){5})'
+mark
+button '^OK$'
+wait-log '^Added extrude [(]New Body[)]' 30
+wait-idle 30
+# The block with its rounding and four cylinders of 10 x 10 (250 pi each).
+expect-model-bodies 5 7124.424507
+
+# 2. Fillet1 edited from the timeline gains the opposite top edge (the
+# view fitted again after the scroll's zoom).
+command view.fit
+wait-idle
+mark
+dblclick-logged '^Timeline Fillet1 at '
+expect-log '^Editing F3 with Fillet'
+wait-log '^Pick places:' 20
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+expect-shown-body F2.b0 - 3982.831853
+mark
+key-down ctrl
+expect-log '^Preview hidden [(]Ctrl held[)]$'
+expect-log '^Preview bodies: F2[.]b0 at 0,0,0$'
+expect-shown-body F2.b0 - 4000
+mark
+click-pick 'edge F2[.]b0/E[{](?:F2:side2[|]F2:top|F2:top[|]F2:side2)[}] at ' ctrl
+wait-log '^Fillet Edges: 2 edges'
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+expect-no-log '^Preview shown|^Preview bodies: '
+expect-shown-body F2.b0 - 4000
+mark
+key-up ctrl
+expect-log '^Preview shown [(]Ctrl released[)]$'
+expect-log '^Preview bodies: F2[.]b0 at 0,0,0$'
+expect-shown-body F2.b0 - 3965.663706
+mark
+button '^OK$'
+wait-log '^Edited F3' 30
+wait-idle 30
+expect-model-bodies 5 7107.256360
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

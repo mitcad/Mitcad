@@ -69,6 +69,19 @@
 //                           shortcut (a QAction, a QShortcut, a button's
 //                           mnemonic) triggers it unless the focused widget
 //                           takes the key as text.
+//   key-down <key>          the key pressed and held: its shortcut offer and
+//                           its press for the widget with the focus, no
+//                           shortcut, no release (ctrl: Ctrl held alone,
+//                           which hides a command's preview, mitcad#1421)
+//   key-up <key>            its release
+//   key-chord <key> <key2>  <key> pressed, then at once (in the same turn of
+//   key-chord <key> wheel <x%> <y%> <notches>
+//                           the event loop, before any timer) <key2> with
+//                           <key>'s modifier and its shortcut, as `key`
+//                           gives it, or the wheel over the view with that
+//                           modifier; then <key> released (mitcad#1421:
+//                           Ctrl+Z, Ctrl+S and a Ctrl+scroll while a
+//                           command's preview shows)
 //   type <text>             the characters as key events
 //   expect-no-qt-popup     no Qt popup owns input or remains logically
 //                           visible, including hidden native presenters
@@ -677,6 +690,10 @@ private:
   // Events. Gestures and keys are queued, one event per tick.
   void queue(std::function<void()> action);
   void sendKey(const KeyPress& press);
+  void sendKeyHalf(const KeyPress& press, bool down);
+  // The widget a key goes to (the target window activated by Qt when the
+  // system did not activate it); `window` gets the target window.
+  QWidget* keyReceiver(QWidget*& window);
   bool triggerShortcut(QWidget* window, const KeyPress& press);
   GlassCard* cardAt(const QPoint& windowPos) const;
   void sendText(const QString& text);

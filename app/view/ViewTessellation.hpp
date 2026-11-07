@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 
 #include <Prs3d_Drawer.hxx>
@@ -57,6 +58,28 @@ constexpr double kViewInteriorAngle = 15.0 * 3.14159265358979323846 / 180.0;
 constexpr double kViewCurveAngle = 5.0 * 3.14159265358979323846 / 180.0;
 constexpr std::size_t kViewFaceTriangles = 20000;
 
+// Small circles (mitcad#879, Preferences > Display > Small circles): a
+// design of 2 929 holes in each of its plates took 40.7 million triangles,
+// 21 s of meshing and 609 MB of stored meshes, every hole cut in 60 pieces
+// (kViewAngle's 6 degree steps). Adaptive, the default: a circle the
+// view's deviation alone cuts more coarsely is cut by the deviation, in at
+// least kViewSmallCircleSegments pieces a turn (io::MeshOptions::
+// small_circle_segments; by the body's deviation, a circle of 365 times it
+// or more keeps the 6 degrees, one of 15 times it or less gets 12 pieces).
+// Full detail: the angle for every circle, as before. Only the view's
+// meshes; the exports' presets mesh as they did.
+enum class SmallCircles { Adaptive, FullDetail };
+constexpr int kViewSmallCircleSegments = 12;
+
+// The choice the view's meshes are made with now, for the whole process
+// (set from the preference at the start and when it changes, read by every
+// thread that meshes for the view).
+inline std::atomic<int>& viewSmallCirclesChoice() {
+  static std::atomic<int> choice{static_cast<int>(SmallCircles::Adaptive)};
+  return choice;
+}
+inline SmallCircles viewSmallCircles() { return static_cast<SmallCircles>(viewSmallCirclesChoice().load()); }
+
 // The view's options with the planes' choice (fast, checked).
 inline io::MeshOptions viewMeshOptionsWith(bool fastPlanes, bool checkPlanes) {
   io::MeshOptions options{kViewDeviation, kViewAngle, false, kViewFaceTriangles, fastPlanes, checkPlanes};
@@ -64,6 +87,7 @@ inline io::MeshOptions viewMeshOptionsWith(bool fastPlanes, bool checkPlanes) {
   options.size_deviation_max = kViewDeviationMax;
   options.interior_angle = kViewInteriorAngle;
   options.hold_face_triangles = true;
+  options.small_circle_segments = viewSmallCircles() == SmallCircles::Adaptive ? kViewSmallCircleSegments : 0;
   return options;
 }
 
@@ -142,5 +166,17 @@ inline bool drawerMeshes(const geometry::Shape& shape) {
 // what io::mesh_in_place(shape, viewMeshOptions()) meshed the same way, and
 // keep those triangulations.
 inline void useViewMeshing() { io::use_bounded_presentation_meshes(viewMeshOptions()); }
+
+// Sets the small circles' choice for the meshes made from now on (and the
+// presentations' meshing with it); returns whether it changed. The meshes
+// made before stay as they are: the application meshes the shown bodies
+// again (framework/DisplayMeshes, remeshForDisplay).
+inline bool setViewSmallCircles(SmallCircles choice) {
+  if (viewSmallCirclesChoice().exchange(static_cast<int>(choice)) == static_cast<int>(choice)) {
+    return false;
+  }
+  useViewMeshing();
+  return true;
+}
 
 } // namespace mitcad

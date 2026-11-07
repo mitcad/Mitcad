@@ -79,6 +79,8 @@
 #include <gp_Elips.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
+#include <gp_Sphere.hxx>
+#include <gp_Torus.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 #include <gp_XY.hxx>
@@ -363,6 +365,79 @@ void coarsen_round_edges(const occ::handle<IMeshData_Model>& model, const IMeshT
         }
       },
       !parameters.InParallel || model->EdgesNb() < 8);
+}
+
+// Small circles by their size (MeshOptions::small_circle_segments,
+// mitcad#879): each edge on a circle (or an arc of one) that its deviation
+// cuts more coarsely than its angle gets the angle small_circle_angle gives
+// it as its own angular deflection, which BRepMesh's edge tessellator takes
+// (half of it, as of the parameters' angle that BRepMesh_Deflection gave
+// it), and is discretized again as coarsen_round_edges does: a polygon
+// that a face's triangulation has for it at its deviation is taken again,
+// as BRepMesh took it, so faces that keep their triangulations keep their
+// edges. Before coarsen_round_edges, which discretizes the edges of large
+// cylinders again with the angle each edge has. In parallel when the
+// meshing is: each task changes only its own edge.
+void widen_small_circle_edges(const occ::handle<IMeshData_Model>& model, const IMeshTools_Parameters& parameters,
+                              int segments) {
+  if (segments <= 0 || model.IsNull() || parameters.Relative) {
+    return;
+  }
+  OSD_Parallel::For(
+      0, model->EdgesNb(),
+      [&model, &parameters, segments](int i) {
+        const IMeshData::IEdgeHandle& edge = model->GetEdge(i);
+        if (edge->IsFree() || edge->GetDegenerated() || edge->IsSet(IMeshData_Failure) || edge->PCurvesNb() == 0) {
+          return;
+        }
+        const double own = edge->GetDeflection();
+        const double angle = edge->GetAngularDeflection();
+        try {
+          const BRepAdaptor_Curve curve(edge->GetEdge());
+          if (curve.GetType() != GeomAbs_Circle) {
+            return;
+          }
+          const double wider = small_circle_angle(curve.Circle().Radius(), own, angle, segments);
+          if (!(wider > angle)) {
+            return;
+          }
+          edge->SetAngularDeflection(wider);
+          rediscretize(edge, own, parameters);
+        } catch (const Standard_Failure&) {
+          // As BRepMesh discretized it.
+          try {
+            edge->SetAngularDeflection(angle);
+            rediscretize(edge, own, parameters);
+          } catch (const Standard_Failure&) {
+            edge->SetStatus(IMeshData_Failure);
+          }
+        }
+      },
+      !parameters.InParallel || model->EdgesNb() < 8);
+}
+
+// The largest radius round a cone, torus or sphere face (a torus's major
+// and minor radii together, a cone's at the end of its range farther from
+// its apex); 0 for other faces and when it cannot be told. What small
+// circles by their size widen such a face's angles by (SmallRoundFaceAlgo).
+double small_round_radius(const TopoDS_Face& face) {
+  try {
+    const BRepAdaptor_Surface surface(face, false);
+    switch (surface.GetType()) {
+    case GeomAbs_Cone:
+      return round_radius(face);
+    case GeomAbs_Torus: {
+      const gp_Torus torus = surface.Torus();
+      return std::abs(torus.MajorRadius()) + std::abs(torus.MinorRadius());
+    }
+    case GeomAbs_Sphere:
+      return surface.Sphere().Radius();
+    default:
+      return 0.0;
+    }
+  } catch (const Standard_Failure&) {
+    return 0.0;
+  }
 }
 
 using Clock = std::chrono::steady_clock;
@@ -841,6 +916,41 @@ private:
   double m_limit;
 };
 
+// A cone, torus or sphere face triangulated with small circles by their
+// size (MeshOptions::small_circle_segments, mitcad#879): BRepMesh steps
+// round such a face by the smaller of its deviation's arc step and the
+// parameters' angle (its range splitters; a torus's and a sphere's
+// deviation control then by the interior angle), so a face whose largest
+// radius (small_round_radius) its deviation alone cuts more coarsely than
+// the angle gets the angle widened as its edges are (small_circle_angle,
+// at the face's deviation, which BRepMesh does not halve for faces), and
+// the interior angle at least as wide. The face's own deviation is read
+// before `inner` (BRepMesh's deviation control sets it to what it
+// measured). Outside the face's private copy (PrivateFaceAlgo), whose
+// face has no edges to bound a cone's range.
+class SmallRoundFaceAlgo : public IMeshTools_MeshAlgo {
+public:
+  SmallRoundFaceAlgo(occ::handle<IMeshTools_MeshAlgo> inner, int segments)
+      : m_inner(std::move(inner)), m_segments(segments) {}
+
+  void Perform(const IMeshData::IFaceHandle& face, const IMeshTools_Parameters& parameters,
+               const Message_ProgressRange& range) override {
+    IMeshTools_Parameters own = parameters;
+    const double radius = small_round_radius(face->GetFace());
+    const double wider =
+        0.5 * small_circle_angle(radius, 2.0 * face->GetDeflection(), 2.0 * parameters.Angle, m_segments);
+    if (wider > parameters.Angle) {
+      own.Angle = wider;
+      own.AngleInterior = std::max(parameters.AngleInterior, wider);
+    }
+    m_inner->Perform(face, own, range);
+  }
+
+private:
+  occ::handle<IMeshTools_MeshAlgo> m_inner;
+  int m_segments;
+};
+
 // use_fast_plane_algorithms_for_tests: null for Delabella's.
 std::mutex g_fastPlanesMutex;
 occ::handle<IMeshTools_MeshAlgoFactory> g_fastPlanesForTests;
@@ -876,12 +986,14 @@ occ::handle<IMeshTools_MeshAlgoFactory> default_algorithms() {
 // `check_planes` too (CheckedPlaneAlgo, counted in the shared `redone`),
 // the other faces held within `held` triangles when that is not 0
 // (HeldFaceAlgo, MeshOptions::hold_face_triangles), each on a private copy
-// of its face (PrivateFaceAlgo), each timed when the meshing is.
+// of its face (PrivateFaceAlgo), cones, tori and spheres with their angles
+// widened by their size when `small_circles` is above 0 (SmallRoundFaceAlgo,
+// MeshOptions::small_circle_segments), each timed when the meshing is.
 class FaceAlgoFactory : public IMeshTools_MeshAlgoFactory {
 public:
-  FaceAlgoFactory(bool fast_planes, bool check_planes, std::size_t held, MeshSharedPtr shared)
+  FaceAlgoFactory(bool fast_planes, bool check_planes, std::size_t held, int small_circles, MeshSharedPtr shared)
       : m_default(default_algorithms()), m_check(fast_planes && check_planes), m_held(held),
-        m_shared(std::move(shared)) {
+        m_smallCircles(small_circles), m_shared(std::move(shared)) {
     m_planes = fast_planes ? fast_plane_algorithms() : m_default;
   }
 
@@ -899,6 +1011,9 @@ public:
       algorithm = new HeldFaceAlgo(algorithm, m_default, m_held);
     }
     algorithm = new PrivateFaceAlgo(algorithm, m_shared);
+    if (m_smallCircles > 0 && (type == GeomAbs_Cone || type == GeomAbs_Torus || type == GeomAbs_Sphere)) {
+      algorithm = new SmallRoundFaceAlgo(algorithm, m_smallCircles);
+    }
     if (m_shared->timed) {
       algorithm = new TimedAlgo(algorithm, m_shared);
     }
@@ -910,6 +1025,7 @@ private:
   occ::handle<IMeshTools_MeshAlgoFactory> m_planes;
   bool m_check;
   std::size_t m_held;
+  int m_smallCircles;
   MeshSharedPtr m_shared;
 };
 
@@ -1128,8 +1244,10 @@ private:
   MeshSharedPtr m_shared;
 };
 
-// BRepMesh's own context, with the edges of large cylinders and cones
-// discretized at their faces' floor (coarsen_round_edges) and each face's
+// BRepMesh's own context, with small circles' edges cut by their size when
+// the options say so (widen_small_circle_edges, mitcad#879), the edges of
+// large cylinders and cones discretized at their faces' floor
+// (coarsen_round_edges) and each face's
 // deviation raised to its floor once the healer has computed the
 // deviations from the edges' (BRepMesh's pre-processor then keeps a
 // triangulation that meets it). The floors are computed over the faces in
@@ -1146,13 +1264,13 @@ private:
 class BoundedContext : public BRepMesh_Context {
 public:
   BoundedContext(const MeshOptions& options, MeshReport* report)
-      : m_faceTriangles(options.face_triangles), m_asked(options.linear_deflection),
-        m_record(options.size_deviation > 0.0 || options.hold_face_triangles), m_report(report),
-        m_shared(std::make_shared<MeshShared>()) {
+      : m_faceTriangles(options.face_triangles), m_smallCircles(options.small_circle_segments),
+        m_asked(options.linear_deflection), m_record(options.size_deviation > 0.0 || options.hold_face_triangles),
+        m_report(report), m_shared(std::make_shared<MeshShared>()) {
     m_shared->timed = m_report != nullptr;
     const std::size_t held = options.hold_face_triangles ? options.face_triangles : 0;
     SetFaceDiscret(new StoppableFaceDiscret(
-        new FaceAlgoFactory(options.fast_planes, options.check_planes, held, m_shared), m_shared));
+        new FaceAlgoFactory(options.fast_planes, options.check_planes, held, m_smallCircles, m_shared), m_shared));
   }
 
   bool BuildModel() override {
@@ -1167,6 +1285,7 @@ public:
     if (!BRepMesh_Context::DiscretizeEdges()) {
       return false;
     }
+    widen_small_circle_edges(GetModel(), GetParameters(), m_smallCircles);
     coarsen_round_edges(GetModel(), GetParameters(), m_faceTriangles);
     add(&MeshReport::edges, start);
     return true;
@@ -1320,6 +1439,7 @@ private:
   }
 
   std::size_t m_faceTriangles;
+  int m_smallCircles; // MeshOptions::small_circle_segments
   double m_asked; // MeshOptions::linear_deflection
   // Whether the faces made record m_asked (recordAsked: the view's options),
   // and which faces a floor raised (HealModel), which do not.
@@ -1589,6 +1709,24 @@ double shape_deviation(const TopoDS_Shape& shape, const MeshOptions& options) {
   // Steps of the square root of 2 up from the deviation asked for.
   const double steps = std::floor(2.0 * std::log2(sized / asked) + 1e-9);
   return asked * std::pow(2.0, steps / 2.0);
+}
+
+double small_circle_angle(double radius, double deviation, double angle, int segments) {
+  if (segments <= 0 || !(radius > 0.0) || !(deviation > 0.0) || !std::isfinite(radius) || !std::isfinite(deviation)) {
+    return angle;
+  }
+  // BRepMesh's step for the deviation (GCPnts_TangentialDeflection's arc
+  // step at half the edge's deviation); a sag of the whole radius or more
+  // allows any step.
+  const double sag = 0.5 * deviation / radius;
+  const double step = sag < 1.0 ? 2.0 * std::acos(1.0 - sag) : kPi;
+  if (!(step > 0.5 * angle)) {
+    return angle; // the deviation cuts it finer than the angle: as it is
+  }
+  // A hair over the step of `segments` pieces, so that a turn divided by it
+  // rounds up to `segments` and not one more.
+  const double least = 2.0 * kPi / static_cast<double>(segments) * (1.0 + 1e-9);
+  return 2.0 * std::min(step, least);
 }
 
 bool has_triangulation(const TopoDS_Shape& shape) {

@@ -18,6 +18,7 @@
 #include <QHash>
 #include <QRegularExpression>
 
+#include "../framework/HandleStep.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
 #include "ProfilePicks.hpp"
@@ -263,6 +264,14 @@ QJsonValue pathOf(const Selection& items, bool chain, Built& error, const QStrin
     return QJsonValue();
   }
   const SelectKind kind = items.first().kind;
+  // The curve of an Intersection Curve (mitcad#1405), alone.
+  if (kind == SelectKind::Feature) {
+    if (items.size() > 1) {
+      error = Built::failure(QObject::tr("Select one intersection curve."), input);
+      return QJsonValue();
+    }
+    return QJsonObject{{QStringLiteral("feature"), items.first().owner}};
+  }
   for (const SelectionItem& item : items) {
     if (item.kind != kind || item.owner != items.first().owner) {
       error = Built::failure(kind == SelectKind::Edge
@@ -312,6 +321,12 @@ std::optional<Selection> pathItems(const QJsonValue& path, const CommandContext&
           QJsonObject{{QStringLiteral("body"), str(o, "body")}, {QStringLiteral("edge"), edge}}, context);
       items.append(item);
     }
+    return items;
+  }
+  // The curve of an Intersection Curve (mitcad#1405).
+  if (o.contains(QStringLiteral("feature"))) {
+    // As its curve, which the inputs that take curves tell (mitcad#1417).
+    items.append(featureCurveItem(str(o, "feature")));
     return items;
   }
   return std::nullopt;
@@ -1068,6 +1083,29 @@ Manipulator arrow(const gp_Pnt& origin, const gp_Dir& direction, double base) {
   handle.direction = direction;
   handle.base = base;
   return handle;
+}
+
+double itemsScale(const Selection& items, const CommandContext& context) {
+  // A few items are enough for a step; a long selection is not measured
+  // whole on each refresh of the handles.
+  constexpr int kMeasured = 16;
+  double scale = 0.0;
+  int measured = 0;
+  for (const SelectionItem& item : items) {
+    if (measured++ >= kMeasured) {
+      break;
+    }
+    double size = 0.0;
+    try {
+      size = shapeScale(context.itemShape(item));
+    } catch (const std::exception&) {
+      continue; // not measurable now: the others decide
+    }
+    if (size > 0.0 && (scale <= 0.0 || size < scale)) {
+      scale = size;
+    }
+  }
+  return scale;
 }
 
 Manipulator ring(const gp_Pnt& origin, const gp_Dir& axis) {

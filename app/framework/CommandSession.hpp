@@ -27,6 +27,7 @@
 #include "AutoOperationPolicy.hpp"
 #include "Command.hpp"
 #include "CommandPanel.hpp"
+#include "PreviewHold.hpp"
 #include "SectionPreview.hpp"
 #include "mitcad_bridge/lib.h"
 
@@ -289,6 +290,9 @@ public:
   QString analysisName() const { return m_analysis.value(QStringLiteral("name")).toString(); }
   // Whether the active input takes items of this kind.
   bool activeTakes(SelectKind kind) const;
+  // Whether the active input takes this item: its kind, and its test (an
+  // input that takes only Intersection Curves among features, mitcad#1417).
+  bool activeAccepts(const SelectionItem& item) const;
   // Whether the active input also takes the edited sketch's axes
   // (InputDef::sketchAxes, mitcad#876).
   bool activeTakesSketchAxes() const;
@@ -936,6 +940,35 @@ private:
   bool takeAutoOperation(const QJsonObject& report);
   void autoOperationOverruled(const QString& key);
   AutoOperationPolicy m_autoOperation;
+
+  // What the preview draws, logged as "Preview bodies: ..." when it
+  // changed (mitcad#266), for UI tests.
+  void logPreviewBodies(const std::vector<BodyDisplay>& bodies);
+  // Ctrl held alone hides a feature's preview while its inputs are picked
+  // (mitcad#1421, framework/PreviewHold.hpp; CommandSessionHold.cpp): the
+  // view shows the bodies as clearPreview leaves them, without the tool,
+  // the tool overlays and the handles; picks, hover, the Selection Filter
+  // and the panel work as before. A preview computed meanwhile is kept in
+  // m_drawnPreview, not drawn, until Ctrl is released.
+  void setUpPreviewHold();
+  void endPreviewHold();
+  // Why a Ctrl pressed now may not hide it, empty when it may: the
+  // command's window active, no dialog or popup, and the keyboard not in a
+  // text field the user types in (a panel's value field that has the
+  // keyboard is the panel's until something is typed in it, mitcad#338).
+  QString previewHoldRefusal() const;
+  bool m_valueTyped = false; // typed in the value field since it got the keyboard
+  void hidePreviewHeld();
+  void drawHiddenPreview();
+  void showPreviewHeld(const QString& why);
+  struct DrawnPreview {
+    Preview preview;
+    QString operation;
+  };
+  std::optional<DrawnPreview> m_drawnPreview; // the last one showPreview got, drawn or kept
+  QPointer<PreviewHold> m_previewHold;
+  bool m_previewHidden = false;
+  bool m_hiddenWaits = false; // the hidden view waits for the model to be idle
 };
 
 } // namespace mitcad

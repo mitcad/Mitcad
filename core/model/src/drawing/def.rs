@@ -304,6 +304,12 @@ pub struct DrawingView {
     /// the model.
     #[serde(default, skip_serializing_if = "is_false")]
     pub retrieved_dimensions: bool,
+    /// The model's annotations whose plane it sees square on (a hole
+    /// callout where it sees its hole end on), retrieved from the model
+    /// (mitcad#1406): dimensions, notes, datum labels, feature control
+    /// frames and hole callouts, each drawn in one view of its sheet.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub model_annotations: bool,
     /// Its dimensions, centre marks, notes and symbols, in the order they
     /// were added.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

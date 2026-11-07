@@ -373,6 +373,10 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_view_show", Model),
     // Update Link reads a linked design's file again (mitcad#1416).
     ("update_link", FileIo),
+    // The model's items in a drawing's views and kept as its own
+    // (mitcad#1406, `drawing_annotations.rs`).
+    ("drawing_model_items", Model),
+    ("keep_drawing_model_items", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -581,6 +585,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("drawing_corners", Model),
     // Whether linked designs' files changed: it reads them (mitcad#1416).
     ("links", FileIo),
+    // The curves of Intersection Curves as polylines (mitcad#1405).
+    ("feature_curves", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

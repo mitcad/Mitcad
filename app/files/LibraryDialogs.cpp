@@ -104,6 +104,19 @@ QJsonObject command(const char* name, QJsonObject fields = {}) {
   return libraryCommand(fields);
 }
 
+// A source added (mitcad#1436): a clone its earlier removal left out of
+// the pickers is listed again (re-adding brings the components and their
+// stars back, not copies).
+void sourceAdded(const QString& url) {
+  const QJsonObject answer = markLibrarySource(url, {}, false);
+  const QJsonArray changed = answer.value(QStringLiteral("changed")).toArray();
+  if (!changed.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Library source %1: %2 clone(s) listed in the pickers again")
+                             .arg(url)
+                             .arg(changed.size());
+  }
+}
+
 // The columns of Libraries...: On, Auto-update (mitcad#576), the source's
 // URL, what was fetched from it.
 constexpr int kOnColumn = 0;
@@ -292,9 +305,30 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
     }
     LibrarySettings settings = LibrarySettings::load();
     if (row < settings.sources.size()) {
-      qInfo().noquote() << QStringLiteral("Library source removed: %1").arg(settings.sources[row].url);
+      const QString url = settings.sources[row].url;
       settings.sources.removeAt(row);
       settings.save();
+      // Its clone leaves the pickers and the search (mitcad#1436) unless
+      // another listed source names the same repository; designs keep
+      // reading their parts' versions from it.
+      QStringList remaining;
+      for (const LibrarySource& source : settings.sources) {
+        remaining << source.url;
+      }
+      const QJsonObject marked = markLibrarySource(url, remaining, true);
+      const QString same = settings.sameRepository(url);
+      const int changed = static_cast<int>(marked.value(QStringLiteral("changed")).toArray().size());
+      QString what;
+      if (!errorOf(marked).isEmpty()) {
+        what = QStringLiteral("its clone not left out: %1").arg(errorOf(marked));
+      } else if (!same.isEmpty()) {
+        what = QStringLiteral("the pickers keep its repository for %1").arg(same);
+      } else if (changed > 0) {
+        what = QStringLiteral("%1 clone(s) left out of the pickers").arg(changed);
+      } else {
+        what = QStringLiteral("nothing fetched from it");
+      }
+      qInfo().noquote() << QStringLiteral("Library source removed: %1; %2").arg(url, what);
     }
     reload();
     if (m_table->rowCount() > 0) {
@@ -342,9 +376,13 @@ void LibrariesDialog::reload() {
   m_table->setRowCount(int(settings.sources.size()));
   for (int row = 0; row < settings.sources.size(); ++row) {
     const LibrarySource& source = settings.sources[row];
+    // Its clone, fetched under this or another form of the repository's URL
+    // (mitcad#1436); the URL as written first.
     QJsonObject info;
     for (const QJsonValue& value : fetched) {
-      if (normalUrl(str(value.toObject(), "url")) == normalUrl(source.url)) {
+      const QString url = str(value.toObject(), "url");
+      if (repositoryKey(url) == repositoryKey(source.url) &&
+          (info.isEmpty() || normalUrl(url) == normalUrl(source.url))) {
         info = value.toObject();
       }
     }
@@ -390,12 +428,26 @@ void LibrariesDialog::reload() {
 
 void LibrariesDialog::addUrl(const QString& url) {
   LibrarySettings settings = LibrarySettings::load();
+  // Another form of a listed source's URL (mitcad#1436: www., .git, a
+  // trailing slash, the host's case) is that source: not listed twice, its
+  // row selected.
+  const QString same = settings.sameRepository(url);
+  int row = -1;
   if (settings.add(url)) {
     settings.save();
     qInfo().noquote() << QStringLiteral("Library source added: %1").arg(url.trimmed());
+    sourceAdded(url.trimmed());
+  } else {
+    qInfo().noquote() << QStringLiteral("Library source not added: %1 is the repository of the source %2")
+                             .arg(url.trimmed(), same);
+    for (int i = 0; i < settings.sources.size(); ++i) {
+      if (settings.sources[i].url == same) {
+        row = i;
+      }
+    }
   }
   reload();
-  m_table->setCurrentCell(m_table->rowCount() - 1, kSourceColumn);
+  m_table->setCurrentCell(row >= 0 ? row : m_table->rowCount() - 1, kSourceColumn);
 }
 
 void LibrariesDialog::save() {
@@ -671,6 +723,9 @@ void LibraryBrowser::search() {
   const QStringList sources = LibrarySettings::load().enabledUrls();
   query.insert(QStringLiteral("sources"), QJsonArray::fromStringList(sources));
   const QJsonObject answer = command("library_search", query);
+  // Which clones it read: one per repository, removed sources' left out
+  // (mitcad#1436).
+  logLibraryClones(answer);
   m_items = {};
   const QJsonArray components = answer.value(QStringLiteral("components")).toArray();
   QStringList leftOut;
@@ -1059,6 +1114,7 @@ void LibraryBrowser::getLibrary() {
   LibrarySettings settings = LibrarySettings::load();
   if (settings.add(url)) {
     settings.save();
+    sourceAdded(url);
   }
   const QList<QJsonObject> answers = fetchLibraries(this, {url});
   const bool failed = !answers.isEmpty() && !errorOf(answers.first()).isEmpty();
@@ -1148,13 +1204,15 @@ QString LibraryBrowser::itemKey(const QJsonObject& item) {
 }
 
 bool LibraryBrowser::anySourceFetched() {
+  // By repository (mitcad#1436): a source's clone may have been fetched
+  // under another form of its URL.
   QStringList fetched;
   for (const QJsonValue& value : command("library_list").value(QStringLiteral("libraries")).toArray()) {
-    fetched << normalUrl(str(value.toObject(), "url"));
+    fetched << repositoryKey(str(value.toObject(), "url"));
   }
   const QStringList urls = LibrarySettings::load().enabledUrls();
   return std::any_of(urls.cbegin(), urls.cend(),
-                     [&fetched](const QString& url) { return fetched.contains(normalUrl(url)); });
+                     [&fetched](const QString& url) { return fetched.contains(repositoryKey(url)); });
 }
 
 void LibraryBrowser::insert() {
@@ -1628,7 +1686,9 @@ void LibraryPartsDialog::getMissing() {
   }
   LibrarySettings settings = LibrarySettings::load();
   for (const QString& url : urls) {
-    settings.add(url);
+    if (settings.add(url)) {
+      sourceAdded(url);
+    }
   }
   settings.save();
   fetchLibraries(this, urls);

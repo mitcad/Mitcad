@@ -374,8 +374,45 @@ DisplayMeshWrites* displayMeshWrites();
 void finishDisplayMeshWrites();
 
 // The final tier's meshing options as the result store keys display
-// meshes by them: other options find none.
+// meshes by them: other options find none (the small circles' choice
+// among them, mitcad#879).
 QByteArray displayMeshStoreOptions();
+
+// The shown bodies' display meshes made again with the final tier's
+// options as they are now (mitcad#879: Preferences > Display > Small
+// circles changed). The meshes they have meet the deviation BRepMesh
+// checks whatever that choice is, so meshing the bodies again would keep
+// them: in a job, each body that has the view's meshes (meshed to the end
+// in the final tier, not drawn through a stand-in, not a mesh body) gets a
+// copy that shares no face, edge or vertex (geometry::independent_copy),
+// the copies are meshed together (io::mesh_all_in_place, on every core)
+// and their triangulations taken (io::capture_triangulations). The bodies
+// are only read, as the view draws them meanwhile. A cancel, or a meshing
+// that did not end, gives nothing (`complete` false).
+struct DisplayRemeshing {
+  DisplayShapes bodies;
+  std::vector<std::shared_ptr<const io::TriangulationCapture>> meshes; // each body's copy's
+  bool complete = false;
+  std::size_t triangles = 0; // over the copies
+  qint64 milliseconds = 0;
+  io::MeshReport report;
+};
+DisplayRemeshing remeshForDisplay(const DisplayShapes& shapes, ModelJob& job);
+
+// Gives the bodies the meshes remeshForDisplay made: on the thread that
+// owns the document, while no job runs and before the view draws the
+// bodies again (OcctViewer::redrawBodies; what it drew keeps the old
+// meshes it holds until then). Every body's faces first drop the meshes
+// they have (a face shared with another body alike), then each takes its
+// copy's (io::restore_triangulations; a face shared with a body before it
+// keeps the one it took there). A body whose copy's meshes do not fit is
+// meshed again in place. Returns how many bodies took their copy's.
+std::size_t giveRemeshed(const DisplayRemeshing& remeshing);
+
+// "Display meshes of <label>: 33 bodies meshed again with small circles
+// adaptive in 5230 ms (1234567 triangles)" (or "full detail"), or "...:
+// meshing again cancelled" (mitcad#879).
+void logRemeshing(const DisplayRemeshing& remeshing, std::size_t given, const QString& label);
 
 // What the view draws for a shape: its stand-in while it has one (the
 // interactive tier), else the shape. Null stays null.

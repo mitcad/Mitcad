@@ -27,7 +27,9 @@ class OcctViewer;
 // a drag it does nothing, and it never reaches the view or the
 // orientation cube as a click (mitcad#1105). The values come from the
 // command's value inputs and go
-// back to them as numbers rounded to a step that fits the zoom.
+// back to them as numbers rounded to a step that fits the zoom, or the
+// size of the geometry a handle works on when that is finer (mitcad#1431,
+// HandleStep.hpp).
 class ManipulatorOverlay : public QWidget {
   Q_OBJECT
 
@@ -39,6 +41,12 @@ public:
     double value = 0.0; // mm or radians
     // The value as the box shows it ("12.5 mm", Manipulator::valueBox).
     QString text = QString();
+    // A length: its value at a drag's start may count as the arrow's scale
+    // (Manipulator::valueScale, mitcad#1431).
+    bool length = false;
+    // The last decimal the value box shows, in the value's unit: an
+    // arrow's step from its scale is not finer (mitcad#1431). 0: no floor.
+    double finest = 0.0;
   };
 
   ManipulatorOverlay(OcctViewer& viewer, const QString& command);
@@ -57,6 +65,10 @@ public:
   QStringList boxKeys() const;
   std::optional<QPoint> boxCentre(const QString& key) const;
   bool isDragging() const { return m_drag >= 0; }
+  // Hidden with the command's preview while Ctrl is held (mitcad#1421):
+  // neither drawn nor taking the mouse, and the view picks where its value
+  // boxes were; shown again as they were.
+  void setHandlesShown(bool shown);
   // The arrow of value input `key` as it is drawn, if it has one (a drag
   // proxy's direction, mitcad#636).
   std::optional<Manipulator> arrowOf(const QString& key) const {
@@ -114,6 +126,14 @@ private:
   DragValue valueAt(const Handle& handle, const QPointF& position);
   // A ring: the angle of the position about its centre; NaN when edge-on.
   double ringAngle(const Handle& handle, const QPointF& position) const;
+  // An arrow: the step its value rounds to, in the value's unit, from the
+  // zoom at its origin, its scale or the value the drag started from, and
+  // the zoom's step alone (HandleStep.hpp, mitcad#1431).
+  struct ArrowStep {
+    double step;
+    double zoom;
+  };
+  ArrowStep arrowStep(const Handle& handle) const;
   double pixelSize(const gp_Pnt& at) const; // mm per pixel near a point
   void logPlaces();
   void logDragFeedback() const;
@@ -131,6 +151,7 @@ private:
   std::vector<std::vector<gp_Pnt>> m_lines; // setLines()
   QPointF m_pressAt;
   double m_dragStart = 0.0; // the value when the drag began
+  double m_dragStep = 0.0;  // an arrow: the step it rounds to, fixed when the drag began
   QPointF m_grab;           // an arrow: the cursor from the handle then
   double m_angleLast = 0.0; // a ring: the cursor's last angle
   double m_turned = 0.0;    // and how far it turned since the drag began

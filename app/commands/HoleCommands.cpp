@@ -887,6 +887,9 @@ CommandDef holeCommand(const CommandContext& context) {
             Manipulator m = arrow(frame->origin, along != flipped ? frame->normal : frame->normal.Reversed());
             m.valueBox = true; // the depth at its tip (mitcad#656)
             m.boxAtTip = true;
+            // Stepped by the hole's diameter (mitcad#1431).
+            const double diameter = state.value(QStringLiteral("diameter"));
+            m.scale = std::isfinite(diameter) && diameter > 0.0 ? diameter : 0.0;
             return m;
           }),
       // The recesses' fields follow the size until typed (mitcad#980).

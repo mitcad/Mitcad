@@ -44,6 +44,13 @@ QJsonObject libraryCommand(const QJsonObject& command) {
   }
 }
 
+QJsonObject markLibrarySource(const QString& url, const QStringList& remaining, bool removed) {
+  return libraryCommand({{QStringLiteral("cmd"), QStringLiteral("library_remove")},
+                         {QStringLiteral("url"), url},
+                         {QStringLiteral("sources"), QJsonArray::fromStringList(remaining)},
+                         {QStringLiteral("removed"), removed}});
+}
+
 void logLibraryFetch(const QString& url, const QJsonObject& answer) {
   const QJsonObject error = answer.value(QStringLiteral("error")).toObject();
   if (error.isEmpty()) {
@@ -51,11 +58,16 @@ void logLibraryFetch(const QString& url, const QJsonObject& answer) {
     for (const QJsonValue& version : answer.value(QStringLiteral("versions")).toArray()) {
       labels << version.toObject().value(QStringLiteral("text")).toString();
     }
-    qInfo().noquote() << QStringLiteral("Library fetched: %1 %2 (%3) from %4; versions %5")
-                             .arg(answer.value(QStringLiteral("kind")).toString(),
-                                  answer.value(QStringLiteral("name")).toString(),
+    // The version Browse Components and the BUILD pickers read from now on:
+    // the newest (the versions come newest first, mitcad#1423).
+    const QString kind = answer.value(QStringLiteral("kind")).toString();
+    const QString pickerVersion = kind == QLatin1String("library") && !labels.isEmpty()
+                                      ? QStringLiteral("; the pickers read %1").arg(labels.constFirst())
+                                      : QString();
+    qInfo().noquote() << QStringLiteral("Library fetched: %1 %2 (%3) from %4; versions %5%6")
+                             .arg(kind, answer.value(QStringLiteral("name")).toString(),
                                   answer.value(QStringLiteral("id")).toString(), url,
-                                  labels.join(QStringLiteral(", ")));
+                                  labels.join(QStringLiteral(", ")), pickerVersion);
   } else {
     qWarning().noquote() << QStringLiteral("Library fetch failed: %1: %2")
                                 .arg(url, error.value(QStringLiteral("message")).toString());

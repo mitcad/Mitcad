@@ -2718,6 +2718,13 @@ if(BUILD_TESTING)
                                   drawings/DrawingPreferences.hpp)
 endif()
 
+# Preferences › Display › Small circles (mitcad#879, app/COMMANDS.md
+# "Small circles"): the view's small circles meshed by their size
+# (Adaptive) or with the view's angle (Full detail); a change re-meshes the
+# open designs' shown bodies.
+target_sources(mitcad PRIVATE view/SmallCirclesPreference.cpp view/SmallCirclesPreference.hpp
+                              MainWindowDisplayMeshes.cpp)
+
 # A read of the model while a job computes it, out of an event handler
 # (mitcad#1360, GitHub mitcad/Mitcad#156, app/COMMANDS.md "Background
 # computation"): the application's notify() logs the ModelBusy and drops
@@ -2755,4 +2762,25 @@ target_sources(mitcad PRIVATE files/MainWindowLinks.cpp files/LinkedFiles.cpp fi
 if(BUILD_TESTING)
   # The refusal read from an error and the linked file's path: plain Qt Core.
   target_sources(test_app PRIVATE tests/linked_files.cpp files/LinkedFiles.cpp files/LinkedFiles.hpp)
+endif()
+
+# Ctrl (Cmd on macOS) held alone hides a feature command's preview while its
+# inputs are picked, and its release shows it again (mitcad#1421,
+# app/COMMANDS.md "Holding Ctrl hides the preview").
+target_sources(mitcad PRIVATE framework/CommandSessionHold.cpp framework/PreviewHold.cpp framework/PreviewHold.hpp)
+if(BUILD_TESTING)
+  # When a held Ctrl hides and shows it, from synthetic events: plain Qt
+  # Widgets.
+  target_sources(test_app PRIVATE tests/preview_hold.cpp framework/PreviewHold.cpp framework/PreviewHold.hpp)
+endif()
+
+# The step a dragged arrow handle rounds its value to (mitcad#1431,
+# app/COMMANDS.md "withManipulator"): the zoom's step, or a finer one from
+# the size of the geometry the handle works on; Place's click rounds by the
+# same rule.
+target_sources(mitcad PRIVATE framework/HandleStep.cpp framework/HandleStep.hpp)
+if(BUILD_TESTING)
+  # The step with a finer and a coarser scale, without one, from the value,
+  # the floor; the sizes of OCCT shapes.
+  target_sources(test_app PRIVATE tests/handle_step.cpp framework/HandleStep.cpp framework/HandleStep.hpp)
 endif()

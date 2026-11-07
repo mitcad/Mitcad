@@ -37,7 +37,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::ApiError;
-use super::annotations::{FormatEdit, Units as WordUnits, frame_words, present, value_text};
+use super::annotations::{
+    FormatEdit, ModelItem, ModelShape, Units as WordUnits, frame_words, present, value_text,
+};
 use super::drawing_tables::{PartsList, RowKey, TableEdit, row_of};
 use super::drawings::{Evaluated, Shown};
 use super::prelude::*;
@@ -50,7 +52,9 @@ use mitcad_model::kernel::{Curve3, Kernel, KernelError};
 use mitcad_model::notice::Notice;
 use mitcad_model::topo::{EdgeName, FaceName};
 use mitcad_model::transform::Transform;
-use mitcad_model::{AnnotationFormat, Document, GeometricTolerance, MeasureKind, Tolerance};
+use mitcad_model::{
+    AnnotationFormat, Document, GeometricTolerance, MeasureKind, MeasurePick, Tolerance,
+};
 use mitcad_model_drawing::annotate::{
     self, Along, AnnotationType, BodyGeometry, FlatFace, Frame, PickPoint, RoundFace, Seen,
     SheetNote, SketchItem, SketchPen, SurfaceFinish, Terminator, ViewAnnotation, ViewPick, Want,
@@ -249,14 +253,49 @@ pub(super) struct CornersQuery {
     sheet: usize,
 }
 
+/// `drawing_model_items` (mitcad#1406), the Drawing tab's Model Items: the
+/// views given of a sheet (all its views when none are) retrieve the
+/// sketch dimensions (`sketch_dimensions`) and the model's annotations
+/// (`model_annotations`) they see square on; each `true` (the default)
+/// switches its own on, `false` leaves it as it is. One undo step.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ModelItemsCommand {
+    drawing: String,
+    #[serde(default)]
+    sheet: usize,
+    #[serde(default)]
+    views: Option<Vec<u32>>,
+    #[serde(default)]
+    sketch_dimensions: Option<bool>,
+    #[serde(default)]
+    model_annotations: Option<bool>,
+}
+
+/// `keep_drawing_model_items` (mitcad#1406): the model's annotations a view
+/// draws (`names`; all of them when left out) kept as the drawing's own
+/// annotations of that view, to be moved and edited without changing the
+/// model. One undo step.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct KeepModelItemsCommand {
+    drawing: String,
+    view: u32,
+    #[serde(default)]
+    names: Option<Vec<String>>,
+}
+
 /// A sheet's annotations worked out: their groups to draw, their entries
-/// for the `drawing` query, why those that are broken are, and the sketch
-/// dimensions its views retrieved (indices into the list given).
+/// for the `drawing` query, why those that are broken are, the sketch
+/// dimensions its views retrieved (indices into the list given), and the
+/// model's annotations its views brought in (mitcad#1406: `view`, `name`,
+/// `kind`, `label`, `box`).
 pub(super) struct Annotated {
     pub(super) groups: Vec<Group>,
     pub(super) entries: Vec<Value>,
     pub(super) warnings: Vec<String>,
     pub(super) retrieved: Vec<usize>,
+    pub(super) model_items: Vec<Value>,
 }
 
 /// How a view sees a pick: in its plane, and the model point (the
@@ -1314,6 +1353,16 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
         view: &ViewAt<'_>,
         annotation: &ViewAnnotation,
     ) -> Result<Vec<Seen>, String>;
+
+    // The model's items in views (mitcad#1406).
+
+    /// `drawing_model_items`: the Drawing tab's Model Items on views of a
+    /// sheet.
+    fn drawing_model_items(&mut self, c: ModelItemsCommand) -> Result<Value, ApiError>;
+
+    /// `keep_drawing_model_items`: the model's annotations a view draws,
+    /// kept as the drawing's own annotations of the view.
+    fn keep_drawing_model_items(&mut self, c: KeepModelItemsCommand) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
@@ -2260,11 +2309,30 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             entries: Vec::new(),
             warnings: Vec::new(),
             retrieved: Vec::new(),
+            model_items: Vec::new(),
         };
         // The datum letters a frame may refer to: the model's and every
         // drawing's, as the frame dialog offers them.
         let letters = self.all_datum_letters();
         let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
+        // The model's annotations, when a view brings them in (mitcad#1406):
+        // the root's drawings only, as the sketch dimensions. Each is drawn
+        // once on the sheet, in the first view that sees it, and not where
+        // the drawing keeps it as its own.
+        let model_items =
+            if drawing.component.is_root() && sheet.views.iter().any(|v| v.model_annotations) {
+                self.model_items(words_units)
+            } else {
+                Vec::new()
+            };
+        let mut drawn_items: HashSet<String> = sheet
+            .views
+            .iter()
+            .flat_map(|v| v.annotations.iter())
+            .filter_map(|a| a.kept_from.clone())
+            .collect();
+        // The sketch dimensions retrieved, each once on the sheet too.
+        let mut drawn_dimensions: HashSet<(usize, [i64; 3])> = HashSet::new();
         // The sheet's parts lists first: its balloons take their numbers
         // (mitcad#707 phase 3).
         let mut parts_lists: Vec<(u32, Result<PartsList, String>)> = Vec::new();
@@ -2306,13 +2374,61 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     && v.placed.role != ViewRole::Pictorial
                     && !v.pictorial
                 {
-                    for (i, g) in
+                    for (key, g) in
                         self.retrieved_dimensions(v, sketches, words_units, defaults.decimals)
                     {
-                        out.groups.push(g);
-                        if !out.retrieved.contains(&i) {
-                            out.retrieved.push(i);
+                        // Drawn in a view before it on the sheet: not again
+                        // (mitcad#1406).
+                        if !drawn_dimensions.insert(key) {
+                            continue;
                         }
+                        out.groups.push(g);
+                        if !out.retrieved.contains(&key.0) {
+                            out.retrieved.push(key.0);
+                        }
+                    }
+                }
+                if view.model_annotations
+                    && drawing.component.is_root()
+                    && v.placed.role != ViewRole::Pictorial
+                    && !v.pictorial
+                {
+                    for item in &model_items {
+                        let name = &item.annotation.name;
+                        if drawn_items.contains(name) {
+                            continue;
+                        }
+                        let Some((annotation, seen)) = model_item_in_view(v, item) else {
+                            continue;
+                        };
+                        // Laid out by the drawing's engine with the model's
+                        // value and words; one it cannot lay out here is left
+                        // to the views after it.
+                        let Ok((mut laid, _, label, _)) = written(
+                            &annotation,
+                            v,
+                            &seen,
+                            item.value,
+                            None,
+                            words_units,
+                            &datums,
+                            defaults,
+                        ) else {
+                            continue;
+                        };
+                        laid.group.class = "model-annotation";
+                        // Not `A<id>`: no annotation of the drawing's.
+                        laid.group.id = Some(format!("M:{name}"));
+                        out.model_items.push(json!({
+                            "view": view.id,
+                            "name": name,
+                            "kind": item.annotation.kind.key(),
+                            "type": annotation.kind.key(),
+                            "label": label,
+                            "box": bounds_json(&laid.bounds),
+                        }));
+                        out.groups.push(laid.group);
+                        drawn_items.insert(name.clone());
                     }
                 }
             }
@@ -2561,6 +2677,305 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             .map(|p| self.resolve_found(view, p).map(|f| shown_seen(points, &f)))
             .collect()
     }
+
+    fn drawing_model_items(&mut self, c: ModelItemsCommand) -> Result<Value, ApiError> {
+        let old = self.find_drawing(&c.drawing)?.clone();
+        if old.cut_sheet.is_some() {
+            return Err(ApiError(
+                "a cut sheet's parts bring in no items of the model".to_owned(),
+            ));
+        }
+        let sheet = old
+            .sheets
+            .get(c.sheet)
+            .ok_or_else(|| ApiError(format!("{} has no sheet {}", old.name, c.sheet)))?;
+        let sketch = c.sketch_dimensions.unwrap_or(true);
+        let annotations = c.model_annotations.unwrap_or(true);
+        if !sketch && !annotations {
+            return Err(ApiError(
+                "Model Items switches on the sketch dimensions, the model's annotations or both: \
+                 neither was asked for"
+                    .to_owned(),
+            ));
+        }
+        // The views given, else all the sheet's.
+        let ids: Vec<u32> = match &c.views {
+            Some(ids) if !ids.is_empty() => {
+                if let Some(id) = ids.iter().find(|id| sheet.view_index(**id).is_none()) {
+                    return Err(ApiError(format!(
+                        "{} of {} has no view {id}",
+                        sheet.name, old.name
+                    )));
+                }
+                ids.clone()
+            }
+            _ => sheet.views.iter().map(|v| v.id).collect(),
+        };
+        if ids.is_empty() {
+            return Err(ApiError(format!(
+                "{} of {} has no views",
+                sheet.name, old.name
+            )));
+        }
+        let mut changed = old.clone();
+        let mut switched = Vec::new();
+        for view in &mut changed.sheets[c.sheet].views {
+            if !ids.contains(&view.id) {
+                continue;
+            }
+            let before = (view.retrieved_dimensions, view.model_annotations);
+            view.retrieved_dimensions |= sketch;
+            view.model_annotations |= annotations;
+            if (view.retrieved_dimensions, view.model_annotations) != before {
+                switched.push(view.id);
+            }
+        }
+        let label = format!("Model Items on {} of {}", sheet.name, old.name);
+        self.set_drawing(old.uid, label, changed)?;
+        Ok(json!({"drawing": old.uid, "views": ids, "switched": switched}))
+    }
+
+    fn keep_drawing_model_items(&mut self, c: KeepModelItemsCommand) -> Result<Value, ApiError> {
+        let old = self.find_drawing(&c.drawing)?.clone();
+        if !old.component.is_root() {
+            return Err(ApiError(
+                "only the design's drawings bring in the model's annotations".to_owned(),
+            ));
+        }
+        let (si, _) = old
+            .find_view(c.view)
+            .ok_or_else(|| ApiError(format!("{} has no view {}", old.name, c.view)))?;
+        let units = match &old.sheets[si].units {
+            Some(symbol) => Units::by_symbol(symbol)
+                .ok_or_else(|| ApiError(format!("unknown length unit “{symbol}”")))?,
+            None => Units::of(self.parameters().context().default_length_unit),
+        };
+        let evaluated = self.evaluate_views(&old, si);
+        // What the sheet draws now: the model's annotations this view
+        // brings in.
+        let drawn = self.annotate_sheet(&old, si, &evaluated, units, &[]);
+        let here: Vec<String> = drawn
+            .model_items
+            .iter()
+            .filter(|e| e["view"] == c.view)
+            .filter_map(|e| e["name"].as_str().map(str::to_owned))
+            .collect();
+        let names = match c.names {
+            Some(names) if !names.is_empty() => {
+                if let Some(name) = names.iter().find(|n| !here.contains(n)) {
+                    return Err(ApiError(format!(
+                        "view {} of {} does not draw {name}",
+                        c.view, old.name
+                    )));
+                }
+                names
+            }
+            _ if here.is_empty() => {
+                return Err(ApiError(format!(
+                    "view {} of {} draws no annotations of the model",
+                    c.view, old.name
+                )));
+            }
+            _ => here,
+        };
+        let view = self
+            .view_at(&old, si, &evaluated, c.view)
+            .map_err(ApiError)?;
+        let items = self.model_items(WordUnits::new(units.symbol, units.mm));
+        // A datum's letter once on the drawing.
+        let mut letters: Vec<String> = old
+            .sheets
+            .iter()
+            .flat_map(|s| s.views.iter())
+            .flat_map(|v| v.annotations.iter())
+            .filter_map(|a| a.letter.clone())
+            .collect();
+        let mut kept: Vec<ViewAnnotation> = Vec::new();
+        for (next, name) in (old.next_annotation_id()..).zip(names.iter()) {
+            let refused = |why: String| ApiError(format!("{name} cannot be kept: {why}"));
+            let item = items
+                .iter()
+                .find(|i| i.annotation.name == *name)
+                .ok_or_else(|| refused("the model has no such annotation".to_owned()))?;
+            let (mut annotation, _) = model_item_in_view(&view, item)
+                .ok_or_else(|| refused(format!("view {} does not see it", c.view)))?;
+            annotation.picks = kept_picks(self, &view, item).map_err(refused)?;
+            if let Some(letter) = &annotation.letter {
+                if letters.contains(letter) {
+                    return Err(refused(format!(
+                        "datum {letter} is on {} already",
+                        old.name
+                    )));
+                }
+                letters.push(letter.clone());
+            }
+            annotation.id = next;
+            annotation.kept_from = Some(name.clone());
+            annotation.check().map_err(refused)?;
+            // Drawn from its own picks from now on: they must draw it.
+            let seen = self.annotation_seen(&view, &annotation).map_err(refused)?;
+            annotate::measure(&annotation, &seen).map_err(refused)?;
+            annotate::keep_tip_along(&mut annotation, &seen);
+            kept.push(annotation);
+        }
+        let ids: Vec<u32> = kept.iter().map(|a| a.id).collect();
+        let label = match names.as_slice() {
+            [name] => format!("Keep {name} in {}", old.name),
+            _ => format!("Keep {} model annotations in {}", names.len(), old.name),
+        };
+        let mut changed = old.clone();
+        let i = changed.sheets[si].view_index(c.view).expect("found above");
+        changed.sheets[si].views[i].annotations.extend(kept);
+        self.set_drawing(old.uid, label, changed)?;
+        Ok(json!({"drawing": old.uid, "annotations": ids, "kept": names}))
+    }
+}
+
+/// The picks of the drawing's own annotation a model annotation is kept as
+/// (mitcad#1406), in the view that draws it: a length's two ends, a
+/// circle's edge or round face, an angle's two straight edges, a leader's
+/// feature at its arrow's point ([`kept_pick`]).
+fn kept_picks<K: Kernel>(
+    doc: &Document<K>,
+    view: &ViewAt<'_>,
+    item: &ModelItem,
+) -> Result<Vec<ViewPick>, String> {
+    let model = &item.annotation;
+    let second = || {
+        model
+            .b
+            .as_ref()
+            .ok_or_else(|| "it has no second pick".to_owned())
+    };
+    match item.shape {
+        ModelShape::Ends([p, q]) => Ok(vec![
+            kept_pick(doc, view, &model.a, p, true)?,
+            kept_pick(doc, view, second()?, q, true)?,
+        ]),
+        ModelShape::Circle { center, .. } => {
+            Ok(vec![kept_pick(doc, view, &model.a, center, false)?])
+        }
+        ModelShape::Arc { center, .. } => Ok(vec![
+            kept_pick(doc, view, &model.a, center, false)?,
+            kept_pick(doc, view, second()?, center, false)?,
+        ]),
+        ModelShape::Point { at, .. } => Ok(vec![kept_pick(doc, view, &model.a, at, false)?]),
+    }
+}
+
+/// A model annotation's pick as its view picks it (mitcad#1406): an edge by
+/// its name (with `point`, its end or middle at `at` where one is there),
+/// a round face by its name (its centre with `point`), a planar face at
+/// `at` on it (`on_face`, so the point stays on the face), a vertex as the
+/// end of an edge the view sees there. Construction geometry and a whole
+/// body are no picks of a view.
+fn kept_pick<K: Kernel>(
+    doc: &Document<K>,
+    view: &ViewAt<'_>,
+    pick: &MeasurePick,
+    at: Vec3,
+    point: bool,
+) -> Result<ViewPick, String> {
+    let body = pick.body.ok_or_else(|| {
+        "a construction plane, axis or point is no pick of a drawing's view".to_owned()
+    })?;
+    let s = view
+        .shown
+        .iter()
+        .find(|s| s.body == body && pick.occurrence.as_ref().is_none_or(|o| o.0 == s.path))
+        .ok_or_else(|| format!("the view does not show the body {body}"))?;
+    let base = ViewPick {
+        body,
+        occurrence: (!s.path.is_empty()).then(|| OccurrencePath(s.path.clone())),
+        edge: None,
+        face: None,
+        point: None,
+        on_face: None,
+        on_cut: None,
+    };
+    if let Some(edge) = &pick.edge {
+        let whole = ViewPick {
+            edge: Some(edge.clone()),
+            ..base
+        };
+        if point {
+            for p in [PickPoint::Start, PickPoint::End, PickPoint::Center] {
+                let one = ViewPick {
+                    point: Some(p),
+                    ..whole.clone()
+                };
+                if doc
+                    .resolve_found(view, &one)
+                    .is_ok_and(|f| mitcad_vec3::distance(f.at, at) <= KEPT_NEAR)
+                {
+                    return Ok(one);
+                }
+            }
+        }
+        doc.resolve_found(view, &whole)?;
+        return Ok(whole);
+    }
+    if let Some(face) = &pick.face {
+        let shape = doc
+            .body_shape(body)
+            .ok_or_else(|| format!("the body {} is gone", s.name))?;
+        let surface = doc
+            .kernel()
+            .face_geometry(shape, face)
+            .map_err(|_| format!("the face {face} of {} is gone", s.name))?;
+        let one = match surface {
+            SurfaceGeometry::Plane { origin, normal } => {
+                let flat = FlatFace {
+                    face: face.clone(),
+                    names: vec![face.clone()],
+                    origin,
+                    normal: mitcad_vec3::unit(normal)
+                        .ok_or_else(|| format!("the face {face} has no normal"))?,
+                };
+                let plane = world_plane(&flat, &s.transform)
+                    .ok_or_else(|| format!("the face {face} of {} has no plane", s.name))?;
+                ViewPick {
+                    face: Some(face.clone()),
+                    on_face: Some(plane.coordinates(at)),
+                    ..base
+                }
+            }
+            _ => ViewPick {
+                face: Some(face.clone()),
+                point: point.then_some(PickPoint::Center),
+                ..base
+            },
+        };
+        doc.resolve_found(view, &one)?;
+        return Ok(one);
+    }
+    if pick.vertex.is_some() {
+        let geometry = doc.body_geometry(body)?;
+        for (edge, curve) in &geometry.edges {
+            let (start, end) = ends(&placed_curve(curve, &s.transform));
+            for (p, q) in [(PickPoint::Start, start), (PickPoint::End, end)] {
+                if mitcad_vec3::distance(q, at) > KEPT_NEAR {
+                    continue;
+                }
+                let one = ViewPick {
+                    edge: Some(edge.clone()),
+                    point: Some(p),
+                    ..base.clone()
+                };
+                if doc.resolve_found(view, &one).is_ok() {
+                    return Ok(one);
+                }
+            }
+        }
+        return Err(format!(
+            "no edge of {} that the view sees ends at its vertex",
+            s.name
+        ));
+    }
+    Err(format!(
+        "a whole body is no pick of a drawing's view: {}",
+        s.name
+    ))
 }
 
 /// The direction a new dimension of these picks measures along (as
@@ -2701,7 +3116,7 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// sketches that shape its bodies, those it sees square on, where it
     /// shows them (behind a section's plane, in a detail's circle, beside
     /// breaks); written by #702's engine. Each with its index in
-    /// `sketches`.
+    /// `sketches` and where it is placed (`retrieved_key`).
     ///
     /// A sketch's dimensions are in its component's coordinates: each
     /// placement of its shaped bodies the view shows (one per occurrence
@@ -2713,7 +3128,7 @@ trait DrawingAnnotationsLocal<K: Kernel> {
         sketches: &[(FeatureUid, SketchDimension)],
         units: WordUnits,
         decimals: Option<u8>,
-    ) -> Vec<(usize, Group)>;
+    ) -> Vec<((usize, [i64; 3]), Group)>;
 
     /// An annotation laid out on its view: its group and box, its value,
     /// its words on one line and a warning of its words (a fit code out of
@@ -3729,14 +4144,14 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         sketches: &[(FeatureUid, SketchDimension)],
         units: WordUnits,
         decimals: Option<u8>,
-    ) -> Vec<(usize, Group)> {
+    ) -> Vec<((usize, [i64; 3]), Group)> {
         let placements = self.sketch_placements(ComponentUid::ROOT, &view.shown);
         let mut out = Vec::new();
         for (i, (sketch, dim)) in sketches.iter().enumerate() {
             for (_, transform) in placements.iter().filter(|(f, _)| f == sketch) {
                 let placed = placed_dimension(dim, transform);
                 if let Some(g) = retrieved_dimension(view, &placed, units, decimals) {
-                    out.push((i, g));
+                    out.push((retrieved_key(i, &placed), g));
                 }
             }
         }
@@ -3771,62 +4186,9 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         if points && annotation.kind == AnnotationType::Linear && found.len() == 2 {
             value = Some(mitcad_vec3::distance(found[0].at, found[1].at));
         }
-        // The drawing's decimals where it has none of its own (mitcad#729).
-        let mut format = annotation.format.clone();
-        if format.decimals.is_none() {
-            format.decimals = defaults.decimals;
-        }
-        let (words, mut warning) = match (value, number) {
-            (Some(v), _) => {
-                let (words, warning) = value_text(
-                    annotation.kind.measure_kind(),
-                    &format,
-                    annotation.tolerance.as_ref(),
-                    v,
-                    units,
-                );
-                (Some(words), warning)
-            }
-            (None, Some(n)) => (
-                Some(annotate::ValueText {
-                    text: n.to_owned(),
-                    main: n.to_owned(),
-                    ..annotate::ValueText::default()
-                }),
-                None,
-            ),
-            (None, None) => (None, None),
-        };
-        let (cells, text) = match (&annotation.frame, annotation.kind) {
-            (Some(frame), AnnotationType::Frame) => {
-                let (cells, text, frame_warning) = frame_words(frame, units, datums);
-                warning = warning.or(frame_warning);
-                (cells, text)
-            }
-            _ => (
-                Vec::new(),
-                match annotation.kind {
-                    AnnotationType::Note => annotation
-                        .text
-                        .as_deref()
-                        .unwrap_or("")
-                        .lines()
-                        .map(str::trim_end)
-                        .collect::<Vec<_>>()
-                        .join(" / "),
-                    AnnotationType::Datum => annotation.letter.clone().unwrap_or_default(),
-                    AnnotationType::Finish => annotation
-                        .finish
-                        .as_ref()
-                        .and_then(|f| f.text.clone())
-                        .unwrap_or_default(),
-                    _ => words.as_ref().map(|w| w.text.clone()).unwrap_or_default(),
-                },
-            ),
-        };
-        let frame = view.frame_with(defaults.text(annotation.height));
-        let laid = annotate::lay_out(annotation, &seen, &frame, words.as_ref(), &cells)?;
-        Ok((laid, value, text, warning))
+        written(
+            annotation, view, &seen, value, number, units, datums, defaults,
+        )
     }
 
     fn lay_out_hole_table(
@@ -4177,4 +4539,230 @@ pub(super) fn bounds_json(b: &Bounds) -> Value {
     } else {
         json!([b.min, b.max])
     }
+}
+
+/// An annotation laid out on its view from what the view sees of its picks
+/// and its value (measured on the view, a model annotation's own,
+/// mitcad#1406, or a balloon's `number`): its words with the drawing's
+/// decimals where it has none of its own (mitcad#729), a frame's cells,
+/// the group, its words on one line and a warning of its words.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn written(
+    annotation: &ViewAnnotation,
+    view: &ViewAt<'_>,
+    seen: &[Seen],
+    value: Option<f64>,
+    number: Option<&str>,
+    units: WordUnits,
+    datums: &[&str],
+    defaults: &DrawingDefaults,
+) -> Result<(annotate::Laid, Option<f64>, String, Option<String>), String> {
+    let mut format = annotation.format.clone();
+    if format.decimals.is_none() {
+        format.decimals = defaults.decimals;
+    }
+    let (words, mut warning) = match (value, number) {
+        (Some(v), _) => {
+            let (words, warning) = value_text(
+                annotation.kind.measure_kind(),
+                &format,
+                annotation.tolerance.as_ref(),
+                v,
+                units,
+            );
+            (Some(words), warning)
+        }
+        (None, Some(n)) => (
+            Some(annotate::ValueText {
+                text: n.to_owned(),
+                main: n.to_owned(),
+                ..annotate::ValueText::default()
+            }),
+            None,
+        ),
+        (None, None) => (None, None),
+    };
+    let (cells, text) = match (&annotation.frame, annotation.kind) {
+        (Some(frame), AnnotationType::Frame) => {
+            let (cells, text, frame_warning) = frame_words(frame, units, datums);
+            warning = warning.or(frame_warning);
+            (cells, text)
+        }
+        _ => (
+            Vec::new(),
+            match annotation.kind {
+                AnnotationType::Note => annotation
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .lines()
+                    .map(str::trim_end)
+                    .collect::<Vec<_>>()
+                    .join(" / "),
+                AnnotationType::Datum => annotation.letter.clone().unwrap_or_default(),
+                AnnotationType::Finish => annotation
+                    .finish
+                    .as_ref()
+                    .and_then(|f| f.text.clone())
+                    .unwrap_or_default(),
+                _ => words.as_ref().map(|w| w.text.clone()).unwrap_or_default(),
+            },
+        ),
+    };
+    let frame = view.frame_with(defaults.text(annotation.height));
+    let laid = annotate::lay_out(annotation, seen, &frame, words.as_ref(), &cells)?;
+    Ok((laid, value, text, warning))
+}
+
+/// How far apart (model mm) a model annotation's point and a pick of its
+/// view may be and still be one point, when the annotation is kept as the
+/// drawing's own (mitcad#1406).
+const KEPT_NEAR: f64 = 1e-6;
+
+/// A model annotation as a view brings it in (mitcad#1406): the view's
+/// annotation of its type that draws it (a length a linear dimension,
+/// horizontal, vertical or aligned as its ends lie in the view; a radius,
+/// a diameter and an angle their own; a datum label, a feature control
+/// frame and the other leaders, a hole callout among them, notes of the
+/// model's words) and what the view sees of it. None where the view does
+/// not show the bodies it is on (an annotation of construction geometry
+/// alone has none), does not see its plane square on (a hole callout's
+/// hole end on), or does not see where it is (behind a section's plane,
+/// outside a detail's circle, in a break).
+fn model_item_in_view(view: &ViewAt<'_>, item: &ModelItem) -> Option<(ViewAnnotation, Vec<Seen>)> {
+    let model = &item.annotation;
+    let shows = |pick: &MeasurePick| {
+        pick.body.is_none_or(|body| {
+            view.shown
+                .iter()
+                .any(|s| s.body == body && pick.occurrence.as_ref().is_none_or(|o| o.0 == s.path))
+        })
+    };
+    if !model.picks().any(|p| p.body.is_some()) || !model.picks().all(shows) {
+        return None;
+    }
+    let spec = &view.placed.spec;
+    let square = |n: Vec3| mitcad_vec3::dot(spec.toward_eye, n).abs() > 1.0 - 1e-9;
+    let seen_at = |p: Vec3| {
+        let q = spec.project(p);
+        (view.kept(p) && view.sees(q)).then_some(q)
+    };
+    let mut annotation = ViewAnnotation::new(0, AnnotationType::Note, Vec::new());
+    let seen = match item.shape {
+        ModelShape::Ends([p, q]) => {
+            if !square(item.normal) {
+                return None;
+            }
+            let (a, b) = (seen_at(p)?, seen_at(q)?);
+            if (b[0] - a[0]).hypot(b[1] - a[1]) < 1e-9 {
+                return None;
+            }
+            annotation.kind = AnnotationType::Linear;
+            // Along the direction its dimension line runs in the model, as
+            // the view sees it: level, plumb or neither.
+            let o = spec.project(p);
+            let t = spec.project(mitcad_vec3::add_scaled(p, item.x, 1.0));
+            let d = mitcad_vec3::vec2::unit([t[0] - o[0], t[1] - o[1]])
+                .unwrap_or([b[0] - a[0], b[1] - a[1]]);
+            annotation.along = Some(if d[1].abs() <= 1e-6 * d[0].hypot(d[1]) {
+                Along::Horizontal
+            } else if d[0].abs() <= 1e-6 * d[0].hypot(d[1]) {
+                Along::Vertical
+            } else {
+                Along::Aligned
+            });
+            vec![Seen::Point(a), Seen::Point(b)]
+        }
+        ModelShape::Circle {
+            center,
+            axis,
+            radius,
+        } => {
+            if !square(item.normal) {
+                return None;
+            }
+            let c = seen_at(center)?;
+            annotation.kind = if model.kind == MeasureKind::Radius {
+                AnnotationType::Radius
+            } else {
+                AnnotationType::Diameter
+            };
+            if square(axis) {
+                vec![Seen::Circle {
+                    center: c,
+                    radius,
+                    end_on: true,
+                    across: [1.0, 0.0],
+                    arc: None,
+                }]
+            } else {
+                // Seen from the side: across its axis as the view sees it.
+                let tip = spec.project(mitcad_vec3::add_scaled(center, axis, 1.0));
+                let along = mitcad_vec3::vec2::unit([tip[0] - c[0], tip[1] - c[1]])?;
+                vec![Seen::Circle {
+                    center: c,
+                    radius,
+                    end_on: false,
+                    across: [-along[1], along[0]],
+                    arc: None,
+                }]
+            }
+        }
+        ModelShape::Arc { center, from, to } => {
+            if !square(item.normal) {
+                return None;
+            }
+            let c = seen_at(center)?;
+            // Its rays as straight edges from its corner.
+            let ray = |d: Vec3| spec.project(mitcad_vec3::add_scaled(center, d, 10.0));
+            annotation.kind = AnnotationType::Angle;
+            vec![Seen::Line(c, ray(from)), Seen::Line(c, ray(to))]
+        }
+        ModelShape::Point { at, axis } => {
+            let facing = match axis {
+                Some(axis) => square(axis),
+                None => square(item.normal),
+            };
+            if !facing {
+                return None;
+            }
+            let p = seen_at(at)?;
+            match model.kind {
+                MeasureKind::Datum => {
+                    annotation.kind = AnnotationType::Datum;
+                    annotation.letter = model.letter.clone();
+                }
+                MeasureKind::Frame => {
+                    annotation.kind = AnnotationType::Frame;
+                    annotation.frame = model.frame.clone();
+                }
+                _ => {
+                    let text = item.lines.join("\n");
+                    if text.trim().is_empty() {
+                        return None;
+                    }
+                    annotation.text = Some(text);
+                }
+            }
+            annotation.at = Some(p);
+            vec![Seen::Point(p)]
+        }
+    };
+    if annotation.kind.is_dimension() {
+        annotation.format = model.format.clone();
+        annotation.tolerance = model.tolerance.clone();
+    }
+    Some((annotation, seen))
+}
+
+/// A dimension retrieved from a sketch, told apart from the others on a
+/// sheet (mitcad#1406: each drawn in one view): its sketch dimension's
+/// index and where a placement puts its first point, to a micrometre's
+/// thousandth.
+fn retrieved_key(i: usize, dim: &SketchDimension) -> (usize, [i64; 3]) {
+    let p = match dim {
+        SketchDimension::Linear { a, .. } => *a,
+        SketchDimension::Radial { center, .. } => *center,
+    };
+    (i, p.map(|v| (v * 1e6).round() as i64))
 }

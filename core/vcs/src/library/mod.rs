@@ -10,8 +10,9 @@
 //! server is needed.
 //!
 //! - **Cache** ([`LibraryCache`]): bare clones in the user's data folder
-//!   (`MITCAD_LIBRARIES_DIR`), one per URL, made and updated with the
-//!   system's git only when the user asks (`library_fetch`); git's
+//!   (`MITCAD_LIBRARIES_DIR`), one per repository ([`sources`]), made and
+//!   updated with the system's git only when the user asks
+//!   (`library_fetch`); git's
 //!   automatic garbage collection is off there, so versions designs were
 //!   made with stay readable after a library's history moved on.
 //! - **Versions** ([`LibraryRepo::versions`]): the tags, newest first by
@@ -40,7 +41,12 @@ pub mod manifest;
 // Mount frames of any part (mitcad#525).
 pub mod mounts;
 mod publish;
+// Which clones the pickers read: one per repository, removed sources'
+// left out (mitcad#1436).
+pub mod sources;
+pub use sources::{ClonesRead, repository_key};
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -463,10 +469,81 @@ impl LibraryRepo {
     }
 }
 
-/// Orders tags as versions: `v1.10.0` after `v1.9.0`; tags without numbers
-/// by name.
-fn version_order(a: &str, b: &str) -> std::cmp::Ordering {
-    mitcad_model::configurations::natural_cmp(a, b)
+/// A part of a version label: a run of digits (its value, without leading
+/// zeros) or a run of other characters (in lower case).
+enum VersionPart {
+    Number(String),
+    Text(String),
+}
+
+/// The parts of a version label, a leading `v` before a digit left out
+/// (`v2.10.0` and `2.10.0` are one version): `2`, `.`, `10`, `.`, `0`.
+fn version_parts(label: &str) -> Vec<VersionPart> {
+    let label = label.trim();
+    let label = match label.strip_prefix(['v', 'V']) {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest,
+        _ => label,
+    };
+    let mut parts = Vec::new();
+    let mut run = String::new();
+    let mut digits = false;
+    for c in label.chars() {
+        if c.is_ascii_digit() != digits && !run.is_empty() {
+            parts.push(version_part(std::mem::take(&mut run), digits));
+        }
+        digits = c.is_ascii_digit();
+        run.push(c);
+    }
+    if !run.is_empty() {
+        parts.push(version_part(run, digits));
+    }
+    parts
+}
+
+fn version_part(run: String, digits: bool) -> VersionPart {
+    if digits {
+        let value = run.trim_start_matches('0');
+        let value = if value.is_empty() { "0" } else { value };
+        VersionPart::Number(value.to_owned())
+    } else {
+        VersionPart::Text(run.to_lowercase())
+    }
+}
+
+/// Orders tags as versions (mitcad#1423): their numbers part by part as
+/// whole numbers, so `v2.10.0` comes after `v2.9.0` and `v1.10.0` after
+/// `v1.9.0`; a pre-release (`v2.0.0-rc1`) before its release; tags without
+/// numbers by name. (The natural order of sizes took `2.10.0` for one
+/// text, after `2.9.0`, and so listed v2.9.0 as the newest version.)
+pub(crate) fn version_order(a: &str, b: &str) -> Ordering {
+    let (x, y) = (version_parts(a), version_parts(b));
+    for (p, q) in x.iter().zip(&y) {
+        let order = match (p, q) {
+            // Without leading zeros the longer number is the larger one;
+            // no number is too long to compare.
+            (VersionPart::Number(p), VersionPart::Number(q)) => {
+                p.len().cmp(&q.len()).then_with(|| p.cmp(q))
+            }
+            (VersionPart::Number(_), VersionPart::Text(_)) => Ordering::Less,
+            (VersionPart::Text(_), VersionPart::Number(_)) => Ordering::Greater,
+            (VersionPart::Text(p), VersionPart::Text(q)) => p.cmp(q),
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+    // One is the other with more parts: a pre-release (`-rc1`, `~beta`)
+    // comes before it, a further number (`.1`) after it.
+    let pre_release = |parts: &[VersionPart]| {
+        matches!(parts.get(x.len().min(y.len())),
+            Some(VersionPart::Text(text)) if text.starts_with(['-', '~']))
+    };
+    match x.len().cmp(&y.len()) {
+        Ordering::Less if pre_release(y.as_slice()) => Ordering::Greater,
+        Ordering::Greater if pre_release(x.as_slice()) => Ordering::Less,
+        Ordering::Equal => a.cmp(b),
+        longer => longer,
+    }
 }
 
 /// The libraries the user fetched: bare clones in a folder of the user's
@@ -691,10 +768,21 @@ impl LibraryCache {
             return LibraryRepo::open(&dir).ok();
         }
         let wanted = normal_url(&url);
-        self.repos().into_iter().find_map(|dir| {
-            let repo = LibraryRepo::open(&dir).ok()?;
-            (repo.url().map(|u| normal_url(&u)) == Some(wanted.clone())).then_some(repo)
-        })
+        self.repos()
+            .into_iter()
+            .find_map(|dir| {
+                let repo = LibraryRepo::open(&dir).ok()?;
+                (repo.url().map(|u| normal_url(&u)) == Some(wanted.clone())).then_some(repo)
+            })
+            .or_else(|| {
+                // Another form of the same repository's URL (mitcad#1436):
+                // `www.`, `.git`, a trailing slash, the host's case.
+                let key = repository_key(&url);
+                self.repos().into_iter().find_map(|dir| {
+                    let repo = LibraryRepo::open(&dir).ok()?;
+                    (repo.url().map(|u| repository_key(&u)) == Some(key.clone())).then_some(repo)
+                })
+            })
     }
 
     /// A clone with library `id` (at its HEAD), when `url` was not fetched
@@ -780,7 +868,20 @@ impl LibraryCache {
         let way = options.way(&url)?;
         fs::create_dir_all(&self.root)
             .map_err(|e| crate::io_error("make the folder", &self.root, e))?;
-        let dir = self.dir_for(&url);
+        let mut dir = self.dir_for(&url);
+        // Another form of a URL already cloned (mitcad#1436:
+        // https://www.github.com/mitcad/parts.git after
+        // https://github.com/mitcad/parts.git) updates that clone: one
+        // repository, one clone.
+        if !dir.is_dir()
+            && let Some(same) = self.clone_of_repository(&url)
+        {
+            log.push(format!(
+                "{shown}: the same repository as the clone {}, which is updated",
+                same.display()
+            ));
+            dir = same;
+        }
         let cloned = !dir.is_dir();
         if cloned {
             let temporary = self.root.join(format!(
@@ -844,6 +945,13 @@ impl LibraryCache {
             fs::rename(&temporary, &dir).map_err(|e| crate::io_error("rename", &temporary, e))?;
         } else {
             self.update_clone(&dir, &url, &way, control, log)?;
+        }
+        // Fetched again: the pickers read it again (a removed source's
+        // mark off, mitcad#1436).
+        let mark = dir.join(sources::REMOVED_MARK);
+        if mark.is_file() {
+            fs::remove_file(&mark).map_err(|e| crate::io_error("remove", &mark, e))?;
+            log.push(format!("{shown}: listed in the pickers again"));
         }
         let repo = LibraryRepo::open(&dir)?;
         let head = repo.head()?;

@@ -39,6 +39,7 @@ void CommandSession::valueFocused(const QString& key, bool focused) {
   if (!slot || slot->def->type != InputDef::Type::Value) {
     return;
   }
+  m_valueTyped = false; // nothing typed in the field with the keyboard now (mitcad#1421)
   if (focused) {
     m_valueKeyboard = true;
     const bool onOpen = std::exchange(m_openFocusPending, false);

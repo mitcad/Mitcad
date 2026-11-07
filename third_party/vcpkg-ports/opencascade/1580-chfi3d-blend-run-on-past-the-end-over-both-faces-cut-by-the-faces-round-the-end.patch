@@ -1,0 +1,445 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose chain ends past a concave corner of its wall,
+where its contact on the wall has gone on round the corner and leaves it
+past the spine's end vertex, after its contact on the top has left the top
+across a crease into the face at the end: the blend runs on over both
+faces' surfaces and the faces at the end cut it (mitcad#1425).
+
+The case: a bar's front wall turns through a concave corner rounded with 3
+(a cylinder about the vertical) into the side of a tip whose top edge is
+rounded with 4, a rounding that goes on round the corner up to the wall
+as a corner patch tangent to the wall. The bar's top slopes by 2.2
+degrees to the tip's and meets it along a crease. The wall's top edge and
+the corner patch's edge with the bar's top are rounded with 5, the chain
+ending at the crease. The ball's contact on the wall goes on round the
+corner's cylinder below the corner patch; its contact on the top crosses
+the crease 0.7 before the vertex at the end; its contact on the cylinder
+reaches the cylinder's edge with the tip's side (tangent to it) 3 past
+the vertex. The walk then went on along the tip's side, the other contact
+standing on the crease, and the corner at the vertex failed: the walk
+round the vertex followed the cylinder's boundary, which does not reach
+the vertex ("the max number of faces reached"). The stored body runs the
+ball on over the cylinder's and the top's surfaces and cuts the blend
+with the faces it runs into: the tip's top beyond the crease, the corner
+patch (leaving a sliver of it), the tip's rounding of 4 and the tip's
+side.
+
+- ComputeData: where, on the walk on past the spine's end, a contact
+  reaches an edge of its face into a face that goes on from it
+  (SearchFace), neither face holding the spine's end vertex (the contact
+  has run off the spine's faces), more than 10 tolesp past the spine's
+  end, after the other contact left its face into a face at the end (the
+  walk ran it on unclassified), that contact ends on its edge too and the
+  walk goes on with both sides unclassified: the end is the blend's, for
+  the corner to cut. Where the contact's face holds the vertex, it meets
+  the face at the end there and 1430's roll on the other contact's edge
+  (ChFi3d_WalkedOnPastEndEdge) builds the end, as before.
+- ChFi3d_CutRunOnExtension (new; ChFi3d_CutSingularExtension leaves such
+  an end): the line is kept past the later contact's edge while its
+  contacts run at most eight times as fast along the guide as at the
+  spine's end, measured along the guide's length. The guide's extension
+  past the first end was not parametrised by length (its derivative grew
+  from 1 to 4), and the walk round the corner runs into the singular
+  section where the guide's normal plane comes tangent to the ball centre's
+  curve: twice as fast per unit of the guide's parameter cut the bottom
+  chain's line short of its contact's edge.
+- PerformIntersectionAtEnd: where F1, the face of side 1's contact, does
+  not hold the end vertex, the walk along F1's boundary from that
+  contact's edge stops at the first face that holds the vertex (the corner
+  patch, after the tip's rounding of 4, found between the faces at the
+  corner's top vertex as before), and the faces at the end go on round
+  the vertex from there up to the face beyond side 2's edge
+  (RoundVertexToEdge): the tip's side, its rounding of 4, the corner patch
+  and the tip's top.
+
+On the design's stored body before the item, with 1581, both chains: valid
+and closed, the stored body's 127 faces; about each end the result on the
+stored body and the stored body on it within 0.0007 mm, along each chain
+within 0.0036 mm (the torus's vanishing ends, fitted in the file); the
+change of volume -200.2687 against the file's -200.2866 mm3. Before, the
+corners at both ends failed.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+index 00aaba99..1b475596 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+@@ -852,7 +852,8 @@ static bool ChFi3d_RegularUpToArc(const occ::handle<BRepBlend_Line>& Lin,
+ //=======================================================================
+ 
+ static int ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+-                                       const occ::handle<ChFiDS_Spine>& Spine)
++                                       const occ::handle<ChFiDS_Spine>& Spine,
++                                       const int                        theSkip = 0)
+ {
+   int aCut = 0;
+   if (Lin.IsNull() || Spine.IsNull() || Spine->IsPeriodic() || Lin->NbPoints() < 4)
+@@ -870,7 +871,7 @@ static int ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+   {
+     i0 = i;
+   }
+-  if (i0 >= 2 && i0 < nb && !Lin->Point(i0).IsTangencyPoint()
++  if ((theSkip & 2) == 0 && i0 >= 2 && i0 < nb && !Lin->Point(i0).IsTangencyPoint()
+       && !ChFi3d_RegularUpToArc(Lin, Spine, true))
+   {
+     const double v0 = ChFi3d_ContactSpeed(Lin->Point(i0));
+@@ -895,7 +896,7 @@ static int ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+   {
+     i0 = i;
+   }
+-  if (i0 > 1 && i0 <= nb - 1 && !Lin->Point(i0).IsTangencyPoint()
++  if ((theSkip & 1) == 0 && i0 > 1 && i0 <= nb - 1 && !Lin->Point(i0).IsTangencyPoint()
+       && !ChFi3d_RegularUpToArc(Lin, Spine, false))
+   {
+     const double v0 = ChFi3d_ContactSpeed(Lin->Point(i0));
+@@ -916,6 +917,88 @@ static int ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+   return aCut;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_CutRunOnExtension
++// purpose  : ChFi3d_CutSingularExtension for an end whose blend ran on
++//            past both contacts' edges (mitcad#1425): the faces at the end
++//            cut it beyond those edges, up to where the blend leaves the
++//            body, which may lie close to the singular section. The line
++//            is kept past the last of the edges (theKeep) while its
++//            contacts run at most eight times as fast along the guide as at
++//            the spine's end, measured along the guide's own length (its
++//            extension past the spine need not be parametrised by length:
++//            twice as fast per unit of its parameter stopped the walk round
++//            the reported corner a third of the way to its end). Returns
++//            true where it was cut.
++//=======================================================================
++
++static bool ChFi3d_CutRunOnExtension(occ::handle<BRepBlend_Line>&       Lin,
++                                     const occ::handle<ChFiDS_Spine>&   Spine,
++                                     const occ::handle<ChFiDS_ElSpine>& HGuide,
++                                     const bool                         atEnd,
++                                     const double                       theKeep)
++{
++  if (Lin.IsNull() || Spine.IsNull() || HGuide.IsNull() || Spine->IsPeriodic() || Lin->NbPoints() < 4)
++  {
++    return false;
++  }
++  const auto aSpeed = [&](const Blend_Point& P) {
++    gp_Pnt       aG;
++    gp_Vec       aT;
++    HGuide->D1(P.Parameter(), aG, aT);
++    const double aV = ChFi3d_ContactSpeed(P);
++    return aV >= RealLast() || aT.Magnitude() <= gp::Resolution() ? RealLast() : aV / aT.Magnitude();
++  };
++  const int    nb  = Lin->NbPoints();
++  const double SpF = Spine->FirstParameter(1);
++  const double SpL = Spine->LastParameter(Spine->NbEdges());
++  int          i0  = 0;
++  if (atEnd)
++  {
++    for (int i = 1; i <= nb && Lin->Point(i).Parameter() <= SpL; i++)
++    {
++      i0 = i;
++    }
++  }
++  else
++  {
++    for (int i = nb; i >= 1 && Lin->Point(i).Parameter() >= SpF; i--)
++    {
++      i0 = i;
++    }
++  }
++  if (i0 == 0 || (atEnd ? i0 >= nb : i0 <= 1))
++  {
++    return false;
++  }
++  const double v0 = aSpeed(Lin->Point(i0));
++  if (v0 >= RealLast())
++  {
++    return false;
++  }
++  const int step = atEnd ? 1 : -1;
++  for (int i = i0 + step; i >= 1 && i <= nb; i += step)
++  {
++    const double w = Lin->Point(i).Parameter();
++    if ((atEnd ? w <= theKeep : w >= theKeep) || aSpeed(Lin->Point(i)) <= 8. * v0)
++    {
++      continue;
++    }
++    if (atEnd)
++    {
++      Lin->Remove(i, nb);
++      UpdateLine(Lin, false);
++    }
++    else
++    {
++      Lin->Remove(1, i);
++      UpdateLine(Lin, true);
++    }
++    return true;
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : ChFi3d_EndBeforeVanishing
+ // purpose  : A rounding of constant radius vanishing at an end of its
+@@ -2853,6 +2936,50 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+                                     myVEMap,
+                                     myEFMap);
+   };
++  // A contact that reaches an edge past the spine's end, into a face that
++  // goes on from its own, neither of them holding the end vertex (the
++  // contact has run off the spine's faces), after the other contact left
++  // its face into a face at that end and the walk ran it on over its face's
++  // surface (mitcad#1425): the blend past the end is the ball rolling on
++  // over both faces' surfaces, its end cut by the faces at the end
++  // (PerformIntersectionAtEnd), and that contact ends on its edge. (Where
++  // its face holds the vertex, the face at the end and that face meet
++  // there, and the ball rolls on the other contact's edge instead,
++  // ChFi3d_WalkedOnPastEndEdge.)
++  const auto aRunsOnPastEnd = [&](const TopoDS_Face&        theFace,
++                                  const TopoDS_Face&        theNext,
++                                  const ChFiDS_CommonPoint& theCP,
++                                  const double              theW,
++                                  const bool                theAtStart) {
++    const TopoDS_Vertex& aV = theAtStart ? aVFirst : aVLast;
++    if (Spine.IsNull() || Spine->IsPeriodic() || theFace.IsNull() || theNext.IsNull() || aV.IsNull()
++        || !theCP.IsOnArc() || theCP.IsVertex() || !myVFMap.Contains(aV))
++    {
++      return false;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator itF(myVFMap(aV)); itF.More(); itF.Next())
++    {
++      if (itF.Value().IsSame(theNext) || itF.Value().IsSame(theFace))
++      {
++        return false;
++      }
++    }
++    const double aWEnd = theAtStart ? Spine->FirstParameter(1) : Spine->LastParameter(Spine->NbEdges());
++    return theAtStart ? theW < aWEnd - 10. * tolesp : theW > aWEnd + 10. * tolesp;
++  };
++  // (The ends so run on, and the crossings the line is kept past.)
++  bool   aRanOn[2]     = {false, false};
++  double aRanOnKeep[2] = {0., 0.};
++  // (The walk on from there, both sides unclassified.)
++  const auto aRunOn = [&](const double theTarget) {
++    TheWalk.ClassificationOnS1(false);
++    TheWalk.ClassificationOnS2(false);
++    TheWalk.Check2d(true);
++    TheWalk.Continu(Func, FInv, theTarget);
++    TheWalk.ClassificationOnS1(true);
++    TheWalk.ClassificationOnS2(true);
++    TheWalk.Check2d(false);
++  };
+   // (At an end of a spine walked again for it, a contact that left its
+   // face across a convex edge into a face at that end rolls on that edge:
+   // PerformSetOfSurf.)
+@@ -2978,6 +3105,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+ 
+     if (oncontinue)
+     {
++      const bool aWasArc1 = debarc1, aWasArc2 = debarc2;
+       TheWalk.ClassificationOnS1(!debarc1);
+       TheWalk.ClassificationOnS2(!debarc2);
+       TheWalk.Check2d(true); // It should be strict (PMN)
+@@ -3063,6 +3191,29 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+           }
+         }
+       }
++      // (mitcad#1425: a contact past the spine's end into a face beyond.)
++      for (int s = 1; s <= 2; s++)
++      {
++        bool&      aCas   = s == 1 ? debcas1 : debcas2;
++        const bool anArc  = s == 1 ? debarc1 : debarc2;
++        const bool aWas   = s == 1 ? aWasArc1 : aWasArc2;
++        const bool anOCas = s == 1 ? debcas2 : debcas1;
++        const bool anOWas = s == 1 ? aWasArc2 : aWasArc1;
++        if (!anArc || aWas || aCas || !anOCas || !anOWas)
++        {
++          continue;
++        }
++        const ChFiDS_CommonPoint& aCP = s == 1 ? Data->VertexFirstOnS1() : Data->VertexFirstOnS2();
++        const double aW = (s == 1 ? Lin->StartPointOnFirst() : Lin->StartPointOnSecond()).ParameterOnGuide();
++        if (aRunsOnPastEnd(s == 1 ? F1 : F2, bif, aCP, aW, true))
++        {
++          aCas         = true;
++          aRanOn[0]    = true;
++          aRanOnKeep[0] = aW;
++          aRunOn(Target);
++          break;
++        }
++      }
+       if (backwContinueFailed)
+       {
+         // if we leave backwContinueFailed as is, we will stop in this direction
+@@ -3178,6 +3329,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+ 
+     if (oncontinue)
+     {
++      const bool aWasArc1 = finarc1, aWasArc2 = finarc2;
+       TheWalk.ClassificationOnS1(!finarc1);
+       TheWalk.ClassificationOnS2(!finarc2);
+       TheWalk.Check2d(true); // It should be strict (PMN)
+@@ -3253,6 +3405,29 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+           }
+         }
+       }
++      // (mitcad#1425: a contact past the spine's end into a face beyond.)
++      for (int s = 1; s <= 2; s++)
++      {
++        bool&      aCas   = s == 1 ? fincas1 : fincas2;
++        const bool anArc  = s == 1 ? finarc1 : finarc2;
++        const bool aWas   = s == 1 ? aWasArc1 : aWasArc2;
++        const bool anOCas = s == 1 ? fincas2 : fincas1;
++        const bool anOWas = s == 1 ? aWasArc2 : aWasArc1;
++        if (!anArc || aWas || aCas || !anOCas || !anOWas)
++        {
++          continue;
++        }
++        const ChFiDS_CommonPoint& aCP = s == 1 ? Data->VertexLastOnS1() : Data->VertexLastOnS2();
++        const double aW = (s == 1 ? Lin->EndPointOnFirst() : Lin->EndPointOnSecond()).ParameterOnGuide();
++        if (aRunsOnPastEnd(s == 1 ? F1 : F2, bif, aCP, aW, false))
++        {
++          aCas         = true;
++          aRanOn[1]    = true;
++          aRanOnKeep[1] = aW;
++          aRunOn(Target);
++          break;
++        }
++      }
+       if (forwContinueFailed)
+       {
+         // if we leave forwContinueFailed as is, we will stop in this direction
+@@ -3267,7 +3442,14 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+       //  modified by eap Fri Feb  8 11:45:10 2002 ___END___
+     }
+   }
+-  const int aCutEnds = ChFi3d_CutSingularExtension(Lin, Spine); // (the ends cut)
++  int aCutEnds = ChFi3d_CutSingularExtension(Lin, Spine, (aRanOn[0] ? 1 : 0) | (aRanOn[1] ? 2 : 0)); // (the ends cut)
++  for (int k = 0; k < 2; k++)
++  {
++    if (aRanOn[k] && ChFi3d_CutRunOnExtension(Lin, Spine, HGuide, k == 1, aRanOnKeep[k]))
++    {
++      aCutEnds |= k == 1 ? 2 : 1;
++    }
++  }
+   {
+     // (An end replaced at a vanishing end: no longer on the arcs found.)
+     const int aTidied = ChFi3d_EndBeforeVanishing(Lin, Spine, Data, Func, tolapp3d);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 510fd893..1c76e91f 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -10616,6 +10616,83 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+     Face[nbCur]  = aTarget;
+     Vedge[nbCur] = aV;
+   };
++  // From a face Face[nbCur - 1] at the vertex (not F2), the faces round
++  // the vertex up to the one beyond side 2's edge (CV2's arc, an edge of F2
++  // at the vertex), each after the edge it shares with the face before it
++  // (mitcad#1425). False where the face is not at the vertex or the round
++  // does not get there.
++  const auto RoundVertexToEdge = [&](int& nbCur) {
++    if (!CV2.IsOnArc() || nbCur < 1)
++    {
++      return false;
++    }
++    const TopoDS_Edge& anEnd = TopoDS::Edge(CV2.Arc());
++    const auto         atVtx = [&](const TopoDS_Shape& theS) {
++      for (TopExp_Explorer exV(theS, TopAbs_VERTEX); exV.More(); exV.Next())
++      {
++        if (exV.Current().IsSame(Vtx))
++        {
++          return true;
++        }
++      }
++      return false;
++    };
++    TopoDS_Face aCur  = Face[nbCur - 1];
++    TopoDS_Edge aPrev = Edge[nbCur - 1];
++    if (aCur.IsSame(F2) || !atVtx(aCur) || !myEFMap.Contains(anEnd))
++    {
++      return false;
++    }
++    int nbNew = nbCur;
++    for (int k = 0; k < nn; k++)
++    {
++      for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(anEnd)); it.More(); it.Next())
++      {
++        if (it.Value().IsSame(aCur) && !aCur.IsSame(F2))
++        {
++          nbCur = nbNew;
++          return true;
++        }
++      }
++      TopoDS_Edge aNextE;
++      TopoDS_Face aNextF;
++      for (TopExp_Explorer exE(aCur, TopAbs_EDGE); exE.More() && aNextE.IsNull(); exE.Next())
++      {
++        const TopoDS_Edge& anE = TopoDS::Edge(exE.Current());
++        if (BRep_Tool::Degenerated(anE) || anE.IsSame(aPrev) || anE.IsSame(EdgeSpine) || !atVtx(anE)
++            || !myEFMap.Contains(anE))
++        {
++          continue;
++        }
++        TopoDS_Face anOther;
++        bool        onF2 = false;
++        for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(anE)); it.More(); it.Next())
++        {
++          onF2 = onF2 || it.Value().IsSame(F2);
++          if (!it.Value().IsSame(aCur))
++          {
++            anOther = TopoDS::Face(it.Value());
++          }
++        }
++        if (!onF2 && !anOther.IsNull())
++        {
++          aNextE = anE;
++          aNextF = anOther;
++        }
++      }
++      if (aNextE.IsNull() || nbNew + 1 >= nn)
++      {
++        return false;
++      }
++      Edge[nbNew]  = aNextE;
++      Face[nbNew]  = aNextF;
++      Vedge[nbNew] = Vtx;
++      nbNew++;
++      aPrev = aNextE;
++      aCur  = aNextF;
++    }
++    return false;
++  };
+   // A seam counts as an edge of the vertex where the walk round it passes
+   // it: not when it lies on a face at the end only and both contacts end on
+   // edges away from the vertex (the faces at the end are then found along
+@@ -10884,6 +10961,18 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         ChFi3d_cherche_face1(myEFMap(CV1.Arc()), F1, Face[0]);
+         nb = 1;
+         Ei = Edge[0];
++        // A fillet whose contact on side 1 ran off the spine's face onto a
++        // face that goes on from it and leaves that face away from the
++        // vertex (mitcad#1425: its blend run on past the spine's end over
++        // both faces' surfaces): F1 does not hold the vertex. The walk
++        // along F1's boundary reaches a face that holds it; from there the
++        // faces at the end go on round the vertex up to the face beyond
++        // side 2's edge.
++        bool isF1AtVtx = false;
++        for (TopExp_Explorer exV(F1, TopAbs_VERTEX); exV.More() && !isF1AtVtx; exV.Next())
++        {
++          isF1AtVtx = exV.Current().IsSame(Vtx);
++        }
+         while (!V1.IsSame(Vtx))
+         {
+           ChFi3d_cherche_element(V1, Ei, F1, E, V2);
+@@ -10898,6 +10987,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           {
+             throw Standard_Failure("IntersectionAtEnd : the max number of faces reached");
+           }
++          if (!isF1AtVtx && !findonf2 && RoundVertexToEdge(nb))
++          {
++            break;
++          }
+         }
+         if (!findonf2)
+         {

@@ -50,6 +50,12 @@ const Choices kHemForms = {{QStringLiteral("none"), QStringLiteral("None")},
                            {QStringLiteral("teardrop"), QStringLiteral("Teardrop")},
                            {QStringLiteral("rope"), QStringLiteral("Rope")},
                            {QStringLiteral("double"), QStringLiteral("Double")}};
+// The corner joint of a flange whose wall closes against another wall of
+// the sheet (the model's `corner`, mitcad#1410); None is a free end. The
+// list takes further joints (flush, overlap) as they come.
+const Choices kFlangeCorners = {{QStringLiteral("none"), QStringLiteral("None")},
+                                {QStringLiteral("open"), QStringLiteral("Open")},
+                                {QStringLiteral("half_open"), QStringLiteral("Half Open")}};
 // How much of the edge a flange covers: all of it, all but the offsets
 // from its ends, or a width each way from its middle (the model's `width`,
 // which may pass the edge's ends, mitcad#242).
@@ -180,6 +186,12 @@ QJsonValue angleOf(const CommandState& state) {
 bool isHem(const CommandState& state) {
   const QString form = state.choice(QStringLiteral("hem"));
   return !form.isEmpty() && form != QStringLiteral("none");
+}
+
+// Whether a flange's panel makes a corner joint (Corner not None).
+bool isCornerJoint(const CommandState& state) {
+  const QString corner = state.choice(QStringLiteral("corner"));
+  return !corner.isEmpty() && corner != QStringLiteral("none");
 }
 
 // A hem's angle: only its side counts (the bends follow from its sizes),
@@ -480,6 +492,8 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("wall"), QStringLiteral("bend"), QStringLiteral("hem")};
   def.featureType = QStringLiteral("sheet_flange");
   const auto plain = [](const CommandState& s) { return !isHem(s); };
+  const auto measured = [](const CommandState& s) { return !isHem(s) && !isCornerJoint(s); };
+  const auto noCorner = [](const CommandState& s) { return !isCornerJoint(s); };
   const auto hemShown = [](const CommandState& s) { return isHem(s); };
   const auto doubleHem = [](const CommandState& s) { return s.choice(QStringLiteral("hem")) == QStringLiteral("double"); };
   const auto offsets = [](const CommandState& s) { return s.choice(QStringLiteral("width_type")) == QStringLiteral("offsets"); };
@@ -498,11 +512,15 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("0 with no hem: the bend alone, without a wall (a rolled hem)")),
       choiceInput(QStringLiteral("length_mode"), QObject::tr("Measured"), kLengthModes, QStringLiteral("tangent"))
           .withTooltip(QObject::tr("Where the length is measured from: tangent line, virtual sharp or outer surface"))
-          .withVisible(plain),
+          .withVisible(measured),
       choiceInput(QStringLiteral("position"), QObject::tr("Position"), kFlangePositions, QStringLiteral("bend_line"))
           .withTooltip(QObject::tr("Where the edge ends up: bend line, a virtual sharp, bend start or outer surface")),
+      choiceInput(QStringLiteral("corner"), QObject::tr("Corner"), kFlangeCorners, QStringLiteral("none"))
+          .withTooltip(QObject::tr("Closing joint on another wall; Half Open laps half the thickness with a 0.00001 mm seam"))
+          .withVisible(plain),
       choiceInput(QStringLiteral("hem"), QObject::tr("Hem"), kHemForms, QStringLiteral("none"))
-          .withTooltip(QObject::tr("A hem whose bends follow from its gap and length; Flip turns it to the other side")),
+          .withTooltip(QObject::tr("A hem whose bends follow from its gap and length; Flip turns it to the other side"))
+          .withVisible(noCorner),
       valueInput(QStringLiteral("hem_gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("1 mm"))
           .withStepMinimum(0.0)
           .withTooltip(QObject::tr("The gap between the hem and the face"))
@@ -549,7 +567,12 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     // A hem's length is measured from the plane touching its first bend's
     // outer surface, and its angle gives only its side (commands.md, "Hem
     // forms of a flange").
-    const QString mode = hem ? QStringLiteral("outer_tangent") : state.choice(QStringLiteral("length_mode"));
+    // A corner joint's length is the closed section's inside dimension
+    // (commands.md, "Corner joints of a closing flange").
+    const bool corner = !hem && isCornerJoint(state);
+    const QString mode = hem      ? QStringLiteral("outer_tangent")
+                         : corner ? QStringLiteral("inner")
+                                  : state.choice(QStringLiteral("length_mode"));
     result.def = {{QStringLiteral("type"), QStringLiteral("sheet_flange")},
                   {QStringLiteral("body"), item.owner},
                   {QStringLiteral("boundary"), boundary},
@@ -565,6 +588,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
         hemDef.insert(QStringLiteral("setback"), state.expression(QStringLiteral("hem_setback")));
       }
       result.def.insert(QStringLiteral("hem"), hemDef);
+    }
+    if (corner) {
+      result.def.insert(QStringLiteral("corner"), state.choice(QStringLiteral("corner")));
     }
     const QString widthType = state.choice(QStringLiteral("width_type"));
     if (widthType == QStringLiteral("offsets")) {
@@ -597,6 +623,7 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
       loadValue(state, QStringLiteral("hem_gap"), hem.value(QStringLiteral("gap")), feature, model);
       loadValue(state, QStringLiteral("hem_setback"), hem.value(QStringLiteral("setback")), feature, model);
     }
+    state.setChoice(QStringLiteral("corner"), feature.value(QStringLiteral("corner")).toString(QStringLiteral("none")));
     const QJsonObject offsets = feature.value(QStringLiteral("offsets")).toObject();
     const QJsonObject width = feature.value(QStringLiteral("width")).toObject();
     if (!offsets.isEmpty()) {
@@ -623,6 +650,10 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
                                   : QString();
       return QStringLiteral("Added flange, %1 hem, length %2, gap %3%4%5")
           .arg(form, text(state, "length"), text(state, "hem_gap"), setback, flipped);
+    }
+    if (isCornerJoint(state)) {
+      return QStringLiteral("Added flange, %1 corner, inside length %2, angle %3%4")
+          .arg(state.choice(QStringLiteral("corner")), text(state, "length"), text(state, "angle"), flipped);
     }
     return QStringLiteral("Added flange, length %1 (%2), angle %3%4")
         .arg(text(state, "length"), state.choice(QStringLiteral("length_mode")), text(state, "angle"), flipped);

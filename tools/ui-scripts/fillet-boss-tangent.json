@@ -1,0 +1,5 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"An empty sketch F1 (Sketch1) on XY for tools/ui-scripts/fillet-boss-tangent.mitcad-ui (mitcad#1422): the steps draw the slot and the boss's circle in it through the UI."},
+  {"cmd":"sketch.create"}
+]

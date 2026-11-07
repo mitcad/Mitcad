@@ -1,0 +1,296 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a boss's top rim rounded down to its foot's earlier rounding,
+where the foot has one: the rim's contact on the wall is split where it
+runs along that rounding's edge, so that the wall keeps no strip of no
+width there (mitcad#1419).
+
+The case: a cylindrical boss of radius 5 stands 2 high on a plate that
+covers only part of its foot; past the plate's side the wall runs on down
+along it. The foot, an arc where the plate is, is rounded with 0.5; the
+top rim, a whole circle, is then rounded with 1.5. The rim's contact on
+the wall, a circle at the height 0.5, runs along the foot rounding's edge
+on the wall where the plate is, and on inside the wall past that edge's
+ends. The analytic blend (a torus, SplitKPart) is one piece along the
+whole circle: 0014 hatches a line on its face's boundary a little inside
+the face, and the whole circle is one domain. The wall was then cut along
+the whole circle and kept the strip between the circle and the foot
+rounding's edge, of no width: its wire held both and intersected itself
+(BRepCheck_SelfIntersectingWire), the shape was not valid, and the
+material taken was 5e-3 mm3 short of the rounding's (14.152809 mm3). The
+closed contact's start on the wall's seam was moreover cut at the
+parameter of the line hatched inside the face (1e-4 above the contact),
+so that the seam's piece went on past the contact's point and the wall's
+wire had a gap of 1e-4 there.
+
+- edgeEndOnContact (new): a vertex V of the contact's face strictly inside
+  the contact, on it, where exactly one of the face's edges at V (not of
+  the spine) lies wholly on the contact, its other vertex on the contact
+  too, and the contact past V away from that edge lies inside the face.
+- ChFi3d_ContactsAlongFaceEdges splits a SurfData at such a vertex (as at
+  0014's inner vertices of a chain along the contact,
+  ChFi3d_SplitAtVertexOnLine): the part along the edge is then a contact
+  along a whole edge, stored as a blend on that edge with the face beyond
+  it (the foot rounding), the others inside the face up to the vertices.
+  Both roundings meet along the edge, and the wall keeps only its part
+  past the plate's side.
+- FillSD: an end of a line hatched on its face's boundary (0014) that
+  stays on an arc away from the arc's vertices takes the parameter of its
+  own point on the arc, not that of the line moved inside the face.
+
+On the reported design's stored body before the item, the rounding takes
+14.152982 mm3 against the file's 14.152911 (5e-6 relative; before
+14.147664 and not valid), its new faces on the file's within 1e-6 mm.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 07ba8dfd..5ede4c90 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -26,6 +26,7 @@
+ #include <Approx_SameParameter.hxx>
+ #include <BRepAdaptor_Curve.hxx>
+ #include <BRepAdaptor_Surface.hxx>
++#include <BRepClass_FaceClassifier.hxx>
+ #include <BRepLib.hxx>
+ #include <BRepTools.hxx>
+ #include <BRepTopAdaptor_HVertex.hxx>
+@@ -92,6 +93,8 @@
+ #include <TopOpeBRepDS_InterferenceIterator.hxx>
+ #include <TopOpeBRepDS_SolidSurfaceInterference.hxx>
+ 
++#include <vector>
++
+ #ifdef OCCT_DEBUG
+ extern bool   ChFi3d_GetcontextFORCEBLEND();
+ extern bool   ChFi3d_GettraceDRAWINT();
+@@ -3534,6 +3537,165 @@ static TopoDS_Vertex chainVertexOnContact(const occ::handle<Geom_Curve>&   C,
+   return aBest;
+ }
+ 
++// The vertex of face F nearest to the start of the contact curve C on
++// [T1, T2] where an edge of F along C ends and C goes on inside F: a vertex
++// V of F strictly inside the contact, on C within Tol, of whose edges in F
++// (not edges of the spine) exactly one lies wholly on C, its other vertex
++// on C within the contact too, and the contact past V away from that edge,
++// halfway to the contact's end or the next such vertex, inside F. (A face
++// whose rest beside a blend is as wide as the blend's contact distance
++// along a part of the contact only: a boss's side between a rim rounded
++// down to the foot's earlier rounding where the foot has one, and wider
++// where it has none.) Its parameter on C in tV.
++static TopoDS_Vertex edgeEndOnContact(const occ::handle<Geom_Curve>&   C,
++                                      const double                     T1,
++                                      const double                     T2,
++                                      const TopoDS_Face&               F,
++                                      const occ::handle<ChFiDS_Spine>& Spine,
++                                      const double                     Tol,
++                                      double&                          tV)
++{
++  const double tmin = std::min(T1, T2), tmax = std::max(T1, T2);
++  // The parameter on C of point P, inside the contact, or none.
++  const auto onC = [&](const gp_Pnt& P, const double aTol, double& t) {
++    GeomAPI_ProjectPointOnCurve aProj(P, C, tmin, tmax);
++    if (aProj.NbPoints() == 0 || aProj.LowerDistance() > aTol)
++    {
++      return false;
++    }
++    t = aProj.LowerDistanceParameter();
++    return true;
++  };
++  // Whether edge E lies on C on its whole curve.
++  const auto along = [&](const TopoDS_Edge& E) {
++    double                        f = 0., l = 0.;
++    const occ::handle<Geom_Curve> aCE = BRep_Tool::Curve(E, f, l);
++    if (aCE.IsNull())
++    {
++      return false;
++    }
++    for (int i = 0; i <= 8; i++)
++    {
++      double t = 0.;
++      if (!onC(aCE->Value(f + (l - f) * i / 8.), Tol, t))
++      {
++        return false;
++      }
++    }
++    return true;
++  };
++  const occ::handle<Geom_Surface> S = BRep_Tool::Surface(F);
++  // Whether the point of C at t lies inside F.
++  const auto inF = [&](const double t) {
++    GeomAPI_ProjectPointOnSurf aProj(C->Value(t), S);
++    if (aProj.NbPoints() == 0 || aProj.LowerDistance() > Tol)
++    {
++      return false;
++    }
++    double u = 0., v = 0.;
++    aProj.LowerDistanceParameters(u, v);
++    BRepClass_FaceClassifier aCl(F, gp_Pnt2d(u, v), Precision::PConfusion());
++    return aCl.State() == TopAbs_IN;
++  };
++  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> aVE;
++  TopExp::MapShapesAndAncestors(F, TopAbs_VERTEX, TopAbs_EDGE, aVE);
++  // The vertices inside the contact, with their parameters and the side
++  // their edge along C lies on (+1 toward tmax, -1 toward tmin).
++  struct Cand
++  {
++    TopoDS_Vertex V;
++    double        t;
++    int           side;
++  };
++  std::vector<Cand> aCands;
++  std::vector<double> anInner; // (every vertex of F inside the contact on C)
++  for (int iv = 1; iv <= aVE.Extent(); iv++)
++  {
++    const TopoDS_Vertex& V = TopoDS::Vertex(aVE.FindKey(iv));
++    double               t = 0.;
++    if (!onC(BRep_Tool::Pnt(V), Tol + BRep_Tool::Tolerance(V), t))
++    {
++      continue;
++    }
++    if (t <= tmin + Precision::PConfusion() || t >= tmax - Precision::PConfusion())
++    {
++      continue;
++    }
++    anInner.push_back(t);
++    NCollection_List<TopoDS_Shape> anEdges;
++    bool                           onSpine = false;
++    for (NCollection_List<TopoDS_Shape>::Iterator it(aVE(iv)); it.More() && !onSpine; it.Next())
++    {
++      onSpine = BRep_Tool::Degenerated(TopoDS::Edge(it.Value()));
++      for (int ie = 1; ie <= Spine->NbEdges() && !onSpine; ie++)
++      {
++        onSpine = Spine->Edges(ie).IsSame(it.Value());
++      }
++      if (!containsSame(anEdges, it.Value()))
++      {
++        anEdges.Append(it.Value());
++      }
++    }
++    if (onSpine || anEdges.Extent() < 2)
++    {
++      continue;
++    }
++    int         aNbAlong = 0;
++    TopoDS_Edge anAlong;
++    for (NCollection_List<TopoDS_Shape>::Iterator it(anEdges); it.More(); it.Next())
++    {
++      if (along(TopoDS::Edge(it.Value())))
++      {
++        aNbAlong++;
++        anAlong = TopoDS::Edge(it.Value());
++      }
++    }
++    if (aNbAlong != 1 || BRep_Tool::IsClosed(anAlong, F))
++    {
++      continue;
++    }
++    // The edge's other vertex, inside the contact too.
++    TopoDS_Vertex V1, V2;
++    TopExp::Vertices(anAlong, V1, V2);
++    const TopoDS_Vertex& Vo = V1.IsSame(V) ? V2 : V1;
++    double               to = 0.;
++    if (Vo.IsNull() || Vo.IsSame(V) || !onC(BRep_Tool::Pnt(Vo), Tol + BRep_Tool::Tolerance(Vo), to)
++        || std::abs(to - t) <= Precision::PConfusion())
++    {
++      continue;
++    }
++    aCands.push_back({V, t, to > t ? 1 : -1});
++  }
++  TopoDS_Vertex aBest;
++  double        aBestDist = RealLast();
++  for (const Cand& c : aCands)
++  {
++    // The contact past V away from the edge: up to its end or the next
++    // vertex of F on it.
++    double aFar = c.side > 0 ? tmin : tmax;
++    for (const double t : anInner)
++    {
++      if ((c.side > 0 && t < c.t - Precision::PConfusion() && t > aFar)
++          || (c.side < 0 && t > c.t + Precision::PConfusion() && t < aFar))
++      {
++        aFar = t;
++      }
++    }
++    if (!inF(0.5 * (c.t + aFar)))
++    {
++      continue;
++    }
++    const double aDist = std::abs(c.t - T1);
++    if (aDist < aBestDist)
++    {
++      aBestDist = aDist;
++      aBest     = c.V;
++      tV        = c.t;
++    }
++  }
++  return aBest;
++}
++
+ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
+                                    const occ::handle<ChFiDS_Stripe>& CorDat,
+                                    const ChFiDS_Map&                 EFMap,
+@@ -3586,6 +3748,25 @@ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
+           }
+         }
+       }
++      {
++        // A contact going on inside F past the ends of an edge of F that it
++        // runs along (F as wide as the contact distance there only): the
++        // SurfData is split at those ends, the part along the edge then
++        // along a whole edge, the others inside F up to its vertices, so
++        // that F keeps no strip of no width along the edge.
++        double              tV = 0.;
++        const TopoDS_Vertex aV = edgeEndOnContact(C, T1, T2, F, aSpine, 0.1 * Tol3d, tV);
++        if (!aV.IsNull())
++        {
++          const occ::handle<ChFiDS_SurfData> aNext = ChFi3d_SplitAtVertexOnLine(DStr, aSpine, Fd, ons, tV, aV, F);
++          if (!aNext.IsNull())
++          {
++            CorDat->ChangeSetOfSurfData()->ChangeSequence().InsertAfter(j, aNext);
++            ons--; // (this side of the shortened Fd again)
++            continue;
++          }
++        }
++      }
+       TopoDS_Edge       E;
+       for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More() && E.IsNull(); ex.Next())
+       {
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+index 9f97df72..f97d2eb2 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+@@ -42,6 +42,7 @@
+ #include <Geom2dAdaptor_Curve.hxx>
+ #include <Geom2dHatch_Hatcher.hxx>
+ #include <Geom2dHatch_Intersector.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
+ #include <Geom_Curve.hxx>
+ #include <Geom_Plane.hxx>
+ #include <Geom_Surface.hxx>
+@@ -1237,6 +1238,25 @@ static void FillSD(TopOpeBRepDS_DataStructure&                               DSt
+     // (A tangency line on the boundary of its face, hatched a little
+     // inside.)
+     SnapToVertex(DStr, CD, isFirst, ons, pitol, snapTol, true);
++    if (Pons.IsOnArc() && !Pons.IsVertex())
++    {
++      // An end left on an arc away from its vertices (where a closed
++      // contact starts on a seam): its parameter on the arc is that of the
++      // line hatched, a little inside the face; the arc is cut at the
++      // point's own parameter on it. Else the arc kept up to the moved
++      // line's crossing goes past the end's point, and the face's wire has
++      // a gap there.
++      double                        f = 0., l = 0.;
++      const occ::handle<Geom_Curve> aCE = BRep_Tool::Curve(Pons.Arc(), f, l);
++      if (!aCE.IsNull())
++      {
++        GeomAPI_ProjectPointOnCurve aPr(Pons.Point(), aCE, f, l);
++        if (aPr.NbPoints() > 0 && aPr.LowerDistance() <= snapTol)
++        {
++          Pons.SetArc(Pons.Tolerance(), Pons.Arc(), aPr.LowerDistanceParameter(), Pons.TransitionOnArc());
++        }
++      }
++    }
+   }
+   else if (pPH != nullptr && Pons.IsOnArc() && !Pons.IsVertex())
+   {

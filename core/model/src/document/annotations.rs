@@ -1306,7 +1306,35 @@ impl<K: Kernel> Document<K> {
         // one set).
         let renamed_letters: std::collections::BTreeMap<String, String> =
             relettered.iter().cloned().collect();
-        let drawings = self.state.drawings_relettered(&renamed_letters, None)?;
+        let mut drawings = self.state.drawings_relettered(&renamed_letters, None)?;
+        // The drawings' annotations kept from a renamed one follow its name
+        // (mitcad#1406), so that it is not brought into their views again.
+        let renames = if renamed.is_empty() {
+            &[][..]
+        } else {
+            &self.state.drawings[..]
+        };
+        for (i, original) in renames.iter().enumerate() {
+            let mut drawing = drawings
+                .iter()
+                .find(|(j, _)| *j == i)
+                .map_or_else(|| original.clone(), |(_, d)| d.clone());
+            let mut followed = false;
+            for view in drawing.sheets.iter_mut().flat_map(|s| s.views.iter_mut()) {
+                for kept in &mut view.annotations {
+                    if let Some(from) = &kept.kept_from
+                        && let Some((_, new)) = renamed.iter().find(|(old, _)| old == from)
+                    {
+                        kept.kept_from = Some(new.clone());
+                        followed = true;
+                    }
+                }
+            }
+            if followed {
+                drawings.retain(|(j, _)| *j != i);
+                drawings.push((i, drawing));
+            }
+        }
         if changed == self.state.annotations {
             return Ok(false);
         }

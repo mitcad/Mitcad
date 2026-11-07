@@ -55,6 +55,7 @@
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
 #include "update/OpenSslConfiguration.hpp"
+#include "view/SmallCirclesPreference.hpp"
 
 namespace {
 
@@ -497,6 +498,10 @@ int runApplication(int argc, char* argv[]) {
 
   // A screenshot run offers no crash reports either (mitcad#62).
   mitcad::ReportCenter::setOfferEarlierCrashes(!parser.isSet(screenshotOption));
+  // The view's small circles as Preferences has them (mitcad#879), before
+  // any body is meshed for display.
+  mitcad::applySavedSmallCircles();
+  qDebug().noquote() << QStringLiteral("Small circles: %1").arg(mitcad::smallCirclesId(mitcad::viewSmallCircles()));
   mitcad::WindowManager manager(nativeUiRequested);
   mitcad::DocumentFrame::install(manager);
   mitcad::MainWindow* ownedWindow = nullptr;

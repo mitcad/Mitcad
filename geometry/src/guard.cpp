@@ -22,6 +22,8 @@
 #include "util.hpp"
 
 #ifdef _WIN32
+#include <exception>
+#include <malloc.h>
 #include <windows.h>
 #endif
 
@@ -47,6 +49,68 @@ thread_local int t_operations = 0;
 std::atomic<int> g_operations{0};
 // This thread has OCCT's handlers (catch_occt_crashes).
 thread_local bool t_installed = false;
+
+void recover_or_terminate();
+
+// The point an operation's thread comes back to from a crash whose
+// exception cannot unwind to the operation (detail::call_recoverable,
+// mitcad#1429): the thread's innermost while it lives, with this file's
+// terminate handler.
+struct Recovery;
+thread_local Recovery* t_recovery = nullptr;
+
+struct Recovery {
+  CONTEXT context{};
+  Recovery* outer;
+  std::terminate_handler before;
+  // OCCT's handler turned a crash on this thread into an exception since
+  // this point was set: its message, and whether it was a stack overflow.
+  bool converted = false;
+  bool stack_overflow = false;
+  std::string message;
+  volatile bool resumed = false;
+
+  Recovery() : outer(t_recovery), before(std::set_terminate(recover_or_terminate)) { t_recovery = this; }
+  ~Recovery() {
+    t_recovery = outer;
+    std::set_terminate(before);
+  }
+  Recovery(const Recovery&) = delete;
+  Recovery& operator=(const Recovery&) = delete;
+};
+
+// The thread's terminate handler while an operation runs (MSVC keeps one
+// per thread). An exception OCCT's handler threw for a crash ends here when
+// it cannot be unwound to the operation (a crash in a destructor): the
+// thread goes back to the operation's point, the frames between left as
+// they are (their objects leak, as on Linux and macOS). Any other
+// termination goes to the handler that was there before the operations.
+void recover_or_terminate() {
+  Recovery* recovery = t_recovery;
+  if (recovery != nullptr && recovery->converted) {
+    recovery->converted = false;
+    recovery->resumed = true;
+    RtlRestoreContext(&recovery->context, nullptr);
+  }
+  std::terminate_handler before = nullptr;
+  for (const Recovery* r = recovery; r != nullptr; r = r->outer) {
+    before = r->before;
+  }
+  if (before != nullptr && before != recover_or_terminate) {
+    before();
+  }
+  std::abort();
+}
+
+// Notes on this thread's innermost recovery point that OCCT's handler is
+// turning a crash into an exception (its message).
+void note_conversion(const char* message, bool stack_overflow) {
+  if (Recovery* recovery = t_recovery) {
+    recovery->converted = true;
+    recovery->stack_overflow = stack_overflow;
+    recovery->message = message;
+  }
+}
 
 } // namespace
 
@@ -76,7 +140,12 @@ bool occt_converts() { return t_operations > 0 || (!t_installed && g_operations.
 
 LONG WINAPI dispatch_occt_exception(EXCEPTION_POINTERS* info) {
   if (g_occt != nullptr && occt_converts()) {
-    g_occt(info); // throws for the faults it turns into exceptions
+    try {
+      g_occt(info); // throws for the faults it turns into exceptions
+    } catch (const Standard_Failure& failure) {
+      note_conversion(failure.what(), info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW);
+      throw;
+    }
   }
   return g_before != nullptr ? g_before(info) : EXCEPTION_CONTINUE_SEARCH;
 }
@@ -105,9 +174,29 @@ void dispatch_occt_signal(int number, int code) {
   for (int i = 0; i < kSignalCount; ++i) {
     if (kOcctSignals[i] == number && g_occtSignal[i] != nullptr) {
       const SignalBack back(number);
-      g_occtSignal[i](number, code);
+      try {
+        g_occtSignal[i](number, code);
+      } catch (const Standard_Failure& failure) {
+        note_conversion(failure.what(), false);
+        throw;
+      }
     }
   }
+}
+
+void call_recoverable(void (*call)(void*), void* work) {
+  Recovery recovery;
+  // Comes back here a second time from recover_or_terminate, with the
+  // registers as they are now: only `recovery` (volatile `resumed`) is read
+  // after it.
+  RtlCaptureContext(&recovery.context);
+  if (recovery.resumed) {
+    if (recovery.stack_overflow) {
+      _resetstkoflw();
+    }
+    throw Standard_Failure(recovery.message.c_str());
+  }
+  call(work);
 }
 
 } // namespace detail
@@ -116,6 +205,8 @@ namespace detail {
 
 OperationScope::OperationScope() = default;
 OperationScope::~OperationScope() = default;
+
+void call_recoverable(void (*call)(void*), void* work) { call(work); }
 
 } // namespace detail
 #endif

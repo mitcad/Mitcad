@@ -107,6 +107,22 @@ struct MeshOptions {
   // boundary's, are left as they are. Such a face records the deviation it
   // was asked for, so that the same options keep it.
   bool hold_face_triangles = false;
+  // Small circles by their size (mitcad#879), the view's "Adaptive" small
+  // circles: above 0, a circle or an arc of one that the deviation alone
+  // cuts into fewer pieces a turn than `angular_deflection` does is cut by
+  // the deviation alone, but into at least this many pieces a turn (an arc
+  // into its share of them); a larger circle keeps the angle
+  // (small_circle_angle). Done with BRepMesh's own means: such an edge gets
+  // the wider angle as its own angular deflection and is discretized again
+  // after BRepMesh's edges, and a cone, torus or sphere face of such a
+  // radius (its largest) is triangulated with the angles widened as far
+  // (its deviation not halved, as BRepMesh's faces take it), so that its
+  // inside agrees with its edges. Cylinders and planes have no points of
+  // their own inside: their triangles follow their edges. A design of
+  // thousands of small holes took 40 million triangles at the view's 12
+  // degrees (60 pieces a turn for every hole). 0: the angle for every
+  // circle, as before (the exports' presets, the view's "Full detail").
+  int small_circle_segments = 0;
 
   MeshOptions() = default;
   // The first six, as an aggregate of them before mitcad#1275; the others
@@ -128,6 +144,22 @@ struct MeshOptions {
 // at or below the size's, so that a body that changes a little keeps its
 // deviation (and the faces a change left as they were their meshes).
 double shape_deviation(const TopoDS_Shape& shape, const MeshOptions& options);
+
+// The angular deflection (radians) an edge on a circle of `radius` is
+// discretized with under MeshOptions::small_circle_segments (mitcad#879),
+// given the edge's deviation and angular deflection as BRepMesh set them.
+// BRepMesh cuts an edge in steps of the smaller of the step whose sag is
+// half its deviation, 2 acos(1 - deviation / (2 radius)), and half its
+// angle. Where the deviation's step is the smaller, `angle` as it is (a
+// large circle: the same mesh in both choices); else twice the deviation's
+// step, at most twice the step of `segments` pieces a turn (a hair over
+// it, so that a full circle comes out in exactly that many), so that the
+// edge is cut by the deviation alone, in at least `segments` pieces a
+// turn. `angle` as it is when `segments` is 0 or less, or the radius or
+// the deviation is not above 0 or not finite. For a face (a cone's, a
+// torus's or a sphere's, whose deviation BRepMesh does not halve), pass
+// twice its deviation and twice its angle, and take half the result.
+double small_circle_angle(double radius, double deviation, double angle, int segments);
 
 // The area (mm²) a plane's triangulation covers, and the area its edges'
 // polygons on it enclose (the outer wire's less the holes'), both in the

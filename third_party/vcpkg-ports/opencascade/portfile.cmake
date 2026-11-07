@@ -278,7 +278,23 @@ vcpkg_from_github(
         1490-chfi3d-walk-back-to-the-spines-first-end-stepped-by-its-own-stretch.patch
         1430-chfi3d-ball-rolled-on-a-convex-edge-into-the-end-face-cut-from-its-turn.patch
         1500-chfi3d-convex-chain-into-a-mitre-of-tighter-roundings-closed-by-their-balls-torus.patch
+        1520-blendfunc-constrad-ball-staying-put-between-tubes-walked-in-the-guides-normal-plane.patch
+        1521-chfi3d-ball-staying-put-at-a-plane-walked-its-point-contact-along-no-edge.patch
+        1522-chfi3d-walked-blend-split-only-where-its-contacts-meet.patch
+        1523-blendfunc-constrad-ball-staying-put-between-tubes-within-a-tolerance.patch
         1530-chfi3d-walk-onto-a-tight-tangent-face-at-the-end-rolls-on-cut-to-a-point.patch
+        1540-chfi3d-tight-tangent-end-walked-and-cut-pieces-one-face.patch
+        1560-chfi3d-rim-contact-split-where-it-runs-along-a-foot-roundings-edge.patch
+        1570-chfi3d-point-end-on-an-edge-at-the-vertex-runs-the-seam-on.patch
+        1571-chfi3d-kpart-cut-end-on-a-periodic-face-in-the-period-of-its-other-end.patch
+        1572-chfi3d-kpart-cut-piece-on-the-end-edge-one-face-with-its-rest.patch
+        1580-chfi3d-blend-run-on-past-the-end-over-both-faces-cut-by-the-faces-round-the-end.patch
+        1581-chfi3d-end-cut-on-a-face-the-way-round-inside-it.patch
+        1590-chfi3d-tight-corners-at-a-cylinders-rim-and-at-an-obtuse-wall-closed-by-the-rims-ball.patch
+        1600-chfi3d-walk-ends-at-the-next-analytic-piece-only-where-both-contacts-reach-it.patch
+        1601-chfi3d-two-stripes-meet-at-the-section-of-an-earlier-roundings-ball-that-stays-put.patch
+        1610-chfi3d-standing-ball-section-where-the-normal-planes-pass-forwards.patch
+        1611-chfi3d-two-corner-cut-on-a-periodic-pcurve-not-cut-to-its-period.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

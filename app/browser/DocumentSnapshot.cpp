@@ -577,6 +577,7 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("construction_plane"), QStringLiteral("offset-plane")},
       {QStringLiteral("construction_axis"), QStringLiteral("construction-axis")},
       {QStringLiteral("construction_point"), QStringLiteral("construction-point")},
+      {QStringLiteral("intersection_curve"), QStringLiteral("sketch-intersect")},
       {QStringLiteral("base"), QStringLiteral("base-feature")},
       {QStringLiteral("rectangular_pattern"), QStringLiteral("rectangular-pattern")},
       {QStringLiteral("circular_pattern"), QStringLiteral("circular-pattern")},

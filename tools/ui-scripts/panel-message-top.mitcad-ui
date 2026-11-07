@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# A failed preview's message opens at its first line (mitcad#1430), on
+# panel-message-top.json (a 20 mm cube: Sketch1 F1, Extrude1 F2), in a
+# window of 1280 x 800 and the layout the runner chose (Docked, Floating):
+# Extrude1 edited, its distance 0 fails the preview, and the panel's error
+# box shows its text from the first line: "Panel Extrude message <w>x<h>,"
+# when it all fits, "... scrolling, at 0 of <n>," when it scrolls, never
+# scrolled down its text, also once the panel has settled. (The box had
+# opened scrolled in the Docked layout, its "Failed:" line cut off.)
+# Run by tools/ui-panel-message-top-test.sh (Linux) and
+# tools/ui-windows-panel-message-top-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+window-resize 1280 800
+command view.fit
+wait-idle
+
+# Extrude1 edited: its panel and its preview.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log '^Editing F2 with Extrude' 20
+wait-log '^Panel Extrude input distance at ' 20
+wait-idle 30
+
+# Distance 0: the preview fails, its error in the panel's box.
+mark
+type-in '^Panel Extrude input distance at ' 0
+wait-log '^Preview Extrude: failed' 30
+wait-log '^Panel Extrude message box: error: ' 10
+wait-log '^Panel Extrude message [0-9]+x[0-9]+(, | scrolling, at 0 of [0-9]+, )panel width ' 10
+wait-idle 30
+sleep 500
+expect-no-log '^Panel Extrude message [0-9]+x[0-9]+ scrolling, at [1-9]'
+expect-no-log '^Panel Extrude message hidden'
+
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle

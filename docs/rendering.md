@@ -387,7 +387,15 @@ with an embedded XPC service and leased IOSurfaces instead; see
   while it still holds the scene's lock (`restart`, mitcad#146): Cycles
   updates the scene between batches, and an update without its reset
   (another set of passes, as the ground's catcher passes) would have the
-  kernels write past the render buffers.
+  kernels write past the render buffers. The reset takes effect only
+  after the batch the render thread is tracing, which it traces without
+  the scene's lock, so geometry that leaves the scene (a body's old mesh,
+  the ground's, a light's) is not deleted at once (`retire`, mitcad#1432):
+  on the CPU, Embree traces a mesh's own vertex and triangle arrays. Its
+  objects go at once; the geometry and its shaders are deleted with a
+  later change's reset, once Cycles' object manager has no change left
+  to apply, that is once the render thread has built the scene without
+  them (`render-retired` in the worker's log).
 - **Scene**: `RenderMode` sends the shown bodies (`OcctViewer::
   shownBodies`) as scene updates ([Scene updates](#scene-updates)), only
   while the model is idle (`MainWindow::whenIdle`), and again whenever the
@@ -2749,6 +2757,12 @@ scope; they are not inferred from the M1 tests. Qt remains the default UI.
   orbited under the ground and back in the orthographic and the
   perspective view; the worker turns the ground off and on, and every
   view's frames cover the box (mitcad#320).
+- `tools/ui-render-section-toggle-test.sh` (Windows:
+  `tools/ui-windows-render-section-toggle-test.ps1`, ctest
+  `app.ui-windows-render-section-toggle`): a section analysis shown and
+  hidden twelve times while the worker renders on the CPU; the worker
+  does not stop, and deletes the meshes it left after its render thread
+  built the scene without them (mitcad#1432).
 - `tools/ui-render-environment-test.sh`: Render Environment on a white box
   and a glass sphere: the Dark Studio renders the box darker than the
   Studio over the same background; a background colour shows without a

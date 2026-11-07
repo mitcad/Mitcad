@@ -346,6 +346,47 @@ void checkJobMeshesKept(const occ::handle<Prs3d_Drawer>& drawer) {
   const mitcad::geometry::Shape unmeshed(dome(1.0));
   CHECK(mitcad::drawerMeshes(unmeshed));
 }
+
+// Small circles (mitcad#879, Preferences > Display > Small circles): the
+// view's meshes are Adaptive by default, a small cylinder's circles (0.02
+// mm, at the view's 0.01 mm) in 12 pieces a turn, in Full detail in 60 or
+// more; a tank's of 5 m alike in both. The choice switches the view's
+// options and the drawers' meshing with them.
+void checkSmallCircles() {
+  CHECK(mitcad::viewSmallCircles() == mitcad::SmallCircles::Adaptive);
+  CHECK(mitcad::viewMeshOptions().small_circle_segments == mitcad::kViewSmallCircleSegments);
+  CHECK(!mitcad::setViewSmallCircles(mitcad::SmallCircles::Adaptive)); // as it was
+  const auto meshed = [](double radius, double height) {
+    const TopoDS_Shape shape = BRepPrimAPI_MakeCylinder(radius, height).Shape();
+    CHECK(mitcad::io::mesh_in_place(shape, mitcad::viewMeshOptions()));
+    return circlePoints(shape);
+  };
+  const int smallAdaptive = meshed(0.02, 0.08);
+  const int tankAdaptive = meshed(5000.0, 20000.0);
+  CHECK(mitcad::setViewSmallCircles(mitcad::SmallCircles::FullDetail));
+  CHECK(mitcad::viewMeshOptions().small_circle_segments == 0);
+  const int smallFull = meshed(0.02, 0.08);
+  const int tankFull = meshed(5000.0, 20000.0);
+  // The drawers' meshing follows the choice too.
+  const occ::handle<Prs3d_Drawer> defaults = new Prs3d_Drawer();
+  defaults->SetupOwnDefaults();
+  mitcad::setViewTessellation(defaults);
+  const occ::handle<Prs3d_Drawer> drawer = new Prs3d_Drawer();
+  drawer->SetLink(defaults);
+  const TopoDS_Shape drawnFull = BRepPrimAPI_MakeCylinder(0.02, 0.08).Shape();
+  CHECK(StdPrs_ToolTriangulatedShape::Tessellate(drawnFull, drawer));
+  CHECK(mitcad::setViewSmallCircles(mitcad::SmallCircles::Adaptive));
+  const TopoDS_Shape drawnAdaptive = BRepPrimAPI_MakeCylinder(0.02, 0.08).Shape();
+  CHECK(StdPrs_ToolTriangulatedShape::Tessellate(drawnAdaptive, drawer));
+  std::printf("Small circles: cylinder of 0.02 mm %d points adaptive, %d in full detail (drawn %d, %d); tank of 5 m "
+              "%d, %d\n",
+              smallAdaptive, smallFull, circlePoints(drawnAdaptive), circlePoints(drawnFull), tankAdaptive, tankFull);
+  CHECK(smallAdaptive == 13); // 12 pieces, the first point again at the end
+  CHECK(smallFull >= 61);
+  CHECK(circlePoints(drawnAdaptive) == smallAdaptive);
+  CHECK(circlePoints(drawnFull) == smallFull);
+  CHECK(tankAdaptive == tankFull);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -355,10 +396,16 @@ int main(int argc, char** argv) {
   // The application's meshing algorithm (OcctViewer does this).
   mitcad::useViewMeshing();
   try {
+    checkSmallCircles();
+    // The boundary's deviation under a pixel at 500 pixels' radius is Full
+    // detail's: Adaptive cuts a small circle by the body's deviation alone
+    // (mitcad#879, checkSmallCircles).
+    CHECK(mitcad::setViewSmallCircles(mitcad::SmallCircles::FullDetail));
     checkCylinder(path, 0.02, 0.08);
     checkCylinder(path, 5.0, 20.0);
     checkCylinder(path, 5000.0, 20000.0);
     checkCylinder(path, 5.0, 50000.0);
+    CHECK(mitcad::setViewSmallCircles(mitcad::SmallCircles::Adaptive));
     const occ::handle<Prs3d_Drawer> defaults = new Prs3d_Drawer();
     defaults->SetupOwnDefaults();
     mitcad::setViewTessellation(defaults);

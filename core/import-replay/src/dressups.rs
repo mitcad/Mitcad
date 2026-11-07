@@ -16,7 +16,9 @@
 //! state (`I<item>-stored-<k>.shape`), to find the first item whose result
 //! deviates from the file's. The files
 //! are derived from the designs: keep the directory outside the repository,
-//! like the corpora.
+//! like the corpora. `tools/f3d-rounding-specs.sh` writes it for every file
+//! of the corpora, the rounding specs (mitcad#1398,
+//! core/import/docs/rounding-specs.md).
 
 use std::collections::HashMap;
 use std::io::Write;

@@ -1412,13 +1412,16 @@ impl<'de> Deserialize<'de> for SketchEntityRef {
 
 /// What a linked projection follows: model geometry by its topological
 /// name (an edge, a face or a vertex), or a curve or point of an earlier
-/// sketch (mitcad#904). In a definition the first is its name's text, as
-/// in every earlier version, the second the object form of
-/// [`SketchEntityRef`].
+/// sketch (mitcad#904), or the curve of an Intersection Curve
+/// (mitcad#1405). In a definition the first is its name's text, as in
+/// every earlier version, the second the object form of
+/// [`SketchEntityRef`], the third `{"feature": "F5"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProjectionSource {
     Topo(TopoName),
     Sketch(SketchEntityRef),
+    /// An Intersection Curve's curve (mitcad#1405); in text `F5/curve`.
+    Curve(crate::ids::FeatureUid),
 }
 
 impl ProjectionSource {
@@ -1426,15 +1429,24 @@ impl ProjectionSource {
     pub fn topo(&self) -> Option<&TopoName> {
         match self {
             Self::Topo(name) => Some(name),
-            Self::Sketch(_) => None,
+            Self::Sketch(_) | Self::Curve(_) => None,
         }
     }
 
     /// The sketch's entity; None for model geometry.
     pub fn sketch(&self) -> Option<&SketchEntityRef> {
         match self {
-            Self::Topo(_) => None,
+            Self::Topo(_) | Self::Curve(_) => None,
             Self::Sketch(entity) => Some(entity),
+        }
+    }
+
+    /// The Intersection Curve whose curve it is (mitcad#1405); None for
+    /// other sources.
+    pub fn curve(&self) -> Option<crate::ids::FeatureUid> {
+        match self {
+            Self::Curve(feature) => Some(*feature),
+            Self::Topo(_) | Self::Sketch(_) => None,
         }
     }
 }
@@ -1462,6 +1474,7 @@ impl fmt::Display for ProjectionSource {
         match self {
             Self::Topo(name) => name.fmt(f),
             Self::Sketch(entity) => entity.fmt(f),
+            Self::Curve(feature) => write!(f, "{feature}/curve"),
         }
     }
 }
@@ -1469,8 +1482,14 @@ impl fmt::Display for ProjectionSource {
 impl std::str::FromStr for ProjectionSource {
     type Err = String;
 
-    /// `F5/c3` a sketch's entity, anything else a topological name.
+    /// `F5/c3` a sketch's entity, `F5/curve` an Intersection Curve's curve
+    /// (mitcad#1405), anything else a topological name.
     fn from_str(text: &str) -> Result<Self, String> {
+        if let Some(feature) = text.strip_suffix("/curve")
+            && let Ok(feature) = feature.parse::<crate::ids::FeatureUid>()
+        {
+            return Ok(Self::Curve(feature));
+        }
         if let Ok(entity) = text.parse::<SketchEntityRef>() {
             return Ok(Self::Sketch(entity));
         }
@@ -1485,6 +1504,11 @@ impl Serialize for ProjectionSource {
         match self {
             Self::Topo(name) => name.serialize(s),
             Self::Sketch(entity) => entity.serialize(s),
+            Self::Curve(feature) => {
+                let mut map = Map::new();
+                map.insert("feature".to_owned(), Value::String(feature.to_string()));
+                Value::Object(map).serialize(s)
+            }
         }
     }
 }
@@ -1495,6 +1519,13 @@ impl<'de> Deserialize<'de> for ProjectionSource {
             Value::String(text) => text
                 .parse::<TopoName>()
                 .map(Self::Topo)
+                .map_err(D::Error::custom),
+            // An Intersection Curve's curve (mitcad#1405).
+            Value::Object(map) if map.len() == 1 && map.contains_key("feature") => map["feature"]
+                .as_str()
+                .ok_or_else(|| D::Error::custom("\"feature\" is a feature's uid like \"F5\""))?
+                .parse::<crate::ids::FeatureUid>()
+                .map(Self::Curve)
                 .map_err(D::Error::custom),
             other => SketchEntityRef::from_json(&other)
                 .map(Self::Sketch)

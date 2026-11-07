@@ -23,7 +23,9 @@
 //   cut meets the contact on the hub, 0.29 short of the vertex where the
 //   hole touches the hub; the edge stays sharp from there to the vertex.
 //   Four such ends, two at each of the two smaller holes. Without the
-//   port's patch 1530 the walk reframed onto that face and failed.
+//   port's patch 1530 the walk reframed onto that face and failed; without
+//   1540 (mitcad#1418) each end was two faces, the piece walked up to the
+//   crossing and the piece cut after it, where the stored body has one.
 //
 // OCCT's own fillet cannot make the earlier roundings of a hole's rim that
 // touches the hub (on a hub and flange built with OCCT's solids the rim's
@@ -187,6 +189,36 @@ double nearest_vertex(const TopoDS_Shape& shape, const gp_Pnt& p) {
   return best;
 }
 
+double area(const TopoDS_Shape& face) {
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props, 1e-7);
+  return props.Mass();
+}
+
+int face_count(const TopoDS_Shape& shape) {
+  ShapeIndex faces;
+  TopExp::MapShapes(shape, TopAbs_FACE, faces);
+  return faces.Extent();
+}
+
+// The rounding's face at one of its ends: of the faces through the point
+// that are no cylinders (the hub), the largest (the other is the remainder
+// of the rim's face along the foot, about 0.25 mm2). Its area, or 0.
+double end_face_area(const TopoDS_Shape& shape, const gp_Pnt& p) {
+  const TopoDS_Shape point = BRepBuilderAPI_MakeVertex(p).Vertex();
+  double             best  = 0.;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(f.Current())).GetType() == GeomAbs_Cylinder) {
+      continue;
+    }
+    BRepExtrema_DistShapeShape d(point, f.Current());
+    if (d.IsDone() && d.Value() <= 1e-3) {
+      best = std::max(best, area(f.Current()));
+    }
+  }
+  return best;
+}
+
 // The edges in `list` rounded with 1 as MitCad's dressup calls the fillet:
 // chains stopped at turns, carried across notches. Null where the fillet
 // fails.
@@ -270,7 +302,18 @@ void test_ends_cut_by_the_rims() {
     const double d = nearest_vertex(result, p);
     std::printf("the end at (%.5f %.5f %.5f): a vertex of the result within %.6f mm\n", e[0], e[1], e[2], d);
     CHECK(d <= 0.01);
+    // One face from the section where the contact on the flange reaches the
+    // rim's torus to the end, as the stored body's (mitcad#1418): before, the
+    // piece walked up to the crossing onto the rim's face along the foot
+    // and the piece cut by that face were two faces, the one at the end
+    // about 0.05 mm2.
+    const double a = end_face_area(result, p), s = end_face_area(after, p);
+    std::printf("  its face %.6f mm2, the stored body's %.6f mm2\n", a, s);
+    CHECK(s > 0. && std::abs(a - s) <= 0.01 * s);
   }
+  const int faces = face_count(result), stored_faces = face_count(after);
+  std::printf("the result has %d faces, the stored body %d\n", faces, stored_faces);
+  CHECK(faces == stored_faces);
 }
 
 } // namespace

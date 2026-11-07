@@ -193,6 +193,10 @@ private:
   void setTool(const DrawingToolDef* tool);
   void fillPanel();
   void fillToolPanel(const DrawingToolDef& tool);
+  // A tool without picks (Model Items, mitcad#1406) run from its panel's
+  // Apply: on the selected views, none: all the sheet's; then the
+  // selection again.
+  void applyTool();
   void fillViewPanel(int view);
   // An annotation's properties (mitcad#707 phase 2): its value, type,
   // format, tolerance (#702's dialog), text, letter, frame or finish.
@@ -333,8 +337,9 @@ private:
   // Save as Template… of a sheet tab's menu: the sheet's template under a
   // name, to the user's or the project's library.
   void saveTemplate(int sheet);
-  // The sheet's template and title block fields and the drawing's
-  // revisions, logged when they change (the UI tests read them).
+  // The sheet's template and title block fields, the drawing's revisions
+  // and the model's annotations its views bring in (mitcad#1406), logged
+  // when they change (the UI tests read them).
   void logTitleBlock(const QJsonObject& sheet);
   // The window's status bar; empty text says nothing.
   void setStatus(const QString& text, bool error);
@@ -414,6 +419,7 @@ private:
   QString m_loggedButtons;
   QString m_loggedTitle;
   QString m_loggedRevisions;
+  QString m_loggedModelItems;
   bool m_updatingTabs = false;
   // A cut sheet is open (mitcad#853): its row instead of the tools'.
   bool m_cutSheet = false;

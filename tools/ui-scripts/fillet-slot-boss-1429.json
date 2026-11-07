@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The slot-and-boss part of mitcad#1429 (GitHub mitcad/Mitcad#173), tools/ui-windows-fillet-boss-tangent-crash-test.ps1: a slot 85 between centres and 50 wide on xy (F1) extruded 15 (the plate, F2.b0), and a circle of the slot end's size at its second centre (F3) extruded 30 and joined (the boss): the plate's flat sides run tangentially into the boss's cylinder."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.slot","sketch":"F1","mode":"center_to_center","a":[0,0],"b":[85,0],"width":50},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c2,c4],c2[c3,c1],c3[c4,c2],c4[c1,c3]}"}],"extent":{"type":"distance","distance":15},"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F3","center":[85,0],"diameter":50},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1}"}],"extent":{"type":"distance","distance":30},"operation":"join","participants":["F2.b0"]}},
+  {"expect":{"feature":"F4","status":"ok"}}
+]

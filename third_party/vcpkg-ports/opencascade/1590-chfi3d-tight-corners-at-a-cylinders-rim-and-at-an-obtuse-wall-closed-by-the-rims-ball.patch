@@ -1,0 +1,1055 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a face's outline rounded past a cylinder's rims rounded with less
+than the radius, and past a wall's corner tighter than the ball where the
+other wall's edge with the face is obtuse (mitcad#1426).
+
+The case: a tube (bore 25, outside 30, 30 long) cut by a plane U; its rims
+rounded with rk = 1 (tori); the outline of each cut face rounded with
+R = 1.5, one tangent chain over U's lines on the end planes, the outside
+and the bore, and its arcs on the rims' tori. No ball of R rolls round a
+rim of rk: OCCT walked the chain over the torus and threw while storing
+the walk (the rational sections' weights), on the replayed and on the
+stored body. Patch 0970 split such a chain only at a cylinder K between
+two planes, and only where the other wall's edge with U is square or
+acute. The bodies stored in the files close the bore's rims (whose edge
+with U is acute) with 0970's vertex blend and torus, the bore in the
+place of the leaning plane, and the outside's rims (obtuse) with the
+rim's own ball: the ball of R touching U, the end plane and the outside
+lies clear of the rim's torus; the ball of rk that the torus is rolls on
+between the outside and the end plane's rounding (a strip), then between
+the two roundings (a triangle) down to where their contacts on U meet, as
+patch 1380 closes a concave corner.
+
+- ChFi3d_TightArc (0970's) also takes K a torus between the plane Wp
+  square to the other line and a cylinder Wo about K's axis whose line on
+  U runs along it (K the rim of Wo's edge with Wp: its tube circle rk
+  inside both), and marks the corner Obtuse where the other wall's
+  outward normal at its line on U turns towards U's (a plane or the
+  cylinder Wo); such corners are split too (before, an obtuse wall was
+  left as it was).
+- ChFi3d_Builder::PerformTightCorners: where Wo is such a cylinder, the
+  ball's centre C is R inside U, Wp and Wo (on the line R inside U and
+  rw -+ R from Wo's axis, on its line's side), e0 Wo's outward normal
+  along Lo, K's tube circle through T's spine circle's start, a torus K's
+  seams (circles) kept by their direction at the point, K cut along its
+  meridian; an obtuse corner goes to PerformTightObtuseCorner.
+- ChFi3d_Builder::ExtendAtTightObtuseCorners (new, after
+  ExtendAtTightConcaveArcs): the ends at an obtuse corner walk on past
+  their vertex by two radii, so that the end plane's rounding's contact
+  on it reaches the rim (the strip starts from the rim's section there).
+- ChFi3d_Builder::PerformSetOfKPart: an end of status ChFiDS_Tangent
+  prolonged past its vertex is not cut by the face at the end
+  (ChFi3d_KPartCutToEnd and the like marked it a free boundary): its
+  corner's construction cuts it.
+- ChFi3d_Builder::PerformTightObtuseCorner (new): 1380's corner
+  (tcBuildCorner) with the balls inside the material (Side -1), the
+  heights along U's inward normal, K's edges any curves (a torus's seams:
+  where a contact reaches them, the strip's first section's contact on
+  K's edge with the outside, which side of them is kept).
+
+On the design's stored body before the item: valid, the file's 73 faces,
+the result within 0.0057 mm of the stored body about the outlines both
+ways, the material taken 83.349390 against the file's 83.349888 mm3;
+before, the fillet failed. On the replay's bodies of both designs: the
+item parametric and verified. Synthetic: the tube of the case, valid, the
+four tori of the file, every point of the strips and triangles on the
+rim's ball within 5e-4 mm; a block's bottom outline past vertical corners
+rounded with 0.3, its front wall leaning 15 and 30 degrees away from the
+bottom, rounded with 0.5: valid (before, invalid at 15 and failed at 30).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index a6317365..d88e2ccd 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3357,6 +3357,17 @@ void ChFi3d_Builder::Compute()
+   {
+     // (The ends as they are.)
+   }
++  // (The ends SplitAtTightCorners made at an obtuse wall walk on to the
++  // corner's own ball.)
++  try
++  {
++    OCC_CATCH_SIGNALS
++    ExtendAtTightObtuseCorners();
++  }
++  catch (Standard_Failure const&)
++  {
++    // (The ends as they are.)
++  }
+ 
+ #ifdef OCCT_DEBUG // perf
+   ChFi3d_ResultChron(cl_extent, t_extent);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 48db7a29..2e19c5b0 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1298,6 +1298,30 @@ private:
+   //! Returns false where a corner cannot be built.
+   Standard_EXPORT bool PerformTightCorners();
+ 
++  //! The ends SplitAtTightCorners made at a corner whose other wall's edge
++  //! with U is obtuse walk on past their vertex by two radii, so that the
++  //! contacts reach the corner's own ball (mitcad#1426).
++  Standard_EXPORT void ExtendAtTightObtuseCorners();
++
++  //! One corner of PerformTightCorners whose other wall Wo's edge with U is
++  //! obtuse (mitcad#1426): the ball of R touching U and both walls lies
++  //! clear of K, and K (the ball of its radius rolling between Wp and Wo)
++  //! rolls on between Wo and the blend along Wp, then between the two
++  //! blends down to where their contacts on U meet: a strip and a triangle
++  //! as PerformTightConcaveCorners builds. SP's end (FirstP) runs along Wp,
++  //! SO's along Wo; the corners go to Corners. Returns false where the
++  //! corner cannot be built.
++  Standard_EXPORT bool PerformTightObtuseCorner(const occ::handle<ChFiDS_Stripe>&             SP,
++                                                const bool                                    FirstP,
++                                                const occ::handle<ChFiDS_Stripe>&             SO,
++                                                const bool                                    FirstO,
++                                                const TopoDS_Edge&                            Ek,
++                                                const TopoDS_Face&                            U,
++                                                const TopoDS_Face&                            K,
++                                                const TopoDS_Face&                            Wp,
++                                                const TopoDS_Face&                            Wo,
++                                                NCollection_List<occ::handle<ChFiDS_Stripe>>& Corners);
++
+   //! Concave contours of constant radius R whose tangent chain runs through
+   //! an arc between the chain's face U and a cylinder K of radius below R
+   //! whose axis lies on the ball's side (a wall's concave corner tighter
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index b86ef96f..ab7e5ec3 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -21528,6 +21528,15 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+     // Contacts running into the face at an end of the spine before it.
+     for (const bool isFirst : {true, false})
+     {
++      // (An end made at a corner tighter than the ball and prolonged past
++      // its vertex is closed by that corner's own construction, which cuts
++      // it: ExtendAtTightObtuseCorners, ExtendAtTightConcaveArcs.)
++      if (Spine->Status(isFirst) == ChFiDS_Tangent
++          && (isFirst ? Spine->FirstParameter() < -Precision::PConfusion()
++                      : Spine->LastParameter() > Spine->LastParameter(Spine->NbEdges()) + Precision::PConfusion()))
++      {
++        continue;
++      }
+       if (!ChFi3d_KPartCutToEnd(DStr, Spine, aLSD, aFull, aState, aIntf, aIntl, myEFMap, myVFMap, tolapp3d, isFirst))
+       {
+         // (The face at the end cuts the blend before its contact comes back
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 9f9f82dd..4e4a7a8d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -44,6 +44,8 @@
+ #include <Geom_Circle.hxx>
+ #include <Geom_Ellipse.hxx>
+ #include <Geom_ToroidalSurface.hxx>
++#include <gp_Cylinder.hxx>
++#include <gp_Torus.hxx>
+ #include <GeomAdaptor_Curve.hxx>
+ #include <IntAna_QuadQuadGeo.hxx>
+ #include <BRep_Tool.hxx>
+@@ -5096,6 +5098,12 @@ namespace
+ //! Axis), between the chain's lines Ea and Eb, whose other faces are the
+ //! planes Wa and Wb tangent to K; n, na, nb the outward normals of U, Wa
+ //! and Wb. ASquare: Wa is square to Eb's line (else Wb to Ea's).
++//! Or (KTorus, mitcad#1426) a cylinder's rim rounded with less than the
++//! radius: K a torus (tube radius rk, major radius RK, axis Axis) between
++//! the plane square to the other line and the cylinder CylO coaxial with
++//! K, the other wall, its outward normal at its line on U in na or nb.
++//! Obtuse: the other wall's edge with U is obtuse (its outward normal
++//! there turns towards U's).
+ struct ChFi3d_TightArcData
+ {
+   TopoDS_Face U, K, Wa, Wb;
+@@ -5103,6 +5111,10 @@ struct ChFi3d_TightArcData
+   double      rk = 0.;
+   gp_Ax1      Axis;
+   bool        ASquare = false;
++  bool        KTorus  = false;
++  double      RK      = 0.;
++  gp_Cylinder CylO;
++  bool        Obtuse = false;
+ };
+ } // namespace
+ 
+@@ -5163,12 +5175,16 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+   const TopoDS_Face F1 = TopoDS::Face(EFMap(Ek).First());
+   const TopoDS_Face F2 = TopoDS::Face(EFMap(Ek).Last());
+   gp_Pln            PlU;
+-  if (ChFi3d_PlaneOf(F1, PlU, D.n) && BRepAdaptor_Surface(F2, false).GetType() == GeomAbs_Cylinder)
++  const auto        isK = [](const TopoDS_Face& F) {
++    const GeomAbs_SurfaceType t = BRepAdaptor_Surface(F, false).GetType();
++    return t == GeomAbs_Cylinder || t == GeomAbs_Torus;
++  };
++  if (ChFi3d_PlaneOf(F1, PlU, D.n) && isK(F2))
+   {
+     D.U = F1;
+     D.K = F2;
+   }
+-  else if (ChFi3d_PlaneOf(F2, PlU, D.n) && BRepAdaptor_Surface(F1, false).GetType() == GeomAbs_Cylinder)
++  else if (ChFi3d_PlaneOf(F2, PlU, D.n) && isK(F1))
+   {
+     D.U = F2;
+     D.K = F1;
+@@ -5177,9 +5193,25 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+   {
+     return false;
+   }
+-  const gp_Cylinder aCyl = BRepAdaptor_Surface(D.K, false).Cylinder();
+-  D.rk                   = aCyl.Radius();
+-  D.Axis                 = aCyl.Axis();
++  const BRepAdaptor_Surface aKS(D.K, false);
++  D.KTorus = aKS.GetType() == GeomAbs_Torus;
++  if (D.KTorus)
++  {
++    const gp_Torus aTor = aKS.Torus();
++    D.rk                = aTor.MinorRadius();
++    D.RK                = aTor.MajorRadius();
++    D.Axis              = aTor.Axis();
++    if (!(D.RK > D.rk + 10. * tol))
++    {
++      return false;
++    }
++  }
++  else
++  {
++    const gp_Cylinder aCyl = aKS.Cylinder();
++    D.rk                   = aCyl.Radius();
++    D.Axis                 = aCyl.Axis();
++  }
+   if (!(D.rk > 10. * tol && D.rk < R - 10. * tol))
+   {
+     return false;
+@@ -5192,14 +5224,14 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+   const gp_Lin La = aCa.Line(), Lb = aCb.Line();
+   D.Wa            = ChFi3d_FaceBeyond(EFMap, Ea, D.U);
+   D.Wb            = ChFi3d_FaceBeyond(EFMap, Eb, D.U);
+-  gp_Pln PlA, PlB;
+-  if (D.Wa.IsNull() || D.Wb.IsNull() || D.Wa.IsSame(D.Wb) || !ChFi3d_PlaneOf(D.Wa, PlA, D.na)
+-      || !ChFi3d_PlaneOf(D.Wb, PlB, D.nb))
++  if (D.Wa.IsNull() || D.Wb.IsNull() || D.Wa.IsSame(D.Wb))
+   {
+     return false;
+   }
+-  // The lines on U and on their walls; the walls along K's axis, at rk from
+-  // it, K's axis inside both (a convex corner).
++  gp_Pln     PlA, PlB;
++  const bool aPlane = ChFi3d_PlaneOf(D.Wa, PlA, D.na);
++  const bool bPlane = ChFi3d_PlaneOf(D.Wb, PlB, D.nb);
++  // The lines on U.
+   for (const gp_Lin* L : {&La, &Lb})
+   {
+     if (std::abs(L->Direction().Dot(D.n)) > angTol || PlU.Distance(L->Location()) > tol)
+@@ -5207,36 +5239,118 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+       return false;
+     }
+   }
+-  if (std::abs(La.Direction().Dot(D.na)) > angTol || PlA.Distance(La.Location()) > tol
+-      || std::abs(Lb.Direction().Dot(D.nb)) > angTol || PlB.Distance(Lb.Location()) > tol)
++  if (D.KTorus)
+   {
+-    return false;
+-  }
+-  const gp_Dir& a = D.Axis.Direction();
+-  if (std::abs(a.Dot(D.na)) > angTol || std::abs(a.Dot(D.nb)) > angTol)
+-  {
+-    return false;
+-  }
+-  const gp_Pnt& O = D.Axis.Location();
+-  if (std::abs(gp_Vec(PlA.Location(), O).Dot(gp_Vec(D.na)) + D.rk) > tol
+-      || std::abs(gp_Vec(PlB.Location(), O).Dot(gp_Vec(D.nb)) + D.rk) > tol)
+-  {
+-    return false;
+-  }
+-  const bool aSq = std::abs(std::abs(D.na.Dot(Lb.Direction())) - 1.) <= angTol;
+-  const bool bSq = std::abs(std::abs(D.nb.Dot(La.Direction())) - 1.) <= angTol;
+-  if (!aSq && !bSq)
+-  {
+-    return false;
++    // A cylinder's rim: the plane Wp square to the other line, along K's
++    // axis at rk from K's tube circle; the other wall Wo a cylinder about
++    // K's axis, its line on U along it, K's tube circle rk inside it.
++    const bool aSqT = aPlane && std::abs(std::abs(D.na.Dot(Lb.Direction())) - 1.) <= angTol;
++    const bool bSqT = bPlane && std::abs(std::abs(D.nb.Dot(La.Direction())) - 1.) <= angTol;
++    if (aSqT == bSqT)
++    {
++      return false;
++    }
++    D.ASquare             = aSqT;
++    const gp_Pln&      PlP = aSqT ? PlA : PlB;
++    const gp_Dir&      np  = aSqT ? D.na : D.nb;
++    const gp_Lin&      Lp  = aSqT ? La : Lb;
++    const gp_Lin&      Lo  = aSqT ? Lb : La;
++    const TopoDS_Face& Wo  = aSqT ? D.Wb : D.Wa;
++    const BRepAdaptor_Surface aWo(Wo, false);
++    if (aWo.GetType() != GeomAbs_Cylinder)
++    {
++      return false;
++    }
++    D.CylO              = aWo.Cylinder();
++    const gp_Dir& a     = D.Axis.Direction();
++    const gp_Lin  aAxis(D.Axis);
++    if (std::abs(np.Dot(Lp.Direction())) > angTol || PlP.Distance(Lp.Location()) > tol
++        || std::abs(std::abs(np.Dot(a)) - 1.) > angTol
++        || std::abs(std::abs(D.CylO.Axis().Direction().Dot(a)) - 1.) > angTol
++        || aAxis.Distance(D.CylO.Location()) > tol
++        || std::abs(std::abs(Lo.Direction().Dot(a)) - 1.) > angTol
++        || std::abs(aAxis.Distance(Lo.Location()) - D.CylO.Radius()) > tol)
++    {
++      return false;
++    }
++    // K's tube circle rk inside Wp and inside Wo.
++    const gp_Pnt& OK = D.Axis.Location();
++    if (std::abs(gp_Vec(PlP.Location(), OK).Dot(gp_Vec(np)) + D.rk) > tol)
++    {
++      return false;
++    }
++    // Wo's outward normal at its line on U: from its axis (a convex wall)
++    // or towards it (a concave one).
++    const gp_Pnt Mo = Lo.Location();
++    gp_Vec       aRad(ElCLib::Value(ElCLib::Parameter(aAxis, Mo), aAxis), Mo);
++    if (aRad.Magnitude() < 10. * tol)
++    {
++      return false;
++    }
++    aRad.Normalize();
++    gp_Dir no;
++    {
++      double u = 0., v = 0.;
++      ElSLib::Parameters(D.CylO, Mo, u, v);
++      gp_Pnt Pc;
++      gp_Vec du, dv;
++      ElSLib::D1(u, v, D.CylO, Pc, du, dv);
++      gp_Vec aN = du.Crossed(dv);
++      if (aN.Magnitude() < 1.e-12)
++      {
++        return false;
++      }
++      if (Wo.Orientation() == TopAbs_REVERSED)
++      {
++        aN.Reverse();
++      }
++      no = gp_Dir(aN);
++    }
++    const double sO = no.Dot(gp_Dir(aRad)) > 0. ? 1. : -1.;
++    if (std::abs(D.CylO.Radius() - sO * D.rk - D.RK) > tol)
++    {
++      return false;
++    }
++    (aSqT ? D.nb : D.na) = no;
++    D.Obtuse             = no.Dot(D.n) > angTol;
+   }
+-  D.ASquare = aSq;
+-  // (The other wall square to U or leaning over it, its edge with U acute:
+-  // an obtuse one is not such a corner.)
+-  if ((aSq ? D.nb : D.na).Dot(D.n) > angTol)
++  else
+   {
+-    return false;
++    if (!aPlane || !bPlane)
++    {
++      return false;
++    }
++    // The lines on their walls; the walls along K's axis, at rk from it,
++    // K's axis inside both (a convex corner).
++    if (std::abs(La.Direction().Dot(D.na)) > angTol || PlA.Distance(La.Location()) > tol
++        || std::abs(Lb.Direction().Dot(D.nb)) > angTol || PlB.Distance(Lb.Location()) > tol)
++    {
++      return false;
++    }
++    const gp_Dir& a = D.Axis.Direction();
++    if (std::abs(a.Dot(D.na)) > angTol || std::abs(a.Dot(D.nb)) > angTol)
++    {
++      return false;
++    }
++    const gp_Pnt& O = D.Axis.Location();
++    if (std::abs(gp_Vec(PlA.Location(), O).Dot(gp_Vec(D.na)) + D.rk) > tol
++        || std::abs(gp_Vec(PlB.Location(), O).Dot(gp_Vec(D.nb)) + D.rk) > tol)
++    {
++      return false;
++    }
++    const bool aSq = std::abs(std::abs(D.na.Dot(Lb.Direction())) - 1.) <= angTol;
++    const bool bSq = std::abs(std::abs(D.nb.Dot(La.Direction())) - 1.) <= angTol;
++    if (!aSq && !bSq)
++    {
++      return false;
++    }
++    D.ASquare = aSq;
++    // (The other wall square to U or leaning over it, its edge with U
++    // acute: the vertex blend and the torus; an obtuse one: the corner's
++    // own ball rolled on, PerformTightObtuseCorner.)
++    D.Obtuse = (aSq ? D.nb : D.na).Dot(D.n) > angTol;
+   }
+-  // K's edges with the walls run along its axis (no other face between).
++  // K's edges with the walls (no other face between).
+   bool aSeamA = false, aSeamB = false;
+   for (TopExp_Explorer ex(D.K, TopAbs_EDGE); ex.More(); ex.Next())
+   {
+@@ -5586,6 +5700,96 @@ void ChFi3d_Builder::SplitAtTightCorners()
+   }
+ }
+ 
++//=======================================================================
++// function : ExtendAtTightObtuseCorners
++// purpose  : See the header.
++//=======================================================================
++
++void ChFi3d_Builder::ExtendAtTightObtuseCorners()
++{
++  const double tol = std::max(10. * tolapp3d, 1.e-5);
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(myListStripe); it.More(); it.Next())
++  {
++    const occ::handle<ChFiDS_FilSpine> sp = it.Value()->Spine().IsNull()
++                                              ? occ::handle<ChFiDS_FilSpine>()
++                                              : occ::down_cast<ChFiDS_FilSpine>(it.Value()->Spine());
++    if (sp.IsNull() || !sp->IsConstant() || sp->IsPeriodic() || sp->GetTypeOfConcavity() == ChFiDS_Concave)
++    {
++      continue;
++    }
++    const double R   = sp->Radius();
++    const double ext = 2. * R;
++    for (const bool isfirst : {true, false})
++    {
++      if ((isfirst ? sp->FirstStatus() : sp->LastStatus()) != ChFiDS_Tangent)
++      {
++        continue;
++      }
++      const TopoDS_Vertex Vx = isfirst ? sp->FirstVertex() : sp->LastVertex();
++      const TopoDS_Edge   Ex = sp->Edges(isfirst ? 1 : sp->NbEdges());
++      if (!myVEMap.Contains(Vx))
++      {
++        continue;
++      }
++      // An obtuse tight arc at Vx between Ex and the end edge of a stripe
++      // of the same radius ending at its other vertex.
++      bool aObtuse = false;
++      for (NCollection_List<TopoDS_Shape>::Iterator itE(myVEMap(Vx)); itE.More() && !aObtuse; itE.Next())
++      {
++        const TopoDS_Edge& E = TopoDS::Edge(itE.Value());
++        if (E.IsSame(Ex) || BRep_Tool::Degenerated(E))
++        {
++          continue;
++        }
++        TopoDS_Vertex v1, v2;
++        TopExp::Vertices(E, v1, v2);
++        const TopoDS_Vertex Vo = v1.IsSame(Vx) ? v2 : v1;
++        for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itT(myListStripe); itT.More() && !aObtuse;
++             itT.Next())
++        {
++          const occ::handle<ChFiDS_FilSpine> sp2 = itT.Value()->Spine().IsNull()
++                                                     ? occ::handle<ChFiDS_FilSpine>()
++                                                     : occ::down_cast<ChFiDS_FilSpine>(itT.Value()->Spine());
++          if (sp2.IsNull() || !sp2->IsConstant() || std::abs(sp2->Radius() - R) > tol)
++          {
++            continue;
++          }
++          for (const bool f2 : {true, false})
++          {
++            if ((f2 ? sp2->FirstStatus() : sp2->LastStatus()) != ChFiDS_Tangent
++                || !(f2 ? sp2->FirstVertex() : sp2->LastVertex()).IsSame(Vo)
++                || (itT.Value() == it.Value() && f2 == isfirst))
++            {
++              continue;
++            }
++            ChFi3d_TightArcData D;
++            if (ChFi3d_TightArc(E, Ex, sp2->Edges(f2 ? 1 : sp2->NbEdges()), myEFMap, R, tol, D) && D.Obtuse)
++            {
++              aObtuse = true;
++              break;
++            }
++          }
++        }
++      }
++      if (!aObtuse)
++      {
++        continue;
++      }
++      if (isfirst && sp->FirstParameter() > -ext)
++      {
++        sp->SetFirstParameter(-ext);
++        sp->SetFirstTgt(0.);
++      }
++      const double dU = sp->LastParameter(sp->NbEdges());
++      if (!isfirst && sp->LastParameter() < dU + ext)
++      {
++        sp->SetLastParameter(dU + ext);
++        sp->SetLastTgt(dU);
++      }
++    }
++  }
++}
++
+ //=======================================================================
+ // function : ChFi3d_KeptSideOn
+ // purpose  : The transition of a new edge C (at its parameter t, PC its
+@@ -5773,6 +5977,16 @@ bool ChFi3d_Builder::PerformTightCorners()
+       {
+         return false;
+       }
++      if (D.Obtuse)
++      {
++        // (The other wall's edge with U obtuse: K's own ball rolled on
++        // between the blends, mitcad#1426.)
++        if (!PerformTightObtuseCorner(SP, fP, SO, fO, Ek, D.U, D.K, Wp, Wo, aCorners))
++        {
++          return false;
++        }
++        continue;
++      }
+       const occ::handle<ChFiDS_SurfData>& FdP =
+         fP ? SP->SetOfSurfData()->Value(1) : SP->SetOfSurfData()->Value(SP->SetOfSurfData()->Length());
+       const occ::handle<ChFiDS_SurfData>& FdO =
+@@ -5794,23 +6008,61 @@ bool ChFi3d_Builder::PerformTightCorners()
+       // blends.
+       gp_Pln PlU, PlP, PlO;
+       gp_Dir aNU, aNP, aNO;
+-      if (!ChFi3d_PlaneOf(D.U, PlU, aNU) || !ChFi3d_PlaneOf(Wp, PlP, aNP) || !ChFi3d_PlaneOf(Wo, PlO, aNO))
+-      {
+-        return false;
+-      }
+-      const double aDet = gp_Vec(n).Dot(gp_Vec(np).Crossed(gp_Vec(no)));
+-      if (std::abs(aDet) < 1.e-6)
++      if (!ChFi3d_PlaneOf(D.U, PlU, aNU) || !ChFi3d_PlaneOf(Wp, PlP, aNP)
++          || (!D.KTorus && !ChFi3d_PlaneOf(Wo, PlO, aNO)))
+       {
+         return false;
+       }
+       const double hU = gp_Vec(n).Dot(gp_Vec(PlU.Location().XYZ())) - R;
+       const double hP = gp_Vec(np).Dot(gp_Vec(PlP.Location().XYZ())) - R;
+-      const double hO = gp_Vec(no).Dot(gp_Vec(PlO.Location().XYZ())) - R;
+-      const gp_Pnt C((hU * gp_Vec(np).Crossed(gp_Vec(no)).XYZ() + hP * gp_Vec(no).Crossed(gp_Vec(n)).XYZ()
+-                      + hO * gp_Vec(n).Crossed(gp_Vec(np)).XYZ())
+-                     / aDet);
++      gp_Pnt       C;
++      gp_Vec       d2;
++      gp_Dir       e0 = no;
++      if (!D.KTorus)
++      {
++        const double aDet = gp_Vec(n).Dot(gp_Vec(np).Crossed(gp_Vec(no)));
++        if (std::abs(aDet) < 1.e-6)
++        {
++          return false;
++        }
++        const double hO = gp_Vec(no).Dot(gp_Vec(PlO.Location().XYZ())) - R;
++        C = gp_Pnt((hU * gp_Vec(np).Crossed(gp_Vec(no)).XYZ() + hP * gp_Vec(no).Crossed(gp_Vec(n)).XYZ()
++                    + hO * gp_Vec(n).Crossed(gp_Vec(np)).XYZ())
++                   / aDet);
++        d2 = gp_Vec(n).Crossed(gp_Vec(no));
++      }
++      else
++      {
++        // Wo a cylinder about K's axis (direction a, through A0, radius rw):
++        // Lo's axis R inside U and R inside Wo (rw - sO R from the axis, sO
++        // +1 where Wo is convex), on the side of Wo's line on U; C on it, R
++        // inside Wp. e0 is Wo's outward normal along Lo.
++        const gp_Dir  a  = D.CylO.Axis().Direction();
++        const gp_Pnt& A0 = D.CylO.Location();
++        const gp_Dir  e2(gp_Vec(a).Crossed(gp_Vec(n)));
++        const double  xU = gp_Vec(n).Dot(gp_Vec(A0, PlU.Location())) - R;
++        // (Wo's outward normal at its line on U, no: from the axis where Wo
++        // is convex; VO lies on that line.)
++        const gp_Pnt Mo = BRep_Tool::Pnt(VO);
++        const gp_Vec aRadO(gp_Vec(A0, Mo) - gp_Vec(a) * gp_Vec(A0, Mo).Dot(gp_Vec(a)));
++        if (aRadO.Magnitude() < tol)
++        {
++          return false;
++        }
++        const double sO  = no.Dot(gp_Dir(aRadO)) > 0. ? 1. : -1.;
++        const double rho0 = D.CylO.Radius() - sO * R;
++        const double y2  = rho0 * rho0 - xU * xU;
++        if (rho0 <= tol || y2 < 0.)
++        {
++          return false;
++        }
++        const double y = (aRadO.Dot(gp_Vec(e2)) >= 0. ? 1. : -1.) * std::sqrt(y2);
++        const double z = (hP - gp_Vec(np).Dot(gp_Vec(A0.XYZ()))) / gp_Vec(np).Dot(gp_Vec(a));
++        C              = gp_Pnt(A0.XYZ() + xU * n.XYZ() + y * e2.XYZ() + z * a.XYZ());
++        e0             = gp_Dir(sO * (xU * n.XYZ() + y * e2.XYZ()));
++        d2             = gp_Vec(a);
++      }
+       const gp_Vec d1 = gp_Vec(n).Crossed(gp_Vec(np));
+-      const gp_Vec d2 = gp_Vec(n).Crossed(gp_Vec(no));
+       if (d1.Magnitude() < 1.e-6 || d2.Magnitude() < 1.e-6)
+       {
+         return false;
+@@ -5826,7 +6078,6 @@ bool ChFi3d_Builder::PerformTightCorners()
+       {
+         eo.Reverse();
+       }
+-      const gp_Dir e0 = no;
+       if (eo.Dot(np) < 1. - 1.e-6 || std::abs(ep.Dot(np)) > 1.e-6 || std::abs(e0.Dot(np)) > 1.e-6
+           || std::abs(ep.Dot(n)) > 1.e-6)
+       {
+@@ -5839,11 +6090,22 @@ bool ChFi3d_Builder::PerformTightCorners()
+         return false;
+       }
+       const gp_Pnt OT(C.XYZ() + rho * np.XYZ());
+-      // (K's axis through the start of T's spine circle.)
+-      if (gp_Lin(D.Axis).Distance(gp_Pnt(OT.XYZ() + rho * e0.XYZ())) > tol)
++      // (K's axis, or a torus K's tube circle, through the start of T's
++      // spine circle.)
++      if (!D.KTorus && gp_Lin(D.Axis).Distance(gp_Pnt(OT.XYZ() + rho * e0.XYZ())) > tol)
+       {
+         return false;
+       }
++      if (D.KTorus)
++      {
++        const gp_Pnt X(OT.XYZ() + rho * e0.XYZ());
++        const gp_Vec aOX(D.Axis.Location(), X);
++        const double hX = aOX.Dot(gp_Vec(D.Axis.Direction()));
++        if (std::abs(hX) > tol || std::abs(gp_Lin(D.Axis).Distance(X) - D.RK) > tol)
++        {
++          return false;
++        }
++      }
+       const gp_Pnt PD(C.XYZ() + R * n.XYZ());
+       const gp_Pnt PQ(OT.XYZ() + rho * ep.XYZ() + rk * np.XYZ());
+       const gp_Pnt PM(OT.XYZ() + R * ep.XYZ());
+@@ -5913,8 +6175,18 @@ bool ChFi3d_Builder::PerformTightCorners()
+       {
+         return false;
+       }
+-      // The part of a seam towards U is taken away.
+-      const auto keptOnSeam = [&](const TopoDS_Edge& E) {
++      // The part of a seam towards U is taken away (a torus K's seams are
++      // circles round its axis, both ends on U: seen along the seam at w).
++      const auto keptOnSeam = [&](const TopoDS_Edge& E, const double w) {
++        if (D.KTorus)
++        {
++          double                        f = 0., l = 0.;
++          const occ::handle<Geom_Curve> Ce = BRep_Tool::Curve(E, f, l);
++          gp_Pnt                        Pe;
++          gp_Vec                        Te;
++          Ce->D1(w, Pe, Te);
++          return Te.Dot(gp_Vec(D.n)) > 0. ? TopAbs_REVERSED : TopAbs_FORWARD;
++        }
+         TopoDS_Vertex v1, v2;
+         TopExp::Vertices(E, v1, v2);
+         gp_Pln PlU;
+@@ -5993,6 +6265,11 @@ bool ChFi3d_Builder::PerformTightCorners()
+         {
+           u = ElCLib::InPeriod(u, 0.5 * (u1 + u2) - 0.5 * Sf->UPeriod(), 0.5 * (u1 + u2) + 0.5 * Sf->UPeriod());
+         }
++        // (A torus K: periodic both ways.)
++        if (Sf->IsVPeriodic())
++        {
++          v = ElCLib::InPeriod(v, 0.5 * (v1 + v2) - 0.5 * Sf->VPeriod(), 0.5 * (v1 + v2) + 0.5 * Sf->VPeriod());
++        }
+         return gp_Pnt2d(u, v);
+       };
+       if (pPe1.IsNull() || pOe3.IsNull())
+@@ -6074,16 +6351,16 @@ bool ChFi3d_Builder::PerformTightCorners()
+       cpM.SetPoint(PM);
+       cpF.SetPoint(PF);
+       cpK1.SetPoint(PK1);
+-      cpF.SetArc(tol, EsO, wF, keptOnSeam(EsO));
++      cpF.SetArc(tol, EsO, wF, keptOnSeam(EsO, wF));
+       if (aTorus)
+       {
+-        cpK1.SetArc(tol, EsP, wK1, keptOnSeam(EsP));
++        cpK1.SetArc(tol, EsP, wK1, keptOnSeam(EsP, wK1));
+       }
+       else
+       {
+         // (Q is K1 and M is F: the arc is K's section.)
+         cpQ = cpK1;
+-        cpQ.SetArc(tol, EsP, wK1, keptOnSeam(EsP));
++        cpQ.SetArc(tol, EsP, wK1, keptOnSeam(EsP, wK1));
+         cpM = cpF;
+       }
+       const int iD = ChFi3d_IndexPointInDS(cpD, DStr);
+@@ -6189,7 +6466,9 @@ bool ChFi3d_Builder::PerformTightCorners()
+       cV->SetSolidIndex(SP->SolidIndex());
+       aCorners.Append(cV);
+       const int IK = DStr.AddShape(D.K);
+-      const gp_Vec aDown(gp_Vec(D.Axis.Direction()) * (gp_Vec(D.Axis.Direction()).Dot(gp_Vec(n)) > 0. ? 1. : -1.));
++      // (Along K towards U: its axis, or a torus K's tube circle at e0.)
++      const gp_Vec aKAlong = D.KTorus ? gp_Vec(D.Axis.Direction()).Crossed(gp_Vec(e0)) : gp_Vec(D.Axis.Direction());
++      const gp_Vec aDown(aKAlong * (aKAlong.Dot(gp_Vec(n)) > 0. ? 1. : -1.));
+       if (!aTorus)
+       {
+         // (The arc is K's section: K is cut there.)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
+index 83943226..68709393 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
+@@ -78,8 +78,10 @@
+ #include <gp_Ax1.hxx>
+ #include <gp_Cylinder.hxx>
+ #include <gp_Lin.hxx>
++#include <gp_Pln.hxx>
+ #include <gp_Pnt.hxx>
+ #include <gp_Pnt2d.hxx>
++#include <gp_Torus.hxx>
+ #include <gp_Vec.hxx>
+ #include <gp_Vec2d.hxx>
+ 
+@@ -918,6 +920,95 @@ TopAbs_Orientation tcKeptAbove(const TopoDS_Edge& E, const gp_Dir& a)
+   return gp_Vec(BRep_Tool::Pnt(v1), BRep_Tool::Pnt(v2)).Dot(gp_Vec(a)) < 0. ? TopAbs_REVERSED : TopAbs_FORWARD;
+ }
+ 
++//! The same at parameter w of edge E whatever its curve: seen along the
++//! edge there (a torus's seam, a circle with both ends on U, mitcad#1426).
++TopAbs_Orientation tcKeptAboveAt(const TopoDS_Edge& E, const double w, const gp_Dir& a)
++{
++  if (BRepAdaptor_Curve(E).GetType() == GeomAbs_Line)
++  {
++    return tcKeptAbove(E, a);
++  }
++  double                        f = 0., l = 0.;
++  const occ::handle<Geom_Curve> C = BRep_Tool::Curve(TopoDS::Edge(E.Oriented(TopAbs_FORWARD)), f, l);
++  gp_Pnt                        P;
++  gp_Vec                        T;
++  C->D1(w, P, T);
++  return T.Dot(gp_Vec(a)) < 0. ? TopAbs_REVERSED : TopAbs_FORWARD;
++}
++
++//! The distance from X to edge E's curve and the point there (Pe).
++double tcToEdge(const TopoDS_Edge& E, const gp_Pnt& X, gp_Pnt& Pe)
++{
++  const BRepAdaptor_Curve aE(E);
++  if (aE.GetType() == GeomAbs_Line)
++  {
++    const gp_Lin Lin = aE.Line();
++    Pe               = ElCLib::Value(ElCLib::Parameter(Lin, X), Lin);
++    return Pe.Distance(X);
++  }
++  double                        f = 0., l = 0.;
++  const occ::handle<Geom_Curve> C = BRep_Tool::Curve(TopoDS::Edge(E.Oriented(TopAbs_FORWARD)), f, l);
++  if (C.IsNull())
++  {
++    return RealLast();
++  }
++  double t = 0., d = 0.;
++  tcOnCurve(C, f, l, X, t, d);
++  Pe = C->Value(t);
++  return d;
++}
++
++//! The parameter on curve C over [F, L] where it comes nearest edge E (a
++//! line: tcNearestToLine), the distance, and the point on E there.
++void tcNearestToEdge(const occ::handle<Geom_Curve>& C,
++                     const double                   F,
++                     const double                   L,
++                     const TopoDS_Edge&             E,
++                     double&                        t,
++                     double&                        d,
++                     gp_Pnt&                        Pe)
++{
++  const BRepAdaptor_Curve aE(E);
++  if (aE.GetType() == GeomAbs_Line)
++  {
++    const gp_Lin Lin = aE.Line();
++    tcNearestToLine(C, F, L, Lin, t, d);
++    Pe = ElCLib::Value(ElCLib::Parameter(Lin, C->Value(t)), Lin);
++    return;
++  }
++  const int n    = 200;
++  int       best = 0;
++  d              = RealLast();
++  gp_Pnt P;
++  for (int i = 0; i <= n; i++)
++  {
++    const double di = tcToEdge(E, C->Value(F + (L - F) * i / n), P);
++    if (di < d)
++    {
++      d    = di;
++      best = i;
++    }
++  }
++  double       a = F + (L - F) * std::max(0, best - 1) / n;
++  double       b = F + (L - F) * std::min(n, best + 1) / n;
++  const double g = 0.5 * (std::sqrt(5.) - 1.);
++  for (int it = 0; it < 100 && std::abs(b - a) > 1.e-15 * (1. + std::abs(b)); it++)
++  {
++    const double c1 = b - g * (b - a);
++    const double c2 = a + g * (b - a);
++    if (tcToEdge(E, C->Value(c1), P) < tcToEdge(E, C->Value(c2), P))
++    {
++      b = c2;
++    }
++    else
++    {
++      a = c1;
++    }
++  }
++  t = 0.5 * (a + b);
++  d = tcToEdge(E, C->Value(t), Pe);
++}
++
+ //! One rounding's end at the corner: its stripe, end, last SurfData, the
+ //! sides of U and of its wall W on it, the wall's edge with K (Ek), its
+ //! blend's surface, where its contact on W reaches Ek (tW, PW at height hW).
+@@ -947,6 +1038,7 @@ static bool tcBuildCorner(
+   const bool                                                                         FirstB,
+   const TopoDS_Edge&                                                                 Ek,
+   const TCArc&                                                                       D,
++  const double                                                                       Side,
+   NCollection_List<occ::handle<ChFiDS_Stripe>>&                                      Corners);
+ 
+ //=======================================================================
+@@ -1271,7 +1363,7 @@ bool ChFi3d_Builder::PerformTightConcaveCorners()
+         return false;
+       }
+       aDoneArcs.Add(Ek);
+-      if (!tcBuildCorner(myDS->ChangeDS(), tolapp3d, myRegul, myEVIMap, S, isfirst, S2, isfirst2, Ek, D, aCorners))
++      if (!tcBuildCorner(myDS->ChangeDS(), tolapp3d, myRegul, myEVIMap, S, isfirst, S2, isfirst2, Ek, D, 1., aCorners))
+       {
+         return false;
+       }
+@@ -1288,7 +1380,10 @@ bool ChFi3d_Builder::PerformTightConcaveCorners()
+ // function : tcBuildCorner
+ // purpose  : One corner of PerformTightConcaveCorners: stripe SA's end
+ //            (FirstA) along wall D.Fa, SB's (FirstB) along D.Fb, the arc
+-//            Ek of K between them (TCArc D).
++//            Ek of K between them (TCArc D). Side is 1 for a concave
++//            chain (the balls outside the material), -1 for a convex one
++//            (PerformTightObtuseCorner: the balls inside it, D.Axis
++//            pointing away from U, K's edges any curves).
+ //=======================================================================
+ 
+ static bool tcBuildCorner(
+@@ -1302,6 +1397,7 @@ static bool tcBuildCorner(
+   const bool                                                                         FirstB,
+   const TopoDS_Edge&                                                                 Ek,
+   const TCArc&                                                                       D,
++  const double                                                                       Side,
+   NCollection_List<occ::handle<ChFiDS_Stripe>>&                                      Corners)
+ {
+   const double                       tol = std::max(10. * tolapp3d, 1.e-5);
+@@ -1346,15 +1442,13 @@ static bool tcBuildCorner(
+     {
+       return false;
+     }
+-    const BRepAdaptor_Curve aE(e.E);
+-    double                  d = 0.;
+-    tcNearestToLine(Cc, Fi.FirstParameter(), Fi.LastParameter(), aE.Line(), e.tW, d);
++    double d = 0.;
++    // (PW on K's edge itself.)
++    tcNearestToEdge(Cc, Fi.FirstParameter(), Fi.LastParameter(), e.E, e.tW, d, e.PW);
+     if (d > tol)
+     {
+       return false;
+     }
+-    // (On K's edge itself.)
+-    e.PW = ElCLib::Value(ElCLib::Parameter(aE.Line(), Cc->Value(e.tW)), aE.Line());
+     e.hW = gp_Vec(e.PW.XYZ()).Dot(gp_Vec(a));
+   }
+   // L: the end lower on its wall, H the higher; the strip lies on L's wall
+@@ -1386,7 +1480,7 @@ static bool tcBuildCorner(
+       return false;
+     }
+     X = CLU->Value(s);
+-    C = X.Translated(gp_Vec(n) * R);
++    C = X.Translated(gp_Vec(n) * (Side * R));
+     return true;
+   };
+   const auto offWall = [&](const double s, double& f) {
+@@ -1397,7 +1491,7 @@ static bool tcBuildCorner(
+     {
+       return false;
+     }
+-    f = gp_Vec(SWH->Value(u, v), C).Dot(gp_Vec(nW)) - R;
++    f = Side * gp_Vec(SWH->Value(u, v), C).Dot(gp_Vec(nW)) - R;
+     return true;
+   };
+   double sP = 0.;
+@@ -1463,22 +1557,23 @@ static bool tcBuildCorner(
+   {
+     return false;
+   }
+-  // The apex: the ball of radius rk at P, its centre rk along U's normal.
+-  const gp_Pnt CApex = PP.Translated(gp_Vec(nP) * rk);
++  // The apex: the ball of radius rk at P, its centre rk along U's normal (into
++  // the material where the chain is convex).
++  const gp_Pnt CApex = PP.Translated(gp_Vec(nP) * (Side * rk));
+   const double hBot  = gp_Vec(CApex.XYZ()).Dot(gp_Vec(a));
+   if (!(hTop - hBot > 10. * tol))
+   {
+     return false;
+   }
+ 
+-  // The supports' sides: a wall's outward normal; a blend's normal towards
+-  // its ball (at P, U's outward normal).
++  // The supports' sides: a wall's outward normal (inward where convex); a
++  // blend's normal towards its ball (at P, U's outward normal times Side).
+   const auto blendSide = [&](const TCEnd& e, const ChFiDS_FaceInterference& Fi, const double s) {
+     const gp_Pnt2d uv = Fi.PCurveOnSurf()->Value(s);
+     gp_Pnt         X;
+     gp_Vec         du, dv;
+     e.Sf->D1(uv.X(), uv.Y(), X, du, dv);
+-    return du.Crossed(dv).Dot(gp_Vec(nP)) > 0. ? 1. : -1.;
++    return du.Crossed(dv).Dot(gp_Vec(nP) * Side) > 0. ? 1. : -1.;
+   };
+   const double sgnL = blendSide(eL, FiLU, sP);
+   const double sgnH = blendSide(eH, FiHU, tPH);
+@@ -1487,7 +1582,7 @@ static bool tcBuildCorner(
+   {
+     return false;
+   }
+-  const double sgnWL = eL.W.Orientation() == TopAbs_REVERSED ? -1. : 1.;
++  const double sgnWL = (eL.W.Orientation() == TopAbs_REVERSED ? -1. : 1.) * Side;
+   const ChFiDS_FaceInterference& FiLW = eL.Fd->Interference(eL.sW);
+   const ChFiDS_FaceInterference& FiHW = eH.Fd->Interference(eH.sW);
+   const occ::handle<Geom_Curve>& CLW  = DStr.Curve(FiLW.LineIndex()).Curve();
+@@ -1520,11 +1615,24 @@ static bool tcBuildCorner(
+     B.Sgn[1] = sgnH;
+     B.r      = rk;
+     B.A      = a;
++    // (A concave arc's K: its edges are lines along a, K's sections at a
++    // height. Else, a convex corner's K, its edges any curves or lines
++    // across the heights: K's section is the ball's at W.)
++    const bool aLineL = Side > 0. && BRepAdaptor_Curve(eL.E).GetType() == GeomAbs_Line;
+     {
+-      const BRepAdaptor_Curve aE(eL.E);
+-      const gp_Lin            L  = aE.Line();
+-      const double            w  = (hTop - gp_Vec(L.Location().XYZ()).Dot(gp_Vec(a))) / L.Direction().Dot(a);
+-      PK1                        = ElCLib::Value(w, L);
++      if (aLineL)
++      {
++        const BRepAdaptor_Curve aE(eL.E);
++        const gp_Lin            L = aE.Line();
++        const double            w = (hTop - gp_Vec(L.Location().XYZ()).Dot(gp_Vec(a))) / L.Direction().Dot(a);
++        PK1                       = ElCLib::Value(w, L);
++      }
++      else
++      {
++        // (K's section through W meets L's edge with K nearest W: a
++        // start; the section's own contact below.)
++        tcToEdge(eL.E, eH.PW, PK1);
++      }
+       double u = 0., v = 0., d = 0.;
+       if (!tcProject(SWL, PK1, u, v, d) || d > tol)
+       {
+@@ -1560,6 +1668,16 @@ static bool tcBuildCorner(
+     {
+       return false;
+     }
++    if (!aLineL)
++    {
++      // (K's section: its contact on L's wall lies on L's edge with K.)
++      gp_Pnt Pe;
++      if (tcToEdge(eL.E, aLast.X1, Pe) > tol)
++      {
++        return false;
++      }
++      PK1 = aLast.X1;
++    }
+     double g0 = 0.;
+     if (!side(aLast.x[0], aLast.x[1], g0) || std::abs(g0) < 1.e-12)
+     {
+@@ -1849,8 +1967,8 @@ static bool tcBuildCorner(
+     {
+       return false;
+     }
+-    cpK1.SetArc(tol, EL, wL, tcKeptAbove(EL, a));
+-    cpW.SetArc(tol, EH, wH, tcKeptAbove(EH, a));
++    cpK1.SetArc(tol, EL, wL, tcKeptAboveAt(EL, wL, a));
++    cpW.SetArc(tol, EH, wH, tcKeptAboveAt(EH, wH, a));
+     if (!aStrip)
+     {
+       cpQ = cpK1;
+@@ -1919,7 +2037,7 @@ static bool tcBuildCorner(
+     gp_Pnt X;
+     gp_Vec du, dv;
+     eL.Sf->D1(uvPL.X(), uvPL.Y(), X, du, dv);
+-    sL = du.Crossed(dv).Dot(gp_Vec(nP)) > 0.;
++    sL = du.Crossed(dv).Dot(gp_Vec(nP) * Side) > 0.;
+   }
+   const auto orientOf = [&](const occ::handle<Geom_BSplineSurface>& Sf, const TCSection& s, const double u,
+                             const double v) {
+@@ -2098,3 +2216,93 @@ static bool tcBuildCorner(
+   }
+   return true;
+ }
++
++//=======================================================================
++// function : PerformTightObtuseCorner
++// purpose  : See the header. The corner of tcBuildCorner with the balls
++//            inside the material: K is the ball of its radius rolling
++//            between Wp and Wo; it rolls on between Wo and Wp's blend (the
++//            strip, from K's section where Wp's blend's contact on Wp
++//            reaches K) and then between the two blends (the triangle),
++//            down to where the contacts on U meet. The heights are taken
++//            along U's inward normal.
++//=======================================================================
++
++bool ChFi3d_Builder::PerformTightObtuseCorner(const occ::handle<ChFiDS_Stripe>&             SP,
++                                              const bool                                    FirstP,
++                                              const occ::handle<ChFiDS_Stripe>&             SO,
++                                              const bool                                    FirstO,
++                                              const TopoDS_Edge&                            Ek,
++                                              const TopoDS_Face&                            U,
++                                              const TopoDS_Face&                            K,
++                                              const TopoDS_Face&                            Wp,
++                                              const TopoDS_Face&                            Wo,
++                                              NCollection_List<occ::handle<ChFiDS_Stripe>>& Corners)
++{
++  TCArc D;
++  D.U  = U;
++  D.K  = K;
++  D.Fa = Wp;
++  D.Fb = Wo;
++  const BRepAdaptor_Surface aK(K, false);
++  if (aK.GetType() == GeomAbs_Torus)
++  {
++    D.rk = aK.Torus().MinorRadius();
++  }
++  else if (aK.GetType() == GeomAbs_Cylinder)
++  {
++    D.rk = aK.Cylinder().Radius();
++  }
++  else
++  {
++    return false;
++  }
++  // U's outward normal: the heights are taken against it.
++  const BRepAdaptor_Surface aU(U, false);
++  if (aU.GetType() != GeomAbs_Plane)
++  {
++    return false;
++  }
++  const gp_Pln aPl = aU.Plane();
++  gp_Dir       n   = aPl.Axis().Direction();
++  if (!aPl.Position().Direct())
++  {
++    n.Reverse();
++  }
++  if (U.Orientation() == TopAbs_REVERSED)
++  {
++    n.Reverse();
++  }
++  D.Axis = gp_Ax1(aPl.Location(), n.Reversed());
++  // K's edges with Wp and Wo through the arc's vertices.
++  TopoDS_Vertex v1, v2;
++  TopExp::Vertices(Ek, v1, v2);
++  for (TopExp_Explorer ex(K, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (BRep_Tool::Degenerated(E) || E.IsSame(Ek))
++    {
++      continue;
++    }
++    TopoDS_Vertex e1, e2;
++    TopExp::Vertices(E, e1, e2);
++    const bool aAtArc = e1.IsSame(v1) || e1.IsSame(v2) || e2.IsSame(v1) || e2.IsSame(v2);
++    if (!aAtArc)
++    {
++      continue;
++    }
++    if (D.Ka.IsNull() && tcHasFace(myEFMap, E, Wp))
++    {
++      D.Ka = E;
++    }
++    else if (D.Kb.IsNull() && tcHasFace(myEFMap, E, Wo))
++    {
++      D.Kb = E;
++    }
++  }
++  if (D.Ka.IsNull() || D.Kb.IsNull())
++  {
++    return false;
++  }
++  return tcBuildCorner(myDS->ChangeDS(), tolapp3d, myRegul, myEVIMap, SP, FirstP, SO, FirstO, Ek, D, -1., Corners);
++}

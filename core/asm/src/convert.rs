@@ -510,7 +510,8 @@ struct Circle {
 /// whose points (16 in each knot span) lie on the circle through three of
 /// them within a billionth of its radius (a rational quadratic circle, as
 /// files store the slices of round blends and the profiles of round
-/// extrusions). `None` for other curves.
+/// extrusions), those three points spanning at least a thousandth of the
+/// radius. `None` for other curves.
 fn circle_of(curve: &Curve) -> Option<Circle> {
     match curve {
         Curve::Ellipse {
@@ -550,6 +551,19 @@ fn circle_of(curve: &Curve) -> Option<Circle> {
                 ),
             );
             let radius = brep::dist(p0, center);
+            // Three points (nearly) on a line give a circle of a huge
+            // radius, and a tolerance in billionths of it would take any
+            // curve near that line for an arc of it: a profile of a line
+            // and an arc was taken for a circle 3e16 mm wide, its faces'
+            // vertices then mm off their cylinder (mitcad_private#198). An
+            // arc whose points span less than a thousandth of its radius
+            // (under a milliradian) is no circle here.
+            let span = brep::dist(p0, p1)
+                .max(brep::dist(p1, p2))
+                .max(brep::dist(p0, p2));
+            if radius.is_nan() || radius > 1e3 * span {
+                return None;
+            }
             let normal = unit(brep::cross(brep::sub(p1, p0), brep::sub(p2, p0)));
             let tol = 1e-9 * radius.max(1.0);
             let n = 16 * b.knots.len().max(2);
@@ -3233,6 +3247,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)] // a profile's points as stored in a file
     fn round_extrusions_are_cylinders() {
         // mitcad_private#198: a circle swept along its normal is a
         // cylinder, its natural normal outwards: as the extrusion's where
@@ -3345,6 +3360,50 @@ mod tests {
         };
         assert!(matches!(
             ctx.surface_geom(&extrusion(oval, [0.0, 0.0, 5.0]))
+                .unwrap()
+                .0,
+            Surface::Extrusion { .. }
+        ));
+        // A profile of a long line and then a short bend (degree 2, the
+        // line's span first, as a file stored it): its first three points
+        // at a third and two thirds of its range lie on the line, and the
+        // circle through them, 1e16 mm wide, is not taken for it
+        // (mitcad_private#198: the faces' vertices were mm off it).
+        let bent = |ctrl: &[[f64; 3]], knots: Vec<f64>| AsmCurve::Int {
+            reversed: false,
+            subtype: "exact_int_cur".into(),
+            geom: IntGeom::BSpline(Bs3Curve {
+                degree: 2,
+                rational: false,
+                closure: 0,
+                mults: vec![2; knots.len()],
+                knots,
+                ctrl: ctrl.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect(),
+            }),
+        };
+        let line_and_bend = bent(
+            &[
+                [-2.5803664572168227, 1.746, 0.7679655154297169],
+                [-0.886937719591222, 1.746, 1.6415195382965358],
+                [0.8064910180343794, 1.746, 2.515073561163357],
+                [0.8945234984912187, 1.746, 2.560485054270447],
+                [0.9453212102898616, 1.746, 2.644722421367375],
+            ],
+            vec![-19.2364082988182, 0.0, 1.0],
+        );
+        assert!(matches!(
+            ctx.surface_geom(&extrusion(line_and_bend, [0.0, -1.0, 0.0]))
+                .unwrap()
+                .0,
+            Surface::Extrusion { .. }
+        ));
+        // A straight B-spline: no circle either.
+        let straight = bent(
+            &[[0.0, 0.0, 0.0], [1.0, 0.5, 0.0], [2.0, 1.0, 0.0]],
+            vec![0.0, 1.0],
+        );
+        assert!(matches!(
+            ctx.surface_geom(&extrusion(straight, [0.0, 0.0, 1.0]))
                 .unwrap()
                 .0,
             Surface::Extrusion { .. }

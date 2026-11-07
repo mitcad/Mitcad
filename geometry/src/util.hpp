@@ -5,7 +5,9 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -75,11 +77,28 @@ public:
   OperationScope& operator=(const OperationScope&) = delete;
 };
 
+// Calls `call(work)` as an operation's work (mitcad#1429). On Windows it is
+// also the point the thread comes back to from a crash that OCCT's handler
+// turned into an exception but that the stack cannot unwind to the
+// operation: a crash in a destructor, whose exception would end the
+// process (std::terminate; a destructor is noexcept, also where it is
+// inlined). The thread then comes back here without unwinding the frames
+// between, as OCCT's handler jumps back to OCC_CATCH_SIGNALS on Linux and
+// macOS, and this throws the crash's exception (a Standard_Failure with
+// OCCT's message) instead. Elsewhere it only calls.
+void call_recoverable(void (*call)(void*), void* work);
+
+template <class Work>
+void recoverable(Work& work) {
+  call_recoverable([](void* data) { (*static_cast<Work*>(data))(); }, &work);
+}
+
 // OCCT reports errors as Standard_Failure; add context for the user. With
 // OCCT's signal handlers installed (catch_occt_crashes), a crash inside the
 // operation is one too: OCC_CATCH_SIGNALS gives the handlers somewhere to
 // return to where OCCT has no handler of its own (on Linux; on Windows the
-// handlers throw). An operation asked to stop does not start, and one that
+// handlers throw, and where that exception cannot unwind to here the
+// thread comes back to call_recoverable). An operation asked to stop does not start, and one that
 // fails after the request was cancelled (cancel.hpp), unless an allocation
 // failed in it (the import stops on that). An allocation that
 // fails (OCCT's Standard_OutOfMemory, std::bad_alloc) is an error
@@ -96,18 +115,39 @@ auto run(const char* operation, Operation&& op) -> decltype(op()) {
   const CheckedOperation check(operation);
   const OperationScope scope;
   const std::size_t failed = failed_allocations_in_thread();
+  using Result = decltype(op());
   try {
     OCC_CATCH_SIGNALS
-    crash_if_asked(operation);
-    fail_allocation_if_asked(operation);
-    fail_occt_allocation_if_asked(operation);
-    if constexpr (std::is_void_v<decltype(op())>) {
-      op();
+    const auto start = [operation] {
+      crash_if_asked(operation);
+      fail_allocation_if_asked(operation);
+      fail_occt_allocation_if_asked(operation);
+    };
+    if constexpr (std::is_void_v<Result>) {
+      auto work = [&] {
+        start();
+        op();
+      };
+      recoverable(work);
       throw_if_allocation_failed(failed);
+    } else if constexpr (std::is_reference_v<Result>) {
+      std::add_pointer_t<std::remove_reference_t<Result>> result = nullptr;
+      auto work = [&] {
+        start();
+        result = std::addressof(op());
+      };
+      recoverable(work);
+      throw_if_allocation_failed(failed);
+      return static_cast<Result>(*result);
     } else {
-      decltype(auto) result = op();
+      std::optional<Result> result;
+      auto work = [&] {
+        start();
+        result.emplace(op());
+      };
+      recoverable(work);
       throw_if_allocation_failed(failed);
-      return result;
+      return std::move(*result);
     }
   } catch (const Cancelled&) {
     // Stopped after an allocation it caught inside failed: the import's

@@ -483,9 +483,13 @@ CommandDef pathPatternCommand(const CommandContext& context) {
   def.keyInputs = {QStringLiteral("object_type")};
   def.inputs += {
       // Several curves are a chain, joined end to end (mitcad#464).
-      selectionInput(QStringLiteral("path"), QObject::tr("Path"), SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("A sketch line, arc or circle, or a chain of them in one sketch"))
-          .withAccepts([](const SelectionItem& item) { return isLine(item) || isCircular(item); }),
+      // Or an Intersection Curve (mitcad#1405), picked in the view or on the
+      // timeline.
+      selectionInput(QStringLiteral("path"), QObject::tr("Path"), SelectKind::SketchCurve | SelectKind::Feature, 1, 0)
+          .withTooltip(QObject::tr("A sketch line, arc or circle, a chain of them, or an intersection curve"))
+          .withAccepts([](const SelectionItem& item) {
+            return item.kind == SelectKind::Feature || isLine(item) || isCircular(item);
+          }),
       distanceTypeInput(),
       directionTypeInput(QStringLiteral("direction_type"), QObject::tr("Direction Type")),
       valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
@@ -510,8 +514,9 @@ CommandDef pathPatternCommand(const CommandContext& context) {
       return result;
     }
     const Selection& curves = state.items(QStringLiteral("path"));
-    const QJsonValue path =
-        curves.size() > 1 ? pathOf(curves, false, result, QStringLiteral("path")) : curves.first().reference();
+    const QJsonValue path = curves.size() > 1 || curves.first().kind == SelectKind::Feature
+                                ? pathOf(curves, false, result, QStringLiteral("path"))
+                                : curves.first().reference();
     if (!result.error.isEmpty()) {
       return result;
     }
@@ -540,7 +545,7 @@ CommandDef pathPatternCommand(const CommandContext& context) {
     loadObjects(feature, state, context);
     loadSuppressed(feature, state);
     const QJsonValue path = feature.value(QStringLiteral("path"));
-    if (path.toObject().contains(QStringLiteral("curves"))) {
+    if (path.toObject().contains(QStringLiteral("curves")) || path.toObject().contains(QStringLiteral("feature"))) {
       state.setItems(QStringLiteral("path"), pathItems(path, context).value_or(Selection{}));
     } else {
       state.setItems(QStringLiteral("path"), {itemOf(path, context)});

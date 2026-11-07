@@ -88,6 +88,13 @@
 #     drawing's ISO, A3, first angle (a cut sheet is not kept); ANSI chosen
 #     (B, third angle) and a drawing created; the next Create Drawing opens
 #     with ANSI, B, third angle (logged), cancelled.
+#   - Model Items (mitcad#1406) on a block mitcad-cli makes with the
+#     model's annotations (its height, datum A on its top, a hole's
+#     callout): a sheet of three views, Model Items with nothing selected
+#     (the command search, its panel's Sketch Dimensions and Model
+#     Annotations, Apply): each annotation drawn once, in the view that
+#     sees it (logged as "Drawing model items: …"); the view's panel shows
+#     Model Annotations; one Undo takes them all.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-drawings-test.sh [screenshot.png]
@@ -1243,6 +1250,97 @@ ui_focus_dialog '^Create Drawing$'
 ui_step "Cancel (Esc)"                     ui_key Escape
 ui_focus_main
 ui_expect_new "Create Drawing cancelled" "nothing made"
+
+echo "--- Model Items on a sheet of three views (mitcad#1406)"
+# A 40 x 30 x 20 block with a 6.6 mm hole from its top at (20, 15), and the
+# model's annotations: its height (Offset1), datum A on its top and the
+# hole's callout. A sheet of three views (the front, one beside it, one
+# above it); Model Items with nothing selected brings each of them into
+# the one view that sees it, in one undo step.
+ITEMS="$WORK/items.mitcad"
+cat > "$WORK/items.json" << EOF
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "$R"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F2.b0", "face": "F2:end($R)", "points": [[20, 15, 20]]},
+    "diameter": 6.6, "extent": {"type": "distance", "depth": 10}}},
+  {"cmd": "add_annotation", "name": "Offset1", "kind": "offset",
+    "a": {"body": "F2.b0", "face": "F2:end($R)"}, "b": {"body": "F2.b0", "face": "F2:start($R)"}},
+  {"cmd": "add_annotation", "name": "DatumA", "letter": "A", "a": {"body": "F2.b0", "face": "F2:end($R)"}},
+  {"cmd": "add_annotation", "name": "HoleCallout1", "kind": "hole_callout",
+    "a": {"body": "F2.b0", "face": "F3:hole0.wall"}, "at": [20, 18.3, 20]}
+]
+EOF
+"$CLI" run "$WORK/items.json" --save "$ITEMS" > "$WORK/cli.log" 2>&1 ||
+  { cat "$WORK/cli.log"; ui_fail "mitcad-cli (the annotated block)"; }
+ui_stop_app
+ui_start_app --open "$ITEMS" --no-native-dialogs
+ui_expect_log "items.mitcad" "the annotated block opened"
+ui_mark
+ui_step "Create Drawing (search)"          ui_command "Create Drawing"
+ui_expect_new "Create Drawing dialog opened" "its dialog"
+ui_focus_dialog '^Create Drawing$'
+ui_step "OK"                               ui_key Return
+ui_focus_main
+ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "its sheet over the view"
+ui_expect_new "Drawing model items: none" "nothing of the model's yet"
+ui_expect_new "Drawing tool: Base View" "Base View on"
+ui_mark
+ui_step "the front view at 120, 120"       sheet_click 120 120
+ui_expect_new "Drawing view 1 at" "the front view drawn"
+ui_expect_new "Drawing tool: Projected View" "projected views follow"
+ui_step "a view beside it"                 sheet_click 215 120
+ui_expect_new "Drawing view 2 at" "the side view drawn"
+ui_step "a view above it"                  sheet_click 120 200
+ui_expect_new "Drawing view 3 at" "the view from above or below drawn"
+ui_expect_new "Drawing sheet drawn: 3 views" "three views on the sheet"
+no_refusal
+ui_mark
+ui_step "end the tool (Esc)"               ui_key Escape
+ui_expect_new "Drawing tool: selection" "back to the selection"
+ui_mark
+ui_step "Model Items (search)"             ui_command "Model Items"
+ui_expect_new "Drawing tool: Model Items" "the Model Items tool is on"
+ui_expect_new "Drawing panel drawingOption_sketch_dimensions at" "its Sketch Dimensions check box"
+ui_expect_new "Drawing panel drawingOption_model_annotations at" "its Model Annotations check box"
+ui_expect_new "Drawing panel drawingToolApply at" "its Apply"
+ui_mark
+settled "Drawing panel drawingToolApply"
+ui_step "Apply (nothing selected)"         ui_click_logged "Drawing panel drawingToolApply"
+ui_expect_new "Drawing Model Items on all views" "on all the sheet's views"
+ui_expect_new '"cmd":"drawing_model_items"' "one command asked for"
+ui_expect_new "Drawing model items: " "the model's annotations drawn"
+ui_expect_new "Drawing tool: selection" "the tool done"
+no_refusal
+ui_sync
+items=$(grep -F "Drawing model items: " "$UI_LOG" | tail -1)
+for name in Offset1 DatumA HoleCallout1; do
+  count=$(grep -o "$name in view [0-9]*" <<< "$items" | wc -l)
+  [ "$count" -eq 1 ] || ui_fail "$name is drawn $count times: $items"
+done
+echo "ok   each of the model's annotations drawn once: ${items#*: }"
+# The datum on the top and the hole's callout in the view from above or
+# below, the height in the front or the side view.
+grep -q "DatumA in view 3" <<< "$items" || ui_fail "the datum is not in the view from above: $items"
+grep -q "HoleCallout1 in view 3" <<< "$items" || ui_fail "the callout is not in the view from above: $items"
+grep -Eq "Offset1 in view [12]" <<< "$items" || ui_fail "the height is not in the front or the side view: $items"
+echo "ok   each in the view that sees it"
+# Each view's panel shows its Model Annotations on.
+ui_mark
+ui_step "select the front view"            ui_click_logged "Drawing view 1"
+ui_expect_new "Drawing view 1 selected" "the front view selected"
+ui_expect_new "Drawing panel drawingViewModelAnnotations at" "its Model Annotations in its panel"
+ui_mark
+ui_step "Esc"                              ui_key Escape
+ui_expect_new "Drawing selection cleared" "nothing selected"
+# One undo step takes them all.
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "Drawing model items: none" "Model Items undone in one step"
+no_refusal
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI drawings test"

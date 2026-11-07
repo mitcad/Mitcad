@@ -27,7 +27,9 @@ use super::ApiError;
 use super::annotations::present;
 use super::cut_sheets::PartEdit;
 use super::dispatch::named_enum;
-use super::drawing_annotations::{AddAnnotationCommand, EditAnnotationCommand};
+use super::drawing_annotations::{
+    AddAnnotationCommand, EditAnnotationCommand, KeepModelItemsCommand, ModelItemsCommand,
+};
 use super::drawing_templates::{RevisionCommand, SaveTemplateCommand};
 use super::prelude::*;
 use mitcad_model::Document;
@@ -217,6 +219,10 @@ pub(super) struct AddViewCommand {
     /// The sketch dimensions it sees square on (off when left out).
     #[serde(default)]
     retrieved_dimensions: Option<bool>,
+    /// The model's annotations it sees square on (off when left out,
+    /// mitcad#1406).
+    #[serde(default)]
+    model_annotations: Option<bool>,
 }
 
 /// A break picked on a view: two sheet points whose coordinates along the
@@ -281,6 +287,8 @@ pub(super) struct EditViewCommand {
     center_marks: Option<bool>,
     #[serde(default)]
     retrieved_dimensions: Option<bool>,
+    #[serde(default)]
+    model_annotations: Option<bool>,
     /// How far it is turned on the sheet, degrees counter-clockwise
     /// (mitcad#729).
     #[serde(default)]
@@ -328,6 +336,10 @@ named_enum! {
             revision: String,
         },
         "save_drawing_template" => SaveTemplate(Box<SaveTemplateCommand>),
+        // The model's items in views, and kept as the drawing's own
+        // (mitcad#1406, `drawing_annotations.rs`).
+        "drawing_model_items" => ModelItems(Box<ModelItemsCommand>),
+        "keep_drawing_model_items" => KeepModelItems(Box<KeepModelItemsCommand>),
     }
 }
 
@@ -405,6 +417,9 @@ pub(super) struct SheetDrawn {
     pub(super) annotations: Vec<Value>,
     /// Its title block's fields as drawn: each label with its text.
     pub(super) title_fields: Vec<Value>,
+    /// The model's annotations its views brought in (mitcad#1406), each
+    /// once, with the view that draws it.
+    pub(super) model_items: Vec<Value>,
 }
 
 /// A scale a command asks for.
@@ -1201,7 +1216,8 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     || c.add_break.is_some()
                     || c.aligned.is_some()
                     || c.center_marks.is_some()
-                    || c.retrieved_dimensions.is_some();
+                    || c.retrieved_dimensions.is_some()
+                    || c.model_annotations.is_some();
                 if other {
                     return Err(ApiError(
                         "a cut sheet's part is moved and turned only (place, move, rotation)"
@@ -1251,6 +1267,8 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 self.delete_drawing_revision(&drawing, &revision)
             }
             DrawingCommand::SaveTemplate(c) => self.save_drawing_template(*c),
+            DrawingCommand::ModelItems(c) => self.drawing_model_items(*c),
+            DrawingCommand::KeepModelItems(c) => self.keep_drawing_model_items(*c),
         }
     }
 
@@ -1864,6 +1882,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             evaluated,
             annotations: annotated.entries,
             title_fields,
+            model_items: annotated.model_items,
         })
     }
 
@@ -1978,6 +1997,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     value["scale"] = json!(scale_text(drawn.composed.scale));
                     value["warnings"] = json!(drawn.composed.warnings);
                     value["annotations"] = json!(drawn.annotations);
+                    value["model_items"] = json!(drawn.model_items);
                     value["title_fields"] = json!(drawn.title_fields);
                     if query.geometry {
                         value["groups"] = groups_json(&drawn.composed.sheet);
@@ -2283,6 +2303,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             aligned: true,
             center_marks: c.center_marks.unwrap_or(true),
             retrieved_dimensions: c.retrieved_dimensions.unwrap_or(false),
+            model_annotations: c.model_annotations.unwrap_or(false),
             annotations: Vec::new(),
             rotation: 0.0,
             sketch: Vec::new(),
@@ -2514,6 +2535,9 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             }
             if let Some(on) = c.retrieved_dimensions {
                 view.retrieved_dimensions = on;
+            }
+            if let Some(on) = c.model_annotations {
+                view.model_annotations = on;
             }
             // A view turned another way takes the views from it and their
             // annotations along (`follow_turns` below, mitcad#729).
@@ -2827,6 +2851,7 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
         "breaks": view.breaks,
         "center_marks": view.center_marks,
         "retrieved_dimensions": view.retrieved_dimensions,
+        "model_annotations": view.model_annotations,
         "annotations": view.annotations.iter().map(|a| a.id).collect::<Vec<_>>(),
         // Turned on the sheet, and what is drawn in it (mitcad#729).
         "rotation": view.rotation,

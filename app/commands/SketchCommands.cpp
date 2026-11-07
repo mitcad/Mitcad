@@ -434,6 +434,25 @@ bool projectsSketchGeometry(const SelectionItem& item) {
          item.kind == SelectKind::Sketch;
 }
 
+// Project's and Intersect's picks (mitcad#1417): the curve of an
+// Intersection Curve among features (picked in the view, on its Browser row
+// or on the timeline, isFeatureCurve), never another feature; other kinds as
+// the input's filter has them, but not the edited sketch's own geometry nor
+// the sketch itself. Only Intersection Curves among features, so that a
+// sketch clicked on the timeline still goes in as the whole sketch
+// (BrowserController::featureItems, mitcad#1031).
+bool projectionSourceAccepted(const SelectionItem& item, const QString& edited) {
+  if (item.kind == SelectKind::Feature) {
+    return isFeatureCurve(item);
+  }
+  return !projectsSketchGeometry(item) || item.owner != edited;
+}
+
+// "intersection curve F4" (logs), as other sketches' geometry is named.
+QString projectedName(const SelectionItem& item) {
+  return isFeatureCurve(item) ? QStringLiteral("intersection curve %1").arg(item.owner) : item.describe();
+}
+
 void addProject(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.project", QObject::tr("Project"), "project", "CREATE/References",
                                  CommandDef::Kind::Feature);
@@ -444,12 +463,9 @@ void addProject(CommandRegistry& registry, SketchController& c) {
   def.inputs = {
       selectionInput(QStringLiteral("geometry"), QObject::tr("Geometry"),
                      SelectKind::Edge | SelectKind::Face | SelectKind::Vertex | SelectKind::SketchCurve |
-                         SelectKind::SketchPoint | SelectKind::Sketch,
+                         SelectKind::SketchPoint | SelectKind::Sketch | SelectKind::Feature,
                      1, 0)
-          .withAccepts([&c](const SelectionItem& item) {
-            // Not the edited sketch's own geometry, nor the sketch itself.
-            return !projectsSketchGeometry(item) || item.owner != c.uid();
-          }),
+          .withAccepts([&c](const SelectionItem& item) { return projectionSourceAccepted(item, c.uid()); }),
       checkInput(QStringLiteral("linked"), QObject::tr("Projection Link"), true)
           .withTooltip(QObject::tr("The projection follows its source when the design changes")),
   };
@@ -457,7 +473,10 @@ void addProject(CommandRegistry& registry, SketchController& c) {
     QJsonArray commands;
     for (const SelectionItem& item : s.items(QStringLiteral("geometry"))) {
       QJsonObject cmd = base(c, "sketch.project");
-      if (projectsSketchGeometry(item)) {
+      if (isFeatureCurve(item)) {
+        // An Intersection Curve's curve (mitcad#1417), its ends with it.
+        cmd.insert(QStringLiteral("source"), QJsonObject{{QStringLiteral("feature"), item.owner}});
+      } else if (projectsSketchGeometry(item)) {
         // {"sketch": "F5", "curve": "c3"}, {"sketch": "F5", "point":
         // "p2"} or a whole sketch, {"sketch": "F5"}.
         cmd.insert(QStringLiteral("source"), item.reference());
@@ -475,11 +494,12 @@ void addProject(CommandRegistry& registry, SketchController& c) {
   };
   def.describe = [](const CommandState& s, const CommandContext&) {
     const Selection& items = s.items(QStringLiteral("geometry"));
-    // Other sketches' geometry by name (mitcad#904).
+    // Other sketches' geometry and Intersection Curves by name (mitcad#904,
+    // mitcad#1417).
     QStringList sketched;
     for (const SelectionItem& item : items) {
-      if (projectsSketchGeometry(item)) {
-        sketched << item.describe();
+      if (projectsSketchGeometry(item) || isFeatureCurve(item)) {
+        sketched << projectedName(item);
       }
     }
     return QStringLiteral("Projected %1 item(s)").arg(items.size()) +
@@ -508,12 +528,9 @@ void addIntersect(CommandRegistry& registry, SketchController& c) {
   def.inputs = {
       selectionInput(QStringLiteral("geometry"), QObject::tr("Geometry"),
                      SelectKind::Body | SelectKind::Face | SelectKind::Edge | SelectKind::SketchCurve |
-                         SelectKind::SketchPoint | SelectKind::Sketch,
+                         SelectKind::SketchPoint | SelectKind::Sketch | SelectKind::Feature,
                      1, 0)
-          .withAccepts([&c](const SelectionItem& item) {
-            // Not the edited sketch's own geometry, nor the sketch itself.
-            return !projectsSketchGeometry(item) || item.owner != c.uid();
-          }),
+          .withAccepts([&c](const SelectionItem& item) { return projectionSourceAccepted(item, c.uid()); }),
       checkInput(QStringLiteral("linked"), QObject::tr("Projection Link"), true)
           .withTooltip(QObject::tr("The curves follow the design when it changes")),
   };
@@ -521,7 +538,10 @@ void addIntersect(CommandRegistry& registry, SketchController& c) {
     QJsonArray commands;
     for (const SelectionItem& item : s.items(QStringLiteral("geometry"))) {
       QJsonObject cmd = base(c, "sketch.project");
-      if (projectsSketchGeometry(item)) {
+      if (isFeatureCurve(item)) {
+        // Where the plane crosses an Intersection Curve (mitcad#1417).
+        cmd.insert(QStringLiteral("source"), QJsonObject{{QStringLiteral("feature"), item.owner}});
+      } else if (projectsSketchGeometry(item)) {
         // Another sketch's curve or point, or all its curves: where the
         // plane crosses them, no body.
         cmd.insert(QStringLiteral("source"), item.reference());
@@ -541,11 +561,12 @@ void addIntersect(CommandRegistry& registry, SketchController& c) {
   };
   def.describe = [](const CommandState& s, const CommandContext&) {
     const Selection& items = s.items(QStringLiteral("geometry"));
-    // Other sketches' geometry by name, as Project's log (mitcad#1031).
+    // Other sketches' geometry and Intersection Curves by name, as
+    // Project's log (mitcad#1031, mitcad#1417).
     QStringList sketched;
     for (const SelectionItem& item : items) {
-      if (projectsSketchGeometry(item)) {
-        sketched << item.describe();
+      if (projectsSketchGeometry(item) || isFeatureCurve(item)) {
+        sketched << projectedName(item);
       }
     }
     return QStringLiteral("Intersected %1 item(s)").arg(items.size()) +

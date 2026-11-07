@@ -5,12 +5,14 @@
 #include <cmath>
 #include <memory>
 
+#include <QAbstractSlider>
 #include <QChar>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QFrame>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QScrollBar>
 #include <QSizePolicy>
 #include <QStringView>
 #include <QTextDocument>
@@ -40,6 +42,24 @@ CommandMessage::CommandMessage(QWidget* parent) : QTextEdit(parent) {
   setSizePolicy(policy);
   // The pointer over it without a button pressed (mitcad#1327).
   viewport()->setMouseTracking(true);
+  // A new text from its first line (mitcad#1430). Qt scrolls a text edit to
+  // its cursor, at the start, when the text is set and when it is first
+  // shown, with the height it has then: the one line of the hint before it
+  // less the error box's padding (CommandPanel::setMessage), or the size
+  // it was made with while hidden. A viewport lower than the first line
+  // scrolled that line partly out of sight, and the box kept the scroll
+  // once the layout made it as high as its lines, where they scroll. So
+  // any scroll that is not the user's goes back to the top until the user
+  // scrolls (the bar's actions: its arrows, page steps and drags, and the
+  // wheel through it) or clicks in the text (a selection dragged past its
+  // edge scrolls it).
+  QScrollBar* bar = verticalScrollBar();
+  connect(bar, &QAbstractSlider::actionTriggered, this, [this](int) { m_fromTop = false; });
+  connect(bar, &QAbstractSlider::valueChanged, this, [this, bar](int value) {
+    if (m_fromTop && value != 0) {
+      bar->setValue(0);
+    }
+  });
   hide();
 }
 
@@ -48,11 +68,13 @@ void CommandMessage::setMessage(const QString& text) {
     return;
   }
   m_text = text;
+  m_fromTop = true;
   if (Qt::mightBeRichText(text)) {
     setHtml(text);
   } else {
     setPlainText(text);
   }
+  verticalScrollBar()->setValue(0);
   setVisible(!text.isEmpty());
   updateGeometry();
 }
@@ -102,6 +124,12 @@ bool CommandMessage::event(QEvent* event) {
 
 bool CommandMessage::viewportEvent(QEvent* event) {
   switch (event->type()) {
+  case QEvent::MouseButtonPress:
+  case QEvent::MouseButtonDblClick:
+  case QEvent::Wheel:
+    // The user's: a selection may scroll it, the wheel does.
+    m_fromTop = false;
+    break;
   case QEvent::Enter:
   case QEvent::MouseMove:
   case QEvent::HoverMove:

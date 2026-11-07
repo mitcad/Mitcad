@@ -143,6 +143,8 @@ mod drawing_spacing;
 mod print_plates;
 // Auto Fix of references a warning found again (mitcad#1223).
 mod auto_fix;
+// The curves of Intersection Curves as polylines (mitcad#1405).
+mod feature_curves;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -1060,6 +1062,9 @@ named_enum! {
             #[serde(default)]
             base: Option<String>,
         },
+        // The curves of Intersection Curves as polylines, for the view to draw
+        // (mitcad#1405, `feature_curves.rs`).
+        "feature_curves" => FeatureCurves,
     }
 }
 
@@ -1636,6 +1641,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::DrawingCorners(query) => self.drawing_corners_json(&query)?,
             // Linked designs' files that changed (mitcad#1416).
             Query::Links { base } => components::links_json(self, base.as_deref()),
+            Query::FeatureCurves => feature_curves::feature_curves_json(self),
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

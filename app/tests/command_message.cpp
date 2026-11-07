@@ -2,9 +2,11 @@
 // The command panel's message in a narrow panel (mitcad#198), laid out as
 // MainWindow lays out a command panel: in a scroll area that never scrolls
 // sideways, at the Docked page's width, and as narrow as the other rows
-// allow with a larger font (display scaling). On Qt's offscreen platform.
+// allow with a larger font (display scaling); a new message from its first
+// line (mitcad#1430). On Qt's offscreen platform.
 #include "framework/CommandMessage.hpp"
 
+#include <QAbstractSlider>
 #include <QChar>
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -162,6 +164,45 @@ int commandMessageTests() {
   settle();
   check(message->toPlainText() == QStringLiteral("Distance: %1").arg(name), "rich text: shown as text");
   check(fits(), "rich text: within the panel's width");
+
+  // A new message opens at its first line (mitcad#1430). The panel puts an
+  // error in a padded box (CommandPanel::setMessage) while the message is
+  // still as high as the one-line hint before it: Qt scrolled to the cursor
+  // at the start of the text in a viewport a few pixels high, and the box
+  // kept that scroll once it was as high as its lines, its first line cut.
+  const QString boxed =
+      QStringLiteral("QTextEdit { color: #b00020; background: #fbe3e3; border-radius: 6px; padding: 5px 6px; }");
+  QScrollBar* bar = message->verticalScrollBar();
+  message->setStyleSheet(QString());
+  message->setMessage(QStringLiteral("Pick a face."));
+  settle();
+  check(message->isVisible() && bar->maximum() == 0, "a hint: one line, nothing to scroll");
+  message->setStyleSheet(boxed);
+  message->setMessage(many);
+  settle();
+  check(bar->maximum() > 0, "an error box after a hint: the rest scrolls");
+  check(bar->value() == 0, "an error box after a hint: opens at its first line");
+  // From hidden, made at the size it had when it was hidden.
+  message->setMessage(QString());
+  settle();
+  message->setMessage(QStringLiteral("%1\n%2").arg(duplicate, many));
+  settle();
+  check(bar->maximum() > 0 && bar->value() == 0, "an error box shown again: opens at its first line");
+  // The user's scroll stays while the page is laid out again and the same
+  // text comes again; a new text opens at its first line.
+  bar->triggerAction(QAbstractSlider::SliderPageStepAdd);
+  const int scrolled = bar->value();
+  check(scrolled > 0, "scrolled by the user: down its text");
+  page.resize(page.width(), 700);
+  settle();
+  message->setMessage(QStringLiteral("%1\n%2").arg(duplicate, many));
+  settle();
+  check(bar->value() == scrolled, "scrolled by the user: kept");
+  message->setMessage(many);
+  settle();
+  check(bar->value() == 0, "a new error after the user's scroll: opens at its first line");
+  page.resize(page.width(), 800);
+  message->setStyleSheet(QString());
 
   // A larger font (display scaling), the page as narrow as the other rows
   // allow, high enough not to scroll.

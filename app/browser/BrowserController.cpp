@@ -518,7 +518,7 @@ bool BrowserController::reveal(const QString& uid, bool say) {
   // names it and why it failed (mitcad#961); not into a running command's
   // input.
   if (m_host.activeCommandName().isEmpty()) {
-    pick(featureItems({uid}), m_host.takesFeatures() ? QStringList() : QStringList{uid});
+    pick(featureItems({uid}), notTakenAsFeatures({uid}));
   }
   if (say && !feature->error.isEmpty()) {
     // At the feature's own level: a warning stays a warning (mitcad#1040);
@@ -1887,7 +1887,31 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
 void BrowserController::featuresClicked(const QStringList& uids) {
   // The browser shows the features' rows under their sketches too
   // (mitcad#177); a command that takes features takes them instead.
-  pick(featureItems(uids), m_host.takesFeatures() ? QStringList() : uids);
+  pick(featureItems(uids), notTakenAsFeatures(uids));
+}
+
+SelectionItem BrowserController::featureItem(const QString& uid) const {
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+  if (feature != nullptr && feature->type == QStringLiteral("intersection_curve")) {
+    // Where its component's first occurrence shows it, as its sketches are
+    // (a projection of another component's curve goes through that link).
+    return featureCurveItem(uid, m_snapshot.firstOccurrence(feature->component));
+  }
+  return {SelectKind::Feature, uid, QString(), QString()};
+}
+
+bool BrowserController::takenAsFeature(const QString& uid) const {
+  return m_host.takesFeatures() && m_host.takesFeature(featureItem(uid));
+}
+
+QStringList BrowserController::notTakenAsFeatures(const QStringList& uids) const {
+  QStringList shown;
+  for (const QString& uid : uids) {
+    if (!takenAsFeature(uid)) {
+      shown << uid;
+    }
+  }
+  return shown;
 }
 
 Selection BrowserController::featureItems(const QStringList& uids) const {
@@ -1897,18 +1921,19 @@ Selection BrowserController::featureItems(const QStringList& uids) const {
       items.append(item);
     }
   };
-  if (m_host.takesFeatures()) {
-    for (const QString& uid : uids) {
-      add({SelectKind::Feature, uid, QString(), QString()});
-    }
-    return items;
-  }
-  // Each feature's sketch, datum or bodies are selected. A feature that made
-  // no body of its own (a fillet, a chamfer, a hole, a join) is selected as
-  // the faces it made on the bodies at the marker (mitcad#28), placed by its
-  // component's first occurrence as its sketches are; the main window keeps
-  // it only where it finds such faces.
+  // Each feature's sketch, datum or bodies are selected, or the feature
+  // itself where the running command's input takes it (only Intersection
+  // Curves for the sketch's Project and Intersect, mitcad#1417: a sketch
+  // clicked on the timeline goes in whole, as before they took any). A
+  // feature that made no body of its own (a fillet, a chamfer, a hole, a
+  // join) is selected as the faces it made on the bodies at the marker
+  // (mitcad#28), placed by its component's first occurrence as its
+  // sketches are; the main window keeps it only where it finds such faces.
   for (const QString& uid : uids) {
+    if (takenAsFeature(uid)) {
+      add(featureItem(uid));
+      continue;
+    }
     bool body = false;
     for (const BrowserNode& node : m_browser->nodesOfFeature(uid)) {
       body = body || node.type == BrowserNode::Type::Body;

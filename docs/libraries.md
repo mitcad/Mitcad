@@ -917,7 +917,12 @@ with the reason (`it fits 48 × 148, the member is 48 × 123`).
 
 A library's versions are its commits. Released versions are tags
 (`v1.0.0`). MitCad lists the tags, newest first, and the default
-branch's tip as "latest, unreleased".
+branch's tip as "latest, unreleased". The newest tag is found by its
+numbers, part by part: `v2.10.0` and `v2.11.0` are newer than `v2.9.0`, and
+a pre-release such as `v3.0.0-rc1` comes before `v3.0.0`. Browse
+Components, the BUILD pickers and Insert from Library read each library at
+its newest version; after Update the log says which one
+(`Library fetched: … ; the pickers read v2.11.0 (…)`).
 
 A design records, for each component, the commit of the version that you
 selected. When you open the design, MitCad reads that commit, also after
@@ -1976,7 +1981,15 @@ The default configuration also reads the earlier CLI cache under
 `mitcad/libraries`, preserving versions already fetched there without moving
 or deleting them; new fetches use the shared folder. Explicit overrides do
 not add this legacy cache. There is
-one clone for each URL. MitCad makes and updates the clones only when
+one clone for each repository: the forms of one repository's URL (with or
+without `www.`, `.git` or a trailing slash, the host in any letter case,
+over https, http or SSH) are one repository, and fetching another form
+updates the clone that is there (mitcad#1436). Of two clones an older
+MitCad made for two forms, the pickers and the search read one.
+Removing a source in Library Sources leaves its clone on disk, so designs
+keep their parts' versions, but marks it (a file `mitcad-source-removed`
+in the clone): the pickers and the search leave it out until the source
+is added again or fetched. MitCad makes and updates the clones only when
 you ask, or at start-up for a source with Auto-update (the check box in
 Libraries). These commands ask for it:
 

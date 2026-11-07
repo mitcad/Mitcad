@@ -151,6 +151,17 @@ along the side's blend's cut on the cylinder to the vertex where the
 side's blend ends, which was valid at 3 and 6 and not at 1 (its contact's
 curve on the cylinder ended a period off at the seam).
 
+## The edge picked at its other side: 1570 to 1572
+
+Done in mitcad#1422 by the patches 1570 to 1572
+([fillet-boss-tangent-other-side-1570-1572.md](fillet-boss-tangent-other-side-1570-1572.md)).
+The tests here picked the plate's top edge at y = 25. Picked at y = -25
+(the same tangent chain, its stripe's faces in the other order) the face
+at the end cut the blend to a point on the vertical edge instead of the
+corner cutting it, and that path had none of 1331's seam handling: the
+rounding failed at every radius, on both synthetic bodies and on the body
+MitCad's UI builds from a slot and a circle.
+
 ## Tests
 
 - 1330, 1331 and 1332: mitcad#1359, in

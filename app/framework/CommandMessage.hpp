@@ -13,9 +13,10 @@ namespace mitcad {
 // longer than the line (a profile's or a face's name), anywhere, so a long
 // identifier cannot push the panel's fields and buttons out of sight. It is
 // as high as its text up to kMaxLines lines and scrolls beyond them, so a
-// long list of errors stays readable without taking over the panel. The
-// text can be selected and copied whole. Empty, it is hidden and takes no
-// room.
+// long list of errors stays readable without taking over the panel. A new
+// text shows from its first line until the user scrolls it (mitcad#1430).
+// The text can be selected and copied whole. Empty, it is hidden and takes
+// no room.
 class CommandMessage : public QTextEdit {
   Q_OBJECT
 
@@ -25,9 +26,9 @@ public:
 
   explicit CommandMessage(QWidget* parent = nullptr);
 
-  // Shows the text (plain, or rich text as a label would take it); empty
-  // hides it. The same text again changes nothing (its scroll position and
-  // selection stay).
+  // Shows the text (plain, or rich text as a label would take it) from its
+  // first line; empty hides it. The same text again changes nothing (its
+  // scroll position and selection stay).
   void setMessage(const QString& text);
   QString message() const { return m_text; }
 
@@ -57,6 +58,9 @@ private:
 
   QString m_text;
   bool m_hovered = false;
+  // The text stays at its first line: set with a new text, cleared when the
+  // user scrolls it, clicks in it or uses the wheel over it.
+  bool m_fromTop = true;
 };
 
 // Plain text with a zero-width space between the characters of each word

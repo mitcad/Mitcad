@@ -474,6 +474,28 @@ bool DocumentSession::refineDisplayAsync(const DisplayShapes& bodies, QObject* c
   });
 }
 
+bool DocumentSession::remeshDisplayAsync(QObject* context, RemeshCompletion completion) {
+  auto result = std::make_shared<AsyncResult>();
+  auto remeshing = std::make_shared<DisplayRemeshing>();
+  Document* document = &*m_state.document;
+  const QString label = m_state.documentName.isEmpty() ? QStringLiteral("untitled") : m_state.documentName;
+  return startAsync(QStringLiteral("display"), tr("Meshing the bodies for display"),
+                    [document, remeshing](ModelJob& job) {
+    *remeshing = remeshForDisplay(shownBodyShapes(*document), job);
+    if (job.control().is_cancelled()) {
+      throw ComputationCancelled();
+    }
+  }, result, context, [remeshing, label, completion = std::move(completion)](const AsyncResult& outcome) {
+    // No job runs now: the bodies are this thread's to write.
+    const std::size_t given = outcome.succeeded() ? giveRemeshed(*remeshing) : 0;
+    if (!outcome.succeeded()) {
+      remeshing->complete = false;
+    }
+    logRemeshing(*remeshing, given, label);
+    if (completion) { completion(given, outcome); }
+  });
+}
+
 bool DocumentSession::inspectionAsync(const QString& name, QObject* context, InspectionTask task,
                                       InspectionCompletion completion) {
   auto result = std::make_shared<AsyncResult>();

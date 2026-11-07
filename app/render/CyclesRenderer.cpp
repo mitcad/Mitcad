@@ -410,6 +410,7 @@ public:
     {
       const ccl::thread_scoped_lock lock(m_session->scene->mutex);
       ccl::Scene& scene = *m_session->scene;
+      noteSceneBuilt(scene);
       // Texture images are checked again in each update that gives a body
       // their material (mitcad#538, textureReadable).
       m_textures.clear();
@@ -506,6 +507,7 @@ public:
     {
       const ccl::thread_scoped_lock lock(m_session->scene->mutex);
       ccl::Scene& s = *m_session->scene;
+      noteSceneBuilt(s);
       m_environment = environment;
       m_seesEnvironment = environment.background;
       if (m_environment.preset == EnvironmentData::Preset::Image) {
@@ -543,6 +545,7 @@ public:
     }
     {
       const ccl::thread_scoped_lock lock(m_session->scene->mutex);
+      noteSceneBuilt(*m_session->scene);
       ccl::Camera& camera = *m_session->scene->camera;
       m_viewData = view;
       m_hasView = true;
@@ -951,15 +954,71 @@ private:
     return entry;
   }
 
-  // Deletes a body's object, and its Cycles mesh when no other body shows
-  // it (the mesh's data stays until the application releases it).
+  // Deletes a body's object, and retires its Cycles mesh when no other body
+  // shows it (retire; the mesh's data stays until the application releases
+  // it).
   void removeObject(ccl::Scene& scene, const BodyEntry& entry) {
     scene.delete_node(entry.object);
     auto geometry = m_geometry.find({entry.mesh, entry.lookKey});
     if (geometry != m_geometry.end() && --geometry->second.users <= 0) {
-      scene.delete_node(geometry->second.mesh);
+      retire(geometry->second.mesh);
       m_geometry.erase(geometry);
     }
+  }
+
+  // Geometry that no object shows any more, deleted only once the render
+  // cannot trace it (mitcad#1432). Cycles' CPU device gives Embree a mesh's
+  // own vertex and triangle arrays (rtcSetSharedGeometryBuffer), and its
+  // render thread traces the BVH of its last scene update without the
+  // scene's lock, until the reset that follows a change takes effect after
+  // the batch of samples it is rendering. A mesh deleted at once (a body
+  // cut again by a section analysis shown or hidden, the ground built
+  // again) freed the arrays that batch still traversed, and the worker
+  // crashed in rtcIntersect1. Objects go at once: Embree copies their
+  // transforms, and the next BVH leaves them out.
+  void retire(ccl::Geometry* geometry) { m_retired.push_back({geometry, nullptr}); }
+
+  // Under the scene's lock, at the start of a change: when Cycles has no
+  // object change left to apply, its render thread has built the scene
+  // again since the last change, so no BVH it traces holds the geometry
+  // retired until now. (ObjectManager clears its flags only at the end of
+  // a scene update that got through the BVH's build; a cancelled update
+  // leaves them, and the geometry waits for the next.)
+  void noteSceneBuilt(ccl::Scene& scene) {
+    if (!scene.object_manager->need_update()) {
+      m_unused = m_retired.size();
+    }
+  }
+
+  // Deletes the retired nodes noteSceneBuilt found unused, with the
+  // render's restart, so that the scene changes only together with the
+  // reset as for any other change: the geometry, then the shaders of a
+  // ground, a light or the world (deleteNodes' order).
+  void deleteRetired(ccl::Scene& scene) {
+    if (m_unused == 0) {
+      return;
+    }
+    ccl::set<ccl::Geometry*> geometry;
+    ccl::set<ccl::Shader*> shaders;
+    const auto end = m_retired.begin() + static_cast<std::ptrdiff_t>(m_unused);
+    for (auto it = m_retired.begin(); it != end; ++it) {
+      if (it->geometry != nullptr) {
+        geometry.insert(it->geometry);
+      } else {
+        shaders.insert(it->shader);
+      }
+    }
+    m_retired.erase(m_retired.begin(), end);
+    m_unused = 0;
+    if (!geometry.empty()) {
+      scene.delete_nodes(geometry);
+    }
+    if (!shaders.empty()) {
+      scene.delete_nodes(shaders);
+    }
+    // For the log and the UI tests.
+    std::fprintf(stderr, "render-retired: %zu geometries deleted that the render no longer traces, %zu waiting\n",
+                 geometry.size(), m_retired.size());
   }
 
   // A body's material (Renderer.hpp, MaterialData) as a Principled BSDF:
@@ -1239,21 +1298,23 @@ private:
     return result->output("Vector");
   }
 
-  // Removes the nodes of one part of the scene.
+  // Removes the nodes of one part of the scene: its objects at once, its
+  // geometry and then its shaders once the render no longer traces them
+  // (retire).
   void deleteNodes(ccl::Scene& scene, ccl::set<ccl::Object*>& objects, ccl::set<ccl::Geometry*>& geometry,
                    ccl::set<ccl::Shader*>& shaders) {
     if (!objects.empty()) {
       scene.delete_nodes(objects);
       objects.clear();
     }
-    if (!geometry.empty()) {
-      scene.delete_nodes(geometry);
-      geometry.clear();
+    for (ccl::Geometry* g : geometry) {
+      retire(g);
     }
-    if (!shaders.empty()) {
-      scene.delete_nodes(shaders);
-      shaders.clear();
+    geometry.clear();
+    for (ccl::Shader* shader : shaders) {
+      m_retired.push_back({nullptr, shader});
     }
+    shaders.clear();
   }
 
   ccl::Shader* addShader(ccl::Scene& scene, std::unique_ptr<ccl::ShaderGraph> graph, ccl::set<ccl::Shader*>& owner) {
@@ -2052,6 +2113,7 @@ private:
   // passes, another size) would have the kernels write past the render
   // buffers, which only the reset makes anew.
   void restart() {
+    deleteRetired(*m_session->scene);
     if (m_width <= 0 || m_height <= 0) {
       return; // no view yet
     }
@@ -2120,6 +2182,15 @@ private:
   std::map<std::pair<std::string, std::string>, GeometryEntry> m_geometry;
   std::map<std::string, ccl::Shader*> m_shaders;
   std::map<std::string, BodyEntry> m_bodies;
+  // Nodes left out of the scene that the render may still trace (retire),
+  // in the order they left it; the first m_unused of them it no longer
+  // does (noteSceneBuilt).
+  struct Retired {
+    ccl::Geometry* geometry;
+    ccl::Shader* shader;
+  };
+  std::vector<Retired> m_retired;
+  std::size_t m_unused = 0;
   // Texture images by path: whether they can be read, in the scene update
   // being made; and its warnings. Shaders are by material and the images
   // of it that could be read (shaderOf).

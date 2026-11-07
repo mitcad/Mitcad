@@ -16,3 +16,5 @@ mod profile_feature_tests;
 mod thread_fit_tests;
 // Extents up to a point and starts from a point (mitcad#1329).
 mod extent_point_tests;
+// Intersection Curve: a 3D curve from two sketches, a path (mitcad#1405).
+mod intersection_curve_tests;

@@ -108,6 +108,8 @@ pub(crate) const ARROW_LENGTH: f64 = 3.0;
 const ARROW_HALF_WIDTH: f64 = 0.8;
 pub(crate) const EXTENSION_GAP: f64 = 1.0;
 pub(crate) const EXTENSION_BEYOND: f64 = 2.0;
+// How far a dimension's text keeps clear of its line or arc.
+pub(crate) const TEXT_GAP: f64 = 1.0;
 const DIMENSION_OFFSET: f64 = 10.0;
 // The room around a view for its dimensions (left, below) and leaders.
 const ROOM_LEFT: f64 = 16.0;
@@ -431,7 +433,7 @@ fn linear_dimension(a: P2, b: P2, direction: P2, offset: f64, text: &str) -> Gro
     let up = [-angle.sin(), angle.cos()];
     let middle = mul2(add2(fa, fb), 0.5);
     g.text(
-        add2(middle, mul2(up, 1.0)),
+        add2(middle, mul2(up, TEXT_GAP)),
         DIMENSION_TEXT,
         angle,
         Anchor::Middle,

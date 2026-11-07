@@ -194,6 +194,11 @@ every face on the stored body's within 0.002 mm both ways, the change of
 volume -1.5382 against the file's -1.5432 mm³ (the file's vertex blends are
 cubic B-splines); before, the fillet failed.
 
+1590 ([fillet-tight-rim-corner-1590.md](fillet-tight-rim-corner-1590.md))
+takes the same corners at a cylinder's rim (K a torus, Wo the cylinder)
+and closes those where Wo's edge with U is obtuse with the corner's own
+ball rolled on between the roundings.
+
 ## 0980: a chain over slight creases
 
 The patch 0980 comes from mitcad#343 (round 18): a fin's top edges rounded

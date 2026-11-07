@@ -45,10 +45,21 @@ struct LibrarySettings {
   // The URLs of the sources that are enabled and have Auto-update on, in
   // order: the ones fetched at start-up.
   QStringList autoUpdateUrls() const;
-  // Adds a source (enabled, Auto-update off) unless it is listed; true when
+  // Adds a source (enabled, Auto-update off) unless it or another form of
+  // its repository's URL is listed (mitcad#1436, sameRepository); true when
   // added.
   bool add(const QString& url);
+  // The listed source that names the same repository as `url` in any form
+  // (repositoryKey), empty when none does.
+  QString sameRepository(const QString& url) const;
 };
+
+// A repository's identity (mitcad#1436, GitHub mitcad/Mitcad#172): one key
+// for the URL forms that name it, as the model's `repository_key`
+// (core/vcs/src/library/sources.rs) gives it: without user information,
+// the scheme of a network address or file://, a host's leading "www.",
+// trailing slashes and ".git"; '/' for a backslash; in lower case.
+QString repositoryKey(const QString& url);
 
 // The default sources: Mitcad's parts library and the community index.
 QList<LibrarySource> defaultLibrarySources();
@@ -69,6 +80,22 @@ QJsonArray browserLibraries(const QJsonObject& answer, const QStringList& source
                             QStringList* leftOut = nullptr);
 // Logs "Library index: <text>" for each text, once in a session.
 void logLeftOutLibraries(const QStringList& texts);
+
+// The clones a library_search or library_build_candidates answer read and
+// left out (its `clones`, mitcad#1436) as one text: "<url> (<folder>), …;
+// left out: <url> (<folder>): <reason>, …".
+QString libraryClonesText(const QJsonObject& answer);
+// Logs "Library clones the pickers read: <libraryClonesText>" when it
+// differs from the text logged last.
+void logLibraryClones(const QJsonObject& answer);
+
+// Library Sources' Remove (mitcad#1436): `library_remove` for the source
+// `url` removed from the settings, `remaining` the sources still listed.
+// Its clones are left out of the pickers and the search unless a remaining
+// source names the same repository; designs keep reading them. With
+// `removed` false (the source added again) they are listed again. The
+// answer (`changed`: the clones' folders), or {"error"}.
+QJsonObject markLibrarySource(const QString& url, const QStringList& remaining, bool removed);
 
 // Where fetched libraries are kept: MITCAD_LIBRARIES_DIR, else
 // "libraries" in the application's local data folder.

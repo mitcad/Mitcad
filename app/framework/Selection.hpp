@@ -87,6 +87,15 @@ struct SelectionItem {
 
 using Selection = QVector<SelectionItem>;
 
+// The curve of an Intersection Curve (mitcad#1405, mitcad#1417): a feature
+// item whose geometry is "curve" (featureCurveGeometry), as the view's drawn
+// curve, its Browser row and its timeline entry give it. Inputs that take
+// it rather than whole features (the sketch's Project and Intersect, Rib,
+// Web) tell it from other features by this.
+QString featureCurveGeometry();
+SelectionItem featureCurveItem(const QString& feature, const QString& occurrence = QString());
+bool isFeatureCurve(const SelectionItem& item);
+
 // A fixed plane of a definition (`{"origin", "normal"[, "x_axis"]}`,
 // core/model-api/src/commands.md "References to geometry") as an item
 // (mitcad#1137): a plane owned by "fixed" whose name is its reference as

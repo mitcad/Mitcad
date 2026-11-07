@@ -344,6 +344,11 @@ pub struct MockKernel {
     /// The direction of each feature's last extrusion. Shared with the
     /// kernel's forks, which may extrude.
     pub extrusion_directions: Arc<Mutex<BTreeMap<FeatureUid, [f64; 3]>>>,
+    /// Intersection curves (mitcad#1405): the pieces `intersection_curves`
+    /// gives instead of working them out (a crossing that branches);
+    /// otherwise it samples the first chain as [`MockKernel::intersection_curves`]
+    /// tells.
+    pub crossing: RefCell<Option<Vec<mitcad_model_base::kernel::Curve3>>>,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -3308,6 +3313,7 @@ impl Kernel for MockKernel {
             empty_results: self.empty_results.clone(),
             extrusion_axes: self.extrusion_axes.clone(),
             extrusion_directions: Arc::clone(&self.extrusion_directions),
+            crossing: self.crossing.clone(),
             ..MockKernel::default()
         })
     }
@@ -5612,6 +5618,182 @@ impl Kernel for MockKernel {
             .map(|(op, _)| places.get(op).cloned().unwrap_or_default())
             .collect()
     }
+
+    // Intersection curves (mitcad#1405).
+
+    /// Records the chains' curve names and directions in `specs`. The
+    /// pieces of `crossing` when set; otherwise each curve of `first` (its
+    /// lines and conics) at 32 points along its parameter, each point moved
+    /// along `first_direction` onto the surface `second` makes swept along
+    /// `second_direction` (its lines and circular arcs; the nearest such
+    /// point), and lines between the points of neighbouring samples that
+    /// reach it. Parallel directions are an error, as the OCCT kernel's.
+    fn intersection_curves(
+        &self,
+        first: &[PathCurve],
+        first_direction: [f64; 3],
+        second: &[PathCurve],
+        second_direction: [f64; 3],
+    ) -> Result<Vec<mitcad_model_base::kernel::Curve3>, KernelError> {
+        use mitcad_model_base::kernel::Curve3;
+        self.call("intersection_curves")?;
+        let names = |path: &[PathCurve]| {
+            path.iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let direction = |d: [f64; 3]| format!("{} {} {}", number(d[0]), number(d[1]), number(d[2]));
+        self.specs.borrow_mut().push(format!(
+            "intersection_curves {} along {} with {} along {}",
+            names(first),
+            direction(first_direction),
+            names(second),
+            direction(second_direction)
+        ));
+        if let Some(curves) = self.crossing.borrow().clone() {
+            return Ok(curves);
+        }
+        let d1 = first_direction;
+        let d2 = mitcad_vec3::unit(second_direction)
+            .ok_or_else(|| KernelError::failed("no second direction"))?;
+        if mitcad_vec3::norm(mitcad_vec3::cross(d1, d2)) <= 1e-9 * mitcad_vec3::norm(d1) {
+            return Err(KernelError::failed(
+                "the sketches' normals are parallel: the swept curves do not cross in a curve",
+            ));
+        }
+        const SAMPLES: usize = 32;
+        let mut points: Vec<Option<[f64; 3]>> = Vec::new();
+        for (k, piece) in first.iter().enumerate() {
+            for i in usize::from(k > 0)..=SAMPLES {
+                let at = mock_curve_point(&piece.curve, i as f64 / SAMPLES as f64);
+                points.push(at.and_then(|a| mock_crossing(a, d1, second, d2)));
+            }
+        }
+        Ok(points
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [Some(a), Some(b)] if mitcad_vec3::distance(*a, *b) > 1e-12 => {
+                    Some(Curve3::Line { start: *a, end: *b })
+                }
+                _ => None,
+            })
+            .collect())
+    }
+}
+
+/// A mock path curve's point at `fraction` of its parameter range: lines
+/// and conics; None for other curves (mitcad#1405).
+fn mock_curve_point(curve: &mitcad_model_base::kernel::Curve3, fraction: f64) -> Option<[f64; 3]> {
+    use mitcad_model_base::kernel::Curve3;
+    match curve {
+        Curve3::Line { start, end } => Some(std::array::from_fn(|i| {
+            start[i] + fraction * (end[i] - start[i])
+        })),
+        Curve3::Conic {
+            center,
+            normal,
+            x_axis,
+            major,
+            minor,
+            start,
+            end,
+            ..
+        } => Some(mitcad_model_base::curves::conic_point(
+            *center,
+            *normal,
+            *x_axis,
+            (*major, *minor),
+            start + fraction * (end - start),
+        )),
+        _ => None,
+    }
+}
+
+/// Where the line through `a` along `along` meets the surface the curves
+/// make swept along the unit vector `sweep` (lines and circular arcs; other
+/// curves are not met): the meeting nearest to `a`, or None (mitcad#1405).
+fn mock_crossing(
+    a: [f64; 3],
+    along: [f64; 3],
+    curves: &[PathCurve],
+    sweep: [f64; 3],
+) -> Option<[f64; 3]> {
+    use mitcad_model_base::kernel::Curve3;
+    use mitcad_vec3::{add, cross, dot, norm, scale, sub};
+    // A vector without its part along the sweep.
+    let flat = |v: [f64; 3]| sub(v, scale(sweep, dot(v, sweep)));
+    let mut best: Option<(f64, [f64; 3])> = None;
+    let mut take = |t: f64| {
+        if best.is_none_or(|(b, _)| t.abs() < b.abs()) {
+            best = Some((t, add(a, scale(along, t))));
+        }
+    };
+    for piece in curves {
+        match &piece.curve {
+            Curve3::Line { start, end } => {
+                let w = flat(sub(*end, *start));
+                let m = cross(sub(*end, *start), sweep);
+                let across = dot(along, m);
+                if across.abs() <= 1e-12 || dot(w, w) <= 1e-24 {
+                    continue;
+                }
+                let t = -dot(sub(a, *start), m) / across;
+                let p = add(a, scale(along, t));
+                let u = dot(flat(sub(p, *start)), w) / dot(w, w);
+                if (-1e-9..=1.0 + 1e-9).contains(&u) {
+                    take(t);
+                }
+            }
+            Curve3::Conic {
+                center,
+                normal,
+                x_axis,
+                major,
+                minor,
+                start,
+                end,
+                closed,
+            } if (major - minor).abs() <= 1e-9 * major.abs().max(1.0) => {
+                let base = flat(sub(a, *center));
+                let d = flat(along);
+                let (qa, qb, qc) = (
+                    dot(d, d),
+                    2.0 * dot(base, d),
+                    dot(base, base) - major * major,
+                );
+                let disc = qb * qb - 4.0 * qa * qc;
+                if qa <= 1e-24 || disc < 0.0 {
+                    continue;
+                }
+                let y_axis = cross(*normal, *x_axis);
+                for sign in [-1.0, 1.0] {
+                    let t = (-qb + sign * disc.sqrt()) / (2.0 * qa);
+                    let v = add(base, scale(d, t));
+                    if norm(v) <= 1e-12 {
+                        continue;
+                    }
+                    let angle = dot(v, y_axis).atan2(dot(v, *x_axis));
+                    let (low, high) = if start <= end {
+                        (*start, *end)
+                    } else {
+                        (*end, *start)
+                    };
+                    let turn = std::f64::consts::TAU;
+                    let within = *closed
+                        || (-2..=2).any(|k| {
+                            let shifted = angle + f64::from(k) * turn;
+                            (low - 1e-9..=high + 1e-9).contains(&shifted)
+                        });
+                    if within {
+                        take(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// The part and place `part(<kind>;<x>,<y>,<z>)` in a mock shape's history

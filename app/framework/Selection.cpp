@@ -333,4 +333,16 @@ QString summarize(const Selection& items) {
   return parts.join(QStringLiteral(", "));
 }
 
+QString featureCurveGeometry() { return QStringLiteral("curve"); }
+
+SelectionItem featureCurveItem(const QString& feature, const QString& occurrence) {
+  SelectionItem item{SelectKind::Feature, feature, QString(), featureCurveGeometry()};
+  item.occurrence = occurrence;
+  return item;
+}
+
+bool isFeatureCurve(const SelectionItem& item) {
+  return item.kind == SelectKind::Feature && item.geometry == featureCurveGeometry();
+}
+
 } // namespace mitcad

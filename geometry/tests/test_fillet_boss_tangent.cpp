@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Roundings that end where a boss's cylinder meets a plate's flat side
 // tangentially (mitcad#1359), with the port's patches 1330 to 1332, and
-// both rounded together (mitcad#1374), with patches 1400 to 1402.
+// both rounded together (mitcad#1374), with patches 1400 to 1402; the
+// plate's top edge picked at its other side (mitcad#1422), with patches
+// 1570 to 1572.
 //
 // A sketch of two circles of radius 25, their centres 85 apart, joined by
 // the two lines tangent to both: the first circle and the region between
@@ -48,6 +50,18 @@
 // there) and without a sliver of micrometres at its ends (patch 1402: at 3
 // and 6). The result is the one OCCT's fillet alone gives built so, one
 // after the other.
+//
+// The plate's top edge picked at its other side, y = -25 (mitcad#1422,
+// GitHub mitcad/Mitcad#173): the same tangent chain, whose analytic
+// pieces were then split so that the face at the end cuts the blend to a
+// point on the vertical edge (ChFi3d_KPartCutToEnd) instead of the corner
+// cutting it. The cylinder's seam stopped at the vertex there and the face
+// lost the boss (patch 1570 runs it on to the point, as 1331 does at the
+// corner); where the seam runs up at the other vertex, the cut's curve on
+// the cylinder lay a period off (patch 1571); and each side's blend was two
+// faces (patch 1572). The same checks hold for that edge, alone and with
+// the boss's top edge, and on the body MitCad's UI builds from a Center to
+// Center Slot and a circle on its end (`slot-boss-tangent-rounding`).
 
 #include <cmath>
 #include <cstdio>
@@ -182,10 +196,13 @@ ShapePtr plate_and_boss(bool top_first) {
   return joined.pieces.size() == 1 ? joined.pieces.front().shape : nullptr;
 }
 
-// The volume, integrated to a relative error of 1e-9.
+// The volume, integrated to a relative error of 1e-12: the material a
+// rounding of 1 takes away or adds is a difference of two volumes over
+// 1e5 mm3, and 1e-9 of them (the B-spline seam of the UI-built case body
+// integrates to about that) is 5e-6 of the foot's (mitcad#1422).
 double volume_of(const TopoDS_Shape& shape) {
   GProp_GProps props;
-  BRepGProp::VolumeProperties(shape, props, 1.0e-9, true);
+  BRepGProp::VolumeProperties(shape, props, 1.0e-12, true);
   return props.Mass();
 }
 
@@ -205,18 +222,21 @@ int edge_at(const Shape& body, const gp_Pnt& point) {
 }
 
 // The case's edges: the plate's top edge at y = 25, the boss's foot and the
-// boss's top edge.
+// boss's top edge; and the plate's top edge at y = -25 (`other`), the same
+// tangent chain picked at its other side (mitcad#1422).
 struct Edges {
-  int side = -1;
-  int foot = -1;
-  int top  = -1;
+  int side  = -1;
+  int foot  = -1;
+  int top   = -1;
+  int other = -1;
 };
 
 Edges edges_of(const Shape& body) {
   Edges out;
-  out.side = edge_at(body, gp_Pnt(kApart / 2.0, kRadius, kPlate));
-  out.foot = edge_at(body, gp_Pnt(kApart - kRadius, 0.0, kPlate));
-  out.top  = edge_at(body, gp_Pnt(kApart, kRadius, kBoss));
+  out.side  = edge_at(body, gp_Pnt(kApart / 2.0, kRadius, kPlate));
+  out.other = edge_at(body, gp_Pnt(kApart / 2.0, -kRadius, kPlate));
+  out.foot  = edge_at(body, gp_Pnt(kApart - kRadius, 0.0, kPlate));
+  out.top   = edge_at(body, gp_Pnt(kApart, kRadius, kBoss));
   if (out.top < 0) {
     out.top = edge_at(body, gp_Pnt(kApart, -kRadius, kBoss));
   }
@@ -404,10 +424,10 @@ void check_result(const Shape& body, const ShapePtr& result, const std::vector<i
 // boss's top edge, as asked) with every radius, through OCCT's fillet alone
 // and through MitCad's fillet.
 void check_roundings(const std::string& label, const Shape& body, const Edges& at, bool side, bool foot,
-                     bool top) {
+                     bool top, bool other = false) {
   std::vector<int> edges;
   if (side) {
-    edges.push_back(at.side);
+    edges.push_back(other ? at.other : at.side);
   }
   if (foot) {
     edges.push_back(at.foot);
@@ -506,10 +526,12 @@ void check_together(const std::string& label, const Shape& body, const Edges& at
 void check_body(const Shape& body) {
   CHECK(BRepCheck_Analyzer(body.occt()).IsValid());
   const Edges at = edges_of(body);
-  CHECK(at.side >= 0 && at.foot >= 0 && at.top >= 0);
-  if (at.side < 0 || at.foot < 0 || at.top < 0) {
+  CHECK(at.side >= 0 && at.foot >= 0 && at.top >= 0 && at.other >= 0);
+  if (at.side < 0 || at.foot < 0 || at.top < 0 || at.other < 0) {
     return;
   }
+  check_roundings("other side", body, at, true, false, false, true);
+  check_roundings("other side and top", body, at, true, false, true, true);
   check_roundings("side", body, at, true, false, false);
   check_roundings("foot", body, at, false, true, false);
   check_roundings("side and top", body, at, true, false, true);
@@ -537,20 +559,21 @@ void test_seam_at_the_other_side() {
   }
 }
 
-// The body as MitCad's sketch and extrusions build it, from
-// MITCAD_GEOMETRY_CASES: the edges `edges.txt` lists by their indices (the
-// side's top edge, the foot and the boss's top edge) are the ones found.
-void test_case_body() {
+// A body of MITCAD_GEOMETRY_CASES/<name>: the edges `edges.txt` lists by
+// their indices (the side's top edge, the foot, the boss's top edge and, in
+// a case that lists four, the side's top edge at y = -25) are the ones
+// found, and every rounding builds. Skipped without the case.
+void check_case_body(const std::string& name) {
   const std::string root = env("MITCAD_GEOMETRY_CASES");
   if (root.empty()) {
-    std::printf("test_case_body: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    std::printf("%s: skipped (MITCAD_GEOMETRY_CASES is not set)\n", name.c_str());
     return;
   }
-  const std::string folder = root + "/boss-tangent-side-rounding/";
+  const std::string folder = root + "/" + name + "/";
   TopoDS_Shape      shape;
   BRep_Builder      builder;
   if (!BRepTools::Read(shape, (folder + "body.brep").c_str(), builder) || shape.IsNull()) {
-    std::printf("test_case_body: skipped (no boss-tangent-side-rounding in MITCAD_GEOMETRY_CASES)\n");
+    std::printf("%s: skipped (not in MITCAD_GEOMETRY_CASES)\n", name.c_str());
     return;
   }
   const ShapePtr   body = import_body(shape, "F1", 0);
@@ -565,14 +588,31 @@ void test_case_body() {
     }
   }
   const Edges at = edges_of(*body);
-  CHECK(listed.size() == 3);
-  if (listed.size() == 3) {
+  std::printf("%s: edges side %d, foot %d, top %d, other side %d\n", name.c_str(), at.side, at.foot, at.top,
+              at.other);
+  CHECK(listed.size() == 3 || listed.size() == 4);
+  if (listed.size() >= 3) {
     CHECK(listed[0] == at.side);
     CHECK(listed[1] == at.foot);
     CHECK(listed[2] == at.top);
   }
+  if (listed.size() == 4) {
+    CHECK(listed[3] == at.other);
+  }
   check_body(*body);
 }
+
+// The body as MitCad's sketch and extrusions build it from two circles and
+// the lines tangent to both (mitcad#1359).
+void test_case_body() { check_case_body("boss-tangent-side-rounding"); }
+
+// The body as MitCad's UI builds it (mitcad#1422, GitHub mitcad/Mitcad#173):
+// a Center to Center Slot extruded 15, then in the same sketch a circle
+// centred on the slot's end centre through the end of its side, extruded 30
+// and joined. The plate's end and the boss are one cylinder whose seam runs
+// up the boss from the vertex at y = -25 (a B-spline line from the faces'
+// join); the report picked the plate's top edge at y = -25.
+void test_slot_case_body() { check_case_body("slot-boss-tangent-rounding"); }
 
 } // namespace
 } // namespace test
@@ -581,6 +621,7 @@ int main() {
   test::guarded("test_seam_at_the_side_rounded", test::test_seam_at_the_side_rounded);
   test::guarded("test_seam_at_the_other_side", test::test_seam_at_the_other_side);
   test::guarded("test_case_body", test::test_case_body);
+  test::guarded("test_slot_case_body", test::test_slot_case_body);
   if (test::failures != 0) {
     std::printf("%d check(s) failed\n", test::failures);
   }

@@ -65,7 +65,14 @@ def main():
     args = parser.parse_args()
     libraries = os.path.abspath(args.libraries)
     work = os.path.abspath(args.work)
-    shutil.rmtree(work, ignore_errors=True)
+    # git's objects are read-only on Windows: make them writable to remove
+    # an earlier run's folder (rmtree ignoring errors left it in place).
+    def writable_again(function, path, _excinfo):
+        os.chmod(path, 0o700)
+        function(path)
+
+    if os.path.exists(work):
+        shutil.rmtree(work, onerror=writable_again)
     os.makedirs(work)
     # The user's and the system's git settings (signing, hooks) stay out.
     config = os.path.join(work, "gitconfig")

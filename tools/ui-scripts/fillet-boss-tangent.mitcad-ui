@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: MIT
+# The part of GitHub mitcad/Mitcad#173 (mitcad#1422) built with the UI's own
+# steps, on fillet-boss-tangent.json (an empty Sketch1 on XY):
+#   1. In Sketch1 a Center to Center Slot from the origin, 85 long and
+#      50 wide; Extrude 15 (the plate, F2.b0: 93202.431 mm3).
+#   2. Sketch1 again: a circle centred on the slot's end centre (85, 0)
+#      through the end of its side (85, 25), the clicks snapped to those
+#      points; Extrude its region 30, joined (the boss: 122654.862 mm3).
+#      The plate's end and the boss are one cylinder, its seam where MitCad
+#      puts it.
+#   3. Fillet on the plate's top edge along its side at y = -25 (the edge
+#      the report picked, with Tangent Chain on by default, the chain round
+#      the plate's far end to the other side): 30 mm, more than the plate
+#      is thick, fails with its error in the panel and the application goes
+#      on; 3 mm previews and OK makes it, valid, taking away the material
+#      the exact shapes give (455.984 mm3, geometry.fillet_boss_tangent).
+#      0.49.0 failed at every radius: "fillet produced an invalid shape
+#      (face: BRepCheck_UnorientableShape)" (OCCT port patches 1570 to 1572).
+#   4. Saved, for the second part: fillet-boss-tangent-crash.mitcad-ui.
+# Run by tools/ui-fillet-boss-tangent-test.sh (Linux) and
+# tools/ui-windows-fillet-boss-tangent-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+dblclick-logged '^Timeline Sketch1 at '
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The slot and the plate.
+command sketch.slot
+sketch-click 0 0
+sketch-move 85 0
+type 85
+key Return
+sketch-move 85 25
+type 50
+mark
+key Return
+wait-log '^Added slot, width 50 mm \[c1, c2, c3, c4\]'
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle 30
+mark
+command solid.extrude
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile '
+type-in '^Panel Extrude input distance at ' '15 mm'
+wait-log '^Preview Extrude: ok' 30
+button '^OK$'
+wait-log '^Added extrude \(New Body\), distance 15' 30
+wait-idle 30
+capture plate 'New body \S+ [(]F2[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${plate} 93202.431 1e-6 0.01
+
+# 2. The circle on the slot's end and the boss.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+command sketch.circle
+sketch-click 85 0
+sketch-click 85 25
+wait-log '^Added circle, diameter 50 mm at [(]85, 0[)]'
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle 30
+command view.fit
+wait-idle 30
+mark
+command solid.extrude
+wait-log '^Command Extrude started'
+wait-idle 30
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+mark
+# The circle's region: bounded by the slot's end arc c2 and the circle.
+click-pick 'profile F1/r\{c2\['
+wait-log '^Extrude Profiles: 1 profile '
+type-in '^Panel Extrude input distance at ' '30 mm'
+wait-log '^Preview Extrude: ok' 30
+button '^OK$'
+wait-log '^Added extrude \(Join\), distance 30' 30
+wait-idle 30
+capture boss 'Body \S+ [(]F2[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${boss} 122654.862 1e-6 0.01
+command view.fit
+wait-idle 30
+
+# 3. Fillet on the plate's top edge at y = -25 (the slot's side c3).
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F2[.]b0/E[{]F2:end[(][^|]*[|]F2:side[(]c3\['
+wait-log '^Fillet Edges: 1 edge'
+wait-idle 60
+expect-log '^Panel Fillet checks: tangent_chain=on'
+mark
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '30 mm'
+wait-log '^Preview Fillet: failed: ' 60
+wait-log '^Panel Fillet error: ' 30
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/fillet-30mm-failed.png'
+mark
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '3 mm'
+wait-log '^Fillet Radius: 3 mm = 3 mm$' 30
+wait-log '^Preview Fillet: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/fillet-3mm-preview.png'
+mark
+button '^OK$'
+wait-log '^Added Fillet' 60
+wait-idle 60
+capture filleted 'Body \S+ [(]F2[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${filleted} 122198.877926 1e-6 0.01
+screenshot '${MITCAD_TEST_WORK}/fillet-3mm.png'
+
+# 4. Saved for the second part.
+command file.save
+wait-log '^Saved '
+expect-never 'Preview Fillet: failed: fillet produced an invalid shape|The document was read while a job computes it|TestDriver: FAIL'

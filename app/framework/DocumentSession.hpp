@@ -169,6 +169,14 @@ public:
   // end, so the view draws them. True when all were.
   bool refineDisplay(const DisplayShapes& bodies);
   bool refineDisplayAsync(const DisplayShapes& bodies, QObject* context, Completion completion);
+  // The shown bodies meshed again for display with the view's options as
+  // they are now (remeshForDisplay, mitcad#879: the small circles' choice
+  // changed), in a job of their own that computes nothing in the model. On
+  // completion, with no job running, the bodies are given the new meshes
+  // (giveRemeshed) and `completion` gets how many took them, before the
+  // caller draws them again. False when a job runs.
+  using RemeshCompletion = std::function<void(std::size_t given, const AsyncResult&)>;
+  bool remeshDisplayAsync(QObject* context, RemeshCompletion completion);
   void clearPreview();
   void markSaved();
   void cancelJob();

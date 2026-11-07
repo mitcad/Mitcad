@@ -15,7 +15,10 @@ use super::build::{self, Fit, Picker, System};
 use super::manifest::{
     ACCEPTED_LICENSES, IndexEntry, Manifest, ManifestComponent, license_note, matches, search_words,
 };
-use super::{FetchOptions, LibraryCache, LibraryRepo, LibraryVersion, RepoKind, publish};
+use super::{
+    ClonesRead, FetchOptions, LibraryCache, LibraryRepo, LibraryVersion, RepoKind, publish,
+    repository_key,
+};
 use crate::VcsError;
 use crate::api::{optional, text};
 use crate::remote::commands::answer;
@@ -77,6 +80,8 @@ pub fn command(
         "index_entry" => publish::index_entry_command(&command)?,
         "library_build_candidates" => build_candidates(cache, &command)?,
         "library_configure" => configure(cache, &command)?,
+        // Library Sources' Remove and Add (mitcad#1436).
+        "library_remove" => remove(cache, &command)?,
         // The suppliers' shops by region and the product links of
         // articles (mitcad#950, `mitcad_model::supplier_shops`).
         "supplier_shops" => supplier_shops(&command),
@@ -203,6 +208,8 @@ fn list(cache: &LibraryCache) -> Value {
             "dir": dir.to_string_lossy(),
             "url": repo.url(),
             "kind": repo.kind(head),
+            // A removed source's clone, which the pickers leave out (mitcad#1436).
+            "removed": super::sources::is_removed(&dir),
             "versions": versions_json(&versions),
         });
         match repo.kind(head) {
@@ -234,6 +241,29 @@ fn list(cache: &LibraryCache) -> Value {
         libraries.push(value);
     }
     json!({"root": cache.root.to_string_lossy(), "libraries": libraries})
+}
+
+/// `library_remove` (mitcad#1436): a source removed in Library Sources.
+/// Its clones (the repository `url` names, in any form) are marked, so the
+/// pickers and the search leave them out, unless one of `sources` (the
+/// sources still listed) names the same repository; designs keep reading
+/// their parts from them. With `removed: false` (the source added again)
+/// the mark is taken off. `changed`: the clones' folders whose mark
+/// changed; `repository`: the repository's key.
+fn remove(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
+    let url = text(command, "url")?;
+    let removed = command
+        .get("removed")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let sources = sources_of(command).unwrap_or_default();
+    let changed = cache.mark_removed(url, &sources, removed)?;
+    Ok(json!({
+        "url": crate::remote::redact(url),
+        "repository": repository_key(url),
+        "removed": removed,
+        "changed": changed.iter().map(|dir| dir.to_string_lossy()).collect::<Vec<_>>(),
+    }))
 }
 
 /// A component's design at a commit, as JSON.
@@ -642,15 +672,38 @@ fn has_supplier(manifest: &Manifest, c: &ManifestComponent, supplier: &str) -> b
             .any(|s| same(&s.id) || same(&s.name))
 }
 
-/// A URL as a repository's key (mitcad#949): without user information, a
-/// trailing slash or `.git`, `/` for a backslash, in lower case.
-fn url_key(url: &str) -> String {
-    let shown = mitcad_model::library::shown_url(url.trim()).replace('\\', "/");
-    let mut key = shown.trim_end_matches('/').to_ascii_lowercase();
-    if let Some(stripped) = key.strip_suffix(".git") {
-        key = stripped.to_owned();
-    }
-    key
+/// The clones a picker or the search read and those left out
+/// (mitcad#1436), for the log: `read` (`dir`, `url`), `left_out` (`dir`,
+/// `url`, `reason`, `text`).
+fn clones_json(clones: &ClonesRead) -> Value {
+    let read: Vec<Value> = clones
+        .read
+        .iter()
+        .map(|repo| json!({"dir": repo.dir().to_string_lossy(), "url": repo.url()}))
+        .collect();
+    let left_out: Vec<Value> = clones
+        .left_out
+        .iter()
+        .map(|clone| {
+            json!({
+                "dir": clone.dir.to_string_lossy(),
+                "url": clone.url,
+                "reason": clone.reason,
+                "text": format!("{} ({}) left out: {}", clone.url, clone.dir.display(), clone.reason),
+            })
+        })
+        .collect();
+    json!({"read": read, "left_out": left_out})
+}
+
+/// The `sources` of a command as written (the enabled sources' URLs).
+fn sources_of(command: &Value) -> Option<Vec<String>> {
+    command.get("sources").and_then(Value::as_array).map(|a| {
+        a.iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    })
 }
 
 /// A library fetched here, at its newest version.
@@ -699,7 +752,9 @@ fn fetched_left_out(
     }
     all.iter()
         .filter(|other| !std::ptr::eq(*other, f) && is_source(&other.url))
-        .find(|other| url_key(&other.url) == url_key(&f.url) || other.repo.contains(f.commit))
+        .find(|other| {
+            repository_key(&other.url) == repository_key(&f.url) || other.repo.contains(f.commit)
+        })
         .map(|other| format!("same repository as {}", other.url))
 }
 
@@ -720,7 +775,7 @@ fn entry_left_out(
     all.iter()
         .filter(|f| is_source(&f.url) && f.manifest.id != entry.id)
         .find(|f| {
-            url_key(&f.url) == url_key(&entry.url)
+            repository_key(&f.url) == repository_key(&entry.url)
                 || entry.reviewed.iter().any(|r| {
                     ObjectId::from_hex(r.rev.trim().as_bytes()).is_ok_and(|id| f.repo.contains(id))
                 })
@@ -748,22 +803,25 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     let picker = picker_fields(command)?;
     let supplier = optional(command, "supplier");
     let part_number = optional(command, "part_number");
-    let sources: Option<Vec<String>> = command
-        .get("sources")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(url_key).collect());
+    let written = sources_of(command);
+    let sources: Option<Vec<String>> = written.as_ref().map(|list| {
+        list.iter()
+            .map(String::as_str)
+            .map(repository_key)
+            .collect()
+    });
     let is_source = |url: &str| {
         sources
             .as_ref()
-            .is_none_or(|list| list.contains(&url_key(url)))
+            .is_none_or(|list| list.contains(&repository_key(url)))
     };
     let build_only = !picker.is_empty();
     let mut fetched: Vec<Fetched> = Vec::new();
     let mut indexes = Vec::new();
-    for dir in cache.repos() {
-        let Ok(repo) = LibraryRepo::open(&dir) else {
-            continue;
-        };
+    // One clone per repository, removed sources' left out (mitcad#1436).
+    let clones = cache.clones_read(written.as_deref().unwrap_or(&[]));
+    let clones_read = clones_json(&clones);
+    for repo in clones.read {
         let Ok(Some(head)) = repo.head() else {
             continue;
         };
@@ -858,7 +916,7 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     }
     Ok(
         json!({"components": components, "libraries": libraries, "hidden": hidden,
-              "left_out": left_out}),
+              "left_out": left_out, "clones": clones_read}),
     )
 }
 
@@ -885,10 +943,10 @@ fn build_candidates(cache: &LibraryCache, command: &Value) -> Result<Value, VcsE
     let mut fits: Vec<(u32, String, Value)> = Vec::new();
     let mut refused = Vec::new();
     let mut hidden = 0;
-    for dir in cache.repos() {
-        let Ok(repo) = LibraryRepo::open(&dir) else {
-            continue;
-        };
+    // One clone per repository, removed sources' left out (mitcad#1436).
+    let clones = cache.clones_read(sources_of(command).as_deref().unwrap_or(&[]));
+    let clones_read = clones_json(&clones);
+    for repo in clones.read {
         let Ok(Some(head)) = repo.head() else {
             continue;
         };
@@ -944,6 +1002,7 @@ fn build_candidates(cache: &LibraryCache, command: &Value) -> Result<Value, VcsE
         "components": fits.into_iter().map(|(_, _, item)| item).collect::<Vec<_>>(),
         "refused": refused,
         "hidden": hidden,
+        "clones": clones_read,
     }))
 }
 

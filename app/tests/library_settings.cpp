@@ -2,8 +2,9 @@
 // The library sources' settings (mitcad#576): the defaults, Auto-update kept
 // with a source and read back, settings written before the key existed
 // (Auto-update off), the sources a start-up fetch takes, added sources, and
-// the index's libraries an enabled source has left out (mitcad#949), and Use
-// the installed git program (mitcad#1224).
+// the index's libraries an enabled source has left out (mitcad#949), Use
+// the installed git program (mitcad#1224), and one repository's URL forms
+// as one source (mitcad#1436).
 #include "files/Libraries.hpp"
 
 #include <cstdio>
@@ -177,6 +178,59 @@ void indexLibraryTests() {
   // The source disabled: the old library is offered again.
   CHECK(ids(browserLibraries(answer, {sources.last()}, false)) ==
         (QStringList{QStringLiteral("mitcad-fasteners"), QStringLiteral("brackets")}));
+  // The parts repository under another form of its URL (mitcad#1436).
+  CHECK(ids(browserLibraries(answer, {text("https://www.github.com/mitcad/parts")}, false)) ==
+        QStringList{QStringLiteral("brackets")});
+}
+
+// One repository, one source (mitcad#1436, GitHub mitcad/Mitcad#172): the
+// URL forms of one repository have one key, as the model's
+// repository_key, and Add takes no second form of a listed source; the
+// log's text of the clones a picker read.
+void repositoryTests() {
+  using namespace mitcad;
+  const QString parts = repositoryKey(text("https://github.com/mitcad/parts.git"));
+  CHECK(parts == QStringLiteral("github.com/mitcad/parts"));
+  for (const char* form : {"https://www.github.com/mitcad/parts.git", "https://github.com/mitcad/parts",
+                           "https://github.com/mitcad/parts/", "https://github.com/mitcad/parts.git/",
+                           " HTTPS://WWW.GitHub.com/mitcad/parts.git ", "http://github.com/mitcad/parts.git",
+                           "https://user@github.com/mitcad/parts.git", "ssh://git@github.com/mitcad/parts.git",
+                           "git@github.com:mitcad/parts.git"}) {
+    if (repositoryKey(text(form)) != parts) {
+      std::fprintf(stderr, "library_settings.cpp: %s: %s\n", form, qPrintable(repositoryKey(text(form))));
+    }
+    CHECK(repositoryKey(text(form)) == parts);
+  }
+  for (const char* other : {"https://github.com/mitcad/part.git", "https://www.github.com/mitcad/community-index.git",
+                            "https://gitlab.com/mitcad/parts.git", "https://wwwgithub.com/mitcad/parts.git"}) {
+    CHECK(repositoryKey(text(other)) != parts);
+  }
+  CHECK(repositoryKey(text("/srv/libraries/parts.git")) == repositoryKey(text("file:///srv/libraries/parts")));
+  CHECK(repositoryKey(text("C:\\Libraries\\parts.git")) == repositoryKey(text("file:///C:/Libraries/parts")));
+  CHECK(repositoryKey(text("C:\\Libraries\\parts")) == QStringLiteral("c:/libraries/parts"));
+
+  // The default source, removed and added again as the www. form, is one
+  // row; another form of it is not added beside it.
+  LibrarySettings settings;
+  settings.sources = defaultLibrarySources();
+  settings.sources.removeFirst();
+  CHECK(settings.add(text("https://www.github.com/mitcad/parts.git")));
+  CHECK(!settings.add(text("https://github.com/mitcad/parts.git")));
+  CHECK(!settings.add(text("https://github.com/mitcad/parts/")));
+  CHECK(settings.sources.size() == 2);
+  CHECK(settings.sameRepository(text("HTTPS://GITHUB.COM/mitcad/parts")) ==
+        QStringLiteral("https://www.github.com/mitcad/parts.git"));
+  CHECK(settings.sameRepository(text("https://github.com/mitcad/part.git")).isEmpty());
+
+  // The log's text of a picker's clones.
+  const QJsonObject answer = QJsonDocument::fromJson(QByteArray(R"json({"clones": {
+    "read": [{"dir": "/data/libraries/parts-1a2b3c4d.git", "url": "https://github.com/mitcad/parts.git"}],
+    "left_out": [{"dir": "/data/libraries/parts-5e6f7a8b.git", "url": "https://www.github.com/mitcad/parts.git",
+                  "reason": "its source was removed"}]}})json")).object();
+  CHECK(libraryClonesText(answer) ==
+        QStringLiteral("https://github.com/mitcad/parts.git (parts-1a2b3c4d.git); left out: "
+                       "https://www.github.com/mitcad/parts.git (parts-5e6f7a8b.git): its source was removed"));
+  CHECK(libraryClonesText(QJsonObject()) == QStringLiteral("none"));
 }
 
 } // namespace
@@ -229,6 +283,7 @@ int librarySettingsTests() {
   oldSettingsTests();
   addTests();
   indexLibraryTests();
+  repositoryTests();
   useGitTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);

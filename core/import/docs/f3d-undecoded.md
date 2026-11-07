@@ -561,7 +561,10 @@ traces of the import (the backup corpus repeats some designs of
   on different arcs of that ball, and the rolling ball leaves the gap
   between them over the face it cannot touch open (the file's body closes
   it with faces of its own), so there is no rolling-ball construction to
-  make; they still fail, the last one now at its end corner. In 2 (1) the
+  make; they still fail, the last one now at its end corner (since mitcad#1371
+  and mitcad#1398 each of them is the file's result: built and verified, or
+  skipped where the file's own rounding failed too; [the rounding
+  specs](rounding-specs.md#mitcad238s-three-face-specs)). In 2 (1) the
   contact crosses such a hole, but the stripe's start overflowed an earlier
   rounding all round a closed edge, a face that nothing cuts loose (the
   result kept it), so the walk over the hole is not taken there. In 3 (1)
@@ -1158,8 +1161,55 @@ kept under `third_party/`).
 | An edge whose curve the reader cannot decode | left out of its loops (the loops open) | **kept** on an unknown curve (`Curve::Unknown`), counted in `unknown_edges`; the builder leaves it out; a state with one counts as lost faces, as before |
 | Subshells: owner, next sibling, first child, first face, wire | not read ("their faces are not read") | **read**: their faces belong to the shell |
 | Helices (`helix_int_cur`), thread flanks (`helix_spl_line`) and rounded roots (`helix_spl_circ`) | sampled 48 times a turn and interpolated | **exact** (`Curve::Helix`): the builder gets a degree 7 B-spline of twelve spans a turn matching the helix's point and first three derivatives at each knot, within 6e-10 of its radius; a flank is ruled between two helices, a root swept through the helices of its arc's control points, all with the same knots |
-| A translational extrusion (`cyl_spl_sur`, a sum surface with a line) of a circle along its normal | an extrusion | **a cylinder** (a circle: an ellipse of ratio 1, or a B-spline on a circle within a billionth of its radius) |
+| A translational extrusion (`cyl_spl_sur`, a sum surface with a line) of a circle along its normal | an extrusion | **a cylinder** (a circle: an ellipse of ratio 1, or a B-spline on a circle within a billionth of its radius whose three sample points span at least a thousandth of it: a long line ending in a short bend is no circle) |
 | A constant-radius rolling ball (`rb_blend_spl_sur`) between two planes along a line, or a plane and a cylinder about its normal along a circle | the stored approximation, or the ball walked by OCCT | **a cylinder or a torus** where every condition holds within 1e-6 mm, before any stored approximation |
 | `off_spl_sur` (revision-gated) without its approximation: support, distance, sense pair, extension prefix and run, shared tail | not made (no approximation) | **exact**: an offset of a plane is the plane moved, of a B-spline OCCT's offset surface of it; curves on such a surface follow their parameter curve on it |
 | The other procedural surfaces stored without an approximation (variable blends, lofts, sweeps, laws, skins, nets, tapers, G2 blends) and curves without one or parameter curves (surface intersections, projections, silhouettes, springs) | not made | not read: the families are added one row at a time to `PROCEDURAL_SURFACES` in `core/asm/src/asm/geom.rs` |
 
+
+What the readers now meet in the private test files (every distinct
+`.f3d`, `.f3z`, `.ipt` and `.iam` file: 890, 848 and 168), from the
+comparison before and after (mitcad_private#198):
+
+| In the stored bodies | `.f3d` | `.ipt` |
+|---|---|---|
+| Helix edges, now exact | 630 (in 47 files) | in 40 files |
+| Faces kept on an unknown surface | 15 (in 5 files; the builder leaves them out as before) | none |
+| Edges kept on an unknown curve | 4 (in 1 file, whose two bodies lose their open loops) | none |
+| Extrusions of a circle as cylinders | none (one 0.7 mm piece of a cubic, within 2e-9 mm of a circle 10.7 m wide, was one before the fix below; it stays the exact extrusion) | none (5 faces in 3 files were taken for cylinders wrongly, below) |
+| Rolling balls as cylinders or tori, offset surfaces made without their approximation | none | none |
+| Mesh bodies in the import of the stored bodies (mitcad#1376) | 1 | |
+| Bodies with an appearance in the import of the stored bodies (mitcad#1375) | | 3 068 of 3 091 (1 537 before) |
+
+The comparison imported each file with its history and as stored
+bodies (`mitcad-cli import-f3d`, `import-ipt`, `import-iam`, the same
+options for both builds) and compared per file whether it imports,
+the items' outcomes, the final bodies against the file's, and each
+body's volume, area, faces and edges (1e-6 relative). It found one
+regression: a B-spline profile of a long line ending in a short bend
+was taken for a circle 3e16 mm wide (the circle through three of its
+points on the line; the tolerance grew with its radius), so its
+extrusion became a cylinder whose faces' vertices lay up to 4 mm off it,
+and the stored body came in invalid (a body in each of three `.ipt`
+files, and in six assemblies that use them). An arc whose three sample
+points span less than a thousandth of its radius is no circle now; those
+files import as before. The rest changed as follows:
+
+- the thread bodies with exact helices: volumes and areas by 1e-6 to
+  3e-5 relative (the old interpolation's error), and the replay of a
+  thread now agrees better with the stored body (the worst of one file
+  from 1.0e-5 to 1.2e-6 relative); two `.f3d` designs' final bodies
+  now agree exactly, and in two `.ipt` parts with threads a fillet is now
+  parametric (in one it failed, in the other it hung; the same in a
+  second run);
+- four `.f3d` hems (rolled, teardrop, rope, double) are parametric
+  (mitcad#1378);
+- in the import with the history, the bodies of 11 `.ipt` parts now
+  have the appearances they lacked (mitcad#1375);
+- differences that come from the time and memory limits, not from the
+  code: items cut short at their share of the 300 s time limit, or
+  reached when it ran out, changed with the machine's load (a second
+  run reversed three of four; the fourth design takes 300 to 350 s in
+  both builds), and three `.ipt` parts that need more than 6 GB stop on
+  the import's memory guard in one build and are killed in the other,
+  or are killed in both.

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# A fillet that fails inside the geometry kernel never ends the application
+# (mitcad#1422), on the part fillet-boss-tangent.mitcad-ui built and saved,
+# opened with MITCAD_TEST_OCCT_CRASH=fillet: every fillet the kernel
+# computes crashes as an access violation inside OCCT would.
+#   1. Fillet1, recomputed as the design opens, fails with that crash as
+#      its error (its timeline cell failed, an error report offered and
+#      declined); the application goes on.
+#   2. Fillet on the boss's top edge: its preview fails with the crash, the
+#      error is in the panel, OK stays off; Escape cancels the command and
+#      the application goes on.
+# Run by tools/ui-fillet-boss-tangent-test.sh (Linux) and
+# tools/ui-windows-fillet-boss-tangent-test.ps1 (Windows).
+expect-ever 'View area'
+# The crash is offered as an error report (the application's own, not the
+# operating system's); the test declines it and turns the offers off.
+focus-dialog '^Error Report$' 60
+expect-ever '^Error report offered [(]error[)]: '
+button '^Don.t Send$'
+focus-main
+set-setting reports/offerErrors false
+wait-idle 60
+expect-ever 'Opened '
+expect-ever '^Failed features: Fillet1: fillet: '
+# The timeline logs its cells' states as it paints them; in the build VM's
+# session 0 Qt never exposes the window, so nothing paints until the
+# window is grabbed (tools/ui-windows-lib.ps1): the screenshot paints it.
+screenshot '${MITCAD_TEST_WORK}/fillet-crash-opened.png'
+expect-ever '^Timeline cell Fillet1: failed'
+command view.fit
+wait-idle 30
+
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F2[.]b0/E[{][^|]*[|]F3:end[(]'
+wait-log '^Fillet Edges: 1 edge'
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '2 mm'
+wait-log '^Preview Fillet: failed: ' 60
+wait-log '^Panel Fillet error: ' 30
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/fillet-crash-in-panel.png'
+mark
+key Escape
+wait-log '^Command Fillet cancelled'
+wait-idle 30
+command view.fit
+wait-idle 30
+expect-never 'The document was read while a job computes it|TestDriver: FAIL'

@@ -1740,6 +1740,28 @@ impl PathPatternDef {
                 .into_iter()
                 .map(|i| chain_transform(&chain, s0, s0 + i * step, self.along_path))
                 .collect()
+        } else if let PathRef::FeatureCurve(feature) = &self.path {
+            // Along an Intersection Curve (mitcad#1405): moved along it, and
+            // along the path turned as its tangent turns.
+            let curve = ctx.feature_curve(*feature)?;
+            let chain = super::intersection_curve::CurveChain::new(&curve)?;
+            let s0 = match self.start_point {
+                Some(p) => chain.nearest(p),
+                None => self.start * chain.length(),
+            };
+            positions(q, self.symmetric)
+                .into_iter()
+                .map(|i| {
+                    let (p0, t0) = chain.at(s0);
+                    let (p1, t1) = chain.at(s0 + i * step);
+                    let shift = Transform::translation(sub(p1, p0));
+                    if self.along_path {
+                        shift.after(&super::intersection_curve::turned(p0, t0, t1))
+                    } else {
+                        shift
+                    }
+                })
+                .collect()
         } else {
             let curve = path_curve(ctx, &self.path)?;
             let s0 = match self.start_point {

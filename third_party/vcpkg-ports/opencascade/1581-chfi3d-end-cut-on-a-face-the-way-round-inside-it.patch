@@ -1,0 +1,67 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the cut of a blend's end by a face at the end that the blend
+meets in a loop through both its points is the way round inside the face
+(mitcad#1425).
+
+The case of 1580: the bar's blend run on past the chain's end crosses the
+tip's rounding of 4 (a cylinder) from its edge with the tip's side to its
+edge with the corner patch. The blend's surface and the cylinder, each
+bounded by PerformIntersectionAtEnd's box about the two points, meet in a
+loop through both, and ChFi3d_ComputeCurves took the way round it outside
+the cylinder's face, past the corner patch's edge: the cylinder's face
+was grown over the blend's face (area 73.7 against the file's 55.2 mm2),
+0.27 mm off the stored body.
+
+- PerformIntersectionAtEnd: where the curve computed on a face at the end
+  that is not prolonged has its middle outside the face, it is computed
+  again on the surface bounded by the face's own domain (one hundredth of
+  it wider), and taken where its middle lies inside the face.
+
+On the design's stored body before the item: the cylinder's face as the
+file's (its cut within 0.0007 mm of the file's).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 1c76e91f..9f9f82dd 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -12178,6 +12178,38 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         PerformMoreThreeCorner(Index, 1);
+         return;
+       }
++      // A curve whose middle lies outside the face, the face not prolonged:
++      // the surfaces meet in a loop through both points and the way round
++      // it outside the face was taken (the cut by an earlier rounding's
++      // cylinder beside the end, mitcad#1425). It is computed again on the
++      // face's own domain, and taken where its middle lies in the face.
++      if (!prolface[nb - 1] && nbface > 1 && !Cc.IsNull() && !Pc.IsNull())
++      {
++        const auto aMidOut = [&](const occ::handle<Geom_Curve>& theC, const occ::handle<Geom2d_Curve>& thePc) {
++          const gp_Pnt2d          aMid = thePc->Value(0.5 * (theC->FirstParameter() + theC->LastParameter()));
++          BRepClass_FaceClassifier aClass(Face[nb - 1], aMid, Precision::PConfusion());
++          return aClass.State() == TopAbs_OUT;
++        };
++        if (aMidOut(Cc, Pc))
++        {
++          double aU0 = 0., aU1 = 0., aV0 = 0., aV1 = 0.;
++          BRepTools::UVBounds(Face[nb - 1], aU0, aU1, aV0, aV1);
++          const double aMU = 0.01 * (aU1 - aU0), aMV = 0.01 * (aV1 - aV0);
++          occ::handle<GeomAdaptor_Surface> aOwn =
++            new GeomAdaptor_Surface(BRep_Tool::Surface(Face[nb - 1]), aU0 - aMU, aU1 + aMU, aV0 - aMV, aV1 + aMV);
++          occ::handle<Geom_Curve>   aCc;
++          occ::handle<Geom2d_Curve> aPs, aPc;
++          double                    aTolR = tolreached;
++          if (ChFi3d_ComputeCurves(HGs, aOwn, Pardeb, Parfin, aCc, aPs, aPc, tolapp3d, tol2d, aTolR, false)
++              && !aMidOut(aCc, aPc))
++          {
++            Cc         = aCc;
++            Ps         = aPs;
++            Pc         = aPc;
++            tolreached = aTolR;
++          }
++        }
++      }
+       // storage of information in the data structure
+ 
+       // evaluate tolerances

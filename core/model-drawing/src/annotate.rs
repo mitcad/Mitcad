@@ -42,7 +42,9 @@ pub use mitcad_model::drawing::annotate_def::*;
 
 use super::P2;
 use super::clip::ViewMap;
-use super::compose::{ARROW_LENGTH, Bounds, EXTENSION_BEYOND, EXTENSION_GAP, arrow, upright};
+use super::compose::{
+    ARROW_LENGTH, Bounds, EXTENSION_BEYOND, EXTENSION_GAP, TEXT_GAP, arrow, upright,
+};
 use super::sheet::{Anchor, Group, Item, Pen, text_width};
 use mitcad_model::Characteristic;
 use mitcad_model::datum::{CurveGeometry, Vec3};
@@ -633,6 +635,17 @@ impl ValueText {
             .fold(0.0, f64::max)
     }
 
+    /// How far it reaches below and above its baseline at this height,
+    /// mm: its lowest letters' foot (0 or below, a stacked tolerance's
+    /// lower part) and its highest letters' top.
+    pub fn rise(&self, h: f64) -> (f64, f64) {
+        self.parts(h)
+            .iter()
+            .fold((0.0, h), |(low, high), (_, y, _, size)| {
+                (low.min(*y), high.max(y + size))
+            })
+    }
+
     /// Writes it on a baseline, its letters `h` high: `at` its start
     /// (`Anchor::Start`), its middle or its end, along `angle`.
     fn write(&self, group: &mut Group, at: P2, angle: f64, anchor: Anchor, h: f64) {
@@ -1147,7 +1160,7 @@ fn dimension_line(
     }
     let angle = upright(towards);
     let up = [-angle.sin(), angle.cos()];
-    let at = add2(middle, mul2(up, 1.0 + v));
+    let at = add2(middle, mul2(up, TEXT_GAP + v));
     words.write(g, at, angle, Anchor::Middle, h);
 }
 
@@ -1228,7 +1241,7 @@ fn arc_radius(annotation: &ViewAnnotation, seen: &[Seen], frame: &Frame<'_>) -> 
 
 /// An angle between two straight edges: an arc about their corner with an
 /// arrow at each end, extension lines along the edges to it where it lies
-/// beyond them, the value on the arc's middle.
+/// beyond them, the value clear outside the arc's middle.
 fn angle(
     g: &mut Group,
     annotation: &ViewAnnotation,
@@ -1272,19 +1285,37 @@ fn angle(
             );
         }
     }
-    let tangent = |r: P2| perp(r);
-    arrow(
-        g,
-        add2(center, mul2(from, radius)),
-        mul2(tangent(from), -1.0),
-    );
-    arrow(g, add2(center, mul2(to, radius)), tangent(to));
+    // Each arrow along the chord from its tip to the arc's point an arrow
+    // length back, so its base's middle lies on the arc and it carries
+    // the arc on whatever the radius.
+    let on_arc = |a: f64| add2(center, mul2([a.cos(), a.sin()], radius));
+    let back = 2.0 * (ARROW_LENGTH / (2.0 * radius)).clamp(-1.0, 1.0).asin();
+    for (tip, base) in [
+        (add2(center, mul2(from, radius)), on_arc(start + back)),
+        (add2(center, mul2(to, radius)), on_arc(start + sweep - back)),
+    ] {
+        arrow(g, tip, sub2(tip, base));
+    }
+    // The text outside the arc's middle, across the angle's bisector: its
+    // near edge (its foot where it stands on the far side, its top where
+    // it hangs towards the corner) the text gap beyond the arc, whatever
+    // its height; a text offset moves it from there.
     let half = start + sweep / 2.0;
     let middle = [half.cos(), half.sin()];
     let [u, v] = annotation.text_offset.unwrap_or([0.0, 0.0]);
-    let along = tangent(middle);
-    let at = add2(add2(center, mul2(middle, radius + 1.0 + v)), mul2(along, u));
+    let along = perp(middle);
     let angle = upright(along);
+    let up = [-angle.sin(), angle.cos()];
+    let (low, high) = words.rise(frame.text);
+    let lift = if dot2(up, middle) >= 0.0 {
+        TEXT_GAP - low
+    } else {
+        TEXT_GAP + high
+    };
+    let at = add2(
+        add2(center, mul2(middle, radius + lift + v)),
+        mul2(along, u),
+    );
     words.write(g, at, angle, Anchor::Middle, frame.text);
     Ok(())
 }
@@ -2823,6 +2854,153 @@ mod tests {
         assert_eq!(measure(&o, &points).unwrap(), Some(25.0));
         o.along = Some(Along::Vertical);
         assert_eq!(measure(&o, &points).unwrap(), Some(5.0));
+    }
+
+    /// The nearest a text item's box (its width along its baseline, its
+    /// height above it) comes to `p`: 0 inside it.
+    fn text_box_distance(item: &Item, p: P2) -> f64 {
+        let Item::Text {
+            at,
+            height,
+            angle,
+            anchor,
+            text,
+        } = item
+        else {
+            panic!("not a text: {item:?}");
+        };
+        let w = text_width(text, *height);
+        let along = [angle.cos(), angle.sin()];
+        let up = [-angle.sin(), angle.cos()];
+        let start = match anchor {
+            Anchor::Start => 0.0,
+            Anchor::Middle => w / 2.0,
+            Anchor::End => w,
+        };
+        let x = dot2(sub2(p, *at), along) + start;
+        let y = dot2(sub2(p, *at), up);
+        let dx = (-x).max(x - w).max(0.0);
+        let dy = (-y).max(y - height).max(0.0);
+        dx.hypot(dy)
+    }
+
+    #[test]
+    fn an_angles_text_lies_clear_outside_its_arc_and_its_arrows_bases_on_it() {
+        // mitcad#1433: the text sat across the arc, and on a small radius
+        // the arrows' bases left it.
+        let map = map();
+        let stacked = ValueText {
+            text: "60° +0.5 -0.5".to_owned(),
+            main: "60°".to_owned(),
+            upper: Some("+0.5".to_owned()),
+            lower: Some("-0.5".to_owned()),
+            ..ValueText::default()
+        };
+        // Corners whose bisector points up, down, left, right and aslant,
+        // so the text stands on the arc's far side or hangs towards its
+        // corner.
+        for first in [0.0f64, 60.0, 150.0, 240.0, 330.0, 15.0] {
+            let (a1, a2) = (first.to_radians(), (first + 60.0).to_radians());
+            let lines = [
+                Seen::Line([0.0, 0.0], [20.0 * a1.cos(), 20.0 * a1.sin()]),
+                Seen::Line([0.0, 0.0], [20.0 * a2.cos(), 20.0 * a2.sin()]),
+            ];
+            for radius in [5.0, 30.0] {
+                for h in [2.5, 3.5, 5.0] {
+                    for value in [words("60°"), stacked.clone()] {
+                        let frame = Frame {
+                            map: &map,
+                            view_box: view_box(),
+                            text: h,
+                        };
+                        let mut a = ViewAnnotation::new(1, AnnotationType::Angle, Vec::new());
+                        a.line_offset = Some(radius);
+                        let laid = lay_out(&a, &lines, &frame, Some(&value), &[]).unwrap();
+                        let items = &laid.group.items;
+                        let (center, r) = items
+                            .iter()
+                            .find_map(|i| match i {
+                                Item::Arc { center, radius, .. } => Some((*center, *radius)),
+                                _ => None,
+                            })
+                            .unwrap();
+                        assert!((r - radius).abs() < 1e-9, "{r}");
+                        // Each arrow's base's middle on the arc, its tip at
+                        // an end of it.
+                        let fills: Vec<&Vec<P2>> = items
+                            .iter()
+                            .filter_map(|i| match i {
+                                Item::Fill { points } => Some(points),
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(fills.len(), 2, "{items:?}");
+                        for points in fills {
+                            let base = mid(points[1], points[2]);
+                            for p in [points[0], base] {
+                                let off = len2(sub2(p, center)) - radius;
+                                assert!(
+                                    off.abs() < 0.01,
+                                    "first {first}, radius {radius}: {p:?} is {off} off the arc"
+                                );
+                            }
+                        }
+                        // Every text's box the text gap clear outside the
+                        // arc: it does not cross it.
+                        let texts: Vec<&Item> = items
+                            .iter()
+                            .filter(|i| matches!(i, Item::Text { .. }))
+                            .collect();
+                        assert!(!texts.is_empty());
+                        for text in texts {
+                            let clear = text_box_distance(text, center) - radius;
+                            assert!(
+                                clear > TEXT_GAP - 1e-9,
+                                "first {first}, radius {radius}, height {h}: {text:?} only \
+                                 {clear} outside the arc"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_angles_dragged_text_keeps_its_offset_from_its_place_outside_the_arc() {
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: 5.0,
+        };
+        // The bisector points down: the text hangs towards the corner.
+        let lines = [
+            Seen::Line([0.0, 0.0], [10.0, -10.0]),
+            Seen::Line([0.0, 0.0], [-10.0, -10.0]),
+        ];
+        let text_at = |a: &ViewAnnotation| {
+            let laid = lay_out(a, &lines, &frame, Some(&words("90°")), &[]).unwrap();
+            laid.group
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Text { at, .. } => Some(*at),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let mut a = ViewAnnotation::new(1, AnnotationType::Angle, Vec::new());
+        a.line_offset = Some(12.0);
+        let before = text_at(&a);
+        a.text_offset = Some([3.0, 2.0]);
+        let after = text_at(&a);
+        // Along the arc's tangent at its middle and out along its bisector
+        // (here down): the tangent there runs along the sheet's x.
+        let middle = [0.0, -1.0];
+        let shift = add2(mul2(perp(middle), 3.0), mul2(middle, 2.0));
+        let moved = sub2(after, before);
+        assert!(len2(sub2(moved, shift)) < 1e-9, "{moved:?}");
     }
 
     #[test]

@@ -24,7 +24,10 @@ namespace mitcad::geometry {
 // the operations; a fault becomes an exception only in an operation (and
 // on OCCT's own threads while one runs), any other goes to the unhandled
 // exception filter installed before the first call (the application's
-// crash report, with the stack from the fault, mitcad#76). On Linux and
+// crash report, with the stack from the fault, mitcad#76); where that
+// exception cannot unwind to the operation (a fault in a destructor, which
+// passes on no exception), the thread goes back to the operation without
+// unwinding, as on Linux and macOS (mitcad#1429). On Linux and
 // macOS the handlers are the process's: a crash outside an operation that
 // catches it (OCC_CATCH_SIGNALS, on any thread) goes to the handler
 // installed before the first call (the application's crash report,

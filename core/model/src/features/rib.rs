@@ -4,18 +4,25 @@
 //! plane, its thickness across the plane; a web grows from each curve along
 //! the sketch normal, its thickness in the plane. Either runs a depth, or
 //! up to the next faces of the bodies.
+//!
+//! Instead of sketch curves either takes the curve of an Intersection Curve
+//! (mitcad#1417), `{"feature": "F5"}`, when it lies in one plane: that
+//! plane is its sketch plane ([`intersection_curve::curve_plane`]).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::extrude::{Operation, apply_operation, check_participants, participant_bodies};
+use super::intersection_curve;
 use super::path::{self, SketchCurves};
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse, is_false,
 };
-use crate::ids::BodyUid;
+use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
-use crate::sweeps::{RibSpec, ThicknessLocation};
+use crate::profile::SketchFrame;
+use crate::sweeps::{PathCurve, RibSpec, ThicknessLocation};
 
 /// How far a rib or a web grows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,13 +36,120 @@ pub enum RibExtent<P = ParamId> {
     },
 }
 
+/// What a rib or a web grows from: curves of a sketch
+/// (`{"sketch": "F6", "curves": ["c1"]}`), or the curve of an Intersection
+/// Curve (mitcad#1417), `{"feature": "F5"}`, which must lie in one plane.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum RibCurves {
+    Sketch(SketchCurves),
+    Feature { feature: FeatureUid },
+}
+
+impl<'de> Deserialize<'de> for RibCurves {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = Value::deserialize(deserializer)?;
+        match &value {
+            Value::Object(map) if map.contains_key("feature") => {
+                if map.len() != 1 {
+                    return Err(D::Error::custom(
+                        "an intersection curve's curves are {\"feature\": \"F5\"} alone",
+                    ));
+                }
+                let feature = map["feature"]
+                    .as_str()
+                    .ok_or_else(|| D::Error::custom("\"feature\" is a feature's uid like \"F5\""))?
+                    .parse::<FeatureUid>()
+                    .map_err(D::Error::custom)?;
+                Ok(Self::Feature { feature })
+            }
+            _ => serde_json::from_value(value)
+                .map(Self::Sketch)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+impl From<SketchCurves> for RibCurves {
+    fn from(curves: SketchCurves) -> Self {
+        Self::Sketch(curves)
+    }
+}
+
+impl RibCurves {
+    fn add_references(&self, references: &mut References) {
+        match self {
+            Self::Sketch(curves) => curves.add_references(references),
+            Self::Feature { feature } => {
+                references.features.insert(*feature);
+            }
+        }
+    }
+
+    fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        match self {
+            Self::Sketch(curves) => curves.check(ctx),
+            Self::Feature { feature } => {
+                let entry = ctx.feature(*feature)?;
+                if matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{} ({feature}) makes no curve: the curves are a sketch's or an \
+                         intersection curve's",
+                        entry.name
+                    ))
+                }
+            }
+        }
+    }
+
+    /// The plane the curves lie in and the curves in model space. An
+    /// Intersection Curve's pieces are named `c1`, `c2`, ... in order along
+    /// it, as a sketch's curves are, so that the faces grown from them are
+    /// `side(c1)`, `wall1(c2)` and so on.
+    fn resolve<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+    ) -> Result<(SketchFrame, Vec<PathCurve>), String> {
+        let feature = match self {
+            Self::Sketch(curves) => return curves.curves(ctx),
+            Self::Feature { feature } => *feature,
+        };
+        let curve = ctx.feature_curve(feature)?;
+        // Its sketches' normals, which orient its plane.
+        let sketches: Vec<FeatureUid> = match ctx.env.feature(feature).map(|e| &e.def) {
+            Some(super::FeatureDef::IntersectionCurve(def)) => {
+                vec![def.first.sketch, def.second.sketch]
+            }
+            _ => Vec::new(),
+        };
+        let mut normals = Vec::with_capacity(sketches.len());
+        for sketch in sketches {
+            normals.push(ctx.sketch(sketch)?.frame.normal());
+        }
+        let frame = intersection_curve::curve_plane(&curve, &normals)
+            .map_err(|e| format!("{}: {e}", ctx.feature_name(feature)))?;
+        let pieces = curve
+            .iter()
+            .enumerate()
+            .map(|(i, piece)| PathCurve {
+                name: EntityUid(i as u32 + 1).curve_name(),
+                curve: piece.curve.clone(),
+            })
+            .collect();
+        Ok((frame, pieces))
+    }
+}
+
 macro_rules! thin_feature {
     ($(#[$doc:meta])* $name:ident, $type:literal, $base:literal, $web:literal) => {
         $(#[$doc])*
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         #[serde(deny_unknown_fields)]
         pub struct $name<P = ParamId> {
-            pub curves: SketchCurves,
+            pub curves: RibCurves,
             pub thickness: P,
             #[serde(default, skip_serializing_if = "is_symmetric")]
             pub thickness_location: ThicknessLocation,
@@ -144,7 +258,7 @@ fn is_symmetric(location: &ThicknessLocation) -> bool {
 /// The fields of a rib or a web.
 struct Thin<'a, P> {
     web: bool,
-    curves: &'a SketchCurves,
+    curves: &'a RibCurves,
     thickness: &'a P,
     location: ThicknessLocation,
     extent: &'a RibExtent<P>,
@@ -207,7 +321,7 @@ impl Thin<'_, ParamId> {
             }
         })?;
         let participants = participant_bodies(ctx, Operation::Join, self.participants)?;
-        let (frame, curves) = self.curves.curves(ctx)?;
+        let (frame, curves) = self.curves.resolve(ctx)?;
         let chains = if self.web {
             for curve in &curves {
                 if path::curve_ends(&curve.curve).is_none() {

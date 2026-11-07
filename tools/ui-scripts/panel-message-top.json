@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A failed preview's message from its first line (mitcad#1430), tools/ui-panel-message-top-test.sh: a 20 mm cube, a rectangle on the xy plane (F1) extruded 20 mm (F2, Extrude1)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":20,"height":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}}
+]

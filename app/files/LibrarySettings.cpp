@@ -4,6 +4,8 @@
 // without the bridge.
 #include "Libraries.hpp"
 
+#include <mutex>
+
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -97,17 +99,79 @@ QStringList LibrarySettings::autoUpdateUrls() const {
 
 namespace {
 
-// A URL as a repository's key: without a trailing slash or ".git", in lower
-// case.
-QString repositoryKey(const QString& url) {
-  QString key = normalLibraryUrl(url).toLower();
-  if (key.endsWith(QStringLiteral(".git"))) {
-    key.chop(4);
+// "host[:port]/path" without user information and the host's leading
+// "www.".
+QString hostAndPath(const QString& rest) {
+  const int slash = static_cast<int>(rest.indexOf(QLatin1Char('/')));
+  QString host = slash < 0 ? rest : rest.left(slash);
+  const QString path = slash < 0 ? QString() : rest.mid(slash);
+  const int at = static_cast<int>(host.lastIndexOf(QLatin1Char('@')));
+  if (at >= 0) {
+    host = host.mid(at + 1);
   }
-  return key;
+  if (host.startsWith(QStringLiteral("www."))) {
+    host = host.mid(4);
+  }
+  return host + path;
+}
+
+void chopSlashes(QString& text) {
+  while (text.endsWith(QLatin1Char('/'))) {
+    text.chop(1);
+  }
 }
 
 } // namespace
+
+QString repositoryKey(const QString& url) {
+  QString text = url.trimmed();
+  text.replace(QLatin1Char('\\'), QLatin1Char('/'));
+  text = text.toLower();
+  QString named = text;
+  const int scheme = static_cast<int>(text.indexOf(QStringLiteral("://")));
+  if (text.startsWith(QStringLiteral("file://"))) {
+    // file:///C:/library is the folder C:/library.
+    named = text.mid(7);
+    if (named.size() >= 3 && named.at(0) == QLatin1Char('/') && named.at(1).isLetter() &&
+        named.at(2) == QLatin1Char(':')) {
+      named = named.mid(1);
+    }
+  } else if (scheme > 0) {
+    static const QStringList network{QStringLiteral("https"), QStringLiteral("http"), QStringLiteral("ssh"),
+                                     QStringLiteral("git+ssh"), QStringLiteral("ssh+git")};
+    if (network.contains(text.left(scheme))) {
+      named = hostAndPath(text.mid(scheme + 3));
+    }
+  } else {
+    // git's short SSH form user@host:path; never a drive (c:/folder).
+    const int colon = static_cast<int>(text.indexOf(QLatin1Char(':')));
+    const QString before = colon < 0 ? QString() : text.left(colon);
+    if (colon >= 2 && !before.contains(QLatin1Char('/'))) {
+      QString path = text.mid(colon + 1);
+      while (path.startsWith(QLatin1Char('/'))) {
+        path.remove(0, 1);
+      }
+      const int at = static_cast<int>(before.lastIndexOf(QLatin1Char('@')));
+      named = hostAndPath((at >= 0 ? before.mid(at + 1) : before) + QLatin1Char('/') + path);
+    }
+  }
+  chopSlashes(named);
+  if (named.endsWith(QStringLiteral(".git"))) {
+    named.chop(4);
+    chopSlashes(named);
+  }
+  return named;
+}
+
+QString LibrarySettings::sameRepository(const QString& url) const {
+  const QString key = repositoryKey(url);
+  for (const LibrarySource& source : sources) {
+    if (repositoryKey(source.url) == key) {
+      return source.url;
+    }
+  }
+  return {};
+}
 
 QJsonArray browserLibraries(const QJsonObject& answer, const QStringList& sources, bool community,
                             QStringList* leftOut) {
@@ -161,13 +225,52 @@ void logLeftOutLibraries(const QStringList& texts) {
 
 bool LibrarySettings::add(const QString& url) {
   const QString trimmed = url.trimmed();
-  for (const LibrarySource& source : sources) {
-    if (source.url == trimmed) {
-      return false;
-    }
+  // One repository is listed once, whatever form of its URL names it
+  // (mitcad#1436: https://www.github.com/mitcad/parts.git beside
+  // https://github.com/mitcad/parts.git listed its components twice).
+  if (!sameRepository(trimmed).isEmpty()) {
+    return false;
   }
   sources.append({trimmed, true, false});
   return true;
+}
+
+QString libraryClonesText(const QJsonObject& answer) {
+  const QJsonObject clones = answer.value(QStringLiteral("clones")).toObject();
+  const auto entry = [](const QJsonObject& clone) {
+    const QString dir = QDir::fromNativeSeparators(clone.value(QStringLiteral("dir")).toString());
+    return QStringLiteral("%1 (%2)").arg(clone.value(QStringLiteral("url")).toString(),
+                                         dir.mid(dir.lastIndexOf(QLatin1Char('/')) + 1));
+  };
+  QStringList read;
+  for (const QJsonValue& value : clones.value(QStringLiteral("read")).toArray()) {
+    read << entry(value.toObject());
+  }
+  QStringList leftOut;
+  for (const QJsonValue& value : clones.value(QStringLiteral("left_out")).toArray()) {
+    const QJsonObject clone = value.toObject();
+    leftOut << QStringLiteral("%1: %2").arg(entry(clone), clone.value(QStringLiteral("reason")).toString());
+  }
+  QString text = read.isEmpty() ? QStringLiteral("none") : read.join(QStringLiteral(", "));
+  if (!leftOut.isEmpty()) {
+    text += QStringLiteral("; left out: %1").arg(leftOut.join(QStringLiteral(", ")));
+  }
+  return text;
+}
+
+void logLibraryClones(const QJsonObject& answer) {
+  if (!answer.contains(QStringLiteral("clones"))) {
+    return;
+  }
+  // Once per change: every picker and search asks again.
+  static std::mutex mutex;
+  static QString logged;
+  const QString text = libraryClonesText(answer);
+  const std::lock_guard<std::mutex> lock(mutex);
+  if (text != logged) {
+    logged = text;
+    qInfo().noquote() << QStringLiteral("Library clones the pickers read: %1").arg(text);
+  }
 }
 
 } // namespace mitcad

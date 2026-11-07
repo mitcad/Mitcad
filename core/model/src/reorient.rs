@@ -285,7 +285,7 @@ impl Turn {
     }
 
     /// The turned counterpart of a path: fixed lines, helices and curves turn,
-    /// edges and sketch curves stay.
+    /// edges, sketch curves and intersection curves (mitcad#1405) stay.
     pub fn path(&self, path: &PathRef) -> PathRef {
         match path {
             PathRef::Line { start, end } => PathRef::Line {
@@ -306,9 +306,10 @@ impl Turn {
                     .map(|c| c.mapped(&|v| self.vector(v)))
                     .collect(),
             ),
-            PathRef::Edges { .. } | PathRef::SketchCurve { .. } | PathRef::SketchCurves { .. } => {
-                path.clone()
-            }
+            PathRef::Edges { .. }
+            | PathRef::SketchCurve { .. }
+            | PathRef::SketchCurves { .. }
+            | PathRef::FeatureCurve(_) => path.clone(),
         }
     }
 }

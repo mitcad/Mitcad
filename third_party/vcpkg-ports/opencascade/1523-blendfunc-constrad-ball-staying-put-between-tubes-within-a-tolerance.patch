@@ -1,0 +1,145 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a ball that stays put between tubes of its radius within a
+tolerance is walked as one between exact tubes (mitcad#1420).
+
+1520 takes a ball for staying put where, along one parameter of each
+support, the centre seen from the contact moves at less than a thousandth
+of the contact's speed. A stored body's earlier rounding approximated by a
+B-spline is a tube of the ball's radius within 1.6e-3 mm, but the curvature
+of its sections ripples by a few hundredths about the ball's: the centre
+seen from a contact moves at up to 2.5 % of the contact's speed, and back.
+There the ball was not seen as staying put, and the walk failed as before
+1520; taken for staying put, its centres seen from the two contacts lie up
+to 1.4e-3 mm apart, which the walk's tolerance (1e-4) refused.
+
+- StillTolerance: the centres of a ball of radius R that stays put may lie
+  apart by 5e-3 (half the hundredth of a millimetre a stored body is taken
+  within), at most R / 200.
+- StillDirection: where the centre moves at less than a tenth of the
+  contact's speed along one parameter (and at more than 0.3 along the
+  other), the support is taken for a tube of the ball's radius if the
+  centres seen from the points of that parameter's iso up to half the
+  radius away on either side lie within the tolerance of the contact's.
+- StillSection gives a section only where the centres seen from its
+  contacts lie within the tolerance; IsSolution takes a section of a ball
+  that stays put whose centres lie within it.
+
+Exact tubes are taken as before (the thousandth), and the walk's tolerance
+is as before elsewhere.
+
+The case: 1520's lid, the stored body before its rims are rounded: the
+cone rim's chain now builds through the mitre of the vertical rounding and
+the stored B-spline rounding between the flat side and the cone; both rims
+valid, the result with the stored body's faces, within 2.1e-4 mm of it.
+
+Test: geometry/tests/test_fillet_stationary_ball.cpp (the case's stored
+body before the rounding).
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+@@ -159,6 +159,14 @@ gp_Vec CentreDirection(const gp_Vec& nsurf)
+ // the mid-point's condition); its derivatives by the guide's parameter are those of that
+ // section, each contact running round its tube's section.
+ 
++//! How far the centres of a ball of radius R that stays put, seen from its contacts, may lie
++//! apart (mitcad#1420): the supports are tubes of the ball's radius within it. Half the
++//! hundredth of a millimetre a stored body's geometry is taken within, at most R / 200.
++double StillTolerance(const double R)
++{
++  return std::min(5.e-3, 5.e-3 * R);
++}
++
+ //! The parameter of S (1: U, 2: V) along which the centre of the ball of radius R touching S at
+ //! (U, V) on the side of C does not move (S is there a tube of the ball's radius); 0 if none.
+ int StillDirection(const occ::handle<Adaptor3d_Surface>& S,
+@@ -195,7 +203,38 @@ int StillDirection(const occ::handle<Adaptor3d_Surface>& S,
+   {
+     return 2;
+   }
+-  return 0;
++  // A tube of the ball's radius within StillTolerance (mitcad#1420): a stored rounding
++  // approximated by a B-spline, the curvature of its sections rippling by a few hundredths
++  // about the ball's (the centre seen from a contact there moves at up to 2.5 % of the
++  // contact's speed, and back), its centres within 1.6e-3 of one axis. Along the parameter
++  // where the centre moves slowly, the centres seen from the points of the section up to half
++  // the radius away on either side lie within the tolerance of the contact's.
++  constexpr double aNear = 0.1, aMoving = 0.3;
++  const int        aDir  = ru < aNear && rv > aMoving ? 1 : (rv < aNear && ru > aMoving ? 2 : 0);
++  if (aDir == 0)
++  {
++    return 0;
++  }
++  const gp_Pnt aCentre = P.Translated(n * sgn);
++  const double aTol    = StillTolerance(R);
++  const double aFirst  = aDir == 1 ? S->FirstUParameter() : S->FirstVParameter();
++  const double aLast   = aDir == 1 ? S->LastUParameter() : S->LastVParameter();
++  const double aT      = aDir == 1 ? U : V;
++  const double aStep   = 0.25 * R / (aDir == 1 ? Su : Sv).Magnitude();
++  for (const double aShift : {-2. * aStep, -aStep, aStep, 2. * aStep})
++  {
++    const double t = std::min(std::max(aT + aShift, aFirst), aLast);
++    gp_Pnt       Q;
++    gp_Vec       Qu, Qv;
++    S->D1(aDir == 1 ? t : U, aDir == 1 ? V : t, Q, Qu, Qv);
++    const gp_Vec M = Qu.Crossed(Qv);
++    if (M.Magnitude() < gp::Resolution()
++        || Q.Translated(M.Normalized() * sgn).Distance(aCentre) > aTol)
++    {
++      return 0;
++    }
++  }
++  return aDir;
+ }
+ 
+ //! The first and second derivatives by the guide's parameter W of the parameter Dir of S at the
+@@ -847,7 +886,21 @@ bool BlendFunc_ConstRad::IsSolution(const math_Vector& Sol, const double Tol)
+ 
+   Ok = ComputeValues(Sol, 1, true, param);
+ 
+-  if (std::abs(E(1)) <= Tol && E(2) * E(2) + E(3) * E(3) + E(4) * E(4) <= Tol * Tol)
++  // A ball that stays put between tubes of its radius within StillTolerance (mitcad#1420): its
++  // centres seen from the contacts within that tolerance.
++  double       aTolCentre = Tol;
++  const double aMismatch  = E(2) * E(2) + E(3) * E(3) + E(4) * E(4);
++  if (std::abs(E(1)) <= Tol && aMismatch > Tol * Tol
++      && aMismatch <= StillTolerance(std::abs(ray1)) * StillTolerance(std::abs(ray1)))
++  {
++    const gp_Pnt aC(pts1.XYZ() + ray1 * CentreDirection(nsurf1).XYZ());
++    if (StillDirection(surf1, Sol(1), Sol(2), aC, std::abs(ray1)) != 0
++        && StillDirection(surf2, Sol(3), Sol(4), aC, std::abs(ray1)) != 0)
++    {
++      aTolCentre = StillTolerance(std::abs(ray1));
++    }
++  }
++  if (std::abs(E(1)) <= Tol && aMismatch <= aTolCentre * aTolCentre)
+   {
+ 
+     // ns1, ns2 and  np are copied locally to avoid crushing the fields !
+@@ -1179,10 +1232,18 @@ bool BlendFunc_ConstRad::StillSection(const double       W,
+   {
+     return false;
+   }
+-  Sol(1) = U1;
+-  Sol(2) = V1;
+-  Sol(3) = U2;
+-  Sol(4) = V2;
++  math_Vector aX(1, 4);
++  aX(1) = U1;
++  aX(2) = V1;
++  aX(3) = U2;
++  aX(4) = V2;
++  // (Tubes within StillTolerance: the centres seen from the contacts lie within it.)
++  if (!ComputeValues(aX, 0, true, Param)
++      || E(2) * E(2) + E(3) * E(3) + E(4) * E(4) > StillTolerance(R) * StillTolerance(R))
++  {
++    return false;
++  }
++  Sol = aX;
+   return true;
+ }
+ 

@@ -273,9 +273,20 @@ private:
   // Selects the items; the browser shows the rows of these features too.
   void pick(const Selection& items, const QStringList& features);
   // What selecting features selects: their sketches, datums or bodies, or
-  // the features themselves (a command that takes features; one that
-  // made no body).
+  // the features themselves (a command whose active input takes that
+  // feature; one that made no body).
   Selection featureItems(const QStringList& uids) const;
+  // The item of a feature itself: an Intersection Curve's is its curve
+  // (featureCurveItem, mitcad#1417).
+  SelectionItem featureItem(const QString& uid) const;
+  // Whether the running command's active input takes the feature itself
+  // (DocumentHost::takesFeature): an input that takes only Intersection
+  // Curves (the sketch's Project and Intersect) leaves other features,
+  // whole sketches among them, to their rows' items, as before it took any.
+  bool takenAsFeature(const QString& uid) const;
+  // The features of `uids` that are not taken as features: the browser
+  // shows their rows as selected.
+  QStringList notTakenAsFeatures(const QStringList& uids) const;
   void editFeature(const QString& uid);
   void markerDragged(int position);
   void browserMenu(const BrowserNode& node, const QPoint& at);

@@ -38,7 +38,10 @@ std::optional<Manipulator> faceArrow(const CommandState& state, const CommandCon
   if (!frame || !center) {
     return std::nullopt;
   }
-  return arrow(*center, frame->normal);
+  // Stepped by the faces' size (mitcad#1431).
+  Manipulator handle = arrow(*center, frame->normal);
+  handle.scale = itemsScale(faces, context);
+  return handle;
 }
 
 } // namespace

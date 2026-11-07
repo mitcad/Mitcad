@@ -56,7 +56,7 @@ int drawingToolsTests() {
   CHECK(names == QStringList({QStringLiteral("Base View"), QStringLiteral("Projected View"),
                               QStringLiteral("Section View"), QStringLiteral("Detail View"),
                               QStringLiteral("Break"), QStringLiteral("Dimension"), QStringLiteral("Ordinate"),
-                              QStringLiteral("Baseline"), QStringLiteral("Center Mark"),
+                              QStringLiteral("Baseline"), QStringLiteral("Model Items"), QStringLiteral("Center Mark"),
                               QStringLiteral("Centerline"), QStringLiteral("Line"), QStringLiteral("Arc"),
                               QStringLiteral("Center Pattern"), QStringLiteral("Edge Extension"),
                               QStringLiteral("Text"), QStringLiteral("Note"),
@@ -78,8 +78,9 @@ int drawingToolsTests() {
   }
   // The bar's groups (mitcad#725): Create, Geometry, Dimensions, Text,
   // Symbols, Tables, each with its caption; Geometry with Line, Arc, Center
-  // Pattern and Edge Extension (mitcad#729).
-  CHECK(groups.count(0) == 5 && groups.count(1) == 6 && groups.count(2) == 3 && groups.count(3) == 2 &&
+  // Pattern and Edge Extension (mitcad#729); Dimensions with Model Items
+  // (mitcad#1406).
+  CHECK(groups.count(0) == 5 && groups.count(1) == 6 && groups.count(2) == 4 && groups.count(3) == 2 &&
         groups.count(4) == 3 && groups.count(5) == 3);
   CHECK(toolGroupName(0) == QStringLiteral("Create") && toolGroupName(1) == QStringLiteral("Geometry") &&
         toolGroupName(2) == QStringLiteral("Dimensions") && toolGroupName(3) == QStringLiteral("Text") &&
@@ -341,6 +342,41 @@ int drawingToolsTests() {
   CHECK(sideChoices().size() == 8);
   command = viewEdit(QStringLiteral("D1"), 2, QStringLiteral("center_marks"), QStringLiteral("false"), style);
   CHECK(command.value(QStringLiteral("center_marks")) == QJsonValue(false));
+  // The model's annotations in a view (mitcad#1406), by its panel's
+  // Model Annotations.
+  command = viewEdit(QStringLiteral("D1"), 2, QStringLiteral("model_annotations"), QStringLiteral("true"), style);
+  CHECK(command.value(QStringLiteral("cmd")).toString() == QStringLiteral("edit_drawing_view"));
+  CHECK(command.value(QStringLiteral("model_annotations")) == QJsonValue(true));
+
+  // Model Items (mitcad#1406): no picks, its two check boxes on; the views
+  // it works on are the picks' ids, none: all the sheet's.
+  const DrawingToolDef* modelItems = drawingTool(QStringLiteral("drawing.model_items"));
+  CHECK(modelItems != nullptr);
+  if (modelItems != nullptr) {
+    CHECK(modelItems->pick == SheetPick::None && !modelItems->place && !modelItems->iconOnly);
+    CHECK(toolGroup(*modelItems) == 2);
+    CHECK(modelItems->options.size() == 2);
+    for (const ToolOption& option : modelItems->options) {
+      CHECK(option.kind == ToolOption::Kind::Check && option.defaultValue == QStringLiteral("true"));
+    }
+    command = modelItems->command(QStringLiteral("D1"), 1, ToolPicks(), none);
+    CHECK(command.value(QStringLiteral("cmd")).toString() == QStringLiteral("drawing_model_items"));
+    CHECK(command.value(QStringLiteral("drawing")).toString() == QStringLiteral("D1"));
+    CHECK(command.value(QStringLiteral("sheet")).toInt() == 1);
+    CHECK(command.value(QStringLiteral("sketch_dimensions")) == QJsonValue(true));
+    CHECK(command.value(QStringLiteral("model_annotations")) == QJsonValue(true));
+    CHECK(!command.contains(QStringLiteral("views")));
+    ToolPicks selected;
+    selected.picks = QJsonArray({2, 3});
+    const QHash<QString, QString> annotationsOnly{{QStringLiteral("sketch_dimensions"), QStringLiteral("false")}};
+    command = modelItems->command(QStringLiteral("D1"), 0, selected, annotationsOnly);
+    CHECK(command.value(QStringLiteral("views")).toArray() == QJsonArray({2, 3}));
+    CHECK(command.value(QStringLiteral("sketch_dimensions")) == QJsonValue(false));
+    const QHash<QString, QString> neither{{QStringLiteral("sketch_dimensions"), QStringLiteral("false")},
+                                          {QStringLiteral("model_annotations"), QStringLiteral("false")}};
+    CHECK(modelItems->command(QStringLiteral("D1"), 0, selected, neither).isEmpty());
+    CHECK(toolKeywords(QStringLiteral("drawing.model_items")).contains(QStringLiteral("model annotations")));
+  }
 
   // The annotations' tools (mitcad#707 phase 2): the model's picks the
   // workspace found, then the placing click.

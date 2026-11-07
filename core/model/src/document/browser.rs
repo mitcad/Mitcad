@@ -19,9 +19,10 @@ use crate::ids::FeatureUid;
 use crate::kernel::Kernel;
 
 /// Whether a feature has a light bulb of its own: sketches and
-/// construction planes, axes, points and joint origins.
+/// construction planes, axes, points and joint origins, and intersection
+/// curves (mitcad#1405).
 fn has_visibility(def: &FeatureDef) -> bool {
-    crate::joints::placed_geometry(def)
+    crate::joints::placed_geometry(def) || matches!(def, FeatureDef::IntersectionCurve(_))
 }
 
 impl DocState {

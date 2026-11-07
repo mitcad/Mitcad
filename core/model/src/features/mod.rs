@@ -295,6 +295,10 @@ pub use envelope::EnvelopeDef;
 // The control cages imported Form bodies keep (mitcad#1365).
 pub mod cage;
 pub use cage::ControlCage;
+// Intersection Curve: a 3D curve from the curves of two sketches, a path
+// (mitcad#1405).
+pub mod intersection_curve;
+pub use intersection_curve::IntersectionCurveDef;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -467,6 +471,8 @@ feature_types! {
     MortiseTenon(MortiseTenonDef),
     // Envelope (mitcad#1271).
     Envelope(EnvelopeDef),
+    // Intersection Curve (mitcad#1405).
+    IntersectionCurve(IntersectionCurveDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is
@@ -670,6 +676,9 @@ pub struct FeatureOutput<S> {
     /// What the feature picked, drawn where it was (a Fillet's or a
     /// Chamfer's edges, mitcad#957); None when the kernel gave nothing.
     pub inputs: Option<FeatureInputs>,
+    /// The 3D curve of an Intersection Curve (mitcad#1405), in its
+    /// component's coordinates: its pieces in order, each running along it.
+    pub curve: Option<Vec<crate::sweeps::PathCurve>>,
 }
 
 impl<S> Default for FeatureOutput<S> {
@@ -687,6 +696,7 @@ impl<S> Default for FeatureOutput<S> {
             measured: Vec::new(),
             threaded_walls: Vec::new(),
             inputs: None,
+            curve: None,
         }
     }
 }

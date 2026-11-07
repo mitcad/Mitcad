@@ -11,6 +11,7 @@
 //! | `{"sketch": "F1", "curve": "c1"}` | one curve ([`PathRef`]) |
 //! | `{"body": "F2.b0", "edges": ["E{…}", …]}` | connected edges of a body ([`PathRef`]) |
 //! | `{"start": [x, y, z], "end": [x, y, z]}` | a fixed line ([`PathRef`]) |
+//! | `{"feature": "F5"}` | the curve of an Intersection Curve (mitcad#1405, [`PathRef`]) |
 //!
 //! Evaluation gives the curves in model space in order along the path,
 //! each running along it ([`PathCurve`]). The path starts at the free end
@@ -325,6 +326,10 @@ impl CurvePath {
                     curve: c.curve(),
                 })
                 .collect(),
+            // An Intersection Curve's (mitcad#1405): in order along it already.
+            Self::Path(PathRef::FeatureCurve(feature)) => {
+                return Ok(ctx.feature_curve(*feature)?.as_ref().clone());
+            }
         };
         chain(pieces)
     }

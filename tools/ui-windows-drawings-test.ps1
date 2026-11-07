@@ -36,6 +36,11 @@
 #      first angle as the drawings before; ANSI chosen (B, third angle) and
 #      a drawing created; the next Create Drawing opens with ANSI, B, third
 #      angle (logged), cancelled.
+#   9. Model Items (mitcad#1406) on a block mitcad-cli makes with the
+#      model's annotations (its height, datum A on its top, a hole's
+#      callout): a sheet of three views, Model Items (the DRAWING tab's
+#      Dimensions group) applied with nothing selected: each annotation
+#      drawn once, in the view that sees it; one Undo takes them all.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-drawings-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -485,6 +490,78 @@ Ui-ExpectNew 'Create Drawing dialog starts with template ansi, ANSI_B, landscape
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'Cancel (Esc)'                    { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Escape'; Ui-FocusMain }
 Ui-ExpectNew 'Create Drawing cancelled' 'nothing made'
+
+Write-Host '--- 9. Model Items on a sheet of three views (mitcad#1406)'
+# A 40 x 30 x 20 block with a 6.6 mm hole from its top at (20, 15), and the
+# model's annotations: its height (Offset1), datum A on its top and the
+# hole's callout.
+$itemsScript = Join-Path $work 'items.json'
+$items = Join-Path $work 'items.mitcad'
+Set-Content -Encoding ascii $itemsScript (@'
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "RECT"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F2.b0", "face": "F2:end(RECT)", "points": [[20, 15, 20]]},
+    "diameter": 6.6, "extent": {"type": "distance", "depth": 10}}},
+  {"cmd": "add_annotation", "name": "Offset1", "kind": "offset",
+    "a": {"body": "F2.b0", "face": "F2:end(RECT)"}, "b": {"body": "F2.b0", "face": "F2:start(RECT)"}},
+  {"cmd": "add_annotation", "name": "DatumA", "letter": "A", "a": {"body": "F2.b0", "face": "F2:end(RECT)"}},
+  {"cmd": "add_annotation", "name": "HoleCallout1", "kind": "hole_callout",
+    "a": {"body": "F2.b0", "face": "F3:hole0.wall"}, "at": [20, 18.3, 20]}
+]
+'@ -creplace 'RECT', $region)
+$made = & $cli run $itemsScript --save $items
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $items)) { Ui-Fail "mitcad-cli (the annotated block): $($made -join ' / ')" }
+Ui-StartApp 'drawings-items' @('--open', $items)
+Ui-ExpectLog 'items.mitcad' 'the annotated block opened'
+Ui-Mark
+Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
+Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
+Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'
+Ui-ExpectNew 'Drawing model items: none' 'nothing of the model''s yet'
+Ui-ExpectNew 'Drawing tool: Base View' 'Base View on'
+Ui-ExpectNew 'Drawing sheet view ' 'the sheet placed'
+Ui-Mark
+Ui-Step 'the front view at 120, 120'      { Sheet-Click 120 120 }
+Ui-ExpectNew 'Drawing view 1 at' 'the front view drawn'
+Ui-ExpectNew 'Drawing tool: Projected View' 'projected views follow'
+Ui-Step 'a view beside it'                { Sheet-Click 215 120 }
+Ui-ExpectNew 'Drawing view 2 at' 'the side view drawn'
+Ui-Step 'a view above it'                 { Sheet-Click 120 200 }
+Ui-ExpectNew 'Drawing view 3 at' 'the view from above or below drawn'
+Ui-Mark
+Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
+Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
+Ui-Mark
+Drawing-Tool 'Model Items' 'Dimensions'
+Ui-ExpectNew 'Drawing tool: Model Items' 'the Model Items tool is on'
+Ui-ExpectNew 'Drawing panel drawingOption_model_annotations at' 'its Model Annotations check box'
+Ui-ExpectNew 'Drawing panel drawingToolApply at' 'its Apply'
+Settled 'Drawing panel drawingToolApply'
+Ui-Mark
+Ui-Step 'Apply (nothing selected)'        { Ui-ClickLogged 'Drawing panel drawingToolApply' }
+Ui-ExpectNew 'Drawing Model Items on all views' 'on all the sheet''s views'
+Ui-ExpectNew '"cmd":"drawing_model_items"' 'one command asked for'
+Ui-ExpectNew 'Drawing model items: ' 'the model''s annotations drawn'
+Ui-Sync
+$drawnItems = "$(Ui-LastLineWith 'Drawing model items: ')"
+foreach ($name in @('Offset1', 'DatumA', 'HoleCallout1')) {
+  $count = ([regex]::Matches($drawnItems, "$name in view [0-9]+")).Count
+  if ($count -ne 1) { Ui-Fail "$name is drawn $count times: $drawnItems" }
+}
+if ($drawnItems -notmatch 'DatumA in view 3' -or $drawnItems -notmatch 'HoleCallout1 in view 3' -or
+    $drawnItems -notmatch 'Offset1 in view [12]') {
+  Ui-Fail "not each in the view that sees it: $drawnItems"
+}
+Write-Host 'ok   each of the model''s annotations drawn once, in the view that sees it'
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                   { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Drawing model items: none' 'Model Items undone in one step'
+if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
 
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 Ui-Finish 'UI Windows drawings test'

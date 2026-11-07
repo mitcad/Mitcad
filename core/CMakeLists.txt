@@ -121,7 +121,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # The assembly structure of STEP files (mitcad#1274).
   kernel/file_structure.rs
   # Repeated parts: bodies equal up to a rigid motion (mitcad#1277).
-  kernel/repeated_parts.rs)
+  kernel/repeated_parts.rs
+  # Intersection curves: two sketches' curves swept and crossed (mitcad#1405).
+  kernel/intersection_curve.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -303,6 +305,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/repeated_parts.cpp
   cpp/bridge/repeated_parts.hpp)
+# Intersection curves: two sketches' curves swept and crossed (mitcad#1405).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/intersection_curve.cpp
+  cpp/bridge/intersection_curve.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.

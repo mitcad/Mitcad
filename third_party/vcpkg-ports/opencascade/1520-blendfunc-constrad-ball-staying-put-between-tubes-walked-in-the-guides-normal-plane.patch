@@ -1,0 +1,668 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a ball that stays put between two tubes of its radius is walked
+with its section in the guide's normal plane (mitcad#1412).
+
+Where both supports of a constant-radius blend are tubes of the ball's
+radius whose axes run through its centre (two earlier roundings of that
+radius meeting in a mitre), the centre seen from either contact does not
+depend on the contact's place round its tube's section: BlendFunc_ConstRad's
+conditions (the centres seen from both contacts one, the mid-point of the
+contacts in the guide's normal plane) leave the section one freedom, their
+Jacobian singular. The solvers' roots slide along it with their starts: the
+inverse function took a walk's start past the guide's end with a contact
+out of its face, the walk's contacts ran out of their faces or did not move
+(Blend_SamePoints), and the approximation's solver did not converge between
+the walk's points.
+
+Every section of such a ball is an arc of its sphere. The section whose
+contacts both lie in the guide's normal plane keeps the mid-point's
+condition, is the rounding's own section where the walk arrives at the ball
+along a rim, and vanishes where the mitre ends.
+
+- BlendFunc_ConstRad::StillSection (new) gives it, each contact moved round
+  its tube's section into the plane, keeping its parameter along the tube
+  (that of another section of the ball where one is given). IsSolution and
+  both Section overloads with derivatives take that section's derivatives
+  (none where it starts at rest, the mitre leaving the edge whose rounding
+  ends at the ball).
+- BRepBlend_Walking takes that section for each step's point (the solver
+  from it slid along the freedom, and along the tubes by its tolerance) and
+  starts a walk at it, its contacts on the arcs where they lie on them,
+  instead of a start the inverse function moved behind it. A contact that
+  stays where it was on its face's boundary (the ball touching a face at
+  one point at its edge with the next, while the guide runs round the
+  other contact's tube) has not left the face, and the step is judged by
+  the other contact: the points are not taken for confused.
+- BRepBlend_AppFuncRoot takes that section at every parameter, the walk's
+  own points too, with the parameters along the tubes of the line's middle
+  point: solved again from the walk's points the sections slid, and taken
+  from the line's ends (found otherwise, a little apart along the tubes)
+  they did not join smoothly, and the approximation cut them up to its
+  limit (1411 poles, the end 0.0146 off its contact).
+
+The case: a lid whose rims are rounded with 1 through the mitres of
+earlier roundings of 1 (a reported design's item; a sphere of 1 at each
+corner in the stored body). With 1521, both rims' chains build, valid, the
+faces within 2.5e-4 mm of the stored body's.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
+index d188e8fb..454c0d8e 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
+@@ -15,6 +15,7 @@
+ // commercial license or contractual agreement.
+ 
+ #include <Blend_AppFunction.hxx>
++#include <BlendFunc_ConstRad.hxx>
+ #include <BRepBlend_AppFuncRoot.hxx>
+ #include <BRepBlend_Line.hxx>
+ #include <gp_Pnt.hxx>
+@@ -345,6 +346,44 @@ bool BRepBlend_AppFuncRoot::SearchPoint(Blend_AppFunction& Func,
+     }
+   }
+ 
++  // A ball that stays put, between two tubes of its radius whose axes run through its centre
++  // (mitcad#1412): the section has a freedom, about which the solver's Jacobian is singular,
++  // and the walk took the section whose contacts lie in the guide's normal plane. That section
++  // at Param, from the line's point before it, is the solution, at the walk's own points too;
++  // the solver slid along the freedom from the interpolated start, or did not converge, and
++  // slid from a point of the walk. Its contacts keep the parameters along the tubes of the
++  // line's middle point, a step of the walk: those of its ends, found otherwise, differ by the
++  // solver's tolerance, and the sections, taken from one end or another, did not join
++  // smoothly (the approximation cut them up to its limit).
++  if (dim == 4)
++  {
++    if (BlendFunc_ConstRad* aFunc = dynamic_cast<BlendFunc_ConstRad*>(&Func))
++    {
++      const Blend_Point& aFrom = myLine->Point(Index);
++      const Blend_Point& aMid  = myLine->Point((myLine->NbPoints() + 1) / 2);
++      math_Vector        aX(1, 4), aAlong(1, 4), aStill(1, 4);
++      aFrom.ParametersOnS1(aX(1), aX(2));
++      aFrom.ParametersOnS2(aX(3), aX(4));
++      aMid.ParametersOnS1(aAlong(1), aAlong(2));
++      aMid.ParametersOnS2(aAlong(3), aAlong(4));
++      for (const math_Vector* aKeep : {static_cast<const math_Vector*>(&aAlong),
++                                       static_cast<const math_Vector*>(nullptr)})
++      {
++        if (!aFunc->StillSection(aFrom.Parameter(), aX, Param, aStill, aKeep))
++        {
++          break;
++        }
++        Func.Set(Param);
++        if (aFunc->IsSolution(aStill, 1.e-5))
++        {
++          Sol = aStill;
++          Point(Func, Param, Sol, Pnt);
++          return true;
++        }
++      }
++    }
++  }
++
+   // (2) Calculation of the solution ------------------------
+   Func.Set(Param);
+   Func.GetBounds(X1, X2);
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+index 637ba43b..edd8f305 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+@@ -46,6 +46,59 @@
+ #include <gp_Pnt2d.hxx>
+ #include <math_FunctionSetRoot.hxx>
+ #include <math_Gauss.hxx>
++#include <BlendFunc_ConstRad.hxx>
++
++namespace
++{
++// A ball that stays put (mitcad#1412). Where both supports are tubes of the ball's radius whose
++// axes run through its centre, as two earlier roundings of that radius meeting in a mitre, the
++// centre seen from either contact does not depend on the contact's place round its tube's
++// section: the walk's conditions leave the section one freedom, and the solver's choice drifts
++// with its start, its contacts running out of their faces or standing still. Every section of
++// such a ball is an arc of its sphere; the walk takes the one whose contacts both lie in the
++// guide's normal plane (BlendFunc_ConstRad::StillSection), which keeps the mid-point's
++// condition, is the rounding's own section where it arrives at the ball, and vanishes where the
++// mitre ends.
++
++//! Where the ball of Func at the section From, at the guide's parameter W, stays put: in Sol
++//! its section at the guide's parameter Param in the guide's normal plane. False elsewhere.
++bool stillSection(Blend_Function&    Func,
++                  const double       W,
++                  const math_Vector& From,
++                  const double       Param,
++                  math_Vector&       Sol)
++{
++  BlendFunc_ConstRad* aFunc = dynamic_cast<BlendFunc_ConstRad*>(&Func);
++  return aFunc != nullptr && aFunc->StillSection(W, From, Param, Sol);
++}
++
++//! The parameter of the arc A nearest to P, from t.
++double arcParameter(const occ::handle<Adaptor2d_Curve2d>& A, const gp_Pnt2d& P, double t)
++{
++  const double aFirst = A->FirstParameter();
++  const double aLast  = A->LastParameter();
++  for (int i = 0; i < 30; ++i)
++  {
++    gp_Pnt2d Q;
++    gp_Vec2d D1, D2;
++    A->D2(t, Q, D1, D2);
++    const gp_Vec2d d(P, Q);
++    const double   f  = d.Dot(D1);
++    const double   df = D1.Dot(D1) + d.Dot(D2);
++    if (std::abs(df) < 1.e-14)
++    {
++      break;
++    }
++    const double dt = f / df;
++    t               = std::min(std::max(t - dt, aFirst), aLast);
++    if (std::abs(dt) < 1.e-12)
++    {
++      break;
++    }
++  }
++  return t;
++}
++} // namespace
+ 
+ #ifdef OCCT_DEBUG
+   #include <Geom_BSplineCurve.hxx>
+@@ -129,7 +182,8 @@ BRepBlend_Walking::BRepBlend_Walking(const occ::handle<Adaptor3d_Surface>&   Sur
+       check2d(true),
+       check(true),
+       twistflag1(false),
+-      twistflag2(false)
++      twistflag2(false),
++      stillstep(false)
+ 
+ {
+   domain1    = Domain1;
+@@ -465,6 +519,15 @@ bool BRepBlend_Walking::PerformFirstSection(Blend_Function&    Func,
+   }
+   rsnld.Root(sol);
+ 
++  // A ball that stays put: its section at Pdep in the guide's normal plane, from the start
++  // given (the solver's root slides along the section's freedom).
++  math_Vector aStill(1, 4);
++  const bool  aStillStart = stillSection(Func, Pdep, ParDep, Pdep, aStill);
++  if (aStillStart)
++  {
++    sol = aStill;
++  }
++
+   w1 = w2 = Pmax;
+ 
+   recad1 = RecOnS1 && Recadre(FuncInv, true, sol, solrst1, Index1, Isvtx1, Vtx1, extrapol);
+@@ -484,6 +547,50 @@ bool BRepBlend_Walking::PerformFirstSection(Blend_Function&    Func,
+     return false;
+   }
+ 
++  // The ball that stays put starts at Pdep, its contacts on the arcs where they lie on them,
++  // inside the faces elsewhere: the inverse function, its contact held on an arc, has the same
++  // freedom as the walk and found the arc anywhere along the guide (past its end, the contact
++  // on the other face out of it).
++  if (aStillStart)
++  {
++    const TopAbs_State aOn1 =
++      domain1->Classify(gp_Pnt2d(sol(1), sol(2)), std::min(tolerance(1), tolerance(2)), false);
++    const TopAbs_State aOn2 =
++      domain2->Classify(gp_Pnt2d(sol(3), sol(4)), std::min(tolerance(3), tolerance(4)), false);
++    if (aOn1 != TopAbs_OUT && aOn2 != TopAbs_OUT
++        && ((recad1 && aOn1 == TopAbs_ON) || (recad2 && aOn2 == TopAbs_ON)))
++    {
++      recad1 = recad1 && aOn1 == TopAbs_ON;
++      recad2 = recad2 && aOn2 == TopAbs_ON;
++      if (recad1)
++      {
++        recdomain1->Init();
++        for (nbarc = 1; nbarc < Index1; nbarc++)
++        {
++          recdomain1->Next();
++        }
++        solrst1(1) = arcParameter(recdomain1->Value(), gp_Pnt2d(sol(1), sol(2)), solrst1(1));
++        solrst1(2) = Pdep;
++        solrst1(3) = sol(3);
++        solrst1(4) = sol(4);
++        w1         = Pdep;
++      }
++      if (recad2)
++      {
++        recdomain2->Init();
++        for (nbarc = 1; nbarc < Index2; nbarc++)
++        {
++          recdomain2->Next();
++        }
++        solrst2(1) = arcParameter(recdomain2->Value(), gp_Pnt2d(sol(3), sol(4)), solrst2(1));
++        solrst2(2) = Pdep;
++        solrst2(3) = sol(1);
++        solrst2(4) = sol(2);
++        w2         = Pdep;
++      }
++    }
++  }
++
+   if (recad1 && recad2)
+   {
+     if (std::abs(w1 - w2) <= tolgui)
+@@ -953,6 +1060,17 @@ Blend_Status BRepBlend_Walking::TestArret(Blend_Function&    Function,
+ 
+       State1 = CheckDeflection(true, curpoint);
+       State2 = CheckDeflection(false, curpoint);
++      // A ball that stays put whose contact on one face stays where it was (it touches that
++      // face at one point while the other contact runs round its tube): the step is judged by
++      // the other contact; the points are not confused, the walk goes on.
++      if (stillstep && State1 == Blend_SamePoints && State2 != Blend_SamePoints)
++      {
++        State1 = State2;
++      }
++      else if (stillstep && State2 == Blend_SamePoints && State1 != Blend_SamePoints)
++      {
++        State2 = State1;
++      }
+     }
+     else
+     {
+@@ -2118,17 +2236,37 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+     //////////////////////////
+ 
+     bool bonpoint = true;
++    // A ball that stays put: its section in the normal plane is the step's root, its contacts
++    // moved round their tubes' sections from the previous point's; the solver, from it, slid
++    // along the section's freedom and along the tubes by its own tolerance.
++    bool aStill = false;
++    {
++      math_Vector aPrev(1, 4);
++      previousP.ParametersOnS1(aPrev(1), aPrev(2));
++      previousP.ParametersOnS2(aPrev(3), aPrev(4));
++      aStill = stillSection(Func, previousP.Parameter(), aPrev, param, parinit);
++    }
+     Func.Set(param);
+-    rsnld.Perform(Func, parinit, infbound, supbound);
++    if (!aStill)
++    {
++      rsnld.Perform(Func, parinit, infbound, supbound);
++    }
+ 
+-    if (!rsnld.IsDone())
++    if (!aStill && !rsnld.IsDone())
+     {
+       State    = Blend_StepTooLarge;
+       bonpoint = false;
+     }
+     else
+     {
+-      rsnld.Root(sol);
++      if (aStill)
++      {
++        sol = parinit;
++      }
++      else
++      {
++        rsnld.Root(sol);
++      }
+ 
+       if (clasonS1)
+       {
+@@ -2148,6 +2286,25 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+       {
+         situ2 = TopAbs_IN;
+       }
++      if (aStill)
++      {
++        // A contact of the ball that stays put where the previous one was, on its face's
++        // boundary (the ball touching a face at one point at its edge with the next while the
++        // guide runs round the other contact's tube): it has not left the face.
++        double aU1, aV1, aU2, aV2;
++        previousP.ParametersOnS1(aU1, aV1);
++        previousP.ParametersOnS2(aU2, aV2);
++        if (situ1 == TopAbs_ON && std::abs(sol(1) - aU1) <= tolerance(1)
++            && std::abs(sol(2) - aV1) <= tolerance(2))
++        {
++          situ1 = TopAbs_IN;
++        }
++        if (situ2 == TopAbs_ON && std::abs(sol(3) - aU2) <= tolerance(3)
++            && std::abs(sol(4) - aV2) <= tolerance(4))
++        {
++          situ2 = TopAbs_IN;
++        }
++      }
+     }
+     if (bonpoint && line->NbPoints() == 1 && (situ1 != TopAbs_IN || situ2 != TopAbs_IN))
+     {
+@@ -2451,6 +2608,7 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+ #ifdef OCCT_DEBUG
+         testdefl = !Blend_GetcontextNOTESTDEFL();
+ #endif
++        stillstep = aStill;
+         if (recad1 || recad2)
+         {
+           Func.Set(param);
+@@ -2461,6 +2619,7 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+         {
+           State = TestArret(Func, State, testdefl);
+         }
++        stillstep = false;
+       }
+       else
+       {
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.hxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.hxx
+index 047f411d..1f52fe1e 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.hxx
+@@ -207,6 +207,8 @@ private:
+   bool                              check;
+   bool                              twistflag1;
+   bool                              twistflag2;
++  //! The step being tested is that of a ball that stays put (mitcad#1412).
++  bool                              stillstep;
+ };
+ 
+ #endif // _BRepBlend_Walking_HeaderFile
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+index 351eb1cd..0aa48c2f 100644
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+@@ -150,6 +150,169 @@ gp_Vec CentreDirection(const gp_Vec& nsurf)
+   const double norm = nsurf.Magnitude();
+   return norm > Eps ? -nsurf / norm : -nsurf;
+ }
++
++// A ball that stays put (mitcad#1412): where both surfaces are tubes of the ball's radius about
++// curves through its centre (two earlier roundings of that radius meeting in a mitre), the
++// centre seen from either contact does not depend on the contact's place round its tube's
++// section, and the conditions leave the section one freedom (their Jacobian is singular). The
++// walk then takes the section whose contacts both lie in the guide's normal plane (which keeps
++// the mid-point's condition); its derivatives by the guide's parameter are those of that
++// section, each contact running round its tube's section.
++
++//! The parameter of S (1: U, 2: V) along which the centre of the ball of radius R touching S at
++//! (U, V) on the side of C does not move (S is there a tube of the ball's radius); 0 if none.
++int StillDirection(const occ::handle<Adaptor3d_Surface>& S,
++                   const double                          U,
++                   const double                          V,
++                   const gp_Pnt&                         C,
++                   const double                          R)
++{
++  gp_Pnt P;
++  gp_Vec Su, Sv, Suu, Svv, Suv;
++  S->D2(U, V, P, Su, Sv, Suu, Svv, Suv);
++  const gp_Vec N     = Su.Crossed(Sv);
++  const double aNorm = N.Magnitude();
++  if (aNorm < gp::Resolution() || Su.Magnitude() < gp::Resolution()
++      || Sv.Magnitude() < gp::Resolution())
++  {
++    return 0;
++  }
++  const gp_Vec n   = N / aNorm;
++  const double sgn = n.Dot(gp_Vec(P, C)) < 0. ? -R : R;
++  const gp_Vec Nu  = Suu.Crossed(Sv) + Su.Crossed(Suv);
++  const gp_Vec Nv  = Suv.Crossed(Sv) + Su.Crossed(Svv);
++  const gp_Vec cu  = Su + (Nu - n * n.Dot(Nu)) * (sgn / aNorm);
++  const gp_Vec cv  = Sv + (Nv - n * n.Dot(Nv)) * (sgn / aNorm);
++  // The centre's speed along each parameter against the contact's.
++  const double     ru     = cu.Magnitude() / Su.Magnitude();
++  const double     rv     = cv.Magnitude() / Sv.Magnitude();
++  constexpr double aStill = 1.e-3;
++  if (ru < aStill && rv > 10. * aStill)
++  {
++    return 1;
++  }
++  if (rv < aStill && ru > 10. * aStill)
++  {
++    return 2;
++  }
++  return 0;
++}
++
++//! The first and second derivatives by the guide's parameter W of the parameter Dir of S at the
++//! contact X (U, V), held in the guide's normal plane while it runs round its tube's section.
++bool StillContactDerivatives(const occ::handle<Adaptor3d_Surface>& S,
++                             const int                             Dir,
++                             const double                          U,
++                             const double                          V,
++                             const gp_Pnt&                         G,
++                             const gp_Vec&                         G1,
++                             const gp_Vec&                         G2,
++                             const gp_Vec&                         T,
++                             const gp_Vec&                         dT,
++                             const gp_Vec&                         d2T,
++                             double&                               D1,
++                             double&                               D2)
++{
++  gp_Pnt P;
++  gp_Vec Su, Sv, Suu, Svv, Suv;
++  S->D2(U, V, P, Su, Sv, Suu, Svv, Suv);
++  const gp_Vec& St  = Dir == 1 ? Su : Sv;
++  const gp_Vec& Stt = Dir == 1 ? Suu : Svv;
++  const double  ft  = St.Dot(T);
++  if (std::abs(ft) < 1.e-9 * St.Magnitude())
++  {
++    return false;
++  }
++  const gp_Vec GP(G, P);
++  const double fw  = -G1.Dot(T) + GP.Dot(dT);
++  const double ftt = Stt.Dot(T);
++  const double fwt = St.Dot(dT);
++  const double fww = -G2.Dot(T) - 2. * G1.Dot(dT) + GP.Dot(d2T);
++  D1               = -fw / ft;
++  D2               = -(fww + 2. * fwt * D1 + ftt * D1 * D1) / ft;
++  return true;
++}
++
++//! Moves the contact (U, V) on S along its parameter Dir (1: U, 2: V), round its tube's section,
++//! into the plane through G square to the unit vector T. False where it does not get there.
++bool StillContact(const occ::handle<Adaptor3d_Surface>& S,
++                  const int                             Dir,
++                  double&                               U,
++                  double&                               V,
++                  const gp_Pnt&                         G,
++                  const gp_Vec&                         T)
++{
++  double& t = Dir == 1 ? U : V;
++  for (int i = 0; i < 30; ++i)
++  {
++    gp_Pnt P;
++    gp_Vec Su, Sv;
++    S->D1(U, V, P, Su, Sv);
++    const double f = gp_Vec(G, P).Dot(T);
++    if (std::abs(f) < 1.e-12)
++    {
++      return true;
++    }
++    const double df = (Dir == 1 ? Su : Sv).Dot(T);
++    if (std::abs(df) < 1.e-12)
++    {
++      return std::abs(f) < 1.e-9;
++    }
++    t -= f / df;
++  }
++  gp_Pnt P = S->Value(U, V);
++  return std::abs(gp_Vec(G, P).Dot(T)) < 1.e-9;
++}
++
++//! Where the ball of radius R centred at C, touching S1 and S2 at X for the parameter W of the
++//! guide Guide, stays put: the first and second derivatives of X by W of the section whose
++//! contacts lie in the guide's normal plane. False elsewhere.
++bool StillBall(const occ::handle<Adaptor3d_Surface>& S1,
++               const occ::handle<Adaptor3d_Surface>& S2,
++               const occ::handle<Adaptor3d_Curve>&   Guide,
++               const math_Vector&                    X,
++               const double                          W,
++               const gp_Pnt&                         C,
++               const double                          R,
++               math_Vector&                          D1,
++               math_Vector&                          D2)
++{
++  const int aDir1 = StillDirection(S1, X(1), X(2), C, R);
++  const int aDir2 = aDir1 == 0 ? 0 : StillDirection(S2, X(3), X(4), C, R);
++  if (aDir1 == 0 || aDir2 == 0)
++  {
++    return false;
++  }
++  gp_Pnt G;
++  gp_Vec G1, G2, G3;
++  Guide->D3(W, G, G1, G2, G3);
++  const double aSpeed = G1.Magnitude();
++  if (aSpeed < gp::Resolution())
++  {
++    return false;
++  }
++  // The unit tangent and its derivatives, as ComputeValues takes them for the normal plane.
++  const double invn  = 1. / aSpeed;
++  const gp_Vec T     = G1 * invn;
++  gp_Vec       dT    = (G2 - T * T.Dot(G2)) * invn;
++  const double dinvn = -T.Dot(G2) * invn * invn;
++  gp_Vec       d2T   = G3 * invn + G2 * dinvn;
++  const double aux   = dinvn * T.Dot(G2) + invn * (dT.Dot(G2) + T.Dot(G3));
++  d2T                = d2T - dT * (invn * T.Dot(G2)) - T * aux;
++  double a1, a2, b1, b2;
++  if (!StillContactDerivatives(S1, aDir1, X(1), X(2), G, G1, G2, T, dT, d2T, a1, a2)
++      || !StillContactDerivatives(S2, aDir2, X(3), X(4), G, G1, G2, T, dT, d2T, b1, b2))
++  {
++    return false;
++  }
++  D1.Init(0.);
++  D2.Init(0.);
++  D1(aDir1)     = a1;
++  D2(aDir1)     = a2;
++  D1(2 + aDir2) = b1;
++  D2(2 + aDir2) = b2;
++  return true;
++}
+ } // namespace
+ 
+ //=================================================================================================
+@@ -730,6 +893,21 @@ bool BlendFunc_ConstRad::IsSolution(const math_Vector& Sol, const double Tol)
+       }
+     }
+ 
++    {
++      // (A ball that stays put: the tangents of its section in the normal plane.)
++      math_Vector  aD1(1, 4), aD2(1, 4);
++      const gp_Pnt aC(pts1.XYZ() + ray1 * ns1.XYZ());
++      if (StillBall(surf1, surf2, tcurv, Sol, param, aC, std::abs(ray1), aD1, aD2))
++      {
++        solution = aD1;
++        // Where the guide leaves the contacts' circles tangentially (a mitre leaving the edge
++        // whose rounding ends at the ball), the contacts start at rest: no tangent there.
++        const gp_Vec aT1 = aD1(1) * d1u1 + aD1(2) * d1v1;
++        const gp_Vec aT2 = aD1(3) * d1u2 + aD1(4) * d1v2;
++        istangent        = aT1.Magnitude() < Precision::Confusion() && aT2.Magnitude() < Precision::Confusion();
++      }
++    }
++
+     if (!istangent)
+     {
+       tg1.SetLinearForm(solution(1), d1u1, solution(2), d1v1);
+@@ -965,6 +1143,51 @@ bool BlendFunc_ConstRad::TwistOnS2() const
+ 
+ //=================================================================================================
+ 
++bool BlendFunc_ConstRad::StillSection(const double       W,
++                                      const math_Vector& From,
++                                      const double       Param,
++                                      math_Vector&       Sol,
++                                      const math_Vector* Along)
++{
++  double  aDeb, aFin;
++  gp_Circ aCircle;
++  Section(W, From(1), From(2), From(3), From(4), aDeb, aFin, aCircle);
++  const gp_Pnt C     = aCircle.Location();
++  const double R     = aCircle.Radius();
++  const int    aDir1 = StillDirection(surf1, From(1), From(2), C, R);
++  const int    aDir2 = aDir1 == 0 ? 0 : StillDirection(surf2, From(3), From(4), C, R);
++  if (aDir1 == 0 || aDir2 == 0)
++  {
++    return false;
++  }
++  gp_Pnt G;
++  gp_Vec T;
++  tcurv->D1(Param, G, T);
++  if (T.Magnitude() < gp::Resolution())
++  {
++    return false;
++  }
++  T.Normalize();
++  double U1 = From(1), V1 = From(2), U2 = From(3), V2 = From(4);
++  if (Along != nullptr)
++  {
++    // The parameters along the tubes, which the contacts keep, from Along.
++    (aDir1 == 1 ? V1 : U1) = (*Along)(aDir1 == 1 ? 2 : 1);
++    (aDir2 == 1 ? V2 : U2) = (*Along)(aDir2 == 1 ? 4 : 3);
++  }
++  if (!StillContact(surf1, aDir1, U1, V1, G, T) || !StillContact(surf2, aDir2, U2, V2, G, T))
++  {
++    return false;
++  }
++  Sol(1) = U1;
++  Sol(2) = V1;
++  Sol(3) = U2;
++  Sol(4) = V2;
++  return true;
++}
++
++//=================================================================================================
++
+ void BlendFunc_ConstRad::Section(const double Param,
+                                  const double U1,
+                                  const double V1,
+@@ -1201,7 +1424,17 @@ bool BlendFunc_ConstRad::Section(const Blend_Point&            P,
+   np  = nplan;
+   dnp = dnplan;
+ 
+-  if (!pts1.IsEqual(pts2, 1.e-4))
++  {
++    // (A ball that stays put: the derivatives of its section in the normal plane.)
++    math_Vector  aD2(1, 4);
++    const gp_Pnt aC(pts1.XYZ() + ray1 * CentreDirection(nsurf1).XYZ());
++    if (StillBall(surf1, surf2, tcurv, sol, prm, aC, std::abs(ray1), secmember, aD2))
++    {
++      istgt = false;
++    }
++  }
++
++  if (istgt && !pts1.IsEqual(pts2, 1.e-4))
+   {
+ 
+     // Calculation of derivates Processing Normal
+@@ -1505,7 +1738,16 @@ bool BlendFunc_ConstRad::Section(const Blend_Point&            P,
+ 
+   // Calculation of derivatives
+ 
+-  if (!pts1.IsEqual(pts2, 1.e-4))
++  {
++    // (A ball that stays put: the derivatives of its section in the normal plane.)
++    const gp_Pnt aC(pts1.XYZ() + ray1 * CentreDirection(nsurf1).XYZ());
++    if (StillBall(surf1, surf2, tcurv, X, prm, aC, std::abs(ray1), sol, secmember))
++    {
++      istgt = false;
++    }
++  }
++
++  if (istgt && !pts1.IsEqual(pts2, 1.e-4))
+   {
+     math_Gauss Resol(DEDX, 1.e-9); // Precise tolerance !!!!!
+     // Calculation of derivatives Processing Normal
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx
+index 00a6ce9b..c41bb319 100644
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx
+@@ -127,6 +127,18 @@ public:
+                                double&      Pfin,
+                                gp_Circ&     C);
+ 
++  //! Where the ball of the section From, at the guide's parameter W, stays put, between two
++  //! tubes of its radius whose axes run through its centre (two earlier roundings of that
++  //! radius meeting in a mitre): in Sol the section of that ball at the guide's parameter
++  //! Param whose contacts lie in the guide's normal plane. False elsewhere. Along, when given,
++  //! is another section of that ball, whose parameters along the tubes Sol takes (so that
++  //! sections computed from different starts have the same ones).
++  Standard_EXPORT bool StillSection(const double       W,
++                                    const math_Vector& From,
++                                    const double       Param,
++                                    math_Vector&       Sol,
++                                    const math_Vector* Along = nullptr);
++
+   //! Returns if the section is rational
+   Standard_EXPORT bool IsRational() const override;
+ 

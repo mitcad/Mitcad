@@ -543,6 +543,7 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
                     aligned: false,
                     center_marks: false,
                     retrieved_dimensions: false,
+                    model_annotations: false,
                     annotations: Vec::new(),
                     rotation: 0.0,
                     sketch: Vec::new(),

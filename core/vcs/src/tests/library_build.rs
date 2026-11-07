@@ -1062,3 +1062,288 @@ fn a_profile_without_slots_needs_no_slot_system() {
         "{warnings:#?}"
     );
 }
+
+/// Update brings a library's newest tag to the BUILD pickers (mitcad#1423,
+/// GitHub mitcad/Mitcad#172): a library in a local bare repository, tagged
+/// v2.9.0 and fetched; then v2.10.0 with a new profile pushed to it and
+/// fetched again into the same clone. v2.10.0 is the newest version (by
+/// its numbers, not as a text before v2.9.0), and the picker's candidates,
+/// the search and library_show read it at once.
+#[test]
+fn an_update_brings_the_newest_tag_to_the_pickers() {
+    let Some(cli) = system_git() else {
+        return;
+    };
+    let scratch = Scratch::new("library-build-update");
+    let cache = LibraryCache::new(scratch.join("cache"));
+    let work = scratch.join("work");
+    write_library(&work, components(), &designs());
+    git(&work, &["init", "-q", "-b", "main"]).unwrap();
+    git(&work, &["add", "-A"]).unwrap();
+    git(&work, &["commit", "-q", "-m", "Profiles 2.9"]).unwrap();
+    git(&work, &["tag", "-a", "v2.9.0", "-m", "Profiles 2.9.0"]).unwrap();
+    let remote = scratch.join("remote.git");
+    let url = slashes(&remote);
+    git(
+        &scratch.0,
+        &["clone", "-q", "--bare", &slashes(&work), &url],
+    )
+    .unwrap();
+    let run = |command: Value| library_command(&cache, Some(&cli), command);
+    // The profiles a picker lists, "<id> <version>", by id.
+    let profiles = |answer: &Value| -> Vec<String> {
+        let mut found: Vec<String> = answer["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let version = c["version"].as_str().unwrap();
+                let label = version.split(' ').next().unwrap_or("");
+                format!("{} {label}", c["id"].as_str().unwrap())
+            })
+            .collect();
+        found.sort();
+        found
+    };
+
+    let fetched = run(json!({"cmd": "library_fetch", "url": url}));
+    assert_eq!(fetched["error"], Value::Null, "{fetched}");
+    assert_eq!(fetched["cloned"], true, "{fetched}");
+    let picker = json!({"cmd": "library_build_candidates", "role": "profile"});
+    assert_eq!(
+        profiles(&run(picker.clone())),
+        ["p30-b8 v2.9.0"],
+        "the first fetch"
+    );
+
+    // v2.10.0: a 40 x 40 profile more, pushed with its tag.
+    let mut newer = components();
+    let mut p40 = newer[0].clone();
+    p40["id"] = json!("p40-b8");
+    p40["path"] = json!("profiles/p40-b8.mitcad");
+    p40["name"] = json!("Profile 40x40 B8");
+    p40["part_number"] = json!("P40_N8_B");
+    p40["designation"] = json!("Profile 40x40 B8 L={L}");
+    p40["build"]["section"] = json!({"width": "40 mm", "height": "40 mm"});
+    newer.as_array_mut().unwrap().push(p40);
+    let mut files = designs();
+    files.push(("profiles/p40-b8.mitcad", profile([1.0, 0.0, 0.0])));
+    write_library(&work, newer, &files);
+    git(&work, &["add", "-A"]).unwrap();
+    git(&work, &["commit", "-q", "-m", "Profiles 2.10"]).unwrap();
+    git(&work, &["tag", "-a", "v2.10.0", "-m", "Profiles 2.10.0"]).unwrap();
+    git(&work, &["push", "-q", &url, "main", "v2.10.0"]).unwrap();
+
+    // Update: the same clone, both tags, the newest first.
+    let updated = run(json!({"cmd": "library_fetch", "url": url}));
+    assert_eq!(updated["error"], Value::Null, "{updated}");
+    assert_eq!(updated["cloned"], false, "{updated}");
+    assert_eq!(updated["dir"], fetched["dir"], "{updated}");
+    let labels: Vec<&str> = updated["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["v2.10.0", "v2.9.0"], "{updated}");
+
+    // The picker, the search and the library read v2.10.0.
+    assert_eq!(
+        profiles(&run(picker)),
+        ["p30-b8 v2.10.0", "p40-b8 v2.10.0"],
+        "after Update"
+    );
+    let found = run(json!({"cmd": "library_search", "text": "40x40"}));
+    assert_eq!(profiles(&found), ["p40-b8 v2.10.0"], "{found}");
+    let shown = run(json!({"cmd": "library_show", "id": "test-profiles"}));
+    assert_eq!(shown["labels"], json!(["v2.10.0"]), "{shown}");
+}
+
+/// The URL forms that name one repository have one key (mitcad#1436,
+/// GitHub mitcad/Mitcad#172): with or without `www.`, `.git` or a
+/// trailing slash, in any letter case of the host, over https, http or
+/// SSH; a folder by its path, as written or as a file:// URL. Other
+/// repositories keep keys of their own.
+#[test]
+fn url_forms_of_one_repository_have_one_key() {
+    use crate::library::repository_key;
+    let parts = repository_key("https://github.com/mitcad/parts.git");
+    assert_eq!(parts, "github.com/mitcad/parts");
+    for form in [
+        "https://www.github.com/mitcad/parts.git",
+        "https://github.com/mitcad/parts",
+        "https://github.com/mitcad/parts/",
+        "https://github.com/mitcad/parts.git/",
+        " HTTPS://WWW.GitHub.com/mitcad/parts.git ",
+        "https://GITHUB.COM/mitcad/parts",
+        "http://github.com/mitcad/parts.git",
+        "https://user@github.com/mitcad/parts.git",
+        "ssh://git@github.com/mitcad/parts.git",
+        "git@github.com:mitcad/parts.git",
+    ] {
+        assert_eq!(repository_key(form), parts, "{form}");
+    }
+    for other in [
+        "https://github.com/mitcad/part.git",
+        "https://www.github.com/mitcad/community-index.git",
+        "https://gitlab.com/mitcad/parts.git",
+        "https://github.com/someone/parts.git",
+        "https://wwwgithub.com/mitcad/parts.git",
+    ] {
+        assert_ne!(repository_key(other), parts, "{other}");
+    }
+    // Folders: the path, its separators, file:// and a drive.
+    assert_eq!(
+        repository_key("/srv/libraries/parts.git"),
+        repository_key("file:///srv/libraries/parts")
+    );
+    assert_eq!(
+        repository_key("/srv/libraries/parts/"),
+        "/srv/libraries/parts"
+    );
+    assert_eq!(
+        repository_key("C:\\Libraries\\parts.git"),
+        repository_key("file:///C:/Libraries/parts")
+    );
+    assert_eq!(repository_key("C:\\Libraries\\parts"), "c:/libraries/parts");
+    assert_ne!(
+        repository_key("/srv/libraries/parts"),
+        repository_key("/srv/other/parts")
+    );
+}
+
+/// A source removed in Library Sources and added again (mitcad#1436,
+/// GitHub mitcad/Mitcad#172), from a local bare repository: removed, its
+/// components leave the BUILD picker and the search while designs still
+/// read the library; added again in another URL form and fetched, the same
+/// clone is updated and each component is listed once. A second clone of
+/// the repository that an older MitCad made for another URL form is left
+/// out, so each component, and so each favourite (the stars are kept by
+/// library and component), comes once.
+#[test]
+fn a_source_removed_and_added_again_lists_each_component_once() {
+    let Some(cli) = system_git() else {
+        return;
+    };
+    let scratch = Scratch::new("library-sources-again");
+    let cache = LibraryCache::new(scratch.join("cache"));
+    let work = scratch.join("work");
+    write_library(&work, components(), &designs());
+    git(&work, &["init", "-q", "-b", "main"]).unwrap();
+    git(&work, &["add", "-A"]).unwrap();
+    git(&work, &["commit", "-q", "-m", "Profiles 1.0"]).unwrap();
+    git(&work, &["tag", "-a", "v1.0.0", "-m", "Profiles 1.0.0"]).unwrap();
+    let remote = scratch.join("remote.git");
+    let url = slashes(&remote);
+    git(
+        &scratch.0,
+        &["clone", "-q", "--bare", &slashes(&work), &url],
+    )
+    .unwrap();
+    // The same repository as a file:// URL (file:///C:/… on Windows).
+    let other_form = if url.starts_with('/') {
+        format!("file://{url}")
+    } else {
+        format!("file:///{url}")
+    };
+    let run = |command: Value| library_command(&cache, Some(&cli), command);
+    // "<library>/<component>" of each component an answer lists, sorted.
+    let ids = |answer: &Value| -> Vec<String> {
+        let mut found: Vec<String> = answer["components"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{answer}"))
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}/{}",
+                    c["library"].as_str().unwrap(),
+                    c["id"].as_str().unwrap()
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    };
+    let picker = json!({"cmd": "library_build_candidates", "role": "profile"});
+    let search = json!({"cmd": "library_search", "sources": [other_form]});
+    let all = [
+        "test-profiles/bracket-b8",
+        "test-profiles/bracket-i5",
+        "test-profiles/carriage-15",
+        "test-profiles/carriage-20",
+        "test-profiles/p30-b8",
+        "test-profiles/tnut-b8",
+    ];
+
+    let fetched = run(json!({"cmd": "library_fetch", "url": url}));
+    assert_eq!(fetched["error"], Value::Null, "{fetched}");
+    assert_eq!(fetched["cloned"], true, "{fetched}");
+    assert_eq!(ids(&run(picker.clone())), ["test-profiles/p30-b8"]);
+    assert_eq!(ids(&run(json!({"cmd": "library_search"}))), all);
+
+    // Removed: the clone is marked and left out of the picker and the
+    // search; the libraries list says so; designs still read it.
+    let removed = run(json!({"cmd": "library_remove", "url": url, "sources": []}));
+    assert_eq!(removed["changed"], json!([fetched["dir"]]), "{removed}");
+    assert!(
+        ids(&run(picker.clone())).is_empty(),
+        "the picker after Remove"
+    );
+    let found = run(json!({"cmd": "library_search"}));
+    assert!(ids(&found).is_empty(), "{found}");
+    let text = found["clones"]["left_out"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.ends_with("left out: its source was removed"),
+        "{found}"
+    );
+    let listed = run(json!({"cmd": "library_list"}));
+    assert_eq!(listed["libraries"][0]["removed"], true, "{listed}");
+    let shown = run(json!({"cmd": "library_show", "id": "test-profiles"}));
+    assert_eq!(shown["manifest"]["id"], "test-profiles", "{shown}");
+
+    // Added again in another form: the mark is taken off at once, and the
+    // fetch updates the same clone instead of making a second one.
+    let added = run(json!({"cmd": "library_remove", "url": other_form, "removed": false}));
+    assert_eq!(added["changed"], json!([fetched["dir"]]), "{added}");
+    assert_eq!(ids(&run(picker.clone())), ["test-profiles/p30-b8"]);
+    let again = run(json!({"cmd": "library_fetch", "url": other_form}));
+    assert_eq!(again["error"], Value::Null, "{again}");
+    assert_eq!(again["cloned"], false, "{again}");
+    assert_eq!(again["dir"], fetched["dir"], "{again}");
+    assert_eq!(cache.repos().len(), 1, "one clone of the repository");
+    assert_eq!(ids(&run(picker.clone())), ["test-profiles/p30-b8"]);
+    assert_eq!(ids(&run(search.clone())), all);
+
+    // A second clone an older MitCad made for another form of the URL
+    // (`.git` left out): read once, the other left out and logged.
+    let old = scratch.join("cache").join("remote-00000000.git");
+    let old_dir = slashes(&old);
+    git(&scratch.0, &["clone", "-q", "--bare", &url, &old_dir]).unwrap();
+    let without_git = url.trim_end_matches(".git").to_owned();
+    git(&old, &["config", "remote.origin.url", &without_git]).unwrap();
+    assert_eq!(cache.repos().len(), 2);
+    let candidates = run(picker.clone());
+    assert_eq!(ids(&candidates), ["test-profiles/p30-b8"], "{candidates}");
+    assert_eq!(
+        candidates["clones"]["read"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let found = run(search.clone());
+    assert_eq!(ids(&found), all, "{found}");
+    let text = found["clones"]["left_out"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(text.contains("left out: same repository as "), "{found}");
+    assert_eq!(ids(&run(json!({"cmd": "library_search"}))), all);
+
+    // Removing one form while another listed source names the repository
+    // marks nothing; removing the last one marks both clones.
+    let kept = run(json!({"cmd": "library_remove", "url": url, "sources": [other_form]}));
+    assert_eq!(kept["changed"], json!([]), "{kept}");
+    assert_eq!(ids(&run(picker.clone())), ["test-profiles/p30-b8"]);
+    let gone = run(json!({"cmd": "library_remove", "url": other_form, "sources": []}));
+    assert_eq!(gone["changed"].as_array().map(Vec::len), Some(2), "{gone}");
+    assert!(ids(&run(picker)).is_empty(), "both clones left out");
+}

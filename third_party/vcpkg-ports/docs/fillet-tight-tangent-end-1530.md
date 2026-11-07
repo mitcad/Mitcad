@@ -1,4 +1,4 @@
-# A rounding's end past a tangent face tighter than the ball: 1530
+# A rounding's end past a tangent face tighter than the ball: 1530 and 1540
 
 mitcad#1413, the follow-up of mitcad#1397: a concave rounding whose walk's
 contact crosses a tangent edge onto a face of the spine's end that bends
@@ -22,6 +22,11 @@ ending in points ([chamfers.md](chamfers.md)). Back to the
   and ends the stripe in a point on the spine's last edge. No corner is
   made at a vertex where every stripe ends in a point of its own short of
   it.
+- **1540** (mitcad#1418) makes the stripe's last walked piece and the
+  piece cut by B one face, as the stored body's: the blend is walked on
+  over F's surface from that piece's other end through the crossing, the
+  piece is that walk up to the section through the crossing and the cut
+  piece the rest, on the same surface.
 
 ## The case
 
@@ -106,6 +111,44 @@ body has one: the walked piece up to the section through the crossing on
 E110 and the cut piece after it (1.547501 and 0.052383 mm² against the
 file's 1.599656). Before, the contour failed.
 
+## 1540: the walked and the cut piece one face
+
+### 1540-chfi3d-tight-tangent-end-walked-and-cut-pieces-one-face
+
+With 1530 the stripe's last walked piece P (from the section where the
+contact on the flange reaches the torus up to the crossing on E110, 1.14
+along the spine) and the piece cut by F47 after it were two faces,
+each on a surface of its own: P's from the walk along the foot, the cut
+piece's from 1530's walk on from P's end section. The stored body has one
+B-spline face there. Both pieces are the same ball rolling between U and
+the torus's surface, before the crossing within the torus face and after
+it beyond: one walk gives both.
+
+`WalkedCutToEnd`, at such an end (B the tight tangent face), walks the
+blend on with F's surface unbounded from P's other end (instead of from
+its end section) up to Q on E152: one walk through the crossing, whose
+contact line on F passes within 2.3e-6 mm of P's end point on E110. The
+cut by B (`ChFi3d_KPartCutPiece`, section by section as 1530's) starts at
+that walk's section through the crossing; P is replaced by the walk's part
+up to that section (its contacts' lines and p-curves, P's common points at
+its other end, those at the crossing as the cut piece's), and the cut
+piece takes the walk's surface. `ChFi3d_FilDS` makes no section between
+two pieces on one surface (as for 1352's piece past the end), so the two
+are one face. Where the walk from P's other end does not reach Q or does
+not pass through P's end point (within 10 times the approximation's
+tolerance), the blend is walked from P's end section as before, in two
+faces. P's other end may be the guide's own end up to the rounding of its
+parameter (as at the first end of the chain between the two smaller
+holes): the walk starts there.
+
+On the stored body before the item, the nine edges at once: 203 faces as
+the stored body (207 before), valid and closed; each of the four ends' face
+1.599877 mm² against the stored body's 1.599638 and 1.599010 (the same
+measure: the largest face through the end point that is not the hub);
+about the holes the result on the stored body within 0.0014 mm and the
+stored body on it within 0.0014 mm; the change of volume 2.554333 against
+the file's 2.548358 mm³.
+
 ## Reports and tests
 
 - `geometry.fillet_tight_tangent_end`
@@ -115,7 +158,10 @@ file's 1.599656). Before, the contour failed.
   valid and closed, the material added the stored body's within 0.5 %, the
   result on the stored body and back within 0.01 mm about both holes, and
   a vertex of the result within 0.01 mm of each of the stored body's four
-  end points. It fails without the patch (the contour fails). OCCT's own
+  end points, the face there of the stored body's area within 1 % (one
+  face from the walked piece's start to the end, 1540) and the stored
+  body's number of faces. It fails without 1530 (the contour fails) and
+  without 1540 (each end's face 0.247 mm², 207 faces). OCCT's own
   fillet cannot make the earlier roundings of a hole's rim that touches the
   hub (on a hub and flange of OCCT's solids it throws in the topological
   build), so there is no synthetic body.

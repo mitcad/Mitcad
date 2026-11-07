@@ -1,0 +1,237 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a stripe rolled on past a tight tangent face at its end and cut
+(patch 1530) is one face from its last walked piece's start to its end
+point (mitcad#1418).
+
+Patch 1530 ends a walk whose contact on a face F crosses a tangent edge
+onto a face B at the spine's end that no ball of the radius touches: the
+blend is walked on from the last piece P's end section with F's surface
+unbounded, cut by B, and ends in a point on the spine's last edge. P and
+the cut piece were two faces (the walked piece up to the section through
+the crossing and the cut piece after it, 1.547501 and 0.052383 mm2 at each
+of the four ends of the case) where the stored body has one face of
+1.599656 mm2: the ball rolls on over F's surface through the crossing as
+before it, one surface.
+
+WalkedCutToEnd now walks the blend on from P's other end, through the
+crossing, up to the end: P is the part of that walk up to the section
+through the crossing (its contacts' lines, P's points at its other end),
+and the piece cut by B is the rest, on the same surface, so that the two
+are one face (ChFi3d_FilDS makes no section between pieces on one
+surface). Where that walk does not pass through the crossing, the blend is
+walked from P's end section as before.
+
+Test: geometry/tests/test_fillet_tight_tangent_end.cpp: each end's face
+has the stored body's area, and the result the stored body's faces.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -17458,56 +17458,93 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+                                      Stripe->OrientationOnFace1(),
+                                      Stripe->OrientationOnFace2(),
+                                      Stripe->Choix());
+-  math_Vector    Soldep(1, 4);
+-  const gp_Pnt2d uv1 = P->Interference(1).PCurveOnFace()->Value(P->Interference(1).Parameter(isFirst));
+-  const gp_Pnt2d uv2 = P->Interference(2).PCurveOnFace()->Value(P->Interference(2).Parameter(isFirst));
+-  Soldep(1) = uv1.X();
+-  Soldep(2) = uv1.Y();
+-  Soldep(3) = uv2.X();
+-  Soldep(4) = uv2.Y();
+-  NCollection_Sequence<occ::handle<ChFiDS_SurfData>> SeqSD;
+-  SeqSD.Append(new ChFiDS_SurfData());
+-  double     First = WP, Last = isFirst ? HGuide->FirstParameter() : HGuide->LastParameter();
+-  int        intf = 0, intl = 0;
+-  const int  nbed = Spine->NbEdges();
++  const int    nbed    = Spine->NbEdges();
+   const double MaxStep = 0.05 * (Spine->LastParameter(nbed) - Spine->FirstParameter(1)) / nbed;
+   const double Fleche  = (HGuide->LastParameter() - HGuide->FirstParameter()) * fleche;
+-  bool         walked  = false;
+-  try
+-  {
+-    OCC_CATCH_SIGNALS
+-    walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
+-                         Last, false, false, !isFirst, false, false, Soldep, intf, intl);
+-  }
+-  catch (Standard_Failure const&)
+-  {
+-    walked = false;
+-  }
+-  if (!walked || SeqSD.Length() != 1)
+-  {
+-    return false;
+-  }
+-  occ::handle<ChFiDS_SurfData> X = SeqSD.First();
+-  X->ChangeIndexOfS1(DStr.AddShape(ons == 1 ? N : Fo));
+-  X->ChangeIndexOfS2(DStr.AddShape(ons == 1 ? Fo : N));
+-  // The walk ends where the other contact reaches Eq.
+-  const ChFiDS_CommonPoint& CPq = X->Vertex(isFirst, opp);
+-  if (!CPq.IsOnArc() || !CPq.Arc().IsSame(Eq) || X->Vertex(isFirst, ons).IsOnArc())
+-  {
+-    return false;
+-  }
+-  const double WQ = isFirst ? X->FirstSpineParam() : X->LastSpineParam();
+-  const double WX = isFirst ? X->LastSpineParam() : X->FirstSpineParam();
+-  if (std::abs(WX - WP) > 10. * tolesp || (isFirst ? WP - WQ : WQ - WP) <= 10. * tolesp)
+-  {
+-    return false;
+-  }
+-  const ChFiDS_FaceInterference& XO = X->Interference(opp);
+-  const ChFiDS_FaceInterference& XN = X->Interference(ons);
+-  if (XO.PCurveOnSurf().IsNull() || XN.PCurveOnSurf().IsNull() || XO.LineIndex() <= 0 || XN.LineIndex() <= 0)
+-  {
+-    return false;
+-  }
++  // The walk from P's section at its end (aWhole false) or at its other
++  // end (aWhole), up to Q on Eq: X, in a SurfData of its own.
++  const double WPs    = isFirst ? P->LastSpineParam() : P->FirstSpineParam();
++  const auto   walkOn = [&](const bool aWhole, occ::handle<ChFiDS_SurfData>& X) {
++    const bool aSide = aWhole ? !isFirst : isFirst;
++    // (P's other end is where the guide begins, to the rounding of its
++    // parameter.)
++    const double aTolW = aWhole ? tolesp : 0.;
++    double       W0    = aWhole ? WPs : WP;
++    if (W0 < HGuide->FirstParameter() - aTolW || W0 > HGuide->LastParameter() + aTolW)
++    {
++      return false;
++    }
++    W0 = std::min(std::max(W0, HGuide->FirstParameter()), HGuide->LastParameter());
++    math_Vector    Soldep(1, 4);
++    const gp_Pnt2d uv1 = P->Interference(1).PCurveOnFace()->Value(P->Interference(1).Parameter(aSide));
++    const gp_Pnt2d uv2 = P->Interference(2).PCurveOnFace()->Value(P->Interference(2).Parameter(aSide));
++    Soldep(1) = uv1.X();
++    Soldep(2) = uv1.Y();
++    Soldep(3) = uv2.X();
++    Soldep(4) = uv2.Y();
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>> SeqSD;
++    SeqSD.Append(new ChFiDS_SurfData());
++    double First = W0, Last = isFirst ? HGuide->FirstParameter() : HGuide->LastParameter();
++    int    intf = 0, intl = 0;
++    bool   walked = false;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
++                           Last, false, false, !isFirst, false, false, Soldep, intf, intl);
++    }
++    catch (Standard_Failure const&)
++    {
++      walked = false;
++    }
++    if (!walked || SeqSD.Length() != 1)
++    {
++      return false;
++    }
++    X = SeqSD.First();
++    X->ChangeIndexOfS1(DStr.AddShape(ons == 1 ? N : Fo));
++    X->ChangeIndexOfS2(DStr.AddShape(ons == 1 ? Fo : N));
++    // The walk ends where the other contact reaches Eq.
++    const ChFiDS_CommonPoint& CPq = X->Vertex(isFirst, opp);
++    if (!CPq.IsOnArc() || !CPq.Arc().IsSame(Eq) || X->Vertex(isFirst, ons).IsOnArc())
++    {
++      return false;
++    }
++    const double WQ = isFirst ? X->FirstSpineParam() : X->LastSpineParam();
++    const double WX = isFirst ? X->LastSpineParam() : X->FirstSpineParam();
++    if (std::abs(WX - W0) > 10. * tolesp || (isFirst ? WP - WQ : WQ - WP) <= 10. * tolesp)
++    {
++      return false;
++    }
++    const ChFiDS_FaceInterference& XO = X->Interference(opp);
++    const ChFiDS_FaceInterference& XN = X->Interference(ons);
++    return !XO.PCurveOnSurf().IsNull() && !XN.PCurveOnSurf().IsNull() && XO.LineIndex() > 0 && XN.LineIndex() > 0;
++  };
++  // (Where B is the tight tangent face, the ball rolls on over N's surface
++  // through the crossing on E as before it: the blend is walked from P's
++  // other end, and P is the part of it up to the section through the
++  // crossing, on the surface of the piece cut from the rest, one face with
++  // it, 1540.)
++  occ::handle<ChFiDS_SurfData> X;
++  bool   aWhole = !aTight.IsNull() && aTight.IsSame(B) && walkOn(true, X);
++  double tN     = 0.;
++  if (aWhole)
++  {
++    // The section of X through the crossing, where P's contact on N ends.
++    const occ::handle<Geom_Curve>& CN = DStr.Curve(X->Interference(ons).LineIndex()).Curve();
++    aWhole = !CN.IsNull() && ChFi3d_KPartLineParam(DStr, X, ons, CPn.Point(), tN)
++             && CN->Value(tN).Distance(CPn.Point()) <= 10. * tolapp3d
++             && (isFirst ? X->Interference(ons).LastParameter() - tN : tN - X->Interference(ons).FirstParameter())
++                  > Precision::PConfusion();
++  }
++  if (!aWhole && !walkOn(false, X))
++  {
++    return false;
++  }
++  const double                   WQ = isFirst ? X->FirstSpineParam() : X->LastSpineParam();
++  const ChFiDS_CommonPoint&      CPq = X->Vertex(isFirst, opp);
++  const ChFiDS_FaceInterference& XO  = X->Interference(opp);
++  const ChFiDS_FaceInterference& XN  = X->Interference(ons);
+   TopoDS_Face BF = B, FoF = Fo;
+   BF.Orientation(TopAbs_FORWARD);
+   FoF.Orientation(TopAbs_FORWARD);
+@@ -17544,14 +17581,21 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+     anEnd.CPO.SetPoint(Q);
+     anEnd.CPO.SetArc(tolapp3d, Eq, wQ, aTrO);
+   }
+-  // The other end: P's end section, where the contact on N leaves N.
++  // The other end: P's end section, where the contact on N leaves N (with
++  // aWhole, X's section through that point).
+   ChFi3d_KPartCutEnd aJunction;
+   aJunction.P   = CPn.Point();
+-  aJunction.uvS = XN.PCurveOnSurf()->Value(XN.Parameter(!isFirst));
++  aJunction.uvS = XN.PCurveOnSurf()->Value(aWhole ? tN : XN.Parameter(!isFirst));
+   aJunction.uvB = pcBE->Value(CPn.ParameterOnArc());
+-  aJunction.tO  = XO.Parameter(!isFirst);
++  aJunction.tO  = aWhole ? tN : XO.Parameter(!isFirst);
+   aJunction.CPN = CPn;
+   aJunction.CPO = P->Vertex(isFirst, opp);
++  if (aWhole)
++  {
++    aJunction.CPN.SetParameter(tN);
++    aJunction.CPO.SetPoint(DStr.Curve(XO.LineIndex()).Curve()->Value(tN));
++    aJunction.CPO.SetParameter(tN);
++  }
+   const occ::handle<ChFiDS_SurfData> aNone;
+   occ::handle<ChFiDS_SurfData>       G;
+   try
+@@ -17583,6 +17627,36 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+   {
+     return false;
+   }
++  if (aWhole)
++  {
++    // P's place: X up to the crossing, with P's points at its other end; G
++    // on X's surface.
++    ChFiDS_FaceInterference& XN1 = X->ChangeInterference(ons);
++    ChFiDS_FaceInterference& XO1 = X->ChangeInterference(opp);
++    if (isFirst)
++    {
++      XN1.SetFirstParameter(tN);
++      XO1.SetFirstParameter(tN);
++    }
++    else
++    {
++      XN1.SetLastParameter(tN);
++      XO1.SetLastParameter(tN);
++    }
++    X->ChangeVertex(isFirst, ons) = aJunction.CPN;
++    X->ChangeVertex(isFirst, opp) = aJunction.CPO;
++    for (int s = 1; s <= 2; s++)
++    {
++      ChFiDS_CommonPoint CPs = P->Vertex(!isFirst, s);
++      CPs.SetParameter(X->Interference(s).Parameter(!isFirst));
++      X->ChangeVertex(!isFirst, s) = CPs;
++    }
++    X->FirstSpineParam(P->FirstSpineParam());
++    X->LastSpineParam(P->LastSpineParam());
++    G->ChangeSurf(X->Surf());
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = Stripe->ChangeSetOfSurfData()->ChangeSequence();
++    aSeq.ChangeValue(isFirst ? 1 : aSeq.Length()) = X;
++  }
+   if (isFirst)
+   {
+     Stripe->ChangeSetOfSurfData()->Prepend(G);

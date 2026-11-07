@@ -28,7 +28,7 @@ QVector<InputDef> pathInputs(const QString& id, const QString& name,
                              std::function<bool(const CommandState&)> shown = {}) {
   QVector<InputDef> inputs = {
       selectionInput(id, name, kPathKinds, 1, 0)
-          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end")),
+          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end, or an intersection curve")),
   };
   if (shown) {
     inputs.first().withVisible(shown);
@@ -115,7 +115,7 @@ bool takeSweepPath(const QJsonObject& report, CommandState& state) {
 bool pathEditable(const QJsonValue& path) {
   const QJsonObject o = path.toObject();
   return o.contains(QStringLiteral("curves")) || o.contains(QStringLiteral("curve")) ||
-         o.contains(QStringLiteral("edges"));
+         o.contains(QStringLiteral("edges")) || o.contains(QStringLiteral("feature"));
 }
 
 bool loadPath(const QJsonValue& path, CommandState& state, const QString& id,
@@ -684,8 +684,14 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
   def.keywords = {QStringLiteral("stiffener"), QStringLiteral("wall"), QStringLiteral("gusset")};
   def.featureType = web ? QStringLiteral("web") : QStringLiteral("rib");
   def.inputs = {
-      selectionInput(QStringLiteral("curves"), QObject::tr("Curves"), SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("Open sketch curves of one sketch")),
+      // Or the curve of an Intersection Curve lying in one plane
+      // (mitcad#1417), picked in the view, the Browser or the timeline.
+      selectionInput(QStringLiteral("curves"), QObject::tr("Curves"), SelectKind::SketchCurve | SelectKind::Feature,
+                     1, 0)
+          .withTooltip(QObject::tr("Open sketch curves of one sketch, or a flat intersection curve"))
+          .withAccepts([](const SelectionItem& item) {
+            return item.kind != SelectKind::Feature || isFeatureCurve(item);
+          }),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), false),
       choiceInput(QStringLiteral("location"), QObject::tr("Thickness Side"),
                   {{QStringLiteral("symmetric"), QStringLiteral("Symmetric")},
@@ -709,14 +715,24 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
   def.build = [type](const CommandState& state, const CommandContext&) {
     Built result;
     const Selection& curves = state.items(QStringLiteral("curves"));
-    const QString sketch = oneSketch(curves, result, QStringLiteral("curves"));
-    if (sketch.isEmpty()) {
-      return result;
-    }
-    QJsonObject path{{QStringLiteral("sketch"), sketch},
-                     {QStringLiteral("curves"), names(curves, SelectKind::SketchCurve)}};
-    if (state.checked(QStringLiteral("chain"))) {
-      path.insert(QStringLiteral("chain"), true);
+    QJsonObject path;
+    if (std::any_of(curves.cbegin(), curves.cend(), isFeatureCurve)) {
+      // An Intersection Curve (mitcad#1417), alone.
+      if (curves.size() > 1) {
+        return Built::failure(QObject::tr("Select one intersection curve, or sketch curves."),
+                              QStringLiteral("curves"));
+      }
+      path.insert(QStringLiteral("feature"), curves.first().owner);
+    } else {
+      const QString sketch = oneSketch(curves, result, QStringLiteral("curves"));
+      if (sketch.isEmpty()) {
+        return result;
+      }
+      path = QJsonObject{{QStringLiteral("sketch"), sketch},
+                         {QStringLiteral("curves"), names(curves, SelectKind::SketchCurve)}};
+      if (state.checked(QStringLiteral("chain"))) {
+        path.insert(QStringLiteral("chain"), true);
+      }
     }
     QJsonObject extent{{QStringLiteral("type"), state.choice(QStringLiteral("depth_type"))}};
     if (state.choice(QStringLiteral("depth_type")) == QStringLiteral("depth")) {
@@ -811,6 +827,9 @@ CommandDef coilCommand(const CommandContext& context) {
             Manipulator m = arrow(frame->origin, frame->normal);
             m.valueBox = true;
             m.boxAtTip = true;
+            // Stepped by the coil's diameter (mitcad#1431).
+            const double diameter = state.value(QStringLiteral("diameter"));
+            m.scale = std::isfinite(diameter) && diameter > 0.0 ? diameter : 0.0;
             return m;
           }),
       valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
@@ -1235,6 +1254,63 @@ CommandDef helixCommand(const CommandContext& context) {
       text += QStringLiteral(", growing %1 per turn").arg(number(state.value(QStringLiteral("growth"))));
     }
     return text;
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Intersection Curve (mitcad#1405): the 3D curve of the curves of two
+// sketches, each swept along its own sketch's normal; the features after it
+// take it as a path (picked in the view or on the timeline).
+
+CommandDef intersectionCurveCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("solid.intersection_curve");
+  def.name = QObject::tr("Intersection Curve");
+  def.icon = QStringLiteral("sketch-intersect");
+  def.tooltip = QObject::tr("A 3D curve where two sketches' curves meet, swept along their normals");
+  def.group = QStringLiteral("CREATE");
+  def.section = QStringLiteral("primitives");
+  def.keywords = {QStringLiteral("3d curve"), QStringLiteral("curve"), QStringLiteral("path")};
+  def.featureType = QStringLiteral("intersection_curve");
+  def.inputs = {
+      selectionInput(QStringLiteral("first"), QObject::tr("First Curves"), SelectKind::SketchCurve, 1, 0)
+          .withTooltip(QObject::tr("Curves of one sketch, swept along its normal")),
+      selectionInput(QStringLiteral("second"), QObject::tr("Second Curves"), SelectKind::SketchCurve, 1, 0)
+          .withTooltip(QObject::tr("Curves of another sketch, on a plane at an angle to the first")),
+      checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
+          .withTooltip(QObject::tr("Also take the curves joined to the selected ones")),
+  };
+  def.enabled = [&context] { return hasSketches(context); };
+
+  def.build = [](const CommandState& state, const CommandContext&) {
+    Built result;
+    const bool chain = state.checked(QStringLiteral("chain"));
+    const QJsonValue first =
+        pathOf(state.items(QStringLiteral("first")), chain, result, QStringLiteral("first"));
+    if (!result.error.isEmpty()) {
+      return result;
+    }
+    const QJsonValue second =
+        pathOf(state.items(QStringLiteral("second")), chain, result, QStringLiteral("second"));
+    if (!result.error.isEmpty()) {
+      return result;
+    }
+    result.def = {{QStringLiteral("type"), QStringLiteral("intersection_curve")},
+                  {QStringLiteral("first"), first},
+                  {QStringLiteral("second"), second}};
+    return result;
+  };
+
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    loadPath(feature.value(QStringLiteral("first")), state, QStringLiteral("first"), context);
+    loadPath(feature.value(QStringLiteral("second")), state, QStringLiteral("second"), context);
+  };
+
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    return QStringLiteral("Added intersection curve of %1 and %2 curve(s)")
+        .arg(state.items(QStringLiteral("first")).size())
+        .arg(state.items(QStringLiteral("second")).size());
   };
   return def;
 }

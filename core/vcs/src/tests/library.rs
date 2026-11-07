@@ -371,15 +371,16 @@ fn libraries_are_fetched_and_read_at_their_versions() {
     later.set_link_resolver(Some(resolver));
     assert_eq!(later.update_links(None).unwrap(), Vec::<String>::new());
 
-    // The same library from its folder's path: another clone, found by
-    // its id for designs that recorded another URL.
+    // The same library from its folder's path: the same repository, so the
+    // same clone (mitcad#1436), still found by its id for designs that
+    // recorded another URL.
     let by_path = library_command(
         &cache,
         Some(&cli),
         json!({"cmd": "library_fetch", "url": slashes(&source)}),
     );
     assert_eq!(by_path["error"], Value::Null, "{by_path}");
-    assert_ne!(by_path["dir"], fetched["dir"]);
+    assert_eq!(by_path["dir"], fetched["dir"]);
     let (repo, commit) = cache
         .find("test-pins", "https://example.org/elsewhere.git", &v1)
         .unwrap();
@@ -801,4 +802,51 @@ fn fetching_an_unchanged_library_again_keeps_its_clone() {
         .filter_map(|v| v["label"].as_str())
         .collect();
     assert!(labels.contains(&"v1.2.0"), "{tagged}");
+}
+
+/// Tags in the order of their versions (mitcad#1423, GitHub
+/// mitcad/Mitcad#172): v2.10.0 and v2.11.0 after v2.9.0 (taken for texts,
+/// `2.10.0` once sorted before `2.9.0`, and v2.9.0 was read as the newest
+/// version), a pre-release before its release, a leading `v` or not, tags
+/// without numbers after the versions.
+#[test]
+fn versions_are_ordered_by_their_numbers() {
+    use crate::library::version_order;
+    use std::cmp::Ordering;
+    let mut tags = vec![
+        "v2.10.0",
+        "release",
+        "v1.0.0",
+        "v2.9.0",
+        "v2.11.0",
+        "v2.0.0",
+        "v2.0.0-rc1",
+        "v10.0.0",
+        "v2.9.1",
+        "2.9.5",
+    ];
+    tags.sort_by(|a, b| version_order(a, b));
+    assert_eq!(
+        tags,
+        [
+            "v1.0.0",
+            "v2.0.0-rc1",
+            "v2.0.0",
+            "v2.9.0",
+            "v2.9.1",
+            "2.9.5",
+            "v2.10.0",
+            "v2.11.0",
+            "v10.0.0",
+            "release",
+        ]
+    );
+    assert_eq!(version_order("v2.11.0", "v2.9.0"), Ordering::Greater);
+    assert_eq!(version_order("V2.10.0", "v2.10.1"), Ordering::Less);
+    assert_eq!(version_order("v1.0", "v1.0.1"), Ordering::Less);
+    // Numbers longer than any integer type still compare.
+    assert_eq!(
+        version_order("v1.123456789012345678901234567890", "v1.99"),
+        Ordering::Greater
+    );
 }

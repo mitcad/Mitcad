@@ -52,6 +52,7 @@ search: type the start of a command's name and press Enter.
   - [Emboss and Wrap Onto](#emboss-and-wrap-onto)
   - [Helix](#helix)
   - [Sweep](#sweep)
+  - [Intersection Curve](#intersection-curve)
   - [Loft](#loft)
   - [Hole](#hole)
   - [Thread](#thread)
@@ -842,6 +843,21 @@ change **Turn View Left**, **Turn View Right**, **Turn View Up** and
 The cube keeps its size and place in the corner with each choice, and a
 click on it turns the view to what you clicked.
 
+**Preferences › Display › Small circles** sets how finely the view draws
+small holes, circles and arcs:
+
+- **Adaptive** (the default): a small circle gets fewer segments, by its
+  size compared with the body, but always at least 12 for a full circle,
+  so that small holes still look round. Large circles are drawn as in
+  Full Detail. A design with thousands of small holes has far fewer
+  triangles to draw, so it opens faster and takes less memory.
+- **Full Detail**: every circle as finely as a large one, as in earlier
+  versions. Zoomed in close on a small hole, it looks smoother.
+
+When you change it, MitCad draws the open designs again with the new
+choice. It changes only what the view shows: exported meshes (STL, 3MF,
+OBJ, Send to Slicer) and the model itself stay the same.
+
 The **View menu** has the standard views, Look At, Fit, the camera, the
 display styles, the background, Grid and Snaps, and the named views.
 The display styles are Shaded, Shaded with Visible Edges Only, Shaded
@@ -1025,6 +1041,25 @@ A preview that fails shows in red, and OK does not accept it. Enter is
 OK, and Esc is Cancel. While you edit a feature, the timeline rolls
 back to before the feature.
 
+**Hide the preview while you pick.** Hold Ctrl (Cmd on macOS) alone to
+hide a feature's preview, for example an Extrude's new bodies or a
+Fillet's rounding. The view then shows the bodies as they are without
+the command, or, while you edit a feature, as they are before it. The
+tool and the handles are hidden too. Picking still works: click faces,
+edges or profiles in or out of the command's inputs, and use the
+panel's fields. A click while Ctrl is down is a Ctrl+click, which adds
+or removes an item as a plain click does in a command. Release Ctrl to
+see the preview again, computed for the inputs as they are now. The
+preview hides as soon as you press Ctrl. Another key pressed with Ctrl,
+as in a shortcut such as Ctrl+Z or Ctrl+S, shows the preview again at
+once, and the shortcut runs as usual. The wheel (a Ctrl+scroll zoom) and
+the mouse buttons (a Ctrl + middle button pan) leave it hidden.
+In a text field where you type, Ctrl does not hide the preview, so
+Ctrl+A, Ctrl+C and Ctrl+V edit the text. A value field of the panel
+that has the keyboard but in which you have typed nothing yet does not
+count: the panel puts the keyboard there after the picks and as it
+opens.
+
 A value field takes an expression with units (`20`, `2 in`, `d1 * 2`).
 The value of an expression, or an error, shows below the field; a
 number, with or without its sign and unit (`-8 mm`), is its own value
@@ -1142,6 +1177,7 @@ still in the group's menu.
 | Undo, Redo | Ctrl+Z, Ctrl+Y | Undo or redo. This includes a dimension change and a drag of the timeline marker |
 | Fit | F6 | Fit the design to the view. If something is selected, Fit shows the selection. If some bodies are isolated, Fit shows only the isolated bodies |
 | OK, Cancel | Enter, Esc | Accept or cancel a command. Esc also clears the selection |
+| Hide the preview | Hold Ctrl (Cmd) | While a feature command's panel is open: hide its preview while you pick its inputs, and show it again on release ([Command panels](#command-panels)) |
 | Create Sketch | Alt+S (Option+S) | Select a plane or a planar face, or select it before the command. Available outside a sketch |
 | Finish Sketch | Ctrl+Enter | Go back to the 3D view |
 | Line | L | Draw lines one after another. Drag from the last point, or from the end of a line or an arc, for an arc: tangent when you drag along the curve, normal when you drag across it. Also Midpoint Line ([Sketch curve tools](#sketch-curve-tools)) |
@@ -1205,6 +1241,7 @@ submenus.
   - Box, Cylinder, Sphere, Torus, Coil ([Placing a feature](#placing-a-feature))
   - Helix ([Helix](#helix))
   - Pipe
+  - Intersection Curve ([Intersection Curve](#intersection-curve))
 - Patterns ([Patterns](#patterns)):
   - Pattern › Rectangular Pattern, Circular Pattern, Pattern on Path,
     Pattern at Points
@@ -1683,6 +1720,37 @@ where the rail meets the profile. This is on the plane square to the
 path. Or it is at the same fraction of the length of the rail as of
 the path. An optional *Second Rail* (sketch curves or edges)
 turns and sizes the profile with the line between the two rails.
+
+### Intersection Curve
+
+**Intersection Curve** (Create, after Pipe) makes a 3D curve from two
+sketches on planes at an angle to each other, for example a sketch on XZ
+and a sketch on XY. Seen along the normal of each sketch, the curve looks
+like the curves of that sketch. Select the *First Curves* in one sketch
+and the *Second Curves* in the other. MitCad moves each set of curves
+along the normal of its own sketch, and the curve is where the two
+surfaces that they make meet.
+
+- The curve follows both sketches. When you edit a sketch or change its
+  dimensions or parameters, the curve and the features that use it
+  change too.
+- The curve is a path. Select it in the view or in the timeline for the
+  path of Sweep or Pipe, for the rails or the centerline of Loft, for
+  Pattern on Path, or for a construction plane or point along a path.
+  A point or a plane along the curve is exactly where the given length
+  along the curve ends.
+- If the curve lies in one plane, Rib and Web can grow from it: select it
+  as their *Curves*.
+- In a later sketch, **Project** and **Intersect** take the curve. Select
+  it in the view, in the Browser or in the timeline. Project adds the
+  curve and its ends to the sketch. Intersect adds the points where the
+  sketch plane crosses the curve. A sketch that you click in the timeline
+  or the Browser still goes in as the whole sketch.
+- It shows in the Browser in the Construction folder, with a light bulb.
+- If the curve cannot be made, the panel shows the reason: the planes
+  of the sketches are parallel, the curves do not meet, or the result
+  divides into branches or into separate pieces (with the points where
+  that occurs).
 
 ### Loft
 
@@ -3713,11 +3781,12 @@ control:
 | Visible body edges | cross |
 | Occluded edges | empty |
 | Faces and vertices | square |
-| Other sketches' curves and points | cross |
+| Other sketches' curves and points, intersection curves | cross |
 
 You can change the rows while Project runs. Shift+click
 reaches an edge behind faces. Project takes nothing but edges, faces and
-vertices of the bodies, and curves and points of other sketches. OK and Cancel bring back the sketch's rows as they were. The
+vertices of the bodies, curves and points of other sketches, and the
+curves of Intersection Curves. OK and Cancel bring back the sketch's rows as they were. The
 projected geometry then follows the projected geometry row.
 
 **Intersect** has rows of its own too: the same as Project's, but with
@@ -8133,6 +8202,16 @@ the Middle** from the middle of the edge. This width can pass the ends of
 the edge. **Own Overhang Root** sets how far the wall past the ends is cut
 back; 0 starts it at the end of the bend.
 
+**Corner** is for a flange that closes against another wall of the
+sheet, such as the last side of a box section that is welded. Type the
+inside dimension as the Length; the corner sets where the wall ends.
+*Open* ends the wall on the inside of the other wall: the walls meet
+only along the corner line. *Half Open* lets the wall reach half the
+thickness over the end of the other wall. The other wall is then cut
+back by a seam of 0.00001 mm under it, as walls that touch over a face
+cannot make one solid. Use Corner on the flange that closes the section,
+the last one.
+
 **Bend** makes one bend between two edges. With the Bend Type *Double
 Bend*, it makes two opposite bends of the angle with a straight between
 them. A double bend joins parallel faces of two sheets.
@@ -8967,7 +9046,12 @@ community indexes that MitCad uses. At the start, the list has MitCad's
 component library and the community index. In **Library Sources…** you
 can:
 
-- Add a library by its URL or by a folder
+- Add a library by its URL or by a folder. Another form of the URL of a
+  library in the list (for example with `www.` or without `.git`) is the
+  same library: MitCad selects its row and does not add it twice.
+- Remove a library. Its components leave the pickers and the search;
+  designs that use them keep them. Add it again, in any form of its URL,
+  and its components and your stars come back once.
 - Disable a library
 - Select **Fetch** to get a library or its newer versions
 - Select **Auto-update** for a library that MitCad must fetch when it
@@ -10921,6 +11005,22 @@ and on request the dimensions of the sketches it sees square on
 (*Sketch Dimensions*): those of the sketches that shape the bodies it
 shows, where it shows them. Exports draw all of them.
 
+With *Model Annotations* in its panel, a view also shows the
+annotations you made on the model (dimensions, notes, datum labels,
+feature control frames, material notes and hole callouts) whose plane it
+sees square on; a hole callout goes to the view that looks into its
+hole. They are drawn as the drawing's own dimensions are and follow the
+model: change the part and the values change. An annotation you hid in
+the model is not brought in, and each one (like each sketch dimension) is
+drawn only once on a sheet, in the first view that sees it.
+
+**Model Items** (Dimensions group) does this for several views at once:
+select the views (or none for all the sheet's views), choose *Sketch
+Dimensions*, *Model Annotations* or both, and click *Apply*. One Undo
+takes it back. To move or edit one of the model's annotations on the
+drawing, select its view and click *Keep Model Annotations*: they become
+the drawing's own annotations, and the model stays as it is.
+
 Click an annotation on its lines or its text to select it; a click
 between its lines picks the view under it.
 
@@ -11326,7 +11426,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first** | [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |

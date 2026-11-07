@@ -154,7 +154,7 @@ Write-Host '--- 0. The SOLID CREATE menu (mitcad#579)'
 # after it logged its entries.
 $solidCreate = 'Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web | Emboss' +
   ' | - | Hole | Thread | Plastic Feature' +
-  ' | - | Box | Cylinder | Sphere | Torus | Coil | Helix | Pipe' +
+  ' | - | Box | Cylinder | Sphere | Torus | Coil | Helix | Pipe | Intersection Curve' +
   ' | - | Pattern > [Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points] | Mirror' +
   ' | - | Envelope' +
   ' | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing'

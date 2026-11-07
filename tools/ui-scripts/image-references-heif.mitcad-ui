@@ -10,6 +10,10 @@ command insert.image_reference
 expect-log '^Command Image Reference started'
 click-pick 'face F1.b0/F1:top'
 expect-log '^Image Reference Plane: 1 face'
+# The empty panel reports its required fields before a file is chosen.
+# From the chosen plane and file onward, no panel error is allowed.
+wait-log '^Panel Image Reference error: Choose an image file\.$'
+mark
 type-in '^Panel Image Reference input file at ' '${MITCAD_TEST_WORK}/photo.heic'
 wait-log '^Image Reference HEIF file photo.heic decoded: 32 x 64 pixels'
 type-in '^Panel Image Reference input width at ' '32'

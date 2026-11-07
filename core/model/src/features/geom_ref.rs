@@ -120,7 +120,8 @@ pub enum GeomRef {
 /// counter-clockwise), several lines and arcs of one sketch joined end to
 /// end (the path runs from the free end of the first listed curve, as
 /// the paths of sweeps do: `path.rs`), a fixed straight line, a fixed
-/// helix, or fixed curves (mitcad#548).
+/// helix, fixed curves (mitcad#548), or the curve of an Intersection Curve
+/// (mitcad#1405).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathRef {
     Edges {
@@ -146,6 +147,9 @@ pub enum PathRef {
     /// circle and ellipse arcs, B-splines (an imported object's edges that
     /// no sketch holds, a conical helix as its file stores it).
     Fixed(Vec<FixedCurve>),
+    /// The curve of an Intersection Curve (mitcad#1405): `{"feature": "F5"}`,
+    /// its pieces in order along it.
+    FeatureCurve(FeatureUid),
 }
 
 /// A curve of a fixed path (mitcad#548), as [`crate::kernel::Curve3`]
@@ -836,6 +840,10 @@ impl PathRef {
             Self::SketchCurve { sketch, .. } | Self::SketchCurves { sketch, .. } => {
                 references.features.insert(*sketch);
             }
+            // Intersection curves (mitcad#1405).
+            Self::FeatureCurve(feature) => {
+                references.features.insert(*feature);
+            }
             Self::Line { .. } | Self::Helix(_) | Self::Fixed(_) => {}
         }
     }
@@ -904,6 +912,18 @@ impl PathRef {
                 }
                 Ok(())
             }
+            // Intersection curves (mitcad#1405).
+            Self::FeatureCurve(feature) => {
+                let entry = ctx.feature(*feature)?;
+                if matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{} ({feature}) makes no curve: a path names an intersection curve",
+                        entry.name
+                    ))
+                }
+            }
         }
     }
 }
@@ -931,6 +951,18 @@ pub trait Resolver {
     fn mount(&mut self, feature: FeatureUid, name: &str) -> Result<Transform, String> {
         Err(format!(
             "the frame {name} of {} is not available here",
+            self.name(feature)
+        ))
+    }
+
+    /// The curve of an Intersection Curve (mitcad#1405), its pieces in
+    /// order along it, in the feature's coordinates.
+    fn feature_curve(
+        &mut self,
+        feature: FeatureUid,
+    ) -> Result<Arc<Vec<crate::sweeps::PathCurve>>, String> {
+        Err(format!(
+            "the curve of {} is not available here",
             self.name(feature)
         ))
     }
@@ -1222,6 +1254,11 @@ pub(crate) fn resolve_path(
         PathRef::SketchCurves { sketch, curves } => {
             Ok(chain_point(&sketch_chain(r, *sketch, curves)?, at))
         }
+        // Along an Intersection Curve (mitcad#1405), measured along it.
+        PathRef::FeatureCurve(feature) => {
+            let curve = r.feature_curve(*feature)?;
+            Ok(super::intersection_curve::CurveChain::new(&curve)?.path_point(at))
+        }
         _ => Ok(path_curve(r, path)?.path_point(at)),
     }
 }
@@ -1402,6 +1439,9 @@ pub(crate) fn path_curve(r: &mut impl Resolver, path: &PathRef) -> Result<PathCu
         }
         PathRef::Fixed(_) => {
             return Err("a path of fixed curves has no analytic curve".to_owned());
+        }
+        PathRef::FeatureCurve(_) => {
+            return Err("an intersection curve has no analytic curve".to_owned());
         }
     };
     let output = r.sketch(sketch)?;
@@ -1725,6 +1765,13 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
     fn mount(&mut self, feature: FeatureUid, name: &str) -> Result<Transform, String> {
         EvalContext::mount(self, feature, name)
     }
+
+    fn feature_curve(
+        &mut self,
+        feature: FeatureUid,
+    ) -> Result<Arc<Vec<crate::sweeps::PathCurve>>, String> {
+        EvalContext::feature_curve(self, feature)
+    }
 }
 
 impl<K: Kernel> EvalContext<'_, K> {
@@ -1777,6 +1824,78 @@ impl<K: Kernel> EvalContext<'_, K> {
         output
             .map(|d| d.value)
             .ok_or_else(|| format!("{} has no result", self.feature_name(uid)))
+    }
+
+    /// The curve of an Intersection Curve before this one (mitcad#1405),
+    /// its pieces in order along it, in this feature's coordinates: one of
+    /// its own component as it is, one of another component by the
+    /// feature's `datum_links` (a construction feature's, mitcad#1417),
+    /// moved there as [`EvalContext::linked_feature_curve`] moves it.
+    pub fn feature_curve(
+        &mut self,
+        feature: FeatureUid,
+    ) -> Result<Arc<Vec<crate::sweeps::PathCurve>>, String> {
+        if let Some(link) = self.datum_links.get(&feature).cloned() {
+            return self.linked_feature_curve(feature, Some(&link));
+        }
+        self.linked_feature_curve(feature, None)
+    }
+
+    /// The curve of an Intersection Curve before this one, in this
+    /// feature's coordinates: without a link one of this feature's
+    /// component; with one (mitcad#1417: a sketch's projection of it, a
+    /// construction feature's `datum_links`) one of the component the
+    /// link's source is in, moved from there by the placements at this
+    /// point of the timeline, as linked sketches and datums are.
+    pub fn linked_feature_curve(
+        &mut self,
+        feature: FeatureUid,
+        link: Option<&crate::links::OccurrenceLink>,
+    ) -> Result<Arc<Vec<crate::sweeps::PathCurve>>, String> {
+        let result = self.env.result_of(feature);
+        let output = result.and_then(|r| r.output.clone());
+        self.reads
+            .push(Read::Output(feature, output.as_ref().map(|o| o.version)));
+        let name = self.feature_name(feature);
+        let (component, moved) = match link {
+            Some(link) => {
+                let (component, transform) =
+                    self.linked(link).map_err(|e| format!("{name}: {e}"))?;
+                (component, Some(transform))
+            }
+            None => (self.component(), None),
+        };
+        if let Some(entry) = self.env.feature(feature)
+            && entry.component != component
+        {
+            return Err(match link {
+                Some(link) => format!(
+                    "{name} is not in the component where the link {} leads",
+                    link.source
+                ),
+                None => format!(
+                    "{name} is in another component: take the curve of an intersection \
+                     curve of another component through its occurrence"
+                ),
+            });
+        }
+        let failed = result.is_some_and(|r| !r.status.is_ok());
+        let curve = match output.and_then(|o| o.curve.clone()) {
+            Some(curve) if !failed => curve,
+            _ => return Err(format!("{name} has no curve at this point of the timeline")),
+        };
+        Ok(match moved {
+            Some(t) => Arc::new(
+                curve
+                    .iter()
+                    .map(|piece| crate::sweeps::PathCurve {
+                        name: piece.name.clone(),
+                        curve: crate::sketch::project::transform_curve(&t, &piece.curve),
+                    })
+                    .collect(),
+            ),
+            None => curve,
+        })
     }
 
     /// A mount frame of a derived part before this one (mitcad#375), in
@@ -2001,6 +2120,9 @@ impl PathRef {
                     "fixed_curves".to_owned(),
                     serde_json::to_value(curves).map_err(serde::ser::Error::custom)?,
                 );
+            }
+            Self::FeatureCurve(feature) => {
+                map.insert("feature".to_owned(), feature.to_string().into());
             }
         }
         map.serialize(serializer)
@@ -2248,7 +2370,7 @@ impl PathRef {
             return Err(format!(
                 "invalid path {value}: expected {{\"body\": ..., \"edges\": [...]}}, \
                  {{\"sketch\": ..., \"curve\": ...}}, {{\"start\": [...], \"end\": [...]}}, \
-                 {{\"helix\": {{...}}}} or {{\"fixed_curves\": [...]}}"
+                 {{\"helix\": {{...}}}}, {{\"fixed_curves\": [...]}} or {{\"feature\": ...}}"
             ));
         };
         let mut f = Fields(map);
@@ -2269,6 +2391,10 @@ impl PathRef {
             None if f.has("helix") => Self::Helix(f.need("helix", "a helix path")?),
             None if f.has("fixed_curves") => {
                 Self::Fixed(f.need("fixed_curves", "a path of fixed curves")?)
+            }
+            // An Intersection Curve (mitcad#1405).
+            None if f.has("feature") => {
+                Self::FeatureCurve(f.need("feature", "a path of an intersection curve")?)
             }
             None => Self::line(&mut f)?,
         };

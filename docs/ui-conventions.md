@@ -173,6 +173,8 @@ not a level of its own, and MitCad has no separate assembly file.
 | **Surface finish symbol** | ISO 1302's symbol on a surface: any process, material removed or no material removed, with its requirement (`Ra 1.6`). UI: *Surface Finish*. | `AnnotationType::Finish`, `SurfaceFinish` |
 | **Text note** | Text on a sheet without a leader. UI: *Text*. Not a leader note (*Note*). | `SheetNote` |
 | **Sketch dimensions** (of a view) | The dimensions of the sketches a view sees square on, drawn from the sketches (retrieved). | `DrawingView::retrieved_dimensions` |
+| **Model annotations** (of a view) | The model's own annotations a view sees square on, drawn from the model (mitcad#1406). | `DrawingView::model_annotations` |
+| **Model items** | Sketch dimensions and model annotations together, as the Drawing tab's Model Items switches them on. | `drawing_model_items` |
 | **Datum label** (on a view) | A datum label on a drawing's view; its letter is one of the same set as the design's datum labels. UI: the *Datum Label* tool, not *Datum*. | `AnnotationType::Datum` |
 | **Hole table** | A table of the round holes a view sees end on, each tagged in the view (A1, A2, B1 by size, or numbered) and listed with its place from an origin, size, depth and thread. Not File › Export Drawing's sheet-wide hole table of its own. UI: *Hole Table*. | `AnnotationType::HoleTable`, `TableSettings` (`core/model/src/drawing/tables_def.rs`) |
 | **Bill of materials** (on a sheet) | A numbered table of the components a view shows, with their quantities and what the design says of them; the drawing's own form of the design's bill of materials. UI: *Bill of Materials*; its kinds *First Level* and *Components Only*. | `AnnotationType::PartsList` |

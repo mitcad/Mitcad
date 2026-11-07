@@ -336,6 +336,9 @@ pub struct Output<S> {
     /// What the feature picked, where it was (a Fillet's or a Chamfer's
     /// edges as polylines, mitcad#957): the `feature_inputs` query.
     pub inputs: Option<crate::features::FeatureInputs>,
+    /// The 3D curve of an Intersection Curve (mitcad#1405): later
+    /// features take it as a path. Not kept in the result store.
+    pub curve: Option<Arc<Vec<crate::sweeps::PathCurve>>>,
 }
 
 pub struct FeatureResult<S> {
@@ -2268,6 +2271,7 @@ fn evaluate<K: Kernel>(
             changed_pieces,
             threaded_walls: produced.threaded_walls,
             inputs: produced.inputs,
+            curve: produced.curve.map(Arc::new),
         },
         Err(message) => Output {
             sheet_rules: None,
@@ -2304,6 +2308,7 @@ fn evaluate<K: Kernel>(
             changed_pieces: Vec::new(),
             threaded_walls: Vec::new(),
             inputs: None,
+            curve: None,
         },
     };
     Arc::new(output)

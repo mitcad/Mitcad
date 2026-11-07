@@ -2874,6 +2874,8 @@ int ribbonFitTests();
 int updateOfferTests();
 int lineArcsTests();
 int linkedFilesTests();
+int previewHoldTests();
+int handleStepTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3025,6 +3027,8 @@ int main(int argc, char* argv[]) {
     failures += updateOfferTests();
     failures += lineArcsTests();
     failures += linkedFilesTests();
+    failures += previewHoldTests();
+    failures += handleStepTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

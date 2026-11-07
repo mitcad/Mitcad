@@ -10,6 +10,16 @@ use crate::features::SketchOutput;
 use crate::features::geom_ref::{self, GeomRef, Resolver};
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
+use crate::sweeps::PathCurve;
+
+/// An Intersection Curve's curve (mitcad#1405), its pieces in order along
+/// it, in its component's coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeatureCurveView {
+    pub uid: FeatureUid,
+    pub name: String,
+    pub curve: Arc<Vec<PathCurve>>,
+}
 
 /// A construction feature's datum.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +46,34 @@ impl<K: Kernel> Document<K> {
                     uid: entry.uid,
                     name: entry.name.clone(),
                     datum: self.datum(entry.uid)?,
+                })
+            })
+            .collect()
+    }
+
+    /// The curve of an Intersection Curve before the marker (mitcad#1405),
+    /// its pieces in order along it, in its component's coordinates; None
+    /// when it did not evaluate or failed.
+    pub fn feature_curve(&self, uid: FeatureUid) -> Option<Arc<Vec<PathCurve>>> {
+        let output = self.feature_result(uid)?.output.as_deref()?;
+        if output.result.is_err() {
+            return None;
+        }
+        output.curve.clone()
+    }
+
+    /// The curves of the Intersection Curves before the marker, in
+    /// timeline order, with their names (mitcad#1405).
+    pub fn feature_curves(&self) -> Vec<FeatureCurveView> {
+        self.state
+            .features
+            .iter()
+            .filter(|entry| matches!(entry.def, crate::features::FeatureDef::IntersectionCurve(_)))
+            .filter_map(|entry| {
+                Some(FeatureCurveView {
+                    uid: entry.uid,
+                    name: entry.name.clone(),
+                    curve: self.feature_curve(entry.uid)?,
                 })
             })
             .collect()
@@ -123,5 +161,11 @@ impl<K: Kernel> Resolver for DocResolver<'_, K> {
             name,
             &label,
         )
+    }
+
+    fn feature_curve(&mut self, feature: FeatureUid) -> Result<Arc<Vec<PathCurve>>, String> {
+        self.document
+            .feature_curve(feature)
+            .ok_or_else(|| format!("{} has no curve at the timeline marker", self.name(feature)))
     }
 }

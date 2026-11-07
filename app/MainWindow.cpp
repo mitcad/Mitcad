@@ -54,6 +54,7 @@
 #include <BRepBndLib.hxx>
 #include <BOPTools_AlgoTools3D.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
 #include <IntTools_Context.hxx>
@@ -147,6 +148,7 @@
 #include "update/UpdateController.hpp"
 #include "report/ReportCenter.hpp"
 #include "view/ModeBanner.hpp"
+#include "view/SmallCirclesPreference.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
 #include "view/ViewTessellation.hpp"
@@ -187,6 +189,19 @@ QString pathOf(const QJsonValue& uids) {
     path << uid.toString();
   }
   return path.join(QLatin1Char('/'));
+}
+
+// An Intersection Curve's polyline (the feature_curves query, mitcad#1405)
+// as a wire; null for fewer than two points.
+TopoDS_Shape polylineShape(const QJsonArray& points) {
+  if (points.size() < 2) {
+    return TopoDS_Shape();
+  }
+  BRepBuilderAPI_MakePolygon polygon;
+  for (const QJsonValue& point : points) {
+    polygon.Add(pointOf(point));
+  }
+  return polygon.IsDone() ? TopoDS_Shape(polygon.Wire()) : TopoDS_Shape();
 }
 
 SelectKind datumKind(const QString& type) {
@@ -475,6 +490,9 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       });
     }
   });
+  // Preferences > Display > Small circles changed (mitcad#879): the shown
+  // bodies' display meshes made again with the new choice.
+  connect(&SmallCirclesNotifier::instance(), &SmallCirclesNotifier::changed, this, [this] { remeshDisplay(); });
   setAcceptDrops(true);
 
   // The project indicator (mitcad#89): the current project, its kind, the
@@ -2926,6 +2944,10 @@ bool MainWindow::takesFeatures() const {
   return m_session && m_session->activeTakes(SelectKind::Feature);
 }
 
+bool MainWindow::takesFeature(const SelectionItem& item) const {
+  return m_session && m_session->activeAccepts(item);
+}
+
 QJsonValue MainWindow::query(const QJsonObject& request) const {
   // A sketch read once per refresh (m_sketchQueries, mitcad#679); each
   // read of the model logged with MITCAD_LOG_TIMING ("sketch query").
@@ -3189,6 +3211,17 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       // A Move Face's moved faces, which keep their names (mitcad#531).
       if (const TopoDS_Shape moved = movedFacesShape(item.owner); !moved.IsNull()) {
         return moved;
+      }
+      // An Intersection Curve's curve (mitcad#1405), as the view draws it.
+      if (feature->type == QStringLiteral("intersection_curve")) {
+        const QJsonArray curves = query({{QStringLiteral("query"), QStringLiteral("feature_curves")}}).toArray();
+        for (const QJsonValue& value : curves) {
+          const QJsonObject curve = value.toObject();
+          if (curve.value(QStringLiteral("uid")).toString() == item.owner) {
+            return polylineShape(curve.value(QStringLiteral("points")).toArray());
+          }
+        }
+        return TopoDS_Shape();
       }
       // The faces the feature made, on the bodies at the marker.
       TopoDS_Compound compound;
@@ -4063,6 +4096,37 @@ void MainWindow::showDatums() {
       construction << (display.occurrence.isEmpty() ? feature->name
                                                     : QStringLiteral("%1 in %2").arg(feature->name, display.occurrence));
     }
+  }
+  // Intersection Curves (mitcad#1405): their curves drawn as lines, with
+  // the construction geometry's light bulbs; a click picks the feature, which
+  // a path input takes.
+  const QJsonArray curves = query({{QStringLiteral("query"), QStringLiteral("feature_curves")}}).toArray();
+  for (const QJsonValue& value : curves) {
+    const QJsonObject curve = value.toObject();
+    const QString uid = curve.value(QStringLiteral("uid")).toString();
+    if (m_constructionHidden || !m_snapshot.featureShown.value(uid, true)) {
+      continue;
+    }
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+    if (feature != nullptr && m_snapshot.kindHidden(*feature)) {
+      continue;
+    }
+    DatumDisplay display{uid, SelectKind::Feature, polylineShape(curve.value(QStringLiteral("points")).toArray())};
+    display.occurrence = placingOccurrence(uid);
+    // Picked as the curve (mitcad#1417): the sketch's Project and Intersect,
+    // Rib and Web take it, not other features.
+    display.geometry = featureCurveGeometry();
+    if (!display.occurrence.isEmpty()) {
+      if (!m_snapshot.isOccurrenceShown(display.occurrence)) {
+        continue;
+      }
+      if (!display.shape.IsNull()) {
+        display.shape = display.shape.Moved(placementOf(display.occurrence));
+      }
+    }
+    datums.push_back(display);
+    const QString name = feature != nullptr ? feature->name : uid;
+    construction << (display.occurrence.isEmpty() ? name : QStringLiteral("%1 in %2").arg(name, display.occurrence));
   }
   m_viewer->setDatums(datums);
   // For UI tests (mitcad#1287): the construction planes, axes and points

@@ -3031,7 +3031,7 @@ same: within 0.0015 mm about both holes, the material added 2.554251 mm³.
 |---|---|---|
 | `d498ea9d` 63 Fillet22 | 1 / 1 parametric, verified, edges read by their names (1530); new faces within 0.0015 mm of the file's | |
 | `eecf90bd` 63 Fillet22 | 1 / 1 parametric, verified, edges read by their names (1530); new faces within 0.0015 mm of the file's | |
-| `d498ea9d`, `eecf90bd` final body of item 63 | 207 / 203 faces; volume 2.9e-6 relative (0.033 mm³) above the file's | four faces more: each of the four ends is the walked piece and the cut piece where the file has one face; the volume: item 62 takes 0.026 mm³ less than the file (14.122420 against 14.148857 mm³ on its stored input), item 63 adds 0.006 mm³ more; before, item 63's fallback took the stored body |
+| `d498ea9d`, `eecf90bd` final body of item 63 | 207 / 203 faces; volume 2.9e-6 relative (0.033 mm³) above the file's | four faces more: each of the four ends is the walked piece and the cut piece where the file has one face (one face since mitcad#1418, below); the volume: item 62 takes 0.026 mm³ less than the file (14.122420 against 14.148857 mm³ on its stored input), item 63 adds 0.006 mm³ more; before, item 63's fallback took the stored body |
 
 Both designs imported alone (release build, OCCT with the port's patches
 through 1500 and 1530): 99 / 11 / 10 → 100 / 10 / 10 of 120 (parametric /
@@ -3039,3 +3039,526 @@ fallback / skipped), 68 → 69 verified; no other item changed. Test:
 `geometry.fillet_tight_tangent_end` on the case `hub-foot-tight-rim-ends`
 of `MITCAD_GEOMETRY_CASES` (OCCT's fillet cannot make the holes' earlier
 rim roundings on a body of its own solids: no synthetic body).
+
+## A lid's rims rounded through the mitres of roundings of their radius (mitcad#1412)
+
+`6f05020f` item 8 (Fillet2, radius 1 on the lid's two rims), left by
+mitcad#1397. Traced with the dressup dump of item 8 (the replay's body
+before it, the stored states before and after it) and OCCT's fillet
+alone, TKFillet built from the port with probes.
+
+- **The chains.** A D-shaped post under a lid: a cone (45 degrees, radius
+  20 at z = 25 to 23 at z = 28), a cylinder of 23 up to the top at z = 30,
+  cut by the plane y = 0. Item 7 rounded the edges with the flat side with
+  1: at each end a vertical cylinder (axis 1 inside the flat side), a
+  cylinder along x under the top and a walked rounding between the flat
+  side and the cone, which meet in mitres. Each rim's tangent chain runs
+  past a short edge (the cone's with the vertical cylinder, 0.014 mm; the
+  top's, an arc of 0.045 mm) through the mitre to the flat side.
+- **The file's corners.** A torus of 22 / 1 along each rim and at each
+  corner a sphere of 1 centred on the vertical cylinder's axis where the
+  torus's centre circle meets it: (±21.977, 1, 28.414), 0.818 mm², and
+  (±21.977, 1, 29), 1.616 mm² (pi / 2 + asin(1 / 22)). Over the short edge
+  and the mitre the ball stays put, its centre on both earlier roundings'
+  axes.
+- **The fault** (on the replay's body and on the stored body alike). The
+  rounding's conditions leave a ball that stays put between two tubes of
+  its radius a freedom (a singular Jacobian), along which every solver
+  slid: the walk's start was reframed past the guide's end, its contacts
+  ran out of their faces or stood still. With the section taken in the
+  guide's normal plane (a first round of 1520) the cone rim
+  walked, but its approximation took the walk's points solved again (they
+  slid) and its ends, found otherwise, a little apart along the tubes: it
+  cut the sections up to its limit and ended 0.0146 off the contact (an
+  invalid p-curve). At the top the short arc between the top and the
+  vertical cylinder was a particular case, a torus of no tube circle (a
+  sphere piece touching the top at one point); the walked piece after it
+  took the top for its second face and could not leave it.
+- **Port patches 1520 and 1521**
+  (`third_party/vcpkg-ports/docs/fillet-stationary-ball-1520.md`): the
+  walk, its start and the approximation take the section in the guide's
+  normal plane, the approximation at every parameter and with the
+  parameters along the tubes of one point of the walk; a contact that
+  stays where it was on its face's edge has not left the face; the short
+  arc at the top is walked with the mitre (no particular case where the
+  torus would have no tube circle); a contact that is one point runs along
+  no edge.
+
+On the replay's body before the item both rims round, valid: every face
+of the result within 2.5e-4 mm of the stored body after the item and the
+stored body's within 2.5e-4 mm of the result, the volume 0.0103 mm³ above
+the stored body's; the corner pieces lie on the ball's spheres within
+2.5e-6 mm. On the stored body before the item the top rim builds and the
+cone rim does not: the file's walked rounding there is no tube of the
+ball's radius within the patch's thousandth at the walk's start (the
+centre seen from the contact moves at 2.4 % of the contact's speed, on
+the replay's rounding at 1.5e-5), so its ball is not seen as staying put.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `6f05020f` 8 Fillet2 | 1 / 1 parametric, verified (change of volume as the file's), edges read by their names (1520, 1521) | |
+| `6f05020f` final Body1 | 48 / 47 faces; volume 2.6e-8 relative from the file's | one corner's sphere piece (the top rim's at x > 0) is two faces, split along a section of the piece; the file's is one |
+
+The design imported alone (release build, OCCT with the port's patches
+through 1521): 11 / 0 / 1 / 0 → 12 / 0 / 0 / 0 of 12 (parametric /
+partial / fallback / skipped), items 9 to 11 after it verified on the
+replay's bodies. Test: `geometry.fillet_stationary_ball` (synthetic lids,
+and the case `lid-rim-stationary-ball` of `MITCAD_GEOMETRY_CASES`).
+
+## One face at each end of the hub's foot rounding (mitcad#1418)
+
+The follow-up of mitcad#1413: with port patch 1530, `d498ea9d` and
+`eecf90bd` item 63 gave each of its four ends at the smaller holes two
+faces where the stored body has one B-spline face (the final body 207
+faces against the file's 203).
+
+- **The pieces.** The stripe's last walked piece runs from the section
+  where the contact on the flange reaches the rim's torus up to the section
+  through the crossing onto the B-spline face along the foot (1.14 along
+  the spine); 1530 walked the blend on from that piece's end section over
+  the torus's surface, cut it by the B-spline face, and kept the two
+  pieces on surfaces of their own. Both are the same ball of 1 rolling
+  between the hub and the torus's surface (within the torus face before
+  the crossing, beyond it after): one surface through both, as the file's
+  face.
+- **Port patch 1540**
+  (`third_party/vcpkg-ports/docs/fillet-tight-tangent-end-1530.md`): at
+  such an end the blend is walked from the last piece's other end on
+  through the crossing to the end (its contact line passes within 2.3e-6
+  mm of the piece's end point on the torus's edge); the piece becomes that
+  walk up to the section through the crossing and the cut piece the rest,
+  on the same surface, which OCCT's fillet builds as one face. Where that
+  walk does not pass through the crossing, the ends stay as with 1530.
+
+On the stored body before the item: 203 faces as the stored body after it;
+each end's face 1.599877 mm² against the stored body's 1.599638 and
+1.599010; the result on the stored body within 0.0014 mm and back within
+0.0014 mm about both holes. On the replay's body (item 62's result) the
+same faces and areas, within 0.0015 mm both ways about both holes.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `d498ea9d` 63 Fillet22 | 1 / 1 parametric, verified, edges read by their names; four ends 4 / 4 one face as the file's, within 0.0015 mm | |
+| `eecf90bd` 63 Fillet22 | 1 / 1 parametric, verified, edges read by their names; four ends 4 / 4 one face as the file's, within 0.0015 mm | |
+| `d498ea9d`, `eecf90bd` final body of item 63 | 203 / 203 faces (511 edges, 515 before); volume 2.9e-6 relative (0.033 mm³) above the file's | the volume: item 62 takes 0.026 mm³ less than the file (mitcad#1419), item 63 adds 0.006 mm³ more |
+
+Both designs imported alone (release build, OCCT rebuilt from the port
+with 1530 and 1540): 100 / 10 / 10 of 120 (parametric / fallback /
+skipped), 69 verified, as before; the final bodies differ from the file's
+only in the volume above. Test: `geometry.fillet_tight_tangent_end` checks
+each end's face against the stored body's area (within 1 %) and the
+result's number of faces (207 without 1540).
+
+## A boss's rim rounded down to its foot's rounding (mitcad#1419)
+
+`d498ea9d` and `eecf90bd` item 62 (Fillet21, radius 1.5 on one edge: the
+top rim of a boss of radius 5 that stands 2 high on a plate), the
+remainder of mitcad#1413: with item 63 parametric, item 62's deviation
+reached the final body. The plate covers only part of the boss's foot,
+which an earlier item rounded with 0.5 where the plate is; past the
+plate's side the boss's wall runs on. Traced with the dressup dump
+(`MITCAD_IMPORT_DRESSUPS_ITEMS` naming items 61 to 63; item 61 falls
+back, so its stored state is item 62's input) and OCCT's fillet alone on
+the stored state before the item.
+
+- **The file's rounding.** The rim's torus (R 3.5, r 1.5) all round, the
+  material taken the whole rim's rounding (14.152911 mm³; the formula
+  14.152809). Its contact on the wall, 0.5 above the plate, runs along
+  the foot rounding's edge where the plate is: there the two roundings
+  share that edge, and the wall keeps only its part past the plate's side
+  (one face of 25.929328 mm²).
+- **First deviation: the wall's strip of no width.** OCCT's analytic blend
+  is one piece along the whole circle (0014 hatches a contact on its
+  face's boundary a little inside the face). The wall was cut along the
+  whole circle and kept the strip between it and the foot rounding's
+  edge, of no width: its wire held both and intersected itself, and the
+  shape was not valid. The closed contact's start on the wall's seam was
+  cut 1e-4 above the contact (the moved line's parameter), a gap in the
+  wire. OCCT alone on the stored body took 14.147664 mm³ (5.2e-3 short);
+  the import's result (the invalid shape repaired) 14.125564, 0.027 short,
+  every face on the file's surfaces: no radius, edge set or construction
+  differed.
+- **Port patch 1560**
+  (`third_party/vcpkg-ports/docs/fillet-rim-down-to-foot-1560.md`): the
+  contact is split at the ends of the edge it runs along, the part along
+  the edge a blend on that edge with the foot's rounding beyond it; the
+  seam is cut at the contact's own point.
+
+On the stored body before the item: valid, the material taken 14.152982
+mm³ against the file's 14.152911 (5.0e-6 relative), every new face on the
+file's within 1e-6 mm (the wall's rest as two faces split at its old seam,
+24.745720 and 1.183608 mm², where the file has one; the import's result
+has the file's faces). In the import of both designs item 62's result
+lies on the stored body after it within 8e-9 mm (3.2e-6 before), its
+volume 5e-5 mm³ off the file's (0.027 before).
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `d498ea9d` 62 Fillet21 | 1 / 1 parametric, verified, edges read by their names (1560); volume 5.0e-6 relative off the file's on its stored input (target 1e-4); new faces within 1e-6 mm of the file's (target 0.01) | |
+| `eecf90bd` 62 Fillet21 | 1 / 1 parametric, verified (1560); the same | |
+| `d498ea9d`, `eecf90bd` final body of item 63 | 207 / 203 faces; volume 5.2e-7 relative (0.006 mm³) above the file's, 2.9e-6 (0.033 mm³) before | the four ends of mitcad#1413 (the walked piece and the cut piece where the file has one face) and item 63's 0.006 mm³ more; item 62 now takes the file's volume |
+
+Both designs imported alone (release build, OCCT with the port's patches
+through 1530 and 1560): 100 / 10 / 10 of 120 (parametric / fallback /
+skipped), 69 verified, as with 1530 alone; no item changed outcome. Test:
+`geometry.fillet_rim_down_to_foot` (synthetic: the boss on a plate whose
+side cuts its foot, fails without 1560).
+
+## A lid's corners one face each, and its rims on the stored body (mitcad#1420)
+
+The rest of mitcad#1412: `6f05020f`'s final body had 48 faces against the
+file's 47, and the cone rim of item 8 failed on the stored body before the
+item. Traced with OCCT's fillet alone (TKFillet built from the port with
+probes) on the replay's body before the item and on the stored body before
+it (the dressup dump of item 8).
+
+- **The corner in two faces.** Both top corners came out as two faces,
+  0.026460 and 1.590495 mm² (the stored sphere piece: one face of
+  1.616266 mm²). The walk over the short arc and the mitre was one piece;
+  `ChFi3d_FilBuilder::SplitSurf` split it at the arc's end (spine 1.923757
+  of 1.955569), where the contacts lay 1.414 apart. It splits a walked
+  blend whose contacts came close (here at the mitre's end on the flat
+  side) at the minima of the distance between the contacts, and kept every
+  minimum: its test took the derivative of half the squared distance,
+  nought at any minimum, for the distance. A ball that stays put keeps its
+  contacts a constant distance apart, and the walk's noise made a minimum
+  of it. Port patch 1522 splits only where the contacts meet (within the
+  distance the walk took for singular): each corner one face of
+  1.615949 mm².
+- **The stored body's cone rim.** The stored rounding between the flat
+  side and the cone is a B-spline whose sections' curvature ripples by a
+  few hundredths about the ball's: measured on a grid of its face, the
+  centre seen from a point moves at 0.24 % to 2.5 % of the point's speed
+  round the section (1.5e-5 on the replay's rounding), and the centres lie
+  within 1.6e-3 mm of one axis. 1520's test (a thousandth) did not see the
+  ball as staying put; seen as staying put, the centres seen from the two
+  contacts lie up to 1.4e-3 mm apart, which the walk's tolerance (1e-4)
+  refused. Port patch 1523 takes a support for a tube of the ball's radius
+  where the centres seen from its section's points up to half the radius
+  away lie within 5e-3 mm (at most R / 200) of the contact's, and accepts
+  such a ball's sections with their centres within that tolerance; exact
+  tubes and every other walk are as before.
+
+On the stored body before the item both rims round, valid, with the stored
+body's 24 faces after it, within 2.1e-4 mm of it both ways, the volume
+0.0083 mm³ below the stored body's; on the replay's body likewise (24 / 24
+faces, within 2.5e-4 mm, 0.0054 mm³ below).
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `6f05020f` 8 Fillet2 | 1 / 1 parametric, verified, edges read by their names; builds on the stored body before it too | |
+| `6f05020f` final Body1 | 47 / 47 faces; volume 2.6e-8 relative from the file's | |
+
+The design imported alone (release build, OCCT with the port's patches
+through 1523): 12 / 0 / 0 / 0 of 12 (parametric / partial / fallback /
+skipped), as before. Test: `geometry.fillet_stationary_ball` (each corner
+one face; the case `lid-rim-stationary-ball` with the replay's body and,
+where the case has it, `stored-before.brep`, the stored body before the
+item, each with the stored body's faces after it).
+
+## A wall's edges rounded past a concave corner into a tip (mitcad#1425)
+
+`5d6ee474` item 88 (Fillet45, radius 5, six edges in two chains), with
+the same item in `36f79fb9` and `81beaf7b` (copies of the design) and in
+`9cef13ca` (which refers to `36f79fb9`'s design and imports it with it).
+Found among the rounding specs of mitcad#1398 ([rounding-specs.md](rounding-specs.md),
+`T88-24` to `T88-29`); the input is the stored body of the history's state
+58 (the spec's input and its stored state before agree exactly), so the
+cause is in OCCT. Traced with OCCT's fillet alone (TKFillet built from the
+port with probes) on that body.
+
+- **The file's construction.** A bar's front wall runs from a boss, which
+  it meets through a concave rounding of 3 (a torus), to a concave corner
+  rounded with 3 (a cylinder about the vertical) that turns it into the
+  side of the hook's tip. The tip's top and bottom edges are rounded with
+  4; that rounding goes on round the corner up to the wall as a corner
+  patch (a B-spline tangent to the wall, the corner's cylinder and the
+  tip's rounding). The bar's top and bottom slope by 2.2 degrees to the
+  tip's and meet them along creases. Each chain runs along the torus's
+  edge with the bar's top (or bottom), the wall's edge and the corner
+  patch's edge up to the crease. At the boss the rounding vanishes where
+  the torus comes tangent to the top (a face with a degenerated edge). At
+  the crease the stored body has one face from the end of the wall: the
+  ball rolling between the corner's cylinder and the bar's top plane,
+  both continued past their faces (each section's centre 8 from the
+  cylinder's axis and 5 under the plane within 0.001 mm), cut by the
+  tip's top beyond the crease, the corner patch (a sliver of 0.36 mm² of
+  it is left), the tip's rounding of 4 and the tip's side.
+- **First deviation.** OCCT's walk was the file's up to the end of the
+  wall and round the cylinder (its contacts within 0.0003 mm of the
+  file's edges). The contact on the top crosses the crease 0.7 before the
+  chain's end vertex, and the walk ran it on over the top's plane (OCCT's
+  own end handling). The contact on the cylinder reaches the cylinder's
+  edge with the tip's side 3 past the vertex; there the walk went on along
+  the tip's side (a face that goes on from the cylinder), the other
+  contact standing on the crease, and the corner at the vertex walked the
+  cylinder's boundary for the vertex, which it does not hold: "the walk
+  round the vertex along the faces at the end does not come back to the
+  rounding". With that fixed, the cut on the tip's rounding of 4 took the
+  way round its loop with the blend outside the face (0.27 mm off).
+- **Port patches 1580 and 1581**
+  (`third_party/vcpkg-ports/docs/fillet-run-on-past-the-end-1580.md`): a
+  contact that has run off the spine's faces and leaves its face past the
+  spine's end, after the other contact left its face into a face at the
+  end, ends on its edge, and the blend is walked on over both faces'
+  surfaces; the faces at the end are found round the vertex from the first
+  face along the way that holds it; an end's cut whose middle lies outside
+  its face is computed again on the face's own domain.
+
+On the stored body before the item, both chains: valid and closed, the
+stored body's 127 faces; about each end the result on the stored body and
+the stored body on it within 0.0007 mm, along each chain within 0.0036 mm
+(the torus's vanishing ends, fitted in the file); the change of volume
+-200.2687 against the file's -200.2866 mm³ (OCCT's volume, 9e-5); through
+the dressup (`mitcad-rounding-specs`, `T88-24`) NEAR, 5.6e-6 from the
+file's change. `T88-29`, a later candidate (nine edges, found against the
+history's state 59), still fails in the walk; the import takes `T88-24`.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `5d6ee474` 88 Fillet45 | 1 / 1 parametric, verified, edges read by their names in the file (1580, 1581); new faces within 0.0036 mm of the file's (target 0.01) | |
+| `36f79fb9` 88 Fillet45 | 1 / 1 parametric, verified, read; the same | |
+| `81beaf7b` 88 Fillet45 | 1 / 1 parametric, verified, read; the same | |
+| `9cef13ca` (the referred design's item 88) | 1 / 1 built: the import of `9cef13ca` dumps no failed definition of item 88 any more (six before) | |
+| `5d6ee474`, `36f79fb9`, `81beaf7b` Body2 | 128 / 128 faces; volume 4.7e-8 relative below the file's (2.0e-9 while item 88 held the stored body) | |
+
+The designs imported alone (release build, OCCT with the port's patches
+through 1560, 1580 and 1581): `5d6ee474`, `36f79fb9`, `81beaf7b` each 61 /
+0 / 3 / 3 of 67 features (parametric / partial / fallback / skipped, 60 /
+0 / 4 / 3 before), 57 verified (56), inputs 60 read and 1 inferred; their
+26 sketches, components and other items as before; `9cef13ca` as before
+(20 / 0 / 0 / 1 of 21). Test: `geometry.fillet_torus_side_ends` (the case
+`fillet-torus-side-ends`, the stored bodies before and after the item;
+fails without 1580 and without 1581). No synthetic body: the corner patch
+is the end of an earlier rounding that fades into the wall tangentially,
+which OCCT's own fillet does not make.
+
+## A cut face's outline rounded past a tube's rims tighter than the ball (mitcad#1426)
+
+`6eccefc2` item 11 and `c23a90e7` item 12 (Fillet7, radius 1.5, two
+chains of eight edges), found among the rounding specs of mitcad#1398
+([rounding-specs.md](rounding-specs.md), `T11-4` to `T11-16`, `T12-0` to
+`T12-10`). The rounding's computation failed on the replay's bodies and
+on the stored bodies alike (the class "an exception in a rounding's
+computation" of [f3d-rounds-2.md](f3d-rounds-2.md), the rational
+sections' weights), so the cause is in OCCT. Traced with OCCT's fillet
+alone (TKFillet built from the port with probes) on the specs' bodies.
+
+- **The file's construction.** A tube (bore 25, outside 30, 30 long; the
+  second design's 20 and 25) is cut by the plane y = -10; its four rims
+  are rounded with 1 (tori). The item rounds the outline of each cut face
+  with 1.5: the face's lines on the two end planes, the outside and the
+  bore, and its arcs on the rims' tori, one tangent chain. At the bore's
+  rims (the bore's edge with the cut face acute) the stored body ends the
+  roundings along the end plane and along the bore where their axes cross
+  and closes the corner with a vertex blend (a cubic B-spline, 2.435 mm²)
+  and a torus about the bore's rounding's axis (major radius 0.5, minor
+  1, 0.583 mm²): the construction of port patch 0970, the bore in the
+  place of a leaning wall. At the outside's rims (the edge obtuse) the
+  ball touching the cut face, the end plane and the outside lies clear of
+  the rim; the end plane's rounding runs on past the corner to the rim's
+  meridian through its contact, the outside's down to 1.0228 above the
+  end plane, and a strip (0.524 mm²) and a triangle (1.619 mm²) close the
+  corner: every point of them is 1 from a centre 0.5 from the end plane's
+  rounding's axis and 1 inside the outside (the strip) or 0.5 from the
+  outside's rounding's axis (the triangle), the rim's own ball rolled on
+  between the outside and the end plane's rounding, then between the two
+  roundings, down to where their contacts on the cut face meet.
+- **First deviation.** No ball of 1.5 rolls round a rim of 1: OCCT walked
+  the chain over the torus and the approximation of the walk threw. Patch
+  0970 splits a chain at such a corner only where the corner is a
+  cylinder between two planes and the other wall's edge is square or
+  acute.
+- **Port patch 1590**
+  (`third_party/vcpkg-ports/docs/fillet-tight-rim-corner-1590.md`): the
+  chain is split at a rim's torus as at 0970's corner; where the other
+  wall's edge with the face is acute (or square), 0970's vertex blend and
+  torus close the corner with that wall a cylinder; where it is obtuse,
+  the ends walk on past their vertex, are not cut by the face at the end,
+  and patch 1380's strip and triangle (the rim's own ball, here inside
+  the material) close it.
+
+On the stored body before the item: valid, the stored body's 73 faces,
+about the outlines the result on the stored body and the stored body on
+it within 0.0057 mm (the vertex blends; the strips, triangles and tori
+within 0.0004 mm), the material taken 83.349390 against the file's
+83.349888 mm³; through the dressup (`mitcad-rounding-specs`, `T11-15`)
+NEAR, 6.0e-6 from the file's change. On the replay's body of `c23a90e7`
+(`T12-0`): NEAR, 1.7e-4.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `6eccefc2` 11 Fillet7 | 1 / 1 parametric, verified, edges read by their names in the file (1590); new faces within 0.0057 mm of the file's (target 0.01) | |
+| `c23a90e7` 12 Fillet7 | 1 / 1 parametric, verified, read; the same | |
+| `c23a90e7` Body1 | 82 / 82 faces; volume 7.2e-7 relative above the file's (equal while item 12 held the stored body) | |
+| `6eccefc2` Body1 | 69 / 73 faces; volume 1.8e-5 relative below the file's, 0.26 mm off (equal while item 11 held the stored body) | item 8 (Fillet3, radius 1.5, parametric and verified) builds four corners of the other tube's ends without the file's horn tori (major and minor radius 1.5; its check: 4 of the file's new faces up to 0.112 mm off); the replay's body before item 11 has 45 faces against the stored 49, and item 11's own faces are the file's within 0.0004 mm |
+
+The designs imported alone (release build, OCCT built from the port with
+its patches through 1590): `6eccefc2` 8 / 0 / 0 / 1 of 9 features
+(parametric / partial / fallback / skipped, 7 / 0 / 1 / 1 before), 8
+verified (7), inputs 7 read and 1 inferred; `c23a90e7` 9 / 0 / 0 / 1 of 10
+(8 / 0 / 1 / 1 before), 9 verified (8), 8 read and 1 inferred; both
+designs' 3 sketches as before. Test: `geometry.fillet_tight_rim_corner`
+(the tube of the case, a block with an obtuse front wall, and the case
+`tube-rim-tight-corners`: the stored bodies before and after the item;
+fails without 1590).
+## An opening's wall rounded through the corners of earlier roundings (mitcad#1427)
+
+`c4e070f9` item 8 (Fillet2, radius 0.2), found among the rounding specs of
+mitcad#1398 ([rounding-specs.md](rounding-specs.md), `T8-0` to `T8-7`).
+The replay's body before the item lies within 1.6e-7 mm of the history's
+stored state 6 about the item, so the cause is in OCCT. Traced with OCCT's
+fillet alone (TKFillet built from the port with probes) on that body.
+
+- **The file's construction.** A plate 10 thick (the base body) whose top
+  and bottom rims are rounded with 0.2: along a side P, cylinders that go
+  on into tori along arcs, and along a cylinder of 5, tori of 4.8 / 0.2. A
+  later extrusion (Extrude2) adds a face X, an extrusion of such a torus's
+  section tangent to the top, next to the side's rounding; then an
+  opening (Extrude3) cuts the plate with a plane wall W that meets the
+  top, the bottom, the cylinder of 5 (a convex crease of 28 degrees), the
+  side P (a crease of 3.5 degrees) and the roundings and X between them.
+  Item 8 rounds W's whole edge loop (twelve edges) with 0.2. The stored
+  body after it: along the top and the bottom one cylinder each between
+  W and the plate's face, vertical cylinders along the cylinder of 5 and
+  along P, and at each of the four corners a piece of a sphere of 0.2
+  whose centre lies R from W and the two faces it meets there, on the
+  earlier rounding's centre line (the torus's centre circle on the
+  cylinder's side, the side's rounding's axis on P's side): the ball of
+  0.2 stays put in the earlier rounding's tube there. On P's side the
+  rounding along the top runs straight on, past where W's edge with the
+  top ends, to that ball; X, the torus's part at the corner and the edges
+  between lie under the ball and are gone. 169 faces; the change of
+  volume -0.052871 mm³ against the input.
+- **First deviation.** W's boundary turns where its edge with X meets its
+  edge with the torus (X and the torus meet at a crease), at the top and
+  at the bottom: OCCT makes two contours, A (X, the top, the cylinder's
+  side, the bottom, the bottom's X) and B (the bottom's torus and
+  rounding, P, the top's rounding and torus). B's walk is the file's: the
+  vertical cylinder along P, the ball staying put over the side's rounding
+  (a piece of the sphere). A's ball rolls on the top and W (its contact
+  passes over X onto the top) up to a section 0.165 mm short of the
+  ball's centre, and the corner at each of the two vertices
+  (PerformTwoCorner) failed: "BRep_Tool:: no parameters on surface" (the
+  spec's "an edge at the vertex has no curve on a face the corner takes it
+  on"; the first candidate, `T8-0`, A's seven edges alone, "the corner's
+  computation gives no result" at the same vertices). Beyond that, on the
+  cylinder's side A's walk over W's edge with the top's torus stopped where
+  its contact on W reached the vertical piece's first point (1301), with
+  the ball's quarter turn round the torus's section still to go: that part
+  of the ball was missing, and the build of the result failed on the gap.
+- **Port patches 1600 and 1601**
+  (`third_party/vcpkg-ports/docs/fillet-still-ball-corners-1600.md`): a
+  walk ends at the next analytic piece only where its other contact lies
+  within a tenth of that piece's section too; two stripes of one radius at
+  a vertex, one with a section on the other's cylinder run on, past which
+  its spine runs between W and tubes of the radius about curves through
+  that section's centre, meet there: the cylinder run on, the pieces past
+  it dropped, the points and the section's edge shared.
+
+On the replay's body before the item, W's twelve edges: valid and closed;
+every new face within 8e-6 mm of the stored body after the item, its faces
+within 7e-6 mm of the result (about the opening both ways within 1.2e-5
+mm); the change of volume about the opening -0.053109 against the file's
+-0.053108 mm³ (of the whole body -0.053063 against -0.052871, the
+difference the replay's own outside the item: faces of other features 1e-4
+to 2.7e-4 mm off the stored body's). Through the dressup
+(`mitcad-rounding-specs`): `T8-1` (four edges found against the history's
+state 7, whose chains take the loop) and `T8-6` (the loop's twelve edges)
+build the stored body's 169 faces, the change 1.1e-3 from the file's
+(OFF only by that difference of the input); `T8-0` (the seven edges named
+in the file: A alone, whose chain OCCT ends at the two vertices) and
+`T8-7` (fourteen edges, X's creases with the tori among them) still fail.
+The import takes `T8-1`.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `c4e070f9` 8 Fillet2 | 1 / 1 parametric, verified (1600, 1601); new faces within 1.2e-5 mm of the file's (target 0.01) | the edges inferred (the history's state 7), not read: the seven edges the file names stop at the two vertices where W's boundary turns, while the file's rounding takes the whole loop |
+| `c4e070f9` Body1 | 170 / 170 faces; volume 2.0e-8 relative above the file's (4.5e-16 while item 8 held the stored body) | |
+
+The design imported alone (release build, OCCT with the port's patches
+through 1581, 1600 and 1601): features parametric 12 / 12 (11 before, item
+8 fell back), verified 8 / 8 (7), inputs 9 read and 1 inferred (item 8),
+sketches 2 / 2 parametric, the body exact. Test:
+`geometry.fillet_still_ball_corners`: a D-shaped block whose wall's edges
+are rounded through its top rim's torus (synthetic, 1600; it threw or made
+an invalid body without), and the case `fillet-opening-still-corners`, the
+replay's body before the item and the stored body after it (fails without
+1600 and without 1601). No synthetic body for 1601: the turn of W's
+boundary comes from a later feature's face over the end of an earlier
+rounding.
+## A groove's rim rounded past a corner of the ball's radius (mitcad#1428)
+
+`09c282ac` item 22 (Fillet13, radius 0.5, twelve edges in four chains).
+Found among the rounding specs of mitcad#1398 ([rounding-specs.md](rounding-specs.md),
+`T22-0` to `T22-5`, "the rounding's surface twists"); the input is the
+replay's body before the item, which lies on the history's stored body of
+state 16 within 1e-6 mm about the item (four earlier roundings far from it
+differ by up to 3.1e-4 mm). Traced with OCCT's fillet alone (TKFillet built
+from the port with probes) on the input and on the stored body.
+
+- **The file's construction.** Two legs, each a profile extruded along z: a
+  flange whose top y = 5 meets a slanted side through a convex corner
+  rounded with 0.5, the slanted side meeting the leg's side x = 3 (x = 17
+  on the other leg) through a convex corner rounded with 2, and above the
+  flange a wall x = 0 (x = 20). A groove, a concave cylinder of 12.5 along
+  x, is cut across both legs. The item rounds the groove's edges with the
+  wall, the side, the slanted sides and the roundings of 2 with 0.5; the
+  flange's top and its corner rounding join the chain as tangent edges (the
+  edge with a chamfer of the flange at the far end does not). In the
+  stored body after the item, every new face lies on the rolling ball's
+  envelope (its centre 13 from the groove's axis): a torus along each
+  wall's arc and along each side, a cylinder along the flange's top, a
+  piece of the ball's sphere (0.676 mm2) where the chain runs over the
+  corner rounded with 0.5 (the ball's centre stays on that corner's axis
+  while its contact sweeps round it), B-splines over the slanted sides and
+  the roundings of 2. Where the wall's arc meets the flange's top, the
+  cylinder runs on to x = 0.5 and it and the wall's torus are cut along
+  their intersection. The item removes 7.23 mm3 (16 new faces, 156 in all).
+- **First deviation.** OCCT's sphere piece (port patch 0670) went from the
+  corner's start to spine parameter 11.66, far down the chain round the
+  rounding of 2, instead of 3.86: the section where the walk goes on from
+  the ball was taken as the last root of the contacts' mid-point's distance
+  from the guide's normal plane, and the guide, turning round the rounding
+  of 2, swings its normal plane back through the ball there. The walk over
+  the slanted side started from that section against the guide: "twisted".
+  With one chain only (the specs `T22-1` to `T22-4`) the same walk failed
+  in the other legs' chains or left them out (0.89 mm3 removed). With that
+  fixed, the corner at the wall was filled with a plate 0.049 mm off the
+  roundings: `PerformTwoCornerbyInter` cut the cylinder by the wall from the
+  point where the torus's contact on the wall crosses it, found on the
+  contact's circle at parameter -0.069, and looked for it again on the
+  circle's p-curve cut to [0, 2 pi].
+- **Port patches 1610 and 1611**
+  (`third_party/vcpkg-ports/docs/fillet-groove-rim-corners-1610.md`): the
+  walk goes on from a standing ball's sphere only at a section where the
+  guide's normal planes pass the ball forwards; the crossing roundings' cut
+  takes a periodic p-curve over the parameters about the crossing.
+
+On the stored body before the item: valid and closed, the stored body's
+156 faces, every new face on the ball's envelope within 1e-5 mm, the
+result on the stored body and the stored body on it within 0.0013 mm.
+The stored body's faces over the roundings of 2 are approximations (the
+ball's centre seen from them up to 0.0006 mm off the envelope, their edges
+with the roundings of 2 with p-curves 0.0013 mm off their curves): the
+distance between the result's new faces and the file's, integrated over
+them, is 0.0020 mm3 (2.8e-4 of the item's change, the result keeping that
+much more); the volume integrals of the stored body are off by about 0.01
+mm3 at those edges, so the change of volume measured by the bodies'
+volumes (`mitcad-rounding-specs`, `T22-0`: 1.9e-3, OFF) does not tell it.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `09c282ac` 22 Fillet13 | 1 / 1 parametric, verified (1610, 1611); new faces within 0.0013 mm of the file's (target 0.01); the change of volume within 2.8e-4 of the file's by the faces (target 1e-4) | the volume: the file's own approximation of the faces over the roundings of 2 (up to 0.0013 mm off the exact rounding, which the result follows within 1e-5 mm) |
+| `09c282ac` 22 inputs | 0 / 1 read, 1 inferred (the edges the history's state 17 takes away, the file's twelve) | the file names leg 2's edge with its rounding of 2 as two edges, split where that cylinder's seam crosses it; the replay's cylinder has its seam elsewhere and one edge there, and the lookup by name takes a file edge made of replay edges but not one that is part of a replay edge (follow-up) |
+| `09c282ac` Body1 | 180 / 180 faces; volume 1.7e-6 relative below the file's (0.0145 mm3; 8e-16 while item 22 held the stored body) | the item's result keeps the exact rounding where the file's approximates it (above) |
+
+The design imported alone (release build, OCCT with the port's patches
+through 1581, 1610 and 1611): 25 / 0 / 0 / 1 of 26 items (parametric /
+partial / fallback / skipped; 24 / 0 / 1 / 1 before; the skipped item is
+suppressed in the file), every built feature verified, the history's
+states matched 19 of 20 (18), inputs read 17 / 19 of the built features
+(item 22 and, as before, Extrude5 inferred); its 6 sketches as before. Test:
+`geometry.fillet_groove_rim_corners` (a synthetic leg, and the case
+`groove-rim-corners`, the stored bodies before and after the item; fails
+without 1610 and without 1611).

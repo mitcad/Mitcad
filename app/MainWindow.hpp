@@ -334,6 +334,7 @@ public:
   void createSketchOn(const SelectionItem& plane) override;
   void pickItems(const Selection& items) override;
   bool takesFeatures() const override;
+  bool takesFeature(const SelectionItem& item) const override;
   void lookAt(const SelectionItem& item) override;
   void showNamedView(const QString& view) override;
   void saveNamedView(const QString& name, bool replace) override;
@@ -589,6 +590,10 @@ private:
 
   void recompute();
   void showBodies();
+  // The shown bodies' display meshes made again and drawn anew, once the
+  // model is idle (Preferences > Display > Small circles changed,
+  // mitcad#879; MainWindowDisplayMeshes.cpp).
+  void remeshDisplay();
   void showProfiles();
   void refreshAutoselect();
   void showSketches();

@@ -2464,6 +2464,15 @@ void OcctViewer::setComponentColors(bool on) {
   sceneChanged();
 }
 
+void OcctViewer::redrawBodies() {
+  for (auto& [key, entry] : m_bodies) {
+    removeBody(entry);
+    entry.occluder.reset(); // its faces' triangles anew when next asked
+    showBody(entry);
+  }
+  sceneChanged();
+}
+
 void OcctViewer::setVisualStyle(VisualStyle style) {
   if (style == m_visualStyle) {
     return;
@@ -2812,7 +2821,8 @@ void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
     }
     occ::handle<AIS_Shape> object = new AIS_Shape(datum.shape);
     PickInfo info;
-    info.item = {datum.kind, datum.uid, QString(), SelectionItem::kindName(datum.kind)};
+    info.item = {datum.kind, datum.uid, QString(),
+                 datum.geometry.isEmpty() ? SelectionItem::kindName(datum.kind) : datum.geometry};
     info.item.occurrence = datum.occurrence;
     markInactive(object, isInactiveItem(info.item)); // pale outside the active component (mitcad#420)
     const int mode = styleDatum(object, datum.kind);
@@ -2838,6 +2848,9 @@ int OcctViewer::styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind
   }
   case SelectKind::Axis:
     setEdgeStyle(object, look(kAxisColor), 2.0, Aspect_TOL_DOTDASH);
+    return AIS_WireFrame;
+  case SelectKind::Feature: // an Intersection Curve's curve (mitcad#1405)
+    setEdgeStyle(object, look(kAxisColor), 2.0, Aspect_TOL_SOLID);
     return AIS_WireFrame;
   default:
     setPointStyle(object, look(kAxisColor), Aspect_TOM_BALL, 1.5);

@@ -120,6 +120,10 @@ public:
   // (patterns and mirrors of features): a timeline click then picks the
   // feature itself.
   virtual bool takesFeatures() const = 0;
+  // Whether it takes this feature item itself (mitcad#1417): the sketch's
+  // Project and Intersect take Intersection Curves only, so a sketch
+  // clicked on the timeline still goes in as the whole sketch.
+  virtual bool takesFeature(const SelectionItem& item) const = 0;
   // Turns the view to look at a plane or a sketch.
   virtual void lookAt(const SelectionItem& item) = 0;
   // Named views: "home", "top", "front", "right", and the document's

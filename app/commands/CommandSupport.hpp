@@ -76,7 +76,9 @@ constexpr SelectFilter kAxisKinds =
     SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve | SelectKind::Face;
 constexpr SelectFilter kPointKinds =
     SelectKind::Point | SelectKind::Vertex | SelectKind::SketchPoint;
-constexpr SelectFilter kPathKinds = SelectKind::SketchCurve | SelectKind::Edge;
+// Paths: sketch curves, edges, or the curve of an Intersection Curve picked
+// in the view or on the timeline (a feature, mitcad#1405).
+constexpr SelectFilter kPathKinds = SelectKind::SketchCurve | SelectKind::Edge | SelectKind::Feature;
 // Straight lines as extent objects (mitcad#1329); isStraightLine tells.
 constexpr SelectFilter kStraightLineKinds = SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve;
 
@@ -216,6 +218,11 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> profileNormal(const Selection& profiles
                                                        const CommandContext& context);
 // An arrow manipulator along a direction from a point.
 Manipulator arrow(const gp_Pnt& origin, const gp_Dir& direction, double base = 0.0);
+// The size of the items an arrow works on, its Manipulator::scale
+// (mitcad#1431): the smallest shapeScale (framework/HandleStep.hpp) of the
+// first 16 of them, a face's or a profile's 4 area / perimeter, a curve's
+// length; 0 when none has a size.
+double itemsScale(const Selection& items, const CommandContext& context);
 // A ring manipulator about an axis.
 Manipulator ring(const gp_Pnt& origin, const gp_Dir& axis);
 // A length in the document's unit, as a value input's text ("12.5 mm").

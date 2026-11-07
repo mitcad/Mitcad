@@ -93,6 +93,31 @@ pub enum SheetHem<P> {
     Double { gap: P, setback: P },
 }
 
+/// The corner joint a flange makes where its wall closes against another
+/// wall of the same sheet (mitcad#1410). The flange's length is then the
+/// inside dimension of the closed section (length mode `inner`), and the
+/// joint sets the wall's end from the sheet's thickness `t`:
+///
+/// - `open`: the wall ends on the other wall's inner surface; the two
+///   walls meet only along the corner line (a full open corner, its outer
+///   V welded);
+/// - `half_open`: the wall reaches `t / 2` further, over half of the other
+///   wall's end, and the other wall is cut back by
+///   [`HALF_OPEN_SEAM`] under it, as walls that touch over a face cannot
+///   make one sound body (mitcad#1409).
+///
+/// The list is open for further joints (flush, overlap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetFlangeCorner {
+    Open,
+    HalfOpen,
+}
+
+/// The seam a half open corner leaves between the closing wall and the end
+/// of the wall it lies over (mm, mitcad#1410).
+pub const HALF_OPEN_SEAM: f64 = 1e-5;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetLength<P> {
@@ -127,6 +152,10 @@ pub struct SheetFlangeDef<P = ParamId> {
     /// A hem form whose bends follow from its sizes (mitcad#1378).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hem: Option<SheetHem<P>>,
+    /// The corner joint where the wall closes against another wall of the
+    /// sheet (mitcad#1410); none: the wall's end is free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner: Option<SheetFlangeCorner>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -305,6 +334,7 @@ impl<P> SheetFlangeDef<P> {
                     })
                 })
                 .transpose()?,
+            corner: self.corner,
         })
     }
 }

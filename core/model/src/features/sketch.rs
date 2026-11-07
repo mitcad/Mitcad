@@ -92,6 +92,18 @@ impl FeatureInfo for SketchDef {
                 ctx.sketch(entity.sketch)
                     .map_err(|e| format!("projection of {}: {e}", projection.source))?;
             }
+            // An Intersection Curve's curve (mitcad#1405).
+            if let ProjectionSource::Curve(feature) = &projection.source {
+                let entry = ctx
+                    .feature(*feature)
+                    .map_err(|e| format!("projection of {}: {e}", projection.source))?;
+                if !matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
+                    return Err(format!(
+                        "projection of {}: {} makes no curve",
+                        projection.source, entry.name
+                    ));
+                }
+            }
             if let Some(body) = projection.body {
                 ctx.body(body)?;
             }
@@ -300,6 +312,7 @@ pub(crate) fn topo_features(source: &ProjectionSource) -> BTreeSet<FeatureUid> {
             v.faces().iter().flat_map(FaceName::features).collect()
         }
         ProjectionSource::Sketch(entity) => BTreeSet::from([entity.sketch]),
+        ProjectionSource::Curve(feature) => BTreeSet::from([*feature]),
     }
 }
 
@@ -550,6 +563,23 @@ fn source_curves<K: Kernel>(
             return Ok(curves
                 .iter()
                 .flat_map(|c| project::plane_crossings(c, frame.origin, normal))
+                .map(Curve3::Point)
+                .collect());
+        }
+        // An Intersection Curve's curve (mitcad#1405), or where the
+        // sketch's plane crosses it; another component's through the
+        // projection's link (mitcad#1417).
+        ProjectionSource::Curve(feature) => {
+            let curve = ctx
+                .linked_feature_curve(*feature, projection.link.as_ref())
+                .map_err(|e| format!("projection of {}: {e}", projection.source))?;
+            let curves = curve.iter().map(|p| p.curve.clone());
+            if !projection.section {
+                return Ok(curves.collect());
+            }
+            let normal = frame.normal();
+            return Ok(curves
+                .flat_map(|c| project::plane_crossings(&c, frame.origin, normal))
                 .map(Curve3::Point)
                 .collect());
         }

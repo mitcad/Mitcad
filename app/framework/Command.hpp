@@ -116,6 +116,16 @@ struct Manipulator {
   // Arrow: the smallest value a drag gives; the handle stops there
   // (mitcad#693; Two Sides distances cross their start since mitcad#765).
   double minimum = -std::numeric_limits<double>::infinity();
+  // Arrow: the size of the geometry it works on, in the value's unit (a
+  // fillet's shortest edge or face, an extrusion's profile, a hole's
+  // diameter; mitcad#1431): a drag steps by the zoom's step or, finer, by
+  // a hundredth of it (framework/HandleStep.hpp). 0: not known.
+  double scale = 0.0;
+  // Arrow without a scale: whether the value a drag starts from counts as
+  // one (a 0.4 mm length steps by 0.02 mm). Off where a click rounds the
+  // value by the zoom alone and a drag must round it alike (Place's
+  // distances, mitcad#656).
+  bool valueScale = true;
   // Toggle: the element it stands for and whether it is on.
   int element = -1;
   bool on = true;

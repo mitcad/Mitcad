@@ -1131,6 +1131,8 @@ if(BUILD_TESTING)
   # Walls of one sheet that meet: a full open corner accepted, a face
   # contact and a penetration refused naming both walls (mitcad#1409).
   add_test(NAME cli.sheet_open_corner COMMAND mitcad-cli run "${scripts}/sheet_open_corner.json")
+  # Corner joints of a closing flange: Open and Half Open (mitcad#1410).
+  add_test(NAME cli.sheet_flange_corner COMMAND mitcad-cli run "${scripts}/sheet_flange_corner.json")
   # A face joined to a sheet in its panel's plane (mitcad#242).
   add_test(NAME cli.sheet_face_join COMMAND mitcad-cli run "${scripts}/sheet_face_join.json")
   # The sheet-domain adapter of ordinary features (mitcad#242).
@@ -1174,6 +1176,9 @@ if(BUILD_TESTING)
   add_test(NAME cli.sheet_cut_on_seam COMMAND mitcad-cli run "${scripts}/sheet_cut_on_seam.json")
   # A fold whose line crosses a cut window (mitcad#288).
   add_test(NAME cli.sheet_fold_window COMMAND mitcad-cli run "${scripts}/sheet_fold_window.json")
+  # Folds across edges oblique to their lines (mitcad#1424).
+  add_test(NAME cli.sheet_fold_oblique COMMAND mitcad-cli run "${scripts}/sheet_fold_oblique.json")
+  add_test(NAME cli.sheet_fold_oblique_polygon COMMAND mitcad-cli run "${scripts}/sheet_fold_oblique_polygon.json")
   # A pattern of a straight sheet cut with many copies, cut at once (mitcad#288).
   add_test(NAME cli.sheet_pattern_holes COMMAND mitcad-cli run "${scripts}/sheet_pattern_holes.json")
   # Contour Flange, Convert to Sheet Metal and Perforate (mitcad#461).

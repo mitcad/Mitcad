@@ -1020,6 +1020,45 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
     field->setObjectName(QStringLiteral("drawingOption_") + id);
     m_form->addRow(option.label, field);
   }
+  // A tool without picks (Model Items, mitcad#1406): the views it works on
+  // and its Apply.
+  if (tool.pick == SheetPick::None && tool.command != nullptr) {
+    const QList<int> views = m_sheetView->selectedViews();
+    QStringList ids;
+    for (const int view : views) {
+      ids << QString::number(view);
+    }
+    m_form->addRow(tr("Views"), new QLabel(views.isEmpty() ? tr("All of the sheet's") : ids.join(QStringLiteral(", "))));
+    auto* apply = new QPushButton(tr("Apply"));
+    apply->setObjectName(QStringLiteral("drawingToolApply"));
+    connect(apply, &QPushButton::clicked, this, [this] { QTimer::singleShot(0, this, [this] { applyTool(); }); });
+    m_form->addRow(QString(), apply);
+  }
+}
+
+void DrawingWorkspace::applyTool() {
+  if (m_tool == nullptr || m_tool->pick != SheetPick::None || m_tool->command == nullptr) {
+    return;
+  }
+  const DrawingToolDef* tool = m_tool;
+  const QList<int> views = m_sheetView->selectedViews();
+  ToolPicks picks;
+  QStringList ids;
+  for (const int view : views) {
+    picks.picks.append(view);
+    ids << QString::number(view);
+  }
+  const QJsonObject command = tool->command(m_drawing, m_sheet, picks, m_options.value(tool->id));
+  if (command.isEmpty()) {
+    setStatus(tr("%1: choose what it brings in.").arg(tool->name), true);
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Drawing %1 on %2")
+                            .arg(tool->name, views.isEmpty() ? QStringLiteral("all views")
+                                                             : QStringLiteral("views ") + ids.join(QStringLiteral(", ")));
+  if (run(command)) {
+    setTool(nullptr);
+  }
 }
 
 void DrawingWorkspace::editView(int view, const QString& field, const QString& value) {
@@ -1284,13 +1323,39 @@ void DrawingWorkspace::fillViewPanel(int id) {
   // on its round edges and faces, the sketch dimensions it sees square on.
   for (const auto& [flag, caption, object] :
        {std::tuple{"center_marks", "Center Marks", "drawingViewCenterMarks"},
-        std::tuple{"retrieved_dimensions", "Sketch Dimensions", "drawingViewRetrievedDimensions"}}) {
+        std::tuple{"retrieved_dimensions", "Sketch Dimensions", "drawingViewRetrievedDimensions"},
+        std::tuple{"model_annotations", "Model Annotations", "drawingViewModelAnnotations"}}) {
     const QString flagName = QString::fromLatin1(flag);
     auto* flagBox = new QCheckBox;
     flagBox->setChecked(json.value(flagName).toBool());
     connect(flagBox, &QCheckBox::toggled, this,
             [edit, flagName](bool on) { edit(flagName, on ? QStringLiteral("true") : QStringLiteral("false")); });
     m_form->addRow(tr(caption), named(flagBox, object));
+  }
+  // The model's annotations it draws (mitcad#1406), kept as the drawing's
+  // own to move or edit them; the model stays as it is.
+  int drawnItems = 0;
+  const QJsonArray shownItems = m_answer.value(QStringLiteral("sheets"))
+                                    .toArray()
+                                    .at(m_sheet)
+                                    .toObject()
+                                    .value(QStringLiteral("model_items"))
+                                    .toArray();
+  for (const QJsonValue& item : shownItems) {
+    if (item.toObject().value(QStringLiteral("view")).toInt() == id) {
+      ++drawnItems;
+    }
+  }
+  if (drawnItems > 0) {
+    auto* keep = new QPushButton(tr("Keep Model Annotations (%1)").arg(drawnItems));
+    keep->setToolTip(tr("Makes them the drawing's own, to move or edit them; the model stays as it is"));
+    connect(keep, &QPushButton::clicked, this, [this, id] {
+      const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("keep_drawing_model_items")},
+                                {QStringLiteral("drawing"), m_drawing},
+                                {QStringLiteral("view"), id}};
+      QTimer::singleShot(0, this, [this, command] { run(command); });
+    });
+    m_form->addRow(QString(), named(keep, "drawingViewKeepModelItems"));
   }
   if (type == QStringLiteral("projected") || type == QStringLiteral("section")) {
     auto* aligned = new QCheckBox;
@@ -2998,6 +3063,21 @@ void DrawingWorkspace::logTitleBlock(const QJsonObject& sheet) {
   if (revisions != m_loggedRevisions) {
     m_loggedRevisions = revisions;
     qDebug().noquote() << revisions;
+  }
+  // The model's annotations the views bring in (mitcad#1406), each with
+  // the view that draws it.
+  QStringList items;
+  for (const QJsonValue& value : sheet.value(QStringLiteral("model_items")).toArray()) {
+    const QJsonObject item = value.toObject();
+    items << QStringLiteral("%1 in view %2")
+                 .arg(item.value(QStringLiteral("name")).toString())
+                 .arg(item.value(QStringLiteral("view")).toInt());
+  }
+  const QString modelItems =
+      QStringLiteral("Drawing model items: %1").arg(items.isEmpty() ? QStringLiteral("none") : items.join(QStringLiteral("; ")));
+  if (modelItems != m_loggedModelItems) {
+    m_loggedModelItems = modelItems;
+    qDebug().noquote() << modelItems;
   }
 }
 

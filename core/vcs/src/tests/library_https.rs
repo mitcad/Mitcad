@@ -697,3 +697,50 @@ fn the_installed_git_program_is_used_when_chosen() {
     assert_eq!(by_path["error"], Value::Null, "{by_path}");
     assert_eq!(by_path["transport"], "git", "{by_path}");
 }
+
+/// An update without the git program brings new tags, and the newest by its
+/// numbers is the version read (mitcad#1423, GitHub mitcad/Mitcad#172):
+/// v1.9.0 and v1.10.0 recorded after the first fetch come with the update,
+/// v1.10.0 first, and the library is shown at v1.10.0.
+#[test]
+fn an_update_without_git_brings_new_tags_newest_first() {
+    let scratch = Scratch::new("library-http-tags");
+    let cache = LibraryCache::new(scratch.join("cache"));
+    let source = make_library(&scratch, &cache);
+    let url = serve(&source, "pins.git");
+    let missing = no_git(&scratch);
+    let fetched = library_command(
+        &cache,
+        Some(&missing),
+        json!({"cmd": "library_fetch", "url": url}),
+    );
+    assert_eq!(fetched["error"], Value::Null, "{fetched}");
+    assert_eq!(labels(&fetched), ["v1.1.0", "v1.0.0"], "{fetched}");
+
+    record_pin(&cache, &source, "20 mm", Vec::new(), "Pins 1.9");
+    tag_head(&source, "v1.9.0");
+    record_pin(&cache, &source, "22 mm", Vec::new(), "Pins 1.10");
+    tag_head(&source, "v1.10.0");
+    let updated = library_command(
+        &cache,
+        Some(&missing),
+        json!({"cmd": "library_fetch", "url": url}),
+    );
+    assert_eq!(updated["error"], Value::Null, "{updated}");
+    assert_eq!(updated["cloned"], false, "{updated}");
+    assert_eq!(updated["transport"], "built_in", "{updated}");
+    assert_eq!(
+        labels(&updated),
+        ["v1.10.0", "v1.9.0", "v1.1.0", "v1.0.0"],
+        "{updated}"
+    );
+    let shown = library_command(&cache, None, json!({"cmd": "library_show", "url": url}));
+    assert_eq!(shown["labels"], json!(["v1.10.0"]), "{shown}");
+    let found = library_command(
+        &cache,
+        None,
+        json!({"cmd": "library_search", "text": "pin"}),
+    );
+    let version = found["components"][0]["version"].as_str().unwrap_or("");
+    assert!(version.starts_with("v1.10.0 ("), "{found}");
+}

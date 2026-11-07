@@ -555,6 +555,7 @@ QList<PickerPart> pickerParts(const QVector<build::Part>& parts) {
   QHash<QString, PickerPart> known;
   const QJsonObject answer = libraryCommand({{QStringLiteral("cmd"), QStringLiteral("library_search")},
                                              {QStringLiteral("unlicensed"), true}});
+  logLibraryClones(answer); // which clones it read (mitcad#1436)
   for (const QJsonValue& value : answer.value(QStringLiteral("components")).toArray()) {
     const PickerPart found = pickerPart(value.toObject());
     known.insert(partId(found), found);

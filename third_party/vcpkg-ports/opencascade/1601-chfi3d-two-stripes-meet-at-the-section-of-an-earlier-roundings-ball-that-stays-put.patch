@@ -1,0 +1,564 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: two stripes of one radius R at a vertex, one running on into the
+ball of an earlier rounding of R (the ball staying put there), the other
+ending on two planes that ball touches, meet at that ball's section
+(mitcad#1427).
+
+A wall W of an opening through a plate meets the plate's top T and a side
+P (along a crease of a few degrees); T's edge with P was rounded with R
+earlier (a cylinder K), and that rounding goes on into a torus of R along
+an arc. A later feature's face X (an extrusion of the torus's section,
+tangent to T) lies between T and the torus at W. The opening's edges on W
+are rounded with R. W's boundary turns at the vertex V where its edge
+with X meets its edge with the torus (X and the torus meet at a crease):
+two contours. A rounds W's edges with T and X, B those with the torus, K
+and P. The ball of B over the torus and K stays put (both tubes of R whose
+centre lines run through its centre C, which lies R from W, T and P); A's
+ball rolls on W and T (its contact passes over X onto T) up to a section
+short of C. The stored body after the rounding has A's cylinder run
+straight on to C's section, B's ball over K from P's rounding up to that
+section (a sphere's corner patch), and X and the torus's part at V gone
+under the ball. OCCT's corner at V (PerformTwoCorner) failed ("BRep_Tool::
+no parameters on surface").
+
+- JoinAtStillBalls (new, in ChFi3d_Builder_StillBall.cxx, after
+  JoinAcrossCorners): for a vertex of two stripes of one constant radius
+  R, A's end pieces on two planes W and T up to a cylinder of R whose
+  contacts are unbounded lines, and a section of B at the end of one of
+  its pieces towards V whose contacts lie on those lines at one section of
+  the cylinder (centre C on its axis, R from both contacts): A's
+  run-on to there within 8 R beyond its end, its contacts on W's and T's
+  faces, and B past there over edges between W and tubes of R about a
+  curve through C (a cylinder of R whose axis runs through C, or a torus
+  of minor radius R whose centre circle does). Then the cylinder piece is
+  run on to that section (its points B's), A's pieces past it and B's past
+  that section are dropped, and the two ends meet there as free ends: the
+  points and the section's edge shared, as JoinOverNarrowFaceFrom's ends
+  meet. The vertices' corners are those of the ends left.
+
+On the reported design's body before the item (OCCT alone), the wall's
+whole loop with radius 0.2: valid, every new face within 8e-6 mm of the
+stored body after the item and its faces within 7e-6 mm of the result;
+the change of volume -0.053063 against the file's -0.052871 mm3, the
+difference the input's own outside the item (faces of other features
+1e-4 to 2.7e-4 mm off the stored body). Through MitCad's import the item
+is parametric and verified, the final body the file's within 2e-8 of its
+volume. Needs 1600 (the corner balls of the same chain at the other
+corner of the wall). Before, the corners at both vertices failed.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index a6317365..24ad068d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3775,6 +3775,18 @@ void ChFi3d_Builder::Compute()
+     {
+       // (The stripes as they are.)
+     }
++    // Two stripes of one radius at a vertex, one running on into the ball
++    // of an earlier rounding of that radius, the other ending on two planes
++    // that ball touches: they meet at that ball's section.
++    try
++    {
++      OCC_CATCH_SIGNALS
++      JoinAtStillBalls();
++    }
++    catch (Standard_Failure const&)
++    {
++      // (The stripes as they are.)
++    }
+     // Blends whose contact crossed a tangent edge of a narrow face of their
+     // edge and came back: on that face's surface, cut by the face beyond.
+     for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itK(myListStripe); itK.More(); itK.Next())
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 48db7a29..ecad5a80 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1444,6 +1444,25 @@ private:
+                                         const TopoDS_Face&                Fo,
+                                         const TopoDS_Face&                C);
+ 
++  //! Two stripes of one radius R ending at a vertex V, where one (B) runs
++  //! on into the ball of an earlier rounding of radius R (a tube whose
++  //! axis runs through the ball's centre, so that the ball stays put
++  //! there) and the other (A) ends on two planes W and T that ball touches:
++  //! A's blend between W and T, a cylinder about the line of the centres
++  //! R from both, run on to the section through that ball's centre C
++  //! (which lies on that line) is a section of B at C. A is run on to that
++  //! section and B cut back to it; the two ends meet there as free ends,
++  //! the faces about V between them under the ball (mitcad#1427). Returns
++  //! true when stripes were joined.
++  Standard_EXPORT bool JoinAtStillBalls();
++
++  //! One pair of ends of JoinAtStillBalls: SA's end (aFirst) and SB's end
++  //! (bFirst), both at the vertex V.
++  Standard_EXPORT bool JoinAtStillBall(const occ::handle<ChFiDS_Stripe>& SA,
++                                       const bool                        aFirst,
++                                       const occ::handle<ChFiDS_Stripe>& SB,
++                                       const bool                        bFirst);
++
+   //! Stripes failed in theBad that round the concave edge of a lens (a face
+   //! of two edges, the other convex and rounded too, both with constant
+   //! radii): such pairs are taken out of the stripes (and out of theBad)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx
+new file mode 100644
+index 00000000..7fc45e54
+--- /dev/null
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx
+@@ -0,0 +1,443 @@
++// This file is part of Open CASCADE Technology software library.
++//
++// This library is free software; you can redistribute it and/or modify it under
++// the terms of the GNU Lesser General Public License version 2.1 as published
++// by the Free Software Foundation, with special exception defined in the file
++// OCCT_LGPL_EXCEPTION.txt. Consult the file LICENSE_LGPL_21.txt included in OCCT
++// distribution for complete text of the license and disclaimer of any warranty.
++
++// Two stripes of one radius at a vertex, one running on into the ball of an
++// earlier rounding of that radius (the ball staying put there), the other
++// ending on two planes that ball touches: the one run on to that ball's
++// section, the other cut back to it, the two meeting there
++// (ChFi3d_Builder::JoinAtStillBalls).
++
++#include <BRepAdaptor_Surface.hxx>
++#include <BRepTopAdaptor_FClass2d.hxx>
++#include <BRep_Tool.hxx>
++#include <ChFi3d_Builder.hxx>
++#include <ChFi3d_Builder_0.hxx>
++#include <ChFiDS_CommonPoint.hxx>
++#include <ChFiDS_FaceInterference.hxx>
++#include <ChFiDS_FilSpine.hxx>
++#include <ChFiDS_Spine.hxx>
++#include <ChFiDS_Stripe.hxx>
++#include <ChFiDS_SurfData.hxx>
++#include <ElCLib.hxx>
++#include <Geom2d_Curve.hxx>
++#include <Geom2d_Line.hxx>
++#include <Geom_CylindricalSurface.hxx>
++#include <Geom_Curve.hxx>
++#include <Geom_Line.hxx>
++#include <Geom_Surface.hxx>
++#include <NCollection_List.hxx>
++#include <NCollection_Sequence.hxx>
++#include <Precision.hxx>
++#include <Standard_ErrorHandler.hxx>
++#include <Standard_Failure.hxx>
++#include <TopOpeBRepDS_Curve.hxx>
++#include <TopOpeBRepDS_DataStructure.hxx>
++#include <TopOpeBRepDS_HDataStructure.hxx>
++#include <TopoDS.hxx>
++#include <TopoDS_Edge.hxx>
++#include <TopoDS_Face.hxx>
++#include <TopoDS_Vertex.hxx>
++#include <gp_Ax1.hxx>
++#include <gp_Cylinder.hxx>
++#include <gp_Lin.hxx>
++#include <gp_Torus.hxx>
++
++#include <algorithm>
++#include <cmath>
++
++namespace
++{
++
++// Whether face F is a tube of radius R about a curve through C: a cylinder
++// of radius R whose axis passes through C, or a torus of minor radius R
++// whose centre circle does (the ball of radius R about C then touches F
++// along a whole circle and stays put there).
++bool stillTubeAt(const TopoDS_Face& F, const gp_Pnt& C, const double R, const double Tol)
++{
++  BRepAdaptor_Surface S(F, false);
++  if (S.GetType() == GeomAbs_Cylinder)
++  {
++    const gp_Cylinder K = S.Cylinder();
++    return std::abs(K.Radius() - R) <= Tol && gp_Lin(K.Axis()).Distance(C) <= Tol;
++  }
++  if (S.GetType() == GeomAbs_Torus)
++  {
++    const gp_Torus T = S.Torus();
++    if (std::abs(T.MinorRadius() - R) > Tol)
++    {
++      return false;
++    }
++    const gp_Ax1 A = T.Axis();
++    const gp_Vec v(A.Location(), C);
++    const double h = v.Dot(gp_Vec(A.Direction()));
++    const double r = (v - h * gp_Vec(A.Direction())).Magnitude();
++    return std::abs(h) <= Tol && std::abs(r - T.MajorRadius()) <= Tol;
++  }
++  return false;
++}
++
++// The line of a contact of a piece, where it and its p-curves are unbounded
++// lines (a piece of a cylinder between two planes, which can be run on).
++bool contactLine(const TopOpeBRepDS_DataStructure& DStr, const ChFiDS_FaceInterference& FI, gp_Lin& L)
++{
++  if (FI.LineIndex() <= 0)
++  {
++    return false;
++  }
++  const occ::handle<Geom_Line> GL = occ::down_cast<Geom_Line>(DStr.Curve(FI.LineIndex()).Curve());
++  if (GL.IsNull() || occ::down_cast<Geom2d_Line>(FI.PCurveOnFace()).IsNull()
++      || occ::down_cast<Geom2d_Line>(FI.PCurveOnSurf()).IsNull())
++  {
++    return false;
++  }
++  L = GL->Lin();
++  return true;
++}
++
++} // namespace
++
++//=======================================================================
++// function : JoinAtStillBalls
++// purpose  : See the header.
++//=======================================================================
++
++bool ChFi3d_Builder::JoinAtStillBalls()
++{
++  bool any = false;
++  for (int iv = 1; iv <= myVDataMap.Extent(); iv++)
++  {
++    const NCollection_List<occ::handle<ChFiDS_Stripe>>& L = myVDataMap(iv);
++    if (L.Extent() != 2 || L.First() == L.Last())
++    {
++      continue;
++    }
++    const TopoDS_Vertex& V     = myVDataMap.FindKey(iv);
++    bool                 found = false;
++    for (int k = 0; k < 2 && !found; k++)
++    {
++      const occ::handle<ChFiDS_Stripe>& SA = k == 0 ? L.First() : L.Last();
++      const occ::handle<ChFiDS_Stripe>& SB = k == 0 ? L.Last() : L.First();
++      if (myDroppedStripes.Contains(SA) || myDroppedStripes.Contains(SB) || SA->SetOfSurfData().IsNull()
++          || SB->SetOfSurfData().IsNull())
++      {
++        continue;
++      }
++      int sensA = 0, sensB = 0;
++      ChFi3d_IndexOfSurfData(V, SA, sensA);
++      ChFi3d_IndexOfSurfData(V, SB, sensB);
++      try
++      {
++        OCC_CATCH_SIGNALS
++        found = JoinAtStillBall(SA, sensA == 1, SB, sensB == 1);
++      }
++      catch (Standard_Failure const&)
++      {
++        found = false;
++      }
++    }
++    any = any || found;
++  }
++  if (any)
++  {
++    // The corners of the stripes' ends left.
++    myVDataMap.Clear();
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(myListStripe); it.More(); it.Next())
++    {
++      if (myDroppedStripes.Contains(it.Value()))
++      {
++        continue;
++      }
++      if (it.Value()->Spine()->FirstStatus() <= ChFiDS_BreakPoint)
++      {
++        myVDataMap.Add(it.Value()->Spine()->FirstVertex(), it.Value());
++      }
++      if (it.Value()->Spine()->LastStatus() <= ChFiDS_BreakPoint)
++      {
++        myVDataMap.Add(it.Value()->Spine()->LastVertex(), it.Value());
++      }
++    }
++  }
++  return any;
++}
++
++//=======================================================================
++// function : JoinAtStillBall
++// purpose  : See the header.
++//=======================================================================
++
++bool ChFi3d_Builder::JoinAtStillBall(const occ::handle<ChFiDS_Stripe>& SA,
++                                     const bool                        aFirst,
++                                     const occ::handle<ChFiDS_Stripe>& SB,
++                                     const bool                        bFirst)
++{
++  TopOpeBRepDS_DataStructure&        DStr = myDS->ChangeDS();
++  const occ::handle<ChFiDS_FilSpine> fA   = occ::down_cast<ChFiDS_FilSpine>(SA->Spine());
++  const occ::handle<ChFiDS_FilSpine> fB   = occ::down_cast<ChFiDS_FilSpine>(SB->Spine());
++  if (fA.IsNull() || fB.IsNull() || !fA->IsConstant() || !fB->IsConstant() || fA->IsPeriodic()
++      || fB->IsPeriodic() || std::abs(fA->Radius() - fB->Radius()) > tolesp)
++  {
++    return false;
++  }
++  const double R        = fA->Radius();
++  const double aTolMeet = std::max(std::max(100. * tolapp3d, 1.e-4), 1.e-3 * R);
++  NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SeqA = SA->ChangeSetOfSurfData()->ChangeSequence();
++  NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SeqB = SB->ChangeSetOfSurfData()->ChangeSequence();
++  const int                                           nA   = SeqA.Length();
++  const int                                           nB   = SeqB.Length();
++  if (nA == 0 || nB == 0)
++  {
++    return false;
++  }
++
++  // A's end: its pieces on the same two planes from the end in, up to a
++  // cylinder of radius R whose contacts are unbounded lines (Dc).
++  const int iA[2] = {SeqA(aFirst ? 1 : nA)->IndexOfS1(), SeqA(aFirst ? 1 : nA)->IndexOfS2()};
++  if (iA[0] <= 0 || iA[1] <= 0 || iA[0] == iA[1])
++  {
++    return false;
++  }
++  for (const int iF : iA)
++  {
++    if (BRepAdaptor_Surface(TopoDS::Face(DStr.Shape(iF)), false).GetType() != GeomAbs_Plane)
++    {
++      return false;
++    }
++  }
++  int ic = 0;
++  for (int j = 0; j < std::min(nA, 4) && ic == 0; j++)
++  {
++    const int                           i = aFirst ? 1 + j : nA - j;
++    const occ::handle<ChFiDS_SurfData>& D = SeqA(i);
++    if (D->IndexOfS1() != iA[0] || D->IndexOfS2() != iA[1] || D->IsOnCurve1() || D->IsOnCurve2())
++    {
++      return false;
++    }
++    const occ::handle<Geom_CylindricalSurface> K =
++      occ::down_cast<Geom_CylindricalSurface>(DStr.Surface(D->Surf()).Surface());
++    if (!K.IsNull() && std::abs(K->Radius() - R) <= tolesp)
++    {
++      ic = i;
++    }
++  }
++  if (ic == 0)
++  {
++    return false;
++  }
++  const occ::handle<ChFiDS_SurfData> Dc = SeqA(ic);
++  gp_Lin                             LA[2];
++  if (!contactLine(DStr, Dc->Interference(1), LA[0]) || !contactLine(DStr, Dc->Interference(2), LA[1]))
++  {
++    return false;
++  }
++  const gp_Ax1 aAxis = occ::down_cast<Geom_CylindricalSurface>(DStr.Surface(Dc->Surf()).Surface())->Axis();
++
++  // B's section on A's lines run on: at the end of one of its pieces
++  // towards V, its contacts on A's two lines at one section, B's side sW
++  // and A's side aW on the plane W they share, the other contact on A's
++  // other plane T.
++  int    ib = 0, sW = 0, aW = 0;
++  double tA[2] = {0., 0.};
++  for (int j = 0; j < nB && ib == 0; j++)
++  {
++    const int                           i = bFirst ? 1 + j : nB - j;
++    const occ::handle<ChFiDS_SurfData>& D = SeqB(i);
++    for (int s = 1; s <= 2 && ib == 0; s++)
++    {
++      for (int a = 1; a <= 2 && ib == 0; a++)
++      {
++        if (D->Index(s) != iA[a - 1])
++        {
++          continue;
++        }
++        const gp_Pnt Pw = D->Vertex(bFirst, s).Point();
++        const gp_Pnt Pt = D->Vertex(bFirst, 3 - s).Point();
++        if (LA[a - 1].Distance(Pw) > aTolMeet || LA[2 - a].Distance(Pt) > aTolMeet
++            || std::abs(gp_Vec(Pt, Pw).Dot(gp_Vec(aAxis.Direction()))) > aTolMeet)
++        {
++          continue;
++        }
++        ib        = i;
++        sW        = s;
++        aW        = a;
++        tA[a - 1] = ElCLib::Parameter(LA[a - 1], Pw);
++        tA[2 - a] = ElCLib::Parameter(LA[2 - a], Pt);
++      }
++    }
++  }
++  if (ib == 0)
++  {
++    return false;
++  }
++  const occ::handle<ChFiDS_SurfData> Db = SeqB(ib);
++  // The ball there: its centre on the cylinder's axis, R from both contacts.
++  const gp_Lin aAxisLine(aAxis);
++  const gp_Pnt C = ElCLib::Value(ElCLib::Parameter(aAxisLine, Db->Vertex(bFirst, sW).Point()), aAxisLine);
++  if (std::abs(C.Distance(Db->Vertex(bFirst, sW).Point()) - R) > aTolMeet
++      || std::abs(C.Distance(Db->Vertex(bFirst, 3 - sW).Point()) - R) > aTolMeet)
++  {
++    return false;
++  }
++
++  // A run on to that section: within a few radii of its end and beyond it,
++  // its contacts on the faces of W and T.
++  for (int s = 0; s < 2; s++)
++  {
++    const ChFiDS_FaceInterference& FI    = Dc->Interference(s + 1);
++    const double                   tEnd  = FI.Parameter(aFirst);
++    const double                   tFar  = FI.Parameter(!aFirst);
++    const double                   aStep = tA[s] - tEnd;
++    if ((aStep * (tEnd - tFar) < 0. && std::abs(aStep) > aTolMeet) || std::abs(aStep) > 8. * R)
++    {
++      return false;
++    }
++    const TopoDS_Face       F = TopoDS::Face(DStr.Shape(Dc->Index(s + 1)));
++    BRepTopAdaptor_FClass2d aClass(F, Precision::PConfusion());
++    for (int k = 0; k <= 10; k++)
++    {
++      if (aClass.Perform(FI.PCurveOnFace()->Value(tEnd + aStep * k / 10.)) == TopAbs_OUT)
++      {
++        return false;
++      }
++    }
++  }
++
++  // B past that section: over edges between W and a tube of radius R
++  // about a curve through C, the ball staying put at C.
++  const occ::handle<ChFiDS_Spine> spB = SB->Spine();
++  const double                    wS  = bFirst ? Db->FirstSpineParam() : Db->LastSpineParam();
++  const TopoDS_Shape&             FW  = DStr.Shape(iA[aW - 1]);
++  for (int ie = 1; ie <= spB->NbEdges(); ie++)
++  {
++    const double w0 = spB->FirstParameter(ie), w1 = spB->LastParameter(ie);
++    // (The edges with a part past the section.)
++    if (bFirst ? w0 >= wS - tolesp : w1 <= wS + tolesp)
++    {
++      continue;
++    }
++    bool aOnW = false, aStill = false;
++    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(spB->Edges(ie))); it.More(); it.Next())
++    {
++      if (it.Value().IsSame(FW))
++      {
++        aOnW = true;
++      }
++      else
++      {
++        aStill = stillTubeAt(TopoDS::Face(it.Value()), C, R, aTolMeet);
++      }
++    }
++    if (!aOnW || !aStill)
++    {
++      return false;
++    }
++  }
++
++  // A: Dc run on to the section, its points there B's, its pieces past it
++  // dropped.
++  {
++    const ChFiDS_FaceInterference& F1 = Dc->Interference(1);
++    const double r = (Dc->LastSpineParam() - Dc->FirstSpineParam()) / (F1.LastParameter() - F1.FirstParameter());
++    const double wNew = (aFirst ? Dc->FirstSpineParam() : Dc->LastSpineParam()) + r * (tA[0] - F1.Parameter(aFirst));
++    for (int s = 0; s < 2; s++)
++    {
++      ChFiDS_FaceInterference& FI = Dc->ChangeInterference(s + 1);
++      FI.SetParameter(tA[s], aFirst);
++      ChFiDS_CommonPoint CP = Db->Vertex(bFirst, s + 1 == aW ? sW : 3 - sW);
++      gp_Pnt             P;
++      gp_Vec             D;
++      DStr.Curve(FI.LineIndex()).Curve()->D1(tA[s], P, D);
++      CP.SetParameter(tA[s]);
++      CP.SetVector(D);
++      Dc->ChangeVertex(aFirst, s + 1) = CP;
++    }
++    if (aFirst)
++    {
++      Dc->FirstSpineParam(wNew);
++    }
++    else
++    {
++      Dc->LastSpineParam(wNew);
++    }
++  }
++  if (aFirst && ic > 1)
++  {
++    SeqA.Remove(1, ic - 1);
++  }
++  else if (!aFirst && ic < nA)
++  {
++    SeqA.Remove(ic + 1, nA);
++  }
++  // B: its pieces past the section dropped.
++  if (bFirst && ib > 1)
++  {
++    SeqB.Remove(1, ib - 1);
++  }
++  else if (!bFirst && ib < nB)
++  {
++    SeqB.Remove(ib + 1, nB);
++  }
++
++  // The meeting section: its points, shared, and its edge (as
++  // JoinOverNarrowFaceFrom's).
++  const int Iw = ChFi3d_IndexPointInDS(Db->Vertex(bFirst, sW), DStr);
++  const int It = ChFi3d_IndexPointInDS(Db->Vertex(bFirst, 3 - sW), DStr);
++  SB->SetIndexPoint(Iw, bFirst, sW);
++  SB->SetIndexPoint(It, bFirst, 3 - sW);
++  SA->SetIndexPoint(Iw, aFirst, aW);
++  SA->SetIndexPoint(It, aFirst, 3 - aW);
++  {
++    const occ::handle<Geom_Surface>& SurfB = DStr.Surface(Db->Surf()).Surface();
++    const ChFiDS_FaceInterference&   B1    = Db->Interference(1);
++    const ChFiDS_FaceInterference&   B2    = Db->Interference(2);
++    occ::handle<Geom_Curve>          C3d;
++    occ::handle<Geom2d_Curve>        PcB, PcA;
++    double                           Pardeb = 0., Parfin = 0., tolreached = tolapp3d;
++    ChFi3d_ComputeArete(Db->Vertex(bFirst, 1),
++                        B1.PCurveOnSurf()->Value(B1.Parameter(bFirst)),
++                        Db->Vertex(bFirst, 2),
++                        B2.PCurveOnSurf()->Value(B2.Parameter(bFirst)),
++                        SurfB,
++                        C3d,
++                        PcB,
++                        Pardeb,
++                        Parfin,
++                        tolapp3d,
++                        tolapp2d,
++                        tolreached,
++                        0);
++    // On A: B's side 1 is A's side 1 where the faces agree.
++    const bool                     aSameSides = sW == aW;
++    const ChFiDS_FaceInterference& G1         = Dc->Interference(aSameSides ? 1 : 2);
++    const ChFiDS_FaceInterference& G2         = Dc->Interference(aSameSides ? 2 : 1);
++    const gp_Pnt2d                 u1         = G1.PCurveOnSurf()->Value(G1.Parameter(aFirst));
++    const gp_Pnt2d                 u2         = G2.PCurveOnSurf()->Value(G2.Parameter(aFirst));
++    double                         tolA       = tolapp3d;
++    ChFi3d_ComputePCurv(C3d, u1, u2, PcA, DStr.Surface(Dc->Surf()).Surface(), Pardeb, Parfin, tolapp3d, tolA);
++    const int Ic = DStr.AddCurve(TopOpeBRepDS_Curve(C3d, std::max(tolreached, tolA)));
++    SB->SetCurve(Ic, bFirst);
++    SB->SetParameters(bFirst, Pardeb, Parfin);
++    SB->ChangePCurve(bFirst) = PcB;
++    SA->SetCurve(Ic, aFirst);
++    SA->SetParameters(aFirst, Pardeb, Parfin);
++    SA->ChangePCurve(aFirst) = PcA;
++    if (!aSameSides)
++    {
++      if (aFirst)
++      {
++        SA->FirstPCurveOrientation(TopAbs_REVERSED);
++      }
++      else
++      {
++        SA->LastPCurveOrientation(TopAbs_REVERSED);
++      }
++    }
++  }
++  fA->SetStatus(ChFiDS_FreeBoundary, aFirst);
++  fB->SetStatus(ChFiDS_FreeBoundary, bFirst);
++  return true;
++}
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
+index d735ea54..1464b868 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
+@@ -21,6 +21,7 @@ set(OCCT_ChFi3d_FILES
+   ChFi3d_Builder_Lens.cxx
+   ChFi3d_Builder_TightConcave.cxx
+   ChFi3d_Builder_Guide.cxx
++  ChFi3d_Builder_StillBall.cxx
+   ChFi3d_ChBuilder.cxx
+   ChFi3d_ChBuilder.hxx
+   ChFi3d_ChBuilder_C2.cxx

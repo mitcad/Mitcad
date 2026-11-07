@@ -387,6 +387,7 @@ plane or point along a path) is a `PathRef`:
 | `{"start": [x, y, z], "end": [x, y, z]}` | a fixed line |
 | `{"helix": {"center": [x, y, z], "axis": [x, y, z], "x_axis": [x, y, z], "radius": r, "pitch": p, "start_angle": a, "end_angle": b}}` | a fixed helix (mitcad#385): the points `center + r (cos t x + sin t (axis × x)) + p t / 2π axis` (`x` is `x_axis` made square to the axis) for `t` from `start_angle` to `end_angle` (radians, either way round: the path runs from the first to the second); `p`, the rise per turn counter-clockwise about the axis, is negative for a left-handed helix |
 | `{"fixed_curves": [{"type": "line", "start": [x, y, z], "end": [x, y, z]}, {"type": "conic", "center", "normal", "x_axis", "major", "minor", "start", "end", "closed"}, {"type": "spline", "degree": d, "poles": [[x, y, z], …], "weights": [w, …], "knots": [k, …]}]}` | fixed curves in model space, joined end to end (mitcad#548): lines, circle or ellipse arcs (`center + major cos t x_axis + minor sin t (normal × x_axis)` for `t` from `start` to `end`), B-splines (`weights` left out: not rational; the full knot vector, `poles + degree + 1` knots, never decreasing); the FreeCAD import's edges that lie in no plane, a conical helix as its file stores it. Not a construction plane's or point's path, nor a path pattern's |
+| `{"feature": "F5"}` | the curve of an Intersection Curve before the feature, in its component, or with a construction feature's `datum_links` in another (mitcad#1417) ([Intersection Curve](#intersection-curve-mitcad1405)); every path takes it, and ribs' and webs' curves when it lies in one plane |
 
 A path runs from the free end of the first listed curve or edge when it
 ends the chain, else along the first listed curve's own direction (a
@@ -3024,6 +3025,14 @@ Faces: `side(<segment>)`, `start(<region>)` at the profile and
   reaches first, which must close it off; otherwise it fails) or
   `{"type": "depth", "depth": d}`. The result joins the participants (all
   bodies when left out); one that reaches none becomes a new body.
+- `curves` may instead be the curve of an Intersection Curve before it
+  (mitcad#1417): `{"feature": "F5"}`. It must lie in one plane, which is
+  then the sketch plane: its normal points the way of the curve's sketch
+  normal it is most nearly parallel to. Its pieces are the curves `c1`,
+  `c2`, ... in order along it (faces `side(c1)`, `wall1(c2)`, ...). A
+  straight curve, or one with a point off the plane by more than the
+  joining tolerance (1e-6 of its size), is refused with where; a web takes
+  lines and circular arcs, as from a sketch.
 
 Faces of a rib: `side(<curve>)` along the curves, `wall1` and `wall2` (its
 sides along and against the sketch normal), `tip0` and `tip1` at the
@@ -9386,6 +9395,39 @@ BUILD parts' generator on sections made in the test, its frames,
 fetch, search and candidates; needs git and Python) and
 `tools/ui-library-test.sh`.
 
+### Removed sources and one clone per repository
+
+mitcad#1436 (GitHub mitcad/Mitcad#172): the forms of one repository's URL
+have one key (`repository_key`, `core/vcs/src/library/sources.rs`: without
+user information, the scheme of a network address (`https://`, `http://`,
+`ssh://`, `user@host:path`) or `file://`, a host's leading `www.`,
+trailing slashes and `.git`; `/` for a backslash; in lower case), so
+`https://www.github.com/mitcad/parts.git` and
+`https://github.com/mitcad/parts.git` are one repository.
+
+| Command | Fields | Result |
+|---|---|---|
+| `library_remove` | `url` (a source removed from the application's list), `sources` (the sources still listed, any form), `removed` (default true; false when the source is added again) | `url`, `repository` (its key), `removed`, `changed` (the clones' folders whose mark changed). Marks the clones of that repository (`mitcad-source-removed` in the clone), in every folder of the cache, unless one of `sources` names the repository; with `removed: false` takes the mark off |
+
+- `library_search` and `library_build_candidates` read one clone per
+  repository and leave marked clones out; their answers have `clones`:
+  `read` (`dir`, `url`) and `left_out` (`dir`, `url`, `reason`: `its
+  source was removed` or `same repository as <url>`, `text`). Of two
+  clones of one repository (an older MitCad cloned each form of the URL
+  apart) they read the one whose URL is one of the command's `sources`
+  as written, else the one with the newer newest version, else the first.
+- `library_fetch` of another form of a repository already cloned updates
+  that clone (`dir` is its folder; the `log` says so), and a fetch takes
+  a clone's mark off.
+- `library_list` gives each clone's `removed`; `library_show`,
+  `library_preview`, `library_diff`, `library_configure` and the
+  resolver read marked clones too, so designs keep their parts.
+  `library_show`'s `url` finds a clone fetched under another form of it.
+
+Tests: `core/vcs/src/tests/library_build.rs`
+(`url_forms_of_one_repository_have_one_key`,
+`a_source_removed_and_added_again_lists_each_component_once`).
+
 ### Standards and suppliers of library rows
 
 A library's manifest may name each configuration row's standards and the
@@ -10997,6 +11039,18 @@ The line may cross holes and cut windows of the panel (mitcad#288): the
 bend's two lines then run through material in stretches, each stretch its
 own piece of the generated curve (numbered along the bend's axis) with a
 seam of its own, and the bend's strip keeps the openings.
+The line may also cross edges at angles other than 90 degrees, or run past
+the outline (mitcad#1424): the bend's strip is bounded by the outline (the
+crossed edges continued across the strip), so its two tangent lines can
+end at different places along the line, and each seam covers the part of
+its line that has material. An end of the line that lies on the outline or
+past it gets no relief; where an edge oblique to the line carries material
+past that end within the bend's reach (the line drawn exactly from edge to
+edge of a trapezoid), the bend and the moving panel run on past the end, so
+the whole side folds and its edges stay straight across the strip. The
+flat pattern of such a fold is the outline it was folded from. A seam that
+still cannot pair is refused with the bend's name and the boundary curve
+where the two sides of the seam part.
 
 ```json
 {"type":"sheet_corner_chamfer","body":"F3.b0",
@@ -11041,6 +11095,45 @@ them`; walls that pass into each other (more than 1e-6 mm deep) are refused,
 is named by its feature, a further wall of it `SheetFlange3 (wall 2)`, a
 bend `SheetFlange1 (bend)`. No clearance is added. See
 [the sheet-metal contract](../../../docs/sheet-metal.md).
+
+### Corner joints of a closing flange (mitcad#1410)
+
+A `sheet_flange` whose wall closes against another wall of the same sheet
+(the last side of a box section) takes `corner`, the joint the two walls
+make: `"open"` or `"half_open"` (left out: the wall's end is free; the
+list is open for further joints). With a corner the flange's `length` is
+the inside dimension of the closed section, measured by `"mode": "inner"`
+(other modes, and a `hem` with it, are refused), and the joint sets the
+wall's end from the sheet's thickness `t`:
+
+- `open`: the wall ends on the other wall's inner surface, the two walls
+  meeting only along the corner line (a full open corner, whose outer V
+  is welded); the body holds them as they are (mitcad#1409).
+- `half_open`: the wall reaches `t / 2` further, over half of the other
+  wall's end. Walls that touch over a face do not make one sound body, so
+  the other wall is cut back by a seam of 0.00001 mm (10 nm) where the
+  wall lies over it (its new end the flange's generated curves 60 to 63);
+  that seam is the only clearance. It is the smallest seam that is a gap
+  at all, ten times the 1e-6 mm modelling tolerance: the check of
+  mitcad#1409 accepts walls 0.0000005 mm apart and refuses them at
+  0.0000001 mm, and gaps from 0.000001 mm to 0.01 mm all gave a valid
+  body, a cut through the corner and a hole. The other wall is the flat wall normal to the
+  flange's wall whose material lies under the wall's last `t / 2` and
+  whose end lies on its surface; none, or more than one, refuses the
+  flange.
+
+```json
+{"type":"sheet_flange","body":"F3.b0",
+ "boundary":{"panel":{"feature":"F5","slot":0},"curve":{"type":"generated","feature":"F5","slot":51}},
+ "angle":1.5707963267948966,"length":{"mode":"inner","value":10},"position":"outside",
+ "corner":"half_open"}
+```
+
+On a 1 mm sheet with Outside flanges of Inner Length 10 on both long edges
+of a 10 mm wide base, this third flange closes the 10 x 10 section: its
+wall reaches 0.5 mm over the first wall's end, and the first wall ends
+0.00001 mm under it; the inside stays 10 x 10. The Flat Pattern keeps the two walls at the strip's two
+ends.
 
 ## Sheet Unfold, Refold and Flat Pattern
 
@@ -17555,7 +17648,7 @@ dimension (`kind` one of the measurement kinds) or a leader note (`kind`
 | `group` | a group's name (`Manufacturing`), trimmed; left out for none. The application shows and hides a group at once and snapshots one. |
 | `plane` | the plane it lies in: `{"normal": [x, y, z]}` (a direction in the first pick's own coordinates, so that it turns with the pick's occurrence; a length's plane is turned square to its ends), with `"x"` for a note or a diameter (the direction its text runs along, likewise), or `{"pick": <pick>}`, a planar face or a datum plane it lies parallel to and follows. Left out: chosen from the picks — a length's plane is square to the coordinate axis least along it (Z, then Y, then X), or, where a planar face at a pick holds the length and is not parallel to that, the face's nearest it (mitcad#894); a note's is its face's plane (else XY). A radius and an angle lie in the plane of their circle or rays and take no `plane`; a diameter does too unless it has one, which is its leader's (one added in a view takes the view's, mitcad#902: a leader from outside with its text level in that plane). |
 | `line_offset` | a length's dimension line from its ends, mm, signed across the ends in the plane; left out, outside its bodies' extent in the plane (mitcad#894, [Annotations' look](#annotations-look-text-height-auto-colour-and-placement): 6 text heights past the bodies, stacked outside parallel lines; without a body, a quarter of the length, at least 1 mm); an angle's arc radius, more than 0 (half the distance from the corner to the nearer pick's point, else five text heights, mitcad#902). None for a radius, a diameter or a note. |
-| `text_offset` | `[along, across]`, mm in the plane: a dimension's text from its default place (the dimension line's middle; a circle's one and a half radii out along `across` of its axis, at least three text heights past its rim; an angle's arc's middle); a note's (a datum's, a frame's, a hole callout's) text from its arrow's point (four and three text heights when left out, mitcad#902). |
+| `text_offset` | `[along, across]`, mm in the plane: a dimension's text from its default place (the dimension line's middle; a circle's one and a half radii out along `across` of its axis, at least three text heights past its rim; outside an angle's arc's middle, its near edge 1 mm clear of the arc); a note's (a datum's, a frame's, a hole callout's) text from its arrow's point (four and three text heights when left out, mitcad#902). |
 | `format` | a dimension's `{"decimals"` (0 to 6; up to three without trailing zeros when left out), `"prefix"` (in place of the kind's: `Ø` for a diameter, `R` for a radius; `""` for none), `"before"`, `"after"` (own text, e.g. `4 x`, `THRU`), `"replace"` (a text in place of the value and its tolerance)`}`; left out when all are defaults. |
 | `tolerance` | a dimension's `{"type": "symmetric", "value"}` (±), `{"type": "deviations", "upper", "lower"}` (signed, upper more than lower), `{"type": "limits", "upper", "lower"}` (the same deviations written as the largest and smallest size), or `{"type": "fit", "code", "deviations"}` (an ISO 286 code on a length, `H7` a hole's, `g6` a shaft's, of the size as written (its range by the value rounded as shown) — a radius' of its diameter's size, with half its deviations; `deviations: true` writes them in brackets); millimetres for lengths, degrees for angles. |
 | `text` | a note's text, lines split at `\n`. |
@@ -18589,7 +18682,7 @@ gone`.
 | `type` | Picks | Shows |
 |---|---|---|
 | `linear` | two | the distance of the picks along the view's x (`"along": "horizontal"`), its y (`"vertical"`; from the picks when left out: the axis they lie further apart along) or `"aligned"` (square to a straight edge picked, else along the line between them); a straight edge stands for its middle, its extension line starts at its end nearer the dimension line |
-| `angle` | two straight edges | the angle between them as seen, an arc about their corner (refused for parallel ones) |
+| `angle` | two straight edges | the angle between them as seen, an arc about their corner (refused for parallel ones) with an arrow at each end, each along the chord from its tip to the arc's point an arrow length back so that its base's middle lies on the arc; the value outside the arc's middle, across its bisector, its near edge 1 mm clear of the arc whatever the text's height (mitcad#1433) |
 | `radius`, `diameter` | a circle or a round face | its true radius or diameter: end on, a line from the centre (across for a diameter) to the rim, run on to the text on a shoulder; from the side, a linear dimension across it |
 | `ordinate` | an origin and a point | the point's coordinate from the origin along the view's x or y (`along`), on a leader to the origin's level |
 | `center_mark` | a circle seen end on, or a round face from the side | crossed centre lines beyond the rim, or the face's centreline |
@@ -22823,3 +22916,178 @@ its linked designs saved in a project, opened, changed while open, Update
 Link and Update All Links undone), the ctest
 `cli.linked_design_update_reported` (a reported holder whose linked file
 changed after it was saved, under `MITCAD_MITCAD_REPORTED`).
+## The model's items in drawing views (mitcad#1406)
+
+A drawing's views bring in the model's own annotations (*Annotations*,
+*Datums and feature control frames*, *Hole callouts and the reference
+look*), as they retrieve the sketches' dimensions (*Annotations on
+drawing views*, `retrieved_dimensions`), and the Drawing tab's Model
+Items switches both on for the views at once (`api/drawing_annotations.rs`,
+`api/annotations.rs`: `model_items`).
+
+**A view's `model_annotations`** (`add_drawing_view`, `edit_drawing_view`;
+off when left out; the `drawing` query's views and the file list it,
+left out when off): the model's shown annotations whose plane the view
+sees square on, each laid out by the drawing's engine (the same as the
+drawing's own annotations: its paper text height, its defaults, the
+drawing's decimals where the annotation has none) with the model's value,
+format, tolerance, letter, frame and words, worked out whenever the sheet
+is drawn, so they follow the model:
+
+- a length (`distance`, `offset`, `axis_distance`, `center_distance`) a
+  linear dimension between its measured ends, horizontal or vertical
+  where they lie level or plumb in the view, else aligned; a radius and a
+  diameter of their circle (end on, or from the side for a diameter on a
+  leader); an angle between its rays;
+- a note, a material or process note and a hole callout a note on a
+  leader to the arrow's point with the model's lines; a datum label a
+  datum label of its letter; a feature control frame a frame (one that
+  stands under a dimension on a leader to that dimension's first point);
+- a hole callout (and a frame under it) where the view sees its hole end
+  on, whatever its own plane.
+
+The filters of `retrieved_dimensions` apply: not on pictorial views,
+behind a section's plane, in a detail's circle and beside breaks only,
+in the root's drawings only, and only where the view shows every body
+the annotation's picks are on (one of construction geometry alone is
+not brought in). An annotation hidden in the model (`visible: false`) or
+broken there is not brought in.
+
+**Once on a sheet.** A model annotation is drawn in the first view of the
+sheet (in the sheet's order) that brings it in, and not in the views
+after it; so is each sketch dimension a view retrieves (each placement
+of it, mitcad#744, once). One kept as the drawing's own (below) is not
+brought into any view of that sheet.
+
+The `drawing` query's sheet asked for lists them as `model_items`:
+`{"view", "name", "kind"` (the model's), `"type"` (the drawing's type
+that draws it), `"label"` (its words on one line), `"box"}`. Group
+`model-annotation`, its `id` `M:` and the annotation's name (`M:Offset1`;
+not an annotation of the drawing's, which are `A<id>`).
+
+| Command | Fields | Result |
+|---|---|---|
+| `drawing_model_items` | `drawing`, `sheet` (0), `views` (ids; all the sheet's when left out or empty), `sketch_dimensions`, `model_annotations` (each `true` when left out: switched on; `false` leaves it as it is) | `views` (those acted on), `switched` (those that changed); one undo step `Model Items on Sheet1 of Drawing1`, none when nothing changes; refused for a cut sheet, a view the sheet has not, and both `false` |
+| `keep_drawing_model_items` | `drawing`, `view`, `names` (the model annotations the view draws; all of them when left out) | `annotations` (the new ids), `kept`; one undo step `Keep Offset1 in Drawing1`, `Keep 3 model annotations in Drawing1` |
+
+**Kept as the drawing's own.** `keep_drawing_model_items` makes each
+model annotation the view draws an annotation of that view, of the type
+that drew it, with its format, tolerance, letter, frame or words, and
+`kept_from` (the model annotation's name; a rename in the model follows
+it, in the same undo step), so that it is moved, dragged and edited as
+the drawing's own without changing the model. Its picks are the model's
+picks as the view picks them: an edge by its name (with the end or middle
+at the measured point where there is one), a round face by its name, a
+planar face at the measured point on it (`on_face`), a vertex as the end
+of an edge there; refused (with why) for construction geometry or a
+whole body, for a view that does not draw it, and for a datum letter the
+drawing has already. A kept note keeps its words as they were (a hole
+callout's too). Files: an annotation's `kept_from`, left out when none.
+
+The application (`app/COMMANDS.md`, *Drawings*): the Drawing tab's
+**Model Items** (Dimensions group), a view's panel's **Model
+Annotations** beside Sketch Dimensions and its **Keep Model Annotations**.
+
+Tests: `core/model-tests/drawing-views/src/model_items_tests.rs` (a part
+with a height, a datum and a hole callout: Model Items on all views draws
+each once in the view that faces it, the values following the model, the
+file and undo; the views and kinds given, refusals; hidden in the model;
+once on a sheet with a back and a bottom view, sketch dimensions too;
+kept as the drawing's own, moved without changing the model, following a
+rename), `app/tests/drawing_tools.cpp` (the tool and its command),
+`tools/ui-drawings-test.sh` and `tools/ui-windows-drawings-test.ps1`
+(`app.ui-windows-drawings`: Model Items on a sheet of three views).
+
+
+## Intersection Curve (mitcad#1405)
+
+**The feature.** `intersection_curve` makes the 3D curve whose views
+along two sketches' normals are curves of those sketches: each chain is
+swept along its own sketch's normal, through the other chain's extent, and
+the curve is where the two surfaces cross.
+
+```json
+{"type": "intersection_curve",
+ "first": {"sketch": "F1", "curves": ["c1"], "chain": true},
+ "second": {"sketch": "F2", "curves": ["c1"]}}
+```
+
+- `first`, `second`: curves of one sketch each, in the form of a sweep's
+  path (`{"sketch", "curves", "chain"}`, [Paths](#paths)); each must be a
+  chain that does not branch. The two are curves of different sketches.
+- The curve's pieces come from the geometry kernel (`Kernel::intersection_curves`,
+  `geometry/src/intersection_curve.cpp`: the chains swept both ways past
+  the box of both, crossed by OCCT's section), and are joined here into
+  one curve, in order, each running along it, from the end nearer to where
+  the first chain starts; its pieces are named `F5:curve1`, `F5:curve2`,
+  ... in that order.
+- The curve follows both sketches: an edit, a dimension or a parameter of
+  either evaluates it again, and the features that take it with it.
+- It makes no body. It has a light bulb as construction geometry has
+  (`set_feature_visible`; View › Show's construction hides it too), and
+  its results are not kept in the result store.
+
+**Refusals** say why: the two chains of one sketch (`both chains are
+curves of Sketch1`); sketches in parallel planes (`Sketch1 and Sketch2 lie
+in parallel planes: curves swept along the same normal cross in no
+curve`); no crossing (`the curves do not cross`); a result that branches
+(`the curve branches at (x, y, z)`, each point where more than two pieces
+meet); a result in pieces apart (`the curves cross in 2 separate
+stretches (from (…) to (…); a closed loop through (…))`).
+
+**As a path.** `{"feature": "F5"}` is a [path](#paths) wherever one is
+taken: a sweep's path and guide rails, a pipe's path, a loft's centre line
+and rails, a path pattern's path (copies moved along it, and with
+`along_path` turned as its tangent turns), and the path of a construction
+plane or point along a path. The feature it names must be an
+Intersection Curve before the feature, in the same component. A path
+pattern and the construction along a path measure it along its length
+(`CurveChain`): along its exact pieces, each piece's speed integrated
+(Gauss-Legendre between samples, within a B-spline's knot spans) and a
+length's parameter found by Newton's method on the same integral, so a
+point at a length or a fraction lies on the curve at that length to
+rounding (mitcad#1417; within 1e-6 mm on a curve of 1 m, where chords
+were some 2e-8 of the length off).
+
+**Ribs and webs** (mitcad#1417) grow from it when it lies in one plane:
+`"curves": {"feature": "F5"}` ([rib, web](#rib-web)).
+
+**In another component** (mitcad#1417). The curve is in its component's
+coordinates, as sketches and construction geometry are: a feature of
+another component that names it without a link is refused (`… is in
+Motor; a feature of Frame cannot use it`). A construction plane, axis or
+point takes it through its `datum_links` (`{"F5": {"source": "O1",
+"target": "O2"}}`), and a sketch's projection through the occurrence that
+shows it (`sketch.project` with `occurrence`, and `context`): the curve is
+moved into the feature's coordinates by the placements at its point of
+the timeline and follows when the occurrences move.
+
+**Projected into a sketch.** `sketch.project` with `"source": {"feature":
+"F5"}` projects the curve along the sketch's normal, its ends with it; with
+`"section": true` the points where the sketch's plane crosses it instead.
+Linked (the default for Project and Intersect), the projection records the
+source `{"feature": "F5"}` and follows the curve; the Intersection Curve
+comes before the sketch, in its component, or in another one through
+`occurrence` (and `context`) as another component's sketch geometry is
+(mitcad#1417; the projection records the `link`). It takes no `body`. The
+sketch's Project and Intersect pick it in the view, on its Browser row or
+on the timeline (`app/COMMANDS.md`, "Intersection Curve").
+
+**Drawn.** The `feature_curves` query lists the curves of the Intersection
+Curves before the marker: `[{"uid", "name", "points"}]`, each curve one
+polyline in its component's coordinates (a line's ends, other pieces at 64
+points each). The view draws them as the construction geometry's lines;
+a click picks the feature, which path inputs take (`app/COMMANDS.md`,
+"Intersection Curve").
+
+Tests: `core/model/src/features/intersection_curve.rs` (joining and
+measuring), `core/model-tests/features-profile/src/intersection_curve_tests.rs`
+(the mock kernel: the curve of an arc on XZ and a line on XY, a circle
+swept along it following a dimension of each sketch, construction along
+it, projection, the refusals; mitcad#1417: a rib and a web grown from it
+following it, a curve off any plane refused, construction along a 1 m
+curve of a line and an arc within 1e-6 mm, a construction point and a
+section in another component through Motor:1), `geometry/tests/test_intersection_curve.cpp`
+(`geometry.intersection_curve`: an arc and a line, two cylinders whose
+crossing branches), `tools/ui-intersection-curve-test.sh` (mitcad#1417:
+Project and Intersect take the curve, whole sketches as before).

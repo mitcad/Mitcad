@@ -1,0 +1,75 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a walk ends at the analytic piece after its guide only where its
+other contact lags a little too, not where a ball that stays put keeps one
+contact where that piece starts while its other contact still turns round
+the tube it touches (mitcad#1427).
+
+A wall's edge with a top is rounded with R up to a convex corner of the
+wall with a cylinder, whose rim with the top an earlier rounding of R (a
+torus) rounds. The chain goes from the wall's edge with the top (an
+analytic piece, a cylinder) over the wall's edge with the torus (walked)
+to the wall's edge with the cylinder (an analytic piece). Over the
+torus's edge the ball first rolls on the top and the wall up to where its
+contact on the top reaches the torus's edge with the top; there its
+centre lies on the torus's centre circle, and from there on the ball
+stays put: its contact on the wall stays at one point, the start of the
+next analytic piece, while its other contact turns round the torus's
+section from the top down to the cylinder (a quarter of the section).
+
+ChFi3d_ReachedAnalyticPiece (1301) ended the walk where either contact lay
+within ten times the spine's tolerance of the point where the analytic
+piece after the guide starts (going back: where the one before it ends),
+for a walk whose other contact lags a few micrometres across a slight
+kink of the spine. At the ball that stays put the wall's contact is there
+already, so the walk ended with the piece on the top and the wall: the
+part of the ball between was missing, and the build of the result failed
+on the gap ("Knots interval values too close", "U1 == U2") or, on a
+synthetic block, made an invalid body. Walked the other way, from the
+cylinder's piece, the ball's part was there.
+
+- ChFi3d_ReachedAnalyticPiece: the other contact must also lie within a
+  tenth of the analytic piece's section (the distance between its two
+  points there) of that piece's point on its side.
+
+On a D-shaped block (a cylinder of 5 cut by a wall, its top rim rounded
+with 1) whose wall's edges with the top, the torus and the cylinder are
+rounded with 1: valid, each top corner one face on the ball's sphere
+within 1e-5; before, the rounding threw, or (radius 2 on a cylinder of 8)
+the result was invalid.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index b86ef96f..18356ff1 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -5225,7 +5225,8 @@ static bool ChFi3d_ContactAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
+ // theNext after the guide starts (theFirst: where the one before it ends).
+ // Across a slight kink of the spine the walked guide's sections lean against
+ // that piece's: one contact reaches the piece's face, at its first point,
+-// while the other is still a few micrometres short of it.
++// while the other is still a few micrometres short of it (within a tenth of
++// the piece's section).
+ static bool ChFi3d_ReachedAnalyticPiece(const occ::handle<ChFiDS_SurfData>& theSD,
+                                         const occ::handle<ChFiDS_SurfData>& theNext,
+                                         const bool                          theFirst,
+@@ -5235,9 +5236,18 @@ static bool ChFi3d_ReachedAnalyticPiece(const occ::handle<ChFiDS_SurfData>& theS
+   {
+     return false;
+   }
++  // (The other contact lagging only a little: within a tenth of the
++  // analytic piece's section. A ball that stays put between the guide's
++  // end and the analytic piece keeps one contact where that piece starts
++  // while its other contact still turns round the tube it touches: the
++  // walk goes on, mitcad#1427.)
++  const double aChord =
++    theNext->Vertex(!theFirst, 1).Point().Distance(theNext->Vertex(!theFirst, 2).Point());
+   for (int k = 1; k <= 2; k++)
+   {
+-    if (theSD->Vertex(theFirst, k).Point().Distance(theNext->Vertex(!theFirst, k).Point()) <= theTol)
++    if (theSD->Vertex(theFirst, k).Point().Distance(theNext->Vertex(!theFirst, k).Point()) <= theTol
++        && theSD->Vertex(theFirst, 3 - k).Point().Distance(theNext->Vertex(!theFirst, 3 - k).Point())
++             <= std::max(theTol, 0.1 * aChord))
+     {
+       return true;
+     }

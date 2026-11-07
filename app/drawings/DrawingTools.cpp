@@ -230,6 +230,33 @@ QJsonObject baseline(const QString& drawing, int /*sheet*/, const ToolPicks& pic
   return command;
 }
 
+// Model Items (mitcad#1406): the sketch dimensions and the model's
+// annotations switched on, each as its check box says, for the views the
+// picks name by their ids (the selected ones; none: all the sheet's).
+QJsonObject modelItems(const QString& drawing, int sheet, const ToolPicks& picks,
+                       const QHash<QString, QString>& options) {
+  const bool sketch = toolOption("drawing.model_items", options, "sketch_dimensions") == QStringLiteral("true");
+  const bool annotations = toolOption("drawing.model_items", options, "model_annotations") == QStringLiteral("true");
+  if (!sketch && !annotations) {
+    return {};
+  }
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("drawing_model_items")},
+                      {QStringLiteral("drawing"), drawing},
+                      {QStringLiteral("sheet"), sheet},
+                      {QStringLiteral("sketch_dimensions"), sketch},
+                      {QStringLiteral("model_annotations"), annotations}};
+  QJsonArray views;
+  for (const QJsonValue& view : picks.picks) {
+    if (view.isDouble() && view.toInt() > 0) {
+      views.append(view.toInt());
+    }
+  }
+  if (!views.isEmpty()) {
+    command.insert(QStringLiteral("views"), views);
+  }
+  return command;
+}
+
 QJsonObject centerMark(const QString& drawing, int /*sheet*/, const ToolPicks& picks,
                        const QHash<QString, QString>& /*options*/) {
   return picked(picks, 1, false) ? annotationOn(drawing, picks, QStringLiteral("center_mark")) : QJsonObject();
@@ -479,6 +506,17 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                         QStringLiteral("baseline")),
                  choice(QStringLiteral("along"), tr("Direction"), axes, QStringLiteral("horizontal"))},
                 &baseline, false, QString(), &openPicks, &linearType, true});
+  // The model's items in the selected views, or all the sheet's
+  // (mitcad#1406): no picks, its panel's Apply runs it.
+  const auto check = [](const QString& id, const QString& label) {
+    return ToolOption{id, label, ToolOption::Kind::Check, {}, QStringLiteral("true")};
+  };
+  tools.append({QStringLiteral("drawing.model_items"), tr("Model Items"), QStringLiteral("drawing-model-items"),
+                tr("Brings the model's dimensions and annotations into views"), SheetPick::None,
+                tr("Select views (none: all the sheet's), then Apply"),
+                {check(QStringLiteral("sketch_dimensions"), tr("Sketch Dimensions")),
+                 check(QStringLiteral("model_annotations"), tr("Model Annotations"))},
+                &modelItems, false, QString(), nullptr, nullptr, false});
   tools.append({QStringLiteral("drawing.center_mark"), tr("Center Mark"), QStringLiteral("drawing-center-mark"),
                 tr("Marks a circle's center, or a round face's centerline"), SheetPick::Picks,
                 tr("Click a circle, or a round face seen from the side"), {}, &centerMark, false, QString(),
@@ -648,7 +686,7 @@ int toolGroup(const DrawingToolDef& tool) {
     return 1;
   }
   if (id == QStringLiteral("drawing.dimension") || id == QStringLiteral("drawing.ordinate") ||
-      id == QStringLiteral("drawing.baseline")) {
+      id == QStringLiteral("drawing.baseline") || id == QStringLiteral("drawing.model_items")) {
     return 2;
   }
   if (id == QStringLiteral("drawing.text") || id == QStringLiteral("drawing.note")) {
@@ -710,6 +748,8 @@ QStringList toolKeywords(const QString& id) {
     out << QStringLiteral("bolt circle") << QStringLiteral("centered pattern");
   } else if (id == QStringLiteral("drawing.edge_extension")) {
     out << QStringLiteral("virtual sharp") << QStringLiteral("intersection");
+  } else if (id == QStringLiteral("drawing.model_items")) {
+    out << QStringLiteral("model annotations") << QStringLiteral("retrieve dimensions");
   }
   return out;
 }
@@ -979,7 +1019,7 @@ QJsonObject viewEdit(const QString& drawing, int view, const QString& field, con
     command.insert(QStringLiteral("style"), changed);
   } else if (field == QStringLiteral("aligned") || field == QStringLiteral("hatch") ||
              field == QStringLiteral("flip") || field == QStringLiteral("center_marks") ||
-             field == QStringLiteral("retrieved_dimensions")) {
+             field == QStringLiteral("retrieved_dimensions") || field == QStringLiteral("model_annotations")) {
     command.insert(field, yes(value));
   } else if (field == QStringLiteral("radius")) {
     bool number = false;

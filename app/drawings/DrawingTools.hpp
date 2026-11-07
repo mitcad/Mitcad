@@ -57,7 +57,9 @@ struct ToolOption {
 // A base view along the 3D view's Current View gets the camera from the
 // workspace (`{"toward_eye", "up"}`, the model's form). `subject` is
 // unused by the tools since mitcad#725 (a base view's Shows option says
-// what it shows) and kept for the order of the brace initialisers.
+// what it shows) and kept for the order of the brace initialisers. Model
+// Items (mitcad#1406), which picks nothing, gets the ids of the views
+// selected on the sheet as `picks` (none: all the sheet's).
 struct ToolPicks {
   int view = 0;
   QVector<QPointF> points;
@@ -105,8 +107,11 @@ struct DrawingToolDef {
 };
 
 // The tools: Base View, Projected View, Section View, Detail View, Break;
-// then the annotations' tools: Dimension, Ordinate, Baseline, Center
-// Mark, Centerline, Line, Arc, Center Pattern, Edge Extension
+// then the annotations' tools: Dimension, Ordinate, Baseline, Model Items
+// (mitcad#1406: no picks; the sketch dimensions and the model's
+// annotations switched on for the selected views, or all the sheet's, by
+// its panel's Apply), Center Mark, Centerline, Line, Arc, Center Pattern,
+// Edge Extension
 // (mitcad#729), Text, Note, Datum Label, Feature Control Frame, Surface
 // Finish; then the tables' (mitcad#707 phase 3): Hole Table, Parts List,
 // Balloon. The bar shows them by their groups (`toolGroup`).
@@ -133,7 +138,7 @@ const DrawingToolDef* drawingTool(const QString& id);
 // The groups of the bar, in its order, each under its caption
 // (`toolGroupName`, mitcad#725): Create (the views' tools), Geometry
 // (Center Mark, Centerline, Line, Arc, Center Pattern, Edge Extension;
-// mitcad#729), Dimensions (Dimension, Ordinate, Baseline),
+// mitcad#729), Dimensions (Dimension, Ordinate, Baseline, Model Items),
 // Text (Text, Note), Symbols (Datum Label, Feature Control Frame, Surface
 // Finish), Tables (Hole Table, Parts List, Balloon); the bar's Export
 // group comes after them.
@@ -218,8 +223,8 @@ QList<QPair<QString, QString>> sideChoices();
 // "tangent_edges", "shaded", "label", "direction", "aligned", "side",
 // "letter", "hatch", "flip", "radius" (sheet mm), "center" ("x y", sheet
 // mm), "subject" (the model's JSON as text), "center_marks",
-// "retrieved_dimensions", "rotation" (degrees counter-clockwise,
-// mitcad#729)) of view `view`, whose style is `style` now (a style is
+// "retrieved_dimensions", "model_annotations" (mitcad#1406), "rotation"
+// (degrees counter-clockwise, mitcad#729)) of view `view`, whose style is `style` now (a style is
 // changed as a whole); empty for a value the field cannot take.
 QJsonObject viewEdit(const QString& drawing, int view, const QString& field, const QString& value,
                      const QJsonObject& style);

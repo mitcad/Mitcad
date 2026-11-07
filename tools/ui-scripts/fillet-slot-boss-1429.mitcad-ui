@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# Fillet on the slot-and-boss part (mitcad#1429, GitHub mitcad/Mitcad#173):
+# fillet-slot-boss-1429.json's plate (a slot extruded 15, F2.b0) with
+# its boss (the circle of a slot end's size at its centre, extruded 30)
+# whose cylinder the plate's flat sides run into tangentially. Fillet on
+# the plate's top edge along one flat side, Tangent Chain on: the previews
+# at 1, 3 and 6 mm, Tangent Chain off and on again, the edge hovered, Enter
+# and Escape. Whatever each preview gives (a fillet or its failure in the
+# panel), the application stays up.
+# Run by tools/ui-fillet-boss-tangent-crash-test.sh (Linux),
+# tools/ui-windows-fillet-boss-tangent-crash-test.ps1 (Windows) and
+# tools/ui-macos-fillet-boss-tangent-crash-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Fillet on the plate's top edge along the flat side c1 (Tangent Chain on:
+# round the plate's other end and along the other flat side).
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F2[.]b0/E[{]F2:end[^|]*[|]F2:side[(]c1[[]c2,c4[]][)][}] '
+wait-log '^Fillet Edges: ' 20
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+
+# The radii the reports name.
+mark
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '3 mm'
+wait-log '^Fillet Radius: 3 mm = 3 mm$' 30
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+mark
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '6 mm'
+wait-log '^Fillet Radius: 6 mm = 6 mm$' 30
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+mark
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '1 mm'
+wait-log '^Fillet Radius: 1 mm = 1 mm$' 30
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+mark
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '3 mm'
+wait-log '^Fillet Radius: 3 mm = 3 mm$' 30
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+
+# Tangent Chain off and on again, each previewed.
+mark
+click-logged 'Panel Fillet input tangent_chain at '
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+mark
+click-logged 'Panel Fillet input tangent_chain at '
+wait-log '^Preview Fillet: (ok|failed|not built)' 120
+wait-idle 120
+
+# The edge and its neighbours hovered (the tangent chains asked).
+mark
+hover-logged '^Pick edge F2[.]b0/E[{]F2:end[^|]*[|]F2:side[(]c3[[]c4,c2[]][)][}] '
+wait-idle 30
+hover-logged '^Pick edge F2[.]b0/E[{]F2:end[^|]*[|]F2:side[(]c1[[]c2,c4[]][)][}] '
+wait-idle 30
+hover-logged '^Pick edge F2[.]b0/E[{]F2:side[(]c2[[]c3,c1[]][)][|]F4:end'
+wait-idle 30
+
+# Enter (OK): the fillet, or its failure in the panel; then Escape.
+mark
+key Return
+wait-log '^(Added Fillet|Preview Fillet: |Fillet: )' 120
+wait-idle 120
+key Escape
+wait-idle 30
+expect-never 'TestDriver: FAIL'

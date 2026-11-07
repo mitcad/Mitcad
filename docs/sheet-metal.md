@@ -985,6 +985,33 @@ Decisions made while closing the import gaps of mitcad#211:
   a 10 x 4 window across the fold, `2320 + 6.4 pi` folded, `2320` and the
   window again developed; a window across one line only, `2360 + 7.2 pi +
   8/9` on either side; a thickness edit.
+- **Folds across oblique edges (mitcad#1424).** The bend's strip of a Fold is
+  the panel's material between the two tangent lines, so where the line
+  crosses an edge at another angle than 90 degrees the strip ends on that
+  edge, and its stationary and moving tangent lines end at different axial
+  positions. Each seam covers the part of its line that has material (the
+  stationary panel's new boundary pairs with the strip's first side, the
+  strip's second side with the moving panel's), not the whole length of the
+  line; a bend built from a rectangle (Flange, Hem, Bend) still has sides
+  over its whole interval. The bend's `axial_interval` is the interval its
+  strip's material covers. Each end of the line is classified from the
+  material on the normal just past it (1e-5 mm): material on both sides of
+  the line there is an end inside material (relief as before); otherwise
+  material past the end within the bend's reach (beyond the stationary
+  tangent line: the line drawn exactly from edge to edge of a trapezoid
+  whose moving side widens, or whose stationary side widens into the
+  strip) lets the strip, the moving panel and the stationary panel's cut
+  run on past that end, bounded by the outline; with none, the bend ends
+  at the end of the line. The relief no longer follows the panel's
+  bounding box (a line ending on the outline of a panel rotated in its
+  sketch asked for a relief that cut nothing). A seam whose sides still do
+  not pair names the bend and the boundary curve of its strip where they
+  part. CLI `sheet_fold_oblique`: a trapezoid folded across its slanted
+  sides at 90 and 40 degrees (`2000 + 100 BA/9`), the line from edge to
+  edge and past both edges, either side fixed, centred or from the line,
+  the flat pattern its outline, opened and folded back;
+  `sheet_fold_oblique_polygon`: a reported seven-sided panel folded at 40
+  and 90 degrees with the line past both edges it crosses, the same.
 - **Patterns of straight cuts with many copies.** A pattern whose copies
   are all of one straight sheet cut cuts the copies that keep clear of the
   bends' seams (the box of each copy's tool does not reach a seam's line on
@@ -1135,6 +1162,43 @@ The Flange panel edits what the `.f3d` and `.ipt` imports give a flange:
   passes the edge's ends (root 0, then 3), a rolled hem of 270 degrees
   and length 0; volumes as `cli.sheet_flange_hem_past` and
   `cli.sheet_flange_overhang`, the saved definitions read back.
+
+### Corner joints of a closing flange (mitcad#1410)
+
+A flange whose wall closes against another wall of the same sheet (the
+last side of a box section closed by welding) takes a corner joint,
+`corner` (commands.md, "Corner joints of a closing flange"). Its length
+is then the closed section's inside dimension (length mode `inner`), and
+the joint sets the wall's end from the thickness `t`:
+
+- **Open** (`open`): the wall ends on the other wall's inner surface; the
+  two walls meet only along the corner line, which a sheet body holds as
+  it is (mitcad#1409). The inside dimension is exact.
+- **Half Open** (`half_open`): the wall reaches `t / 2` further, over half
+  of the other wall's end. Walls that touch over a face give no sound
+  solid (OCCT's checker refuses it and booleans and fillets on it fail,
+  mitcad#1409), so the flange cuts the other wall back by a seam of
+  0.00001 mm (10 nm, `HALF_OPEN_SEAM`) where its wall lies over it. That
+  seam is the only clearance: the smallest that is a gap at all, ten times
+  the 1e-6 mm modelling tolerance (the contact check accepts walls
+  0.0000005 mm apart and refuses them at 0.0000001 mm; gaps from
+  0.000001 mm to 0.01 mm all gave a valid body, a cut through the corner
+  and a hole). The inside dimension stays exact; the other wall's end is
+  the flange's generated curves 60 to 63.
+- The other wall is found by geometry: the flat wall normal to the
+  flange's wall whose material lies under its last `t / 2` and whose end
+  lies on its surface. None, or more than one, refuses the flange. The
+  joint belongs on the wall that closes the section, added last.
+- The list is open for further joints (flush, overlap).
+- **Panel.** Corner (None, Open, Half Open) on the Flange panel, beside
+  Hem (one or the other); with a corner Measured is hidden and the panel
+  writes Inner Length. Tests: `cli.sheet_flange_corner` (Open and Half
+  Open on a 1 mm sheet, 10 x 10 inside, Outside flanges by Inner Length:
+  valid bodies, volumes, flat patterns with the walls at the strip's
+  ends, a cut through the half open corner and a hole);
+  `tools/ui-sheet-flange-corner-test.sh` and the ctest
+  `app.ui-windows-sheet-corner` (the corner loaded and kept by an edit,
+  Half Open chosen, saved and read back, None showing Measured).
 
 ## Kernel seam
 

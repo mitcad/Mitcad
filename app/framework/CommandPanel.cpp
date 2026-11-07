@@ -1674,7 +1674,9 @@ void CommandPanel::logFit() const {
     shown = QStringLiteral("%1x%2").arg(m_message->width()).arg(m_message->height());
     const QScrollBar* bar = m_message->verticalScrollBar();
     if (bar != nullptr && bar->maximum() > 0) {
-      shown += QStringLiteral(" scrolling");
+      // How far down its text it shows, in pixels: 0 with its first line
+      // in sight at the top (mitcad#1430).
+      shown += QStringLiteral(" scrolling, at %1 of %2").arg(bar->value()).arg(bar->maximum());
     }
   }
   qDebug().noquote() << QStringLiteral("Panel %1 message %2, panel width %3 of %4")

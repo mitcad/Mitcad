@@ -14,6 +14,7 @@
 #include <QJsonValue>
 #include <QtLogging>
 
+#include <BRepTools.hxx>
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressScope.hxx>
 #include <Standard_Failure.hxx>
@@ -396,7 +397,109 @@ QByteArray displayMeshStoreOptions() {
              .arg(options.size_deviation_max, 0, 'g', 17)
              .arg(options.interior_angle, 0, 'g', 17)
              .arg(options.hold_face_triangles ? 1 : 0)
-             .toUtf8();
+             .toUtf8() +
+         // Small circles by their size or not (mitcad#879): a design meshed
+         // with the other choice is meshed again, not shown with its meshes.
+         QStringLiteral(" small_circles=%1").arg(options.small_circle_segments).toUtf8();
+}
+
+DisplayRemeshing remeshForDisplay(const DisplayShapes& shapes, ModelJob& job) {
+  DisplayRemeshing remeshing;
+  QElapsedTimer clock;
+  clock.start();
+  std::vector<TopoDS_Shape> copies;
+  std::set<const TopoDS_TShape*> seen;
+  for (const std::shared_ptr<geometry::Shape>& shape : shapes) {
+    const TopoDS_Shape& occt = shape->occt();
+    if (!shape->display_meshed() || shape->display_interactive() || shape->display_stand_in() ||
+        io::is_mesh(occt) || !io::has_triangulation(occt) || !seen.insert(occt.TShape().get()).second) {
+      continue; // not drawn with the final tier's meshes, or met already
+    }
+    try {
+      const std::shared_ptr<geometry::Shape> copy = geometry::independent_copy(*shape);
+      copies.push_back(copy->occt());
+      remeshing.bodies.push_back(shape);
+    } catch (const Standard_Failure&) {
+      // Keeps the meshes it has.
+    } catch (const std::exception&) {
+    }
+  }
+  if (copies.empty() || job.control().is_cancelled()) {
+    remeshing.complete = !job.control().is_cancelled();
+    remeshing.bodies.clear();
+    remeshing.milliseconds = clock.elapsed();
+    return remeshing;
+  }
+  job.setStage(QCoreApplication::translate("DisplayMeshes", "Meshing the bodies for display"));
+  const occ::handle<JobBreak> progress = new JobBreak(job);
+  try {
+    const std::size_t meshed =
+        io::mesh_all_in_place(copies, viewMeshOptions(), progress->Start(), &remeshing.report);
+    if (meshed == copies.size() && !job.control().is_cancelled() && remeshing.report.abandoned == 0) {
+      for (const TopoDS_Shape& copy : copies) {
+        remeshing.meshes.push_back(io::capture_triangulations(copy));
+        remeshing.triangles += io::mesh_stats(copy).triangles;
+      }
+      remeshing.complete = true;
+    }
+  } catch (const Standard_Failure&) {
+  } catch (const std::exception&) {
+  }
+  if (!remeshing.complete) {
+    remeshing.bodies.clear();
+    remeshing.meshes.clear();
+    remeshing.triangles = 0;
+  }
+  remeshing.milliseconds = clock.elapsed();
+  return remeshing;
+}
+
+std::size_t giveRemeshed(const DisplayRemeshing& remeshing) {
+  if (!remeshing.complete || remeshing.meshes.size() != remeshing.bodies.size()) {
+    return 0;
+  }
+  for (const std::shared_ptr<geometry::Shape>& body : remeshing.bodies) {
+    BRepTools::Clean(body->occt());
+  }
+  std::size_t given = 0;
+  for (std::size_t i = 0; i < remeshing.bodies.size(); ++i) {
+    const TopoDS_Shape& occt = remeshing.bodies[i]->occt();
+    try {
+      io::restore_triangulations(occt, *remeshing.meshes[i]);
+      ++given;
+      continue;
+    } catch (const Standard_Failure&) {
+    } catch (const std::exception&) {
+    }
+    // Not its copy's after all: meshed here, so that the view draws it.
+    try {
+      io::mesh_in_place(occt, viewMeshOptions());
+    } catch (const Standard_Failure&) {
+    } catch (const std::exception&) {
+    }
+  }
+  return given;
+}
+
+void logRemeshing(const DisplayRemeshing& remeshing, std::size_t given, const QString& label) {
+  const QString choice = viewSmallCircles() == SmallCircles::Adaptive ? QStringLiteral("adaptive")
+                                                                      : QStringLiteral("full detail");
+  if (!remeshing.complete) {
+    qDebug().noquote() << QStringLiteral("Display meshes of %1: meshing again with small circles %2 cancelled")
+                              .arg(label, choice);
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Display meshes of %1: %2 bodies meshed again with small circles %3 in %4 ms "
+                                       "(%5 triangles)")
+                            .arg(label)
+                            .arg(static_cast<qulonglong>(given))
+                            .arg(choice)
+                            .arg(remeshing.milliseconds)
+                            .arg(static_cast<qulonglong>(remeshing.triangles));
+  if (io::mesh_tracing()) {
+    qDebug().noquote() << QStringLiteral("Mesh trace %1 again: %2")
+                              .arg(label, QString::fromStdString(remeshing.report.line()));
+  }
 }
 
 DisplayMeshing meshOpenedForDisplay(Document& document, ModelJob& job, bool store, DisplayMeshWrites* writes,

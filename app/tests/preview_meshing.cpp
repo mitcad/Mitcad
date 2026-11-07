@@ -1385,6 +1385,82 @@ void testPatternSharesMeshes() {
 }
 } // namespace
 
+// Small circles switched (mitcad#879, Preferences > Display > Small
+// circles): a 10 mm block with a hole of 1 mm, shown with the default
+// (Adaptive) display meshes. In Full detail the result store's key is
+// another, and the shown body meshed again (remeshForDisplay on copies,
+// giveRemeshed into the body) has more triangles, every face a new
+// triangulation and still meshed to the end; back in Adaptive, meshed
+// again, as many as at first.
+void testRemeshSmallCircles() {
+  CHECK(mitcad::viewSmallCircles() == mitcad::SmallCircles::Adaptive);
+  rust::Box<Document> document = mitcad::new_document();
+  const QString sketch = run(*document, QJsonObject{{"cmd", "sketch.create"}}).value("uid").toString();
+  run(*document, rectangle(sketch, 0, 0, 10, 10));
+  run(*document, QJsonObject{{"cmd", "add_feature"},
+                             {"def", QJsonObject{{"type", "extrude"},
+                                                 {"profiles", QJsonArray{profile(sketch, kRectangle)}},
+                                                 {"extent", QJsonObject{{"type", "distance"}, {"distance", 10}}},
+                                                 {"operation", "new_body"}}}});
+  const QString drill = run(*document, QJsonObject{{"cmd", "sketch.create"}}).value("uid").toString();
+  const QJsonObject circle = run(*document, QJsonObject{{"cmd", "sketch.add_circle"},
+                                                        {"sketch", drill},
+                                                        {"center", QJsonArray{5, 5}},
+                                                        {"diameter", 1}});
+  run(*document, QJsonObject{{"cmd", "add_feature"},
+                             {"def", QJsonObject{{"type", "extrude"},
+                                                 {"profiles", QJsonArray{profile(drill, circle.value("region").toString())}},
+                                                 {"start", QJsonObject{{"type", "offset"}, {"offset", -5}}},
+                                                 {"extent", QJsonObject{{"type", "distance"}, {"distance", 30}}},
+                                                 {"operation", "cut"}}}});
+  meshShown(*document);
+  const mitcad::DisplayShapes shown = mitcad::shownBodyShapes(*document);
+  CHECK(shown.size() == 1);
+  if (shown.size() != 1) {
+    return;
+  }
+  const ShapePtr body = shown.front();
+  CHECK(finalTier(body));
+  const std::size_t adaptive = mitcad::io::mesh_stats(body->occt()).triangles;
+  const QByteArray adaptiveKey = mitcad::displayMeshStoreOptions();
+
+  CHECK(mitcad::setViewSmallCircles(mitcad::SmallCircles::FullDetail));
+  CHECK(mitcad::displayMeshStoreOptions() != adaptiveKey);
+  const std::vector<const Poly_Triangulation*> before = triangulations(body->occt());
+  mitcad::DisplayRemeshing remeshing;
+  {
+    mitcad::ModelJob job;
+    remeshing = mitcad::remeshForDisplay(mitcad::shownBodyShapes(*document), job);
+  }
+  CHECK(remeshing.complete && remeshing.bodies.size() == 1);
+  // The body itself is not written by the job.
+  CHECK(triangulations(body->occt()) == before);
+  const std::size_t given = mitcad::giveRemeshed(remeshing);
+  mitcad::logRemeshing(remeshing, given, QStringLiteral("small circles"));
+  CHECK(given == 1);
+  const std::size_t full = mitcad::io::mesh_stats(body->occt()).triangles;
+  const std::vector<const Poly_Triangulation*> after = triangulations(body->occt());
+  CHECK(after.size() == before.size());
+  for (std::size_t i = 0; i < after.size() && i < before.size(); ++i) {
+    CHECK(after[i] != nullptr && after[i] != before[i]);
+  }
+  CHECK(finalTier(body));
+
+  CHECK(mitcad::setViewSmallCircles(mitcad::SmallCircles::Adaptive));
+  CHECK(mitcad::displayMeshStoreOptions() == adaptiveKey);
+  {
+    mitcad::ModelJob job;
+    remeshing = mitcad::remeshForDisplay(mitcad::shownBodyShapes(*document), job);
+  }
+  CHECK(mitcad::giveRemeshed(remeshing) == 1);
+  const std::size_t again = mitcad::io::mesh_stats(body->occt()).triangles;
+  std::printf("Small circles: a block with a hole of 1 mm, %zu triangles adaptive, %zu in full detail, %zu adaptive "
+              "again\n",
+              adaptive, full, again);
+  CHECK(full > adaptive);
+  CHECK(again == adaptive);
+}
+
 int main(int argc, char** argv) {
   if (argc > 1 && std::strcmp(argv[1], "--abandon-at-exit") == 0) {
     return mitcad::endProcess(abandonFaceAtExit(argc, argv));
@@ -1430,6 +1506,7 @@ int main(int argc, char** argv) {
   testDeferredWrite();
   testMeshDuringRecompute();
   testPatternSharesMeshes();
+  testRemeshSmallCircles();
   if (failures > 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

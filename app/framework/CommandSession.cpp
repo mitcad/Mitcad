@@ -810,6 +810,7 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
     m_state.setText(key, text);
     const auto slot = slotOf(key);
     if (slot && slot->def->type == InputDef::Type::Value) {
+      m_valueTyped = true; // Ctrl hides no preview there now (mitcad#1421)
       evaluate(key);
       if (slot->def->onChange) {
         // A typed value sets the inputs that follow it (mitcad#375: a
@@ -1179,6 +1180,7 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
       application->installEventFilter(this);
     }
   }
+  setUpPreviewHold(); // Ctrl held hides a feature's preview (mitcad#1421)
   createCursorBox();
   updateHighlights();
   updateManipulators();
@@ -1232,6 +1234,12 @@ const InputDef* CommandSession::activeInput() const {
 bool CommandSession::activeTakes(SelectKind kind) const {
   const InputDef* input = activeInput();
   return input != nullptr && activeKinds(input).testFlag(kind);
+}
+
+bool CommandSession::activeAccepts(const SelectionItem& item) const {
+  const InputDef* input = activeInput();
+  return input != nullptr && activeKinds(input).testFlag(item.kind) && acceptsNow(input, item) &&
+         isReferable(item);
 }
 
 bool CommandSession::activeTakesSketchAxes() const {
@@ -2009,6 +2017,11 @@ void CommandSession::updateManipulators() {
         }
       }
       handles.push_back({slot.key, slot.def->label, *handle, value, text});
+      // A drag's step (mitcad#1431): a length's own size may count as its
+      // scale; no finer than the box's last decimal (4 in the unit shown).
+      ManipulatorOverlay::Handle& added = handles.back();
+      added.length = slot.def->valueKind == ValueKind::Length;
+      added.finest = slot.def->valueKind == ValueKind::Length ? 1e-4 * m_host.unitMillimetres() : 1e-4;
     }
   }
   if (m_def.viewLines) {
@@ -3021,8 +3034,14 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
 }
 
 void CommandSession::showPreview(const Preview& preview, const QString& operation) {
-  OcctViewer& viewer = m_host.viewer();
+  // While Ctrl hides the preview it is kept, not drawn, and drawn once Ctrl
+  // is released (mitcad#1421, CommandSessionHold.cpp).
+  m_drawnPreview = DrawnPreview{preview, operation};
   m_shownOperation = operation;
+  if (m_previewHidden) {
+    return;
+  }
+  OcctViewer& viewer = m_host.viewer();
   const InputDef* active = activeInput();
   m_toolOverlaysShown = active != nullptr && active->toolOverlays;
   // Cut at the view's plane with their clips, or until they are ready as
@@ -3038,36 +3057,7 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
     qDebug().noquote() << QStringLiteral("Preview installed: %1, dragging=%2")
         .arg(m_def.name).arg(m_manipulators && m_manipulators->isDragging());
   }
-  // What the preview draws (mitcad#266), for UI tests: each body with its
-  // occurrence, its placement's translation into the design, "new" for
-  // what the command makes and "tool" for a consumed tool's overlay
-  // (mitcad#561), as "Bodies shown" lists the normal view's.
-  QStringList drawn;
-  for (const BodyDisplay& body : bodies) {
-    if (!body.shape) {
-      continue;
-    }
-    const gp_XYZ at = body.placement.Transformation().TranslationPart();
-    const auto coordinate = [](double value) {
-      return QString::number(std::abs(value) < 1e-9 ? 0.0 : value, 'g', 10);
-    };
-    const QString occurrence = QString::fromStdString(body.occurrence);
-    QString look;
-    if (body.style == BodyDisplay::Style::New) {
-      look = QStringLiteral(" new");
-    } else if (body.style == BodyDisplay::Style::Tool || body.style == BodyDisplay::Style::CutTool) {
-      look = QStringLiteral(" tool");
-    }
-    drawn << QStringLiteral("%1%2 at %3,%4,%5%6")
-                 .arg(QString::fromStdString(body.uid),
-                      occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + occurrence,
-                      coordinate(at.X()), coordinate(at.Y()), coordinate(at.Z()), look);
-  }
-  const QString logged = drawn.isEmpty() ? QStringLiteral("none") : drawn.join(QStringLiteral("; "));
-  if (logged != m_loggedPreviewBodies) {
-    m_loggedPreviewBodies = logged;
-    qDebug().noquote() << QStringLiteral("Preview bodies: %1").arg(logged);
-  }
+  logPreviewBodies(bodies);
   // Where the tool is drawn (its box's middle in the design), for UI tests:
   // placed where its component's occurrences put it (mitcad#636).
   QString toolAt = QStringLiteral("none");
@@ -3466,6 +3456,7 @@ void CommandSession::clearPreview() {
     return;
   }
   m_proxyBasis.reset();
+  m_drawnPreview.reset(); // none to draw again when Ctrl is released (mitcad#1421)
   hideDragProxy(QStringLiteral("no exact preview is shown"), true);
   m_host.clearModelPreview();
   const std::vector<BodyDisplay> modelShown = m_host.modelBodies();
@@ -4947,6 +4938,7 @@ void CommandSession::finish(bool committed) {
   if (auto* application = QCoreApplication::instance()) {
     application->removeEventFilter(this); // a Tab cycle's (mitcad#375)
   }
+  endPreviewHold(); // Ctrl's (mitcad#1421)
   if (m_cursorBox) {
     m_cursorBox->hide();
     m_cursorBox->deleteLater();

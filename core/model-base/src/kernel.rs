@@ -1906,6 +1906,29 @@ pub trait Kernel: Send {
     fn note_places(&self, _shape: &Self::Shape) -> Vec<Vec<crate::notice::NoticePlace>> {
         Vec::new()
     }
+
+    // Intersection curves: two sketches' curves, each swept along its
+    // sketch's normal, and where the swept surfaces cross (mitcad#1405;
+    // `features::intersection_curve`).
+
+    /// Where the surface the chain `first` (curves end to end in order, each
+    /// running along it, as a path's) makes swept along `first_direction`
+    /// crosses the surface the chain `second` makes swept along
+    /// `second_direction`. Each chain is swept both ways from where it lies,
+    /// far enough to pass through the other wherever it is. The crossing's
+    /// pieces in model space, each once and in no particular order; a piece
+    /// ends where a face of either surface ends (where two curves of a chain
+    /// meet). Empty when the surfaces do not cross. Directions that are
+    /// parallel either way are an error. The curves are left as they are.
+    fn intersection_curves(
+        &self,
+        _first: &[crate::sweeps::PathCurve],
+        _first_direction: [f64; 3],
+        _second: &[crate::sweeps::PathCurve],
+        _second_direction: [f64; 3],
+    ) -> Result<Vec<Curve3>, KernelError> {
+        Err(KernelError::Unsupported("intersection curves"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of

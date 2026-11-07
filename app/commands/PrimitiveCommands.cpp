@@ -6,6 +6,7 @@
 // PlaceInputs.hpp): on an axis, at a point, or on a face or a plane at
 // distances from two of its edges; a box also turns about its axis.
 #include <cmath>
+#include <initializer_list>
 
 #include <QJsonArray>
 
@@ -51,6 +52,14 @@ handle(const PlacePanel& panel, Along along, double factor, double dx = 0.0, dou
     m.factor = factor;
     m.valueBox = true;
     m.boxAtTip = true; // a size reads at its end (mitcad#656)
+    // Stepped by the part's smallest size (mitcad#1431): a 10 mm cube's
+    // arrows by 0.1 mm.
+    for (const char* key : {"length", "width", "height", "diameter", "section"}) {
+      const double size = std::abs(state.value(QString::fromLatin1(key)));
+      if (std::isfinite(size) && size > 0.0 && (m.scale <= 0.0 || size < m.scale)) {
+        m.scale = size;
+      }
+    }
     return m;
   };
 }

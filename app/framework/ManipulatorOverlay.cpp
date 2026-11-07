@@ -18,6 +18,7 @@
 
 #include "../OcctViewer.hpp"
 #include "Diagnostics.hpp"
+#include "HandleStep.hpp"
 #include "Theme.hpp"
 
 namespace mitcad {
@@ -49,17 +50,6 @@ double distanceToSegment(const QPointF& p, const QPointF& a, const QPointF& b) {
       length2 > 1e-12 ? std::clamp(QPointF::dotProduct(p - a, ab) / length2, 0.0, 1.0) : 0.0;
   const QPointF d = a + ab * t - p;
   return std::hypot(d.x(), d.y());
-}
-
-// A step that is a few pixels long: 1, 2 or 5 times a power of ten.
-double niceStep(double size) {
-  const double power = std::pow(10.0, std::floor(std::log10(std::max(size, 1e-6))));
-  for (const double factor : {1.0, 2.0, 5.0, 10.0}) {
-    if (factor * power >= size) {
-      return factor * power;
-    }
-  }
-  return 10.0 * power;
 }
 
 } // namespace
@@ -166,7 +156,7 @@ void ManipulatorOverlay::publishBoxes() {
   layoutBoxes();
   std::vector<QRect> boxes;
   for (const QRectF& box : m_boxes) {
-    if (!box.isEmpty()) {
+    if (!box.isEmpty() && !isHidden()) { // none while hidden with the preview (mitcad#1421)
       boxes.push_back(box.toAlignedRect());
     }
   }
@@ -435,7 +425,9 @@ ManipulatorOverlay::DragValue ManipulatorOverlay::valueAt(const Handle& handle, 
     const double factor = std::abs(m.factor) > 1e-12 ? m.factor : 1.0;
     const double raw = std::max(
         m.minimum, m.base + QPointF::dotProduct(position - m_grab - a, ab) / length2 / factor);
-    const double step = niceStep(3.0 * pixelSize(m.origin) / std::abs(factor));
+    // The step fixed when the drag began (mitcad#1431); a value asked
+    // for outside a drag at the step it would take now.
+    const double step = m_dragStep > 0.0 ? m_dragStep : arrowStep(handle).step;
     return {std::max(m.minimum, std::round(raw / step) * step), raw};
   }
   const double angle = ringAngle(handle, position);
@@ -455,6 +447,22 @@ ManipulatorOverlay::DragValue ManipulatorOverlay::valueAt(const Handle& handle, 
   const double degree = kPi / 180.0;
   const double raw = m_dragStart + m_turned;
   return {std::round(raw / degree) * degree, raw};
+}
+
+ManipulatorOverlay::ArrowStep ManipulatorOverlay::arrowStep(const Handle& handle) const {
+  // About three pixels of the view along the arrow, in the value's unit;
+  // finer by the geometry's size, else the value the drag starts from
+  // (HandleStep.hpp, mitcad#1431).
+  const Manipulator& m = handle.manipulator;
+  const double factor = std::abs(m.factor) > 1e-12 ? std::abs(m.factor) : 1.0;
+  HandleStepInput input;
+  input.zoom = 3.0 * pixelSize(m.origin) / factor;
+  input.scale = m.scale;
+  if (handle.length && m.valueScale) {
+    input.value = m_drag >= 0 ? m_dragStart : handle.value;
+  }
+  input.finest = handle.finest;
+  return {handleStep(input), niceHandleStep(input.zoom)};
 }
 
 double ManipulatorOverlay::ringAngle(const Handle& handle, const QPointF& position) const {
@@ -479,9 +487,23 @@ double ManipulatorOverlay::ringAngle(const Handle& handle, const QPointF& positi
   return std::atan2(v, u);
 }
 
+void ManipulatorOverlay::setHandlesShown(bool shown) {
+  if (shown == !isHidden()) {
+    return;
+  }
+  setVisible(shown);
+  publishBoxes(); // none while hidden
+  if (shown) {
+    logPlaces();
+  }
+}
+
 bool ManipulatorOverlay::eventFilter(QObject* watched, QEvent* event) {
   if (watched != &m_viewer) {
     return QWidget::eventFilter(watched, event);
+  }
+  if (isHidden() && event->type() != QEvent::Resize) {
+    return false; // hidden with the preview (mitcad#1421) or the command ended: the view's
   }
   // An exception must not leave a Qt event handler: a handle that cannot
   // be worked out (degenerate geometry) just takes no events.
@@ -576,6 +598,17 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
       m_angleLast = ringAngle(handle, m_pressAt);
       m_turned = 0.0;
       m_visualValue = handle.value;
+      m_dragStep = 0.0;
+      if (handle.manipulator.kind == Manipulator::Kind::Arrow) {
+        // One step for the whole drag (mitcad#1431), logged for the UI
+        // tests with the zoom's step it may be finer than.
+        const ArrowStep step = arrowStep(handle);
+        m_dragStep = step.step;
+        qDebug().noquote() << QStringLiteral("Manipulator %1 %2 drag step %3 (zoom step %4)")
+                                  .arg(m_command, handle.key)
+                                  .arg(step.step, 0, 'g', 6)
+                                  .arg(step.zoom, 0, 'g', 6);
+      }
     }
     if (m_drag >= 0) {
       Handle& handle = m_handles[static_cast<std::size_t>(m_drag)];

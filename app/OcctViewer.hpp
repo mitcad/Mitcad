@@ -192,6 +192,9 @@ struct DatumDisplay {
   SelectKind kind = SelectKind::Plane;
   TopoDS_Shape shape;            // placed already
   QString occurrence = QString(); // as for sketch entities
+  // The picked item's geometry; empty: the kind's name. An Intersection
+  // Curve's is featureCurveGeometry() (mitcad#1417).
+  QString geometry = QString();
 };
 
 // A selected item drawn in its input's colour.
@@ -305,6 +308,10 @@ public:
   // Display settings (U5).
   void setVisualStyle(VisualStyle style);
   void setComponentColors(bool on);
+  // Every body drawn anew from its faces' triangulations, which changed
+  // (the small circles' choice, mitcad#879: their display meshes made
+  // again): the objects drawn keep the meshes they were made from.
+  void redrawBodies();
   VisualStyle visualStyle() const { return m_visualStyle; }
   void setNavigation(const NavigationSettings& settings);
   bool UpdateZoom(const Aspect_ScrollDelta& delta) override;

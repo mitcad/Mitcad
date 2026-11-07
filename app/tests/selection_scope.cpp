@@ -127,8 +127,9 @@ void defaultTests() {
   CHECK(sketch.kinds(true).testFlag(SelectKind::Vertex));
   CHECK(sketch.kinds(true).testFlag(SelectKind::Plane));
   CHECK(!sketch.kinds(true).testFlag(SelectKind::Body)); // faces win over bodies
+  // With the curves of Intersection Curves, features (mitcad#1417).
   CHECK(project.kinds(false) == (SelectKind::Edge | SelectKind::Face | SelectKind::Vertex |
-                                 SelectKind::SketchCurve | SelectKind::SketchPoint));
+                                 SelectKind::SketchCurve | SelectKind::SketchPoint | SelectKind::Feature));
   CHECK(project.kinds(true) == project.kinds(false));
 }
 
@@ -304,7 +305,20 @@ void intersectTests() {
   CHECK(scope.describe() == QStringLiteral("visible-edges=cross, occluded-edges=empty, faces=square, bodies=square, "
                                            "other-sketch-geometry=cross"));
   CHECK(scope.kinds(false) == (SelectKind::Edge | SelectKind::Face | SelectKind::Body | SelectKind::SketchCurve |
-                               SelectKind::SketchPoint));
+                               SelectKind::SketchPoint | SelectKind::Feature));
+  // An Intersection Curve's curve (mitcad#1417) in the same row: a click
+  // and a window take it; another feature never.
+  const SelectionItem curve = featureCurveItem(QStringLiteral("F7"));
+  CHECK(isFeatureCurve(curve));
+  CHECK(filterRowOf(curve, kSketch, sketchRow) == FilterRow::OtherSketchGeometry);
+  CHECK(takes(scope, curve, click()));
+  CHECK(takes(scope, curve, window()));
+  const SelectionItem feature = item(SelectKind::Feature, QStringLiteral("F7"));
+  CHECK(!isFeatureCurve(feature));
+  CHECK(!filterRowOf(feature, kSketch, sketchRow).has_value());
+  CHECK(!takes(scope, feature, click(true)));
+  // Sketch mode has no such row: the curve is not picked there.
+  CHECK(!takes(SelectionScope::sketch(), curve, click()));
   const SelectionItem edge = item(SelectKind::Edge, QStringLiteral("F1.b0"), QStringLiteral("e"));
   CHECK(takes(scope, edge, edgePick(true, false, EdgeSight::Visible, nullptr)));
   CHECK(!takes(scope, edge, edgePick(false, false, EdgeSight::Occluded, nullptr)));

@@ -361,21 +361,6 @@ fn port_side(
     })
 }
 
-fn pair(
-    state: &mut SheetState,
-    first: ShapePortSide,
-    second: ShapePortSide,
-    width: f64,
-) -> Result<(), String> {
-    for values in [coverage(&first), coverage(&second)] {
-        if values[0].abs() > TOLERANCE || (values[1] - width).abs() > TOLERANCE {
-            return Err("tangent ports do not cover the same full axial interval".into());
-        }
-    }
-    push_port(state, [0.0, width], first, second);
-    Ok(())
-}
-
 fn push_port(
     state: &mut SheetState,
     interval: [f64; 2],
@@ -399,41 +384,88 @@ fn push_port(
     });
 }
 
-/// Seams between the stretches of two boundaries along one line: a single
-/// stretch each must cover the whole axial interval `[0, width]` (as
-/// [`pair`]); stretches interrupted by holes or cut windows (a fold across
-/// them, mitcad#288) pair one to one, each pair covering the same part of
-/// it, one seam per stretch.
+/// Seams between the stretches of two boundaries along one of `bend`'s
+/// tangent lines (`which`: "stationary" or "moving"), in the order of their
+/// axial coordinates: the stretches pair one to one, each pair covering the
+/// same part of the line, one seam per pair. One stretch each where nothing
+/// interrupts the line; several where holes or cut windows cross it (a fold
+/// across them, mitcad#288). A seam covers the part of the line its material
+/// covers, not necessarily the bend's whole axial interval: a fold across
+/// edges oblique to its line ends its two tangent lines at different axial
+/// positions, each seam over its own interval (mitcad#1424). A bend made from
+/// a rectangle (a flange, a hem, a bend between two panels) has its sides
+/// over the whole interval, so its partners must cover all of it. A refusal
+/// names the bend and the boundary curve of its strip where the two sides
+/// part (`strip`: the bend's chart).
 fn pair_all(
     state: &mut SheetState,
+    bend: BendId,
+    which: &str,
+    strip: &SheetPatch,
     first: Vec<ShapePortSide>,
     second: Vec<ShapePortSide>,
-    width: f64,
 ) -> Result<(), String> {
-    if first.len() == 1 && second.len() == 1 {
-        let (Some(a), Some(b)) = (first.into_iter().next(), second.into_iter().next()) else {
-            unreachable!()
-        };
-        return pair(state, a, b, width);
-    }
+    let label = super::develop::domain_label(SheetDomainRef::Bend(bend));
     if first.len() != second.len() {
-        return Err("the stretches of a bend's seam do not pair up".into());
+        return Err(format!(
+            "{label}: the material along its {which} tangent line comes in {} stretches on one \
+             side of the seam and {} on the other; the seams cannot pair up",
+            first.len(),
+            second.len()
+        ));
     }
     for (a, b) in first.into_iter().zip(second) {
         let (ca, cb) = (coverage(&a), coverage(&b));
-        if (ca[0] - cb[0]).abs() > TOLERANCE
-            || (ca[1] - cb[1]).abs() > TOLERANCE
-            || ca[0] < -TOLERANCE
-            || ca[1] > width + TOLERANCE
-            || ca[1] - ca[0] <= TOLERANCE
+        if let Some((x, y)) = ca
+            .into_iter()
+            .zip(cb)
+            .find(|(x, y)| (x - y).abs() > TOLERANCE)
         {
-            return Err(
-                "the stretches of a bend's seam do not cover the same axial intervals".into(),
-            );
+            // The bend's own side names the edge its strip ends on there.
+            let (own, at) = if b.boundary.domain == SheetDomainRef::Bend(bend) {
+                (&b, y)
+            } else {
+                (&a, x)
+            };
+            let edge = end_edge(strip, own, at).unwrap_or_else(|| "?".into());
+            return Err(format!(
+                "{label}: along its {which} tangent line one side of the seam ends at {x:.4} mm \
+                 and the other at {y:.4} mm, where the bend meets boundary curve {edge}; the bend \
+                 cannot follow that edge"
+            ));
+        }
+        if ca[1] - ca[0] <= TOLERANCE {
+            return Err(format!(
+                "{label}: a stretch of its {which} tangent line at {:.4} mm has no length",
+                ca[0]
+            ));
         }
         push_port(state, ca, a, b);
     }
     Ok(())
+}
+
+/// The boundary curve of a bend's strip that meets the stretch `side` of
+/// one of its tangent lines at the axial coordinate `at` (strip coordinates:
+/// `v` axial): the edge the bend ends on there.
+fn end_edge(strip: &SheetPatch, side: &ShapePortSide, at: f64) -> Option<String> {
+    for l in strip.regions.iter().flat_map(|r| &r.loops) {
+        let n = l.edges.len();
+        for (i, e) in l.edges.iter().enumerate() {
+            if e.piece != side.boundary.piece {
+                continue;
+            }
+            let (a, b) = line(e).ok()?;
+            // The loop runs from the previous edge into this one at `a`.
+            let near = if (a[1] - at).abs() <= (b[1] - at).abs() {
+                (i + n - 1) % n
+            } else {
+                (i + 1) % n
+            };
+            return Some(l.edges[near].piece.curve.to_string());
+        }
+    }
+    None
 }
 
 pub(super) struct Construction {
@@ -654,6 +686,27 @@ fn bend_strip<K: Kernel>(
         return Err("tangent port must be one unique uninterrupted straight boundary".into());
     };
     let moving = last.boundary.clone();
+    // The axial interval the strip's material covers: `[0, width]` unless a
+    // fold's strip ends on edges oblique to its line or runs on to the
+    // outline (mitcad#1424).
+    let hull = left
+        .iter()
+        .chain(&right)
+        .map(coverage)
+        .fold([f64::INFINITY, f64::NEG_INFINITY], |h, c| {
+            [h[0].min(c[0]), h[1].max(c[1])]
+        });
+    let axial_interval = if hull[0].abs() <= TOLERANCE && (hull[1] - width).abs() <= TOLERANCE {
+        ParamSpan {
+            first: 0.0,
+            last: width,
+        }
+    } else {
+        ParamSpan {
+            first: hull[0],
+            last: hull[1],
+        }
+    };
     state.bends.push(BendDomain {
         id,
         stationary: first.boundary.clone(),
@@ -663,17 +716,14 @@ fn bend_strip<K: Kernel>(
         k_factor: metrics.k,
         radius: metrics.radius,
         allowance: metrics.allowance,
-        axial_interval: ParamSpan {
-            first: 0.0,
-            last: width,
-        },
+        axial_interval,
         rules: state.rules,
         rules_version: state.rules_version.clone(),
     });
-    pair_all(state, stationary, left, width)?;
+    pair_all(state, id, "stationary", &strip, stationary, left)?;
     let free = match moving_side {
         Some(moving_side) => {
-            pair_all(state, right, moving_side, width)?;
+            pair_all(state, id, "moving", &strip, right, moving_side)?;
             Vec::new()
         }
         None => right,
@@ -985,7 +1035,131 @@ pub(crate) fn flange<K: Kernel>(
         state.charts.push(moving);
         stationary = vec![far];
     }
+    if d.corner == Some(SheetFlangeCorner::HalfOpen) {
+        half_open_seam(ctx, &mut state, rules.thickness)?;
+    }
     publish(ctx, state, &rules, None)
+}
+
+/// A half open corner (mitcad#1410): the flange's wall (its panel slot 0)
+/// reaches `t / 2` over the end of another wall of the sheet, which is cut
+/// back by [`HALF_OPEN_SEAM`] under it, as walls that touch over a face do
+/// not make one sound body (mitcad#1409). The other wall is the planar
+/// panel normal to the wall's length whose material lies under the wall's
+/// last `t / 2` and whose end lies on the wall's surface; it is cut back
+/// only where the wall lies over it (the trim's curve 60 to 63).
+fn half_open_seam<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    state: &mut SheetState,
+    thickness: f64,
+) -> Result<(), String> {
+    let wall = chart(
+        state,
+        PanelId {
+            feature: ctx.uid,
+            slot: 0,
+        },
+    )?;
+    let (frame, parity) = plane(wall)?;
+    let (min, max) = bounds(wall)?;
+    let normal = frame.normal();
+    // The wall's material across its thickness, along `normal` from its
+    // front surface, and the part of its length past the open corner.
+    let across = [
+        0.0_f64.min(parity.sign() * thickness),
+        0.0_f64.max(parity.sign() * thickness),
+    ];
+    let reach = [max[0] - thickness / 2.0, max[0]];
+    let mut found = None;
+    for patch in &state.charts {
+        let SheetDomainRef::Panel(panel) = patch.domain else {
+            continue;
+        };
+        if panel.feature == ctx.uid {
+            continue;
+        }
+        let Ok((other, other_parity)) = plane(patch) else {
+            continue;
+        };
+        if dot(other.normal(), frame.x_axis).abs() < 1.0 - 1e-9 {
+            continue;
+        }
+        let Ok((a, b)) = bounds(patch) else {
+            continue;
+        };
+        let offset = scale(other.normal(), other_parity.sign() * thickness);
+        let corners: Vec<[f64; 3]> = [a, [a[0], b[1]], b, [b[0], a[1]]]
+            .iter()
+            .flat_map(|p| {
+                let q = other.point(*p);
+                [q, add(q, offset)]
+            })
+            .collect();
+        let range = |axis: [f64; 3]| {
+            corners
+                .iter()
+                .map(|p| dot(sub(*p, frame.origin), axis))
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                    (lo.min(v), hi.max(v))
+                })
+        };
+        let (x, y, h) = (range(frame.x_axis), range(frame.y_axis), range(normal));
+        if x.1.min(reach[1]) - x.0.max(reach[0]) <= TOLERANCE
+            || y.1.min(max[1]) - y.0.max(min[1]) <= TOLERANCE
+        {
+            continue;
+        }
+        let below = (h.1 - across[0]).abs() <= TOLERANCE;
+        if !below && (h.0 - across[1]).abs() > TOLERANCE {
+            continue;
+        }
+        if found.is_some() {
+            return Err(
+                "a half open corner's wall lies over the ends of more than one wall".into(),
+            );
+        }
+        found = Some((panel, other, below, y));
+    }
+    let Some((panel, other, below, y)) = found else {
+        return Err(
+            "a half open corner closes against another wall of the sheet, and no wall ends under \
+             this flange's wall"
+                .into(),
+        );
+    };
+    // The other wall's chart in the operation coordinates: across the
+    // flange's wall (along `normal`) and along its width.
+    let origin = sub(other.origin, frame.origin);
+    let to_operation = Isometry2 {
+        origin: [dot(origin, normal), dot(origin, frame.y_axis)],
+        x_axis: [dot(other.x_axis, normal), dot(other.x_axis, frame.y_axis)],
+        y_axis: [dot(other.y_axis, normal), dot(other.y_axis, frame.y_axis)],
+    };
+    let h = if below {
+        [across[0] - HALF_OPEN_SEAM, across[0] + thickness]
+    } else {
+        [across[1] - thickness, across[1] + HALF_OPEN_SEAM]
+    };
+    // Past the other wall's sides where the flange's wall reaches them.
+    let lo = if y.0 >= min[1] - TOLERANCE {
+        y.0 - 1.0
+    } else {
+        min[1]
+    };
+    let hi = if y.1 <= max[1] + TOLERANCE {
+        y.1 + 1.0
+    } else {
+        max[1]
+    };
+    let tool = rectangle(ctx.uid, 60, [h[0], lo], [h[1], hi])?;
+    trim(
+        ctx,
+        state,
+        &[SheetDomainRef::Panel(panel)],
+        SheetTrimOperation::Difference,
+        &[tool],
+        &[to_operation],
+    )
 }
 
 /// One bend of a flange and the straight wall after it (0: none).
@@ -1007,6 +1181,25 @@ pub(super) fn flange_steps(
     rules: &SheetRulesDef<f64>,
 ) -> Result<Vec<FlangeStep>, String> {
     let metrics = BendMetrics::past_half_turn(d.angle, d.radius, rules)?;
+    // A corner joint: the length is the closed section's inside dimension,
+    // and the joint sets how far the wall reaches past it (mitcad#1410).
+    let reach = match d.corner {
+        None => 0.0,
+        Some(corner) => {
+            if d.hem.is_some() {
+                return Err("a sheet flange makes a hem or a corner joint, not both".into());
+            }
+            if d.length.mode != SheetLengthMode::Inner {
+                return Err(
+                    "a corner joint's length is the inside dimension (length mode inner)".into(),
+                );
+            }
+            match corner {
+                SheetFlangeCorner::Open => 0.0,
+                SheetFlangeCorner::HalfOpen => rules.thickness / 2.0,
+            }
+        }
+    };
     if let Some(hem) = &d.hem {
         if d.length.mode != SheetLengthMode::OuterTangent {
             return Err(
@@ -1029,7 +1222,8 @@ pub(super) fn flange_steps(
             SheetLengthMode::Inner => metrics.setback(metrics.inner, "inner")?,
             SheetLengthMode::Outer => metrics.setback(metrics.outer, "outer")?,
             SheetLengthMode::OuterTangent => metrics.extent,
-        };
+        }
+        + reach;
     if !length.is_finite() || length < -TOLERANCE {
         return Err("sheet flange length is shorter than its requested setback".into());
     }
@@ -1352,6 +1546,58 @@ fn moving_transform(
     Transform::between_frames(&source, target)
 }
 
+/// How far past an end of a fold line its material is probed: well above
+/// the modelling tolerance, well below any meaningful material size.
+const END_PROBE: f64 = 1.0e-5;
+
+/// How one end of a fold line meets the panel's material (mitcad#1424).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FoldEnd {
+    /// The line ends inside material: a relief separates the bend there.
+    Inside,
+    /// The line reaches the outline at this end (on it or past it) and no
+    /// material within the bend's reach crosses the normal through its end:
+    /// the bend ends there, at the end of the line.
+    Flush,
+    /// The line reaches the outline, but material within the bend's reach
+    /// crosses the normal through its end (the line ends on an edge oblique
+    /// to it, or the moving side widens past it): the bend and the moving
+    /// panel run on past the end, bounded by the outline (the oblique edges
+    /// continued across the strip).
+    Outline,
+}
+
+/// Classifies the end of a fold line at the axial coordinate `at` of the
+/// operation frame (`u` across the line, `0` on it, the moving side
+/// positive; `v` along it), `outward` the sign of `v` past that end, from
+/// the material of `operation` (the panel's regions in that frame) on the
+/// normal just past the end. `tangent` is where the bend starts across the
+/// line: material past it is within the bend's reach.
+fn fold_end(
+    operation: &[MaterialRegion],
+    at: f64,
+    outward: f64,
+    tangent: f64,
+) -> Result<FoldEnd, String> {
+    // Swap the axes, so that the chord of `x = v` gives the material
+    // intervals of `u` on the normal at `v`.
+    let swap = Isometry2 {
+        origin: [0.0, 0.0],
+        x_axis: [0.0, 1.0],
+        y_axis: [1.0, 0.0],
+    };
+    let across = super::develop::chord(&mapped_regions(operation, swap), at + outward * END_PROBE)?;
+    Ok(
+        if across.iter().any(|c| c[0] < -TOLERANCE && c[1] > TOLERANCE) {
+            FoldEnd::Inside
+        } else if across.iter().any(|c| c[1] > tangent + TOLERANCE) {
+            FoldEnd::Outline
+        } else {
+            FoldEnd::Flush
+        },
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fold_panel<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
@@ -1378,7 +1624,43 @@ fn fold_panel<K: Kernel>(
     let (min, max) = extent(&old, frame.to_operation)?;
     let pad = margin(min, max);
     let outside = max[0] + pad;
-    if min[1] < -TOLERANCE || max[1] > frame.width + TOLERANCE {
+    // How each end of the line meets the material (mitcad#1424): a relief
+    // where it ends inside material; where it reaches the outline but an
+    // edge oblique to it carries material past its end within the bend's
+    // reach, the bend and the moving panel run on and the outline bounds
+    // them.
+    let operation = mapped_regions(&old.regions, frame.to_operation);
+    let ends = match (
+        fold_end(&operation, 0.0, -1.0, tangent),
+        fold_end(&operation, frame.width, 1.0, tangent),
+    ) {
+        (Ok(start), Ok(end)) => [start, end],
+        // A boundary the probe cannot cross (a closed spline has no
+        // bounded support): the panel's extent decides, as it did before.
+        _ => [
+            if min[1] < -TOLERANCE {
+                FoldEnd::Inside
+            } else {
+                FoldEnd::Flush
+            },
+            if max[1] > frame.width + TOLERANCE {
+                FoldEnd::Inside
+            } else {
+                FoldEnd::Flush
+            },
+        ],
+    };
+    let low = if ends[0] == FoldEnd::Outline {
+        min[1].min(0.0) - pad
+    } else {
+        0.0
+    };
+    let high = if ends[1] == FoldEnd::Outline {
+        max[1].max(frame.width) + pad
+    } else {
+        frame.width
+    };
+    if ends.contains(&FoldEnd::Inside) {
         if !relief.depth.is_finite() || relief.depth <= TOLERANCE {
             return Err("sheet endpoint relief must extend behind the tangent".into());
         }
@@ -1406,7 +1688,7 @@ fn fold_panel<K: Kernel>(
         &old.regions,
     );
     state.charts.extend([moving, strip]);
-    let moving_tool = rectangle(ctx.uid, 50, [far_tangent, 0.0], [outside, frame.width])?;
+    let moving_tool = rectangle(ctx.uid, 50, [far_tangent, low], [outside, high])?;
     trim(
         ctx,
         state,
@@ -1415,7 +1697,7 @@ fn fold_panel<K: Kernel>(
         &[moving_tool],
         &[frame.to_operation],
     )?;
-    let strip_tool = rectangle(ctx.uid, 40, [tangent, 0.0], [far_tangent, frame.width])?;
+    let strip_tool = rectangle(ctx.uid, 40, [tangent, low], [far_tangent, high])?;
     trim(
         ctx,
         state,
@@ -1424,18 +1706,13 @@ fn fold_panel<K: Kernel>(
         &[strip_tool],
         &[frame.to_operation],
     )?;
-    let mut removal = vec![rectangle(
-        ctx.uid,
-        10,
-        [tangent, 0.0],
-        [outside, frame.width],
-    )?];
-    if min[1] < -TOLERANCE {
+    let mut removal = vec![rectangle(ctx.uid, 10, [tangent, low], [outside, high])?];
+    if ends[0] == FoldEnd::Inside {
         removal.push(relief_tool(
             ctx.uid, 20, relief, tangent, 0.0, false, outside,
         )?);
     }
-    if max[1] > frame.width + TOLERANCE {
+    if ends[1] == FoldEnd::Inside {
         removal.push(relief_tool(
             ctx.uid,
             30,
@@ -1515,10 +1792,10 @@ fn fold_panel<K: Kernel>(
             let b = frame.to_operation.point(b);
             if a[0] >= far_tangent - TOLERANCE
                 && b[0] >= far_tangent - TOLERANCE
-                && a[1] >= -TOLERANCE
-                && b[1] >= -TOLERANCE
-                && a[1] <= frame.width + TOLERANCE
-                && b[1] <= frame.width + TOLERANCE
+                && a[1] >= low - TOLERANCE
+                && b[1] >= low - TOLERANCE
+                && a[1] <= high + TOLERANCE
+                && b[1] <= high + TOLERANCE
             {
                 own.boundary.domain = moving_domain;
                 moving_neighbors.push(other.boundary.domain);
@@ -2690,6 +2967,207 @@ mod tests {
             flange_steps(&flange, &rules)
                 .unwrap_err()
                 .contains("outer_tangent")
+        );
+    }
+
+    /// A corner joint's wall (mitcad#1410): the length is the inside
+    /// dimension (Inner Length); an open corner ends there, a half open one
+    /// half the thickness further. Other length modes and a hem with it are
+    /// refused.
+    #[test]
+    fn a_corner_joint_sets_the_wall_end_from_the_thickness() {
+        use std::f64::consts::FRAC_PI_2;
+        let rules = hem_rules();
+        let corner = |mode: &str, corner: &str, hem: serde_json::Value| {
+            let mut flange = hem_flange(FRAC_PI_2, mode, 20.0, 2.5, hem);
+            flange.corner = serde_json::from_value(serde_json::json!(corner)).expect("corner");
+            flange_steps(&flange, &rules)
+        };
+        // The inner setback of a 90-degree bend is its radius, 2.5.
+        let open = corner("inner", "open", serde_json::Value::Null).expect("an open corner");
+        assert!((open[0].wall - 17.5).abs() < 1e-12);
+        let half =
+            corner("inner", "half_open", serde_json::Value::Null).expect("a half open corner");
+        assert!((half[0].wall - 18.75).abs() < 1e-12);
+        assert!(
+            corner("outer", "open", serde_json::Value::Null)
+                .unwrap_err()
+                .contains("length mode inner")
+        );
+        assert!(
+            corner(
+                "inner",
+                "open",
+                serde_json::json!({"form": "teardrop", "gap": 1.0})
+            )
+            .unwrap_err()
+            .contains("not both")
+        );
+    }
+
+    /// A stretch of a seam over `interval` of the bend's axis.
+    fn stretch(domain: SheetDomainRef, slot: u32, interval: [f64; 2]) -> ShapePortSide {
+        ShapePortSide {
+            boundary: BoundaryPieceRef {
+                domain,
+                piece: generated(FeatureUid(7), slot),
+            },
+            span: ParamSpan {
+                first: 0.0,
+                last: 1.0,
+            },
+            axial: AxialMap {
+                offset: interval[0],
+                scale: interval[1] - interval[0],
+            },
+        }
+    }
+
+    #[test]
+    fn seams_of_a_fold_across_oblique_edges_each_cover_their_own_interval() {
+        // mitcad#1424: a strip whose ends follow two edges oblique to its
+        // axis; its stationary side (u = 0) runs 13.1..96.1, its moving
+        // side (u = 2) 13.3..96.8.
+        let bend = BendId {
+            feature: FeatureUid(7),
+            slot: 0,
+        };
+        let own = SheetDomainRef::Bend(bend);
+        let strip = SheetPatch {
+            domain: own,
+            regions: vec![
+                polygon(
+                    FeatureUid(7),
+                    40,
+                    &[[0.0, 13.1], [2.0, 13.3], [2.0, 96.8], [0.0, 96.1]],
+                )
+                .unwrap(),
+            ],
+            embedding: SheetEmbedding::Plane {
+                front_frame: SketchFrame::XY,
+                front_to_back_sign: MaterialParity::Positive,
+            },
+        };
+        let mut state = empty_state();
+        let seam = |state: &mut SheetState, which, first, second| {
+            pair_all(state, bend, which, &strip, vec![first], vec![second])
+        };
+        seam(
+            &mut state,
+            "stationary",
+            stretch(domain(0), 13, [13.1, 96.1]),
+            stretch(own, 43, [13.1, 96.1]),
+        )
+        .unwrap();
+        seam(
+            &mut state,
+            "moving",
+            stretch(own, 41, [13.3, 96.8]),
+            stretch(domain(1), 53, [13.3, 96.8]),
+        )
+        .unwrap();
+        let intervals: Vec<_> = state
+            .joins
+            .iter()
+            .map(|p| [p.axial_interval.first, p.axial_interval.last])
+            .collect();
+        assert_eq!(intervals.len(), 2);
+        for (found, wanted) in intervals.iter().zip([[13.1, 96.1], [13.3, 96.8]]) {
+            assert!((found[0] - wanted[0]).abs() < 1e-9 && (found[1] - wanted[1]).abs() < 1e-9);
+        }
+        // The panel's material running past the edge the strip ends on is
+        // refused, naming the bend and that edge (the strip's g40).
+        let error = seam(
+            &mut state,
+            "stationary",
+            stretch(domain(0), 13, [12.9, 96.1]),
+            stretch(own, 43, [13.1, 96.1]),
+        )
+        .unwrap_err();
+        assert!(error.contains("bend F7 slot 0"), "{error}");
+        assert!(error.contains("stationary tangent line"), "{error}");
+        assert!(error.contains("F7/g40"), "{error}");
+        // A bend from a rectangle still needs partners over its whole
+        // interval.
+        let error = seam(
+            &mut state,
+            "moving",
+            stretch(own, 41, [0.0, 20.0]),
+            stretch(domain(1), 53, [0.0, 15.0]),
+        )
+        .unwrap_err();
+        assert!(error.contains("bend F7 slot 0"), "{error}");
+        let error = pair_all(
+            &mut state,
+            bend,
+            "moving",
+            &strip,
+            vec![stretch(own, 41, [0.0, 8.0]), stretch(own, 41, [12.0, 20.0])],
+            vec![stretch(domain(1), 53, [0.0, 20.0])],
+        )
+        .unwrap_err();
+        assert!(error.contains("2 stretches"), "{error}");
+        assert_eq!(state.joins.len(), 2);
+    }
+
+    #[test]
+    fn fold_line_ends_are_classified_against_the_outline() {
+        // mitcad#1424, in the fold's operation frame (u across the line,
+        // the moving side positive; v along it).
+        let region = |points: &[[f64; 2]]| vec![polygon(FeatureUid(3), 0, points).unwrap()];
+        let ba = 1.8 * std::f64::consts::PI;
+        let centred = -ba / 2.0;
+        // The trapezoid (0,0), (60,0), (50,20), (10,20) and the line y = 10
+        // from edge to edge, its wide side moving (u = 10 - y, v = x - 5):
+        // material past both ends within the bend's reach.
+        let wide = region(&[[10.0, -5.0], [10.0, 55.0], [-10.0, 45.0], [-10.0, 5.0]]);
+        for tangent in [centred, 0.0] {
+            assert_eq!(
+                fold_end(&wide, 0.0, -1.0, tangent).unwrap(),
+                FoldEnd::Outline
+            );
+            assert_eq!(
+                fold_end(&wide, 50.0, 1.0, tangent).unwrap(),
+                FoldEnd::Outline
+            );
+        }
+        // Its narrow side moving (u = y - 10): a centred strip reaches the
+        // wide stationary side past the ends, one starting at the line not.
+        let narrow = region(&[[-10.0, -5.0], [-10.0, 55.0], [10.0, 45.0], [10.0, 5.0]]);
+        assert_eq!(
+            fold_end(&narrow, 0.0, -1.0, centred).unwrap(),
+            FoldEnd::Outline
+        );
+        assert_eq!(
+            fold_end(&narrow, 50.0, 1.0, centred).unwrap(),
+            FoldEnd::Outline
+        );
+        assert_eq!(fold_end(&narrow, 0.0, -1.0, 0.0).unwrap(), FoldEnd::Flush);
+        assert_eq!(fold_end(&narrow, 50.0, 1.0, 0.0).unwrap(), FoldEnd::Flush);
+        // The line drawn past both edges (x from -5 to 65): nothing past
+        // its ends.
+        let past = region(&[[10.0, 5.0], [10.0, 65.0], [-10.0, 55.0], [-10.0, 15.0]]);
+        assert_eq!(fold_end(&past, 0.0, -1.0, centred).unwrap(), FoldEnd::Flush);
+        assert_eq!(fold_end(&past, 70.0, 1.0, centred).unwrap(), FoldEnd::Flush);
+        // A line ending inside material takes a relief at both ends.
+        let around = region(&[[-10.0, -10.0], [10.0, -10.0], [10.0, 60.0], [-10.0, 60.0]]);
+        assert_eq!(
+            fold_end(&around, 0.0, -1.0, centred).unwrap(),
+            FoldEnd::Inside
+        );
+        assert_eq!(
+            fold_end(&around, 50.0, 1.0, centred).unwrap(),
+            FoldEnd::Inside
+        );
+        // Edges square to the line at its ends: the usual full-width fold.
+        let square = region(&[[-10.0, 0.0], [10.0, 0.0], [10.0, 50.0], [-10.0, 50.0]]);
+        assert_eq!(
+            fold_end(&square, 0.0, -1.0, centred).unwrap(),
+            FoldEnd::Flush
+        );
+        assert_eq!(
+            fold_end(&square, 50.0, 1.0, centred).unwrap(),
+            FoldEnd::Flush
         );
     }
 }

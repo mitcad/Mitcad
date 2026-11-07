@@ -606,6 +606,11 @@ SelectKind datumKind(const QString& type) {
   if (type == QStringLiteral("construction_axis") || type.size() == 1) {
     return SelectKind::Axis;
   }
+  // An Intersection Curve's row picks the feature, as its curve in the view
+  // does (mitcad#1405).
+  if (type == QStringLiteral("intersection_curve")) {
+    return SelectKind::Feature;
+  }
   return SelectKind::Point;
 }
 
@@ -743,7 +748,9 @@ SelectionItem BrowserNode::item() const {
   case Type::Datum:
   case Type::OriginDatum:
     item.kind = datumKind(type == Type::Datum ? featureType : uid);
-    item.geometry = SelectionItem::kindName(item.kind);
+    // An Intersection Curve's row picks its curve (mitcad#1417), as the view
+    // does.
+    item.geometry = item.kind == SelectKind::Feature ? featureCurveGeometry() : SelectionItem::kindName(item.kind);
     break;
   case Type::Component:
     if (occurrence.isEmpty()) {

@@ -15,3 +15,5 @@ mod pick_tests;
 mod spacing_tests;
 // Dimensions whose picks choose their type (mitcad#1272).
 mod chosen_dimension_tests;
+// The model's items in views, Model Items and kept ones (mitcad#1406).
+mod model_items_tests;

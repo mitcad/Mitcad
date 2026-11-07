@@ -159,6 +159,9 @@ const StepSpec kSpecs[] = {
     {"expect-document-tab-selected", 1, 1, kIdle},
     {"key", 1, -1, kInputOfTarget},
     {"key-now", 1, -1, kPlain},
+    {"key-down", 1, 1, kInputOfTarget},
+    {"key-up", 1, 1, kInputOfTarget},
+    {"key-chord", 2, 5, kInputOfTarget},
     {"qt-type-now", 2, 2, kPlain},
     {"qt-choice", 2, 2, kInputOfTarget},
     {"qt-cancel-progress", 1, 1, kPlain},
@@ -598,6 +601,9 @@ int keyFromName(const QString& name) {
       // Shift on its own: the view's selection scope widens (mitcad#217;
       // tools/ui-scripts/paste-busy-keys.mitcad-ui, mitcad#1360).
       {QStringLiteral("shift"), Qt::Key_Shift},
+      // Ctrl (the Command key on macOS) on its own: held, it hides a
+      // command's preview (mitcad#1421, key-down).
+      {QStringLiteral("ctrl"), Qt::Key_Control},
   };
   const QString lower = name.toLower();
   const auto named = names.constFind(lower);
@@ -1274,9 +1280,53 @@ void TestDriver::tick() {
 
 void TestDriver::sendKey(const KeyPress& press) {
   if (mac::test::sendKey(press.key, press.modifiers, press.text)) return;
-  QWidget* window = targetWindow();
-  if (window == nullptr) {
+  QWidget* window = nullptr;
+  QWidget* receiver = keyReceiver(window);
+  if (receiver == nullptr) {
     return;
+  }
+  const bool popup = QApplication::activePopupWidget() != nullptr;
+  const Qt::KeyboardModifiers modifiers = press.modifiers;
+  // A key is a shortcut unless the focused widget takes it (a line edit
+  // asks to keep the letters): what the platform does before it delivers
+  // a key press.
+  QKeyEvent offer(QEvent::ShortcutOverride, press.key, modifiers, press.text);
+  offer.ignore();
+  QCoreApplication::sendEvent(receiver, &offer);
+  if (!popup && !offer.isAccepted() && triggerShortcut(window, press)) {
+    return;
+  }
+  QKeyEvent down(QEvent::KeyPress, press.key, modifiers, press.text);
+  QCoreApplication::sendEvent(receiver, &down);
+  QKeyEvent up(QEvent::KeyRelease, press.key, modifiers, press.text);
+  QCoreApplication::sendEvent(receiver, &up);
+}
+
+// A key held or let go on its own (key-down, key-up, mitcad#1421): its
+// shortcut offer and its press, or its release, for the widget with the
+// focus; no shortcut is triggered (a modifier alone makes none).
+void TestDriver::sendKeyHalf(const KeyPress& press, bool down) {
+  QWidget* window = nullptr;
+  QWidget* receiver = keyReceiver(window);
+  if (receiver == nullptr) {
+    return;
+  }
+  if (down) {
+    QKeyEvent offer(QEvent::ShortcutOverride, press.key, press.modifiers, press.text);
+    offer.ignore();
+    QCoreApplication::sendEvent(receiver, &offer);
+    QKeyEvent event(QEvent::KeyPress, press.key, press.modifiers, press.text);
+    QCoreApplication::sendEvent(receiver, &event);
+  } else {
+    QKeyEvent event(QEvent::KeyRelease, press.key, press.modifiers, press.text);
+    QCoreApplication::sendEvent(receiver, &event);
+  }
+}
+
+QWidget* TestDriver::keyReceiver(QWidget*& window) {
+  window = targetWindow();
+  if (window == nullptr) {
+    return nullptr;
   }
   // The document's MainWindow sits in a document frame (mitcad#1172): the
   // frame is the window the system activates and that hosts the panels.
@@ -1307,20 +1357,7 @@ void TestDriver::sendKey(const KeyPress& press) {
   } else if (receiver->focusWidget() != nullptr) {
     receiver = receiver->focusWidget();
   }
-  const Qt::KeyboardModifiers modifiers = press.modifiers;
-  // A key is a shortcut unless the focused widget takes it (a line edit
-  // asks to keep the letters): what the platform does before it delivers
-  // a key press.
-  QKeyEvent offer(QEvent::ShortcutOverride, press.key, modifiers, press.text);
-  offer.ignore();
-  QCoreApplication::sendEvent(receiver, &offer);
-  if (popup == nullptr && !offer.isAccepted() && triggerShortcut(window, press)) {
-    return;
-  }
-  QKeyEvent down(QEvent::KeyPress, press.key, modifiers, press.text);
-  QCoreApplication::sendEvent(receiver, &down);
-  QKeyEvent up(QEvent::KeyRelease, press.key, modifiers, press.text);
-  QCoreApplication::sendEvent(receiver, &up);
+  return receiver;
 }
 
 // With native glass the floating panels are windows of their own: the one
@@ -3748,6 +3785,78 @@ void TestDriver::run(const Step& step) {
   // MSVC refuses an if-else chain of more than 128 links (C1061), so the
   // steps are split into two chains.
   if (stepMatched) {
+    return;
+  }
+
+  // --- A key held on its own, and a chord with it (mitcad#1421: Ctrl held
+  // alone hides a command's preview; Ctrl+Z and Ctrl+S show it again)
+  if (name == QLatin1String("key-down") || name == QLatin1String("key-up") || name == QLatin1String("key-chord")) {
+    KeyPress held;
+    QString error;
+    if (!parseKeySpec(a.at(0), held.key, held.modifiers, held.text, error)) {
+      fail(line, error);
+      return;
+    }
+    // A modifier key carries its own modifier while it is down, as the
+    // platforms deliver it, and none once it is released.
+    Qt::KeyboardModifiers own;
+    if (held.key == Qt::Key_Control) {
+      own = Qt::ControlModifier;
+    } else if (held.key == Qt::Key_Shift) {
+      own = Qt::ShiftModifier;
+    } else if (held.key == Qt::Key_Alt) {
+      own = Qt::AltModifier;
+    } else if (held.key == Qt::Key_Meta) {
+      own = Qt::MetaModifier;
+    }
+    KeyPress down = held;
+    down.modifiers |= own;
+    KeyPress up = held;
+    up.modifiers &= ~own;
+    if (name == QLatin1String("key-down")) {
+      queue([this, down] { sendKeyHalf(down, true); });
+      return;
+    }
+    if (name == QLatin1String("key-up")) {
+      queue([this, up] { sendKeyHalf(up, false); });
+      return;
+    }
+    if (a.at(1) == QLatin1String("wheel")) {
+      double x = 0;
+      double y = 0;
+      double notches = 0;
+      if (a.size() != 5 || !toNumber(a.at(2), x) || !toNumber(a.at(3), y) || !toNumber(a.at(4), notches)) {
+        fail(line, QStringLiteral("key-chord <key> wheel <x%> <y%> <notches>"));
+        return;
+      }
+      QPoint at;
+      if (!viewPoint(x, y, at)) {
+        fail(line, QStringLiteral("no 3D view"));
+        return;
+      }
+      // One turn of the event loop: no timer runs between them.
+      queue([this, down, up, at, notches] {
+        sendKeyHalf(down, true);
+        sendMouse(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton, down.modifiers);
+        sendWheel(at, qRound(notches), down.modifiers);
+        sendKeyHalf(up, false);
+      });
+      return;
+    }
+    KeyPress second;
+    if (a.size() != 2 || !parseKeySpec(a.at(1), second.key, second.modifiers, second.text, error)) {
+      fail(line, error.isEmpty() ? QStringLiteral("key-chord <key> <key2> | <key> wheel <x%> <y%> <notches>") : error);
+      return;
+    }
+    second.modifiers |= down.modifiers;
+    if (second.modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) {
+      second.text.clear(); // a shortcut's key, no text
+    }
+    queue([this, down, up, second] {
+      sendKeyHalf(down, true);
+      sendKey(second);
+      sendKeyHalf(up, false);
+    });
     return;
   }
 

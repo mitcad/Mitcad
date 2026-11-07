@@ -404,6 +404,12 @@ pub struct ViewAnnotation {
     /// face picked face on ([`ViewPick::on_face`]), else a triangle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminator: Option<Terminator>,
+    /// The model annotation it was kept from (mitcad#1406), by its name
+    /// (`Distance1`): a copy the drawing owns, moved and edited without
+    /// changing the model. While it is on a view of a sheet, the model's
+    /// annotation is not brought into that sheet's views again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_from: Option<String>,
 }
 
 /// A text note on the sheet, without a leader.
@@ -462,6 +468,7 @@ impl ViewAnnotation {
             turn: None,
             tip_along: None,
             terminator: None,
+            kept_from: None,
         }
     }
 
@@ -602,6 +609,11 @@ impl ViewAnnotation {
             if !turn.is_finite() {
                 return Err("a turn is a number of degrees".to_owned());
             }
+        }
+        if let Some(from) = &self.kept_from
+            && (from.trim().is_empty() || from.trim() != from.as_str())
+        {
+            return Err("a model annotation is named without spaces around".to_owned());
         }
         Ok(())
     }

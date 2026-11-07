@@ -825,6 +825,8 @@ pub(super) enum ProjectSource {
         sketch: FeatureUid,
         entity: Option<Ref>,
     },
+    /// The curve of an Intersection Curve (mitcad#1405): `{"feature": "F5"}`.
+    Curve(FeatureUid),
 }
 
 impl<'de> Deserialize<'de> for ProjectSource {
@@ -845,6 +847,15 @@ impl<'de> Deserialize<'de> for ProjectSource {
                     sketch,
                     entity: None,
                 })
+            }
+            // An Intersection Curve's curve (mitcad#1405).
+            Value::Object(map) if map.len() == 1 && map.contains_key("feature") => {
+                let feature: FeatureUid = map["feature"]
+                    .as_str()
+                    .ok_or_else(|| D::Error::custom("\"feature\" is a feature's uid like \"F5\""))?
+                    .parse()
+                    .map_err(D::Error::custom)?;
+                Ok(Self::Curve(feature))
             }
             other => mitcad_model::sketch::SketchEntityRef::from_json(&other)
                 .map(|e| Self::Sketch {
@@ -1157,6 +1168,19 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                     _ => None,
                 };
                 let report = match (&source, section) {
+                    // An Intersection Curve's curve (mitcad#1405); as a section,
+                    // where the plane crosses it. Another component's through
+                    // the occurrence that shows it (mitcad#1417).
+                    (Some(ProjectSource::Curve(from)), _) => {
+                        if body.is_some() {
+                            return Err(ApiError(
+                                "sketch.project of an intersection curve takes no body".to_owned(),
+                            ));
+                        }
+                        self.project_feature_curve(
+                            sketch, *from, linked, section, occurrence, context,
+                        )?
+                    }
                     // Another sketch's geometry (mitcad#904); as a section,
                     // where the plane crosses it (mitcad#998).
                     (

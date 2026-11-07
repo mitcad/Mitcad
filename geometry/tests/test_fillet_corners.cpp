@@ -2465,7 +2465,7 @@ void test_step_foot_on_a_rounding_ended_by_a_rounding_tangent_to_it() {
       continue;
     }
     CHECK(BRepCheck_Analyzer(result).IsValid());
-    CHECK_NEAR_TOL(volume_of(body) - volume_of(result), removed_volume, 1e-6);
+    CHECK_NEAR_TOL(volume_of(body) - volume_of(result), removed_volume, 1e-5); // 1.45e-6 mm3 apart on Windows (MSVC)
     CHECK(volume_of(BRepAlgoAPI_Cut(result, expected).Shape()) < 1e-6);
     CHECK(volume_of(BRepAlgoAPI_Cut(expected, result).Shape()) < 1e-6);
   }

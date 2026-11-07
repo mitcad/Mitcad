@@ -16,6 +16,7 @@
 #include <QKeySequence>
 #include <QRegularExpression>
 
+#include "../framework/HandleStep.hpp"
 #include "ChamferHandles.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
@@ -105,6 +106,45 @@ std::optional<EdgeAt> edgeAt(const SelectionItem& item, const CommandContext& mo
   return EdgeAt{placed(*sides, placement), body, faces};
 }
 
+// The size a drag of a set's handle steps by (Manipulator::scale,
+// mitcad#1431): the shortest of its edges and of the faces next to them
+// (shapeScale: a face's 4 area / perimeter), over the first 16 edges; 0
+// when none is found. A fillet on a 10 mm cube's edge steps by 0.1 mm.
+double edgesScale(const Selection& edges, const CommandContext& model) {
+  constexpr int kMeasured = 16;
+  double scale = 0.0;
+  int measured = 0;
+  const auto take = [&scale](double size) {
+    if (size > 0.0 && (scale <= 0.0 || size < scale)) {
+      scale = size;
+    }
+  };
+  for (const SelectionItem& item : edges) {
+    if (item.kind != SelectKind::Edge) {
+      continue;
+    }
+    if (measured++ >= kMeasured) {
+      break;
+    }
+    const auto body = model.bodyShape(item.owner);
+    if (!body) {
+      continue;
+    }
+    // The first edge the name gives, as the handle stands on.
+    const std::vector<int> found = body->find_edges(item.name.toStdString());
+    if (found.empty()) {
+      continue;
+    }
+    take(shapeScale(body->edge(found.front())));
+    for (const int face : body->edge_faces(found.front())) {
+      if (face >= 0) {
+        take(shapeScale(body->face(face)));
+      }
+    }
+  }
+  return scale;
+}
+
 // A chamfer set's handle for its Distance (`second` false) or its Distance
 // 2 (mitcad#534), on the set's first edge that can take it: Distance at
 // the middle of the bevel for an equal distance, else along the face the
@@ -144,6 +184,7 @@ std::optional<Manipulator> chamferHandle(const CommandState& row, const CommandC
     if (shown) {
       Manipulator handle = arrow(shown->origin, shown->direction);
       handle.factor = shown->factor;
+      handle.scale = edgesScale(row.items(QStringLiteral("edges")), model);
       return handle;
     }
   }
@@ -335,6 +376,7 @@ CommandDef filletCommand(const CommandContext& context) {
                          if (const std::optional<EdgeArrow> shown = filletArrow(at->sides)) {
                            Manipulator handle = arrow(shown->origin, shown->direction);
                            handle.factor = shown->factor;
+                           handle.scale = edgesScale(row.items(QStringLiteral("edges")), model);
                            return handle;
                          }
                        }
@@ -853,15 +895,23 @@ CommandDef pressPullCommand(const CommandContext& context) {
             if (items.isEmpty()) {
               return std::nullopt;
             }
+            // Stepped by the profiles' or the face's size (mitcad#1431).
             if (items.first().kind == SelectKind::Profile) {
               const auto base = profileNormal(items, model);
-              return base ? std::optional<Manipulator>(arrow(base->first, base->second)) : std::nullopt;
+              if (!base) {
+                return std::nullopt;
+              }
+              Manipulator handle = arrow(base->first, base->second);
+              handle.scale = itemsScale(items, model);
+              return handle;
             }
             if (items.first().kind == SelectKind::Face) {
               const auto frame = frameOf(items.first(), model);
               const auto center = centerOf({items.first()}, model);
               if (frame && center) {
-                return arrow(*center, frame->normal);
+                Manipulator handle = arrow(*center, frame->normal);
+                handle.scale = itemsScale({items.first()}, model);
+                return handle;
               }
             }
             return std::nullopt;

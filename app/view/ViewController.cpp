@@ -107,6 +107,7 @@
 #include "../browser/ActivateQuestion.hpp"
 // General: show the version in the view (mitcad#1209).
 #include "VersionWatermark.hpp"
+#include "SmallCirclesPreference.hpp"
 
 namespace mitcad {
 namespace {
@@ -1963,6 +1964,39 @@ void ViewController::showPreferences(const QString& page) {
     connect(cornerDotSize, &QComboBox::currentIndexChanged, host, applyCornerDots);
   } else {
     connect(dialog.get(), &QDialog::accepted, cornerDots, applyCornerDots);
+  }
+  // Small circles (mitcad#879): the view's small circles and arcs meshed by
+  // their size, or every circle with the view's angle as before. Saved when
+  // the dialog is accepted, at once in the Settings window; the open
+  // designs' shown bodies are then meshed again (SmallCirclesNotifier).
+  auto* smallCircles = new QComboBox;
+  smallCircles->setObjectName(QStringLiteral("preferencesSmallCircles"));
+  smallCircles->addItem(tr("Adaptive"), smallCirclesId(SmallCircles::Adaptive));
+  smallCircles->addItem(tr("Full Detail"), smallCirclesId(SmallCircles::FullDetail));
+  smallCircles->setCurrentIndex(smallCircles->findData(smallCirclesId(savedSmallCircles())));
+  smallCircles->setItemData(0, tr("Small holes and arcs get fewer segments by their size, at least 12 a turn"),
+                            Qt::ToolTipRole);
+  smallCircles->setItemData(1, tr("Every circle as finely as a large one"), Qt::ToolTipRole);
+  smallCircles->setToolTip(tr("How finely the 3D view draws small circles and arcs; exported meshes do not change"));
+  display->addRow(tr("S&mall circles:"), smallCircles);
+  // Where the keyboard is, for the UI tests (Alt+M, then Up or Down).
+  connect(qApp, &QApplication::focusChanged, smallCircles, [smallCircles](QWidget*, QWidget* now) {
+    if (now == smallCircles) {
+      qDebug().noquote() << QStringLiteral("Preferences small circles focused: %1")
+                                .arg(smallCircles->currentData().toString());
+    }
+  });
+  const auto applySmallCircles = [smallCircles] {
+    const SmallCircles chosen =
+        smallCirclesFromId(smallCircles->currentData().toString()).value_or(SmallCircles::Adaptive);
+    if (saveSmallCircles(chosen)) {
+      qDebug().noquote() << QStringLiteral("Preferences: small circles %1").arg(smallCirclesId(chosen));
+    }
+  };
+  if (window != nullptr) {
+    connect(smallCircles, &QComboBox::currentIndexChanged, host, applySmallCircles);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, smallCircles, applySmallCircles);
   }
   if (window != nullptr) {
     connect(ghostInactive, &QCheckBox::toggled, host, applyGhostInactive);

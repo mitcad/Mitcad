@@ -304,6 +304,12 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/repeated_parts.cpp
   include/mitcad/geometry/repeated_parts.hpp)
+
+# Intersection curves: two sketches' curves swept along their normals and
+# the surfaces crossed (mitcad#1405).
+target_sources(mitcad_geometry PRIVATE
+  src/intersection_curve.cpp
+  include/mitcad/geometry/intersection_curve.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -605,6 +611,16 @@ if(BUILD_TESTING)
     set_tests_properties(geometry.guard_operation PROPERTIES ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=clip"
       PASS_REGULAR_EXPRESSION "error: clip: SIGSEGV")
   endif()
+  # A crash in code of its own inside an operation, in a function's body or
+  # in a destructor: the operation's error, and the process goes on
+  # (mitcad#1429).
+  add_executable(test_guard_fault tests/test_guard_fault.cpp)
+  target_link_libraries(test_guard_fault PRIVATE mitcad_geometry mitcad_warnings)
+  foreach(where body destructor destructor-thread)
+    add_test(NAME geometry.guard_fault_${where} COMMAND test_guard_fault ${where})
+    set_tests_properties(geometry.guard_fault_${where} PROPERTIES
+      PASS_REGULAR_EXPRESSION "error: probe: .*next operation: done")
+  endforeach()
   # Emboss: profiles wrapped onto cylinders (mitcad#458).
   add_executable(test_emboss tests/test_emboss.cpp)
   target_link_libraries(test_emboss PRIVATE mitcad_geometry mitcad_warnings)
@@ -942,6 +958,14 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+  # Intersection curves: an arc and a line, two cylinders whose crossing
+  # branches, parallel normals refused (mitcad#1405).
+  add_executable(test_intersection_curve tests/test_intersection_curve.cpp)
+  target_link_libraries(test_intersection_curve PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.intersection_curve COMMAND test_intersection_curve)
+endif()
+
+if(BUILD_TESTING)
   # A convex edge rounded up into the mitre of two earlier convex roundings
   # tighter than the ball, closed by a torus, on a synthetic block and a
   # case of MITCAD_GEOMETRY_CASES, with the port's patch 1500 (mitcad#1414).
@@ -952,13 +976,79 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+  # A lid's rims rounded through the mitres of earlier roundings of the same
+  # radius, the ball staying put at each corner, on synthetic lids and a
+  # case of MITCAD_GEOMETRY_CASES, with the port's patches 1520 and 1521
+  # (mitcad#1412).
+  add_executable(test_fillet_stationary_ball tests/test_fillet_stationary_ball.cpp)
+  target_link_libraries(test_fillet_stationary_ball PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_stationary_ball COMMAND test_fillet_stationary_ball)
+  set_tests_properties(geometry.fillet_stationary_ball PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
   # A hub's foot rounded past the earlier roundings of the rims of holes
   # that touch the hub, tighter than the ball: the ball rolled on over the
   # rim's torus, cut by the face along the foot, each end a point on the
-  # foot's edge, on a case of MITCAD_GEOMETRY_CASES, with the port's patch
-  # 1530 (mitcad#1413).
+  # foot's edge, one face with the piece walked before it, on a case of
+  # MITCAD_GEOMETRY_CASES, with the port's patches 1530 and 1540
+  # (mitcad#1413, mitcad#1418).
   add_executable(test_fillet_tight_tangent_end tests/test_fillet_tight_tangent_end.cpp)
   target_link_libraries(test_fillet_tight_tangent_end PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_tight_tangent_end COMMAND test_fillet_tight_tangent_end)
   set_tests_properties(geometry.fillet_tight_tangent_end PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A boss's top rim rounded down to its foot's earlier rounding where the
+  # foot has one: the two roundings meet along that rounding's edge, with
+  # the port's patch 1560 (mitcad#1419).
+  add_executable(test_fillet_rim_down_to_foot tests/test_fillet_rim_down_to_foot.cpp)
+  target_link_libraries(test_fillet_rim_down_to_foot PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_rim_down_to_foot COMMAND test_fillet_rim_down_to_foot)
+  set_tests_properties(geometry.fillet_rim_down_to_foot PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A wall's top and bottom edges rounded past a concave corner of the wall
+  # into a tip whose edges are rounded tighter than the ball: the blend run
+  # on past the chain's end over both faces' surfaces and cut by the faces
+  # it runs into, on a case of MITCAD_GEOMETRY_CASES, with the port's
+  # patches 1580 and 1581 (mitcad#1425).
+  add_executable(test_fillet_torus_side_ends tests/test_fillet_torus_side_ends.cpp)
+  target_link_libraries(test_fillet_torus_side_ends PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_torus_side_ends COMMAND test_fillet_torus_side_ends)
+  set_tests_properties(geometry.fillet_torus_side_ends PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A face's outline rounded past a cylinder's rims, or a wall's corners,
+  # rounded with less than the radius where the other wall's edge with the
+  # face is acute (the vertex blend and a torus) or obtuse (the rim's own
+  # ball rolled on between the roundings), on a synthetic cut tube and block
+  # and a case of MITCAD_GEOMETRY_CASES, with the port's patch 1590
+  # (mitcad#1426).
+  add_executable(test_fillet_tight_rim_corner tests/test_fillet_tight_rim_corner.cpp)
+  target_link_libraries(test_fillet_tight_rim_corner PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_tight_rim_corner COMMAND test_fillet_tight_rim_corner)
+  set_tests_properties(geometry.fillet_tight_rim_corner PROPERTIES TIMEOUT 600)
+  # A wall's edges rounded through corners where the ball stays put in the
+  # tube of an earlier rounding of its own radius: the walk goes on into
+  # that ball, and two contours meet at its section, on a synthetic block
+  # and on a case of MITCAD_GEOMETRY_CASES, with the port's patches 1600 and
+  # 1601 (mitcad#1427).
+  add_executable(test_fillet_still_ball_corners tests/test_fillet_still_ball_corners.cpp)
+  target_link_libraries(test_fillet_still_ball_corners PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_still_ball_corners COMMAND test_fillet_still_ball_corners)
+  set_tests_properties(geometry.fillet_still_ball_corners PROPERTIES TIMEOUT 600)
+  # A concave groove's rim rounded past an earlier rounding of the ball's
+  # radius and up to a wall's arc: the walk on from the standing ball's
+  # sphere where the guide's normal planes pass it forwards, the corners
+  # where the rim's roundings cross cut along their intersection, on a
+  # synthetic leg and a case of MITCAD_GEOMETRY_CASES, with the port's
+  # patches 1610 and 1611 (mitcad#1428).
+  add_executable(test_fillet_groove_rim_corners tests/test_fillet_groove_rim_corners.cpp)
+  target_link_libraries(test_fillet_groove_rim_corners PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_groove_rim_corners COMMAND test_fillet_groove_rim_corners)
+  set_tests_properties(geometry.fillet_groove_rim_corners PROPERTIES TIMEOUT 600)
 endif()

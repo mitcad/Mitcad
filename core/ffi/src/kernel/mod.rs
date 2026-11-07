@@ -95,6 +95,8 @@ pub mod face_outline;
 pub mod file_structure;
 // Repeated parts: bodies equal up to a rigid motion (mitcad#1277).
 pub mod repeated_parts;
+// Intersection curves: two sketches' curves swept and crossed (mitcad#1405).
+pub mod intersection_curve;
 
 use std::sync::Arc;
 
@@ -2747,6 +2749,28 @@ impl Kernel for OcctKernel {
 
     fn note_places(&self, shape: &Self::Shape) -> Vec<Vec<mitcad_model::notice::NoticePlace>> {
         occt(shape).map_or_else(|_| Vec::new(), dressup::note_places)
+    }
+
+    // Intersection curves: two sketches' curves swept and crossed
+    // (mitcad#1405; intersection_curve.rs).
+
+    fn intersection_curves(
+        &self,
+        first: &[mitcad_model::PathCurve],
+        first_direction: [f64; 3],
+        second: &[mitcad_model::PathCurve],
+        second_direction: [f64; 3],
+    ) -> Result<Vec<mitcad_model::Curve3>, KernelError> {
+        let first: Vec<sweeps::ffi::SweepCurve> = first.iter().map(sweeps::curve).collect();
+        let second: Vec<sweeps::ffi::SweepCurve> = second.iter().map(sweeps::curve).collect();
+        let curves = intersection_curve::ffi::intersection_curves(
+            &first,
+            first_direction,
+            &second,
+            second_direction,
+        )
+        .map_err(failed)?;
+        Ok(curves.iter().map(intersection_curve::curve).collect())
     }
 }
 

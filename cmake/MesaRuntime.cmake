@@ -1658,6 +1658,20 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-fillet-wheel-busy"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-fillet-wheel-busy PROPERTIES TIMEOUT 240)
+    # The part of GitHub mitcad/Mitcad#173 (mitcad#1422) built through the
+    # UI (a slot, a circle on its end, two extrusions) and the plate's top
+    # edge rounded into the boss with Tangent Chain: a failing radius's error
+    # in the panel, 3 mm valid; then a fillet crashing inside OCCT
+    # (MITCAD_TEST_OCCT_CRASH=fillet) is an error and the application goes
+    # on. The Linux test's shared input scripts
+    # (tools/ui-fillet-boss-tangent-test.sh).
+    add_test(NAME app.ui-windows-fillet-boss-tangent
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-fillet-boss-tangent-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-fillet-boss-tangent"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-fillet-boss-tangent PROPERTIES TIMEOUT 600)
     # Linked designs while the holder is open (mitcad#1416): the notice with
     # Open Linked Design on an edit of a linked component, the linked design
     # opened in a tab of its own, "<file> changed" with Update when it is
@@ -1669,6 +1683,70 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-linked-design" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-linked-design PROPERTIES TIMEOUT 420)
+    # The Flange panel's Corner (mitcad#1410): Open loaded and kept, Half
+    # Open chosen, saved and read back, None showing Measured again. The
+    # Linux test is tools/ui-sheet-flange-corner-test.sh.
+    add_test(NAME app.ui-windows-sheet-corner
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sheet-corner-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sheet-corner" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sheet-corner PROPERTIES TIMEOUT 300)
+    # Preferences > Display > Small circles (mitcad#879): Adaptive by
+    # default; Full Detail kept in the settings and the open design's body
+    # meshed again with more triangles; back to Adaptive, fewer. The Linux
+    # test is tools/ui-small-circles-test.sh.
+    add_test(NAME app.ui-windows-small-circles
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-small-circles-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-small-circles"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-small-circles PROPERTIES TIMEOUT 300)
+    # Ctrl held alone hides a command's preview while its inputs are picked
+    # (mitcad#1421): a new Extrude gains a fourth circle and Fillet1 edited
+    # from the timeline an edge while Ctrl hides their previews; Ctrl+Z and
+    # Ctrl+S show the preview again at once. The Linux test is
+    # tools/ui-ctrl-hides-preview-test.sh.
+    add_test(NAME app.ui-windows-ctrl-hides-preview
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-ctrl-hides-preview-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-ctrl-hides-preview" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-ctrl-hides-preview PROPERTIES TIMEOUT 300)
+    # A failed preview's message opens at its first line (mitcad#1430): a
+    # cube's Extrude edited with its distance 0 in a 1280 x 800 window,
+    # Docked and Floating, the panel's error box not scrolled down its text.
+    # The Linux test's shared input script
+    # (tools/ui-panel-message-top-test.sh).
+    add_test(NAME app.ui-windows-panel-message-top
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-panel-message-top-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-panel-message-top"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-panel-message-top PROPERTIES TIMEOUT 300)
+    # Fillet on the slot-and-boss part (mitcad#1429, GitHub mitcad/Mitcad#173):
+    # the plate's top edge that runs tangentially into the boss, previewed at
+    # 3, 6 and 1 mm, Tangent Chain off and on, the edges hovered, Enter and
+    # Escape; the application stays up whatever the fillet gives.
+    add_test(NAME app.ui-windows-fillet-boss-tangent-crash
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-fillet-boss-tangent-crash-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-fillet-boss-tangent-crash"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-fillet-boss-tangent-crash PROPERTIES TIMEOUT 600)
+    # The render worker while a section analysis is shown and hidden in the
+    # rendered view (mitcad#1432): twelve times while Cycles traces on the
+    # CPU, the worker never stopping. The Linux test's shared input script
+    # (tools/ui-render-section-toggle-test.sh).
+    add_test(NAME app.ui-windows-render-section-toggle
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-render-section-toggle-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-render-section-toggle"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-render-section-toggle PROPERTIES TIMEOUT 420)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

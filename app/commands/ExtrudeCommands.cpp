@@ -199,8 +199,11 @@ QVector<InputDef> sideInputs(const QString& suffix, std::function<bool(const Com
               direction.Reverse(); // side two goes against the normal
             }
             // A Two Sides arrow crosses the start to a negative distance,
-            // which ends on the other side's side (mitcad#765).
-            return arrow(base->first, direction);
+            // which ends on the other side's side (mitcad#765). Stepped by
+            // the profiles' size (mitcad#1431).
+            Manipulator handle = arrow(base->first, direction);
+            handle.scale = itemsScale(state.items(QStringLiteral("profiles")), context);
+            return handle;
           }),
   };
   inputs += objectInputs(suffix, when(kToObject), true);
@@ -293,7 +296,12 @@ CommandDef extrudeCommand(const CommandContext& context) {
               return std::nullopt;
             }
             const auto base = profileBase(state.items(QStringLiteral("profiles")), model);
-            return base ? std::optional<Manipulator>(arrow(base->first, base->second)) : std::nullopt;
+            if (!base) {
+              return std::nullopt;
+            }
+            Manipulator handle = arrow(base->first, base->second);
+            handle.scale = itemsScale(state.items(QStringLiteral("profiles")), model); // mitcad#1431
+            return handle;
           }),
       // A point stands for the plane through it (mitcad#1329).
       selectionInput(QStringLiteral("start_object"), QObject::tr("Start Object"),

@@ -1,0 +1,79 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a ball that stays put at a plane and a tube of its radius is
+walked with the edges beside it, and its contact with the plane, a point,
+runs along no edge (mitcad#1412).
+
+- ChFi3d_KParticular: a plane and a cylinder of the ball's radius about the
+  circle they meet in, the material inside the cylinder and the edge
+  convex, are no particular case: the torus would have no tube circle (the
+  ball's centre stays on the cylinder's axis, its contact with the plane
+  one point). The edge (between a lid's top and an earlier vertical
+  rounding of the ball's radius, 0.045 mm long before the mitre where that
+  rounding meets the one along the top) is walked with the mitre beside
+  it, over which the ball stays put too (1520). As a particular case it
+  was a sphere piece touching the top at one point, its neighbours'
+  contacts taken off the top and onto the rounding along it there, and
+  the top's and that rounding's faces came out broken.
+- runsAlongEdgePart: a contact curve that is one point (the walked piece's
+  contact on the rounding along the top, the ball staying put touching it
+  at its edge with the top) runs along no part of an edge: it was taken
+  for one along that edge, the piece split there and its end there given
+  an external transition, and the rounding along the top lost its edge
+  with the top.
+
+The case: 1520's lid, its top rim rounded through the mitres; without
+this patch the top rim's chain failed (its walked piece took the top for
+its second face) or, with the sphere piece, came out invalid.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 07ba8dfd..8ed8e86e 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -789,6 +789,24 @@ bool ChFi3d_KParticular(const occ::handle<ChFiDS_Spine>& Spine,
+     }
+     else if (aCT == GeomAbs_Circle && aD1.IsParallel(aD2, aPA))
+     {
++      // A cylinder of the ball's radius with the material inside it, rounded along its circle
++      // with the plane at a convex edge: the ball's centre stays on the cylinder's axis, its
++      // contact with the plane one point (mitcad#1412: the short edge between a lid's top and
++      // an earlier vertical rounding of the ball's radius, before the mitre where that rounding
++      // meets the one along the top). The torus would have no tube circle to roll on; the walk
++      // takes the edge with the ones beside it, over which the ball stays put too.
++      const gp_Cylinder aCyl     = aS2.Cylinder();
++      bool              aOutward = aCyl.Position().Direct();
++      if (aS2.Face().Orientation() == TopAbs_REVERSED)
++      {
++        aOutward = !aOutward;
++      }
++      if (!fs.IsNull() && aOutward && std::abs(aCyl.Radius() - fs->Radius(IE)) <= 1.e-6
++          && ChFi3d::DefineConnectType(Spine->Edges(IE), aS1.Face(), aS2.Face(), 1.e-5, false)
++               == ChFiDS_Convex)
++      {
++        return !bRet;
++      }
+       return bRet;
+     }
+   }
+@@ -3208,6 +3226,10 @@ static bool runsAlongEdgePart(const occ::handle<Geom_Curve>& C,
+   {
+     return false;
+   }
++  // (A contact that is one point, a ball that stays put touching F there, mitcad#1412, runs
++  // along no edge.)
++  const gp_Pnt  aP1        = C->Value(T1);
++  bool          aMoves     = aP1.Distance(C->Value(T2)) > Tol;
+   constexpr int aNbSamples = 9;
+   for (int i = 1; i < aNbSamples; i++)
+   {
+@@ -3217,8 +3239,9 @@ static bool runsAlongEdgePart(const occ::handle<Geom_Curve>& C,
+     {
+       return false;
+     }
++    aMoves = aMoves || aP.Distance(aP1) > Tol;
+   }
+-  return true;
++  return aMoves;
+ }
+ 
+ // The outward normal of face F at the point of its surface nearest to P.

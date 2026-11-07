@@ -2034,6 +2034,158 @@ void test_shape_deviation() {
   }
 }
 
+// The pieces a turn of each circle edge of `radius` (within 1e-6 mm) in the
+// shape's triangulations: each edge once, by its polygon on the first face
+// met that has one, its pieces scaled to a whole turn (an arc's share).
+std::vector<int> circle_segments(const TopoDS_Shape& meshed, double radius) {
+  std::vector<int> segments;
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+  for (TopExp_Explorer faces(meshed, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(faces.Current());
+    TopLoc_Location location;
+    const auto triangulation = BRep_Tool::Triangulation(face, location);
+    if (triangulation.IsNull()) {
+      continue;
+    }
+    for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(edges.Current());
+      if (seen.Contains(edge)) {
+        continue;
+      }
+      const BRepAdaptor_Curve curve(edge);
+      if (curve.GetType() != GeomAbs_Circle || !near(curve.Circle().Radius(), radius, 1e-6)) {
+        continue;
+      }
+      const auto polygon = BRep_Tool::PolygonOnTriangulation(edge, triangulation, location);
+      if (polygon.IsNull()) {
+        continue;
+      }
+      seen.Add(edge);
+      const double turns = (curve.LastParameter() - curve.FirstParameter()) / (8.0 * std::atan(1.0));
+      segments.push_back(static_cast<int>(std::lround((polygon->NbNodes() - 1) / turns)));
+    }
+  }
+  return segments;
+}
+
+// Small circles by their size (MeshOptions::small_circle_segments,
+// mitcad#879): a plate with holes of radius 0.1 mm, 1 mm and 10 mm, meshed
+// with the view's 0.01 mm and 12 degrees (BRepMesh cuts edges in steps of
+// half the deviation and half the angle: 60 pieces a turn wherever the
+// deviation alone allows fewer). Full detail (0): 60 or more pieces for
+// both small holes. Adaptive (12): the 0.1 mm hole in exactly 12 (its
+// deviation alone would allow 10), the 1 mm one by its deviation (32: the
+// step whose sag is 0.005 mm, 11.5 degrees), fewer than Full detail; the
+// 10 mm hole, which its deviation cuts finer than the angle (100 pieces),
+// the same in both. Fewer triangles in all; meshed again with the same
+// options, every face kept; the exports' presets unchanged. Counts, not
+// times.
+void test_small_circles() {
+  using mitcad::io::MeshOptions;
+  using mitcad::io::small_circle_angle;
+  const double degree = std::atan(1.0) / 45.0;
+  // The rule itself.
+  CHECK(near(small_circle_angle(10.0, 0.01, 12.0 * degree, 12), 12.0 * degree, 1e-15));
+  CHECK(near(small_circle_angle(0.1, 0.01, 12.0 * degree, 12), 60.0 * degree, 1e-6));
+  CHECK(small_circle_angle(0.1, 0.01, 12.0 * degree, 0) == 12.0 * degree);
+  const double one = small_circle_angle(1.0, 0.01, 12.0 * degree, 12);
+  CHECK(near(one, 4.0 * std::acos(1.0 - 0.005), 1e-12)); // twice the deviation's step
+  for (const auto refinement :
+       {mitcad::io::Refinement::Low, mitcad::io::Refinement::Medium, mitcad::io::Refinement::High}) {
+    CHECK(MeshOptions::from(refinement).small_circle_segments == 0);
+  }
+
+  const auto plate = [] {
+    TopoDS_Shape shape = BRepPrimAPI_MakeBox(gp_Pnt(0.0, 0.0, 0.0), 60.0, 40.0, 2.0).Shape();
+    const double holes[3][3] = {{8.0, 8.0, 0.1}, {16.0, 8.0, 1.0}, {40.0, 20.0, 10.0}};
+    for (const auto& hole : holes) {
+      const TopoDS_Shape tool =
+          BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(hole[0], hole[1], -1.0), gp::DZ()), hole[2], 4.0).Shape();
+      shape = BRepAlgoAPI_Cut(shape, tool).Shape();
+    }
+    return shape;
+  };
+  MeshOptions full{0.01, 12.0 * degree, false, 20000, true, true};
+  full.interior_angle = 15.0 * degree;
+  full.hold_face_triangles = true;
+  MeshOptions adaptive = full;
+  adaptive.small_circle_segments = 12;
+
+  const TopoDS_Shape detailed = plate();
+  const TopoDS_Shape sized = plate();
+  CHECK(mitcad::io::mesh_in_place(detailed, full));
+  mitcad::io::MeshReport report;
+  CHECK(mitcad::io::mesh_in_place(sized, adaptive, Message_ProgressRange(), &report));
+  CHECK(report.failed == 0);
+  const auto print = [](const char* name, const std::vector<int>& segments) {
+    std::printf("Small circles %s:", name);
+    for (const int n : segments) {
+      std::printf(" %d", n);
+    }
+    std::printf("\n");
+  };
+  for (const double radius : {0.1, 1.0, 10.0}) {
+    const std::vector<int> before = circle_segments(detailed, radius);
+    const std::vector<int> after = circle_segments(sized, radius);
+    std::printf("Hole of radius %g mm:\n", radius);
+    print("full detail", before);
+    print("adaptive", after);
+    CHECK(before.size() >= 2 && after.size() == before.size()); // its top and bottom
+    for (std::size_t i = 0; i < before.size() && i < after.size(); ++i) {
+      if (radius < 5.0) {
+        CHECK(before[i] >= 60);
+        CHECK(after[i] >= 12 && after[i] < before[i]);
+        if (radius < 0.5) {
+          CHECK(after[i] == 12);
+        } else {
+          CHECK(after[i] >= 30 && after[i] <= 34);
+        }
+      } else {
+        CHECK(after[i] == before[i]);
+        CHECK(before[i] > 60);
+      }
+    }
+  }
+  const auto stats_full = mitcad::io::mesh_stats(detailed);
+  const auto stats_adaptive = mitcad::io::mesh_stats(sized);
+  std::printf("Plate with three holes: %zu triangles in full detail, %zu adaptive\n", stats_full.triangles,
+              stats_adaptive.triangles);
+  CHECK(stats_adaptive.triangles < stats_full.triangles);
+
+  // Meshed again with the same options: every face kept, its edges too.
+  mitcad::io::MeshReport again;
+  CHECK(mitcad::io::mesh_in_place(sized, adaptive, Message_ProgressRange(), &again));
+  CHECK(again.kept == again.faces && again.meshed == 0);
+  for (const int n : circle_segments(sized, 0.1)) {
+    CHECK(n == 12);
+  }
+
+  // A small conical recess (a countersink's cone, 0.25 to 0.75 mm round):
+  // its inside no finer than its edges' circles, so fewer triangles than
+  // in full detail.
+  const auto countersunk = [] {
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(-5.0, -5.0, -2.0), 10.0, 10.0, 2.0).Shape();
+    const TopoDS_Shape cone =
+        BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0.0, 0.0, -0.5), gp::DZ()), 0.25, 1.25, 1.0).Shape();
+    return BRepAlgoAPI_Cut(box, cone).Shape();
+  };
+  const TopoDS_Shape coneFull = countersunk();
+  const TopoDS_Shape coneSized = countersunk();
+  CHECK(mitcad::io::mesh_in_place(coneFull, full));
+  CHECK(mitcad::io::mesh_in_place(coneSized, adaptive));
+  int coneTrianglesFull = 0;
+  int coneTrianglesSized = 0;
+  for (const auto& [type, triangles] : face_triangles(coneFull)) {
+    coneTrianglesFull += type == GeomAbs_Cone ? triangles : 0;
+  }
+  for (const auto& [type, triangles] : face_triangles(coneSized)) {
+    CHECK(triangles > 0);
+    coneTrianglesSized += type == GeomAbs_Cone ? triangles : 0;
+  }
+  std::printf("Countersink cone: %d triangles in full detail, %d adaptive\n", coneTrianglesFull, coneTrianglesSized);
+  CHECK(coneTrianglesSized > 0 && coneTrianglesSized < coneTrianglesFull);
+}
+
 // The face bound held (MeshOptions::hold_face_triangles, mitcad#1275): a
 // wavy B-spline sheet of 24 mm is too small for the bound's floor (its
 // diagonal under 62.5 mm at 0.01 mm), and at 0.01 mm takes far more
@@ -2538,6 +2690,7 @@ int main(int argc, char** argv) {
     test_face_checker_wire_boxes();
     test_building_scale_round_faces();
     test_shape_deviation();
+    test_small_circles();
     test_held_face_triangles();
     test_stl(dir);
     test_indexed_mesh(dir);

@@ -219,7 +219,7 @@ else:
 # WindowServer/XPC acceptance is asynchronous. Keep the real chooser's
 # focus until it has closed; focusing the canvas can steal the Return.
 add("focus-main",
-    f"expect-log '^Exported ${{MITCAD_TEST_WORK:re}}/cut-{frontend}-${{MITCAD_TEST_COLOR_SCHEME:re}}\\.dxf: cut sheet CutSheet1, 4 parts$' 30",
+    f"expect-log '^Exported ${{MITCAD_TEST_WORK:re}}/cut-{frontend}-${{MITCAD_TEST_COLOR_SCHEME:re}}\\.dxf: cut sheet CutSheet1, 4 parts, in mm$' 30",
     f"expect-file '${{MITCAD_TEST_WORK}}/cut-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.dxf'",
     "expect-undo-depth ${beforeExport} 0", "expect-model-bodies 2 21769.91118430775",
     f"screenshot-screen '${{MITCAD_TEST_WORK}}/cut-workspace-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'",

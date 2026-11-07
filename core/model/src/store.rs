@@ -488,6 +488,8 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::ConstraintSet(_) => false,
         // BUILD (mitcad#375): mount frames and measured lengths are not stored.
         FeatureDef::DerivedPart(_) | FeatureDef::BoundLength(_) => false,
+        // Intersection curves (mitcad#1405): the curve is made again.
+        FeatureDef::IntersectionCurve(_) => false,
         // Base features too, also those that only bring in bodies
         // (mitcad#887): a stored body keeps the names evaluating derives.
         _ => true,
@@ -1223,6 +1225,8 @@ fn restore<K: Kernel>(
         changed_pieces: head.changed_pieces.clone(),
         threaded_walls: head.threaded_walls.clone(),
         inputs: head.inputs.clone(),
+        // Not stored: an Intersection Curve is not storable.
+        curve: None,
     })
 }
 

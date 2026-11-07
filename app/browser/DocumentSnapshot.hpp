@@ -67,7 +67,11 @@ struct DocumentSnapshot {
     bool noted() const { return !importNote.isEmpty() || level == QStringLiteral("info"); }
 
     bool isSketch() const { return type == QStringLiteral("sketch"); }
-    bool isConstruction() const { return type.startsWith(QStringLiteral("construction_")); }
+    // Construction planes, axes and points, and Intersection Curves
+    // (mitcad#1405): the Browser's Construction folder, their light bulbs.
+    bool isConstruction() const {
+      return type.startsWith(QStringLiteral("construction_")) || type == QStringLiteral("intersection_curve");
+    }
     // Joints, as-built joints, joint origins and rigid groups (mitcad#55):
     // the browser's Joints folder.
     bool isJoint() const {

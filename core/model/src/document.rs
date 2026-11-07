@@ -1206,7 +1206,10 @@ pub(crate) fn check_components(
         let Some(other) = index.find(features, uid) else {
             continue;
         };
-        let placed = crate::joints::placed_geometry(&other.def);
+        // An Intersection Curve's curve is in its component's coordinates
+        // too (mitcad#1417): another component's only through a link.
+        let placed = crate::joints::placed_geometry(&other.def)
+            || matches!(other.def, FeatureDef::IntersectionCurve(_));
         if let Some((_, link)) = linked.iter().find(|(u, _)| *u == uid) {
             if let Ok(component) = link.source_component(assembly)
                 && placed
@@ -4583,3 +4586,6 @@ pub(crate) use follow_paths::Follow;
 // files changed (mitcad#1416).
 mod link_updates;
 pub use link_updates::{LinkState, LinksUpdated};
+// The curve of an Intersection Curve projected into a later sketch
+// (mitcad#1405).
+mod intersection_curves;

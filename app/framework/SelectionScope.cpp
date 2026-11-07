@@ -134,7 +134,7 @@ QString filterRowLabel(FilterRow row) {
   case FilterRow::Components:
     return QStringLiteral("Components");
   case FilterRow::OtherSketchGeometry:
-    return QStringLiteral("Other sketches' curves and points");
+    return QStringLiteral("Other sketches' curves and points, intersection curves");
   case FilterRow::ReferenceGeometry:
     break;
   }
@@ -146,8 +146,11 @@ SelectFilter filterRowKinds(FilterRow row) {
   case FilterRow::SketchGeometry:
   case FilterRow::ConstructionGeometry:
   case FilterRow::ProjectedGeometry:
-  case FilterRow::OtherSketchGeometry:
     return SelectKind::SketchCurve | SelectKind::SketchPoint;
+  case FilterRow::OtherSketchGeometry:
+    // With the curves of Intersection Curves, features the view draws
+    // (mitcad#1417).
+    return SelectKind::SketchCurve | SelectKind::SketchPoint | SelectKind::Feature;
   case FilterRow::Annotations:
     return SelectFilter();
   case FilterRow::Profiles:
@@ -326,8 +329,14 @@ std::optional<FilterRow> filterRowOf(const SelectionItem& item, const QString& a
   case SelectKind::Axis:
   case SelectKind::Point:
     return FilterRow::ReferenceGeometry;
-  case SelectKind::Sketch:
   case SelectKind::Feature:
+    // An Intersection Curve's curve (mitcad#1417): curves made of other
+    // sketches, in their row; other features have none.
+    if (isFeatureCurve(item)) {
+      return FilterRow::OtherSketchGeometry;
+    }
+    break;
+  case SelectKind::Sketch:
   case SelectKind::None:
     break;
   }

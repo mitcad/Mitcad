@@ -394,6 +394,13 @@ impl<R: Resolver> Resolver for OneBody<'_, R> {
         self.inner.renamed(what, stored, found, maker);
     }
 
+    fn feature_curve(
+        &mut self,
+        feature: crate::ids::FeatureUid,
+    ) -> Result<std::sync::Arc<Vec<crate::sweeps::PathCurve>>, String> {
+        self.inner.feature_curve(feature)
+    }
+
     fn mount(&mut self, feature: crate::ids::FeatureUid, name: &str) -> Result<Transform, String> {
         self.inner.mount(feature, name)
     }

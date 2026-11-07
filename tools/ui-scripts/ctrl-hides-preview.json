@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Ctrl held hides a command's preview (mitcad#1421), tools/ui-ctrl-hides-preview-test.sh: four circles of 10 mm diameter in Sketch1 (F1) on the xy plane, 20 mm apart along x, to extrude; a 20 x 20 x 10 block (F2.b0) from (0, 40), whose top edge on side0 (at y 40) Fillet1 (F3) rounds with 2 mm."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 10},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [20, 0], "diameter": 10},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [40, 0], "diameter": 10},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [60, 0], "diameter": 10},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 40],
+    "length": 20, "width": 20, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "edges": ["E{F2:side0|F2:top}"], "radius": 2}},
+  {"expect": {"feature": "F3", "status": "ok"}}
+]

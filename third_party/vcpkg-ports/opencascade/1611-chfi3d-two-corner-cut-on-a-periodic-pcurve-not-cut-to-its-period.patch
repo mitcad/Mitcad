@@ -1,0 +1,45 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where two roundings that cross at a vertex are cut along their
+intersection (PerformTwoCornerbyInter, not on one point of the pivot), the
+cut of the larger one by the smaller one's face at the end does not cut a
+periodic p-curve of the smaller one's contact to its first period
+(mitcad#1428).
+
+The case of 1610: the groove's rim meets a wall at a vertex whose third
+edge (the wall with the flange's top) is concave; the rounding along the
+wall's arc (a torus) and the one along the flange's top (a cylinder) end
+OnSame on that edge at different points and cross. The torus's contact on
+the wall is a circle whose p-curve on the plane is a Geom2d_Circle of
+range [0, 2 pi]; the contact's parameters there ran from -0.069 (the point
+where the cylinder crosses it, found on the 3D curve) to 1.34. The second
+intersection, on the p-curve cut to [max(First, w - d), min(Last, w + d)],
+was [0, 0.0009], without w: it failed, and PerformMoreThreeCorner filled
+the corner with a plate 0.049 mm off the stored body.
+
+- PerformTwoCornerbyInter: a periodic p-curve is taken over
+  [w - d, w + d] as it is.
+
+On the design's stored body before the item: each corner cut along the
+roundings' intersection, as the stored body's (its faces within 1e-6 mm),
+the item's 156 faces.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+index acebc51b..2caaeadf 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+@@ -680,8 +680,11 @@ bool ChFi3d_Builder::PerformTwoCornerbyInter(const int Index)
+     double                           lsma    = FiArcSma.LastParameter();
+     double                           deltSma = 0.05 * (lsma - fsma);
+     occ::handle<Geom2d_Curve>        pcpc    = SmaFD->Interference(IFaArcSma).PCurveOnFace();
+-    fsma                                     = std::max(pcpc->FirstParameter(), wi - deltSma);
+-    lsma                                     = std::min(pcpc->LastParameter(), wi + deltSma);
++    // (A periodic p-curve, e.g. the circle of a torus's contact on a plane,
++    // is not cut to its first period: the contact's parameters, and the
++    // crossing found on its 3D curve, may lie before it; mitcad#1428.)
++    fsma = pcpc->IsPeriodic() ? wi - deltSma : std::max(pcpc->FirstParameter(), wi - deltSma);
++    lsma = pcpc->IsPeriodic() ? wi + deltSma : std::min(pcpc->LastParameter(), wi + deltSma);
+     if (lsma < fsma)
+     {
+       done = false;

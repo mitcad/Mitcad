@@ -648,6 +648,56 @@ pub(super) trait AnnotationsOps<K: Kernel> {
     /// (null for the automatic one), the height in use, the automatic one
     /// and the ISO 3098 series it is taken from.
     fn annotation_text_height_json(&self) -> Value;
+
+    /// The shown annotations that are not broken, as a drawing's views
+    /// bring them in (mitcad#1406), in the order of the `annotations`
+    /// query, their leaders' words in `units`; a frame standing under a
+    /// shown dimension on a leader to that dimension's first point.
+    fn model_items(&self, units: Units) -> Vec<ModelItem>;
+}
+
+/// What a model annotation is drawn from, in the design's coordinates, for
+/// a drawing's view that brings it in (mitcad#1406).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum ModelShape {
+    /// A length's measured ends.
+    Ends([Vec3; 2]),
+    /// A radius' or a diameter's circle: its centre, unit axis and radius.
+    Circle {
+        center: Vec3,
+        axis: Vec3,
+        radius: f64,
+    },
+    /// An angle's corner and the unit rays it runs between.
+    Arc { center: Vec3, from: Vec3, to: Vec3 },
+    /// A leader's point (where its arrow is); a hole callout's (and a frame
+    /// under it) with its hole's unit axis: a view brings it in where it
+    /// sees the hole end on.
+    Point { at: Vec3, axis: Option<Vec3> },
+}
+
+/// A shown model annotation as a drawing's view brings it in (mitcad#1406):
+/// the annotation, its plane's unit normal and `x` (a length's dimension
+/// line, the direction it measures along) as it is laid out, what it is
+/// drawn from, a leader's lines as the model writes them (a note's, a hole
+/// callout's, a material or process note's) and a dimension's value (mm or
+/// radians).
+#[derive(Debug, Clone)]
+pub(super) struct ModelItem {
+    pub(super) annotation: Annotation,
+    pub(super) normal: Vec3,
+    pub(super) x: Vec3,
+    pub(super) shape: ModelShape,
+    pub(super) lines: Vec<String>,
+    pub(super) value: Option<f64>,
+}
+
+/// A JSON point or direction of three numbers.
+fn vector_of(value: &Value) -> Option<Vec3> {
+    match value.as_array()?.as_slice() {
+        [x, y, z] => Some([x.as_f64()?, y.as_f64()?, z.as_f64()?]),
+        _ => None,
+    }
 }
 
 impl<K: Kernel> AnnotationsOps<K> for Document<K> {
@@ -947,6 +997,135 @@ impl<K: Kernel> AnnotationsOps<K> for Document<K> {
             "automatic": automatic,
             "series": TEXT_HEIGHTS,
         })
+    }
+
+    fn model_items(&self, units: Units) -> Vec<ModelItem> {
+        // As the `annotations` query holds them (mitcad#758).
+        self.side_cache::<MeasureCache>()
+            .hold(2 * self.annotations().len());
+        let (values, _) = self.laid_out(units, false, None);
+        let mut out: Vec<ModelItem> = Vec::new();
+        let mut under: Vec<&Annotation> = Vec::new();
+        for (annotation, value) in self.annotations().iter().zip(&values) {
+            // Hidden in the model: not brought in; broken: nothing to draw.
+            if !annotation.visible || value.get("error").is_some() {
+                continue;
+            }
+            if annotation.kind == MeasureKind::Frame && annotation.on.is_some() {
+                under.push(annotation);
+                continue;
+            }
+            let drawing = &value["drawing"];
+            let Some(normal) = vector_of(&drawing["plane"]["normal"]).and_then(unit) else {
+                continue;
+            };
+            let x = vector_of(&drawing["plane"]["x"])
+                .and_then(unit)
+                .unwrap_or(X);
+            let lines: Vec<String> = value["label"]["lines"]
+                .as_array()
+                .map(|lines| {
+                    lines
+                        .iter()
+                        .filter_map(|l| l.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let shape = match annotation.kind {
+                MeasureKind::Angle => {
+                    let arc = &value["arc"];
+                    let (Some(center), Some(from), Some(to)) = (
+                        vector_of(&arc["center"]),
+                        vector_of(&arc["from"]),
+                        vector_of(&arc["to"]),
+                    ) else {
+                        continue;
+                    };
+                    ModelShape::Arc { center, from, to }
+                }
+                MeasureKind::Radius | MeasureKind::Diameter => {
+                    let (Some(center), Some(axis), Some(radius)) = (
+                        vector_of(&value["center"]),
+                        vector_of(&value["axis"]).and_then(unit),
+                        value["radius"].as_f64(),
+                    ) else {
+                        continue;
+                    };
+                    ModelShape::Circle {
+                        center,
+                        axis,
+                        radius,
+                    }
+                }
+                kind if kind.is_leader() => {
+                    let Some(at) = vector_of(&drawing["arrows"][0]["tip"]) else {
+                        continue;
+                    };
+                    // A hole callout is of the hole it points at: its axis
+                    // (where the kernel cannot tell it, its plane as the
+                    // other leaders').
+                    let axis = (kind == MeasureKind::HoleCallout)
+                        .then(|| {
+                            let picks = self.measure_picks(&annotation.a, None).ok()?;
+                            match picks.elements[0] {
+                                Some(Element::Axis { direction, .. }) => unit(direction),
+                                _ => None,
+                            }
+                        })
+                        .flatten();
+                    ModelShape::Point { at, axis }
+                }
+                _ => {
+                    let points = &value["points"];
+                    let (Some(p), Some(q)) = (vector_of(&points[0]), vector_of(&points[1])) else {
+                        continue;
+                    };
+                    ModelShape::Ends([p, q])
+                }
+            };
+            out.push(ModelItem {
+                annotation: annotation.clone(),
+                normal,
+                x,
+                shape,
+                lines,
+                value: value["value"].as_f64(),
+            });
+        }
+        // A frame under a dimension or a hole callout: on a leader to that
+        // one's first point, in its plane, where that one is brought in.
+        for annotation in under {
+            let Some(on) = annotation.on.as_deref() else {
+                continue;
+            };
+            let Some(dimension) = out.iter().find(|i| i.annotation.name == on) else {
+                continue;
+            };
+            let (at, axis) = match dimension.shape {
+                ModelShape::Ends([p, _]) => (p, None),
+                ModelShape::Circle {
+                    center,
+                    axis,
+                    radius,
+                } => {
+                    let other = if axis[0].abs() < 0.9 { X } else { Y };
+                    let rim = unit(cross(axis, other)).unwrap_or(X);
+                    (add_scaled(center, rim, radius), None)
+                }
+                ModelShape::Arc { center, from, .. } => (add_scaled(center, from, 1.0), None),
+                ModelShape::Point { at, axis } => (at, axis),
+            };
+            let item = ModelItem {
+                annotation: annotation.clone(),
+                normal: dimension.normal,
+                x: dimension.x,
+                shape: ModelShape::Point { at, axis },
+                lines: Vec::new(),
+                value: None,
+            };
+            out.push(item);
+        }
+        out
     }
 }
 
