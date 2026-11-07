@@ -354,3 +354,5 @@ pub use document::{REPEATED_PARTS_TOLERANCE, RepeatedPart, RepeatedParts};
 // The suppliers' shops by region and the product links made from the
 // rows' part numbers (mitcad#950).
 pub mod supplier_shops;
+// Linked designs' files: which changed, and read again (mitcad#1416).
+pub use document::{LinkState, LinksUpdated};

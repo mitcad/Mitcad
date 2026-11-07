@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use mitcad_import::outcomes::BodyOutcome;
 use mitcad_model::exchange::ReadOptions;
-use mitcad_model::{BaseInput, BodyUid, ImportBody, Kernel};
+use mitcad_model::{BaseInput, BodyUid, ImportBody, Imported, Kernel};
 use mitcad_model_api::ApiError;
 
 use cxx::SharedPtr;
@@ -312,7 +312,9 @@ impl Document {
                 sources.push((place, index));
             }
         }
-        // The meshes of mesh features.
+        // The meshes of mesh features (no stored bodies of the B-rep
+        // records: the appearances do not name them).
+        let brep_sources = sources.len();
         for (place, built) in build_meshes(&ipt.meshes().map_err(|e| fail(&e))?) {
             match built {
                 Ok((shape, report)) => {
@@ -365,6 +367,20 @@ impl Document {
         } else {
             self.0.add_base_features(&label, inputs)?
         };
+        // The bodies' and faces' appearances (mitcad#1375), as the import
+        // with the history sets them on the replay's bodies: each body
+        // stands for the stored body of its source (`<B-rep
+        // record>/<ASM body record>`), a body of several solids' pieces for
+        // its lumps (`…#k`). Before the material, as there.
+        let appearances = mitcad_ipt::appearance::read(&ipt).map(|data| {
+            let stored = stored_bodies(&sources[..brep_sources], &imported);
+            mitcad_import::appearances::apply(
+                &mut self.0,
+                &data,
+                &stored,
+                &mitcad_import::components::Components::default(),
+            )
+        });
         let units = self.apply_part_units(&info, empty, &mut warnings)?;
         // The part's properties on the design's root (mitcad#496).
         let properties = self.0.import_properties(
@@ -415,6 +431,9 @@ impl Document {
             "skipped": skipped,
             "warnings": warnings,
             "notices": mitcad_model::notice::to_json(&notices),
+            // The file's appearances on the bodies (mitcad#1375); null
+            // when the part has neither styles nor assets.
+            "appearances": appearances,
             "seconds": {"read": read_seconds, "build": built_seconds},
         });
         if let Some(step) = &options.reference {
@@ -727,6 +746,8 @@ impl Document {
         let stored_only = mitcad_dump::Dump {
             source: design.dump.source.clone(),
             parameters: design.dump.parameters.clone(),
+            // The stored bodies' appearances (mitcad#1367).
+            f3d: design.dump.f3d.clone(),
             ..mitcad_dump::Dump::default()
         };
         let dump = if attempt.bodies_only {
@@ -1122,6 +1143,32 @@ fn body_counts(found: &[Value], not_built: usize) -> [(BodyOutcome, usize); 3] {
     ]
 }
 
+/// The stored bodies the bodies of the import without the history stand
+/// for, by their sources as the appearances name them (mitcad#1375): a
+/// base feature's body is the stored body of the feature's source, its
+/// bodies `<source>#k` when it has several (the lumps of a stored body of
+/// several solids, as the import with the history names them).
+fn stored_bodies(
+    sources: &[(String, usize)],
+    imported: &[Imported],
+) -> Vec<(String, Option<BodyUid>)> {
+    sources
+        .iter()
+        .zip(imported)
+        .flat_map(|((place, _), feature)| {
+            let several = feature.bodies.len() > 1;
+            feature.bodies.iter().enumerate().map(move |(k, body)| {
+                let source = if several {
+                    format!("{place}#{k}")
+                } else {
+                    place.clone()
+                };
+                (source, Some(body.uid))
+            })
+        })
+        .collect()
+}
+
 /// The watchdog's notes added to a report's warnings, and to its notices
 /// as warnings (mitcad#1051).
 fn add_notes(value: &mut Value, notes: &[String]) {
@@ -1238,6 +1285,22 @@ fn summary(report: &Value) -> String {
         );
         for line in report["design_text"].as_str().unwrap_or_default().lines() {
             text += &format!("  {line}\n");
+        }
+    }
+    // The appearances of the import without the history (mitcad#1375;
+    // the history's are in its design text).
+    let a = &report["appearances"];
+    if report["history"] != true && a.is_object() {
+        text += &format!(
+            "  appearances: bodies {}/{}, faces {}/{}; {} appearances made\n",
+            a["bodies_set"],
+            a["bodies"],
+            a["faces_set"],
+            a["faces"],
+            a["appearances"].as_array().map_or(0, Vec::len)
+        );
+        for gap in a["gaps"].as_array().into_iter().flatten() {
+            text += &format!("    {}\n", gap.as_str().unwrap_or_default());
         }
     }
     for body in imported {

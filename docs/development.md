@@ -2077,7 +2077,14 @@ runs one step after another. Build and lint use half the cores unless
   patches of vcpkg's ports at `vcpkg.json`'s `builtin-baseline`. They are
   in a build only with `-DMITCAD_HEIF=ON`: `MITCAD_HEIF` is off by
   default, releases included, and such a build neither builds nor ships
-  them and reads no HEIF image. The HEVC
+  them. It reads HEIF images with the operating system's decoder instead
+  (mitcad#1304; app/COMMANDS.md, "Image references"), each under its
+  vendor's licence and installed by the user, never shipped or linked by
+  MitCad: macOS' ImageIO, Windows' WIC with Microsoft's HEIF Image
+  Extensions and HEVC Video Extensions, and on Linux the distribution's
+  libheif and its HEVC plugin, loaded at run time by its name
+  (`libheif.so.1`) with no libheif header at build time, so nothing of it
+  is in MitCad's code or packages. The HEVC
   test data of `app/tests/heif_image.cpp` was made with ffmpeg's libx265
   (GPL) by `tools/heif-test-fixture.py`, a separate program run by hand;
   nothing of it is linked or shipped.

@@ -292,6 +292,9 @@ pub use mortise_tenon::MortiseTenonDef;
 // detail size closed over (mitcad#1271).
 pub mod envelope;
 pub use envelope::EnvelopeDef;
+// The control cages imported Form bodies keep (mitcad#1365).
+pub mod cage;
+pub use cage::ControlCage;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;

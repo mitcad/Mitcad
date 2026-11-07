@@ -9,6 +9,7 @@
 // libraries.
 #include <algorithm>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -685,21 +686,133 @@ ChoiceTile valueTile(const ToolKind& kind, const MaterialCache& cache, const Com
   return tile;
 }
 
+// The keys and names the tool's picker offers: the materials or the
+// appearances.
+QVector<std::pair<QString, QString>> offeredNow(const ToolKind& kind, const MaterialCache& cache) {
+  QVector<std::pair<QString, QString>> offered;
+  if (kind.material) {
+    for (const LibraryItem& item : cache.items) {
+      offered.append({item.key(), item.name});
+    }
+  } else {
+    for (const Appearance& appearance : cache.appearances) {
+      offered.append({appearance.id, appearance.name});
+    }
+  }
+  return offered;
+}
+
+// What a window the tool opened does when it closes (Material Library…,
+// mitcad#1250; Edit Materials… and Edit Appearances… of the picker,
+// mitcad#1415): the tool reads its materials or appearances again, so that
+// one made or changed there is offered, logged "Material tool: materials
+// read again, 12 offered, new: Bench PETG" ("Appearance tool: appearances
+// read again, …"); the panel shows them, its inputs (the picked bodies
+// among them) as they were.
+std::function<void()> readAgainWhenClosed(const ToolKind& kind, const std::shared_ptr<MaterialCache>& cache,
+                                          const CommandContext& model) {
+  DocumentHost* host = chooserOf(model);
+  const QPointer<QWidget> guard(windowOf(model));
+  const CommandContext* context = &model;
+  return [kind, cache, host, guard, context] {
+    if (guard.isNull() || host == nullptr) {
+      return;
+    }
+    // Read when no job computes the model: a query refused then would
+    // leave the picker empty.
+    host->whenIdle(guard.data(), [kind, cache, host, context] {
+      QStringList before;
+      for (const auto& item : offeredNow(kind, *cache)) {
+        before << item.first;
+      }
+      readCache(*cache, *context, kind.material);
+      const QVector<std::pair<QString, QString>> after = offeredNow(kind, *cache);
+      QStringList added;
+      for (const auto& item : after) {
+        if (!before.contains(item.first)) {
+          added << item.second;
+        }
+      }
+      const QString news =
+          added.isEmpty() ? QString() : QStringLiteral(", new: %1").arg(added.join(QStringLiteral(", ")));
+      qDebug().noquote() << QStringLiteral("%1: %2 read again, %3 offered%4")
+                                .arg(kind.log, kind.material ? QStringLiteral("materials") : QStringLiteral("appearances"))
+                                .arg(after.size())
+                                .arg(news);
+      // The panel shows them (CommandSession::refreshInputs); its inputs,
+      // the picked bodies among them, stay as they were.
+      host->commandInputsChanged();
+    });
+  };
+}
+
+// The picker's last entry (mitcad#1415): below a line, Edit Materials… or
+// Edit Appearances…, as the material appearance picker and 3D Print's
+// Material Picker end.
+QString editKey() { return QStringLiteral("__edit"); }
+
+PickerEntry editEntry(const ToolKind& kind) {
+  PickerEntry entry{editKey(), kind.material ? QObject::tr("Edit Materials…") : QObject::tr("Edit Appearances…"),
+                    QString(), QImage(),
+                    kind.material ? QObject::tr("New materials and changes in the Materials window, offered here "
+                                                "once it closes")
+                                  : QObject::tr("New appearances and changes in the Appearances window, offered here "
+                                                "once it closes")};
+  entry.lineBefore = true;
+  return entry;
+}
+
+// Edit Materials… or Edit Appearances… chosen: the window on the picker's
+// current material or appearance while the panel stays open with its
+// targets; the tool reads its lists again when the window closes.
+void editInWindow(const ToolKind& kind, const std::shared_ptr<MaterialCache>& cache, const QString& current,
+                  const CommandContext& model) {
+  DocumentHost* host = chooserOf(model);
+  if (host == nullptr || windowOf(model) == nullptr) {
+    return;
+  }
+  // Default and an expression are none of the window's.
+  const bool own = !current.isEmpty() && current != defaultKey() && !isExpressionKey(current);
+  const QString key = own ? current : QString();
+  const QString name = !own ? QStringLiteral("nothing")
+                       : kind.material ? materialName(*cache, key)
+                                       : appearanceName(*cache, key);
+  qDebug().noquote() << QStringLiteral("%1: %2 on %3")
+                            .arg(kind.log,
+                                 kind.material ? QStringLiteral("Edit Materials…") : QStringLiteral("Edit Appearances…"),
+                                 name);
+  if (kind.material) {
+    host->editMaterialsOn(key, readAgainWhenClosed(kind, cache, model));
+  } else {
+    host->editAppearancesOn(key, readAgainWhenClosed(kind, cache, model));
+  }
+}
+
 // Opens the picker under the pointer (the AppKit frontend's popover under
-// the tile, mitcad#1066); its choice goes to the panel's input.
-void openPicker(const ToolKind& kind, const QString& command, const QVector<PickerEntry>& entries,
-                const CommandState& state, const CommandContext& context) {
+// the tile, mitcad#1066); its choice goes to the panel's input, its last
+// entry opens the window (mitcad#1415).
+void openPicker(const ToolKind& kind, const QString& command, QVector<PickerEntry> entries,
+                const std::shared_ptr<MaterialCache>& cache, const CommandState& state, const CommandContext& context) {
   QWidget* window = windowOf(context);
   DocumentHost* host = chooserOf(context);
   const QString input = kind.value;
-  LibraryPicker::open(window, kind.material ? QObject::tr("Material Picker") : QObject::tr("Appearance Picker"),
-                      kind.material ? QStringLiteral("Material picker") : QStringLiteral("Appearance picker"),
-                      entries, state.choice(input), QCursor::pos(), [host, command, input](const QString& value) {
-                        if (host == nullptr || !host->chooseInCommand(command, input, value)) {
-                          qInfo().noquote() << QStringLiteral("%1: the pick was not taken").arg(command);
-                        }
-                      },
-                      QStringLiteral("input_") + input);
+  const QString current = state.choice(input);
+  const CommandContext* model = &context;
+  entries.append(editEntry(kind));
+  LibraryPicker::open(
+      window, kind.material ? QObject::tr("Material Picker") : QObject::tr("Appearance Picker"),
+      kind.material ? QStringLiteral("Material picker") : QStringLiteral("Appearance picker"), entries, current,
+      QCursor::pos(),
+      [host, command, input, kind, cache, current, model](const QString& value) {
+        if (value == editKey()) {
+          editInWindow(kind, cache, current, *model);
+          return;
+        }
+        if (host == nullptr || !host->chooseInCommand(command, input, value)) {
+          qInfo().noquote() << QStringLiteral("%1: the pick was not taken").arg(command);
+        }
+      },
+      QStringLiteral("input_") + input);
 }
 
 // What the targets have now, for the row under them: "3 bodies: PLA Basic,
@@ -872,7 +985,7 @@ CommandDef materialCommand(const CommandContext& context) {
                   [cache, kind](const CommandState& state, const CommandContext& model) {
                     // Read again: a window may have added one (mitcad#1059).
                     cache->items = queryLibraryItems(model, QStringLiteral("material"), cache->project);
-                    openPicker(kind, QStringLiteral("solid.material"), materialEntries(*cache), state, model);
+                    openPicker(kind, QStringLiteral("solid.material"), materialEntries(*cache), cache, state, model);
                   })
       .withOnChange([cache](CommandState& state, const CommandContext&) {
         // Its default appearance with it; Appearance offers its others.
@@ -938,41 +1051,13 @@ CommandDef materialCommand(const CommandContext& context) {
   InputDef library = noteInput(
       QStringLiteral("library"),
       [](const CommandState&) { return InputNote{QString(), {QObject::tr("Material Library…")}, {}}; },
-      [cache](int, const CommandState&, const CommandContext& model) {
+      [cache, kind](int, const CommandState&, const CommandContext& model) {
         DocumentHost* host = chooserOf(model);
-        QWidget* window = windowOf(model);
-        if (host == nullptr || window == nullptr) {
+        if (host == nullptr || windowOf(model) == nullptr) {
           return;
         }
         qDebug().noquote() << QStringLiteral("Material tool: Material Library opened");
-        const QPointer<QWidget> guard(window);
-        host->openMaterialLibrary([cache, guard, host, &model] {
-          if (guard.isNull()) {
-            return;
-          }
-          // Read when no job computes the model: a query refused then
-          // would leave the picker empty.
-          host->whenIdle(guard.data(), [cache, host, &model] {
-            QStringList before;
-            for (const LibraryItem& item : std::as_const(cache->items)) {
-              before << item.key();
-            }
-            readCache(*cache, model, true);
-            QStringList added;
-            for (const LibraryItem& item : std::as_const(cache->items)) {
-              if (!before.contains(item.key())) {
-                added << item.name;
-              }
-            }
-            const QString news =
-                added.isEmpty() ? QString() : QStringLiteral(", new: %1").arg(added.join(QStringLiteral(", ")));
-            qDebug().noquote()
-                << QStringLiteral("Material tool: materials read again, %1 offered%2").arg(cache->items.size()).arg(news);
-            // The panel shows them (CommandSession::refreshInputs); its
-            // inputs, the picked bodies among them, stay as they were.
-            host->commandInputsChanged();
-          });
-        });
+        host->openMaterialLibrary(readAgainWhenClosed(kind, cache, model));
       });
   library.withFieldColumn();
 
@@ -1165,7 +1250,7 @@ CommandDef appearanceCommand(const CommandContext& context) {
                   [cache, kind](const CommandState& state, const CommandContext& model) {
                     const QString materialClass = targetsMaterialClass(*cache, state, model);
                     openPicker(kind, QStringLiteral("solid.appearance"), appearanceEntries(*cache, true, materialClass),
-                               state, model);
+                               cache, state, model);
                   });
 
   // Appearances also go to single faces (mitcad#53), overriding their

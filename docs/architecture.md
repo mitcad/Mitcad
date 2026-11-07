@@ -52,7 +52,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/import-appearances` (`mitcad-import-appearances`) | Rust | The replay's appearances family above its core: the file's appearances and physical materials on the replay's bodies, faces and occurrences, as an extension trait on the core's `Importer`; the report's types stay in the core (mitcad#791; [README](../core/import-appearances/README.md)). |
 | `core/freecad` (`mitcad-freecad`) | Rust | `.FCStd` reader: typed objects and properties, placements, links, sketches, spreadsheets, expressions. No geometry. |
 | `core/zip` (`mitcad-zip`) | Rust | Zip container for `.f3d` and `.FCStd` (stored, deflate, zstd; a writer for tests). An entry inflates to at most 256 MiB unless the caller opts in to up to 4 GiB (body blobs, `.f3z` documents, large meshes), and never to more than 1032 bytes per compressed byte (mitcad#923). |
-| `core/ipt` (`mitcad-ipt`) | Rust | `.ipt` part files: compound file container (MS-CFB), property sets (MS-OLEPS), the segment database, the B-rep record converted by `core/asm`, the meshes of mesh features, the definitions segment (parameters, sketches, features) as the import's dump IR, and `.iam` assemblies (referenced files, occurrences, placements; [README](../core/ipt/README.md)). No geometry. |
+| `core/ipt` (`mitcad-ipt`) | Rust | `.ipt` part files: compound file container (MS-CFB), property sets (MS-OLEPS), the segment database, the B-rep record converted by `core/asm`, the meshes of mesh features, the definitions segment (parameters, sketches, features) and the bodies' and faces' appearances (the `Protein` package, read by `core/f3d-file`, mitcad#1367) as the import's dump IR, and `.iam` assemblies (referenced files, occurrences, placements; [README](../core/ipt/README.md)). No geometry. |
 | `core/ifc` (`mitcad-ifc`) | Rust | IFC files (IFC2X3, IFC4, IFC4X3; `.ifczip`): an own ISO 10303-21 reader, units, the spatial structure, products and their placements, relationships, styles, and the shapes' representation items decoded (profiles, swept solids, booleans, breps, face sets, mapped items; [README](../core/ifc/README.md)). No geometry. |
 | `core/solidcraft` (`mitcad-solidcraft`) | Rust | `.solidcraft` designs: the JSON document or its container, upgraded from any file format to one by SolidCraft's own steps (`third_party/solidcraft`), typed sketches and feature kinds, expressions in MitCad's language. No geometry. |
 | `core/dxf` | Rust | DXF read and write. |
@@ -450,8 +450,13 @@ design in a project.
   file). The model reads only the files' headers (size and resolution;
   a HEIF file's size as shown, after its rotation and crop, mitcad#850);
   the app decodes the pictures (`view/ImageFile.*`: Qt's readers, HEIF
-  through libheif and libde265, shared libraries from vcpkg in builds
-  with `MITCAD_HEIF`) and draws them as textured quads by the
+  through the operating system's decoder, `view/HeifDecoder.*` behind
+  `platform/PlatformHeif.hpp`: ImageIO on macOS, WIC on Windows, the
+  distribution's libheif loaded at run time on Linux, looked for only
+  when a HEIF file is decoded, mitcad#1304; libheif and libde265 from
+  vcpkg instead in builds with `MITCAD_HEIF`), embeds a HEIF file it
+  inserts as a PNG file of the upright image, and draws them as textured
+  quads by the
   corners the `image_references` query gives
   (`MainWindowImageReferences.cpp`, `view/ImageReferenceView.cpp`).
   Their commands are undo steps that recompute nothing.
@@ -1005,6 +1010,11 @@ own units are kept. New designs start in the user's default units for new
 designs (Preferences › General, mm by default, mitcad#1036): the unit is
 the new document's initial state (`Document::new_design_in`, a project's
 `new_design` with `units`), with no undo step and no modified mark.
+The DXF exports (a sketch's, a Flat Pattern's, a face's, a cut sheet's and
+a drawing's) write the design's own length unit unless the export names
+another (`units`, mitcad#1408): an inch design's DXF is in inches
+(`$INSUNITS` 1, `$MEASUREMENT` 0), a millimetre design's in millimetres;
+`mitcad_model::exchange::dxf_in_unit` scales the millimetre drawing.
 
 ## Geometry kernel
 
@@ -3690,7 +3700,21 @@ direction), not only the kernel's (`commands.md`, fillet).
   occurrences (nothing the import adds moves an occurrence elsewhere),
   else as as-built joints of the placements; whether a joint holds is
   computed from its frames before it is added, so a joint item costs one
-  recompute (mitcad#87). Rigid groups come in as rigid groups.
+  recompute (mitcad#87). Rigid groups come in as rigid groups. Mesh
+  bodies (mitcad#1366) are no part of the ASM history: their containers
+  (`mitcad_f3d_file::paramesh`, raw LZMA streams of their own decoder)
+  are placed by the design's mesh body records
+  (`mitcad_f3d_decode::mesh`), the import's geometry gives them to the
+  replay (`StoredGeometry::take_meshes`), and the item that made them
+  (`MeshFeature`) comes in as a base feature of mesh bodies
+  (`Kernel::triangle_body`) in its component
+  (`core/import-replay/src/meshes.rs`); the history's comparisons leave
+  mesh bodies out. Their physical materials and appearances
+  (`_f3d.appearance.meshes`) come in with the appearances family, joined
+  by their mesh body records (`Importer::mesh_bodies`,
+  `core/import-appearances/src/meshes.rs`, mitcad#1376); the import of
+  the stored bodies alone (`import_f3d`, `core/ffi/src/exchange.rs`)
+  brings the mesh bodies in too.
 - FreeCAD: `core/freecad` reads the archive and XML (`roxmltree`, DTDs
   refused, nesting, expressions and B-splines bounded against hostile
   files, mitcad#932); enumerations are indices, mapped per FreeCAD version

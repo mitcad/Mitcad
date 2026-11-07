@@ -270,6 +270,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     component.uid = text(c, "uid");
     component.name = text(c, "name");
     component.linked = c.value(QStringLiteral("link")).isString();
+    component.link = c.value(QStringLiteral("link")).toString();
     component.library = c.value(QStringLiteral("library")).isObject();
     component.envelope = c.value(QStringLiteral("envelope")).toDouble();
     for (const QJsonValue& body : c.value(QStringLiteral("bodies")).toArray()) {

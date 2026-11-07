@@ -53,6 +53,7 @@ if(APPLE)
   set(mitcad_render_input_hashes "")
   foreach(input vcpkg.json triplets/arm64-osx-dynamic.cmake
                 third_party/oidn/respect-macos-deployment-target.patch
+                third_party/oidn/modern-macos-binding.patch
                 third_party/cycles/metal-resource-usage.patch
                 third_party/cycles/denoiser-diagnostics.patch
                 third_party/cycles/metal-pipeline-failure.patch

@@ -39,11 +39,8 @@
 #include <QJsonObject>
 #include <QMenu>
 #include <QMessageBox>
-#include <QPainter>
-#include <QPen>
 #include <QPoint>
 #include <QProcess>
-#include <QRectF>
 #include <QUrl>
 #include <QtLogging>
 #include <QtMath>
@@ -52,6 +49,7 @@
 #include "../framework/Appearances.hpp"
 #include "../framework/CommandSession.hpp"
 #include "../framework/DocumentSession.hpp"
+#include "../framework/PickerComboBox.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../print/ImportDetailsDialog.hpp"
@@ -99,23 +97,6 @@ QString filamentNow() { return choiceHeadingPrefix() + QStringLiteral("__filamen
 // The pickers' last entry, below a line: the Materials window on the
 // row's material.
 const char* kEditMaterials = "__edit_materials";
-
-// A material's swatch in its row and picker: a rounded square of its
-// colour (none: the default look's grey, a default appearance's base
-// colour), as the Material tool's picker.
-QImage materialSwatch(const QColor& color) {
-  constexpr int size = 32;
-  QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
-  image.fill(Qt::transparent);
-  QPainter painter(&image);
-  painter.setRenderHint(QPainter::Antialiasing);
-  const QColor fill = color.isValid() ? color : Appearance().baseColor;
-  painter.setBrush(fill);
-  painter.setPen(QPen(fill.darker(140), 1));
-  const double edge = 1.5;
-  painter.drawRoundedRect(QRectF(edge, edge, size - 2 * edge, size - 2 * edge), size / 6.0, size / 6.0);
-  return image;
-}
 
 // The bodies go on the print bed by their print bed faces (mitcad#731),
 // else by the automatic orientation, centred on the plate and dropped onto
@@ -390,12 +371,26 @@ void MainWindow::openMaterialLibrary(std::function<void()> closed) {
   }
 }
 
+void MainWindow::editMaterialsOn(const QString& key, std::function<void()> closed) {
+  if (m_controller != nullptr) {
+    m_controller->editMaterialsOn(key, std::move(closed));
+  }
+}
+
+void MainWindow::editAppearancesOn(const QString& id, std::function<void()> closed) {
+  if (m_controller != nullptr) {
+    m_controller->editAppearancesOn(id, std::move(closed));
+  }
+}
+
 bool MainWindow::canChangePrintSettings() const {
   // 3D Print has no preview: the print windows its Edit… opens change the
   // design while its panel is open (mitcad#655); so do Plates…' own
   // changes and its plate settings (mitcad#1050), and the Materials
   // manager the Material tool's Material Library… opens (mitcad#1250; the
-  // tool previews nothing, its commands run on OK).
+  // tool previews nothing, its commands run on OK); and the Appearances
+  // window the Appearance tool's Edit Appearances… opens (mitcad#1415, the
+  // same).
   if (canChangeModel()) {
     return true;
   }
@@ -404,7 +399,7 @@ bool MainWindow::canChangePrintSettings() const {
   }
   const QString id = m_session->def().id;
   return id == QStringLiteral("make.print3d") || id == QStringLiteral("make.plates") ||
-         id == QStringLiteral("solid.material");
+         id == QStringLiteral("solid.material") || id == QStringLiteral("solid.appearance");
 }
 
 void MainWindow::importPrintSettings(const std::shared_ptr<PrintImport>& target) {

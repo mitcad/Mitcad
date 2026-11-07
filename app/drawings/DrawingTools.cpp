@@ -1195,6 +1195,7 @@ QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, co
 QList<QPair<QString, QString>> penChoices() {
   return {{QStringLiteral("thin"), tr("Thin")},
           {QStringLiteral("thick"), tr("Thick")},
+          {QStringLiteral("extra_thick"), tr("Extra Thick")},
           {QStringLiteral("hidden"), tr("Dashed")},
           {QStringLiteral("chain"), tr("Center Line")}};
 }

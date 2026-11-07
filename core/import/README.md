@@ -103,7 +103,7 @@ format and, for the `.f3d` import, per topic:
 | [docs/f3d-sheet-metal.md](docs/f3d-sheet-metal.md) | Sheet metal. |
 | [docs/f3d-appearances.md](docs/f3d-appearances.md) | Appearances and materials, designs with many face appearances, light bulbs. |
 | [docs/f3d-learning.md](docs/f3d-learning.md) | Learning the undecoded inputs: the learning dump and the input decoding audits. |
-| [docs/f3d-undecoded.md](docs/f3d-undecoded.md) | What the file does not settle yet, the published format descriptions against the decoder. |
+| [docs/f3d-undecoded.md](docs/f3d-undecoded.md) | What the file does not settle yet, the published format descriptions against the decoder and against the ASM B-rep reader (mitcad_private#198: unknown faces kept, exact helices, analytic blends and extrusions, offset surfaces). |
 | [docs/f3d-rounds-1.md](docs/f3d-rounds-1.md), [-2](docs/f3d-rounds-2.md), [-3](docs/f3d-rounds-3.md), [-4](docs/f3d-rounds-4.md) | Notes on single rounds of work on the corpus: the censuses, model by model, and the fillet and chamfer rounds. |
 | [../import-fcstd/docs/freecad.md](../import-fcstd/docs/freecad.md) | The FreeCAD import (in its crate, `mitcad-import-fcstd`). |
 | [docs/ipt.md](docs/ipt.md) | The `.ipt` import. |

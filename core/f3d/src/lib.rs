@@ -40,6 +40,9 @@ pub use mitcad_zip as zip;
 
 #[doc(hidden)]
 pub mod testreferences;
+// A synthetic design with a mesh body (mitcad#1366).
+#[doc(hidden)]
+pub mod testmeshes;
 
 /// Reads and converts every body blob of a document (`.f3d`).
 pub fn read_document_bodies(

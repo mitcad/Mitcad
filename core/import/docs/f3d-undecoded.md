@@ -825,7 +825,7 @@ it ([*What the history settles*](f3d-history.md#what-the-history-settles)).
 | Shell: thickness, outward flag, removed faces or target bodies (cadmpeg) | **faces, bodies, outside thickness now** | inside or outside is the parameter's role; faces checked on the ref. models; tangent chain not read |
 | Offset faces: signed distance, face group (cadmpeg) | **faces now** | |
 | Thicken, surface patch, extend, offset, stitch, trim, ruled, boundary fill, delete face (cadmpeg) | not read | not translated by the import |
-| Draft: angle, drafted faces, neutral plane or parting tool (cadmpeg) | not read | one corpus draft |
+| Draft: angle, drafted faces, neutral plane or parting tool (cadmpeg) | **read now** (mitcad#1363) | the groups are our input slots of roles 16 (drafted faces) and 33 (neutral face or plane; two for a parting line), the angles the parameters of roles `Angle1` and `Angle2`; the tangent-chain byte is ours (0 on the controlled model made without it, 1 on the corpus' draft); a face draft is MitCad's `draft` with `flip` (the controlled model's volume); the corpus has one draft, about a face; no WorkPlane or parting-line draft in the corpora |
 | Split body, split face: tool and target groups (cadmpeg) | read (split body) | |
 | Cylinder, sphere, box, torus primitives: operation, placement matrix, sizes (cadmpeg) | **read** (mitcad#25) | the matrix is in the frame of the plane or face the primitive stands on (that frame carries the plane's origin): `frame * placement`; two cylinders and both spheres of the corpus' one design come in, four cylinders on faces of an inserted component do not |
 | Coil: operation, clockwise, extent kind, section, position, placement (cadmpeg) | **read** (mitcad#25) | type, section, position, rotation and placement; the corpus' coil (four copies) comes in parametric |
@@ -835,9 +835,12 @@ it ([*What the history settles*](f3d-history.md#what-the-history-settles)).
 | Joint origins, joints, as-built joints, assembly operand frames, alignment owners (cadmpeg) | read | mitcad#66; the description's alignment lanes agree with our owner order |
 | Mirror and patterns: seed groups, counts, angle, axis record (origin and displacement), plane group (cadmpeg) | read | the axis record is our `_f3d_axis` (mitcad#96) |
 | Appearance and material assets (`.protein` packages: page framing, instance records by schema, descriptions), body presentation records, per-face assignments, body map (cadmpeg) | **read** (mitcad#228) | [*Appearances and materials*](f3d-appearances.md#appearances-and-materials); every record of the corpora decodes to its end |
-| Canvas, decal, mesh bodies, body visibility, unit systems, bounding box caches, display meshes (both) | not read (display meshes: read) | not needed by the timeline import |
-| Sheet metal base flange, edge flange, hem (cadmpeg) | base and edge flanges read (mitcad#211); hems not | [*Sheet metal*](f3d-sheet-metal.md#sheet-metal): the edge flange's flip byte and height datum 3 are ours |
+| Canvas, decal, body visibility, unit systems, bounding box caches, display meshes (both) | not read (display meshes: read) | not needed by the timeline import |
+| Sheet metal base flange, edge flange, hem (cadmpeg) | read (mitcad#211, hems mitcad#1364) | [*Sheet metal*](f3d-sheet-metal.md#sheet-metal): the edge flange's flip byte and height datum 3 are ours, and so is the hem's form code (the description takes the form from its parameters and its result) |
 | ACT segment, browser segment (both) | not read | |
+| Mesh containers `ParaMeshGeometry.<uuid>.paramesh`: header, registry, name table, stream chunks with their descriptors, raw LZMA and stored streams, vertex positions, terminal-delta triangle corners and feature edges (cadmpeg) | **read** (mitcad#1366) | `core/f3d-file/src/paramesh.rs`, `lzma.rs`; the attribute channels (normals, texture coordinates, colours, face groups) are not read: a mesh body takes its triangles; feature edges are read and checked, a mesh body keeps no edges |
+| Mesh bodies in the design: entry-name, GUID and mesh body records, the mesh body's two placements, its item (`MeshFeature`), body holder and name (cadmpeg) | **read** (mitcad#1366) | `core/f3d-decode/src/mesh.rs`: each placement is a flag byte, `1` for none (the container's coordinates are the design's centimetres), `0` before the description's matrix; the corpus's one mesh body stores none (its record is the 256 bytes of two matrices shorter, its scene bounds the container's coordinates); its name is read between the two presentation envelopes, and the envelopes' physical material and appearance (mitcad#1376: names as a body record's, each `u32 0` before its preset); the collection, wrapper, texture table and scene records are not read. The mesh body item comes in as a base feature of its meshes in its component |
+| Form control cages (`TSplines.BlobParts/*.tsm`, `TS0200`): topology records, grips and the grip map, creases, the serializer's entry name and surface reference (cadmpeg, `docs/formats/f3d.md`, *Form control cages*) | **read** (mitcad#1365) | `_f3d.cages`; kept with the Form bodies ([*Form bodies and their control cages*](f3d-fallbacks.md#form-bodies-and-their-control-cages-mitcad1365)); the class-keyed cage lists, cage tables and cage-object chains are not read (the entry name joins without them); symmetry and selections kept as written; no corpus file holds a cage |
 
 ### Fillets and chamfers against the descriptions
 
@@ -1138,4 +1141,25 @@ Found by importing real designs one at a time; each rule is general.
   whose boolean the geometry kernel reports as invalid; a cut across
   components whose parts differ in two of seven bodies; primitives' placement
   (the record's entity inputs are not decoded).
+
+### The ASM B-rep against the descriptions (mitcad_private#198)
+
+The cadmpeg project's ASM description (CC BY 4.0, `docs/formats/asm.md`,
+read at commit `613beb5`) was compared with what `core/asm/src/` reads of
+the B-rep that `.f3d` bodies, `.ipt` B-rep records and `.dwg` solids
+hold. Its code (Apache-2.0) was read for the same purpose only; the
+readers below are our own, written from the description and checked on
+synthetic records in `core/asm/src/` (no code was copied, so nothing is
+kept under `third_party/`).
+
+| What the description gives | Reader before | Now |
+|---|---|---|
+| A face whose surface the reader cannot decode | left out; its shell open at its edges | **kept** on an unknown surface ([`Surface::Unknown`](../../asm/src/brep.rs)) with its loops, so the topology stays closed; counted in `skipped_faces`, reported in the issues; the builder leaves the face out, and the shell is no solid |
+| An edge whose curve the reader cannot decode | left out of its loops (the loops open) | **kept** on an unknown curve (`Curve::Unknown`), counted in `unknown_edges`; the builder leaves it out; a state with one counts as lost faces, as before |
+| Subshells: owner, next sibling, first child, first face, wire | not read ("their faces are not read") | **read**: their faces belong to the shell |
+| Helices (`helix_int_cur`), thread flanks (`helix_spl_line`) and rounded roots (`helix_spl_circ`) | sampled 48 times a turn and interpolated | **exact** (`Curve::Helix`): the builder gets a degree 7 B-spline of twelve spans a turn matching the helix's point and first three derivatives at each knot, within 6e-10 of its radius; a flank is ruled between two helices, a root swept through the helices of its arc's control points, all with the same knots |
+| A translational extrusion (`cyl_spl_sur`, a sum surface with a line) of a circle along its normal | an extrusion | **a cylinder** (a circle: an ellipse of ratio 1, or a B-spline on a circle within a billionth of its radius) |
+| A constant-radius rolling ball (`rb_blend_spl_sur`) between two planes along a line, or a plane and a cylinder about its normal along a circle | the stored approximation, or the ball walked by OCCT | **a cylinder or a torus** where every condition holds within 1e-6 mm, before any stored approximation |
+| `off_spl_sur` (revision-gated) without its approximation: support, distance, sense pair, extension prefix and run, shared tail | not made (no approximation) | **exact**: an offset of a plane is the plane moved, of a B-spline OCCT's offset surface of it; curves on such a surface follow their parameter curve on it |
+| The other procedural surfaces stored without an approximation (variable blends, lofts, sweeps, laws, skins, nets, tapers, G2 blends) and curves without one or parameter curves (surface intersections, projections, silhouettes, springs) | not made | not read: the families are added one row at a time to `PROCEDURAL_SURFACES` in `core/asm/src/asm/geom.rs` |
 

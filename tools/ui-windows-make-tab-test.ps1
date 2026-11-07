@@ -4,6 +4,7 @@
 # check-all sources: core/model-api/src/annotations.rs app/MainWindowMeasurements.cpp app/view/MeasurementOverlay.cpp
 # check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
 # check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/print/ProfilePickerRows.cpp
+# check-all sources: app/print/SlicerMaterialRows.cpp app/print/MaterialsDialog.cpp app/print/MaterialMenuChoices.cpp
 # Input-driven Windows UI test of the Make tab (mitcad#1049) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-make-tab-test.sh on Linux, on its design: a sheet-metal plate
@@ -40,6 +41,12 @@
 #      library process first, and choosing it sets it on the body (one undo
 #      step); the Printer picker's last row, Printers..., opens the Printers
 #      manager on Bench.
+#   4d. The card's Material picker (mitcad#1411), on a box in a project
+#      whose library has Project PETG, and My library with Shop TPU: both
+#      under their headings (This project, My library); Shop TPU chosen is
+#      the body's, copied into the design (under This design then), one
+#      undo step takes both back; Edit materials..., the picker's last row,
+#      opens the Materials window for the body.
 #   5. The Floating layout: the Make tab and Dimension from it.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-make-tab-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -110,6 +117,28 @@ foreach ($process in @(@('fine-bench', 'Fine @Bench', '0.12'), @('coarse-alpha',
     ('{"format": "mitcad-print-item", "version": 1, "profile": {"id": "' + $process[0] + '", "name": "' + $process[1] +
      '", "kind": "process", "values": {"layer_height": ' + $process[2] + '}, "version": 1}}')
 }
+# The card's Material picker (mitcad#1411): a box in a project whose
+# library has the material Project PETG; My library gets Shop TPU before
+# that part starts (Material-Item writes an item file as Save to does).
+$project = Join-Path $work 'project'
+New-Item -ItemType Directory -Force (Join-Path $project '.mitcad') | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $project 'print-library\materials') | Out-Null
+Set-Content -Encoding ascii (Join-Path $project '.mitcad\project.json') '{"format": "mitcad-project", "version": 1}'
+function Material-Item([string]$Folder, [string]$Id, [string]$Name, [string]$Type) {
+  Set-Content -Encoding ascii (Join-Path $Folder "$Id.json") `
+    ('{"format": "mitcad-print-item", "version": 1, "material": {"id": "' + $Id + '", "name": "' + $Name +
+     '", "density": 1.25, "filament": {"filament_type": "' + $Type + '", "temperature": 230}, "version": 1}}')
+}
+Material-Item (Join-Path $project 'print-library\materials') 'project_petg' 'Project PETG' 'PETG'
+$materialJson = Join-Path $work 'material.json'
+$materialDesign = Join-Path $project 'material.mitcad'
+Set-Content -Encoding ascii $materialJson @'
+[
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-10,-10],"length":20,"width":20,"height":20,"operation":"new_body"}}
+]
+'@
+$output = & $cli run $materialJson --save $materialDesign 2>&1
+if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli (material): $($output -join ' / ')" }
 
 $ellipsis = [string][char]0x2026
 # Group-Menu "TAB/GROUP" "entries": the group's menu opened, its entries
@@ -397,6 +426,62 @@ Ui-ExpectNew 'Profile selected: printer Bench (design)' 'on Bench'
 Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Printers$'; Ui-Key 'Escape'; Ui-FocusMain }
 if (@(Ui-NewLines | Where-Object { $_.Contains('Make card Printer set: ') }).Count -gt 0) { Ui-Fail 'Printers... changed the printer' }
 Write-Host 'ok   Printers... keeps the printer'
+
+Write-Host '--- 4d. The card''s Material picker (mitcad#1411)'
+New-Item -ItemType Directory -Force (Join-Path $library 'materials') | Out-Null
+Material-Item (Join-Path $library 'materials') 'shop_tpu' 'Shop TPU' 'TPU'
+Ui-StartApp 'make-tab-material' @('--open', $materialDesign, '--no-native-dialogs')
+Ui-ExpectLog "Opened $workLogged/project/material.mitcad" 'the box in the project opened'
+Ui-Mark
+Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
+Ui-Mark
+Ui-Step 'select Body1 in the Browser'      { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
+Ui-ExpectNew 'Make card: Body1: material Steel (default)' 'Body1 of the design''s default'
+Ui-ExpectNew 'Make card material at' 'the Material row''s place'
+Ui-Mark
+Ui-Step 'open the Material picker'         { Ui-ClickLogged 'Make card material' }
+Ui-ExpectNew 'Material picker opened: ' 'the card''s Material picker opened'
+Ui-ExpectNew 'current Default (Steel)' 'on the design''s default'
+Ui-ExpectNew 'Material picker sections: This project 1 | My library 1 | Built-in ' `
+  'the project''s and My library''s materials under their headings, the built-in ones after them'
+Ui-FocusDialog '^Material Picker$'
+Ui-Mark
+Ui-Step 'type Shop TPU'                    { Ui-Type 'Shop TPU' }
+Ui-ExpectNew 'Material picker search: Shop TPU, first Shop TPU' 'My library''s Shop TPU found'
+Ui-Mark
+Ui-Step 'choose (Enter)'                   { Ui-Key 'Return' }
+Ui-ExpectNew 'Material picker chose: Shop TPU' 'Shop TPU chosen'
+Ui-FocusMain
+Ui-ExpectNew 'Make card material of Body1: shop_tpu' 'given to Body1'
+Ui-ExpectNew 'Material shop_tpu set for 1 body(ies), appearance ' 'as Send to Slicer''s material rows give it'
+Ui-ExpectNew 'Make card: Body1: material Shop TPU (body)' 'the card shows it, set on the body'
+Ui-Mark
+Ui-Step 'open the Material picker'         { Ui-ClickLogged 'Make card material' }
+Ui-ExpectNew 'Material picker opened: ' 'opened again'
+Ui-ExpectNew 'current Shop TPU' 'on Shop TPU now'
+Ui-ExpectNew 'Material picker sections: This design 1 | This project 1 | Built-in ' `
+  'Shop TPU copied into the design: under This design, My library has no other'
+Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Material Picker$'; Ui-Key 'Escape'; Ui-FocusMain }
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                    { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Undo: Set Material of Body1' 'one undo step'
+Ui-ExpectNew 'Make card: Body1: material Steel (default)' 'the design''s default again'
+Ui-Mark
+Ui-Step 'open the Material picker'         { Ui-ClickLogged 'Make card material' }
+Ui-ExpectNew 'Material picker sections: This project 1 | My library 1 | Built-in ' `
+  'the copy gone with the same step: Shop TPU in My library again'
+Ui-FocusDialog '^Material Picker$'
+Ui-Mark
+Ui-Step 'type Edit materials'              { Ui-Type 'Edit materials' }
+Ui-ExpectNew "Material picker search: Edit materials, first Edit materials$ellipsis" 'its last row, Edit materials...'
+Ui-Mark
+Ui-Step 'Edit materials... (Enter)'        { Ui-Key 'Return' }
+Ui-ExpectNew "Make card Edit materials$ellipsis of Steel (Body1)" 'for the body''s material'
+Ui-ExpectNew 'Materials opened for bodies F1.b0' 'the Materials window opened for Body1'
+Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Materials$'; Ui-Key 'Escape'; Ui-FocusMain }
+if (@(Ui-NewLines | Where-Object { $_.Contains('Make card material of ') }).Count -gt 0) { Ui-Fail 'Edit materials... changed the material' }
+Write-Host 'ok   Edit materials... keeps the material'
 
 Write-Host '--- 5. Floating'
 Ui-StartApp 'make-tab-floating' @('--open', $design, '--chrome=floating')

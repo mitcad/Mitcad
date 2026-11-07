@@ -67,6 +67,11 @@ internal implementation. Qt 6.12 lists [macOS 14.4 and newer as supported](https
 the current application's deployment target remains 14.4. A deployment
 target and successful execution on a newer OS do not prove execution on 14.4.
 
+The macOS dependency builder patches OIDN 2.5.1 to omit its deprecated
+`-bind_at_load` linker option for deployment targets 14.4 and newer. Older
+targets retain the upstream option. The patch is part of the renderer input
+hash, so an export built before this change is rejected during configure.
+
 ### QRhiWidget and an IOSurface image
 
 A narrow bridge would keep an independent CGL/NSOpenGL context for OCCT,

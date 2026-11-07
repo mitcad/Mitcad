@@ -1,25 +1,30 @@
 // SPDX-License-Identifier: MIT
 //! A sheet as a DXF drawing in millimetres of paper: each pen on a layer of
-//! its own (`VISIBLE`, `HIDDEN`, `THIN`, `HATCH`, `SECTION_LINE`, `FRAME`),
-//! texts on `TEXT`, arrowheads as their outlines. The writer has no
-//! dashed line types, so hidden edges are told apart by their layer.
+//! its own (`VISIBLE`, `HIDDEN`, `THIN`, `HATCH`, `SECTION_LINE`, `FRAME`,
+//! `EXTRA_THICK`), texts on `TEXT`, arrowheads as their outlines. The
+//! writer has no dashed line types or line weights, so hidden edges and
+//! extra wide lines are told apart by their layer.
+//! `export_drawing` writes it in the file's length unit
+//! (`mitcad_model::exchange::dxf_in_unit`, mitcad#1408): the sheet in
+//! inches of paper for an inch design, its texts scaled with it.
 
 use mitcad_dxf::{Drawing, Geometry, Layer, Point2, Text, Units};
 
 use super::sheet::{Anchor, Item, Pen, Sheet, text_width};
 
-const PENS: [Pen; 6] = [
+const PENS: [Pen; 7] = [
     Pen::Thick,
     Pen::Hidden,
     Pen::Thin,
     Pen::Hatch,
     Pen::Chain,
     Pen::Frame,
+    Pen::ExtraThick,
 ];
 
 fn colour(pen: Pen) -> i16 {
     match pen {
-        Pen::Thick | Pen::Frame => 7,
+        Pen::Thick | Pen::ExtraThick | Pen::Frame => 7,
         Pen::Hidden => 8,
         Pen::Thin => 3,
         Pen::Hatch => 9,

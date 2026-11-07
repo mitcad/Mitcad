@@ -632,13 +632,23 @@ fn description(d: &[u8]) -> Option<Description> {
     let ui_name = r.str().ok()?;
     let asset = r.str().ok()?;
     let version = r.u32().ok()?;
-    let (category, description) = if version == 2 {
-        let category = r.str().ok()?;
-        let _ = r.str().ok()?;
-        let description = r.str().ok()?;
-        (Some(category), Some(description))
-    } else {
-        (None, None)
+    // Version 0: the description; 1: group, description; 2: category,
+    // group, description; 3: category, group, subgroup, description
+    // (versions 0, 2 and 3 seen, in `.ipt` packages, mitcad#1367).
+    let (category, description) = match version {
+        0 => (None, Some(r.str().ok()?)),
+        1 => {
+            let _ = r.str().ok()?;
+            (None, Some(r.str().ok()?))
+        }
+        2 | 3 => {
+            let category = r.str().ok()?;
+            for _ in 1..version {
+                let _ = r.str().ok()?;
+            }
+            (Some(category), Some(r.str().ok()?))
+        }
+        _ => (None, None),
     };
     let nonempty = |s: Option<String>| s.filter(|s| !s.is_empty());
     Some(Description {
@@ -674,43 +684,49 @@ pub fn document_assets(file: &crate::F3dFile) -> Package {
     out
 }
 
+/// A paged stream of these records (page size 136), as a package keeps
+/// them: for tests, here and in the `.ipt` reader's (mitcad#1367).
+#[doc(hidden)]
+pub fn paged_stream(recs: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&136u32.to_le_bytes());
+    out.extend_from_slice(&[0xff; 8]);
+    out.extend_from_slice(&[0; 4]);
+    let mut page = 1u32;
+    for rec in recs {
+        let chunks: Vec<&[u8]> = rec.chunks(128).collect();
+        for (k, c) in chunks.iter().enumerate() {
+            let last = k + 1 == chunks.len() && c.len() < 128;
+            if last {
+                out.extend_from_slice(&[0xff; 4]);
+                out.extend_from_slice(&(c.len() as u16).to_le_bytes());
+                out.extend_from_slice(&[0, 0]);
+            } else {
+                out.extend_from_slice(&page.to_le_bytes());
+                out.extend_from_slice(&128u16.to_le_bytes());
+                out.extend_from_slice(&[u8::from(k == 0), 0]);
+            }
+            let mut body = c.to_vec();
+            body.resize(128, 0xcd);
+            out.extend_from_slice(&body);
+            page += 1;
+        }
+        // A record that fills its last page ends on an empty one.
+        if rec.len() % 128 == 0 {
+            out.extend_from_slice(&[0xff; 4]);
+            out.extend_from_slice(&[0; 4]);
+            out.extend_from_slice(&[0xcd; 128]);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A paged stream of these records (page size 136).
     pub(crate) fn paged(recs: &[Vec<u8>]) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&136u32.to_le_bytes());
-        out.extend_from_slice(&[0xff; 8]);
-        out.extend_from_slice(&[0; 4]);
-        let mut page = 1u32;
-        for rec in recs {
-            let chunks: Vec<&[u8]> = rec.chunks(128).collect();
-            for (k, c) in chunks.iter().enumerate() {
-                let last = k + 1 == chunks.len() && c.len() < 128;
-                if last {
-                    out.extend_from_slice(&[0xff; 4]);
-                    out.extend_from_slice(&(c.len() as u16).to_le_bytes());
-                    out.extend_from_slice(&[0, 0]);
-                } else {
-                    out.extend_from_slice(&page.to_le_bytes());
-                    out.extend_from_slice(&128u16.to_le_bytes());
-                    out.extend_from_slice(&[u8::from(k == 0), 0]);
-                }
-                let mut body = c.to_vec();
-                body.resize(128, 0xcd);
-                out.extend_from_slice(&body);
-                page += 1;
-            }
-            // A record that fills its last page ends on an empty one.
-            if rec.len() % 128 == 0 {
-                out.extend_from_slice(&[0xff; 4]);
-                out.extend_from_slice(&[0; 4]);
-                out.extend_from_slice(&[0xcd; 128]);
-            }
-        }
-        out
+        paged_stream(recs)
     }
 
     #[test]
@@ -822,5 +838,44 @@ mod tests {
             .map(|p| p.id)
             .collect();
         assert_eq!(ids, ["AssetLibID", "c", "f", "z"]);
+    }
+
+    /// Descriptions of versions 0 (the description only) and 3 (category,
+    /// group, subgroup, description), as `.ipt` packages keep them.
+    #[test]
+    fn reads_descriptions_of_other_versions() {
+        let record = |version: u32, texts: &[&str]| {
+            let mut d = str32("GenericSchema");
+            d.push(0);
+            for s in ["Shown", "Asset-1"] {
+                d.extend(str32(s));
+            }
+            d.extend(version.to_le_bytes());
+            for s in texts {
+                d.extend(str32(s));
+            }
+            d.extend(0u32.to_le_bytes());
+            d.extend(0u32.to_le_bytes());
+            d
+        };
+        let v0 = description(&record(0, &["Metal."])).unwrap();
+        assert_eq!(v0.category, None);
+        assert_eq!(v0.description.as_deref(), Some("Metal."));
+        let v3 = description(&record(
+            3,
+            &[
+                "Metal/Steel",
+                "Default",
+                "Miscellaneous",
+                "Generic material.",
+            ],
+        ))
+        .unwrap();
+        assert_eq!(v3.category.as_deref(), Some("Metal/Steel"));
+        assert_eq!(v3.description.as_deref(), Some("Generic material."));
+        assert_eq!(
+            (v3.ui_name.as_str(), v3.asset.as_str()),
+            ("Shown", "Asset-1")
+        );
     }
 }

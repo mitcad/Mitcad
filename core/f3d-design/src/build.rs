@@ -44,6 +44,8 @@ mod primitives;
 mod sheet;
 // Derived designs (mitcad#324).
 mod derive;
+// Drafts: drafted faces, neutral plane, parting tool (mitcad#1363).
+mod drafts;
 
 /// Helpers for the decoder's tests.
 #[cfg(test)]
@@ -3390,6 +3392,8 @@ impl Builder<'_> {
             _ if it.class == TANGENT_RELATIONSHIP => self.tangent_relationship(it),
             // What a derive brings from other documents (mitcad#324).
             _ if it.class == DERIVED_CONTEXT => self.derived_context(it),
+            // Drafts (mitcad#1363).
+            _ if it.class == drafts::DRAFT => self.draft(it, &rl),
             _ => Detail::empty(),
         }
     }
@@ -3847,6 +3851,23 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         }),
         timelines_total: Some(dec.timelines_total as u64),
         parameter_failures: Some(dec.parameter_failures as u64),
+        // The mesh bodies (mitcad#1366); absent without any.
+        mesh_bodies: (!dec.mesh_bodies.is_empty()).then(|| {
+            dec.mesh_bodies
+                .iter()
+                .map(|m| MeshBody {
+                    id: Some(m.id),
+                    file: m.file.clone(),
+                    key: m.key.clone(),
+                    feature: m.feature,
+                    component: m.component,
+                    name: m.name.clone(),
+                    transform: m.transform,
+                    error: m.error.clone(),
+                    ..MeshBody::default()
+                })
+                .collect()
+        }),
         ..DumpF3d::default()
     };
 

@@ -18,6 +18,8 @@
 //! The format knowledge comes from Microsoft's specifications for the
 //! container and the property sets, and from inspecting files for the rest.
 
+// Appearances and materials of bodies and faces (mitcad#1367).
+pub mod appearance;
 pub mod assembly;
 // The container, a crate of its own shared with the `.rvt` reader (mitcad#274).
 pub use mitcad_cfb as cfb;

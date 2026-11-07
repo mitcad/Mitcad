@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# A HEIF photo inserted through macOS' ImageIO (mitcad#1304,
+# tools/ui-macos-image-references-heif-test.sh): the 64 x 32 pixel file
+# turned a quarter by its irot, decoded upright (32 x 64 pixels) when it is
+# chosen, inserted 32 mm wide on the plate's top as a PNG file, drawn, saved.
+wait-idle
+command view.fit
+mark
+command insert.image_reference
+expect-log '^Command Image Reference started'
+click-pick 'face F1.b0/F1:top'
+expect-log '^Image Reference Plane: 1 face'
+type-in '^Panel Image Reference input file at ' '${MITCAD_TEST_WORK}/photo.heic'
+wait-log '^Image Reference HEIF file photo.heic decoded: 32 x 64 pixels'
+type-in '^Panel Image Reference input width at ' '32'
+key Return
+wait-log '^Inserted image reference from photo.heic'
+wait-log '^Image reference Image1 decoded: 32 x 64 pixels'
+wait-log '^Image references drawn: Image1 32.0 x 64.0 mm 50% behind'
+expect-no-log 'Panel Image Reference error'
+expect-no-log 'Image1 is a HEIF image'
+screenshot '${MITCAD_TEST_WORK}/image-references-heif.png'
+menu 'File/Save'
+expect-log 'Saved .*plate\.mitcad'

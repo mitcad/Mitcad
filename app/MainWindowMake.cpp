@@ -18,7 +18,8 @@
 //   - Export Face as DXF… (Laser): a body's outline seen along a planar
 //     face (export_face_dxf), also in the face's context menu;
 //   - the selected body's card on the Make tab (print/MakeBodyCard.hpp):
-//     its material and print settings, edited there;
+//     its material (Send to Slicer's Material Picker, mitcad#1411) and
+//     print settings, edited there;
 //   - the Browser's markers on the Make tab: the bodies whose material or
 //     print settings differ from their component's (make_differences).
 #include "MainWindow.hpp"
@@ -51,11 +52,14 @@
 #include "framework/Ribbon.hpp"
 #include "framework/TestSync.hpp"
 #include "print/MakeBodyCard.hpp"
+#include "print/MaterialMenuChoices.hpp"
+#include "print/MaterialsDialog.hpp"
 #include "print/PrintKeys.hpp"
 #include "print/PrintLibrary.hpp"
 #include "print/PrintValueChoices.hpp"
 #include "print/PrintValuePicker.hpp"
 #include "print/ProfilePickerRows.hpp"
+#include "print/SlicerMaterialRows.hpp"
 #include "view/AnnotationDialogs.hpp"
 
 namespace mitcad {
@@ -377,7 +381,9 @@ void MainWindow::exportFaceDxf() {
   const QString occurrence = face->occurrence;
   const QString name = bodyName(body);
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
-  const QString path = dialogSaveFileName(this, tr("Export Face as DXF"), suggested, tr("DXF drawings (*.dxf)"));
+  // In the design's length unit unless another is chosen (mitcad#1408).
+  QString unit = lengthUnit();
+  const QString path = dialogSaveDxf(this, tr("Export Face as DXF"), suggested, unit);
   if (path.isEmpty()) {
     return;
   }
@@ -385,7 +391,8 @@ void MainWindow::exportFaceDxf() {
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export_face_dxf")},
                       {QStringLiteral("body"), body},
                       {QStringLiteral("face"), faceName},
-                      {QStringLiteral("path"), path}};
+                      {QStringLiteral("path"), path},
+                      {QStringLiteral("units"), unit}};
   if (!occurrence.isEmpty()) {
     command.insert(QStringLiteral("occurrence"), occurrence);
   }
@@ -395,21 +402,26 @@ void MainWindow::exportFaceDxf() {
     qInfo().noquote() << QStringLiteral("Export of the face of %1 refused: %2").arg(name, m_lastError);
     return;
   }
-  qInfo().noquote() << QStringLiteral("Exported %1: dxf outline of %2 along %3, %4 outer and %5 inner loops, %6 x %7 mm")
-                           .arg(path, name, faceName)
-                           .arg(result.value(QStringLiteral("outer")).toInt())
-                           .arg(result.value(QStringLiteral("inner")).toInt())
-                           .arg(result.value(QStringLiteral("width")).toDouble())
-                           .arg(result.value(QStringLiteral("height")).toDouble());
-  showHint(tr("Exported the outline of %1 to %2.").arg(name, QDir::toNativeSeparators(path)));
+  const QString written = result.value(QStringLiteral("units")).toString(unit);
+  qInfo().noquote()
+      << QStringLiteral("Exported %1: dxf outline of %2 along %3, %4 outer and %5 inner loops, %6 x %7 mm, in %8")
+             .arg(path, name, faceName)
+             .arg(result.value(QStringLiteral("outer")).toInt())
+             .arg(result.value(QStringLiteral("inner")).toInt())
+             .arg(result.value(QStringLiteral("width")).toDouble())
+             .arg(result.value(QStringLiteral("height")).toDouble())
+             .arg(written);
+  showHint(tr("Exported the outline of %1 to %2 (in %3).").arg(name, QDir::toNativeSeparators(path), written));
 }
 
 MakeBodyCard* MainWindow::createMakeCard() {
   auto* card = new MakeBodyCard;
   // The model commands rebuild the card: after its own signal.
-  connect(card, &MakeBodyCard::materialChosen, this, [this](const QString& id) {
-    QTimer::singleShot(0, this, [this, id] { setMakeCardMaterial(id); });
+  connect(card, &MakeBodyCard::materialChosen, this, [this](const QString& key) {
+    QTimer::singleShot(0, this, [this, key] { setMakeCardMaterial(key); });
   });
+  connect(card, &MakeBodyCard::materialsRequested, this,
+          [this] { QTimer::singleShot(0, this, [this] { openMakeCardMaterials(); }); });
   connect(card, &MakeBodyCard::printerChosen, this, [this](const QString& key) {
     QTimer::singleShot(0, this, [this, key] { setMakeCardProfile(QStringLiteral("printer"), key); });
   });
@@ -466,21 +478,70 @@ void MainWindow::sendMakeCardToSlicer() {
   trigger(id);
 }
 
-void MainWindow::setMakeCardMaterial(const QString& id) {
+void MainWindow::setMakeCardMaterial(const QString& key) {
   QString body;
   QString occurrence;
   if (!selectedBody(m_selection, &body, &occurrence)) {
     return;
   }
-  if (runModelCommand({{QStringLiteral("cmd"), QStringLiteral("set_body_material")},
-                       {QStringLiteral("uid"), body},
-                       {QStringLiteral("material"), id}})) {
+  const QString project = projectFolder();
+  const QVector<LibraryItem> items = queryLibraryItems(model(), QStringLiteral("material"), project);
+  const LibraryItem* found = findItem(items, key);
+  if (found == nullptr) {
+    updateMakeCard();
+    return;
+  }
+  if (!canChangePrintSettings()) {
+    showError(changeBlockedReason());
+    return;
+  }
+  // Given as Send to Slicer's material rows and the Material tool give it
+  // (mitcad#1411, bodyMaterialCommands): a library's or the project's
+  // material copied into the design by the same command, an appearance set
+  // by hand that the material does not offer asked about (Replace, Keep or
+  // Cancel); one undo step, "Set Material of Body1".
+  const LibraryItem item = *found;
+  QJsonArray bodyRows;
+  QJsonArray designMaterials;
+  try {
+    bodyRows = queryArray(QStringLiteral("bodies"));
+    designMaterials = queryArray(QStringLiteral("materials"));
+  } catch (const std::exception&) {
+    // No appearance set by hand is known: none is asked about.
+  }
+  const QStringList offered = materialAppearances(designFields(item, designMaterials, QJsonObject()));
+  const BodyMaterialCommands assignment = bodyMaterialCommands(this, &item, offered, bodyRows, {body}, project);
+  if (assignment.cancelled || assignment.commands.isEmpty()) {
+    updateMakeCard();
+    return;
+  }
+  const QJsonArray& commands = assignment.commands;
+  const bool done = commands.size() == 1 ? runModelCommand(commands.first().toObject())
+                                         : runModelCommands(commands, tr("Material"));
+  const QString id = item.designId().isEmpty() ? item.id : item.designId();
+  if (done) {
+    rememberRecentMaterial(item.place, item.key());
     qInfo().noquote() << QStringLiteral("Make card material of %1: %2").arg(bodyName(body), id);
+    qInfo().noquote()
+        << QStringLiteral("Material %1 set for 1 body(ies), appearance %2").arg(id, assignment.appearance);
   } else {
     showError(tr("Material: %1").arg(lastError()));
     qInfo().noquote() << QStringLiteral("Make card material refused: %1").arg(lastError());
   }
   updateMakeCard();
+}
+
+void MainWindow::openMakeCardMaterials() {
+  QString body;
+  QString occurrence;
+  if (m_controller == nullptr || !selectedBody(m_selection, &body, &occurrence)) {
+    return;
+  }
+  // The Materials window on the body's material, as Send to Slicer's
+  // material rows' Edit materials… opens it.
+  qInfo().noquote() << QStringLiteral("Make card Edit materials… of %1 (%2)")
+                           .arg(m_makeCard != nullptr ? m_makeCard->data().material : QString(), bodyName(body));
+  m_controller->openMaterialsOf({body});
 }
 
 void MainWindow::setMakeCardProfile(const QString& kind, const QString& key) {
@@ -703,9 +764,16 @@ void MainWindow::updateMakeCard() {
     card.material = text(material, "name");
     card.materialId = text(material, "id");
     card.materialLevel = text(material, "source");
-    for (const QJsonValue& value : queryArray(QStringLiteral("materials"))) {
-      const QJsonObject item = value.toObject();
-      card.materials.append(qMakePair(text(item, "id"), text(item, "name")));
+    // The materials as Send to Slicer's material rows list them
+    // (mitcad#1411, materialPickerRows): the design's and the libraries',
+    // under where they live; the body's by its key.
+    const QString project = projectFolder();
+    const QVector<LibraryItem> materialItems = queryLibraryItems(model(), QStringLiteral("material"), project);
+    card.materials = materialPickerRows(materialItems);
+    if (const LibraryItem* item = findDesignCopy(materialItems, card.materialId)) {
+      card.materialKey = item->key();
+    } else if (!card.materialId.isEmpty()) {
+      card.materialKey = QStringLiteral("design/") + card.materialId;
     }
     QJsonObject settingsQuery = target;
     settingsQuery.insert(QStringLiteral("query"), QStringLiteral("print_settings"));
@@ -726,7 +794,6 @@ void MainWindow::updateMakeCard() {
     // the printers under their vendors, the processes under their
     // printers, the body's printer's first (mitcad#1216). The ones it
     // prints with by their keys ("<place>/<id>"), a library's by its row.
-    const QString project = projectFolder();
     const QVector<LibraryItem> printerItems = queryLibraryItems(model(), QStringLiteral("printer"), project);
     const QVector<LibraryItem> processItems = queryLibraryItems(model(), QStringLiteral("process"), project);
     const auto keyOf = [](const QVector<LibraryItem>& items, const QString& designId) -> QString {

@@ -556,3 +556,23 @@ fn the_first_operation_that_took_the_sheet_meaning_away_stays_named() {
     assert_eq!(first.feature, FeatureUid(6));
     assert!(first.message.contains("sheet-domain adapter"), "{first:?}");
 }
+
+/// A bend past half a turn (a hem's, mitcad#1378): its points beyond 180
+/// degrees have chart coordinates, and points past its extent none.
+#[test]
+fn chart_coordinates_go_on_past_half_a_turn() {
+    let mut c = cylinder([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0], R, false);
+    c.angle_extent = 1.5 * PI;
+    let embedding = SheetEmbedding::Cylinder(c.clone());
+    for f in [0.25, 0.75, 1.0, 1.25, 1.45] {
+        let u = f * PI * c.neutral_radius;
+        let p = chart_point(&embedding, [u, 7.0], 0.5, T);
+        let (uv, depth) = chart_coordinates(&embedding, p, T).expect("on the bend");
+        assert!(
+            (uv[0] - u).abs() < 1e-9 && (uv[1] - 7.0).abs() < 1e-9 && (depth - 0.5).abs() < 1e-9,
+            "{f}: {uv:?} {depth}"
+        );
+    }
+    let beyond = chart_point(&embedding, [1.75 * PI * c.neutral_radius, 0.0], 0.0, T);
+    assert!(chart_coordinates(&embedding, beyond, T).is_none());
+}

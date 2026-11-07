@@ -13,7 +13,12 @@ It sits above the replay's core
 ([mitcad-import-replay](../import-replay/README.md), mitcad#791): its
 method is the extension trait `Appearances` on the core's `Importer`,
 which the core reaches only through its `Families` trait (`appearances`),
-filled by `mitcad-import`. The report's types (`AppearanceReport` and its
+filled by `mitcad-import`. Its body is the free function `apply(doc,
+data, stored, components)` (mitcad#1375): the appearance data, the stored
+bodies by their sources with the document's body for each (a lump of a
+stored body of several solids `<source>#k`, joined to the record that
+names `<source>`), and the file's components; the `.ipt` import of the
+bodies only calls it without a replay. The report's types (`AppearanceReport` and its
 entries) are the core's (`appearance_report`), since `DesignReport` holds
 them; this crate re-exports them, and `mitcad-import` re-exports the crate
 as `appearances`, so `mitcad_import::appearances::...` keeps working. An

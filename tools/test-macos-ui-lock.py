@@ -43,6 +43,14 @@ elif sys.argv[5] == "trace-only":
     print("TestDriver: line 3: expect-never 'TestDriver: FAIL'", flush=True)
 while not (root / "release").exists():
     time.sleep(0.02)
+if os.environ.get("MITCAD_TEST_HEADLESS") == "1":
+    # Synthetic logs exercise the harness gate; real app scopes must produce
+    # their own runtime evidence through the actual isolation checks.
+    count = 2 if sys.argv[5] == "missing-completion-proof" else 3
+    for _ in range(count):
+        print("Headless macOS application verified: activation prohibited, inactive, no visible native windows", flush=True)
+    if sys.argv[5] != "missing-qt-proof":
+        print("Headless UI test verified: Qt offscreen without an OpenGL context", flush=True)
 os._exit(int(sys.argv[4]))
 '''
 
@@ -126,7 +134,7 @@ def main():
                             f"{work.name}: harness did not reach the lock")
             assert process.poll() is None, (work / "harness.log").read_text()
 
-        def release(run, expected_exit=0, expected_timeout=0):
+        def release(run, expected_exit=0, expected_timeout=0, expected_failures=None):
             process, work = run
             (work / "release").touch()
             process.wait(timeout=20)
@@ -137,7 +145,8 @@ def main():
             assert record["timeout"] == expected_timeout, record
             assert record["assertion"] == 0, record
             assert record["signal"] == "", record
-            assert record["failures"] == (1 if expected_exit or expected_timeout else 0), record
+            failures = (1 if expected_exit or expected_timeout else 0) if expected_failures is None else expected_failures
+            assert record["failures"] == failures, record
             assert record["pid"] == "", "ui_run_app did not reap its real child"
 
         def remains_queued(run, duration):
@@ -161,6 +170,13 @@ def main():
             assert first[0].poll() is None
             release(headless_a)
             release(headless_b)
+            # Exit zero cannot substitute for the real completion guards.
+            for mode in ("missing-qt-proof", "missing-completion-proof"):
+                incomplete = launch(mode, headless=True, mode=mode)
+                started(incomplete)
+                release(incomplete, expected_failures=1)
+                log = (incomplete[1] / "harness.log").read_text()
+                assert "missing final headless Qt/no-OpenGL or macOS application isolation proof" in log, log
             second = launch("queued", timeout=1)
             queued(second)
             first_root = (first[1] / "prepared-root.txt").read_text().strip()

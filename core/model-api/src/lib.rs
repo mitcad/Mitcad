@@ -1054,6 +1054,12 @@ named_enum! {
         // The corners a drawing sheet's views show, drawn as dots on the
         // screen while Always show corners is on (mitcad#1338).
         "drawing_corners" => DrawingCorners(drawing_annotations::CornersQuery),
+        // The linked designs and whether their files changed since they
+        // were read (mitcad#1416, `components.rs`).
+        "links" => Links {
+            #[serde(default)]
+            base: Option<String>,
+        },
     }
 }
 
@@ -1628,6 +1634,8 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             }
             // A sheet's visible corners (mitcad#1338).
             Query::DrawingCorners(query) => self.drawing_corners_json(&query)?,
+            // Linked designs' files that changed (mitcad#1416).
+            Query::Links { base } => components::links_json(self, base.as_deref()),
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

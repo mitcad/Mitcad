@@ -225,6 +225,8 @@ bool MainWindow::restoreRecovered(RecoverableSession& session) {
   qInfo().noquote() << QStringLiteral("Recovered %1 from autosave of %2")
                            .arg(name, session.savedAt.toString(Qt::ISODate));
   showHint(tr("Recovered %1. Its changes are not saved yet.").arg(name));
+  // The linked files read again (mitcad#1416), after the hint.
+  showLinkMessages(messages);
   return true;
 }
 

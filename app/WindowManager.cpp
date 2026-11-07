@@ -173,6 +173,9 @@ MainWindow* WindowManager::openFile(MainWindow* source, const QString& path, QSt
   error.clear();
   if (MainWindow* existing = findByPath(path); existing != nullptr && !(replaceAsked && existing == source)) {
     present(existing);
+    // Opened again while open: its linked files that changed since are
+    // offered with Update (mitcad#1416); the design is not read again.
+    existing->checkLinkedFiles();
     return existing;
   }
   const bool current =
@@ -213,6 +216,30 @@ MainWindow* WindowManager::openFile(MainWindow* source, const QString& path, QSt
   }
   present(target);
   return target;
+}
+
+MainWindow* WindowManager::openFileBeside(MainWindow* source, const QString& path, QString& error) {
+  error.clear();
+  if (MainWindow* existing = findByPath(path)) {
+    present(existing);
+    existing->checkLinkedFiles();
+    return existing;
+  }
+  QPointer<MainWindow> target = createWindow(false, source, false);
+  const bool opened = target->openFile(path, error);
+  if (!target) return nullptr;
+  if (!opened) {
+    windowClosed(target);
+    return nullptr;
+  }
+  present(target);
+  return target;
+}
+
+void WindowManager::designSaved(MainWindow* source, const QString& path) {
+  for (MainWindow* window : windows()) {
+    if (window != source) window->linkedDesignSaved(path);
+  }
 }
 
 bool WindowManager::closeWindow(MainWindow* window) {

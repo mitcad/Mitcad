@@ -1097,6 +1097,25 @@ impl<'a> NamedState<'a> {
         }
     }
 
+    /// The key a face's record carries in its header's second field (its
+    /// history id; the `.ipt` graphics faces name faces by it, mitcad#1367);
+    /// None for `-1`.
+    pub fn face_key(&self, face: usize) -> Option<i64> {
+        let w = Walker {
+            file: self.file,
+            view: self.view.as_ref(),
+        };
+        let r = w.data(self.faces[face].entity)?;
+        match self
+            .file
+            .tokens
+            .get(self.file.records[r].fields.start + 1)?
+        {
+            Token::Int(k) | Token::Ptr(k) if *k >= 0 => Some(*k),
+            _ => None,
+        }
+    }
+
     /// The GUID of a face's appearance assignment: the string after the
     /// name `NEUTRON_Material_attrib_def` in one of its `ATTRIB_CUSTOM`
     /// attributes (lower case, 36 characters).
@@ -1173,20 +1192,37 @@ impl<'a> NamedState<'a> {
             None => p,
         };
         let scale = transform.map_or(1.0, |tr| brep::norm(tr.m[0]));
+        let rotate = |v: P3| match &transform {
+            Some(tr) => [
+                brep::dot(tr.m[0], v),
+                brep::dot(tr.m[1], v),
+                brep::dot(tr.m[2], v),
+            ],
+            None => v,
+        };
+        // A helix, exactly (mitcad_private#198): its length integrated, its
+        // direction its derivative.
+        if let Curve::Helix(h) = &curve {
+            let m = 0.5 * (t[0] + t[1]);
+            let ahead = rotate(h.derivative(m));
+            return Ok(EdgeGeometry {
+                mid: apply(h.eval(m)),
+                length: scale * h.length(t[0], t[1]),
+                start: apply(h.eval(t[0])),
+                end: apply(h.eval(t[1])),
+                direction: brep::normalize(if along {
+                    ahead
+                } else {
+                    brep::scale(ahead, -1.0)
+                }),
+            });
+        }
         // A helix known by its samples (mitcad#161): on the cubic through
         // them, as the builder interpolates it.
         if let Curve::Interpolated { params, points } = &curve
             && params.len() >= 3
         {
             let m = 0.5 * (t[0] + t[1]);
-            let rotate = |v: P3| match &transform {
-                Some(tr) => [
-                    brep::dot(tr.m[0], v),
-                    brep::dot(tr.m[1], v),
-                    brep::dot(tr.m[2], v),
-                ],
-                None => v,
-            };
             let (_, ahead) = smooth::point(params, points, m);
             let ahead = rotate(ahead);
             return Ok(EdgeGeometry {

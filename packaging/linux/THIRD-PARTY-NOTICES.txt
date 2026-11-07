@@ -32,8 +32,15 @@ Open CASCADE Technology (usr/lib/libTK*.so*)
   crashing; the patches are in MitCad's source code
   (third_party/vcpkg-ports/opencascade).
 
+HEIF/HEIC images of image references are decoded by the distribution's
+libheif with its HEVC plugin when the user has installed them: MitCad
+neither ships nor links them, and loads libheif.so.1 by name at run time.
+Only a build with the MITCAD_HEIF option (releases are built without it)
+ships the following instead:
+
 libheif 1.23.5 and libde265 1.1.3 (usr/lib/libheif.so*, usr/lib/libde265.so*),
-which decode the HEIF/HEIC images of image references
+which decode the HEIF/HEIC images of image references in builds with
+MITCAD_HEIF
   Licence: GNU LGPL version 3 or later; the texts, with the GNU GPL the
   LGPL builds on, are in mitcad/licenses/vcpkg/libheif/copyright and
   mitcad/licenses/vcpkg/libde265/copyright. Linked dynamically (mitcad

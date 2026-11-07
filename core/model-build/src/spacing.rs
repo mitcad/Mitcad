@@ -267,7 +267,7 @@ impl<K: Kernel> SpacingBuild<K> for Document<K> {
             (mode == SpacingMode::Gap && local[0].abs() > 1.0 - 1e-6).then_some(c)
         };
         let side = match &first.spot {
-            Spot::Joint(j) if first.place == "side" => j.side.map(|s| (s, j.frame_b)),
+            Spot::Joint(j) if first.place == "side" => j.side.clone().map(|s| (s, j.frame_b)),
             _ => None,
         };
         let mut inputs = Vec::new();

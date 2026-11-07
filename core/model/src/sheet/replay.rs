@@ -310,7 +310,7 @@ pub(crate) fn copy_faces<K: Kernel>(
                     },
                     &ctx.uid.to_string(),
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| super::folded::name_walls(ctx, &e.to_string()))?;
             let [solid] = <[_; 1]>::try_from(geometry.solids).map_err(|s: Vec<_>| {
                 format!("the copy of {name} came apart into {} solids", s.len())
             })?;

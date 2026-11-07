@@ -11,6 +11,7 @@ as the stream data goes; the feature building above it is
 | `recipe`, `curve` | The recipes and stored curves that feature inputs name their entities with. |
 | `learn` | Raw item records for the import's learning dump (mitcad#96). |
 | `writer` | Synthetic design streams for tests (mitcad#196). |
+| `mesh` | The design's mesh bodies (mitcad#1366): which container holds each, its item, component, placement and name. |
 
 It uses nothing of the feature building: an edit in `mitcad-f3d-design`
 does not rebuild this crate. Until mitcad#779 these modules were part of

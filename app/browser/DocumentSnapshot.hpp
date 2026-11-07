@@ -110,6 +110,9 @@ struct DocumentSnapshot {
     // A linked design shown by its envelope (mitcad#1271): its detail size
     // in mm; 0 when shown in full.
     double envelope = 0;
+    // The link's path as the design saves it (mitcad#1416); empty when not
+    // linked.
+    QString link;
   };
   struct Body {
     QString uid;

@@ -53,7 +53,7 @@ enable_testing()
 set(CMAKE_SOURCE_DIR "${REPO}")
 set(BUILD_TESTING ON)
 set(MITCAD_MACOS_NATIVE_UI ON)
-foreach(target mitcad mitcad-cli mitcad-render)
+foreach(target mitcad mitcad-cli mitcad-render mitcad-release)
   add_executable(${target} IMPORTED GLOBAL)
   set_target_properties(${target} PROPERTIES IMPORTED_LOCATION /usr/bin/true)
 endforeach()
@@ -67,6 +67,9 @@ foreach(test core.cargo_build core.cargo_build_release)
   mitcad_macos_cargo_build(${test})
 endforeach()
 include("${REPO}/cmake/MacUiTests.cmake")
+include("${REPO}/cmake/TimberUiTests.cmake")
+# Match the application's final registration pass, after every UI module.
+mitcad_macos_headless_tests()
 "#,
     )
     .unwrap();
@@ -132,7 +135,32 @@ include("${REPO}/cmake/MacUiTests.cmake")
                 })
             })
             .count();
-        assert_eq!(offscreen, if headless == "ON" { 7 } else { 0 });
+        // MacUiTests registers seventeen component workflows and fourteen
+        // offscreen Projects layouts. Selection lives in another module;
+        // timber remains a desktop workflow even when headless is enabled.
+        assert_eq!(offscreen, if headless == "ON" { 31 } else { 0 });
+        let timber = tests
+            .iter()
+            .find(|t| t["name"] == "app.ui-macos-timber-seating")
+            .unwrap();
+        let properties = timber["properties"].as_array().unwrap();
+        assert!(properties.iter().any(|p| {
+            p["name"] == "RESOURCE_LOCK"
+                && p["value"]
+                    .as_array()
+                    .is_some_and(|v| v.iter().any(|s| s == "macos_desktop"))
+        }));
+        assert!(!properties.iter().any(|p| {
+            p["name"] == "LABELS"
+                && p["value"]
+                    .as_array()
+                    .is_some_and(|v| v.iter().any(|s| s == "macos_headless"))
+        }));
+        assert!(!properties.iter().any(|p| p["name"] == "ENVIRONMENT"
+            && p["value"].as_array().is_some_and(|v| {
+                v.iter()
+                    .any(|s| s == "QT_QPA_PLATFORM=offscreen" || s == "MITCAD_TEST_HEADLESS=1")
+            })));
         inventories.push(
             tests
                 .iter()

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp
+# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp app/files/MainWindowPrint.cpp
 # Edit Appearances (mitcad#46) through the real UI, on a 40 x 30 x 20 mm box:
 #   - The dialog lists the library with swatches, and shows a library
 #     appearance read-only; it assigns nothing (mitcad#1059).
@@ -11,6 +11,11 @@
 #     file keeps the appearance and the body's id.
 #   - Edit Appearances again: Delete removes the appearance and the body
 #     gets the default look; undo takes the steps back.
+#   - Edit Appearances… last in the Appearance tool's picker (mitcad#1415):
+#     the window opens on the tool's appearance (Red Chrome) while the
+#     panel stays open; New there, renamed Blue Chrome; once the window
+#     closes the picker offers it, and OK gives it to Body1, still picked,
+#     in one undo step.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-appearance-test.sh [screenshot of the dialog.png]
@@ -43,6 +48,19 @@ dialog_type() {
   ui_key ctrl+a
   xdotool type --delay 40 -- "$2"
   ui_key Return
+}
+
+# picker_edit button picker entry: the picker opened from its button (after
+# a ui_mark), its last entry (mitcad#1415) found by typing Edit and chosen
+# with Return, as the keyboard reaches the other entries.
+picker_edit() {
+  ui_click_logged "$1"
+  ui_expect_new "$2 opened: " "the $2 opened"
+  ui_focus_dialog "^${2% picker} Picker\$"
+  xdotool type --delay 40 -- "Edit"
+  ui_expect_new "$2 search: Edit, first $3" "typing Edit finds $3"
+  ui_key Return
+  ui_expect_new "$2 chose: $3" "$3 chosen in the $2"
 }
 
 # warm_pixels: red pixels in the middle of the view (the box).
@@ -144,5 +162,51 @@ ui_expect_new "Saved $FILE" "saved"
 expect_file '[(a["id"], a["name"]) for a in doc["appearances"]]' "[('custom1', 'Red Chrome')]" \
   "the appearance is back"
 expect_file 'doc["bodies"][0].get("appearance")' "None" "unassigned"
+
+echo "--- Edit Appearances… at the end of the tool's picker (mitcad#1415)"
+ui_mark
+ui_step "select Body1 in the browser"   ui_click_logged "Browser Root/Bodies/Body1"
+ui_step "Appearance (search)"           ui_command "Appearance"
+ui_expect_new "Appearance Bodies: 1 body [body F1.b0]" "the tool takes the selected Body1"
+ui_step "the picker: Red Chrome"        ui_picker_choose "Panel Appearance input value" "Appearance picker" "Red Chrome"
+ui_mark
+ui_step "the picker: Edit Appearances…" picker_edit "Panel Appearance input value" "Appearance picker" "Edit Appearances…"
+ui_expect_new "Appearance tool: Edit Appearances… on Red Chrome" "the tool opens the window on its appearance"
+ui_expect_new "Appearances dialog opened" "the window opened"
+ui_expect_new "Appearances on custom1" "on Red Chrome"
+ui_focus_dialog '^Appearances$'
+ui_mark
+ui_step "New"                           ui_click_logged "Appearances new"
+ui_expect_new " (Red Chrome Copy) from custom1" "a copy of Red Chrome while the tool's panel is open"
+made=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" |
+  sed -n 's/.*Created appearance \([^ ]*\) (Red Chrome Copy) from custom1.*/\1/p' | tail -1)
+[ -n "$made" ] || ui_fail "no id of the new appearance"
+ui_step "name it Blue Chrome, Enter"    xdotool type --delay 40 "Blue Chrome"
+ui_key Return
+ui_expect_new "Appearance $made name = Blue Chrome" "renamed"
+ui_mark
+ui_step "Close"                         ui_click_logged "Appearances close"
+ui_expect_new "Appearances closed" "closed"
+ui_expect_new "Appearance tool: appearances read again, " "the tool read its appearances again"
+ui_expect_new ", new: Blue Chrome" "Blue Chrome is offered"
+ui_focus_main
+ui_step "the picker: Blue Chrome"       ui_picker_choose "Panel Appearance input value" "Appearance picker" "Blue Chrome"
+ui_expect_new "Panel Appearance tile value: Blue Chrome (This Design)" "the picker button shows Blue Chrome"
+ui_mark
+ui_step "OK (Enter)"                    ui_key Return
+ui_expect_new "Appearance $made for 1 body(ies)" "Body1, still picked, gets Blue Chrome"
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Saved $FILE" "saved"
+expect_file 'doc["bodies"][0].get("appearance")' "$made" "the body has the new appearance"
+ui_mark
+ui_step "undo"                          ui_key ctrl+z
+ui_expect_new "Undo: Set Appearance of Body1" "one undo step"
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Saved $FILE" "saved"
+expect_file 'doc["bodies"][0].get("appearance")' "None" "unassigned again"
+expect_file '[a["name"] for a in doc["appearances"]]' "['Red Chrome', 'Blue Chrome']" \
+  "the new appearance stays in the design"
 
 ui_finish "Edit Appearances"

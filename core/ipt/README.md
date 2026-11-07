@@ -45,11 +45,12 @@ but not understood further.
 | `result` | The result segment's body list: which bodies the part shows, solids or surfaces, their range boxes (*The result segment* below). A writer for tests. |
 | `states` | The bodies of the B-rep records at the states of their ASM history, read once for all tries of the import: the distinct ones by the step they were converted at, converted again when asked for. |
 | `assembly` | Assemblies (`.iam`): the referenced files, the occurrences with their keys, flags, labels, documents, placements, range boxes and display transforms (*Assemblies* below). |
+| `appearance` | Appearances (mitcad#1367): the `Protein` stream's asset package, the application segment's rendering and material styles and defaults, the graphics segment's face colours, and the stored bodies' and faces' appearances as the dump's `_f3d.appearance` (*Appearances* below). |
 | `sheet` | Sheet metal (mitcad#211): the sheet-metal style's K-factor, faces, flanges, cuts, corners, bends and folds as the dump's sheet items (*Sheet metal* below). |
 | `naming` | Topological names (mitcad#242): the items features name edges and faces by, the naming table's names, the naming attributes of the ASM entities at a history state, and the edge a name names there (*Topological names* below). |
-| `testdata`, `testdesign` | Small parts made by these writers: two bodies of MitCad's own ASM writer (a cube and a cylinder), part number, material, inches; the cube with the records of a parameter, a sketch and an extrusion that make it; a part of a mesh feature's tetrahedron; an empty part; the cube and the cylinder with a result list that keeps the cylinder hidden. |
+| `testdata`, `testdesign` | Small parts made by these writers: two bodies of MitCad's own ASM writer (a cube and a cylinder), part number, material, inches; the cube with the records of a parameter, a sketch and an extrusion that make it; a part of a mesh feature's tetrahedron; an empty part; the cube and the cylinder with a result list that keeps the cylinder hidden; a cube of keyed faces with styles, face colours and a `Protein` package (mitcad#1367). |
 | `testassembly` | Small assemblies made by these writers and a test project of them (a top assembly as saved on another machine, a sub-assembly, parts found relative to it and by name, a missing one; hidden, grounded and suppressed occurrences). |
-| `bin/mitcad-ipt-inspect` | `list`, `properties`, `segments`, `records`, `record [--raw]`, `data`, `dump`, `labels`, `stream [--raw]`, `asm`, `bodies [-v|-f]`, `result`, `history`, `parameters`, `typed`, `show`, `constraints`, `prefix`, `flags`, `design [--json]`, `profile [-v]`, `slots` (a sheet-metal group's parts too), `tree`, `find`, `assembly`, `write-test`; for the names (mitcad#242) `words` (a segment's records as u32 words), `nodes`, `names` (each feature's items with their names), `entry`, `brepnames <state>` (the faces and edges of a history state with their naming attributes), `study` (every item resolved in the state before its feature, checked against the file's own `matched` marks); `texts` (the sketch texts, their fonts and glyph contours, mitcad#414). |
+| `bin/mitcad-ipt-inspect` | `list`, `properties`, `segments`, `records`, `record [--raw]`, `data`, `dump`, `labels`, `stream [--raw]`, `asm`, `bodies [-v|-f]`, `result`, `history`, `parameters`, `typed`, `show`, `constraints`, `prefix`, `flags`, `design [--json]`, `profile [-v]`, `slots` (a sheet-metal group's parts too), `tree`, `find`, `assembly`, `write-test`; for the names (mitcad#242) `words` (a segment's records as u32 words), `nodes`, `names` (each feature's items with their names), `entry`, `brepnames <state>` (the faces and edges of a history state with their naming attributes), `study` (every item resolved in the state before its feature, checked against the file's own `matched` marks); `texts` (the sketch texts, their fonts and glyph contours, mitcad#414); `appearances [--json]` (the styles, defaults, assets and face colours, or the dump's appearance data, mitcad#1367). |
 
 ## The container
 
@@ -64,7 +65,8 @@ reader warns about another class but goes on. At the root:
 | `RSeStorage/` | The segment database (below) |
 | `RSeStorage/M<id>`, `B<id>` | A segment's meta and data streams; `<id>` is a 26-character name |
 | `RSeStorage/RSeSegInfo`, `RSeDbRevisionInfo`, `V<n>/RSeDb` | The segment registry, revisions, the database header *(seen; not read)* |
-| `UFRxDoc`, `Protein`, `RSeStorage/RSeEmbeddings/` | References, appearances, embedded documents *(seen; not read)* |
+| `Protein` | The appearance and material assets (*Appearances* below) |
+| `UFRxDoc`, `RSeStorage/RSeEmbeddings/` | References, embedded documents *(seen; not read)* |
 
 ## Property sets
 
@@ -278,6 +280,93 @@ normals, and the meshes are closed apart from one)*. The
 import builds each vertex record with the triangle record after it as a
 mesh body (as an STL file gives); the normals are not read. Parts without
 a mesh feature have no records of these types.
+
+## Appearances
+
+`appearance` (mitcad#1367). What a part's bodies and faces look like
+comes from three places, joined as below; the design's dump gives it as
+`_f3d.appearance`, which the import puts on the replayed bodies and faces
+as it does the `.f3d` import's ([f3d-appearances.md](../import/docs/f3d-appearances.md),
+*Appearances and materials*). The layouts were cross-checked with the
+public format notes of the cadmpeg project (CC BY 4.0, named above),
+section *Part appearance assignments*, and checked on the test files.
+
+**The assets.** The root stream `Protein` is a u32 length and a ZIP
+archive of that length; length 0 (the whole stream four bytes) is no
+package *(verified)*. The archive is the asset package an `.f3d`
+document keeps as `.protein` entries (`mitcad_f3d_file::protein`,
+[f3d-appearances.md](../import/docs/f3d-appearances.md)), deflated with
+data descriptors. Description records come in versions 0 (the
+description only), 2 (category, group, description) and 3 (category,
+group, subgroup, description), each read to its exact end
+*(verified)*; the `.f3d` packages seen have version 2 only. Every asset
+record decodes to its end but one: a 3D noise texture (`NoiseSchema`)
+with 72 bytes more than its schemas declare *(seen once)*.
+
+**The styles** (`PmAppSegment`). A rendering style (`6fd85967…`) and a
+material style (`6ed85967…`): a prefix of 27 bytes (25 in segments of
+major 22 and before), the name and the long name (u32-counted UTF-16), a
+u16 and the label `"1:<name>\n"`; from major 17 on the asset's GUID
+(empty for a library preset), the preset (`Metal-045`, `InvGen-071`;
+empty for an asset of the document), the library, two u16 and a 16-byte
+id; then a rendering style's own colours, four RGBA f32 (ambient,
+diffuse, specular, emissive), and an f32 shininess *(verified: every
+style of the test files)*. The document's defaults (`cdecfb11…`, 55
+bytes, 47 in majors 16 and 18) refer to the material style (u32 at 6)
+and the rendering style (u32 at 10) the bodies have *(verified)*. A
+style names the package's asset by its GUID, else by its preset in its
+library (an asset of that name, or `<material>:<preset>`, the
+appearance a material brings).
+
+**The faces** (`PmGraphicsSegment`). A face record (`a3e99451…`): u32,
+u16, u32 flags, a reference to its style list (at 10), three u32, its
+edges as a list (u16 2, u16 `0x3000`, u32 n and, when not empty, two u32
+and n references), a byte, its box (six f64), its key (u32) and two u32
+to the record's end *(verified: every face of the test files, majors 16
+to 28)*. A style list (`0786eb48…`) is one such list; a face with a
+colour of its own lists one primary colour style (`0f5648af…`, 94
+bytes), whose bytes 20..88 are the colours and shininess of a rendering
+style *(verified: each such face's colours are a style's)*. The key is
+the history id (the second header field) of the stored faces the
+graphics face stands for: the pieces of a face a later feature split
+share it *(verified: every coloured face of the test files names stored
+faces)*. Other style records in the lists (`d98f4d82…`, `6df83373…`,
+`a5f62bb3…`) are not colours and are not read.
+
+**The join.** Each top-level body of each B-rep record (its source
+`<record>/<body record>`, as the import names the stored bodies) has the
+default style. A face's colour names the rendering style of the same
+colours (the default when they are its, else the first such style). A
+body whose keyed faces all have one other style takes that style; else
+its faces of other styles keep theirs, one entry per style with each
+face's point (`mitcad_f3d_names::NamedState`, as a feature's face
+input). A style whose asset the package does not hold (a library
+preset: the library resolves it, the file keeps only its name) comes in
+as a generic appearance of its own diffuse colour, its alpha the
+opacity, named after the style. The default material style's physical
+material is given where the package holds it; MitCad's material is set
+from the part's material name as before.
+
+On both corpora (845 distinct files):
+
+| | achieved / target |
+|---|---|
+| default rendering style read | 845 / 845 |
+| its asset in the file's package (else its own colour) | 128 / 845 |
+| parts with an asset package | 287 / 845 |
+| coloured faces whose colours name a rendering style | 74 994 / 74 994 (634 of them more than one style of the same colours) |
+| coloured faces naming stored faces by their key | 74 994 / 74 994 (in 167 parts) |
+
+The import of the bodies only (`--bodies-only`, a part without a
+design) sets the same (mitcad#1375): each base feature's body stands for
+the stored body of its source, and the appearances come in through
+`mitcad_import::appearances::apply` as the replay's do. A stored body
+of several lumps, which the import with the history brings in as one
+body per lump (sources `<record>/<body record>#k`), takes its record's
+appearance and material on every lump, and each face look on the lumps
+that have the face.
+
+Not read: textures are named in the notes only, as for `.f3d` files.
 
 ## The definitions segment
 
@@ -1661,6 +1750,8 @@ to 2023, sub-assemblies nested up to seven deep):
 
 - `cargo test -p mitcad-ipt` (ctest `core.ipt`): the container, property
   sets and segments on files made by the writers here, damaged files, the
+  appearances of a part of styles, face colours and a `Protein` package
+  (`testdata::test_part_with_appearances`, mitcad#1367), the
   test part's bodies, the result list and its hidden bodies, a segment
   that does not split, extended trailers,
   segments of majors 16 and 18 without trailer flags, mesh records and a

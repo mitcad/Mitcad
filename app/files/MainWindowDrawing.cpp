@@ -68,7 +68,7 @@ void MainWindow::exportDrawing() {
     }
   }
   const std::optional<DrawingChoice> choice =
-      askDrawing(this, suggested, static_cast<int>(selected.size()), analyses, targets, last);
+      askDrawing(this, suggested, static_cast<int>(selected.size()), analyses, targets, last, lengthUnit());
   if (!choice) {
     return;
   }
@@ -140,6 +140,12 @@ void MainWindow::exportDrawing() {
                {QStringLiteral("drawing"), drawing},
                {QStringLiteral("title"), base}};
   }
+  // A DXF file in another unit than the design's (mitcad#1408); left out,
+  // each sheet's unit (or the design's).
+  const bool dxf = options.value(QStringLiteral("format")).toString() == QStringLiteral("dxf");
+  if (dxf && !choice->dxfUnit.isEmpty() && choice->dxfUnit != lengthUnit()) {
+    command.insert(QStringLiteral("units"), choice->dxfUnit);
+  }
   QJsonObject result;
   bool written = false;
   {
@@ -181,11 +187,13 @@ void MainWindow::exportDrawing() {
   const auto bodies = result.value(QStringLiteral("bodies")).toArray().size();
   const QString sheet = result.value(QStringLiteral("sheet")).toString();
   const QString scale = result.value(QStringLiteral("scale")).toString();
-  qInfo().noquote() << QStringLiteral("Exported %1: drawing, %2 views, %3 bodies, %4, %5")
+  // A DXF file's length unit (mitcad#1408).
+  const QString fileUnits = result.value(QStringLiteral("file_units")).toString();
+  qInfo().noquote() << QStringLiteral("Exported %1: drawing, %2 views, %3 bodies, %4, %5%6")
                            .arg(choice->path)
                            .arg(views)
                            .arg(bodies)
-                           .arg(sheet, scale);
+                           .arg(sheet, scale, fileUnits.isEmpty() ? QString() : QStringLiteral(", in %1").arg(fileUnits));
   const int sheets = result.value(QStringLiteral("sheets")).toInt();
   showHint(tr("Exported %1 (%2 view(s) of %3 body(ies), %4 at %5%6).")
                .arg(QDir::toNativeSeparators(choice->path))

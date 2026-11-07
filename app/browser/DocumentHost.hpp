@@ -79,7 +79,9 @@ public:
   virtual void commandInputsChanged() {}
   // Whether the print windows can change the design now (mitcad#655): as
   // canChangeModel, and also while 3D Print's panel is open, which has no
-  // preview and whose Edit... opens them.
+  // preview and whose Edit... opens them; likewise beside the Material and
+  // Appearance tools (mitcad#1250, mitcad#1415). The Appearances window
+  // asks it too.
   virtual bool canChangePrintSettings() const { return canChangeModel(); }
   // Why the design cannot be changed at all (a read-only window whose edit
   // lock someone else holds, mitcad#89); empty when it can.
@@ -176,6 +178,14 @@ public:
   // the Material tool, which opens it while its panel is open); `closed`
   // is called once when the manager closes.
   virtual void openMaterialLibrary(std::function<void()> /*closed*/) {}
+  // Edit Materials… and Edit Appearances… last in the Material and the
+  // Appearance tool's pickers (mitcad#1415): the Materials manager on the
+  // material `key` ("<place>/<id>"; empty: as its own command opens it),
+  // the Appearances window on the appearance `id` (empty: as it was), while
+  // the tool's panel stays open; `closed` is called once when the window
+  // closes.
+  virtual void editMaterialsOn(const QString& /*key*/, std::function<void()> /*closed*/) {}
+  virtual void editAppearancesOn(const QString& /*id*/, std::function<void()> /*closed*/) {}
 
   // Sheet metal (mitcad#210): the Flat Pattern of a sheet-metal body to a
   // DXF file the user chooses.
@@ -228,6 +238,13 @@ public:
   // the dialog. The browser's, the timeline's and Edit Parameters' Add
   // Comment….
   virtual void addCommentOn(const QJsonObject& /*target*/, const QString& /*label*/) {}
+
+  // Linked designs (mitcad#1416, files/MainWindowLinks.cpp): opens the
+  // linked design of `component` (a uid) in a tab of its own; reads its
+  // file again now as one undo step (Update Link), or every linked
+  // design's when `component` is empty (Update All Links).
+  virtual void openLinkedDesign(const QString& /*component*/) {}
+  virtual void updateLink(const QString& /*component*/) {}
 };
 
 } // namespace mitcad

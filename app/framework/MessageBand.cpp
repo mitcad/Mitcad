@@ -2,6 +2,7 @@
 #include "MessageBand.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include <QApplication>
 #include <QDateTime>
@@ -132,6 +133,42 @@ void MessageCenter::post(const QString& text, NoticeLevel level, const QString& 
   emit changed();
 }
 
+void MessageCenter::postAction(const QString& text, NoticeLevel level, const QString& action,
+                               std::function<void()> run) {
+  if (text.isEmpty() || action.isEmpty()) {
+    post(text, level);
+    return;
+  }
+  m_actionText = text;
+  m_actionRun = std::move(run);
+  qDebug().noquote() << QStringLiteral("Message band: %1 %2").arg(noticeLevelName(level), text);
+  qDebug().noquote() << QStringLiteral("Message band action: %1").arg(action);
+  if (m_log.add(text, level, QString(), QDateTime::currentDateTime(), action)) {
+    qDebug().noquote() << QStringLiteral("Message band full: %1 %2").arg(noticeLevelName(level), text);
+    restartTimer();
+  }
+  emit changed();
+}
+
+void MessageCenter::runAction() {
+  const MessageEntry* full = m_log.full();
+  if (full == nullptr || full->action.isEmpty() || full->text != m_actionText || !m_actionRun) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Message band action %1 pressed: %2").arg(full->action, full->text);
+  // The message goes to the stub first: what the button does may post the
+  // next one.
+  const std::function<void()> run = std::move(m_actionRun);
+  m_actionRun = nullptr;
+  m_actionText.clear();
+  if (m_log.close()) {
+    m_timer.stop();
+    toStub("action");
+    emit changed();
+  }
+  run();
+}
+
 void MessageCenter::close() {
   if (m_log.close()) {
     m_timer.stop();
@@ -176,7 +213,8 @@ void MessageCenter::toStub(const char* reason) {
 
 void MessageCenter::restartTimer() {
   const MessageEntry* full = m_log.full();
-  const int lifetime = full != nullptr ? MessageLog::lifetime(full->level) : 0;
+  // A message with a button stays until it is answered (mitcad#1416).
+  const int lifetime = full != nullptr && full->action.isEmpty() ? MessageLog::lifetime(full->level) : 0;
   if (lifetime > 0) {
     m_timer.start(lifetime);
   } else {
@@ -211,10 +249,19 @@ MessageBand::MessageBand(MessageCenter& center, QWidget* parent) : QWidget(paren
   m_close->setAccessibleName(tr("Close message"));
   m_close->setToolTip(tr("Close the message"));
   m_close->setFocusPolicy(Qt::NoFocus);
+  // The message's button (mitcad#1416), shown only with a message that has
+  // one.
+  m_action = new QToolButton;
+  m_action->setObjectName(QStringLiteral("messageBandAction"));
+  m_action->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  m_action->setFocusPolicy(Qt::NoFocus);
+  m_action->hide();
   row->addWidget(m_icon, 0, Qt::AlignVCenter);
   row->addWidget(m_text, 1);
+  row->addWidget(m_action, 0, Qt::AlignVCenter);
   row->addWidget(m_close, 0, Qt::AlignTop);
   connect(m_close, &QToolButton::clicked, this, [this] { m_center.close(); });
+  connect(m_action, &QToolButton::clicked, this, [this] { m_center.runAction(); });
 
   m_stub = new QToolButton;
   m_stub->setObjectName(QStringLiteral("messageStub"));
@@ -230,6 +277,7 @@ MessageBand::MessageBand(MessageCenter& center, QWidget* parent) : QWidget(paren
   connect(&m_center, &MessageCenter::changed, this, &MessageBand::refresh);
   // Where to click, logged again when the band moves (the UI tests).
   new PlaceWatcher(m_close, [this] { logPlaces(); });
+  new PlaceWatcher(m_action, [this] { logPlaces(); });
   new PlaceWatcher(m_stub, [this] { logPlaces(); });
   new PlaceWatcher(m_text, [this] { logPlaces(); });
   // The pointer over the message paints its feature's notice places
@@ -318,6 +366,9 @@ void MessageBand::refresh() {
     styleForLevel(m_text, entry.level);
     m_text->setToolTip(noticeLevelText(entry.level, entry.text));
     m_text->setProperty("noticeLevel", noticeLevelName(entry.level));
+    m_action->setText(entry.action);
+    m_action->setAccessibleName(entry.action);
+    m_action->setVisible(!entry.action.isEmpty());
     m_stub->hide();
     m_fullRow->show();
     setProperty("state", QStringLiteral("full"));
@@ -344,6 +395,9 @@ void MessageBand::refresh() {
   updateGeometry();
   m_refreshing = false;
   emit layoutChanged();
+  // A message's button shown or gone where it was (mitcad#1416): its place
+  // logged once the band is laid out.
+  TestSync::singleShot(0, this, [this] { logPlaces(); });
 }
 
 void MessageBand::fitText() {
@@ -353,6 +407,9 @@ void MessageBand::fitText() {
     int room = width - m_close->sizeHint().width() - 8;
     if (m_icon->isVisibleTo(this)) {
       room -= m_icon->sizeHint().width() + 8;
+    }
+    if (!full->action.isEmpty()) {
+      room -= m_action->sizeHint().width() + 8;
     }
     m_text->setText(fitLines(oneLine(noticeLevelText(full->level, full->text)), m_text->font(), room, 2));
   } else if (const MessageEntry* latest = log.stub()) {
@@ -383,6 +440,16 @@ void MessageBand::logPlaces() {
   if (!text.isEmpty() && text != m_loggedTextPlace) {
     m_loggedTextPlace = text;
     qDebug().noquote() << text;
+  }
+  // Where the message's button is (mitcad#1416), with its label.
+  const QString action = m_action->isVisible()
+                             ? QStringLiteral("Message band action %1 at %2").arg(m_action->text(), placeText(m_action))
+                             : QString();
+  if (action != m_loggedActionPlace) {
+    m_loggedActionPlace = action;
+    if (!action.isEmpty()) {
+      qDebug().noquote() << action;
+    }
   }
 }
 

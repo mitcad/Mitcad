@@ -35,13 +35,13 @@
 //   surface 7 ruled       ints: from_kind from_ints... to_kind to_ints...;
 //                         reals: from_reals... to_reals...
 //                         S(u, v) = (1 - u) from(v) + u to(v), u in [0, 1];
-//                         both curves interpolated at the same parameters
+//                         both curves B-splines with the same knots
 //   surface 8 arc sweep   ints: n (kind ints...) n times;
 //                         reals: weights(n) reals... n times;
 //                         rational quadratic arcs in u (knots spaced evenly
 //                         in [0, 1], one arc per two spans) whose control
 //                         points are the n curves' points at v, all
-//                         interpolated at the same parameters
+//                         polynomial B-splines with the same knots
 //   surface 9 rolling ball  ints: (is_curve kind ints...) twice,
 //                               spine_kind spine_ints...;
 //                         reals: radius v0 v1 (support reals...) twice,
@@ -50,6 +50,13 @@
 //                         the spine over [v0, v1] touching both supports
 //                         (surfaces, or curves where is_curve), walked by
 //                         OCCT and approximated (blend_surfaces.hpp)
+//   curve 5 unknown       no data: an edge the reader could not decode; the
+//                         builder leaves it out (not counted as failed)
+//   surface 10 offset     ints: basis_kind basis_ints...;
+//                         reals: distance basis_reals...;
+//                         Geom_OffsetSurface of the basis
+//   surface 11 unknown    no data: a face the reader could not decode; the
+//                         builder leaves it out (not counted as failed)
 //
 // A face's point loops (Body::point_loops[first_point_loop ...]) are
 // vertices where the face closes up at a singular point of its surface

@@ -222,6 +222,7 @@ pub(super) fn boundary_body(
         body: neutral(body),
         issues: Vec::new(),
         skipped_faces: 0,
+        unknown_edges: 0,
         degenerate_edges: 0,
         tidied: Default::default(),
         check: Default::default(),

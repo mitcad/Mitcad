@@ -276,7 +276,8 @@ void connected_material_collision() {
   for (std::size_t i = 1; i < spec.patches.size(); ++i) {
     spec.ports.push_back({static_cast<std::uint32_t>(i), {0, 20}, port_side(spec.patches[i - 1], 1), port_side(spec.patches[i], 3)});
   }
-  CHECK(test::throws_with([&] { sheet_shape(spec); }, "intersect"));
+  // The refusal names the two walls that pass through each other (mitcad#1409).
+  CHECK(test::throws_with([&] { sheet_shape(spec); }, "sheet walls panel F3 slot 0 and panel F6 slot 0 pass through each other"));
 }
 
 void concave_corner_union_roundtrip() {

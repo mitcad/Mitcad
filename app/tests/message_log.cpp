@@ -186,6 +186,29 @@ void historyTests() {
   CHECK(log.entries().back().text == QStringLiteral("Message 10"));
 }
 
+// A message with a button (mitcad#1416): it waits for its answer; a hint, a
+// progress line or a cleared status line goes to the history only; a newer
+// message of another level takes its place, and closing it makes it the
+// stub.
+void actionTests() {
+  MessageLog log;
+  const QString changed = QStringLiteral("part.mitcad changed");
+  CHECK(log.add(changed, NoticeLevel::Information, QString(), at(0), QStringLiteral("Update")));
+  CHECK(log.full()->action == QStringLiteral("Update"));
+  CHECK(!log.add(QStringLiteral("Opening holder.mitcad"), NoticeLevel::Hint, QString(), at(1)));
+  CHECK(!log.add(QStringLiteral("Reading"), NoticeLevel::Progress, QString(), at(2)));
+  CHECK(!log.add(QString(), NoticeLevel::Hint, QString(), at(3)));
+  CHECK(log.shown() == MessageLog::Shown::Full);
+  CHECK(log.full()->text == changed);
+  CHECK(log.latest()->text == QStringLiteral("Reading"));
+  CHECK(log.add(QStringLiteral("Saved."), NoticeLevel::Information, QString(), at(4)));
+  CHECK(log.full()->action.isEmpty());
+  CHECK(log.add(changed, NoticeLevel::Information, QString(), at(5), QStringLiteral("Update")));
+  CHECK(log.close());
+  CHECK(log.shown() == MessageLog::Shown::Stub);
+  CHECK(log.add(QStringLiteral("Done."), NoticeLevel::Hint, QString(), at(6))); // nothing waits now
+}
+
 } // namespace
 
 int messageLogTests() {
@@ -195,5 +218,6 @@ int messageLogTests() {
   clearTests();
   withdrawTests();
   historyTests();
+  actionTests();
   return failures;
 }

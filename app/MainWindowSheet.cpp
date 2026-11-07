@@ -130,7 +130,9 @@ void MainWindow::toggleFlatPattern(const QString& body) {
 void MainWindow::exportFlatPattern(const QString& body) {
   const QString name = bodyName(body);
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
-  const QString path = dialogSaveFileName(this, tr("Export Flat Pattern"), suggested, tr("DXF drawings (*.dxf)"));
+  // In the design's length unit unless another is chosen (mitcad#1408).
+  QString unit = lengthUnit();
+  const QString path = dialogSaveDxf(this, tr("Export Flat Pattern"), suggested, unit);
   if (path.isEmpty()) {
     return;
   }
@@ -139,7 +141,7 @@ void MainWindow::exportFlatPattern(const QString& body) {
   if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("export_flat_pattern_dxf")},
                    {QStringLiteral("body"), body},
                    {QStringLiteral("path"), path},
-                   {QStringLiteral("unit"), lengthUnit() == QStringLiteral("in") ? QStringLiteral("in") : QStringLiteral("mm")}},
+                   {QStringLiteral("units"), unit}},
                   &result)) {
     sheetWarning(this, tr("Export Flat Pattern"), tr("Could not export:\n%1").arg(m_lastError));
     qInfo().noquote() << QStringLiteral("Export of the flat pattern of %1 refused: %2").arg(name, m_lastError);
@@ -152,11 +154,12 @@ void MainWindow::exportFlatPattern(const QString& body) {
       layers << QStringLiteral("%1 %2").arg(layer.value(QStringLiteral("name")).toString()).arg(layer.value(QStringLiteral("entities")).toInt());
     }
   }
-  qInfo().noquote() << QStringLiteral("Exported %1: dxf flat pattern of %2, %3 entities (%4), %5")
+  const QString written = result.value(QStringLiteral("units")).toString(unit);
+  qInfo().noquote() << QStringLiteral("Exported %1: dxf flat pattern of %2, %3 entities (%4), in %5")
                            .arg(path, name)
                            .arg(result.value(QStringLiteral("entities")).toInt())
-                           .arg(layers.join(QStringLiteral(", ")), result.value(QStringLiteral("unit")).toString());
-  showHint(tr("Exported the flat pattern of %1 to %2.").arg(name, QDir::toNativeSeparators(path)));
+                           .arg(layers.join(QStringLiteral(", ")), written);
+  showHint(tr("Exported the flat pattern of %1 to %2 (in %3).").arg(name, QDir::toNativeSeparators(path), written));
 }
 
 } // namespace mitcad

@@ -788,6 +788,11 @@ fn dxf_unit_name(units: mitcad_dxf::Units) -> String {
         Units::Inches => "in".to_owned(),
         Units::Feet => "ft".to_owned(),
         Units::Microns => "um".to_owned(),
+        // The other units a MitCad design can be in (mitcad#1408).
+        Units::Kilometers => "km".to_owned(),
+        Units::Yards => "yd".to_owned(),
+        Units::Miles => "mi".to_owned(),
+        Units::Mils => "mil".to_owned(),
         other => format!("$INSUNITS {}", other.code()),
     }
 }

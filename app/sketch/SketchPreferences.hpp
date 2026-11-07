@@ -22,4 +22,13 @@ void saveScaleToFirstDimension(bool on);
 // preference is on; any other command as it is.
 QJsonObject withFirstDimensionScale(const QJsonObject& command);
 
+// "Click adds to the selection in sketches" (mitcad#1403, settings
+// "sketch/clickAddsToSelection"), off by default: while it is on, a click
+// in sketch mode with no tool or command running adds to the selection or
+// removes from it, as Ctrl+click does; a click on empty space or Esc
+// clears it, and a right click on what is not selected adds it. Picks of
+// sketch tools and commands are unchanged.
+bool clickAddsToSelection();
+void saveClickAddsToSelection(bool on);
+
 } // namespace mitcad::sketch

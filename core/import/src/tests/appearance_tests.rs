@@ -177,3 +177,136 @@ fn a_body_the_file_hides_comes_in_hidden() {
         assert!(visible, "{}", report.text());
     }
 }
+
+/// A body that names its stored body by its source (an `.ipt` body,
+/// mitcad#1367: `<B-rep record>/<ASM body record>`, no blob and record)
+/// joins the stored body of that source.
+#[test]
+fn a_body_named_by_its_source_gets_its_appearance() {
+    let kernel = || TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    };
+    let (items, geometry) = block_history(Vec::new());
+    let mut data = appearance_data([0.0; 3]);
+    let body = data["bodies"][0].as_object_mut().unwrap();
+    for key in ["blob", "selector", "record", "faces"] {
+        body.remove(key);
+    }
+    body.insert("source".to_owned(), json!("BREP.test.smbh#7"));
+    let mut source = serde_json::to_value(timeline_dump(items)).unwrap();
+    source["_f3d"] = json!({"appearance": data});
+    let mut doc = Document::new(kernel());
+    let mut geometry = BlobGeometry(geometry);
+    let report = import_design(&mut doc, &dump(source), &mut geometry, &Options::default());
+    let a = &report.appearances;
+    assert_eq!((a.bodies_set, a.bodies), (1, 1), "{}", report.text());
+    assert!(a.gaps.is_empty(), "{:?}", a.gaps);
+    let uid = doc.bodies()[0].uid;
+    assert_eq!(
+        doc.body_attributes(uid).appearance.as_deref(),
+        Some("f3d_paint_enamel_red_glossy")
+    );
+}
+
+/// A stored body of two solids comes in as two bodies, its lumps
+/// (`<source>#0`, `<source>#1`, as the `.ipt` import names them,
+/// mitcad#1375): the appearance and the material of the record that names
+/// the stored body go on both, and its face's look on the lump that has the
+/// face. Applied without a replay, as the `.ipt` import of the bodies only
+/// does (`appearances::apply`).
+#[test]
+fn a_stored_body_of_two_lumps_gets_its_appearance_on_both() {
+    let kernel = TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    };
+    // Two blocks, one body each.
+    let mut doc = Document::new(kernel);
+    let items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let region = "r{c5[c8,c6],c6[c5,c7],c7[c6,c8],c8[c7,c5]}";
+    add(
+        &mut doc,
+        json!({"type": "extrude", "profiles": [{"sketch": "F1", "region": region}],
+               "extent": {"type": "distance", "distance": "d2"}, "flip": false,
+               "operation": "new_body"}),
+    );
+    let uids: Vec<BodyUid> = doc.bodies().iter().map(|b| b.uid).collect();
+    assert_eq!(uids.len(), 2);
+    // A face of the second lump, as the stored design has it (cm).
+    let face = doc.bodies()[1].shape.faces[0].clone();
+    let point = face_point(&face).map(|x| x / 10.0);
+
+    // The record names the stored body by its source, not a lump.
+    let mut data = appearance_data(point);
+    let body = data["bodies"][0].as_object_mut().unwrap();
+    for key in ["blob", "selector", "record"] {
+        body.remove(key);
+    }
+    body.insert("source".to_owned(), json!("PmBRepSegment#1/1"));
+    let data: mitcad_dump::AppearanceData = serde_json::from_value(data).unwrap();
+    let stored = vec![
+        ("PmBRepSegment#1/1#0".to_owned(), Some(uids[0])),
+        ("PmBRepSegment#1/1#1".to_owned(), Some(uids[1])),
+    ];
+    let components = crate::components::Components::default();
+    let a = crate::appearances::apply(&mut doc, &data, &stored, &components);
+    assert!(a.gaps.is_empty(), "{:?}", a.gaps);
+    assert_eq!((a.bodies_set, a.bodies), (1, 1), "{a:?}");
+    assert_eq!((a.materials_set, a.materials), (1, 1), "{a:?}");
+    assert_eq!((a.faces_set, a.faces), (1, 1), "{a:?}");
+    assert_eq!(a.not_in_design, 0);
+    for &uid in &uids {
+        let attributes = doc.body_attributes(uid);
+        assert_eq!(
+            attributes.appearance.as_deref(),
+            Some("f3d_paint_enamel_red_glossy"),
+            "{uid}"
+        );
+        assert_eq!(attributes.material.as_deref(), Some("steel"), "{uid}");
+    }
+    assert_eq!(
+        doc.body_attributes(uids[1])
+            .face_appearances
+            .get(&face.to_string())
+            .map(String::as_str),
+        Some("f3d_steel_satin")
+    );
+
+    // A stored body whose source only begins like the record's is another
+    // one: not joined, and counted as a stored body no record names.
+    let mut other = Document::new(TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    });
+    import_design(
+        &mut other,
+        &timeline_dump(vec![
+            rectangle_sketch(0),
+            extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        ]),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let uid = other.bodies()[0].uid;
+    let stored = vec![("PmBRepSegment#1/10".to_owned(), Some(uid))];
+    let a = crate::appearances::apply(&mut other, &data, &stored, &components);
+    assert_eq!((a.bodies_set, a.not_in_design), (0, 1), "{a:?}");
+    assert!(
+        a.gaps
+            .iter()
+            .any(|g| g.contains("stored body PmBRepSegment#1/10: no body record names it")),
+        "{:?}",
+        a.gaps
+    );
+    assert_eq!(other.body_attributes(uid).appearance, None);
+}

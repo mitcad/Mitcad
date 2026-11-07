@@ -213,10 +213,42 @@ the blob; `appearance` and `material` as `{"token", "library", "preset",
 "display", "asset"}`; `faces`: the faces with their own, each `guid`,
 `appearance`, `color`, `faces` (fingerprints in the stored design, cm) or
 `why`; `light_bulb`: false for a body the file hides, where its record
-gives it, mitcad#1175), `faces` (face references whose face the stored
-design does not have), `occurrences` (overrides: `object_id`, `component`, `appearance`)
-and `warnings`. External dumps have none; the import then sets no
-appearances.
+gives it, mitcad#1175; `source`: the stored body as the replay names it,
+where that is not `blob#record` — the `.ipt` decoder's bodies,
+`<B-rep record>/<ASM body record>`, mitcad#1367), `faces` (face references whose face the stored
+design does not have), `occurrences` (overrides: `object_id`, `component`, `appearance`),
+`warnings` and `meshes` (mitcad#1376: the mesh bodies' physical material
+and appearance from their presentation envelopes, `entity` the mesh body
+record of `_f3d.mesh_bodies[].id`, with `appearance` and `material` as a
+body's; absent without any). External dumps have none; the import then
+sets no appearances.
+
+The stream decoder's `_f3d.mesh_bodies` (mitcad#1366;
+`mitcad_dump::MeshBody`, `mitcad_f3d_decode::mesh`) lists the design's
+mesh bodies, absent without any: `id` (the mesh body object), `file`
+(its container's entry name, `ParaMeshGeometry.<uuid>.paramesh`), `key`
+(the GUID the container repeats), `feature` (the object id of the
+timeline item that made it, a `MeshFeature`), `component` (the object id
+of the component that holds it), `name`, `transform` (mat4 from the
+container's coordinates to cm, absent for the identity) or `error` (why
+its placement is not read). External dumps have none; an import of one
+brings in no mesh bodies.
+
+The stream decoder's `_f3d.cages` (mitcad#1365; `mitcad_dump::cage::FormCage`,
+`core/f3d-design/src/cage.rs`) holds the control cages of the document's
+Form bodies, one per `TSplines.BlobParts/*.tsm` entry, as decoded (cm):
+`entry` and `name` (`TSpline.<uuid>.tsm`); `serializer` (the object that
+names the entry), `surface` (the object it refers to after the name),
+`item` and `item_index` (the timeline item that owns them, where one
+does); `degree`, `settings` (`[keyword, operands]` as written),
+`tolerance`, `geometric_tolerance`; `vertices` (`position`, `weight`
+when not 1, `tag` `dart`/`crease`/`corner` when not smooth, `direction`),
+`faces` (vertex rings), `edges` (`vertices`, `knot` when not 1, `crease`,
+`boundary`), `grips` (secondary grips: `vertex`, `position`, `weight`);
+`native` (`[record number, line]`: symmetry, selections, grip layouts and
+other records kept as written); `vertex_slots`, `face_slots`,
+`edge_slots`, `half_edges` (the native slots, deleted ones counted) and
+`warnings`. The key is absent when the document has no cage.
 
 Readers keep unknown keys in each record (a dump survives read and write
 unchanged) and do not check `schema`.
@@ -662,7 +694,7 @@ parentheses.
 | FilletFeature | filletFeatureType, edgeSets (`ConstantRadiusFilletEdgeSet`: edges, radius, isTangentChain, continuity, tangencyWeight; variable radius: startRadius, endRadius, midRadii, midPositions; chord length; asymmetric), isRollingBallCorner, ruleFilletSettings, fullRoundFilletFaceSets; retired isG2, isTangentChain |
 | ChamferFeature | edgeSets (distance / distanceOne, distanceTwo / distance, angle; isFlipped, isTangentChain), cornerType; retired chamferType, chamferTypeDefinition, edges, isTangentChain |
 | ShellFeature | inputEntities, insideThickness, outsideThickness, isTangentChain, shellType. The stream decoder gives `isTangentChain` and `shellType` (`RoundedOffsetShellType` or `SharpOffsetShellType`) from the two bytes after the root part. The `.ipt` decoder gives the body as `inputEntities` and the number of faces removed as `_ipt_removed_faces`, not the faces: the import finds them with the history (the faces of the body the next state no longer has) |
-| DraftFeature | inputFaces, plane, isTangentChain, isDirectionFlipped, draftDefinition (angles, symmetry); preview draftType, partingLineType, partingLineCurves, movingPartingLineDirection, movingPartingLineFixedEdges |
+| DraftFeature | inputFaces, plane, isTangentChain, isDirectionFlipped, draftDefinition (angles, symmetry); preview draftType, partingLineType, partingLineCurves, movingPartingLineDirection, movingPartingLineFixedEdges. The stream decoder (mitcad#1363) gives `inputFaces` (named faces, §2) from the input slots of role 16, `plane` from the one slot of role 33 (its face, or the origin or construction plane of its one entity input), `draftDefinition` (`AngleExtentDefinition`, its `angle` the parameter of role `Angle1`, radians, signed) and `isTangentChain` (the byte nine bytes after the root part); `_f3d_angle_two` the parameter of role `Angle2` (the opposite side's angle; whether the draft is two-sided or symmetric is not decoded); `_f3d_neutral_faces` where the slot of role 33 holds more than one face; for a parting-line draft (two slots of role 33) `_f3d_pull_plane` (the plane whose normal is the pull direction) and `_f3d_parting_tool` (its faces) instead of `plane`. No flip is stored: the file pulls along the neutral face's outward normal or the plane's normal, a positive angle removing material on the pull side |
 | SweepFeature | profile, path, guideRail, guideSurfaces, operation, orientation, distanceOne, distanceTwo, taperAngle, twistAngle, isSolid, profileScaling, extent, isDirectionFlipped, isChainSelection, participantBodies, solidBody, solidOrientation, solidAlignedAxis, solidTwistAxis. The stream decoder gives `operation`, `profile` (one profile reference per selected profile, with its sketch only), `path` and `guideRail` (`PathEntity` items of sketch curves or named edges, §2), `guideSurfaces` (their named faces, when there are some), the distances, `taperAngle`, `twistAngle` and since mitcad#25 `orientation` |
 | LoftFeature | loftSections (entity, index, endCondition), centerLineOrRails, centerLineOrRails.isCenterLine, operation, isSolid, isClosed, isTangentEdgesMerged, startLoftEdgeAlignment, endLoftEdgeAlignment, participantBodies. The stream decoder gives `operation`, `loftSections` (`entity` a profile with its sketch only, a sketch point, or a list of `PathEntity` items of named edges; the first and last sections' `endCondition` with its `weight` and `angle`), and `centerLineOrRails` as a list of paths (`PathEntity` lists) with `centerLineOrRails.isCenterLine`, and since mitcad#25 `isClosed` and `isSolid` |
 | PipeFeature | path, sectionType, sectionSize, sectionThickness, isHollow, operation, distanceOne, distanceTwo, participantBodies. The stream decoder gives `operation`, `path` (as a sweep's), `sectionSize`, `sectionThickness` and the distances, and since mitcad#25 `sectionType` and `isHollow` |
@@ -743,6 +775,7 @@ Sheet metal (mitcad#211): the `.ipt` decoder's `SheetMetalFaceFeature`,
 | `corner_round`, `corner_chamfer` (`.ipt`) | `dressup` (a fillet's or chamfer's detail; each edge set's `edges` the edges read by their names, as `edge_list`'s, mitcad#242), `edge_errors`, `participantBodies` |
 | `bend` (`.ipt`, mitcad#242) | `edges`, `edge_list`, `edge_errors` (its two edges), `radius`, `thickness`, `participantBodies` |
 | `fold` (`.ipt`, mitcad#242) | `angle`, `radius`, `line` (`{point, direction}`, cm), `kind_enumeration` and `flags` (not decoded), `participantBodies` |
+| `hem` (`.f3d`, mitcad#1364) | `operation`, `form` (`open`, `flat`, `rolled`, `double`, `teardrop`, `rope`), `edges` (1), `edge` and `edge_list` (as an `.f3d` flange's), `position` (`tangent`), the parameters its form has: `gap`, `length`, `hem_radius`, `hem_angle`, `setback`; `rule_radius` (`{value, from_rule}`, the rule's inside bend radius, cm) |
 
 `rules` is the rule the body follows: `name`, `thickness`, `bend_radius`,
 `bend_relief` and `corner_relief` (`type`, `width`, `depth`), `k_factor`

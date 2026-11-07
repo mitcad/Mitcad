@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/MainWindowImageReferences.cpp app/OcctViewer.cpp app/view app/browser app/framework tools/cli
+# check-all sources: app/MainWindowImageReferences.cpp app/OcctViewer.cpp app/view app/browser app/framework tools/cli app/platform/unix app/platform/PlatformHeif.hpp tools/heif-test-photo.sh
 # check-all sources: core/model/src/document core/model/src/file core/model-api/src core/model-base/src
 # Image references (mitcad#782) through the real UI, in the Docked layout,
 # on a 60 x 60 x 3 plate and a 200 x 100 pixel grey BMP file that states
@@ -18,12 +18,21 @@
 #   - Its light bulb off: not drawn, and Calibrate Image Reference refused
 #     ("Show an image reference first."); saved, opened again, its light bulb on:
 #     drawn as it was (the image embedded in the design).
-#   - A HEIF file (mitcad#850, tools/heif-test-fixture.py's 64 x 32 pixels
-#     turned a quarter by its irot property), Width 32: Image2 decoded
-#     upright (32 x 64 pixels) and drawn 32 x 64 mm; saved, the file
-#     deleted, opened again: decoded and drawn from the design's copy.
+#   - Nothing in the log speaks of HEIF while no HEIF file is used
+#     (mitcad#1304: no decoder looked for at start, no notice).
+#   - A HEIF file (mitcad#850, tools/heif-test-photo.sh: 64 x 32 pixels
+#     turned a quarter by its irot property), Width 32, with a decoder (a
+#     build with MITCAD_HEIF, or the distribution's libheif with its HEVC
+#     plugin): Image2 decoded upright (32 x 64 pixels) and drawn
+#     32 x 64 mm; saved, the file deleted, opened again with no HEIF
+#     decoder at all (MITCAD_TEST_HEIF_DECODER=none): drawn from the
+#     design's copy, a PNG file. A libheif without the plugin: the message.
+#   - With no libheif (MITCAD_TEST_HEIF_LIBRARY, a path that is not there)
+#     the panel gives the one message, naming libheif and its HEVC plugin,
+#     and nothing is inserted.
 # tools/ui-windows-image-references-test.ps1 does the same in the Windows
-# VM.
+# VM (with WIC's decoder missing), tools/ui-macos-image-references-heif-test.sh
+# the HEIF part through ImageIO on macOS.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-image-references-test.sh [screenshot.png]
@@ -59,29 +68,18 @@ EOF
 # The HEIF file of tools/heif-test-fixture.py (quadrants-8-rot1.heic): an
 # HEVC image of 64 x 32 pixels (flat red, green, blue and white quarters)
 # with an irot of a quarter turn anticlockwise.
-{
-  printf '\x00\x00\x00\x18\x66\x74\x79\x70\x68\x65\x69\x63\x00\x00\x00\x00\x6d\x69\x66\x31\x68\x65\x69\x63'
-  printf '\x00\x00\x01\x4a\x6d\x65\x74\x61\x00\x00\x00\x00\x00\x00\x00\x21\x68\x64\x6c\x72\x00\x00\x00\x00'
-  printf '\x00\x00\x00\x00\x70\x69\x63\x74\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-  printf '\x0e\x70\x69\x74\x6d\x00\x00\x00\x00\x00\x01\x00\x00\x00\x1e\x69\x6c\x6f\x63\x00\x00\x00\x00\x44'
-  printf '\x00\x00\x01\x00\x01\x00\x00\x00\x01\x00\x00\x01\x6a\x00\x00\x00\x69\x00\x00\x00\x23\x69\x69\x6e'
-  printf '\x66\x00\x00\x00\x00\x00\x01\x00\x00\x00\x15\x69\x6e\x66\x65\x02\x00\x00\x00\x00\x01\x00\x00\x68'
-  printf '\x76\x63\x31\x00\x00\x00\x00\xce\x69\x70\x72\x70\x00\x00\x00\xaf\x69\x70\x63\x6f\x00\x00\x00\x77'
-  printf '\x68\x76\x63\x43\x01\x01\x60\x00\x00\x00\x90\x00\x00\x00\x00\x00\x1e\xf0\x00\xfc\xfd\xf8\xf8\x00'
-  printf '\x00\x0f\x03\xa0\x00\x01\x00\x18\x40\x01\x0c\x01\xff\xff\x01\x60\x00\x00\x03\x00\x90\x00\x00\x03'
-  printf '\x00\x00\x03\x00\x1e\x95\x98\x09\xa1\x00\x01\x00\x2b\x42\x01\x01\x01\x60\x00\x00\x03\x00\x90\x00'
-  printf '\x00\x03\x00\x00\x03\x00\x1e\xa0\x20\x82\x16\x59\x59\xae\x4c\xae\x6e\x04\x04\x0c\x08\x00\x00\x03'
-  printf '\x00\x08\x00\x00\x03\x00\xc8\x40\xa2\x00\x01\x00\x06\x44\x01\xc1\x71\xa1\x12\x00\x00\x00\x14\x69'
-  printf '\x73\x70\x65\x00\x00\x00\x00\x00\x00\x00\x40\x00\x00\x00\x20\x00\x00\x00\x13\x63\x6f\x6c\x72\x6e'
-  printf '\x63\x6c\x78\x00\x01\x00\x0d\x00\x06\x80\x00\x00\x00\x09\x69\x72\x6f\x74\x01\x00\x00\x00\x17\x69'
-  printf '\x70\x6d\x61\x00\x00\x00\x00\x00\x00\x00\x01\x00\x01\x04\x81\x02\x03\x84\x00\x00\x00\x71\x6d\x64'
-  printf '\x61\x74\x00\x00\x00\x65\x28\x01\xaf\x04\x78\x3c\x86\x2f\xf4\x39\x48\xb3\x20\x28\x0c\xb8\xe4\x65'
-  printf '\xd1\xcc\x14\xb8\x94\x50\x58\x2c\x9f\xaf\x6c\x9a\xac\x2c\xff\xb1\xec\x4c\x14\x9b\x6d\x7f\x70\x72'
-  printf '\xa2\x83\xfb\x63\xc8\x90\xba\x6c\xe9\xe9\x21\x69\x5a\x8f\xcb\xfd\x38\xcb\x86\xdc\xc4\xab\x7b\xa9'
-  printf '\x7d\xad\x65\x3b\x81\x52\x44\x78\x68\xfc\x34\xb4\x87\x52\xef\xff\x86\xa8\x72\x83\x1b\x68\x7e\xf4'
-  printf '\x80\x10\x95\x93\x05\x8a\xbf\x6a\x3d\xba\x7e'
-} > "$WORK/photo.heic"
-[ "$(wc -c < "$WORK/photo.heic")" = 467 ] || ui_fail "the HEIF file is not 467 bytes"
+source "$(dirname "$0")/heif-test-photo.sh"
+heif_test_photo "$WORK/photo.heic" || ui_fail "the HEIF file is not 467 bytes"
+
+# expect_no_heif "when": nothing in the run's log speaks of HEIF (the app's
+# words, in upper case; paths are not): no decoder is looked for, no notice
+# given, while no HEIF file is used (mitcad#1304).
+expect_no_heif() {
+  if grep -Eq 'HEIF|HEIC' "$UI_LOG"; then
+    ui_fail "the log speaks of HEIF $1: $(grep -E 'HEIF|HEIC' "$UI_LOG" | head -n 3)"
+  fi
+  echo "ok   nothing about HEIF in the log $1"
+}
 
 # expect_size "name" width: the image's width in the last "Image references
 # drawn" line is within 2 % of the width expected (clicks land on whole
@@ -166,6 +164,7 @@ ui_step "Calibrate Image Reference"        ui_command "Calibrate Image Reference
 ui_expect_new "Show an image reference first." "a hidden image is not calibrated"
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_new "Saved $WORK/plate.mitcad" "saved"
+expect_no_heif "with no HEIF file used"
 ui_stop_app
 ui_start_app --open "$WORK/plate.mitcad"
 ui_expect_log "Browser eye Root/Images/Image1 at" "Image1 read back"
@@ -175,10 +174,24 @@ ui_expect_new "Visibility Root/Images/Image1: shown" "shown"
 expect_drawn "Image1 .* 70% through" "drawn as it was saved"
 expect_size Image1 100
 
-# HEIF only in builds with its decoder (MITCAD_HEIF, off by default:
-# docs/development.md); the build's CMake cache says.
-if grep -q '^MITCAD_HEIF:BOOL=ON$' "$(dirname "$UI_APP")/../CMakeCache.txt" 2>/dev/null; then
-  echo "--- A HEIF file: decoded upright, saved and read back without the file"
+expect_no_heif "with no HEIF file used"
+
+# HEIF (mitcad#1304): a build with MITCAD_HEIF decodes with the libheif it
+# links (the build's CMake cache says); others with the distribution's
+# libheif, loaded when the file is chosen, which decodes only with its HEVC
+# plugin: with a libheif.so.1 installed the file is either inserted or
+# refused with the message, and without one there is nothing to decode with.
+HEIF_BUILT=0
+grep -q '^MITCAD_HEIF:BOOL=ON$' "$(dirname "$UI_APP")/../CMakeCache.txt" 2> /dev/null && HEIF_BUILT=1
+HEIF_SYSTEM=0
+LIBRARIES=$( (ldconfig -p || /sbin/ldconfig -p) 2> /dev/null || true)
+grep -q 'libheif\.so\.1 ' <<< "$LIBRARIES" && HEIF_SYSTEM=1
+HEIF_MESSAGE="Reading HEIF and HEIC images needs your distribution's libheif with its HEVC plugin"
+
+# insert_heif: Image Reference on the plate's top with photo.heic and
+# Width 32; sets HEIF_INSERTED to 1 when it was inserted, 0 when the panel
+# gave the message (Esc then cancels the panel).
+insert_heif() {
   ui_mark
   ui_step "Image Reference"                  ui_command "Image Reference"
   ui_expect_new "Command Image Reference started" "the panel opened"
@@ -186,22 +199,67 @@ if grep -q '^MITCAD_HEIF:BOOL=ON$' "$(dirname "$UI_APP")/../CMakeCache.txt" 2>/d
   ui_expect_new "Image Reference Plane: 1 face" "the face picked"
   ui_step "the HEIF file"                    ui_type_in "Panel Image Reference input file" "$WORK/photo.heic"
   ui_step "width 32"                         ui_type_in "Panel Image Reference input width" "32"
-  ui_step "OK (Enter)"                       ui_key Return
-  ui_expect_new "Inserted image reference from photo.heic" "inserted"
-  ui_expect_new "Image reference Image2 decoded: 32 x 64 pixels" "decoded upright: the quarter turn applied"
-  expect_drawn "Image1 .* 70% through, Image2 32.0 x 64.0 mm 50% behind" "drawn 32 x 64 mm"
-  grep -q "Image reference Image2 cannot be drawn" "$UI_LOG" && ui_fail "the HEIF image was not decoded"
-  ui_step "save (Ctrl+S)"                    ui_key ctrl+s
-  ui_expect_new "Saved $WORK/plate.mitcad" "saved"
-  ui_stop_app
-  rm "$WORK/photo.heic"
-  ui_start_app --open "$WORK/plate.mitcad"
-  ui_expect_log "Image reference Image2 decoded: 32 x 64 pixels" "decoded from the design's copy"
-  # The new run's log from its start.
-  UI_MARK=0
-  expect_drawn "Image1 .* 70% through, Image2 32.0 x 64.0 mm 50% behind" "drawn as it was saved"
+  HEIF_INSERTED=""
+  for _ in $(seq 1 50); do
+    if grep -qF "Panel Image Reference error: $HEIF_MESSAGE" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG"); then
+      HEIF_INSERTED=0
+      ui_step "cancel (Esc)"                 ui_key Escape
+      ui_expect_new "Command Image Reference cancelled" "cancelled"
+      return
+    fi
+    if grep -qF "Image Reference HEIF file photo.heic decoded" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG"); then
+      ui_step "OK (Enter)"                   ui_key Return
+      ui_expect_new "Inserted image reference from photo.heic" "inserted"
+      HEIF_INSERTED=1
+      return
+    fi
+    sleep 0.2
+  done
+  ui_fail "photo.heic was neither decoded nor refused with the message"
+}
+
+if [ "$HEIF_BUILT" = 1 ] || [ "$HEIF_SYSTEM" = 1 ]; then
+  echo "--- A HEIF file: decoded upright, embedded as PNG, read back with no decoder and without the file"
+  insert_heif
+  if [ "$HEIF_INSERTED" = 1 ]; then
+    ui_expect_new "Image reference Image2 decoded: 32 x 64 pixels" "decoded upright: the quarter turn applied"
+    expect_drawn "Image1 .* 70% through, Image2 32.0 x 64.0 mm 50% behind" "drawn 32 x 64 mm"
+    grep -q "Image reference Image2 cannot be drawn" "$UI_LOG" && ui_fail "the HEIF image was not decoded"
+    ui_step "save (Ctrl+S)"                  ui_key ctrl+s
+    ui_expect_new "Saved $WORK/plate.mitcad" "saved"
+    ui_stop_app
+    rm "$WORK/photo.heic"
+    # The design's copy is a PNG file: no HEIF decoder needed to open it.
+    export MITCAD_TEST_HEIF_DECODER=none
+    ui_start_app --open "$WORK/plate.mitcad"
+    ui_expect_log "Image reference Image2 decoded: 32 x 64 pixels" "decoded from the design's copy, with no decoder"
+    # The new run's log from its start.
+    UI_MARK=0
+    expect_drawn "Image1 .* 70% through, Image2 32.0 x 64.0 mm 50% behind" "drawn as it was saved"
+    expect_no_heif "opened with no HEIF decoder"
+    unset MITCAD_TEST_HEIF_DECODER
+    heif_test_photo "$WORK/photo.heic" || ui_fail "the HEIF file is not 467 bytes"
+  else
+    echo "--- the distribution's libheif has no HEVC plugin: the message shown, nothing inserted"
+  fi
 else
-  echo "--- A HEIF file: skipped, this build has no HEIF decoder (MITCAD_HEIF off)"
+  echo "--- A HEIF file decoded: skipped, no MITCAD_HEIF and no libheif.so.1 here"
+fi
+
+# With no libheif (a library path that is not there, the run-time load's
+# MITCAD_TEST_HEIF_LIBRARY): one message, naming what to install, and
+# nothing inserted. A build with MITCAD_HEIF decodes with its own.
+if [ "$HEIF_BUILT" = 0 ]; then
+  echo "--- A HEIF file with no libheif: the message only"
+  ui_stop_app
+  export MITCAD_TEST_HEIF_LIBRARY="$WORK/no-libheif/libheif.so.1"
+  ui_start_app --open "$WORK/plate.mitcad"
+  insert_heif
+  [ "$HEIF_INSERTED" = 0 ] || ui_fail "a HEIF file was inserted with no libheif"
+  [ "$(grep -cF "Panel Image Reference error: $HEIF_MESSAGE" "$UI_LOG")" -ge 1 ] &&
+    echo "ok   the message names libheif with its HEVC plugin"
+  grep -q "Inserted image reference from photo.heic" "$UI_LOG" && ui_fail "inserted with no decoder"
+  unset MITCAD_TEST_HEIF_LIBRARY
 fi
 
 ui_finish "UI image references test"

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Base features from shapes the caller built, and the bodies of .f3d
-//! files without history, for C++ callers (`mitcad-cli`, the application).
-//! Rust callers, such as the .f3d import, use
+//! files without history, for C++ callers (`mitcad-cli`, the application);
+//! the mesh bodies of the .f3d files come with them, with their materials
+//! and appearances (mitcad#1376). Rust callers, such as the .f3d import, use
 //! [`mitcad_model::Document::add_base_feature`] with shapes from
 //! [`crate::kernel::exchange::ffi::f3d_bodies`] directly.
 
 use cxx::SharedPtr;
+use mitcad_model::Kernel as _;
 use mitcad_model::features::Operation;
 use mitcad_model::{BaseInput, BodyUid, ImportBody, Imported};
 use mitcad_model_api::ApiError;
@@ -164,20 +166,95 @@ impl Document {
                 }])
             });
         }
+        // The mesh bodies (mitcad#1376): a base feature each after the
+        // B-rep bodies, placed as the timeline import places them.
+        let documents = crate::f3d_import::file_meshes(path).map_err(ApiError)?;
+        let mut meshes_found = Vec::new();
+        let mut meshes_not_read = Vec::new();
+        // Each mesh base feature's document and mesh body record.
+        let mut mesh_records = Vec::new();
+        for (d, document) in documents.iter().enumerate() {
+            for mesh in &document.meshes {
+                let place = if document.document.is_empty() {
+                    mesh.source.clone()
+                } else {
+                    format!("{}: {}", document.document, mesh.source)
+                };
+                let built = mesh.mesh.as_ref().map_err(String::clone).and_then(|m| {
+                    let shape = self
+                        .0
+                        .kernel()
+                        .triangle_body(&m.points, &m.triangles)
+                        .map_err(|e| e.to_string())?;
+                    Ok((shape, m.triangles.len()))
+                });
+                let (shape, triangles) = match built {
+                    Ok(built) => built,
+                    Err(e) => {
+                        meshes_not_read.push(json!({"source": place, "error": e}));
+                        continue;
+                    }
+                };
+                meshes_found.push(json!({"source": place, "triangles": triangles}));
+                mesh_records.push((d, mesh.id));
+                inputs.push(BaseInput {
+                    source: Some(format!("{file}: {place}")),
+                    ..BaseInput::new(vec![ImportBody {
+                        name: mesh.name.clone(),
+                        color: None,
+                        shape,
+                    }])
+                });
+            }
+        }
         if inputs.is_empty() {
             return Err(ApiError(format!(
                 "{file} has no bodies to import ({} could not be built)",
-                skipped.len()
+                skipped.len() + meshes_not_read.len()
             )));
         }
-        let imported = self
-            .0
-            .add_base_features(&format!("Import {file}"), inputs)?;
-        for (report, feature) in found.iter_mut().zip(&imported) {
+        let label = format!("Import {file}");
+        let depth = self.0.undo_depth();
+        let imported = self.0.add_base_features(&label, inputs)?;
+        let (breps, meshes) = imported.split_at(found.len().min(imported.len()));
+        for (report, feature) in found.iter_mut().zip(breps) {
             report["feature"] = json!(feature.feature.uid);
             report["bodies"] = imported_json(feature)["bodies"].clone();
         }
-        let report = json!({"file": file, "imported": found, "skipped": skipped});
+        // The mesh bodies' materials and appearances, part of the import's
+        // undo step.
+        let mut by_document: Vec<Vec<(u64, BodyUid)>> = vec![Vec::new(); documents.len()];
+        for (&(d, record), feature) in mesh_records.iter().zip(meshes) {
+            if let (Some(record), Some(body)) = (record, feature.bodies.first()) {
+                by_document[d].push((record, body.uid));
+            }
+        }
+        let mut gaps = Vec::new();
+        for (document, bodies) in documents.iter().zip(&by_document) {
+            if let Some(data) = &document.appearance
+                && !bodies.is_empty()
+            {
+                let looks = mitcad_import::appearances::mesh_appearances(&mut self.0, data, bodies);
+                gaps.extend(looks.gaps);
+            }
+        }
+        self.0.merge_undo(depth, &label);
+        for (report, feature) in meshes_found.iter_mut().zip(meshes) {
+            report["feature"] = json!(feature.feature.uid);
+            report["bodies"] = imported_json(feature)["bodies"].clone();
+            if let Some(body) = feature.bodies.first() {
+                let attributes = self.0.body_attributes(body.uid);
+                report["appearance"] = json!(attributes.appearance);
+                report["material"] = json!(attributes.material);
+            }
+        }
+        meshes_found.extend(meshes_not_read);
+        let mut report = json!({
+            "file": file, "imported": found, "skipped": skipped, "meshes": meshes_found
+        });
+        if !gaps.is_empty() {
+            report["mesh_gaps"] = json!(gaps);
+        }
         Ok(if options.text {
             summary(&report)
         } else {
@@ -232,6 +309,42 @@ fn summary(report: &Value) -> String {
             body["source"].as_str().unwrap_or_default(),
             body["error"].as_str().unwrap_or_default()
         );
+    }
+    // The mesh bodies (mitcad#1376).
+    let meshes = report["meshes"].as_array().map_or(&[][..], Vec::as_slice);
+    if !meshes.is_empty() {
+        let read = meshes.iter().filter(|m| m["error"].is_null()).count();
+        text += &format!(
+            "Imported {read} mesh bodies ({} not read):\n",
+            meshes.len() - read
+        );
+    }
+    for mesh in meshes {
+        let source = mesh["source"].as_str().unwrap_or_default();
+        if let Some(error) = mesh["error"].as_str() {
+            text += &format!("  not read: {source}: {error}\n");
+            continue;
+        }
+        let body = &mesh["bodies"][0];
+        let look = [
+            ("appearance", &mesh["appearance"]),
+            ("material", &mesh["material"]),
+        ]
+        .iter()
+        .filter_map(|(what, v)| Some(format!(", {what} {}", v.as_str()?)))
+        .collect::<String>();
+        text += &format!(
+            "  {} {} ({}): mesh body of {} triangles{look} from {source}\n",
+            mesh["feature"].as_str().unwrap_or_default(),
+            body["name"].as_str().unwrap_or_default(),
+            body["uid"].as_str().unwrap_or_default(),
+            mesh["triangles"]
+        );
+    }
+    if let Some(gaps) = report["mesh_gaps"].as_array() {
+        for gap in gaps {
+            text += &format!("  {}\n", gap.as_str().unwrap_or_default());
+        }
     }
     text
 }

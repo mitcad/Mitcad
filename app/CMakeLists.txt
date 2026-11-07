@@ -2001,16 +2001,48 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/image_references.cpp view/ImageReferences.cpp view/ImageReferences.hpp)
 endif()
 
-# HEIF images of image references (mitcad#850, MITCAD_HEIF in the top
-# CMakeLists.txt): view/ImageFile.* decodes an image reference's file, HEIF
-# through libheif with its HEVC decoder libde265 from vcpkg (the manifest's
-# feature `heif`, without encoders), the other formats through Qt.
-# libheif and libde265 are LGPL: shared libraries only, never linked
-# statically (docs/development.md, "Licence policy").
-target_sources(mitcad PRIVATE view/ImageFile.cpp view/ImageFile.hpp)
+# HEIF images of image references: view/ImageFile.* decodes an image
+# reference's file, the formats other than HEIF through Qt, HEIF through
+# view/HeifDecoder.* (mitcad#1304): the operating system's decoder, in
+# every build, MitCad shipping none: ImageIO on macOS, WIC with the
+# system's HEIF decoder on Windows (windowscodecs, ole32), the
+# distribution's libheif loaded at run time on Linux and the BSDs (QLibrary;
+# never linked or shipped, no header needed). A build with MITCAD_HEIF (the
+# top CMakeLists.txt, off by default, releases included; mitcad#850) links
+# libheif with its HEVC decoder libde265 from vcpkg instead (the manifest's
+# feature `heif`, without encoders); libheif and libde265 are LGPL: shared
+# libraries only, never linked statically (docs/development.md, "Licence
+# policy").
+set(mitcad_heif_sources view/ImageFile.cpp view/ImageFile.hpp view/HeifDecoder.cpp view/HeifDecoder.hpp
+    platform/PlatformHeif.hpp)
+if(WIN32)
+  list(APPEND mitcad_heif_sources platform/windows/HeifWic.cpp)
+  set(mitcad_heif_platform_libraries windowscodecs ole32)
+elseif(APPLE)
+  list(APPEND mitcad_heif_sources platform/macos/HeifImageIO.mm)
+  set_source_files_properties(platform/macos/HeifImageIO.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+  set(mitcad_heif_platform_libraries "-framework ImageIO" "-framework CoreGraphics" "-framework CoreFoundation"
+      "-framework Foundation")
+else()
+  list(APPEND mitcad_heif_sources platform/unix/HeifUnix.cpp view/HeifLibrary.cpp view/HeifLibrary.hpp)
+  set(mitcad_heif_platform_libraries "")
+endif()
+target_sources(mitcad PRIVATE ${mitcad_heif_sources})
+if(mitcad_heif_platform_libraries)
+  target_link_libraries(mitcad PRIVATE ${mitcad_heif_platform_libraries})
+endif()
 if(BUILD_TESTING)
-  # The formats told apart, HEIF images decoded upright: tests/heif_image.cpp.
-  target_sources(test_app PRIVATE tests/heif_image.cpp view/ImageFile.cpp view/ImageFile.hpp)
+  # The formats told apart, HEIF images decoded upright through a decoder
+  # of the test's own and through the platform's, embedded as PNG, the
+  # message without a decoder, and the run-time libheif with a library
+  # that is not there (on every platform): tests/heif_image.cpp.
+  target_sources(test_app PRIVATE tests/heif_image.cpp ${mitcad_heif_sources})
+  if(WIN32 OR APPLE)
+    target_sources(test_app PRIVATE view/HeifLibrary.cpp view/HeifLibrary.hpp)
+  endif()
+  if(mitcad_heif_platform_libraries)
+    target_link_libraries(test_app PRIVATE ${mitcad_heif_platform_libraries})
+  endif()
 endif()
 if(MITCAD_HEIF)
   find_package(libheif CONFIG REQUIRED)
@@ -2711,4 +2743,16 @@ if(BUILD_TESTING)
   # The choice and the arcs: plain plane geometry.
   target_sources(test_app PRIVATE tests/line_arcs.cpp sketch/LineArcs.cpp sketch/LineArcs.hpp
                                   sketch/SketchGeometry.cpp)
+endif()
+
+# Linked designs while their holder is open (mitcad#1416, app/COMMANDS.md
+# "Linked designs"): Open Linked Design, Update Link and Update All Links,
+# the notice of an edit refused on a linked component, and the message
+# band's "<file> changed" with Update when a linked file changes on disk or
+# is saved in another tab.
+target_sources(mitcad PRIVATE files/MainWindowLinks.cpp files/LinkedFiles.cpp files/LinkedFiles.hpp
+                              files/LinkWatcher.cpp files/LinkWatcher.hpp)
+if(BUILD_TESTING)
+  # The refusal read from an error and the linked file's path: plain Qt Core.
+  target_sources(test_app PRIVATE tests/linked_files.cpp files/LinkedFiles.cpp files/LinkedFiles.hpp)
 endif()

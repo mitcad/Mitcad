@@ -29,3 +29,6 @@ mod link_envelope_tests;
 
 // An Envelope's source through copies and reparenting (mitcad#1276).
 mod envelope_source_tests;
+
+// Linked designs read again: on opening and while open (mitcad#1416).
+mod link_update_tests;

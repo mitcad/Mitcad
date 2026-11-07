@@ -892,16 +892,24 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Linked designs with options whose files changed (part of
-    /// `update_links`): each component, its part, the file read again as a
+    /// `update_links`, and of `update_link` for the components among `only`,
+    /// mitcad#1416): each component, its part, the file read again as a
     /// source and the new digest; a line per file that changed or could not
     /// be read.
     pub(super) fn options_file_updates(
         &self,
         base: Option<&Path>,
+        only: &dyn Fn(ComponentUid) -> bool,
         messages: &mut Vec<String>,
     ) -> Vec<(ComponentUid, FeatureUid, LibrarySourceDef, String)> {
         let mut updates = Vec::new();
-        for c in &self.state.assembly.components {
+        for c in self
+            .state
+            .assembly
+            .components
+            .iter()
+            .filter(|c| only(c.uid))
+        {
             let (Some(link), None, None) = (&c.link, &c.library, &c.build) else {
                 continue;
             };

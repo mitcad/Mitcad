@@ -142,6 +142,8 @@
 #include "sketch/PaletteCreateTools.hpp"
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
+// Click adds to the selection in sketches (mitcad#1403).
+#include "sketch/SketchPreferences.hpp"
 #include "update/UpdateController.hpp"
 #include "report/ReportCenter.hpp"
 #include "view/ModeBanner.hpp"
@@ -524,6 +526,29 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     setCentralWidget(m_viewer);
     statusBar()->addWidget(m_statusIcon);
     statusBar()->addWidget(m_statusLabel, 1);
+    // The button of a message that has one (mitcad#1416: Open Linked
+    // Design, Update), right after the message, as the Floating band has it;
+    // its place logged as the band's (`Message band action <label> at x,y`).
+    m_statusActionButton = new QToolButton(this);
+    m_statusActionButton->setObjectName(QStringLiteral("statusActionButton"));
+    m_statusActionButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_statusActionButton->setFocusPolicy(Qt::NoFocus);
+    m_statusActionButton->hide();
+    connect(m_statusActionButton, &QToolButton::clicked, this, [this] {
+      const std::function<void()> run = std::exchange(m_statusButtonRun, nullptr);
+      const QString label = m_statusActionButton->text();
+      m_statusActionButton->hide();
+      if (!run) {
+        return;
+      }
+      qDebug().noquote() << QStringLiteral("Message band action %1 pressed: %2").arg(label, m_statusLabel->text());
+      if (m_messages != nullptr) {
+        m_messages->close(); // the band's copy of the message: answered
+      }
+      run();
+    });
+    new PlaceWatcher(m_statusActionButton, [this] { logStatusActionPlace(); });
+    statusBar()->addWidget(m_statusActionButton);
     // The message history's button (mitcad#1042), after the message.
     m_messageHistoryButton = new QToolButton(this);
     m_messageHistoryButton->setObjectName(QStringLiteral("messageHistoryButton"));
@@ -2268,6 +2293,15 @@ void MainWindow::editFeature(const QString& uid) {
     return;
   }
   leaveDrawing(); // a feature is edited in the 3D view (mitcad#707)
+  // A feature of a linked design changes only with its file: where to
+  // change it, with Open Linked Design (mitcad#1416).
+  if (const DocumentSnapshot::Feature* entry = m_snapshot.feature(uid)) {
+    const DocumentSnapshot::Component* owner = m_snapshot.component(entry->component);
+    if (owner != nullptr && owner->linked && !owner->library) {
+      showLinkedNotice(owner->name, owner->link);
+      return;
+    }
+  }
   try {
     const QJsonObject feature =
         queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}});
@@ -3247,6 +3281,8 @@ void MainWindow::refreshScene() {
     qWarning().noquote() << "Document structure not read:" << errorText(e);
   }
   snapshot.finish();
+  // The linked designs' files watched (mitcad#1416).
+  refreshLinkWatch();
   // The sketch being edited went with another change, such as its
   // component deleted (mitcad#99): sketch mode ends instead of editing
   // what is no longer there.
@@ -4359,6 +4395,21 @@ void MainWindow::showStatus(const QString& message, NoticeLevel level) {
 }
 
 void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, const QString& feature) {
+  // An edit refused on a linked component says where to change it, with
+  // Open Linked Design (mitcad#1416, files/MainWindowLinks.cpp).
+  if (level == NoticeLevel::Error && m_statusActionLabel.isEmpty() && showLinkedRefusal(message)) {
+    return;
+  }
+  // A message whose button waits for an answer (mitcad#1416) stays in the
+  // Docked status line, as in the band: a hint or a cleared status goes to
+  // the history only.
+  if (m_statusActionLabel.isEmpty() && m_statusButtonRun &&
+      (level == NoticeLevel::Hint || level == NoticeLevel::Progress)) {
+    if (m_messages != nullptr) {
+      m_messages->post(message, level, feature);
+    }
+    return;
+  }
   // One presentation per level (mitcad#1040, docs/ui-conventions.md
   // "Messages and severity"): the level's colour role and icon beside the
   // text, and the same level in the message band (Floating and AppKit,
@@ -4386,8 +4437,27 @@ void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, co
     m_statusIcon->setToolTip(noticeLevelWord(level));
     m_statusIcon->setVisible(m_statusLabel->isVisibleTo(this));
   }
+  // A message with a button (showActionStatus, mitcad#1416): in the
+  // Floating band, and in the Docked status bar beside the message; any
+  // other message takes the status bar's button away.
+  const QString actionLabel = std::exchange(m_statusActionLabel, QString());
+  std::function<void()> actionRun = std::exchange(m_statusActionRun, nullptr);
+  if (m_statusActionButton != nullptr) {
+    const bool shown = !actionLabel.isEmpty() && !message.isEmpty() && actionRun;
+    m_statusButtonRun = shown ? actionRun : std::function<void()>();
+    m_statusActionButton->setText(shown ? actionLabel : QString());
+    m_statusActionButton->setAccessibleName(shown ? actionLabel : QString());
+    m_statusActionButton->setVisible(shown);
+    // Its place once the status bar is laid out (also when only its label
+    // changed).
+    TestSync::singleShot(0, this, [this] { logStatusActionPlace(); });
+  }
   if (m_messages != nullptr) {
-    m_messages->post(message, level, feature);
+    if (!actionLabel.isEmpty()) {
+      m_messages->postAction(message, level, actionLabel, std::move(actionRun));
+    } else {
+      m_messages->post(message, level, feature);
+    }
   }
   if (!message.isEmpty() && !m_statusIsHint) {
     // The level as the UI tests read it (mitcad#1040); hints are many.
@@ -4417,6 +4487,11 @@ void MainWindow::clearDesignMessages() {
   if (m_statusIcon != nullptr) {
     m_statusIcon->clear();
     m_statusIcon->hide();
+  }
+  // The old design's button with it (mitcad#1416).
+  m_statusButtonRun = nullptr;
+  if (m_statusActionButton != nullptr) {
+    m_statusActionButton->hide();
   }
   qDebug().noquote() << QStringLiteral("Status line cleared (another design)");
   if (m_messages != nullptr) {
@@ -4731,8 +4806,13 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
   // removes there, and a window (Shift adds it as before) keeps every kind
   // the filter let it take.
   const bool sketching = m_mode == Mode::Sketch;
-  const bool add = sketching && !window ? modifiers.testFlag(Qt::ControlModifier)
-                                        : bool(modifiers & (Qt::ControlModifier | Qt::ShiftModifier));
+  // Click adds to the selection in sketches (mitcad#1403): a click with no
+  // tool running adds or removes as Ctrl+click does, and one on empty space
+  // clears (Ctrl+click on empty space keeps the selection, as before).
+  const bool clickAdds = sketching && !window && sketch::clickAddsToSelection();
+  const bool add = clickAdds                ? (!items.isEmpty() || modifiers.testFlag(Qt::ControlModifier))
+                   : (sketching && !window) ? modifiers.testFlag(Qt::ControlModifier)
+                                            : bool(modifiers & (Qt::ControlModifier | Qt::ShiftModifier));
   Selection next = add ? m_selection : Selection();
   if (window) {
     // The main window's part of a window selection (mitcad#670): the
@@ -5273,7 +5353,12 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
     // under it.
     if (item.isValid() && !m_selection.contains(item) &&
         !m_sketch->annotationAt(m_viewer->mapFromGlobal(globalPosition))) {
-      setSelection({item});
+      // With Click adds to the selection in sketches (mitcad#1403) the
+      // item joins the selection, so that the menu offers its commands for
+      // all of them; a right click never clears it.
+      Selection next = sketch::clickAddsToSelection() ? m_selection : Selection();
+      next.append(item);
+      setSelection(next);
     }
     const bool sketchItems = std::any_of(m_selection.begin(), m_selection.end(),
                                          [](const SelectionItem& s) { return isSketchKind(s.kind); });
@@ -6106,6 +6191,14 @@ bool MainWindow::loadDesign(const QString& path, QString& error) {
   for (const QJsonValue& message : std::as_const(messages)) {
     qInfo().noquote() << message.toString();
   }
+  // What the linked files read again did, in the message band
+  // (mitcad#1416); an MCP open follows no link, so a changed linked file is
+  // offered with Update instead.
+  if (mcpOpen) {
+    checkLinkedFiles();
+  } else {
+    showLinkMessages(messages);
+  }
   if (upgraded > 0) {
     qInfo().noquote() << QStringLiteral("BUILD connectors placed again by the current rule: %1 part(s)").arg(upgraded);
   }
@@ -6324,6 +6417,10 @@ bool MainWindow::writeFile(const QString& path, const QString& description, Vers
   // Under another name, the design is that file now, with its own edit
   // lock (Save As, Save as Copy).
   m_locks->designSaved(absolute);
+  // The other tabs that link this design offer to take it (mitcad#1416).
+  if (m_windowManager != nullptr) {
+    m_windowManager->designSaved(this, absolute);
+  }
   if (required == nullptr) {
     return true;
   }

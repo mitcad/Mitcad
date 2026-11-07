@@ -182,7 +182,7 @@ int exportStartType(const QString& remembered, bool sketch, bool sketches) {
 
 std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
-                                      const QString& sketch, bool occurrences) {
+                                      const QString& sketch, bool occurrences, const QString& designUnit) {
   // The last export's choices (mitcad#1164).
   QSettings settings;
   settings.beginGroup(QLatin1String(kExportGroup));
@@ -248,6 +248,12 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   }
   sketchBox->setCurrentIndex(current);
   form->addRow(QObject::tr("Sketch:"), sketchBox);
+  // A DXF file's length unit (mitcad#1408): the design's first.
+  auto* dxfUnit = new QComboBox;
+  dxfUnit->addItems(dxfUnits(designUnit));
+  dxfUnit->setCurrentIndex(0);
+  dxfUnit->setToolTip(QObject::tr("The length unit of the DXF file; the sketch keeps its size"));
+  form->addRow(QObject::tr("DXF unit:"), dxfUnit);
   auto* message = new QLabel;
   setErrorStyleSheet(message);
   layout->addWidget(message);
@@ -267,6 +273,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     form->setRowVisible(refinement, mesh);
     form->setRowVisible(stlFormat, format == QStringLiteral("stl"));
     form->setRowVisible(sketchBox, format == QStringLiteral("dxf"));
+    form->setRowVisible(dxfUnit, format == QStringLiteral("dxf"));
   };
   QObject::connect(type, &QComboBox::currentIndexChanged, &dialog, [=](int index) {
     QFileInfo info(file->text());
@@ -296,10 +303,10 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   file->setFocus();
   file->selectAll();
   dialog.resize(480, dialog.sizeHint().height());
-  qDebug().noquote() << QStringLiteral("Export dialog opened: unit %1%2, type %3, refinement %4, file %5")
+  qDebug().noquote() << QStringLiteral("Export dialog opened: unit %1%2, type %3, refinement %4, file %5, dxf unit %6")
                             .arg(unitOffer(unit),
                                  occurrences ? QStringLiteral(", coordinates design (design | component)") : QString(),
-                                 exportTypeKey(start), kRefinements[refined], path);
+                                 exportTypeKey(start), kRefinements[refined], path, unitOffer(dxfUnit));
 
   prepareModal(&dialog);
   while (execDialog(&dialog) == QDialog::Accepted) {
@@ -313,6 +320,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     choice.ascii = stlFormat->currentIndex() == 1;
     choice.selectedOnly = bodies->currentIndex() == 1;
     choice.sketch = sketchBox->currentData().toString();
+    choice.dxfUnit = dxfUnit->currentText();
     if (occurrences) {
       choice.coordinates = coordinates->currentData().toString();
     }

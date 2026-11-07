@@ -1,0 +1,525 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a walk whose contact crosses a tangent edge onto a face of the
+spine's end that the ball cannot touch rolls on over its face's surface,
+is cut by that face and ends in a point on the spine's last edge
+(mitcad#1413).
+
+The case: a hub's foot on a flange rounded with 1 between holes whose
+walls touch the hub (two reported designs' item replayed). Each hole's rim
+was rounded with 0.5 before: a torus around the hole and, between the
+torus and the hub, a face along the hub's foot (its edge with the hub the
+spine's last edge, up to the vertex where the hole touches the hub), tangent
+to the torus across an edge and bending towards the ball more sharply than
+the ball. The walk along the foot reached the torus with its contact on the
+flange, then that face, where the walk reframed onto it and failed: no ball
+of 1 rolls on it. The stored body rolls the ball on over the torus's own
+surface past that edge, between it and the hub, cuts the blend by that face
+from the crossing, and ends it in a point on the spine's last edge where
+the cut meets the contact on the hub; the edge stays sharp from there to
+the vertex.
+
+- ChFi3d_TightTangentFaceAtEnd: a contact that left its face F (along no
+  edge of the spine) across a tangent edge onto a face B along the spine
+  holding the spine's end vertex the walk heads for, where ballCannotTouch
+  says no ball of the radius touches B.
+- StartSol does not reframe onto such a face, and PerformSetOfSurfOnElSpine
+  ends the walk in that direction there (or turns back from a start inside).
+- WalkedCutToEnd takes such a B as it takes a face at an angle: it walks on
+  with F's surface unbounded up to where the other contact reaches its edge
+  with B, and cuts the piece by B. The cut starts where the surfaces meet
+  tangentially, where GeomInt_IntSS's line stops 0.006 mm short of the
+  crossing; ChFi3d_CutBySections finds it section by section of the walked
+  surface (the first crossing of B's surface from the other contact's
+  side), with its p-curve on B through the feet of its points
+  (ChFi3d_KPartCutPiece's BySections).
+- PerformFilletOnVertex makes no corner at a vertex where every stripe
+  ends in a point of its own short of it (the stripes on both sides of the
+  vertex where a hole touches the hub).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -5064,6 +5064,7 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+   bool                         nondegenere      = true;
+   bool                         toujoursdegenere = true;
+   bool                         isfirst          = false;
++  bool                         aAllPointsShort  = true;
+   // (Several fillets ending at the vertex, each vanishing there: each its
+   // contacts within a hundredth of its radius of the vertex, its faces
+   // tangent there, or already ending in a point at it.)
+@@ -5147,6 +5148,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+     }
+     const ChFiDS_CommonPoint& CV1 = Fd->Vertex(isfirst, 1);
+     const ChFiDS_CommonPoint& CV2 = Fd->Vertex(isfirst, 2);
++    // (Each stripe ending in a point of its own short of the vertex, made
++    // with the stripe: mitcad#1413's ends on both sides of a vertex.)
++    aAllPointsShort = aAllPointsShort && sp->Status(isfirst) == ChFiDS_FreeBoundary
++                      && CV1.Point().IsEqual(CV2.Point(), 0)
++                      && CV1.Point().Distance(BRep_Tool::Pnt(Vtx))
++                           > std::max(CV1.Tolerance(), BRep_Tool::Tolerance(Vtx));
+     // Is it always degenerated ?
+     if (CV1.Point().IsEqual(CV2.Point(), 0))
+     {
+@@ -5321,10 +5328,10 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+   }
+   else
+   { // Single case processing
+-    if (i == 1 && sp->Status(isfirst) == ChFiDS_FreeBoundary)
++    if ((i == 1 && sp->Status(isfirst) == ChFiDS_FreeBoundary) || aAllPointsShort)
+     {
+       // (A stripe ending in a point before the vertex, its end made with
+-      // the stripe: nothing to do here.)
++      // the stripe, or several each ending so: nothing to do here.)
+       return;
+     }
+     if (toujoursdegenere)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -53,6 +53,8 @@
+ #include <ChFiKPart_ComputeData.hxx>
+ #include <ElCLib.hxx>
+ #include <Extrema_ExtPS.hxx>
++#include <Extrema_GenLocateExtPS.hxx>
++#include <Extrema_POnSurf.hxx>
+ #include <Extrema_LocateExtPC.hxx>
+ #include <Extrema_POnCurv.hxx>
+ #include <Geom2d_Curve.hxx>
+@@ -1734,6 +1736,56 @@ static bool ChFi3d_ArcOntoSpineFaces(const occ::handle<ChFiDS_SurfData>& SD,
+   return anyFace;
+ }
+ 
++// Whether the contact of SD's end (its start with isFirst) on side ons left
++// its face F across a tangent edge onto a face B that holds the spine's end
++// vertex the walk heads for and borders an edge of the spine, F bordering
++// none, where the ball of the rounding's constant radius cannot touch B (it
++// bends towards the ball more sharply than the ball, ballCannotTouch): an
++// earlier rounding of a hole's rim, tighter than the ball, where the hole
++// meets the face of the other contact tangentially at the spine's end
++// vertex (mitcad#1413). The ball rolls on over F's surface past that edge
++// and B cuts the blend (WalkedCutToEnd). B is given back.
++static bool ChFi3d_TightTangentFaceAtEnd(const TopOpeBRepDS_DataStructure&   DStr,
++                                         const occ::handle<ChFiDS_Spine>&    Spine,
++                                         const occ::handle<ChFiDS_SurfData>& SD,
++                                         const bool                          isFirst,
++                                         const int                           ons,
++                                         const ChFiDS_Map&                   EFMap,
++                                         const ChFiDS_Map&                   VFMap,
++                                         TopoDS_Face&                        B)
++{
++  const occ::handle<ChFiDS_FilSpine> fsp = occ::down_cast<ChFiDS_FilSpine>(Spine);
++  if (SD.IsNull() || fsp.IsNull() || !fsp->IsConstant() || Spine->IsPeriodic() || SD->Index(ons) <= 0
++      || SD->Index(3 - ons) <= 0 || SD->IsOnCurve(1) || SD->IsOnCurve(2))
++  {
++    return false;
++  }
++  const ChFiDS_CommonPoint& CP = SD->Vertex(isFirst, ons);
++  const TopoDS_Vertex       V  = isFirst ? Spine->FirstVertex() : Spine->LastVertex();
++  if (!CP.IsOnArc() || CP.IsVertex() || !EFMap.Contains(CP.Arc()) || V.IsNull() || !VFMap.Contains(V))
++  {
++    return false;
++  }
++  const TopoDS_Edge E  = TopoDS::Edge(CP.Arc());
++  const TopoDS_Face F  = TopoDS::Face(DStr.Shape(SD->Index(ons)));
++  TopoDS_Face       Fb = otherFace(EFMap, E, F);
++  if (Fb.IsNull() || Fb.IsSame(F) || !containsSameShape(VFMap(V), Fb) || !faceAlongSpine(Spine, Fb, EFMap)
++      || faceAlongSpine(Spine, F, EFMap) || !ChFi3d::IsTangentFaces(E, F, Fb))
++  {
++    return false;
++  }
++  Fb.Orientation(TopAbs_FORWARD);
++  const occ::handle<Geom2d_Curve> aPC = getCurveOnSurface(edgeInFace(E, Fb), Fb);
++  if (aPC.IsNull()
++      || !ballCannotTouch(F, CP.Point(), SD->Vertex(isFirst, 3 - ons).Point(), Fb, aPC->Value(CP.ParameterOnArc()),
++                          fsp->Radius()))
++  {
++    return false;
++  }
++  B = Fb;
++  return true;
++}
++
+ // Whether the blend of SD, rolling on side s on an edge Er of its face B,
+ // ends (at its start with isFirst) with that contact at a vertex A of Er
+ // other than the spine's end vertex Bout, where a face W, neither B, the
+@@ -3551,6 +3603,16 @@ bool ChFi3d_Builder::StartSol(
+           prepareDefaultReturn();
+           return false;
+         }
++        // (Nor does such a face along the spine that holds its end vertex
++        // where the contact comes onto it from a face along none: the ball
++        // rolls on over F's surface and that face cuts it, WalkedCutToEnd.)
++        TopoDS_Face aTight;
++        if (!Fv.IsSame(F) && ChFi3d_TightTangentFaceAtEnd(DStr, Spine, SD, isfirst, ons, myEFMap, myVFMap, aTight))
++        {
++          HSBis.Nullify();
++          prepareDefaultReturn();
++          return false;
++        }
+       }
+       return true;
+     }
+@@ -5966,6 +6028,37 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     double                       aBridgeEnd = 0.;
+     if ((!Ok1 && HC1.IsNull()) || (!Ok2 && HC2.IsNull()))
+     {
++      const bool aLost1 = !Ok1 && HC1.IsNull(), aLost2 = !Ok2 && HC2.IsNull();
++      // (The side's face beyond is a face along the spine at its end
++      // vertex that the ball cannot touch, ChFi3d_TightTangentFaceAtEnd:
++      // the walk this way ends here, and WalkedCutToEnd rolls the ball on
++      // over the side's face, cut by that face, up to a point.)
++      TopoDS_Face aTight;
++      if (!Simul && aLost1 != aLost2 && !ref.IsNull() && !Inside
++          && ChFi3d_TightTangentFaceAtEnd(DStr, Spine, ref, !forward, aLost1 ? 1 : 2, myEFMap, myVFMap, aTight))
++      {
++        if (!forward || !complete)
++        {
++          break;
++        }
++        // (Forward from a start inside: on back from that start.)
++        ref     = Stripe->SetOfSurfData()->Sequence().First();
++        forward = false;
++        First   = Firstsov;
++        if (aSavedValid)
++        {
++          RestoreSide(aSaved[0], HS1, HSref1, HC1, HCref1);
++          RestoreSide(aSaved[1], HS2, HSref2, HC2, HCref2);
++          obstacleon1 = aSavedObst[0];
++          obstacleon2 = aSavedObst[1];
++          decroch1    = false;
++          decroch2    = false;
++        }
++        complete = false;
++        Last     = wf;
++        fini     = (First - wf) <= 10. * tolesp;
++        continue;
++      }
+       if ((intf && !forward) || (intl && forward))
+       {
+         if (!Ok1)
+@@ -7957,6 +8050,227 @@ static bool ChFi3d_KPartSectionCutAt(const TopOpeBRepDS_DataStructure&   DStr,
+   return true;
+ }
+ 
++static occ::handle<Geom_Surface> ChFi3d_WideSurface(const TopoDS_Face& F);
++
++//=======================================================================
++// function : ChFi3d_CutBySections
++// purpose  : The cut of a walked blend's surface S by face B's surface,
++//            from uv1 to uv2 on S, found section by section: on each
++//            isoline of S's coordinate along the spine (Coord: 1 for u, 2
++//            for v) between theirs, the point where the section crosses
++//            B's surface (unbounded, ChFi3d_WideSurface). Where the cut
++//            starts at the point where the blend's contact crosses onto B
++//            across a tangent edge, B bending towards the ball more sharply
++//            than the ball (mitcad#1413), the surfaces meet tangentially
++//            there and GeomInt_IntSS's line stops short of it (by 0.006 mm
++//            there); section by section the cut reaches it: on each
++//            section the first crossing from the other contact's side (its
++//            coordinate across aOther; near the contact crossing onto B the
++//            surfaces are nearly tangent), with its foot on B. Cc runs from
++//            uv1's point to uv2's (uvB1 and uvB2 on B), with Ps its p-curve
++//            on S and Pc its p-curve on B's surface through the feet.
++//=======================================================================
++
++static bool ChFi3d_CutBySections(const occ::handle<Geom_Surface>& S,
++                                 const TopoDS_Face&               B,
++                                 const gp_Pnt2d&                  uv1,
++                                 const gp_Pnt2d&                  uvB1,
++                                 const gp_Pnt2d&                  uv2,
++                                 const gp_Pnt2d&                  uvB2,
++                                 const int                        Coord,
++                                 const double                     aOther,
++                                 const double                     tol3d,
++                                 occ::handle<Geom_Curve>&         Cc,
++                                 occ::handle<Geom2d_Curve>&       Ps,
++                                 occ::handle<Geom2d_Curve>&       Pc,
++                                 double&                          tolreached)
++{
++  TopoDS_Face BF = B;
++  BF.Orientation(TopAbs_FORWARD);
++  const occ::handle<Geom_Surface> SB = BRep_Tool::Surface(BF);
++  const occ::handle<Geom_Surface> SW = ChFi3d_WideSurface(BF);
++  if (S.IsNull() || SB.IsNull() || SW.IsNull())
++  {
++    return false;
++  }
++  double su1 = 0., su2 = 0., sv1 = 0., sv2 = 0.;
++  S->Bounds(su1, su2, sv1, sv2);
++  // (The coordinate across the spine runs from one contact to the other.)
++  const double aLo = Coord == 1 ? sv1 : su1, aHi = Coord == 1 ? sv2 : su2;
++  const double c1 = Coord == 1 ? uv1.X() : uv1.Y(), c2 = Coord == 1 ? uv2.X() : uv2.Y();
++  const double a1 = Coord == 1 ? uv1.Y() : uv1.X(), a2 = Coord == 1 ? uv2.Y() : uv2.X();
++  if (std::abs(c2 - c1) <= Precision::PConfusion() || Precision::IsInfinite(aLo) || Precision::IsInfinite(aHi)
++      || aHi - aLo <= Precision::PConfusion())
++  {
++    return false;
++  }
++  const auto pointAt = [&](const double a, const double c) { return Coord == 1 ? S->Value(c, a) : S->Value(a, c); };
++  // (The signed distance of a point of S from B's surface, and its foot
++  // there: found from the last one, the points moving little from one to
++  // the next.)
++  GeomAdaptor_Surface    aGW(SW);
++  Extrema_GenLocateExtPS aLoc(aGW, Precision::PConfusion(), Precision::PConfusion());
++  bool                   aSeeded = false;
++  double                 uSeed = 0., vSeed = 0.;
++  const auto             distanceAt = [&](const double a, const double c, double& d) {
++    const gp_Pnt P = pointAt(a, c);
++    double       u = 0., v = 0.;
++    bool         located = false;
++    if (aSeeded)
++    {
++      aLoc.Perform(P, uSeed, vSeed);
++      if (aLoc.IsDone())
++      {
++        aLoc.Point().Parameter(u, v);
++        located = true;
++      }
++    }
++    if (!located)
++    {
++      GeomAPI_ProjectPointOnSurf aPr(P, SW);
++      if (aPr.NbPoints() == 0)
++      {
++        return false;
++      }
++      aPr.LowerDistanceParameters(u, v);
++    }
++    gp_Pnt Q;
++    gp_Vec DU, DV;
++    SW->D1(u, v, Q, DU, DV);
++    const gp_Vec aN = DU.Crossed(DV);
++    if (aN.Magnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    aSeeded = true;
++    uSeed   = u;
++    vSeed   = v;
++    d       = gp_Vec(Q, P).Dot(aN.Normalized());
++    return true;
++  };
++  // The sections, closer together towards the ends (where the cut may leave
++  // a contact tangentially): on each the first crossing from the other
++  // contact's side, refined, and its foot on B.
++  const bool                     fromHi = std::abs(aOther - aHi) <= std::abs(aOther - aLo);
++  const int                      n = 48, nbs = 200;
++  NCollection_Sequence<double>   aA, aC;
++  NCollection_Sequence<gp_Pnt2d> aF;
++  aA.Append(a1);
++  aC.Append(c1);
++  aF.Append(uvB1);
++  for (int i = 1; i < n; i++)
++  {
++    const double c       = c1 + (c2 - c1) * 0.5 * (1. - std::cos(M_PI * i / n));
++    double       dPrev   = 0., aPrevS = 0.;
++    bool         hasPrev = false, found = false;
++    double       aRoot   = 0.;
++    // (The section's first foot found anew.)
++    aSeeded = false;
++    for (int k = 0; k <= nbs && !found; k++)
++    {
++      const double a = fromHi ? aHi - (aHi - aLo) * k / nbs : aLo + (aHi - aLo) * k / nbs;
++      double       d = 0.;
++      if (!distanceAt(a, c, d))
++      {
++        hasPrev = false;
++        continue;
++      }
++      if (hasPrev && (d == 0. || (d > 0.) != (dPrev > 0.)))
++      {
++        double lo = aPrevS, hi = a, dlo = dPrev;
++        for (int it = 0; it < 60; it++)
++        {
++          const double m  = 0.5 * (lo + hi);
++          double       dm = 0.;
++          if (!distanceAt(m, c, dm))
++          {
++            break;
++          }
++          if ((dm > 0.) == (dlo > 0.))
++          {
++            lo  = m;
++            dlo = dm;
++          }
++          else
++          {
++            hi = m;
++          }
++        }
++        aRoot = 0.5 * (lo + hi);
++        double d0 = 0.;
++        found = distanceAt(aRoot, c, d0);
++      }
++      dPrev   = d;
++      aPrevS  = a;
++      hasPrev = true;
++    }
++    if (found)
++    {
++      aA.Append(aRoot);
++      aC.Append(c);
++      aF.Append(gp_Pnt2d(uSeed, vSeed));
++    }
++  }
++  aA.Append(a2);
++  aC.Append(c2);
++  aF.Append(uvB2);
++  if (aA.Length() < n / 2)
++  {
++    return false;
++  }
++  // Through the points, by their chord lengths, on S and on B.
++  const int                                  np      = aA.Length();
++  occ::handle<NCollection_HArray1<gp_Pnt2d>> aPnts   = new NCollection_HArray1<gp_Pnt2d>(1, np);
++  occ::handle<NCollection_HArray1<gp_Pnt2d>> aFeet   = new NCollection_HArray1<gp_Pnt2d>(1, np);
++  occ::handle<NCollection_HArray1<double>>   aParams = new NCollection_HArray1<double>(1, np);
++  double                                     aLen    = 0.;
++  for (int i = 1; i <= np; i++)
++  {
++    const double a = aA.Value(i), c = aC.Value(i);
++    aPnts->SetValue(i, Coord == 1 ? gp_Pnt2d(c, a) : gp_Pnt2d(a, c));
++    aFeet->SetValue(i, aF.Value(i));
++    if (i > 1)
++    {
++      const double d = pointAt(a, c).Distance(pointAt(aA.Value(i - 1), aC.Value(i - 1)));
++      if (d <= Precision::Confusion())
++      {
++        return false;
++      }
++      aLen += d;
++    }
++    aParams->SetValue(i, aLen);
++  }
++  Geom2dAPI_Interpolate anInterpS(aPnts, aParams, false, Precision::PConfusion());
++  anInterpS.Perform();
++  Geom2dAPI_Interpolate anInterpB(aFeet, aParams, false, Precision::PConfusion());
++  anInterpB.Perform();
++  if (!anInterpS.IsDone() || !anInterpB.IsDone())
++  {
++    return false;
++  }
++  Ps = anInterpS.Curve();
++  Pc = anInterpB.Curve();
++  occ::handle<Geom2dAdaptor_Curve> aHPs = new Geom2dAdaptor_Curve(Ps, 0., aLen);
++  occ::handle<GeomAdaptor_Surface> aHS  = new GeomAdaptor_Surface(S);
++  Adaptor3d_CurveOnSurface         aCOS(aHPs, aHS);
++  double                           aMaxDev = 0., anAvDev = 0.;
++  GeomLib::BuildCurve3d(Precision::Confusion(), aCOS, 0., aLen, Cc, aMaxDev, anAvDev);
++  if (Cc.IsNull())
++  {
++    return false;
++  }
++  // (The tolerance covers the curve's distance from both p-curves.)
++  double aDev = aMaxDev;
++  for (int i = 0; i <= 200; i++)
++  {
++    const double   t = aLen * i / 200.;
++    const gp_Pnt2d p = Pc->Value(t);
++    aDev             = std::max(aDev, SB->Value(p.X(), p.Y()).Distance(Cc->Value(t)));
++  }
++  tolreached = std::max(tol3d, 1.5 * aDev);
++  return true;
++}
++
+ // An end of a piece cut by the face beyond given as such: where the cut
+ // meets the other contact (the piece ends in a point there).
+ struct ChFi3d_KPartCutEnd
+@@ -7992,7 +8306,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+                                                          const ChFi3d_KPartCutEnd* GivenEnd   = nullptr,
+                                                          const NCollection_List<TopoDS_Shape>* CutEdges = nullptr,
+                                                          const bool AtFullEnds = false,
+-                                                         const bool Clamped    = false)
++                                                         const bool Clamped    = false,
++                                                         const bool BySections = false)
+ {
+   const int opp = 3 - ons;
+   // (A walked Full's sections are not those through the spine's points: an
+@@ -8140,21 +8455,42 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+     try
+     {
+       OCC_CATCH_SIGNALS
+-      computed = ChFi3d_KPartCutCurve(S,
+-                                      B,
+-                                      Pend[0],
+-                                      gp_Pnt2d(Par[0](1), Par[0](2)),
+-                                      gp_Pnt2d(Par[0](3), Par[0](4)),
+-                                      Pend[1],
+-                                      aCoord,
+-                                      std::min(cO, cN),
+-                                      std::max(cO, cN),
+-                                      tol3d,
+-                                      Cc,
+-                                      Ps,
+-                                      Pc,
+-                                      tolreached,
+-                                      aExpected);
++      // (A cut from a point where the contact crosses onto B tangentially,
++      // both ends given: section by section.)
++      if (BySections && GivenStart != nullptr && GivenEnd != nullptr)
++      {
++        computed = ChFi3d_CutBySections(S,
++                                        B,
++                                        gp_Pnt2d(Par[0](1), Par[0](2)),
++                                        gp_Pnt2d(Par[0](3), Par[0](4)),
++                                        gp_Pnt2d(Par[1](1), Par[1](2)),
++                                        gp_Pnt2d(Par[1](3), Par[1](4)),
++                                        aCoord,
++                                        cO,
++                                        tol3d,
++                                        Cc,
++                                        Ps,
++                                        Pc,
++                                        tolreached);
++      }
++      else
++      {
++        computed = ChFi3d_KPartCutCurve(S,
++                                        B,
++                                        Pend[0],
++                                        gp_Pnt2d(Par[0](1), Par[0](2)),
++                                        gp_Pnt2d(Par[0](3), Par[0](4)),
++                                        Pend[1],
++                                        aCoord,
++                                        std::min(cO, cN),
++                                        std::max(cO, cN),
++                                        tol3d,
++                                        Cc,
++                                        Ps,
++                                        Pc,
++                                        tolreached,
++                                        aExpected);
++      }
+     }
+     catch (Standard_Failure const&)
+     {
+@@ -17046,7 +17382,13 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+   const TopoDS_Edge         E   = TopoDS::Edge(CPn.Arc());
+   const TopoDS_Face         N   = TopoDS::Face(DStr.Shape(P->Index(ons)));
+   const TopoDS_Face         Fo  = TopoDS::Face(DStr.Shape(P->Index(opp)));
+-  if (ChFi3d::IsTangentFaces(E, N, B) || Fo.IsSame(B) || N.IsSame(B))
++  // (B tangent to N across E where the ball cannot touch B, the walk having
++  // stopped there, ChFi3d_TightTangentFaceAtEnd: as across an edge at an
++  // angle.)
++  TopoDS_Face aTight;
++  if ((ChFi3d::IsTangentFaces(E, N, B)
++       && !(ChFi3d_TightTangentFaceAtEnd(DStr, Spine, P, isFirst, ons, myEFMap, myVFMap, aTight) && aTight.IsSame(B)))
++      || Fo.IsSame(B) || N.IsSame(B))
+   {
+     return false;
+   }
+@@ -17227,7 +17569,11 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+                              aNone,
+                              tolapp3d,
+                              isFirst ? &anEnd : &aJunction,
+-                             isFirst ? &aJunction : &anEnd);
++                             isFirst ? &aJunction : &anEnd,
++                             nullptr,
++                             false,
++                             false,
++                             !aTight.IsNull() && aTight.IsSame(B));
+   }
+   catch (Standard_Failure const&)
+   {

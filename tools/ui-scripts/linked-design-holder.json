@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The holder of tools/ui-linked-design-test.sh (mitcad#1416), run in the folder of part.mitcad: the part linked, its cube 1000 mm3."},
+  {"cmd": "insert_component", "path": "part.mitcad"},
+  {"expect": {"bodies": 1, "instances": 1, "world_volume": 1000}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"uid": "C1", "name": "part", "link": "part.mitcad"}]}}}
+]

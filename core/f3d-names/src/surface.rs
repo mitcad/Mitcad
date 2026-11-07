@@ -388,6 +388,9 @@ impl<'a> Patch<'a> {
                 // built from, where it is exact.
                 let vs = match from {
                     Curve::Interpolated { params, .. } => params.clone(),
+                    // A thread's flank between two helices: four grid lines
+                    // a span of their B-splines (48 a turn).
+                    Curve::Helix(h) => even(range, (4 * h.spans).clamp(32, 20_000)),
                     _ => even(range, 512),
                 };
                 Ok(Patch {

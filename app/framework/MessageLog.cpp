@@ -29,9 +29,14 @@ int MessageLog::lifetime(NoticeLevel level) {
   }
 }
 
-bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time) {
+bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time,
+                     const QString& action) {
+  // A message with a button waits for its answer (mitcad#1416): a hint, a
+  // progress line or a cleared status line does not take it away.
+  const bool waiting = m_full && !m_full->action.isEmpty() &&
+                       (text.isEmpty() || level == NoticeLevel::Hint || level == NoticeLevel::Progress);
   if (text.isEmpty()) {
-    if (m_full && !isProblem(m_full->level)) {
+    if (m_full && !isProblem(m_full->level) && !waiting) {
       m_full.reset();
     }
     return false;
@@ -41,14 +46,15 @@ bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feat
       m_entries.front().feature == feature) {
     MessageEntry& same = m_entries.front();
     same.time = time;
+    same.action = action;
     ++same.count;
   } else {
-    m_entries.push_front({time, level, text, feature, 1});
+    m_entries.push_front({time, level, text, feature, 1, action});
     while (static_cast<int>(m_entries.size()) > kMaxEntries) {
       m_entries.pop_back();
     }
   }
-  if (m_full && rank(m_full->level) > rank(level)) {
+  if ((m_full && rank(m_full->level) > rank(level)) || waiting) {
     return false; // the problem shown stays; this one is in the history
   }
   m_full = m_entries.front();

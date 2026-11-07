@@ -93,6 +93,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 participants: Vec::new(),
                 replaces: Vec::new(),
                 component: Some(component),
+                cages: Vec::new(),
             })
             .map_err(|e| e.to_string())?;
         self.track_bodies(&before, imported.feature.uid);

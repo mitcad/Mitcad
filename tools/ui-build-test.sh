@@ -84,6 +84,10 @@
 #      profile on the root's XY (Enter: grounded at its origin), clicked,
 #      Move 100 mm: it moves, the panel says it stays grounded, and the
 #      saved design has it grounded.
+#  12. Middle of Gap (mitcad#1401): a cross member at the middle of a
+#      side; a click near the middle of one half snaps to the middle of
+#      that free stretch (its marker, marked as taken; From Middle of Gap,
+#      Offset 0) and places the profile there.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-build-test.sh
@@ -1490,5 +1494,68 @@ print([o.get("grounded", False) for o in doc["occurrences"] if o["uid"] == sys.a
   "$WORK/grounded.mitcad" "${P12##*/}") || ui_fail "cannot read the saved design"
 [ "$GROUNDED" = "[True]" ] || ui_fail "the moved profile ${P12##*/} is not grounded: $GROUNDED"
 echo "ok   the moved profile is still grounded"
+ui_stop_app
+
+echo "--- 12. Middle of Gap: a profile centred in a free stretch of a side"
+# mitcad#1401: a side with a cross member at its middle; a click near the
+# middle of one half snaps to the middle of that free stretch (its marker
+# "middle of gap", marked as the snap taken), From Middle of Gap, Offset
+# 0, and the profile is placed there.
+ui_start_app --open "$WORK/start.mitcad" --no-native-dialogs
+ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_mark
+ui_step "Profile (command search)"         ui_command "Profile"
+ui_expect_new "Command Profile started" "Profile started"
+ui_step "a typed length of 600"            ui_type_in "Panel Profile input length" "600"
+ui_show_origin
+ui_step "on the XY plane"                  ui_click_logged "Datum xy"
+ui_expect_new "Inspect Profile: place " "the preview"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the side placed" 30
+B13=$(placed_body)
+[ -n "$B13" ] || ui_fail "no body of the side"
+refresh_picks "Profile"
+SIDE13=$(faces_of "$B13" "$SIDE" | head -1)
+[ -n "$SIDE13" ] || ui_fail "no side of the profile ($B13) to pick"
+ui_mark
+ui_step "its side"                         pick_face "$B13" "$SIDE13"
+ui_expect_new "Inspect Profile: place side" "on the side"
+ui_step "length 100"                       ui_type_in "Panel Profile input length" "100"
+ui_mark
+MIDDLE13=$(marker_in_middle "middle")
+[ -n "$MIDDLE13" ] || ui_fail "no middle marker in the middle of the view"
+ui_step "a click at the side's middle"     xdotool mousemove $MIDDLE13 click 1
+ui_expect_new "BUILD side click: From Middle, Offset 0 mm (middle)" "the cross member at the side's middle"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the cross member placed" 30
+refresh_picks "Profile"
+ui_mark
+ui_step "the side again"                   pick_face "$B13" "$SIDE13"
+ui_expect_new "Inspect Profile: place side" "on the side"
+ui_mark
+GAP13=$(marker_in_middle "middle of gap")
+[ -n "$GAP13" ] || ui_fail "no middle of gap marker in the middle of the view"
+ui_mark
+ui_step "a click at a half's middle"       xdotool mousemove $GAP13 click 1
+ui_expect_new "BUILD side click: From Middle of Gap, Offset 0 mm (gap)" \
+  "the click snaps to the middle of the free stretch"
+expect_inspect "; snap gap at 0.0 mm from gap" "the preview centred in the free stretch"
+taken=""
+for _ in $(seq 1 25); do
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Preview marker Profile > middle of gap world " && {
+    taken=1
+    break
+  }
+  sleep 0.2
+done
+[ -n "$taken" ] || ui_fail "the snap taken is not marked (> middle of gap)"
+echo "ok   the snap taken is marked"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the profile placed in the middle of the free stretch" 30
+ui_step "Close (Escape)"                   ui_key Escape
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 ui_finish "the BUILD tab"

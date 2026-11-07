@@ -30,6 +30,8 @@ pub(crate) mod profiled;
 pub(crate) mod frames;
 // Fasteners chosen and swapped (mitcad#497).
 pub(crate) mod swap;
+// The middle of a free stretch of a side (mitcad#1401).
+pub(crate) mod gap;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -123,4 +125,6 @@ pub mod internal {
     pub use crate::wood::{
         Fastening, Member, WoodPlan, WoodSize, shaft_axis_is_aligned, wood_json,
     };
+    // The middle of a free stretch of a side (mitcad#1401).
+    pub use crate::gap::{SideGap, Standing};
 }

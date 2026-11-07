@@ -16,3 +16,5 @@ mod template_tests;
 mod cut_sheet_tests;
 // Export Face as DXF (mitcad#1049).
 mod face_dxf_tests;
+// The DXF exports' length unit (mitcad#1408).
+mod dxf_units_tests;

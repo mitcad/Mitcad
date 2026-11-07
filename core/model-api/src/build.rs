@@ -669,7 +669,7 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                         })
                     })
                     .collect();
-                json!({
+                let mut part = json!({
                     "component": info.component,
                     "name": info.name,
                     "role": info.record.role.as_str(),
@@ -716,7 +716,10 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     "member": info.record.member,
                     "framing": info.record.framing.as_ref().map(|f| json!({
                         "definition": f["frame"], "count": f["count"]})),
-                })
+                });
+                // Centred between these profiles (mitcad#1401).
+                part["gap"] = json!(info.record.gap);
+                part
             })
             .collect();
         json!({"parts": parts})
@@ -1159,6 +1162,14 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
                              "foot": active.apply_point(joint.frame_b.translation),
                              "normal": active.apply_vector(mitcad_model::internal::build::z_axis(&to_world)),
                              "along": active.apply_vector(mitcad_model::internal::build::x_axis(&to_world))});
+            // The free stretch it stands in (mitcad#1401): its ends from
+            // end A and the profiles around it, for a change of From.
+            snapped["gap"] = match &side.gap {
+                Some(g) => json!({"start": g.start, "end": g.end,
+                                  "a": g.a.as_ref().map(|s| s.component),
+                                  "b": g.b.as_ref().map(|s| s.component)}),
+                None => Value::Null,
+            };
         }
         // On an end (mitcad#417): straight or turned, the turns the panel
         // offers, a corner's offset and the mitre it gets.

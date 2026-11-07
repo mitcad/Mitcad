@@ -119,6 +119,16 @@ lacks the third field. The layouts below start after the header.
 
 Linked lists end with -1; the coedges of a loop form a ring (next of the
 last is the first). No `subshell` or `wire` records occur in the corpus.
+A `subshell` (owner shell or subshell, next sibling, first child subshell,
+first face, wire) is read all the same: its faces belong to its shell
+(mitcad_private#198).
+
+**Unknown geometry** (mitcad_private#198): a face whose surface does not
+decode is kept, with its loops, on an unknown surface, and an edge whose
+curve does not decode on an unknown curve, so that the body's topology
+stays closed; the builder leaves them out (the shell is then open, as
+before), and the conversion's issues and counts (`skipped_faces`,
+`unknown_edges`) say so.
 
 **Degenerate edges**: an edge without a curve (pointer -1) occurs at cone
 apexes (presumably also at sphere poles) and starts and ends at the same
@@ -223,15 +233,16 @@ a keyword followed by the record's fields (without the header): `plane`,
 | `exact_int_cur` | version, enum, bs3 curve, fit tolerance, two surfaces, two bs2 curves, ... | exact B-spline |
 | `int_int_cur` | version, enum, bs3 approximation, fit tolerance, the two intersected surfaces, their pcurves, ... | approximation |
 | `blend_int_cur`, `off_int_cur`, `par_int_cur`, `offset_int_cur` | version, enum, bs3 approximation, ... | approximation |
-| `helix_int_cur` | version, range, center, major axis vector, minor axis vector, pitch vector (per turn), taper, axis, ... | sampled and interpolated: `center + major cos t + minor sin t + pitch t / 2pi` |
+| `helix_int_cur` | version, range, center, major axis vector, minor axis vector, pitch vector (per turn), taper, axis, ... | exact (mitcad_private#198; before, sampled and interpolated): `center + (1 + taper t / 2pi) (major cos t + minor sin t) + pitch t / 2pi`, built as the B-spline described below |
 | `exp_par_cur` | bs2 curve, fit tolerance, the surface | not used (OCCT computes pcurves) |
 | `exact_spl_sur` | version, enum, bs3 surface | exact B-spline |
-| `cyl_spl_sur` | version, profile (`intcurve ...` + range), direction vector, point, approximation level enum (0: bs3 surface follows; 2: none), ... | exact: linear extrusion `C(u) + v dir` |
+| `cyl_spl_sur` | version, profile (`intcurve ...` + range), direction vector, point, approximation level enum (0: bs3 surface follows; 2: none), ... | exact: linear extrusion `C(u) + v dir`; of a circle along its normal, a cylinder (mitcad_private#198) |
+| `off_spl_sur` | version, support surface with its ranges, distance, two sense booleans (the first negates the offset's direction), two booleans of an extension prefix (the second gates an extension run), the tail enum: 0 bs3 approximation, 2 none | approximation; without it, the support offset along its parameters' `du x dv` (a plane moved, or OCCT's offset of a B-spline; mitcad_private#198) |
 | `rot_spl_sur` | version, profile, axis point, axis direction, enum, bs3 approximation | approximation |
-| `rb_blend_spl_sur` | version, two sides (support kind text, support surface with its ranges or `null_surface`, support curve or `null_curve`, contact bs2 pcurve, location, bs2 pcurve, extension integer, bs2 pcurve), the slice (spine) curve with its range, two offsets, radius selector, u and v ranges, shape fields, then the tail enum: 0 bs3 approximation, 1 its knots only (summary), 2 none (the u and v intervals) | approximation; without it, or with one too far off, the rolling ball the builder walks along the spine (see below) |
+| `rb_blend_spl_sur` | version, two sides (support kind text, support surface with its ranges or `null_surface`, support curve or `null_curve`, contact bs2 pcurve, location, bs2 pcurve, extension integer, bs2 pcurve), the slice (spine) curve with its range, two offsets, radius selector, u and v ranges, shape fields, then the tail enum: 0 bs3 approximation, 1 its knots only (summary), 2 none (the u and v intervals) | approximation; without it, or with one too far off, the rolling ball the builder walks along the spine (see below); of a constant radius between two planes along a line, or a plane and a cylinder about its normal along a circle, a cylinder or a torus before any approximation (mitcad_private#198) |
 | `loft_spl_sur` | version, section curves, ..., bs3 approximation | approximation |
-| `helix_spl_line` | version, three ranges, helix data as in `helix_int_cur`, two `null_surface`, two `nullbs`, line vector; no approximation | exact up to the sampling (see below) |
-| `helix_spl_circ` | version, two ranges, a phase, a range, helix data as in `helix_int_cur`, two `null_surface`, two `nullbs`, the arc's radius; no approximation | exact up to the sampling (see below) |
+| `helix_spl_line` | version, three ranges, helix data as in `helix_int_cur`, two `null_surface`, two `nullbs`, line vector; no approximation | exact (see below) |
+| `helix_spl_circ` | version, two ranges, a phase, a range, helix data as in `helix_int_cur`, two `null_surface`, two `nullbs`, the arc's radius; no approximation | exact (see below) |
 
 All procedural curves except helices, and all procedural surfaces except
 `helix_spl_line`, `helix_spl_circ` and `cyl_spl_sur` with approximation
@@ -308,10 +319,9 @@ line vector `L`. With `r(v) = major cos v + minor sin v`:
 radius 0.12645 cm); `v` is the helix angle. `L.y` is always 0 (presumably
 tangential). The surface record's u and v ranges bound the face. Since
 motion along a helix is rigid, `S` is the ruled surface between the helices
-of the line's two ends: MitCad samples both at the same angles (48 points
-per turn) and OCCT interpolates a ruled B-spline surface. The faces' edges
-(`helix_int_cur` of the same helices) lie on the built surfaces within the
-edge tolerance.
+of the line's two ends: MitCad makes both exactly (below) and OCCT the
+ruled B-spline surface between them. The faces' edges (`helix_int_cur` of
+the same helices) lie on the built surfaces within the edge tolerance.
 
 **`helix_spl_circ`** (rounded thread roots and crests): a circular arc
 swept along a helix, the arc in the plane of the axis. Layout: version
@@ -322,20 +332,24 @@ With `r(v)` as above, `R = |major|` and `w = u + p`:
 `S(u, v) = center + (1 + taper v / 2pi) r(v) + pitch v / 2pi + rho (-cos w r(v) / R + sin w a)`
 *(verified on two surfaces of a part file, phases 180 and -120 degrees:
 the faces' edges are the helices at the ends of their u ranges)*. MitCad
-samples the helices of the arcs' control points at the same angles (48
-points per turn) and builds rational quadratic arcs through them (one per
-quarter turn of the arc at most), so that each sampled arc is exact.
-A sweep, the ruled flanks beside it and the helical edges are built from
-at most 2160 samples (45 turns at 48 a turn): OCCT's projections and
-booleans make a search grid of a few points per knot span of a spline
-face for each query point, and the replay of parts with threads of 55 and
-81 turns took tens of gigabytes at 48 samples a turn (one of 40 turns
-stays under one). Longer helices are sampled less densely, down to 16
-points a turn (135 turns; longer sweeps are left out, longer flanks and
-edges sampled densely as before). The thread of 55 turns then replays in
-0.25 GB; the part with one of 81 turns (26 a turn) is a valid solid whose
-volume is within 3e-6 of the one sampled at 48 a turn, and it replays
-within the corpus run's 6 GB. Splitting such a face
+makes the helices of the arcs' control points exactly and builds rational
+quadratic arcs through them (one per quarter turn of the arc at most).
+
+**Helices** (mitcad_private#198): a helix, and each helix a thread's
+surface is built from, is exact in the neutral model (`Curve::Helix`); the
+builder gets its B-spline of degree 7 in pieces of equal angle, twelve a
+turn, each matching the helix's point and first three derivatives at its
+ends, joined with interior knots of multiplicity 4 (each pole the blossom
+of a piece at its knots). A twelfth of a turn is within 6e-10 of the
+helix's radius (1e-7 mm at 100 mm). The helices of one surface share
+their range and spans, so their B-splines share their knots. Before, the
+helices were sampled 48 times a turn and interpolated. A sweep and the
+ruled flanks beside it have at most 2160 spans (180 turns; down to eight
+a turn, 270 turns; longer sweeps are left out, longer flanks get twelve a
+turn as edges do): OCCT's projections and booleans make a search grid of a
+few points per knot span of a spline face for each query point, and the
+replay of parts with threads of 55 and 81 turns took tens of gigabytes at
+48 samples a turn (one of 40 turns stays under one). Splitting such a face
 into faces of fewer spans (OCCT's face division) was tried: the replay
 took no less memory, and the volume changed by 0.5 %.
 

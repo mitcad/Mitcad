@@ -412,6 +412,7 @@ fn named_entities(detail: &mut Detail) -> Vec<&mut Fingerprint> {
             | Detail::Coil(_)
             | Detail::Emboss(_)
             | Detail::MoveFace(_)
+            | Detail::Draft(_)
     );
     let refs: Vec<&mut Reference> = match detail {
         Detail::Fillet(f) => f
@@ -448,6 +449,18 @@ fn named_entities(detail: &mut Detail) -> Vec<&mut Fingerprint> {
         Detail::Emboss(e) => e.input_faces.iter_mut().flatten().collect(),
         // The faces a move face moves (mitcad#343).
         Detail::MoveFace(m) => m.faces.iter_mut().flatten().collect(),
+        // A draft's faces, its neutral face and a parting tool's faces
+        // (mitcad#1363).
+        Detail::Draft(d) => {
+            let d = &mut **d;
+            d.input_faces
+                .iter_mut()
+                .flatten()
+                .chain(d.plane.iter_mut())
+                .chain(d.neutral_faces.iter_mut().flatten())
+                .chain(d.parting_tool.iter_mut().flatten())
+                .collect()
+        }
         // A hole's position: its face and the two edges it is measured
         // from.
         Detail::Hole(h) => h

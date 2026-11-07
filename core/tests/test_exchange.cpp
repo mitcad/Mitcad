@@ -106,6 +106,22 @@ bool contains(const std::string& text, const std::string& part) {
   return text.find(part) != std::string::npos;
 }
 
+// The text values of "<key>" in a compact JSON text, sorted.
+std::vector<std::string> json_strings(const std::string& text, const std::string& key) {
+  std::vector<std::string> out;
+  const std::string marker = "\"" + key + "\":\"";
+  for (std::size_t at = text.find(marker); at != std::string::npos; at = text.find(marker, at + 1)) {
+    const std::size_t begin = at + marker.size();
+    const std::size_t end = text.find('"', begin);
+    if (end == std::string::npos) {
+      break;
+    }
+    out.push_back(text.substr(begin, end - begin));
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
 std::string json_path(const fs::path& path) {
   std::string text = path.generic_string();
   std::string out;
@@ -568,6 +584,26 @@ void test_ipt_import(const fs::path& dir) {
     CHECK(!contains(shown, "Body1 (F1.b0): valid solid (hidden)"));
     CHECK(contains(std::string(part->query(R"({"query": "bodies"})")), R"("visible":false)"));
   }
+  // A part with appearances and a design (mitcad#1367, mitcad#1375): the
+  // import with the history and the import of the bodies only give the
+  // cube the part's default appearance and its top and its face x = 10 mm
+  // their own, the same in both.
+  const fs::path looks = dir / "appearances.ipt";
+  mitcad::bridge::ipt_write_test_appearance_file(looks.string());
+  std::vector<std::vector<std::string>> appearances;
+  for (const char* options : {R"({"text": true})", R"({"text": true, "bodies_only": true})"}) {
+    auto part = mitcad::new_document();
+    const std::string imported(part->import_ipt(looks.string(), options));
+    CHECK(contains(imported, "Imported 1 bodies of appearances.ipt (1 solids, 1 valid; 0 not built)"));
+    CHECK(contains(imported, "appearances: bodies 1/1, faces 1/1"));
+    const std::string listed(part->query(R"({"query": "bodies"})"));
+    CHECK(contains(listed, R"("face_appearances")"));
+    appearances.push_back(json_strings(listed, "appearance"));
+  }
+  // The body's and its two faces'.
+  CHECK(appearances.size() == 2);
+  CHECK(appearances[0].size() == 3);
+  CHECK(appearances[0] == appearances[1]);
 }
 
 // The number after "<key>": in a JSON text from `from` on.

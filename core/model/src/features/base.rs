@@ -90,6 +90,11 @@ pub struct BaseBody {
     /// likewise; none: the faces of the bodies before it counted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_face: Option<u32>,
+    /// The control cage its faces were made from, kept as data (an
+    /// imported Form body, mitcad#1365; [`super::cage`]). Not part of the
+    /// body's evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cage: Option<Box<super::cage::ControlCage>>,
 }
 
 impl<P> BaseDef<P> {
@@ -120,6 +125,7 @@ impl<P> BaseDef<P> {
 
     /// Writes the definition to a fingerprint (P7d): what its serde form
     /// holds, with each body's B-rep data by the data's own fingerprint.
+    /// A body's cage is left out: it does not change the body.
     pub(crate) fn fingerprint(&self, fingerprint: &mut crate::fingerprint::Fingerprint) {
         fingerprint.u64(self.bodies.len() as u64);
         for body in &self.bodies {
@@ -194,6 +200,10 @@ impl FeatureInfo for BaseDef {
                 return Err(format!(
                     "bodies[{i}]: color components must be between 0 and 1, got {color:?}"
                 ));
+            }
+            if let Some(cage) = &body.cage {
+                cage.check()
+                    .map_err(|e| format!("bodies[{i}]: its cage: {e}"))?;
             }
             if body.mesh && self.operation != Operation::NewBody {
                 return Err(format!(

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/commands/MaterialCommands.cpp app/commands/MaterialBinding.cpp app/browser/LibraryPicker.cpp app/browser/BrowserController.cpp app/browser/BrowserMaterialMenu.cpp app/framework/CommandPanel.cpp app/framework/CommandSession.cpp app/print core/model tools/cli
+# check-all sources: app/commands/MaterialCommands.cpp app/commands/MaterialBinding.cpp app/browser/LibraryPicker.cpp app/browser/BrowserController.cpp app/browser/BrowserMaterialMenu.cpp app/framework/CommandPanel.cpp app/framework/CommandSession.cpp app/files/MainWindowPrint.cpp app/print core/model tools/cli
 # The Material and Appearance tools (mitcad#1059) through the real UI, on
 # three boxes of the default material (Steel), a material of the design's
 # own (Acme PETG), a user library with Shop PETG, the text parameter Color
@@ -24,6 +24,12 @@
 #     (Acme PETG).
 #   - The windows: Edit Materials and Edit Appearances open with no Assign
 #     and no assignment panel.
+#   - Edit Materials… last in the Material tool's picker (mitcad#1415):
+#     Body2 picked, Shop PETG chosen, Edit Materials… (typing Edit, Enter)
+#     opens the Materials manager on Shop PETG while the panel stays open;
+#     its copy in My library, renamed Bench PETG, is offered once the
+#     manager closes, and OK gives it to Body2, still picked, in one undo
+#     step.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-material-tool-test.sh
@@ -76,6 +82,19 @@ not_since() {
     ui_fail "$2: '$1' is in the log"
   fi
   echo "ok   $2"
+}
+
+# picker_edit button picker entry: the picker opened from its button (after
+# a ui_mark), its last entry (mitcad#1415) found by typing Edit and chosen
+# with Return, as the keyboard reaches the other entries.
+picker_edit() {
+  ui_click_logged "$1"
+  ui_expect_new "$2 opened: " "the $2 opened"
+  ui_focus_dialog "^${2% picker} Picker\$"
+  xdotool type --delay 40 -- "Edit"
+  ui_expect_new "$2 search: Edit, first $3" "typing Edit finds $3"
+  ui_key Return
+  ui_expect_new "$2 chose: $3" "$3 chosen in the $2"
 }
 
 # set_text name text: the parameter's expression in Edit Parameters, the
@@ -271,5 +290,56 @@ not_since "Appearances varies" "the Appearances window has no assignment panel"
 ui_focus_dialog '^Appearances$'
 ui_step "Close"                            ui_click_logged "Appearances close"
 ui_focus_main
+
+echo "--- Edit Materials… at the end of the picker (mitcad#1415): a material made there is offered"
+ui_mark
+ui_step "click Body2"                      ui_click_logged "Browser Root/Bodies/Body2"
+ui_expect_new "Browser selected: Root/Bodies/Body2" "Body2 selected"
+ui_mark
+ui_step "Material (search)"                ui_command "Material"
+ui_expect_new "Command search chose solid.material" "the Material tool"
+ui_expect_new "Panel Material input material at" "the picker button's place is logged"
+ui_step "the picker: Shop PETG"            ui_picker_choose "Panel Material input material" "Material picker" "Shop PETG"
+ui_mark
+ui_step "the picker: Edit Materials…"      picker_edit "Panel Material input material" "Material picker" "Edit Materials…"
+ui_expect_new "Material tool: Edit Materials… on Shop PETG" "the tool opens the manager on its material"
+ui_expect_new "Materials opened" "the Materials manager opened"
+ui_expect_new "Material selected: Shop PETG (user)" "on Shop PETG"
+ui_expect_new "Materials duplicate at" "Duplicate under the list"
+ui_focus_dialog '^Materials$'
+ui_mark
+ui_step "Duplicate"                        ui_click_logged "Materials duplicate"
+ui_expect_new "Materials duplicate menu: This design | My library" "Duplicate offers This design first while a design is open"
+# The menu opens with nothing active: Down takes This design, Down again My library.
+ui_key Down Down Return
+ui_expect_new "Material duplicated: Shop PETG as " "a copy made while the tool's panel is open"
+ui_expect_new " in user" "into My library"
+ui_sync
+ui_mark
+xdotool type --delay 40 "Bench PETG"
+ui_key Return
+ui_expect_new "Material Shop PETG (copy) (user) name = Bench PETG" "Enter renamed it"
+ui_mark
+ui_step "close (Esc)"                      ui_key Escape
+ui_expect_new "Materials closed" "closed"
+ui_expect_new "Material tool: materials read again, " "the tool read its materials again"
+ui_expect_new ", new: Bench PETG" "Bench PETG is offered"
+ui_focus_main
+ui_step "the picker: Bench PETG"           ui_picker_choose "Panel Material input material" "Material picker" "Bench PETG"
+ui_expect_new "Panel Material tile material: Bench PETG (My library)" "the picker button shows Bench PETG"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Material tool: Bench PETG/" "the tool's log line"
+ui_expect_new " to 1 bodies" "Body2, still picked, gets Bench PETG"
+save
+expect_file '.bodies[1].material as $m | [.materials[] | select(.id == $m) | .name]' '["Bench PETG"]' \
+  "Body2 is the design's copy of Bench PETG"
+ui_mark
+ui_step "undo"                             ui_key ctrl+z
+ui_expect_new "Undo: Set Material of Body2" "one undo step"
+save
+expect_file '[.bodies[1].material, any(.materials[]?; .name == "Bench PETG")]' '[null,false]' \
+  "Body2 has its default again, the copy gone with it"
+ui_step "Escape (clear the selection)"     ui_key Escape
 
 ui_finish "UI Material and Appearance tools"

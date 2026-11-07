@@ -511,6 +511,41 @@ pub fn decode(seg: &Segment, doc: &F3dFile) -> AppearanceData {
             ..OccurrenceLook::default()
         });
     }
+    // The mesh bodies' presentation envelopes (mitcad#1376): the physical
+    // material and the appearance it brings, named as a body's are.
+    let mut meshes = Vec::new();
+    for o in seg.objects_of(super::classes::MESH_BODY) {
+        let mut look = BodyLook {
+            entity: Some(o.id),
+            ..BodyLook::default()
+        };
+        let mut looks = Vec::new();
+        for n in names_in(seg.data(o)) {
+            if look.material.is_none() && is_material(&package, &n) {
+                let m = asset_ref(&package, &n);
+                note(&m);
+                look.material = Some(m);
+            } else {
+                looks.push(n);
+            }
+        }
+        match &looks[..] {
+            [n] => {
+                let a = asset_ref(&package, n);
+                note(&a);
+                look.appearance = Some(a);
+            }
+            [] => {}
+            _ => warnings.push(format!(
+                "mesh body {}: {} appearance names, none taken",
+                o.id,
+                looks.len()
+            )),
+        }
+        if look.material.is_some() || look.appearance.is_some() {
+            meshes.push(look);
+        }
+    }
     // The assets named, their textures, and their materials' aspects.
     let mut k = 0;
     while k < used.len() {
@@ -536,6 +571,7 @@ pub fn decode(seg: &Segment, doc: &F3dFile) -> AppearanceData {
         faces: (!faces.is_empty()).then_some(faces),
         occurrences: (!occurrences.is_empty()).then_some(occurrences),
         warnings: (!warnings.is_empty()).then_some(warnings),
+        meshes: (!meshes.is_empty()).then_some(meshes),
         ..AppearanceData::default()
     }
 }

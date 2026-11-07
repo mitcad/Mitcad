@@ -42,7 +42,7 @@ pub(crate) fn depends_on_bodies(item: &TimelineItem) -> bool {
     match item.object_type() {
         Some(
             "FilletFeature" | "ChamferFeature" | "CombineFeature" | "ReplaceFaceFeature"
-            | "DeleteFaceFeature" | "MoveFaceFeature",
+            | "DeleteFaceFeature" | "MoveFaceFeature" | "DraftFeature",
         ) => true,
         // Paths, rails or sections of edges (mitcad#34).
         Some("SweepFeature" | "PipeFeature" | "LoftFeature") => crate::sweeps::uses_edges(item),
@@ -121,7 +121,6 @@ fn not_translated(object_type: &str) -> Option<&'static str> {
     Some(match object_type {
         "FlangeFeature" => "a sheet metal flange: not translated (MitCad has no sheet metal)",
         "PCBFeature" => "an electronics board: not translated",
-        "DraftFeature" => "a draft: not translated (its faces and plane are not decoded)",
         "MirrorComponent" => {
             "mirrors a component into a new one: not translated (the stored bodies stand in)"
         }
@@ -1810,6 +1809,8 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             }
             // Emboss (mitcad#458).
             (Some(Detail::Emboss(d)), _) => self.emboss(index, d),
+            // Drafts (mitcad#1363).
+            (Some(Detail::Draft(d)), _) => self.draft(d),
             (_, "BaseFeature") => Err("a base feature: the file's bodies as they are".to_owned()),
             // Bodies of other documents (mitcad#324).
             (_, "DerivedContext") => self.derive(index, item),

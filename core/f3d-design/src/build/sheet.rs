@@ -29,6 +29,20 @@
 //!   its value, then a reference to the thickness parameter *(seen: the
 //!   corpus's designs of one rule; the order of the relief fields is
 //!   taken from their default expressions, not from variants)*.
+//! - A **hem** (`Hem<n>`, mitcad#1364; cadmpeg's *Hem* layouts): its
+//!   parameters name their roles (`HemGap`, `HemLength`, `HemRadius`,
+//!   `HemAngle`, `HemSetback`) and their holders are the marked owner
+//!   references of its fixed section. The section at base `b` (`85 + S`):
+//!   `u32` bend position (4, tangent to the side face, the edge flange's
+//!   code *(seen: every hem)*), `u32` edge count 1, the edge wrapper and
+//!   settings references, then the owners from `b + 41`; after them (at
+//!   `b + 66` with two owners, `b + 76` with three) a `u32` form, then a
+//!   byte and the rule's inside bend radius (f64, cm).
+//!   Forms: 1 open, 2 rolled, 3 double, 4 teardrop, 5 rope, 6 flat
+//!   *(ours: one hem of each form in the reference models, each made as
+//!   that form; the description takes the form from the parameters and
+//!   the result instead)*. The edge is its edge input, as an edge
+//!   flange's.
 
 use std::collections::BTreeMap;
 
@@ -92,6 +106,84 @@ fn rule(d: &[u8]) -> Rule {
         .find(|(s, _, _)| s.contains('('))
         .map(|(s, _, _)| s.clone());
     r
+}
+
+/// A hem's form by its code (the module's notes).
+fn hem_form(code: u32) -> Option<&'static str> {
+    Some(match code {
+        1 => "open",
+        2 => "rolled",
+        3 => "double",
+        4 => "teardrop",
+        5 => "rope",
+        6 => "flat",
+        _ => return None,
+    })
+}
+
+/// The parameter roles each hem form owns, in their sorted order.
+fn hem_roles(form: &str) -> &'static [&'static str] {
+    match form {
+        "open" | "flat" => &["HemGap", "HemLength"],
+        "rolled" => &["HemAngle", "HemRadius"],
+        "teardrop" | "rope" => &["HemGap", "HemLength", "HemRadius"],
+        "double" => &["HemGap", "HemLength", "HemSetback"],
+        _ => &[],
+    }
+}
+
+/// The fields of a hem's fixed section.
+#[derive(Clone, Debug, PartialEq)]
+struct HemSection {
+    /// The bend position (the edge flange's codes).
+    position: u32,
+    /// The form's code.
+    form: u32,
+    /// The rule's inside bend radius (cm).
+    rule_radius: f64,
+}
+
+/// A hem's fixed section: the one base `b` with the edge count 1 at
+/// `b + 4`, marked references at `b + 8` and `b + 19`, and each of the
+/// owners (the hem parameters' holders) once among the references from
+/// `b + 40` to `b + 66`; `at` reads the marked reference at an offset.
+fn hem_section(
+    d: &[u8],
+    at: &dyn Fn(usize) -> Option<u64>,
+    owners: &[u64],
+) -> Result<HemSection, String> {
+    let tail = match owners.len() {
+        2 => 66,
+        3 => 76,
+        n => return Err(format!("{n} parameter owners: no hem layout has them")),
+    };
+    let fits: Vec<usize> = (0..d.len().saturating_sub(tail + 13))
+        .filter(|&b| {
+            u32_at(d, b + 4) == Some(1)
+                && at(b + 8).is_some()
+                && at(b + 19).is_some()
+                && owners
+                    .iter()
+                    .all(|&o| (b + 40..=b + 66).filter(|&q| at(q) == Some(o)).count() == 1)
+        })
+        .collect();
+    let [b] = fits.as_slice() else {
+        return Err(format!(
+            "its fixed section was not found ({} fits)",
+            fits.len()
+        ));
+    };
+    let b = *b;
+    let position = u32_at(d, b).ok_or("no bend position")?;
+    let form = u32_at(d, b + tail).ok_or("no form")?;
+    let rule_radius = f64_at(d, b + tail + 5)
+        .filter(|r| r.is_finite() && *r > 0.0)
+        .ok_or("no inside bend radius")?;
+    Ok(HemSection {
+        position,
+        form,
+        rule_radius,
+    })
 }
 
 impl Builder<'_> {
@@ -171,7 +263,7 @@ impl Builder<'_> {
         let sheet = if rl.contains_key("FlangeHeight") {
             self.edge_flange(it, rl)
         } else if rl.keys().any(|k| k.starts_with("Hem")) {
-            Err("a hem: not decoded".to_owned())
+            self.hem(it, rl)
         } else {
             Ok(self.base_flange(it))
         };
@@ -306,6 +398,70 @@ impl Builder<'_> {
             "widths": widths,
         }))
     }
+
+    /// A hem (mitcad#1364): its form, bend position, edge and the
+    /// parameters its form owns.
+    fn hem(
+        &self,
+        it: &TimelineEntry,
+        rl: &BTreeMap<&str, Vec<&ParameterEntry>>,
+    ) -> Result<Value, String> {
+        let seg = self.seg;
+        let d = seg.data_of(it.id);
+        let params: Vec<(&str, &ParameterEntry)> = rl
+            .iter()
+            .filter(|(role, _)| role.starts_with("Hem"))
+            .flat_map(|(role, ps)| ps.iter().map(move |p| (*role, *p)))
+            .collect();
+        let owners: Vec<u64> = params
+            .iter()
+            .map(|(_, p)| p.holder)
+            .collect::<Option<Vec<u64>>>()
+            .ok_or("a hem parameter without its holder")?;
+        let at = |p: usize| seg.ref_at(d, p).map(|r| r.id);
+        let section = hem_section(d, &at, &owners)?;
+        let form = hem_form(section.form)
+            .ok_or_else(|| format!("hem form {} is not known", section.form))?;
+        let roles: Vec<&str> = params.iter().map(|(role, _)| *role).collect();
+        if roles.as_slice() != hem_roles(form) {
+            return Err(format!(
+                "a {form} hem with the parameters {roles:?}: not seen"
+            ));
+        }
+        let position = match section.position {
+            4 => "tangent",
+            other => return Err(format!("hem bend position {other}: not seen")),
+        };
+        let edge_inputs: Vec<Reference> = self
+            .item_inputs(it)
+            .into_iter()
+            .filter_map(|i| edge_input(seg, i))
+            .collect();
+        let mut out = json!({
+            "kind": "hem",
+            "operation": "JoinFeatureOperation",
+            "form": form,
+            "edges": 1,
+            "edge": edge_inputs.first(),
+            // Its edge input: the group's operand, then the aggregate
+            // group's (cadmpeg), so the edge may come twice.
+            "edge_list": edge_inputs,
+            "position": position,
+            "rule_radius": {"value": section.rule_radius, "from_rule": true},
+        });
+        for (role, key) in [
+            ("HemGap", "gap"),
+            ("HemLength", "length"),
+            ("HemRadius", "hem_radius"),
+            ("HemAngle", "hem_angle"),
+            ("HemSetback", "setback"),
+        ] {
+            if let Some((_, p)) = params.iter().find(|(r, _)| *r == role) {
+                out[key] = serde_json::to_value(paramref(p)).expect("serializes");
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -345,5 +501,84 @@ mod tests {
         assert_eq!(r.expressions[2], ("Thickness * 0.5".to_owned(), 0.125));
         assert_eq!(r.k_factor, Some(0.44));
         assert_eq!(r.name.as_deref(), Some("Steel (mm)"));
+    }
+
+    /// A marked reference (flag, id, two zero bytes).
+    fn mark(id: u64) -> Vec<u8> {
+        let mut b = vec![1];
+        b.extend(id.to_le_bytes());
+        b.extend([0, 0]);
+        b
+    }
+
+    /// A hem record's fixed section (the corpus's layout) after `skip`
+    /// bytes: bend position, edge count 1, wrapper and settings, the
+    /// retained fields, the owners at their section offsets, the form at
+    /// `tail`, a byte, the rule's radius and a result count.
+    fn hem_record(skip: usize, owners: &[(usize, u64)], tail: usize, form: u32) -> Vec<u8> {
+        let mut d = vec![0u8; skip];
+        d.extend(4u32.to_le_bytes());
+        d.extend(1u32.to_le_bytes());
+        d.extend(mark(0x13f));
+        d.extend(mark(0x14f));
+        d.extend(1u32.to_le_bytes());
+        d.extend([0, 0]);
+        d.extend(4u32.to_le_bytes());
+        d.resize(skip + tail, 0);
+        for &(at, o) in owners {
+            d[skip + at..skip + at + 11].copy_from_slice(&mark(o));
+        }
+        d.extend(form.to_le_bytes());
+        d.push(0);
+        d.extend(0.25f64.to_le_bytes());
+        d.extend([0; 6]);
+        d.extend(2u32.to_le_bytes());
+        d.extend(mark(0x174));
+        d.extend(vec![0u8; 40]);
+        d
+    }
+
+    /// The marked references of a synthetic record whose ids are known.
+    fn reader(d: &[u8], known: &[u64]) -> impl Fn(usize) -> Option<u64> {
+        let d = d.to_vec();
+        let known = known.to_vec();
+        move |p: usize| {
+            let b = d.get(p..p + 11)?;
+            let id = u64::from_le_bytes(b[1..9].try_into().ok()?);
+            (b[0] == 1 && b[9..] == [0, 0] && known.contains(&id)).then_some(id)
+        }
+    }
+
+    /// An open hem's section (two owners, header shift 4) gives its form,
+    /// bend position and the rule's radius; a teardrop's (three owners)
+    /// its form further on; owners not in the section find none.
+    #[test]
+    fn a_hem_section_gives_its_form_position_and_radius() {
+        let known = [0x13a, 0x13d, 0x140, 0x13f, 0x14f, 0x174];
+        let d = hem_record(89, &[(42, 0x13a), (53, 0x13d)], 66, 1);
+        let at = reader(&d, &known);
+        let s = hem_section(&d, &at, &[0x13a, 0x13d]).expect("found");
+        assert_eq!(
+            s,
+            HemSection {
+                position: 4,
+                form: 1,
+                rule_radius: 0.25
+            }
+        );
+        assert_eq!(hem_form(s.form), Some("open"));
+        assert_eq!(hem_roles("open"), ["HemGap", "HemLength"]);
+        // A rolled hem's owners start a byte earlier, 13 bytes apart.
+        let d = hem_record(85, &[(41, 0x13a), (54, 0x13d)], 66, 2);
+        let at = reader(&d, &known);
+        let s = hem_section(&d, &at, &[0x13a, 0x13d]).expect("found");
+        assert_eq!(hem_form(s.form), Some("rolled"));
+        let d = hem_record(89, &[(42, 0x13d), (53, 0x13a), (64, 0x140)], 76, 4);
+        let at = reader(&d, &known);
+        let s = hem_section(&d, &at, &[0x13a, 0x13d, 0x140]).expect("found");
+        assert_eq!(hem_form(s.form), Some("teardrop"));
+        assert_eq!(s.rule_radius, 0.25);
+        assert!(hem_section(&d, &at, &[0x13a, 0x999]).is_err());
+        assert!(hem_section(&d, &at, &[0x13a]).is_err());
     }
 }

@@ -267,7 +267,9 @@ bodies, as many as the body map names: a snapshot blob (`.smb`) saves the
 faces the design refers to as bodies before the design's (the faces' GUIDs
 put the design's bodies there in all 38 snapshot blobs that showed it).
 The body's ASM record in the blob is the stored body's (`StoredBody::source`,
-`blob#record`), which the final comparison matched with a replayed body. A
+`blob#record`), which the final comparison matched with a replayed body
+(a record also names the lumps `<source>#k` of a stored body that comes
+in as one body per solid, as the `.ipt` import's do, mitcad#1375). A
 face's GUID is the string after `NEUTRON_Material_attrib_def` in an
 `ATTRIB_CUSTOM` attribute of the face in the blob's stored state
 (`NamedState::face_appearance_guid`); every face of the body carrying it
@@ -318,6 +320,28 @@ others the textured oak and the occurrence override (its body's own
 appearance is decoded; the import gives it the override); 10 entries
 have no counterpart (models without bodies, and body records of bodies the
 export leaves out, which the import leaves out too).
+
+### Mesh bodies (mitcad#1376)
+
+A mesh body record (class `EA90DA22`, `mitcad_f3d_decode::mesh`) names
+its physical material and its appearance in two presentation envelopes
+after its placements, each a name as above with an empty display name:
+
+```text
+envelope str16 token | str16 C1EEA57C-… | u32 0 | str16 preset
+mesh     … placements | material envelope | str16 body name |
+         appearance envelope | refs …
+```
+
+The first is the physical material (`PrismMaterial-018`), the second
+the appearance it brings (`PrismMaterial-018_physmat_aspects:Prism-256`,
+whose asset is the token's `_Post2015` form); the corpus' one mesh body
+is laid out so, its two assets in the document's package. The decoder
+gives them in `_f3d.appearance.meshes` (`entity` the mesh body record),
+and the import gives them to the mesh body that record placed
+(`meshes.rs` of `mitcad-import-appearances`), as a body's: after the
+occurrences' overrides, which a mesh body keeps. The import of the
+stored bodies without the timeline (`import_f3d`) gives them too.
 
 ### On the corpora
 

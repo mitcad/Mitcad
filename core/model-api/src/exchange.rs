@@ -156,6 +156,20 @@ pub(super) struct ExportSketchCommand {
     /// `r2000` (default) or `r12`.
     #[serde(default)]
     version: Option<String>,
+    /// The file's length unit (`mm`, `in`, …); the design's when left out
+    /// (mitcad#1408).
+    #[serde(default)]
+    units: Option<String>,
+}
+
+/// The length unit a DXF export writes (mitcad#1408): its `units`, or the
+/// design's when it names none.
+pub(super) fn dxf_unit<K: Kernel>(
+    doc: &Document<K>,
+    units: Option<&str>,
+) -> Result<mitcad_model::expr::LengthUnit, ApiError> {
+    let design = doc.parameters().context().default_length_unit;
+    mitcad_model::exchange::dxf_export_unit(units, design).map_err(ApiError)
 }
 
 pub(super) fn imported_json(imported: &Imported) -> Value {
@@ -537,8 +551,9 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 .parse::<FeatureUid>()
                 .map_err(|_| ApiError(format!("no feature is named {}", command.sketch)))?,
         };
-        let entities = self.export_sketch_dxf(sketch, &command.path, &options)?;
-        Ok(json!({"path": command.path, "entities": entities}))
+        let unit = dxf_unit(self, command.units.as_deref())?;
+        let entities = self.export_sketch_dxf(sketch, &command.path, unit, &options)?;
+        Ok(json!({"path": command.path, "entities": entities, "units": unit.symbol()}))
     }
 
     fn body_by_uid_or_name(&self, body: &str) -> Result<BodyUid, ApiError> {
@@ -581,8 +596,9 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             ..mitcad_dxf::WriteOptions::default()
         };
         let body = self.body_by_uid_or_name(&command.body)?;
+        let unit = dxf_unit(self, command.units.as_deref())?;
         let options = FlatDxfOptions {
-            unit: command.unit,
+            unit,
             tangents: command.tangents,
         };
         let (def, drawing) = self.export_flat_pattern_dxf(
@@ -604,7 +620,8 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         Ok(json!({
             "path": command.path,
             "body": body,
-            "unit": command.unit,
+            "unit": unit.symbol(),
+            "units": unit.symbol(),
             "stationary": def.stationary,
             "reference_side": def.reference_side,
             "entities": drawing.entities.len(),
@@ -719,9 +736,10 @@ pub(super) struct ExportFlatPatternCommand {
     /// Uid or name of the sheet-metal body.
     body: String,
     path: String,
-    /// The drawing unit (`mm` by default).
-    #[serde(default)]
-    unit: LengthUnit,
+    /// The drawing unit (`mm`, `in`, …); the design's when left out
+    /// (mitcad#1408). `unit` is its older name.
+    #[serde(default, alias = "unit")]
+    units: Option<String>,
     /// `r2000` (default) or `r12`.
     #[serde(default)]
     version: Option<String>,

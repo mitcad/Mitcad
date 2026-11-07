@@ -1,0 +1,6 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The mouse wheel over Fillet's Radius while its preview computes (mitcad#1407), tools/ui-fillet-wheel-busy-test.sh: a cylinder of 30 mm diameter and 12 mm height on the xy plane (F1, body F1.b0), whose top edge is filleted."},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":"xy","diameter":30,"height":12,"operation":"new_body"}},
+  {"expect":{"feature":"F1","status":"ok"}}
+]

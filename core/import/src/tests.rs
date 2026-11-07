@@ -119,3 +119,6 @@ mod property_tests;
 
 // History replay into a document that already has bodies (mitcad#624).
 mod body_scope_tests;
+
+// Mesh bodies the file stores, as base features (mitcad#1366).
+mod mesh_tests;

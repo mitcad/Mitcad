@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# The design of image-references-heif.mitcad-ui opened again with no HEIF
+# decoder (MITCAD_TEST_HEIF_DECODER=none) and the HEIF file deleted
+# (mitcad#1304): its copy is a PNG file, drawn as it was saved.
+wait-idle
+wait-log '^Image reference Image1 decoded: 32 x 64 pixels'
+wait-log '^Image references drawn: Image1 32.0 x 64.0 mm 50% behind'
+expect-no-log 'Image reference Image1 cannot be drawn'
+expect-no-log 'Image1 is a HEIF image'

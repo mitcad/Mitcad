@@ -18,6 +18,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHash>
+#include <QHideEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -415,6 +416,39 @@ void AppearanceDialog::showEvent(QShowEvent* event) {
   }
 }
 
+void AppearanceDialog::hideEvent(QHideEvent* event) {
+  QDialog::hideEvent(event);
+  if (event->spontaneous()) {
+    return; // the main window minimised, not the window closed
+  }
+  qDebug().noquote() << "Appearances closed";
+  // Once (mitcad#1415): taken first, so that what it calls may set another.
+  std::function<void()> closed;
+  closed.swap(whenClosed);
+  if (closed) {
+    closed();
+  }
+}
+
+void AppearanceDialog::showAppearance(const QString& id) {
+  const Appearance* found = findAppearance(m_appearances, id);
+  if (found == nullptr) {
+    return;
+  }
+  // Its group open, so that its row shows (mitcad#1133).
+  for (int i = 0; i < m_list->count(); ++i) {
+    const QListWidgetItem* item = m_list->item(i);
+    if (item->data(kIdRole).toString() == id) {
+      setGroupCollapsed(item->data(kGroupRole).toString(), false);
+      break;
+    }
+  }
+  m_current = id;
+  select(id);
+  showCurrent();
+  qDebug().noquote() << QStringLiteral("Appearances on %1").arg(id);
+}
+
 void AppearanceDialog::resizeEvent(QResizeEvent* event) {
   QDialog::resizeEvent(event);
   TestSync::singleShot(0, this, [this] { logLayout(); });
@@ -781,8 +815,11 @@ const Appearance* AppearanceDialog::current() const { return findAppearance(m_ap
 
 bool AppearanceDialog::canChange() {
   // Not in the middle of a command or a sketch, whose undo steps the
-  // change would come between.
-  if (m_host.canChangeModel()) {
+  // change would come between; but beside the Material and Appearance
+  // tools, which preview nothing and run their commands on OK (mitcad#1415:
+  // Edit Appearances… of the Appearance tool's picker, as the print
+  // managers beside them).
+  if (m_host.canChangePrintSettings()) {
     return true;
   }
   m_message->setText(m_host.changeBlockedReason());

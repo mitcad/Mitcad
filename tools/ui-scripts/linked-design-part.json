@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The linked design of tools/ui-linked-design-test.sh (mitcad#1416): one 10 mm cube, 1000 mm3."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"}, "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"expect": {"bodies": 1}}
+]

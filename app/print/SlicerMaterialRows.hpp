@@ -12,7 +12,8 @@
 namespace mitcad {
 
 // Send to Slicer's material rows (mitcad#1141, app/COMMANDS.md "Send to
-// Slicer"): one row per filament, each a searchable material picker. Plain
+// Slicer"): one row per filament, each a searchable material picker; the
+// Make card's Material row lists the same (mitcad#1411). Plain
 // Qt Core: the panel builds its rows from these, and tests use them
 // without one.
 
@@ -24,6 +25,11 @@ struct MaterialPickerRow {
   QString heading;
   QColor color;
   bool fdm = false; // an FDM plastic (a filament)
+  bool operator==(const MaterialPickerRow& other) const {
+    return key == other.key && name == other.name && heading == other.heading && color == other.color &&
+           fdm == other.fdm;
+  }
+  bool operator!=(const MaterialPickerRow& other) const { return !(*this == other); }
 };
 
 // The materials of the `library_items` query in the picker's order: the

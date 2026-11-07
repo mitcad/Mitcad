@@ -15,10 +15,11 @@ include(cmake/RenderDeps.cmake)
 # HEIF/HEIC image references (mitcad#850): libheif with the HEVC decoder
 # libde265, the vcpkg manifest's default feature `heif` (shared libraries,
 # LGPL; no encoder). Off by default, releases included: such a build
-# neither builds nor ships them and reads no HEIF image
-# (app/view/ImageFile.hpp); -DMITCAD_HEIF=ON turns them on. Set before
-# project(), where the vcpkg toolchain installs the manifest.
-option(MITCAD_HEIF "Read HEIF/HEIC images of image references (libheif and libde265 from vcpkg)" OFF)
+# neither builds nor ships them and reads HEIF images with the operating
+# system's decoder (mitcad#1304, app/view/HeifDecoder.hpp);
+# -DMITCAD_HEIF=ON links them instead. Set before project(), where the
+# vcpkg toolchain installs the manifest.
+option(MITCAD_HEIF "Read HEIF/HEIC images of image references with libheif and libde265 from vcpkg instead of the system's decoder" OFF)
 if(MITCAD_HEIF)
   set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES OFF CACHE BOOL "Leave out vcpkg.json's default features (MITCAD_HEIF)" FORCE)
 else()
@@ -26,7 +27,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.49.0
+  VERSION 0.50.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 

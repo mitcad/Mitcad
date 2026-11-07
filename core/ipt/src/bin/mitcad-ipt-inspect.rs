@@ -61,7 +61,10 @@ const USAGE: &str = "usage: mitcad-ipt-inspect <command> ...
   labels <file> <segment>       the browser labels of a segment's records
   texts <file>                  the sketch texts: string, fonts, frame,
                                 and each glyph contour in sketch
-                                coordinates (pen, extent, pieces)";
+                                coordinates (pen, extent, pieces)
+  appearances <file> [--json]   the styles, the defaults, the package's
+                                assets, the faces' colours; --json the
+                                dump's appearance data (mitcad#1367)";
 
 fn open(path: &str) -> Result<IptFile, String> {
     IptFile::open(Path::new(path)).map_err(|e| format!("{path}: {e}"))
@@ -1999,6 +2002,50 @@ fn cmd_constraints(path: &str, prefix: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The appearances (mitcad#1367): the styles with their assets, the
+/// defaults, the faces' colours; or the dump's appearance data.
+fn cmd_appearances(path: &str, json: bool) -> Result<(), String> {
+    use mitcad_ipt::appearance::{self, Appearances};
+    let f = open(path)?;
+    if json {
+        let data = appearance::read(&f).unwrap_or_default();
+        let text = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+        println!("{text}");
+        return Ok(());
+    }
+    let a = Appearances::read(&f);
+    println!(
+        "package: {} assets, {} records not decoded",
+        a.package.assets.len(),
+        a.package.errors.len()
+    );
+    for (kind, styles, default) in [
+        ("rendering", &a.styles, a.default_style),
+        ("material", &a.materials, a.default_material),
+    ] {
+        for (k, s) in styles.iter().enumerate() {
+            let asset = a
+                .asset(s, |x| kind == "material" || x.is_appearance())
+                .map_or("-".to_owned(), |x| format!("{} {}", x.schema, x.guid));
+            println!(
+                "{kind} #{}{}: {:?} guid {:?} preset {:?} library {:?} diffuse {:?} asset {asset}",
+                s.record,
+                if Some(k) == default { " (default)" } else { "" },
+                s.name,
+                s.guid,
+                s.preset,
+                s.library,
+                s.diffuse(),
+            );
+        }
+    }
+    println!("faces with a colour of their own: {}", a.faces.len());
+    for w in &a.warnings {
+        println!("warning: {w}");
+    }
+    Ok(())
+}
+
 /// A decimal or `0x` hexadecimal number.
 fn parse_number(text: &str) -> Result<usize, String> {
     match text.strip_prefix("0x") {
@@ -2081,6 +2128,8 @@ fn run(args: &[String]) -> Result<(), String> {
             Some(m.parse().map_err(|_| format!("bad count {m}"))?),
         ),
         ["texts", file] => cmd_texts(file),
+        ["appearances", file] => cmd_appearances(file, false),
+        ["appearances", file, "--json"] => cmd_appearances(file, true),
         ["write-test", out] => std::fs::write(out, mitcad_ipt::testdata::test_part())
             .map_err(|e| format!("{out}: {e}")),
         _ => Err(USAGE.to_string()),

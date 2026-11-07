@@ -151,6 +151,13 @@ public:
   // without a design. `closed` is called once when the manager closes next
   // (the Materials manager only).
   void openLibrary(const QString& kind, std::function<void()> closed = {});
+  // Edit Materials… and Edit Appearances… of the Material and Appearance
+  // tools' pickers (mitcad#1415): the Materials manager on the material
+  // `key` ("<place>/<id>"; empty: This design first, as Edit Materials),
+  // the Appearances window on the appearance `id` (empty: the one it
+  // showed). `closed` is called once when the window closes next.
+  void editMaterialsOn(const QString& key, std::function<void()> closed);
+  void editAppearancesOn(const QString& id, std::function<void()> closed);
   // A body's, an occurrence's or a component's own process settings in
   // the settings form (mitcad#655): `owner` its uid, `name` as the design
   // shows it (3D Print's own-settings links, Property Sets' Edit… of

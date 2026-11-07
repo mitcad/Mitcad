@@ -259,6 +259,12 @@ pub trait Sheets<K: ImportKernel> {
     /// decoder read by their names (mitcad#242): one `sheet_flange` per
     /// edge with those inputs, the path's boundary among them.
     fn sheet_flange(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String>;
+
+    /// A hem (the `.f3d` hem, mitcad#1364, mitcad#1378): the flange
+    /// `hem_as_flange` makes of it, on its edge as an edge flange's (a
+    /// rolled hem a flange past 180 degrees with no wall; a teardrop, rope
+    /// or double hem the flange's hem of that form).
+    fn sheet_hem(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String>;
 }
 
 impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
@@ -275,6 +281,7 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
             Some(kind @ ("corner_round" | "corner_chamfer")) => self.sheet_corner(kind, sheet),
             Some("bend") => self.sheet_bend_item(sheet),
             Some("fold") => self.sheet_fold_item(sheet),
+            Some("hem") => self.sheet_hem(sheet),
             Some(kind) => Err(format!("a sheet-metal {kind}: not translated yet")),
             None => Err("a sheet-metal item of no kind".to_owned()),
         }
@@ -653,6 +660,9 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         let mode = match sheet.get("length_mode").and_then(Value::as_str) {
             Some(m @ ("inner" | "outer")) => m,
             Some("tangent") => "outer_tangent",
+            // The wall's straight length from the bend's tangent line (a
+            // rolled hem's 0, mitcad#1378).
+            Some("straight") => "tangent",
             other => return Err(format!("length datum {other:?} is not known")),
         };
         let widths: Vec<(String, Value)> = sheet
@@ -726,9 +736,12 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         }
         let signed = |key: &str, negative: bool| -> Result<Value, String> {
             let v = sheet.get(key).ok_or_else(|| format!("no {key}"))?;
-            let v = match self.value(&reference(v)) {
-                Some(v) => v,
-                None => json!(
+            let v = match (v.get("model"), self.value(&reference(v))) {
+                // A value the import made in the model's terms (a hem's
+                // angle and radius, mitcad#1364).
+                (Some(m), _) => m.clone(),
+                (None, Some(v)) => v,
+                (None, None) => json!(
                     v.get("value")
                         .and_then(Value::as_f64)
                         .ok_or_else(|| format!("no {key}"))?
@@ -769,6 +782,10 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
                 "position": position,
                 "radius": signed("radius", false)?,
             });
+            // A hem whose bends follow from its sizes (mitcad#1378).
+            if let Some(hem) = sheet.get("hem_model") {
+                def["hem"] = hem.clone();
+            }
             // Its width along the edge (mitcad#242), measured from the
             // edge's midpoint: the same distance both ways (`EdgeWidth`),
             // or one towards the file's edge's start point and one towards
@@ -1984,6 +2001,137 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         c.note = Some(notes.join("; "));
         Ok(vec![c])
     }
+
+    fn sheet_hem(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String> {
+        // A parameter in the model's terms: the imported parameter, else
+        // its value (mm; an angle in radians).
+        let model = |key: &str| {
+            sheet.get(key).and_then(|p| {
+                self.value(&reference(p)).or_else(|| {
+                    let v = p.get("value").and_then(Value::as_f64)?;
+                    Some(json!(if key == "hem_angle" { v } else { v * 10.0 }))
+                })
+            })
+        };
+        let (flange, note) = hem_as_flange(sheet, &model)?;
+        let edges: Vec<Map<String, Value>> = match flange.get("edge_list") {
+            Some(Value::Array(list)) => {
+                list.iter().filter_map(|e| e.as_object().cloned()).collect()
+            }
+            _ => flange
+                .get("edge")
+                .and_then(Value::as_object)
+                .cloned()
+                .into_iter()
+                .collect(),
+        };
+        if edges.is_empty() {
+            return Err("its edge was not decoded".to_owned());
+        }
+        let mut candidates = self.sheet_edge_flange(&flange, &edges, 1)?;
+        for c in &mut candidates {
+            c.note = Some(note.clone());
+        }
+        Ok(candidates)
+    }
+}
+
+/// The flange a hem is (mitcad#1364, mitcad#1378), with a note, or why it
+/// is none; `model` gives a hem parameter (`gap`, `length`, `hem_radius`,
+/// `hem_angle`, `setback`) in the model's terms: an imported parameter's
+/// name, else its value (mm, an angle in radians). Every form folds over
+/// the panel at the hem's bend position (`tangent`: `side_tangent`), its
+/// length measured from the plane touching the bend's outer surface (the
+/// length datum `tangent`, MitCad's `outer_tangent`):
+///
+/// - an open or flat hem folds its wall back over the panel in one bend of
+///   180 degrees: a flange of 180 degrees whose inside radius is half the
+///   gap *(verified: the volumes of the open hem of gap 2 mm and the flat
+///   hem of gap 0.02 mm of the reference models; the flat hem's gap is its
+///   inside diameter too)*;
+/// - a rolled hem is one bend of its angle and inside radius with no wall:
+///   a flange of that angle, its length 0 from the bend's tangent line
+///   (`straight`, MitCad's `tangent`) *(verified: the reference model's
+///   rolled hem of 270 degrees and radius 3 mm, its volume)*;
+/// - a teardrop or rope hem is the flange's hem of that form with the
+///   hem's gap, its radius the hem's radius *(verified: the volumes of the
+///   reference models' teardrop and rope hems of radius 2 mm, gap 1 mm and
+///   length 10 mm; the inner end corner of the teardrop's wall lies a gap
+///   above the panel and its outer one at the length; the rope's second
+///   bend, of the same radius, turns back by as much as the first passes
+///   180 degrees, its wall a gap above the panel, ending at the length)*;
+/// - a double hem is the flange's double hem with the hem's gap and
+///   setback, every bend's inside radius half the gap: its length runs to
+///   the second fold's outer surface, and the wall folded under ends the
+///   setback short of the first wall's inner surface *(verified: the
+///   reference model's double hem of gap 2 mm, length 10 mm, setback 1 mm:
+///   its stored faces (two bends of 90 degrees with a wall of gap +
+///   thickness between them, walls of 3 mm over and under the 180-degree
+///   fold) and volume)*.
+fn hem_as_flange(
+    sheet: &Map<String, Value>,
+    model: &dyn Fn(&str) -> Option<Value>,
+) -> Result<(Map<String, Value>, String), String> {
+    let form = sheet
+        .get("form")
+        .and_then(Value::as_str)
+        .ok_or("a hem of no form")?;
+    let needed =
+        |key: &str, what: &str| model(key).ok_or_else(|| format!("its {what} was not decoded"));
+    let half = |gap: Value| -> Result<Value, String> {
+        Ok(match gap {
+            Value::String(name) => json!(format!("{name} / 2")),
+            v => json!(v.as_f64().ok_or("its gap is not a number")? / 2.0),
+        })
+    };
+    let mut flange = sheet.clone();
+    flange.insert("kind".to_owned(), json!("flange"));
+    flange.insert("angle".to_owned(), json!({"model": std::f64::consts::PI}));
+    flange.insert("length_mode".to_owned(), json!("tangent"));
+    let note = match form {
+        "open" | "flat" => {
+            let radius = half(needed("gap", "gap")?)?;
+            flange.insert("radius".to_owned(), json!({"model": radius}));
+            format!(
+                "{} hem: a flange of 180 degrees whose inside radius is half its gap, its length \
+                 measured from the bend's outer surface",
+                if form == "open" { "an open" } else { "a flat" }
+            )
+        }
+        "rolled" => {
+            let angle = needed("hem_angle", "angle")?;
+            let radius = needed("hem_radius", "radius")?;
+            flange.insert("angle".to_owned(), json!({"model": angle}));
+            flange.insert("radius".to_owned(), json!({"model": radius}));
+            flange.insert("length".to_owned(), json!({"model": 0.0}));
+            flange.insert("length_mode".to_owned(), json!("straight"));
+            "a rolled hem: a flange of its angle and radius with no wall".to_owned()
+        }
+        "teardrop" | "rope" => {
+            let radius = needed("hem_radius", "radius")?;
+            let gap = needed("gap", "gap")?;
+            flange.insert("radius".to_owned(), json!({"model": radius}));
+            flange.insert("hem_model".to_owned(), json!({"form": form, "gap": gap}));
+            format!(
+                "a {form} hem: a flange's {form} hem of its gap, radius and length, its bend past \
+                 180 degrees"
+            )
+        }
+        "double" => {
+            let gap = needed("gap", "gap")?;
+            let setback = needed("setback", "setback")?;
+            flange.insert("radius".to_owned(), json!({"model": half(gap.clone())?}));
+            flange.insert(
+                "hem_model".to_owned(),
+                json!({"form": "double", "gap": gap, "setback": setback}),
+            );
+            "a double hem: a flange's double hem of its gap, setback and length, every bend's \
+             inside radius half its gap"
+                .to_owned()
+        }
+        other => return Err(format!("a hem of form {other}: not known")),
+    };
+    Ok((flange, note))
 }
 
 /// A length in mm for an expression: at most 12 significant digits.
@@ -2068,5 +2216,111 @@ mod tests {
         assert!((hit.unwrap() - 3.0).abs() < 1e-12);
         assert_eq!(ray_hit(p, [0.0, 1.0], [0.0, 0.0], [10.0, 0.0]), None);
         assert_eq!(ray_hit(p, [1.0, 0.0], [0.0, 0.0], [10.0, 0.0]), None);
+    }
+
+    /// A decoded hem of a form (the decoder's keys, parameters in cm).
+    fn hem(form: &str) -> Map<String, Value> {
+        let p = |name: &str, value: f64| json!({"kind": "parameter", "name": name, "value": value, "unit": "mm"});
+        let v = json!({
+            "kind": "hem", "operation": "JoinFeatureOperation", "form": form,
+            "edges": 1, "position": "tangent",
+            "edge_list": [{"kind": "edge", "mid_point": [5.0, 0.0, 0.25]}],
+            "gap": p("d2", 0.2), "length": p("d3", 1.0), "hem_radius": p("d4", 0.3),
+            "hem_angle": {"kind": "parameter", "name": "d5",
+                          "value": 1.5 * std::f64::consts::PI, "unit": "deg"},
+            "setback": p("d6", 0.1),
+            "rule_radius": {"value": 0.25, "from_rule": true},
+        });
+        v.as_object().expect("an object").clone()
+    }
+
+    /// The hem's parameters by their imported names (`None`: not imported).
+    fn names(key: &str) -> Option<Value> {
+        let name = match key {
+            "gap" => "d2",
+            "length" => "d3",
+            "hem_radius" => "d4",
+            "hem_angle" => "d5",
+            "setback" => "d6",
+            _ => return None,
+        };
+        Some(json!(name))
+    }
+
+    /// An open or flat hem is a 180-degree flange of half its gap, its
+    /// length from the bend's outer surface, on its edge at its position.
+    #[test]
+    fn an_open_hem_is_a_flange_of_half_its_gap() {
+        let (f, note) = hem_as_flange(&hem("open"), &names).expect("a flange");
+        assert_eq!(f["kind"], "flange");
+        assert_eq!(f["angle"], json!({"model": std::f64::consts::PI}));
+        assert_eq!(f["radius"], json!({"model": "d2 / 2"}));
+        assert_eq!(f["length_mode"], "tangent");
+        assert_eq!(f["position"], "tangent");
+        assert_eq!(f["length"]["name"], "d3");
+        assert_eq!(f["edge_list"].as_array().map(Vec::len), Some(1));
+        assert!(f.get("hem_model").is_none());
+        assert!(
+            note.starts_with("an open hem: a flange of 180 degrees"),
+            "{note}"
+        );
+        // A gap that is no imported parameter: half its mm.
+        let mm = |key: &str| {
+            if key == "gap" {
+                Some(json!(0.02))
+            } else {
+                None
+            }
+        };
+        let (f, _) = hem_as_flange(&hem("flat"), &mm).expect("a flange");
+        assert_eq!(f["radius"], json!({"model": 0.01}));
+        assert!(hem_as_flange(&hem("open"), &|_: &str| -> Option<Value> { None }).is_err());
+    }
+
+    /// The forms past 180 degrees (mitcad#1378): a rolled hem is a flange
+    /// of its angle and radius with no wall; a teardrop, rope or double hem
+    /// the flange's hem of that form, its length from the bend's outer
+    /// surface (a double hem's every bend of half its gap).
+    #[test]
+    fn hems_past_half_a_turn_are_flanges_with_their_form() {
+        let (f, note) = hem_as_flange(&hem("rolled"), &names).expect("a rolled flange");
+        assert_eq!(f["angle"], json!({"model": "d5"}));
+        assert_eq!(f["radius"], json!({"model": "d4"}));
+        assert_eq!(f["length"], json!({"model": 0.0}));
+        assert_eq!(f["length_mode"], "straight");
+        assert!(f.get("hem_model").is_none());
+        assert!(note.starts_with("a rolled hem"), "{note}");
+        for form in ["teardrop", "rope"] {
+            let (f, note) = hem_as_flange(&hem(form), &names).expect("a hem flange");
+            assert_eq!(f["angle"], json!({"model": std::f64::consts::PI}));
+            assert_eq!(f["radius"], json!({"model": "d4"}));
+            assert_eq!(f["length"]["name"], "d3");
+            assert_eq!(f["length_mode"], "tangent");
+            assert_eq!(f["hem_model"], json!({"form": form, "gap": "d2"}));
+            assert!(note.contains(form), "{note}");
+        }
+        let (f, _) = hem_as_flange(&hem("double"), &names).expect("a double hem flange");
+        assert_eq!(f["radius"], json!({"model": "d2 / 2"}));
+        assert_eq!(
+            f["hem_model"],
+            json!({"form": "double", "gap": "d2", "setback": "d6"})
+        );
+        // An angle that is no imported parameter stays in radians.
+        let raw = |key: &str| {
+            if key == "hem_angle" {
+                Some(json!(4.5))
+            } else {
+                names(key)
+            }
+        };
+        let (f, _) = hem_as_flange(&hem("rolled"), &raw).expect("a rolled flange");
+        assert_eq!(f["angle"], json!({"model": 4.5}));
+        let none = |key: &str| if key == "setback" { None } else { names(key) };
+        assert!(
+            hem_as_flange(&hem("double"), &none)
+                .unwrap_err()
+                .contains("setback")
+        );
+        assert!(hem_as_flange(&hem("spiral"), &names).is_err());
     }
 }

@@ -273,6 +273,12 @@ vcpkg_from_github(
         1420-chfi3d-strip-edge-rolled-on-past-its-end-cut-by-a-transition-piece.patch
         1440-chfi3d-walk-guided-along-the-balls-centres-where-the-spine-folds.patch
         1460-chfi3d-end-crossing-of-a-periodic-edge-taken-in-the-edges-period.patch
+        1470-chfi3d-periodic-contact-endpoints-snapped-before-splitting.patch
+        1480-chfi3d-and-brepoffset-use-current-occt-apis.patch
+        1490-chfi3d-walk-back-to-the-spines-first-end-stepped-by-its-own-stretch.patch
+        1430-chfi3d-ball-rolled-on-a-convex-edge-into-the-end-face-cut-from-its-turn.patch
+        1500-chfi3d-convex-chain-into-a-mitre-of-tighter-roundings-closed-by-their-balls-torus.patch
+        1530-chfi3d-walk-onto-a-tight-tangent-face-at-the-end-rolls-on-cut-to-a-point.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

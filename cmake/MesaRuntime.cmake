@@ -943,13 +943,14 @@ if(MITCAD_MESA_DIR)
     # The Material and Appearance tools (mitcad#1059): a library material
     # chosen in the picker for two bodies, OK and Ctrl+Z; a component's
     # default material; the fx bound to an option; the Appearance tool's
-    # picker on a body and on a face; the windows without Assign.
+    # picker on a body and on a face; the windows without Assign; the
+    # pickers' Edit Materials… and Edit Appearances… (mitcad#1415).
     add_test(NAME app.ui-windows-material-tool
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
               -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-material-tool-test.ps1"
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-material-tool"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
-    set_tests_properties(app.ui-windows-material-tool PROPERTIES TIMEOUT 300)
+    set_tests_properties(app.ui-windows-material-tool PROPERTIES TIMEOUT 480)
     # The navigation bar at the bottom of the view (mitcad#1086), in the
     # Floating and the Docked layout: shown; Snap to Grid and Layout Grid
     # in step with the View menu's; Fit; Look At in a sketch looks at its
@@ -1645,6 +1646,29 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-line-arcs" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-line-arcs PROPERTIES TIMEOUT 300)
+    # The mouse wheel over Fillet's Radius while its preview computes
+    # (mitcad#1407, GitHub mitcad/Mitcad#162): each notch steps the field
+    # without reading the document, the last value is previewed once the
+    # job ends and OK makes that fillet. The Linux test's shared input
+    # script (tools/ui-fillet-wheel-busy-test.sh).
+    add_test(NAME app.ui-windows-fillet-wheel-busy
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-fillet-wheel-busy-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-fillet-wheel-busy"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-fillet-wheel-busy PROPERTIES TIMEOUT 240)
+    # Linked designs while the holder is open (mitcad#1416): the notice with
+    # Open Linked Design on an edit of a linked component, the linked design
+    # opened in a tab of its own, "<file> changed" with Update when it is
+    # saved in its tab, Update Link of the context menu. The Linux test is
+    # tools/ui-linked-design-test.sh.
+    add_test(NAME app.ui-windows-linked-design
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-linked-design-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-linked-design" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-linked-design PROPERTIES TIMEOUT 420)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

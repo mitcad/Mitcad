@@ -91,6 +91,8 @@ pub use pasting::{Commands, RunCommand};
 // Sketches on other components' faces, linked curves as projections
 // (mitcad#225).
 mod linked;
+// The control cages of Form bodies kept with their bodies (mitcad#1365).
+mod cages;
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -110,6 +112,8 @@ use mitcad_model::{
 use serde_json::{Map, Value};
 
 pub use history::{NoGeometry, Oracle, SheetSig, Sig, StoredBody, StoredGeometry};
+// Mesh bodies the file stores (mitcad#1366).
+pub use history::{MeshData, StoredMesh};
 pub use refs::DEFAULT_GEOMETRIC_TOLERANCE;
 // The progress of an import and the one running on this thread, shared with
 // the other imports (`mitcad-import-base`).
@@ -559,6 +563,10 @@ pub struct Importer<'a, K: Kernel> {
     /// The replay's families in the crates above this one ([`Families`],
     /// mitcad#785).
     pub families: &'a dyn Families<K>,
+    /// The mesh bodies brought in, by their mesh body records
+    /// ([`StoredMesh::id`]), for their materials and appearances
+    /// (`meshes.rs`, mitcad#1376).
+    pub mesh_bodies: Vec<(u64, BodyUid)>,
 }
 
 /// The families of the replay in the crates above this one (mitcad#785):
@@ -680,6 +688,7 @@ impl<'a, K: Kernel> Importer<'a, K> {
             deviated: HashMap::new(),
             deviated_log: Vec::new(),
             deviation_points: Vec::new(),
+            mesh_bodies: Vec::new(),
         }
     }
 }
@@ -1011,10 +1020,14 @@ mod dressups;
 // (mitcad#379).
 mod deviations;
 pub use deviations::{AcceptDeviations, DeviatingFace, DeviationReport};
+// Mesh bodies the file stores, as base features (mitcad#1366).
+mod meshes;
 // What the imports share: the `$k` placeholders, the core of a candidate and
 // the end of an import (mitcad#583).
 use mitcad_import_base::scaffold;
 use scaffold::{CandidateCore, substitute};
+// Drafts about a neutral plane (mitcad#1363).
+mod drafts;
 
 fn item_name(item: &TimelineItem) -> String {
     item.name().unwrap_or("?").to_owned()
@@ -1660,7 +1673,6 @@ fn no_geometry(object_type: &str) -> Option<&'static str> {
         "Context" => "no geometry: the assembly context of a component of another design",
         "Canvas" | "Decal" => "no geometry: a display item",
         "Group" => "no geometry: a timeline group (its items follow it)",
-        "MeshFeature" => "no solid geometry: a mesh body, which the import leaves out",
         _ => return None,
     })
 }
@@ -1968,6 +1980,11 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             self.begin_suppressed_run();
         } else {
             self.close_suppressed_run();
+        }
+        // The file's mesh bodies (mitcad#1366, `meshes.rs`).
+        if object_type.as_deref() == Some(meshes::MESH_FEATURE) {
+            self.mesh_item(at, item, suppressed);
+            return;
         }
         if suppressed
             && matches!(
@@ -5518,6 +5535,8 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                 });
             }
         }
+        // The new Form bodies keep their control cages (mitcad#1365).
+        self.attach_cages(&mut inputs);
         let label = name.map_or_else(|| "Add Base Feature".to_owned(), |n| format!("Add {n}"));
         let replaced: Vec<BodyUid> = inputs.iter().flat_map(|i| i.replaces.clone()).collect();
         let imported = match self.doc.add_base_features(&label, inputs.clone()) {
@@ -5632,6 +5651,9 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             }
         }
         self.compare_final();
+        // The mesh bodies no item brought in (mitcad#1366): no comparison
+        // takes a mesh.
+        self.remaining_meshes();
         // The faces at each deviating result, to select (mitcad#379).
         self.deviation_faces();
         // Low on memory first while the file's bodies were built for the
@@ -5783,6 +5805,8 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             .iter()
             .filter(|b| !matched.iter().any(|m| m.starts_with(&b.uid.to_string())))
             .filter(|b| SheetSig::of(kernel, b.shape).is_none())
+            // (Mesh bodies are the file's own, mitcad#1366.)
+            .filter(|b| !matches!(kernel.body_kind(b.shape), Ok(mitcad_model::BodyKind::Mesh)))
             .map(|b| format!("{} {}", b.uid, b.name))
             .collect();
         // Never silently (mitcad#1175): final bodies that are not those

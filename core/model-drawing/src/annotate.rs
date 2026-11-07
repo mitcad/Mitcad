@@ -77,6 +77,7 @@ pub fn sketch_pen(pen: SketchPen) -> Pen {
     match pen {
         SketchPen::Thin => Pen::Thin,
         SketchPen::Thick => Pen::Thick,
+        SketchPen::ExtraThick => Pen::ExtraThick,
         SketchPen::Hidden => Pen::Hidden,
         SketchPen::Chain => Pen::Chain,
     }

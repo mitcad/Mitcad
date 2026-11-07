@@ -2873,6 +2873,7 @@ int sketchTextPickTests();
 int ribbonFitTests();
 int updateOfferTests();
 int lineArcsTests();
+int linkedFilesTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3023,6 +3024,7 @@ int main(int argc, char* argv[]) {
     failures += ribbonFitTests();
     failures += updateOfferTests();
     failures += lineArcsTests();
+    failures += linkedFilesTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

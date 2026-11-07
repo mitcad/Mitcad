@@ -814,6 +814,8 @@ void DrawingWorkspace::escape() {
   const bool sheetPicks = m_sheetView->cancelPicks();
   const bool toolPicks = clearToolPicks();
   if (sheetPicks || toolPicks) {
+    qDebug().noquote() << QStringLiteral("Drawing picks dropped: %1")
+                              .arg(m_tool != nullptr ? m_tool->name : QStringLiteral("no tool"));
     showHint(); // the tool's own hint again, not the placing one
   } else if (m_tool != nullptr) {
     setTool(nullptr);
@@ -3002,12 +3004,26 @@ void DrawingWorkspace::logTitleBlock(const QJsonObject& sheet) {
 void DrawingWorkspace::exportDrawing(const QString& format) {
   const QString suggested =
       QDir(dialogStartFolder(DialogGroup::Export, QDir::homePath())).filePath(m_name + QLatin1Char('.') + format);
+  const QString title = m_cutSheet ? tr("Export Cut Sheet") : tr("Export Drawing");
+  if (format == QStringLiteral("dxf")) {
+    // In the sheet's length unit (the design's when it has none) unless
+    // another is chosen (mitcad#1408).
+    const QJsonObject sheet = m_answer.value(QStringLiteral("sheets")).toArray().at(m_sheet).toObject();
+    const QString own = m_cutSheet ? QString() : sheet.value(QStringLiteral("units")).toString();
+    const QString offered = own.isEmpty() ? m_host.model().lengthUnit() : own;
+    QString unit = offered;
+    const QString path = dialogSaveDxf(this, title, suggested, unit);
+    if (path.isEmpty()) {
+      return;
+    }
+    rememberDialogFolder(DialogGroup::Export, path);
+    exportTo(path, unit == offered ? QString() : unit);
+    return;
+  }
   const QString filter = format == QStringLiteral("pdf")   ? tr("PDF (*.pdf)")
                          : format == QStringLiteral("svg") ? tr("SVG (*.svg)")
-                         : format == QStringLiteral("dwg") ? tr("DWG (*.dwg)")
-                                                           : tr("DXF (*.dxf)");
-  const QString path =
-      dialogSaveFileName(this, m_cutSheet ? tr("Export Cut Sheet") : tr("Export Drawing"), suggested, filter);
+                                                           : tr("DWG (*.dwg)");
+  const QString path = dialogSaveFileName(this, title, suggested, filter);
   if (path.isEmpty()) {
     return;
   }
@@ -3015,14 +3031,17 @@ void DrawingWorkspace::exportDrawing(const QString& format) {
   exportTo(path);
 }
 
-bool DrawingWorkspace::exportTo(const QString& path) {
+bool DrawingWorkspace::exportTo(const QString& path, const QString& units) {
   // A cut sheet (mitcad#853): its parts' outlines, their names with Part
   // Names on the LABEL Layer.
   if (m_cutSheet) {
-    const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export_cut_sheet")},
-                              {QStringLiteral("path"), path},
-                              {QStringLiteral("drawing"), m_drawing},
-                              {QStringLiteral("labels"), m_cutLabels}};
+    QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export_cut_sheet")},
+                        {QStringLiteral("path"), path},
+                        {QStringLiteral("drawing"), m_drawing},
+                        {QStringLiteral("labels"), m_cutLabels}};
+    if (!units.isEmpty()) {
+      command.insert(QStringLiteral("units"), units);
+    }
     QJsonObject result;
     qDebug().noquote() << QStringLiteral("Drawing export: %1").arg(QDir::toNativeSeparators(path));
     if (!m_host.runModelCommand(command, &result)) {
@@ -3030,8 +3049,13 @@ bool DrawingWorkspace::exportTo(const QString& path) {
       return false;
     }
     const int parts = result.value(QStringLiteral("parts")).toInt();
-    qInfo().noquote() << QStringLiteral("Exported %1: cut sheet %2, %3 parts").arg(path, m_name).arg(parts);
-    setStatus(tr("Exported %1 (%2 component(s)).").arg(QDir::toNativeSeparators(path)).arg(parts), false);
+    // A DXF file's length unit (mitcad#1408).
+    const QString written = result.value(QStringLiteral("units")).toString();
+    const QString inUnit = written.isEmpty() ? QString() : QStringLiteral(", in %1").arg(written);
+    qInfo().noquote()
+        << QStringLiteral("Exported %1: cut sheet %2, %3 parts%4").arg(path, m_name).arg(parts).arg(inUnit);
+    setStatus(tr("Exported %1 (%2 component(s)%3).").arg(QDir::toNativeSeparators(path)).arg(parts).arg(inUnit),
+              false);
     return true;
   }
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export_drawing")},
@@ -3041,6 +3065,9 @@ bool DrawingWorkspace::exportTo(const QString& path) {
   if (!title.isEmpty()) {
     command.insert(QStringLiteral("title"), title);
   }
+  if (!units.isEmpty()) {
+    command.insert(QStringLiteral("units"), units);
+  }
   QJsonObject result;
   qDebug().noquote() << QStringLiteral("Drawing export: %1").arg(QDir::toNativeSeparators(path));
   if (!m_host.runModelCommand(command, &result)) {
@@ -3048,8 +3075,13 @@ bool DrawingWorkspace::exportTo(const QString& path) {
     return false;
   }
   const int sheets = result.value(QStringLiteral("sheets")).toInt();
-  qInfo().noquote() << QStringLiteral("Exported %1: drawing %2, %3 sheets").arg(path, m_name).arg(sheets);
-  setStatus(tr("Exported %1 (%2 sheet(s)).").arg(QDir::toNativeSeparators(path)).arg(sheets), false);
+  // A DXF file's length unit (mitcad#1408).
+  const QString written = result.value(QStringLiteral("file_units")).toString();
+  const QString inUnit = written.isEmpty() ? QString() : QStringLiteral(", in %1").arg(written);
+  qInfo().noquote()
+      << QStringLiteral("Exported %1: drawing %2, %3 sheets%4").arg(path, m_name).arg(sheets).arg(inUnit);
+  setStatus(tr("Exported %1 (%2 sheet(s)%3).").arg(QDir::toNativeSeparators(path)).arg(sheets).arg(inUnit),
+            false);
   return true;
 }
 

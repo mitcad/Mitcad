@@ -1,0 +1,785 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a convex rounding whose chain runs up into the mitre where two
+earlier convex roundings tighter than its ball meet, closed by the torus of
+their ball (mitcad#1414).
+
+The case: a wedge (two planes A and B at 90 degrees) standing on a plate,
+its foot edges rounded with 1.5 and its top edges with rk = 2.5; its
+vertical edge, a line, is then rounded with R = 3. The top roundings are
+cylinders tangent to A and B along their edges at the vertical edge's top
+V; they meet in a mitre Em from V (to which it is tangent) up to W on the
+top T. The vertical edge's tangent chain takes both mitres (at the foot and
+at the top). Over the top mitre the ball of R would have to touch both
+cylinders of rk from inside: its centre lies rk - R < 0 from their axes,
+there is no section at all, and OCCT's walk failed at once
+(ChFiDS_WalkingFailure), on the replayed and on the stored body.
+
+The construction is the one the bodies stored in the files have: the
+rounding along the vertical edge (a cylinder between A and B) stops at V's
+section; the ball of rk rolls between the rounding's end and T, a torus
+about the rounding's axis (major radius R - rk, minor rk, its tube circle
+rk inside T), from the section of one top rounding (its meridian through
+the rounding's contact with A) to the other's. The top roundings are cut
+along those sections, T along the torus's contact (a circle of radius
+R - rk), and the mitre and the strips of the top roundings beside it go.
+On the reported design's stored body after the rounding the corner is
+exactly that torus (12.9017 mm2, major radius 0.5, minor 2.5).
+
+- ChFi3d_ConvexMitre (new): whether the edge Em at the end of a chain past
+  its edge Ex is such a mitre: Ex a line between the planes A and B, Em
+  between two cylinders KA and KB of one radius rk below R, KA tangent to
+  A and KB to B along their edges through V, both to the plane T along
+  their edges through Em's other vertex W, T square to Ex, the cylinders'
+  axes square to Ex, rk inside their planes and T and through the torus's
+  tube circle (radius R - rk about the ball's axis between A and B, rk
+  inside T, at V's height).
+- ChFi3d_Builder::SplitAtConvexMitres (new, at the start of Compute, after
+  SplitAtTightConcaveArcs): a convex open contour of constant radius whose
+  first or last edge is such a mitre leaves it out; the contour ends at V
+  with the status ChFiDS_Tangent.
+- ChFi3d_Builder::PerformConvexMitreCorners (new, after
+  PerformTightConcaveCorners, before the corners at vertices), for each
+  such end: the stripe ends on the arc of radius R about the ball's axis
+  in V's section, from PA on A to PB on B (its contacts' ends, on the
+  edges A and B share with KA and KB, the parts towards V taken away);
+  the torus is a corner stripe on the stripe's blend (that arc) and T
+  (the circle from QA to QB, on the edges KA and KB share with T, the
+  parts towards W taken away), from KA's meridian PA-QA to KB's PB-QB;
+  KA and KB are cut along the meridians (G1 with the torus), the parts
+  towards the mitre taken away; the torus is generated from the mitre's
+  edge. Where a corner cannot be built the fillet fails as before.
+- ChFi3d_Builder::PerformTightCorners leaves such ends to it.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index c16134db..84142028 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3283,6 +3283,18 @@ void ChFi3d_Builder::Compute()
+   {
+     // (The contours as they are.)
+   }
++  // Convex contours whose chain ends in the mitre of earlier roundings
++  // tighter than their radius: they end before it
++  // (PerformConvexMitreCorners builds the corners).
++  try
++  {
++    OCC_CATCH_SIGNALS
++    SplitAtConvexMitres();
++  }
++  catch (Standard_Failure const&)
++  {
++    // (The contours as they are.)
++  }
+ 
+   // filling of myVDatatMap
+   NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
+@@ -3937,6 +3949,23 @@ void ChFi3d_Builder::Compute()
+       done      = false;
+       myFailure = Failure_Corner;
+     }
++    // The corners of contours ending at a convex mitre of earlier
++    // roundings tighter than their radius (SplitAtConvexMitres).
++    bool aMitres = false;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      aMitres = !done || PerformConvexMitreCorners();
++    }
++    catch (Standard_Failure const&)
++    {
++      aMitres = false;
++    }
++    if (!aMitres)
++    {
++      done      = false;
++      myFailure = Failure_Corner;
++    }
+   }
+   // construct fillets on each vertex + feed the Ds
+   if (done)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 375a53af..48db7a29 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1324,6 +1324,22 @@ private:
+   //! close the corner. Returns false where a corner cannot be built.
+   Standard_EXPORT bool PerformTightConcaveCorners();
+ 
++  //! Convex contours of constant radius R whose chain ends past a line Ex
++  //! between two planes A and B in a mitre Em, where two earlier convex
++  //! roundings of radius rk below R (cylinders tangent to A and B along
++  //! their edges at Ex's end V) meet up to a plane T square to Ex: no ball
++  //! of R rolls over the mitre (it would touch both cylinders from inside).
++  //! The contour ends at V (status ChFiDS_Tangent), the mitre left out;
++  //! PerformConvexMitreCorners builds the corners (mitcad#1414).
++  Standard_EXPORT void SplitAtConvexMitres();
++
++  //! The corners SplitAtConvexMitres made: the ball of rk rolling between
++  //! the blend's end section at V and T, a torus about the blend's axis
++  //! from one rounding's section to the other's. The roundings are cut
++  //! along those sections and T along the torus's contact. Returns false
++  //! where a corner cannot be built.
++  Standard_EXPORT bool PerformConvexMitreCorners();
++
+   //! Two ends of blends of one radius on the same two faces, of two stripes
+   //! whose balls are one ball rolling over a narrow face C between them (a
+   //! strip that breaks the edge chain, its edges with the common face under
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index bf1d6071..510fd893 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -5247,6 +5247,242 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+   return aSeamA && aSeamB;
+ }
+ 
++namespace
++{
++//! A convex mitre at the end of a chain (ChFi3d_ConvexMitre): the chain's
++//! edge Ex between the planes A and B (outward normals nA, nB) ends at V,
++//! where the mitre Em between the cylinders KA and KB of radius rk starts;
++//! KA is tangent to A along Ea, KB to B along Eb (both through V); Em ends
++//! at W on the plane T (outward normal nT along Ex), which KA and KB touch
++//! along Eta and Etb (both through W). O is the centre of the torus that
++//! closes the corner: on the axis of the ball of R between A and B, rk
++//! inside T; rho = R - rk; phi the angle between nA and nB.
++struct ChFi3d_ConvexMitreData
++{
++  TopoDS_Face   A, B, KA, KB, T;
++  TopoDS_Edge   Ea, Eb, Eta, Etb;
++  TopoDS_Vertex V, W;
++  gp_Dir        nA, nB, nT;
++  gp_Pnt        O;
++  double        rk  = 0.;
++  double        rho = 0.;
++  double        phi = 0.;
++};
++} // namespace
++
++//=======================================================================
++// function : ChFi3d_EdgeOfFaceAt
++// purpose  : The edge of F other than Ex holding the vertex V whose
++//            other face is G (G null: any other face, given back in G).
++//=======================================================================
++
++static bool ChFi3d_EdgeOfFaceAt(const TopoDS_Face&   F,
++                                const TopoDS_Edge&   Ex,
++                                const TopoDS_Vertex& V,
++                                const ChFiDS_Map&    EFMap,
++                                TopoDS_Face&         G,
++                                TopoDS_Edge&         E)
++{
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& Ec = TopoDS::Edge(ex.Current());
++    if (Ec.IsSame(Ex) || BRep_Tool::Degenerated(Ec))
++    {
++      continue;
++    }
++    TopoDS_Vertex v1, v2;
++    TopExp::Vertices(Ec, v1, v2);
++    if (!v1.IsSame(V) && !v2.IsSame(V))
++    {
++      continue;
++    }
++    const TopoDS_Face Gc = ChFi3d_FaceBeyond(EFMap, Ec, F);
++    if (Gc.IsNull() || (!G.IsNull() && !Gc.IsSame(G)))
++    {
++      continue;
++    }
++    G = Gc;
++    E = Ec;
++    return true;
++  }
++  return false;
++}
++
++//=======================================================================
++// function : ChFi3d_ConvexMitre
++// purpose  : Whether the edge Em at the end of a convex chain of radius R
++//            past its edge Ex is a mitre of two earlier convex roundings of
++//            a radius rk below R (ChFi3d_ConvexMitreData) that a torus
++//            closes: Ex a line between the planes A and B, the roundings
++//            cylinders tangent to A and B along their edges at V and to
++//            the plane T at Em's other end, T square to Ex, their axes
++//            through the torus's tube circle (radius R - rk about Ex's
++//            ball axis, rk inside T, at V's height).
++//=======================================================================
++
++static bool ChFi3d_ConvexMitre(const TopoDS_Edge&      Ex,
++                               const TopoDS_Edge&      Em,
++                               const ChFiDS_Map&       EFMap,
++                               const double            R,
++                               const double            tol,
++                               ChFi3d_ConvexMitreData& D)
++{
++  const double angTol = 1.e-6;
++  if (Ex.IsSame(Em) || BRep_Tool::Degenerated(Ex) || BRep_Tool::Degenerated(Em) || !EFMap.Contains(Ex)
++      || !EFMap.Contains(Em) || EFMap(Ex).Extent() != 2 || EFMap(Em).Extent() != 2
++      || !TopExp::CommonVertex(Ex, Em, D.V))
++  {
++    return false;
++  }
++  {
++    TopoDS_Vertex v1, v2;
++    TopExp::Vertices(Em, v1, v2);
++    if (v1.IsNull() || v2.IsNull() || v1.IsSame(v2))
++    {
++      return false;
++    }
++    D.W = v1.IsSame(D.V) ? v2 : v1;
++  }
++  BRepAdaptor_Curve aCx(Ex);
++  if (aCx.GetType() != GeomAbs_Line)
++  {
++    return false;
++  }
++  const gp_Dir d = aCx.Line().Direction();
++  D.A            = TopoDS::Face(EFMap(Ex).First());
++  D.B            = TopoDS::Face(EFMap(Ex).Last());
++  gp_Pln PlA, PlB, PlT;
++  if (D.A.IsSame(D.B) || !ChFi3d_PlaneOf(D.A, PlA, D.nA) || !ChFi3d_PlaneOf(D.B, PlB, D.nB)
++      || std::abs(D.nA.Dot(d)) > angTol || std::abs(D.nB.Dot(d)) > angTol)
++  {
++    return false;
++  }
++  const TopoDS_Face K1 = TopoDS::Face(EFMap(Em).First());
++  const TopoDS_Face K2 = TopoDS::Face(EFMap(Em).Last());
++  if (K1.IsSame(K2) || BRepAdaptor_Surface(K1, false).GetType() != GeomAbs_Cylinder
++      || BRepAdaptor_Surface(K2, false).GetType() != GeomAbs_Cylinder)
++  {
++    return false;
++  }
++  // KA beside A, KB beside B (each along an edge through V).
++  TopoDS_Face G = K1;
++  if (ChFi3d_EdgeOfFaceAt(D.A, Ex, D.V, EFMap, G, D.Ea))
++  {
++    D.KA = K1;
++    D.KB = K2;
++  }
++  else
++  {
++    D.KA = K2;
++    D.KB = K1;
++    G    = K2;
++    if (!ChFi3d_EdgeOfFaceAt(D.A, Ex, D.V, EFMap, G, D.Ea))
++    {
++      return false;
++    }
++  }
++  G = D.KB;
++  if (!ChFi3d_EdgeOfFaceAt(D.B, Ex, D.V, EFMap, G, D.Eb))
++  {
++    return false;
++  }
++  const gp_Cylinder CA = BRepAdaptor_Surface(D.KA, false).Cylinder();
++  const gp_Cylinder CB = BRepAdaptor_Surface(D.KB, false).Cylinder();
++  D.rk                 = CA.Radius();
++  if (std::abs(CB.Radius() - D.rk) > tol || !(D.rk > 10. * tol && D.rk < R - 10. * tol))
++  {
++    return false;
++  }
++  // The plane T at W, which both cylinders touch along an edge through W.
++  TopoDS_Face T;
++  if (!ChFi3d_EdgeOfFaceAt(D.KA, Em, D.W, EFMap, T, D.Eta) || T.IsSame(D.KB) || T.IsSame(D.A))
++  {
++    return false;
++  }
++  if (!ChFi3d_EdgeOfFaceAt(D.KB, Em, D.W, EFMap, T, D.Etb))
++  {
++    return false;
++  }
++  D.T = T;
++  if (!ChFi3d_PlaneOf(D.T, PlT, D.nT) || std::abs(std::abs(D.nT.Dot(d)) - 1.) > angTol)
++  {
++    return false;
++  }
++  // The cylinders convex, tangent to their plane beside the chain and to T:
++  // their axes square to Ex, along their planes, rk inside both.
++  const auto inside = [](const gp_Pln& Pl, const gp_Dir& n, const gp_Pnt& X) {
++    return gp_Vec(Pl.Location(), X).Dot(gp_Vec(n));
++  };
++  for (const gp_Cylinder* C : {&CA, &CB})
++  {
++    const gp_Dir& a  = C->Axis().Direction();
++    const gp_Dir& nP = C == &CA ? D.nA : D.nB;
++    const gp_Pln& Pl = C == &CA ? PlA : PlB;
++    if (std::abs(a.Dot(d)) > angTol || std::abs(a.Dot(nP)) > angTol
++        || std::abs(inside(Pl, nP, C->Location()) + D.rk) > tol
++        || std::abs(inside(PlT, D.nT, C->Location()) + D.rk) > tol)
++    {
++      return false;
++    }
++  }
++  // O: R inside A and B, rk inside T.
++  const gp_Vec vA(D.nA), vB(D.nB), vT(D.nT);
++  const double aDet = vA.Dot(vB.Crossed(vT));
++  if (std::abs(aDet) < 1.e-6)
++  {
++    return false;
++  }
++  const double hA = vA.Dot(gp_Vec(PlA.Location().XYZ())) - R;
++  const double hB = vB.Dot(gp_Vec(PlB.Location().XYZ())) - R;
++  const double hT = vT.Dot(gp_Vec(PlT.Location().XYZ())) - D.rk;
++  D.O             = gp_Pnt((hA * vB.Crossed(vT).XYZ() + hB * vT.Crossed(vA).XYZ() + hT * vA.Crossed(vB).XYZ()) / aDet);
++  D.rho           = R - D.rk;
++  D.phi           = D.nA.Angle(D.nB);
++  if (D.phi < 1.e-3 || D.phi > M_PI - 1.e-3)
++  {
++    return false;
++  }
++  // The cylinders' axes through the tube circle; V at O's height.
++  if (gp_Lin(CA.Axis()).Distance(gp_Pnt(D.O.XYZ() + D.rho * D.nA.XYZ())) > tol
++      || gp_Lin(CB.Axis()).Distance(gp_Pnt(D.O.XYZ() + D.rho * D.nB.XYZ())) > tol
++      || std::abs(gp_Vec(D.O, BRep_Tool::Pnt(D.V)).Dot(vT)) > tol)
++  {
++    return false;
++  }
++  return true;
++}
++
++//=======================================================================
++// function : ChFi3d_ConvexMitreAt
++// purpose  : The convex mitre (ChFi3d_ConvexMitre) at the vertex Vx of a
++//            chain whose end edge is Ex, given back in Em.
++//=======================================================================
++
++static bool ChFi3d_ConvexMitreAt(const TopoDS_Vertex&    Vx,
++                                 const TopoDS_Edge&      Ex,
++                                 const ChFiDS_Map&       VEMap,
++                                 const ChFiDS_Map&       EFMap,
++                                 const double            R,
++                                 const double            tol,
++                                 TopoDS_Edge&            Em,
++                                 ChFi3d_ConvexMitreData& D)
++{
++  if (!VEMap.Contains(Vx))
++  {
++    return false;
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator it(VEMap(Vx)); it.More(); it.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(it.Value());
++    if (!E.IsSame(Ex) && ChFi3d_ConvexMitre(Ex, E, EFMap, R, tol, D) && D.V.IsSame(Vx))
++    {
++      Em = E;
++      return true;
++    }
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : SplitAtTightCorners
+ // purpose  : See the header.
+@@ -5439,6 +5675,15 @@ bool ChFi3d_Builder::PerformTightCorners()
+       }
+       const TopoDS_Vertex Vx = isfirst ? sp->FirstVertex() : sp->LastVertex();
+       const TopoDS_Edge   Ex = sp->Edges(isfirst ? 1 : sp->NbEdges());
++      // (Ends at a convex mitre: PerformConvexMitreCorners.)
++      {
++        TopoDS_Edge            Em;
++        ChFi3d_ConvexMitreData Dm;
++        if (sp->IsConstant() && ChFi3d_ConvexMitreAt(Vx, Ex, myVEMap, myEFMap, sp->Radius(), tol, Em, Dm))
++        {
++          continue;
++        }
++      }
+       // The arc at Vx and the stripe whose end is at its other vertex.
+       bool                       aFound = false, aDoneHere = false;
+       occ::handle<ChFiDS_Stripe> S2;
+@@ -6054,6 +6299,393 @@ bool ChFi3d_Builder::PerformTightCorners()
+   return true;
+ }
+ 
++//=======================================================================
++// function : SplitAtConvexMitres
++// purpose  : See the header.
++//=======================================================================
++
++void ChFi3d_Builder::SplitAtConvexMitres()
++{
++  const double                                 tol = std::max(10. * tolapp3d, 1.e-5);
++  NCollection_List<occ::handle<ChFiDS_Stripe>> aNew;
++  bool                                         aSplit = false;
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(myListStripe); it.More(); it.Next())
++  {
++    const occ::handle<ChFiDS_Stripe>&  S  = it.Value();
++    const occ::handle<ChFiDS_FilSpine> sp = S.IsNull() ? occ::handle<ChFiDS_FilSpine>()
++                                                        : occ::down_cast<ChFiDS_FilSpine>(S->Spine());
++    const int n = sp.IsNull() ? 0 : sp->NbEdges();
++    if (sp.IsNull() || !sp->IsConstant() || n < 2 || sp->IsClosed()
++        || sp->GetTypeOfConcavity() == ChFiDS_Concave)
++    {
++      aNew.Append(S);
++      continue;
++    }
++    const double           R = sp->Radius();
++    ChFi3d_ConvexMitreData D;
++    const bool             aFirst = ChFi3d_ConvexMitre(sp->Edges(2), sp->Edges(1), myEFMap, R, tol, D);
++    const bool aLast = ChFi3d_ConvexMitre(sp->Edges(n - 1), sp->Edges(n), myEFMap, R, tol, D);
++    const int  i1 = aFirst ? 2 : 1, i2 = aLast ? n - 1 : n;
++    if ((!aFirst && !aLast) || i2 < i1)
++    {
++      aNew.Append(S);
++      continue;
++    }
++    occ::handle<ChFiDS_Stripe>   st = new ChFiDS_Stripe();
++    occ::handle<ChFiDS_FilSpine> ns = new ChFiDS_FilSpine(tolesp);
++    st->ChangeSpine()               = ns;
++    for (int k = i1; k <= i2; k++)
++    {
++      ns->SetEdges(sp->Edges(k));
++    }
++    ns->SetFirstStatus(aFirst ? ChFiDS_Tangent : sp->FirstStatus());
++    ns->SetLastStatus(aLast ? ChFiDS_Tangent : sp->LastStatus());
++    ns->SetTypeOfConcavity(sp->GetTypeOfConcavity());
++    ns->Load();
++    ns->SetRadius(R);
++    aNew.Append(st);
++    aSplit = true;
++  }
++  if (aSplit)
++  {
++    myListStripe = aNew;
++  }
++}
++
++//=======================================================================
++// function : PerformConvexMitreCorners
++// purpose  : See the header. At the stripe's end at V (its end section
++//            the arc of radius R about the ball's axis from PA on A to PB
++//            on B), the torus about that axis (major radius rho = R - rk,
++//            its tube the ball of rk) turns from KA's section through PA
++//            (the meridian from PA to QA on T) to KB's (PB to QB), touching
++//            the stripe's blend along the end arc and T along the circle
++//            of radius rho from QA to QB. KA and KB are cut along the
++//            meridians, T along that circle; the mitre and the strips of
++//            KA and KB beside it go.
++//=======================================================================
++
++bool ChFi3d_Builder::PerformConvexMitreCorners()
++{
++  TopOpeBRepDS_DataStructure&                        DStr = myDS->ChangeDS();
++  const double                                       tol  = std::max(10. * tolapp3d, 1.e-5);
++  NCollection_List<occ::handle<ChFiDS_Stripe>>       aCorners;
++  const NCollection_List<occ::handle<ChFiDS_Stripe>> aStripes = myListStripe;
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itS(aStripes); itS.More(); itS.Next())
++  {
++    const occ::handle<ChFiDS_Stripe>&  S  = itS.Value();
++    const occ::handle<ChFiDS_FilSpine> sp = S->Spine().IsNull()
++                                              ? occ::handle<ChFiDS_FilSpine>()
++                                              : occ::down_cast<ChFiDS_FilSpine>(S->Spine());
++    if (sp.IsNull() || !sp->IsConstant() || sp->GetTypeOfConcavity() == ChFiDS_Concave)
++    {
++      continue;
++    }
++    for (const bool isfirst : {true, false})
++    {
++      if ((isfirst ? sp->FirstStatus() : sp->LastStatus()) != ChFiDS_Tangent)
++      {
++        continue;
++      }
++      const TopoDS_Vertex    Vx = isfirst ? sp->FirstVertex() : sp->LastVertex();
++      const TopoDS_Edge      Ex = sp->Edges(isfirst ? 1 : sp->NbEdges());
++      TopoDS_Edge            Em;
++      ChFi3d_ConvexMitreData D;
++      const double           R = sp->Radius();
++      if (!ChFi3d_ConvexMitreAt(Vx, Ex, myVEMap, myEFMap, R, tol, Em, D))
++      {
++        continue;
++      }
++      if (S->SetOfSurfData().IsNull() || S->SetOfSurfData()->IsEmpty())
++      {
++        return false;
++      }
++      const occ::handle<ChFiDS_SurfData>& Fd =
++        isfirst ? S->SetOfSurfData()->Value(1) : S->SetOfSurfData()->Value(S->SetOfSurfData()->Length());
++      const int IA = DStr.AddShape(D.A);
++      const int IB = DStr.AddShape(D.B);
++      const int sA = Fd->IndexOfS1() == IA ? 1 : Fd->IndexOfS2() == IA ? 2 : 0;
++      if (sA == 0 || Fd->Index(3 - sA) != IB || Fd->IsOnCurve(1) || Fd->IsOnCurve(2))
++      {
++        return false;
++      }
++      const int                        sB  = 3 - sA;
++      const occ::handle<Geom_Surface>& SfP = DStr.Surface(Fd->Surf()).Surface();
++      const double                     rk = D.rk, rho = D.rho, phi = D.phi;
++      const gp_Pnt                     PA(D.O.XYZ() + R * D.nA.XYZ());
++      const gp_Pnt                     PB(D.O.XYZ() + R * D.nB.XYZ());
++      const gp_Pnt                     QA(D.O.XYZ() + rho * D.nA.XYZ() + rk * D.nT.XYZ());
++      const gp_Pnt                     QB(D.O.XYZ() + rho * D.nB.XYZ() + rk * D.nT.XYZ());
++
++      // The stripe's contacts end at PA and PB.
++      const auto onContact = [&](const int s, const gp_Pnt& X, double& t) {
++        const ChFiDS_FaceInterference& Fi = Fd->Interference(s);
++        const occ::handle<Geom_Curve>& Cc = DStr.Curve(Fi.LineIndex()).Curve();
++        if (Cc.IsNull() || Fi.PCurveOnSurf().IsNull())
++        {
++          return false;
++        }
++        const double f = Fi.FirstParameter(), l = Fi.LastParameter();
++        const double tEnd = isfirst ? f : l;
++        if (Cc->Value(tEnd).Distance(X) <= tol)
++        {
++          t = tEnd;
++          return true;
++        }
++        GeomAPI_ProjectPointOnCurve aPr(X, Cc, std::min(f, l), std::max(f, l));
++        if (aPr.NbPoints() == 0 || aPr.LowerDistance() > tol)
++        {
++          return false;
++        }
++        t = aPr.LowerDistanceParameter();
++        return true;
++      };
++      double tA = 0., tB = 0.;
++      if (!onContact(sA, PA, tA) || !onContact(sB, PB, tB))
++      {
++        return false;
++      }
++      const gp_Pnt2d uvPA = Fd->Interference(sA).PCurveOnSurf()->Value(tA);
++
++      // The torus: X along nA, Z along nT, Y towards nB.
++      gp_Ax3 aFrame(D.O, D.nT, D.nA);
++      if (gp_Vec(aFrame.YDirection()).Dot(gp_Vec(D.nB)) < 0.)
++      {
++        aFrame.YReverse();
++      }
++      const gp_Dir                            aY = aFrame.YDirection();
++      const occ::handle<Geom_ToroidalSurface> aT = new Geom_ToroidalSurface(aFrame, rho, rk);
++      const occ::handle<Geom_Curve> ce  = new Geom_TrimmedCurve(aT->VIso(0.), 0., phi);         // PA to PB
++      const occ::handle<Geom_Curve> cw  = new Geom_TrimmedCurve(aT->VIso(0.5 * M_PI), 0., phi); // QA to QB
++      const occ::handle<Geom_Curve> cka = new Geom_TrimmedCurve(aT->UIso(0.), 0., 0.5 * M_PI);  // PA to QA
++      const occ::handle<Geom_Curve> ckb = new Geom_TrimmedCurve(aT->UIso(phi), 0., 0.5 * M_PI); // PB to QB
++      if (ce->Value(0.).Distance(PA) > tol || ce->Value(phi).Distance(PB) > tol || cw->Value(0.).Distance(QA) > tol
++          || cw->Value(phi).Distance(QB) > tol || cka->Value(0.).Distance(PA) > tol
++          || cka->Value(0.5 * M_PI).Distance(QA) > tol || ckb->Value(0.).Distance(PB) > tol
++          || ckb->Value(0.5 * M_PI).Distance(QB) > tol)
++      {
++        return false;
++      }
++      const occ::handle<Geom2d_Curve> pTe  = new Geom2d_Line(gp_Pnt2d(0., 0.), gp_Dir2d(1., 0.));
++      const occ::handle<Geom2d_Curve> pTw  = new Geom2d_Line(gp_Pnt2d(0., 0.5 * M_PI), gp_Dir2d(1., 0.));
++      const occ::handle<Geom2d_Curve> pTka = new Geom2d_Line(gp_Pnt2d(0., 0.), gp_Dir2d(0., 1.));
++      const occ::handle<Geom2d_Curve> pTkb = new Geom2d_Line(gp_Pnt2d(phi, 0.), gp_Dir2d(0., 1.));
++      const TopoDS_Face               TF   = TopoDS::Face(D.T.Oriented(TopAbs_FORWARD));
++      const TopoDS_Face               KAF  = TopoDS::Face(D.KA.Oriented(TopAbs_FORWARD));
++      const TopoDS_Face               KBF  = TopoDS::Face(D.KB.Oriented(TopAbs_FORWARD));
++      const occ::handle<Geom_Surface> ST   = BRep_Tool::Surface(TF);
++      const occ::handle<Geom_Surface> SKA  = BRep_Tool::Surface(KAF);
++      const occ::handle<Geom_Surface> SKB  = BRep_Tool::Surface(KBF);
++      // (Parameters on a face near its own.)
++      const auto uvOnFace = [&](const TopoDS_Face& F, const occ::handle<Geom_Surface>& Sf, const gp_Pnt& X) {
++        double                     u = 0., v = 0.;
++        GeomAPI_ProjectPointOnSurf aPr(X, Sf);
++        if (aPr.NbPoints() > 0)
++        {
++          aPr.LowerDistanceParameters(u, v);
++        }
++        double u1 = 0., u2 = 0., v1 = 0., v2 = 0.;
++        BRepTools::UVBounds(F, u1, u2, v1, v2);
++        if (Sf->IsUPeriodic())
++        {
++          u = ElCLib::InPeriod(u, 0.5 * (u1 + u2) - 0.5 * Sf->UPeriod(), 0.5 * (u1 + u2) + 0.5 * Sf->UPeriod());
++        }
++        if (Sf->IsVPeriodic())
++        {
++          v = ElCLib::InPeriod(v, 0.5 * (v1 + v2) - 0.5 * Sf->VPeriod(), 0.5 * (v1 + v2) + 0.5 * Sf->VPeriod());
++        }
++        return gp_Pnt2d(u, v);
++      };
++      const occ::handle<Geom2d_Curve> pPe = ChFi3d_PCurveNear(ce, 0., phi, SfP, uvPA);
++      const occ::handle<Geom2d_Curve> pWt = ChFi3d_PCurveNear(cw, 0., phi, ST, uvOnFace(TF, ST, QA));
++      const occ::handle<Geom2d_Curve> pKa = ChFi3d_PCurveNear(cka, 0., 0.5 * M_PI, SKA, uvOnFace(KAF, SKA, PA));
++      const occ::handle<Geom2d_Curve> pKb = ChFi3d_PCurveNear(ckb, 0., 0.5 * M_PI, SKB, uvOnFace(KBF, SKB, PB));
++      if (pPe.IsNull() || pWt.IsNull() || pKa.IsNull() || pKb.IsNull())
++      {
++        return false;
++      }
++      const double dPe = ChFi3d_OffSurface(ce, pPe, SfP, 0., phi, tolapp3d);
++      const double dWt = ChFi3d_OffSurface(cw, pWt, ST, 0., phi, tolapp3d);
++      const double dKa = ChFi3d_OffSurface(cka, pKa, SKA, 0., 0.5 * M_PI, tolapp3d);
++      const double dKb = ChFi3d_OffSurface(ckb, pKb, SKB, 0., 0.5 * M_PI, tolapp3d);
++      if (dPe > tol || dWt > tol || dKa > tol || dKb > tol)
++      {
++        return false;
++      }
++
++      // The points: PA and PB on the edges A and B share with KA and KB,
++      // QA and QB on the edges KA and KB share with T, the parts towards V
++      // and W taken away.
++      const auto onEdge = [&](const TopoDS_Edge& E, const TopoDS_Vertex& Vaway, const gp_Pnt& X,
++                              ChFiDS_CommonPoint& cp) {
++        const TopoDS_Edge             EF = TopoDS::Edge(E.Oriented(TopAbs_FORWARD));
++        double                        f = 0., l = 0.;
++        const occ::handle<Geom_Curve> Ce = BRep_Tool::Curve(EF, f, l);
++        if (Ce.IsNull())
++        {
++          return false;
++        }
++        GeomAPI_ProjectPointOnCurve aPr(X, Ce, f, l);
++        if (aPr.NbPoints() == 0 || aPr.LowerDistance() > tol)
++        {
++          return false;
++        }
++        TopoDS_Vertex v1, v2;
++        TopExp::Vertices(EF, v1, v2);
++        cp.Reset();
++        cp.SetTolerance(tol);
++        cp.SetPoint(X);
++        cp.SetArc(tol, EF, aPr.LowerDistanceParameter(), v2.IsSame(Vaway) ? TopAbs_REVERSED : TopAbs_FORWARD);
++        return true;
++      };
++      ChFiDS_CommonPoint cpPA, cpPB, cpQA, cpQB;
++      if (!onEdge(D.Ea, D.V, PA, cpPA) || !onEdge(D.Eb, D.V, PB, cpPB) || !onEdge(D.Eta, D.W, QA, cpQA)
++          || !onEdge(D.Etb, D.W, QB, cpQB))
++      {
++        return false;
++      }
++      const int iPA = ChFi3d_IndexPointInDS(cpPA, DStr);
++      const int iPB = ChFi3d_IndexPointInDS(cpPB, DStr);
++      const int iQA = ChFi3d_IndexPointInDS(cpQA, DStr);
++      const int iQB = ChFi3d_IndexPointInDS(cpQB, DStr);
++
++      // The stripe's end: the arc.
++      {
++        ChFiDS_CommonPoint a = cpPA, b = cpPB;
++        a.SetParameter(Fd->Vertex(isfirst, sA).Parameter());
++        b.SetParameter(Fd->Vertex(isfirst, sB).Parameter());
++        Fd->ChangeVertex(isfirst, sA) = a;
++        Fd->ChangeVertex(isfirst, sB) = b;
++        Fd->ChangeInterference(sA).SetParameter(tA, isfirst);
++        Fd->ChangeInterference(sB).SetParameter(tB, isfirst);
++      }
++      const int Ie = DStr.AddCurve(TopOpeBRepDS_Curve(ce, dPe));
++      S->SetCurve(Ie, isfirst);
++      S->SetParameters(isfirst, 0., phi);
++      S->ChangePCurve(isfirst) = pPe;
++      S->SetIndexPoint(iPA, isfirst, sA);
++      S->SetIndexPoint(iPB, isfirst, sB);
++      S->SetOrientation(sA == 1 ? TopAbs_FORWARD : TopAbs_REVERSED, isfirst);
++      S->InDS(isfirst);
++
++      // The orientation: as the stripe's blend, where the surfaces' normals
++      // agree with its outwards.
++      bool sP = false;
++      {
++        gp_Pnt Pp;
++        gp_Vec du, dv;
++        SfP->D1(uvPA.X(), uvPA.Y(), Pp, du, dv);
++        sP = du.Crossed(dv).Dot(gp_Vec(D.nA)) > 0.;
++      }
++      TopAbs_Orientation aOrT = Fd->Orientation();
++      {
++        const double u = 0.5 * phi, v = 0.25 * M_PI;
++        gp_Pnt       Pt;
++        gp_Vec       du, dv;
++        aT->D1(u, v, Pt, du, dv);
++        const gp_Pnt Ct(D.O.XYZ() + rho * (std::cos(u) * D.nA.XYZ() + std::sin(u) * aY.XYZ()));
++        if ((du.Crossed(dv).Dot(gp_Vec(Ct, Pt)) > 0.) != sP)
++        {
++          aOrT = TopAbs::Reverse(aOrT);
++        }
++      }
++
++      // The torus: S1 on the stripe's blend (the arc), S2 on T, KA's
++      // meridian first, KB's last.
++      const double                 eps = 1.e-2 * rk;
++      occ::handle<ChFiDS_Stripe>   cT  = new ChFiDS_Stripe();
++      cT->ChangeSetOfSurfData()        = new NCollection_HSequence<occ::handle<ChFiDS_SurfData>>();
++      occ::handle<ChFiDS_SurfData> sT  = new ChFiDS_SurfData();
++      cT->ChangeSetOfSurfData()->Append(sT);
++      const int IsT = DStr.AddSurface(TopOpeBRepDS_Surface(aT, tolapp3d));
++      sT->ChangeSurf(IsT);
++      sT->ChangeOrientation() = aOrT;
++      sT->ChangeIndexOfS1(-Fd->Surf());
++      const int IT = DStr.AddShape(D.T);
++      sT->ChangeIndexOfS2(IT);
++      const int Iw  = DStr.AddCurve(TopOpeBRepDS_Curve(cw, dWt));
++      const int Ika = DStr.AddCurve(TopOpeBRepDS_Curve(cka, dKa));
++      const int Ikb = DStr.AddCurve(TopOpeBRepDS_Curve(ckb, dKb));
++      {
++        ChFiDS_FaceInterference& FI = sT->ChangeInterference(1);
++        FI.SetInterference(
++          Ie,
++          ChFi3d_KeptSideOn(ce, 0.5 * phi, pPe, SfP, gp_Pnt(ce->Value(0.5 * phi).XYZ() + eps * D.nT.XYZ())),
++          pPe,
++          pTe);
++        FI.SetFirstParameter(0.);
++        FI.SetLastParameter(phi);
++      }
++      {
++        const gp_Pnt Pw = cw->Value(0.5 * phi);
++        const gp_Vec aOut(gp_Pnt(D.O.XYZ() + rk * D.nT.XYZ()), Pw);
++        ChFiDS_FaceInterference& FI = sT->ChangeInterference(2);
++        FI.SetInterference(Iw,
++                           ChFi3d_KeptSideOn(cw, 0.5 * phi, pWt, ST, gp_Pnt(Pw.XYZ() + (eps / rho) * aOut.XYZ())),
++                           pWt,
++                           pTw);
++        FI.SetFirstParameter(0.);
++        FI.SetLastParameter(phi);
++      }
++      sT->ChangeVertex(true, 1)  = cpPA;
++      sT->ChangeVertex(true, 2)  = cpQA;
++      sT->ChangeVertex(false, 1) = cpPB;
++      sT->ChangeVertex(false, 2) = cpQB;
++      cT->ChangeFirstCurve(Ika);
++      cT->ChangeFirstParameters(0., 0.5 * M_PI);
++      cT->ChangeFirstPCurve() = pTka;
++      cT->FirstPCurveOrientation(TopAbs_FORWARD);
++      cT->ChangeIndexFirstPointOnS1(iPA);
++      cT->ChangeIndexFirstPointOnS2(iQA);
++      cT->ChangeLastCurve(Ikb);
++      cT->ChangeLastParameters(0., 0.5 * M_PI);
++      cT->ChangeLastPCurve() = pTkb;
++      cT->LastPCurveOrientation(TopAbs_FORWARD);
++      cT->ChangeIndexLastPointOnS1(iPB);
++      cT->ChangeIndexLastPointOnS2(iQB);
++      cT->SetSolidIndex(S->SolidIndex());
++      aCorners.Append(cT);
++
++      // KA and KB cut along the meridians, the parts towards the mitre
++      // taken away.
++      const int    IKA = DStr.AddShape(D.KA);
++      const int    IKB = DStr.AddShape(D.KB);
++      // (Along the torus's u at KA's meridian towards KB, and back at KB's.)
++      const gp_XYZ aToB = aY.XYZ();
++      const gp_XYZ aToA = std::sin(phi) * D.nA.XYZ() - std::cos(phi) * aY.XYZ();
++      DStr.ChangeShapeInterferences(IKA).Append(ChFi3d_FilCurveInDS(
++        Ika,
++        IKA,
++        pKa,
++        ChFi3d_KeptSideOn(cka, 0.25 * M_PI, pKa, SKA, gp_Pnt(cka->Value(0.25 * M_PI).XYZ() + eps * aToB))));
++      DStr.ChangeShapeInterferences(IKB).Append(ChFi3d_FilCurveInDS(
++        Ikb,
++        IKB,
++        pKb,
++        ChFi3d_KeptSideOn(ckb, 0.25 * M_PI, pKb, SKB, gp_Pnt(ckb->Value(0.25 * M_PI).XYZ() + eps * aToA))));
++      for (const int Ik : {Ika, Ikb})
++      {
++        ChFiDS_Regul aReg;
++        aReg.SetCurve(Ik);
++        aReg.SetS1(IsT, false);
++        aReg.SetS2(Ik == Ika ? IKA : IKB, true);
++        myRegul.Append(aReg);
++      }
++      // (The torus is generated from the mitre's edge.)
++      if (!myEVIMap.IsBound(Em))
++      {
++        myEVIMap.Bind(Em, NCollection_List<int>());
++      }
++      myEVIMap.ChangeFind(Em).Append(IsT);
++    }
++  }
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itC(aCorners); itC.More(); itC.Next())
++  {
++    myListStripe.Append(itC.Value());
++  }
++  return true;
++}
++
+ //=======================================================================
+ // function : PerformRolledPastEnd
+ // purpose  : The end of a lone stripe at a vertex of more than three edges

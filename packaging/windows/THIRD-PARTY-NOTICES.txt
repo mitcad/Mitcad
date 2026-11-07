@@ -17,8 +17,14 @@ Open CASCADE Technology (TK*.dll in bin)
   crashing; the patches are in MitCad's source code
   (third_party/vcpkg-ports/opencascade).
 
+HEIF/HEIC images of image references are decoded by Windows' own decoder
+(the Windows Imaging Component with Microsoft's HEIF Image Extensions and
+HEVC Video Extensions, when the user has installed them): MitCad ships
+neither. Only a build with the MITCAD_HEIF option (releases are built
+without it) ships the following instead:
+
 libheif 1.23.5 and libde265 1.1.3 (heif.dll and libde265.dll in bin), which
-decode the HEIF/HEIC images of image references
+decode the HEIF/HEIC images of image references in builds with MITCAD_HEIF
   Licence: GNU LGPL version 3 or later; the texts, with the GNU GPL the
   LGPL builds on, are in licenses\vcpkg\libheif\copyright and
   licenses\vcpkg\libde265\copyright (libde265's also gives the licence of

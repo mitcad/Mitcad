@@ -308,6 +308,8 @@ pub struct Decoded {
     /// Objects naming a body blob (`BREP.<guid>.smb`).
     pub brep_blobs: Vec<BrepBlobEntry>,
     pub coverage: CoverageCounts,
+    /// The mesh bodies (mitcad#1366).
+    pub mesh_bodies: Vec<super::mesh::MeshBodyEntry>,
 }
 
 /// Decodes the parameters, timeline, components and blob names.
@@ -473,6 +475,7 @@ pub fn decode(seg: &Segment) -> Decoded {
         components,
         brep_blobs,
         coverage,
+        mesh_bodies: super::mesh::mesh_bodies(seg),
     }
 }
 

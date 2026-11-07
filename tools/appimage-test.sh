@@ -195,6 +195,15 @@ if readelf -d "$DIR/usr/bin/mitcad" | grep -q 'NEEDED.*libheif'; then
   done
   grep -q "libheif" "$DIR/usr/share/doc/mitcad/THIRD-PARTY-NOTICES.txt" || ui_fail "the notices do not list libheif"
   echo "ok   libheif and libde265 as shared libraries, with their licence texts"
+else
+  # Without it (releases): the distribution's libheif, loaded at run time
+  # by name (mitcad#1304), neither linked nor shipped.
+  for library in libheif libde265; do
+    if compgen -G "$DIR/usr/lib/$library.so*" > /dev/null; then
+      ui_fail "the AppImage ships $library, which only a build with MITCAD_HEIF may"
+    fi
+  done
+  echo "ok   no libheif or libde265 shipped: the distribution's libheif decodes HEIF"
 fi
 echo "ok   the executables, the desktop file, the icon, Qt's plugins, OCCT and the licences"
 [ -e "$DIR/usr/bin/mitcad-render" ] || ui_fail "the AppImage has no render worker usr/bin/mitcad-render"

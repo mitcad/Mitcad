@@ -630,6 +630,8 @@ pub enum SketchPen {
     Thin,
     /// Continuous wide, as visible edges.
     Thick,
+    /// Continuous extra wide, twice the wide line (mitcad#1402).
+    ExtraThick,
     /// Dashed, as hidden edges.
     Hidden,
     /// Long dash dotted, as centre lines.

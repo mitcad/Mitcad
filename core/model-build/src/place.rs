@@ -463,7 +463,7 @@ fn shifted(value: &ValueInput, by: f64) -> ValueInput {
 }
 
 /// ` + k` or ` - k` after an expression; nothing for 0.
-fn plus(k: f64) -> String {
+pub(crate) fn plus(k: f64) -> String {
     if k.abs() < 1e-9 {
         String::new()
     } else if k > 0.0 {
@@ -491,19 +491,23 @@ pub(crate) fn slide_of(
         (SideFrom::Middle, Some(l)) => Ok(l / 2.0 + distance - middle),
         (SideFrom::B, None) => Err(refuse("the part has no end B to measure from")),
         (SideFrom::Middle, None) => Err(refuse("the part has no length to find its middle")),
+        // The free stretch's middle is the profiles' around it (`gap.rs`).
+        (SideFrom::Gap, _) => Err(refuse(
+            "Middle of Gap is measured between the profiles on a side",
+        )),
     }
 }
 
 /// The offset from a reference of a part whose frame is at `tx` along the
 /// profile ([`slide_of`] the other way); 0 for B and the middle without a
-/// length.
+/// length, and for the middle of a free stretch (its own, `gap.rs`).
 pub(crate) fn offset_of(from: SideFrom, tx: f64, near: f64, far: f64, length: Option<f64>) -> f64 {
     let middle = (near + far) / 2.0;
     let offset = match (from, length) {
         (SideFrom::A, _) => tx + near,
         (SideFrom::B, Some(l)) => l - (tx + far),
         (SideFrom::Middle, Some(l)) => tx + middle - l / 2.0,
-        (_, None) => 0.0,
+        (SideFrom::Gap, _) | (_, None) => 0.0,
     };
     if offset.abs() < 1e-9 { 0.0 } else { offset }
 }
@@ -544,12 +548,18 @@ pub(crate) fn slide_value_of(
             length("from the middle")?,
             plus(-middle)
         )),
+        // The free stretch's middle is the profiles' around it (`gap.rs`).
+        (SideFrom::Gap, _) => {
+            return Err(refuse(
+                "Middle of Gap is measured between the profiles on a side",
+            ));
+        }
     })
 }
 
 /// A part on a side, along the slot: where it reaches from its joint's
 /// slide, the length it stays within, and the snap a click took.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SidePlan {
     /// The part's reach along the slot's x from where its frame meets the
     /// slot: its near face is at `tx + near`, its far one at `tx + far`.
@@ -562,9 +572,9 @@ pub struct SidePlan {
     pub snap: f64,
     /// The slot's grid (the system's), 0 when it has none.
     pub grid: f64,
-    /// The snap a click took (`end_a`, `end_b`, `middle`, `grid`), or the
-    /// clamp at an end (`clamped`); None for a click between them or a
-    /// typed offset that fits.
+    /// The snap a click took (`end_a`, `end_b`, `middle`, `gap`, `grid`),
+    /// or the clamp at an end (`clamped`); None for a click between them
+    /// or a typed offset that fits.
     pub snapped: Option<&'static str>,
     /// The near face's distance from end A.
     pub offset: f64,
@@ -577,6 +587,13 @@ pub struct SidePlan {
     /// not to its near or far face or its middle; `near` and `far` are
     /// still its foot's reach.
     pub long_point: bool,
+    // The middle of a free stretch (mitcad#1401).
+    /// The free stretches the profiles standing on the slot leave
+    /// (`gap.rs`), from end A; the whole side when none stands on it.
+    pub gaps: Vec<crate::gap::SideGap>,
+    /// The free stretch the part stands in: the one it is centred in when
+    /// `from` is `Gap`.
+    pub gap: Option<crate::gap::SideGap>,
 }
 
 /// A part on an end (mitcad#417): what the click chose, the new part's
@@ -607,6 +624,14 @@ impl SidePlan {
         if length - width > 1e-9 {
             out.push(("end_b", length - width));
             out.push(("middle", (length - width) / 2.0));
+        }
+        // The middles of the free stretches between profiles the part fits
+        // in (mitcad#1401), where no other snap is.
+        for gap in self.gaps.iter().filter(|g| g.between() && g.takes(width)) {
+            let d = gap.middle() - width / 2.0;
+            if out.iter().all(|(_, o)| (o - d).abs() > 1e-9) {
+                out.push(("gap", d));
+            }
         }
         if self.grid > 1e-9 {
             let mut d = self.grid;
@@ -2251,6 +2276,16 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             from: SideFrom::A,
             from_offset: 0.0,
             long_point: tilted.is_some(),
+            // The free stretches between the profiles on the slot
+            // (mitcad#1401).
+            gaps: match target.info.length {
+                Some((_, l)) => crate::gap::gaps_along(
+                    &crate::gap::standing_on(self, &target.path, target.part()?, slot, None),
+                    l,
+                ),
+                None => Vec::new(),
+            },
+            gap: None,
         };
         let point_local = at.point.map(|p| inverse(&target.placement).apply_point(p));
         let mut warnings = Vec::new();
@@ -2356,23 +2391,50 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
         };
         let length = side.length;
         let along = |p: V3| dot(sub(p, slot_local.translation), x_axis(slot_local));
+        // The middle of a free stretch between profiles (mitcad#1401): the
+        // stretch a click snapped to or is in, the part's middle (or long
+        // point) at its middle and the offset from there.
+        let rmid = (rn + rf) / 2.0;
+        let middle = (near + far) / 2.0;
+        let mut gap: Option<crate::gap::SideGap> = None;
+        let no_gap =
+            || refuse("there is no free stretch between profiles where the side was clicked");
         let (mut from, mut offset, tx) = match &at.offset {
             Some(offset) => {
                 let from = at.from.unwrap_or_default();
                 let distance = value_in(self, offset, Unit::MM)?;
-                let tx = slide_of(from, distance, rn, rf, length)?;
+                let tx = if from == SideFrom::Gap {
+                    let centre = point_local.map(along).ok_or_else(|| {
+                        refuse("Middle of Gap needs a point on the side to find its free stretch")
+                    })?;
+                    let found = crate::gap::gap_containing(&side.gaps, centre)
+                        .cloned()
+                        .ok_or_else(no_gap)?;
+                    let tx = found.middle() + distance - rmid;
+                    gap = Some(found);
+                    tx
+                } else {
+                    slide_of(from, distance, rn, rf, length)?
+                };
                 (from, offset.clone(), tx)
             }
             None => {
                 // The part centred on the click, then snapped; the snap
                 // distances at least the app's (`at.snap`).
                 let least = at.snap.filter(|s| s.is_finite() && *s > 0.0).unwrap_or(0.0);
-                let middle = (near + far) / 2.0;
                 let mut tx = point_local.map_or(-near, along) - middle;
                 if let Some(l) = length {
                     let face = tx + near;
                     let ends = side.snap.max(least);
                     let fine = (side.snap / 4.0).max(least);
+                    // The middle of a free stretch between profiles the
+                    // part fits in (mitcad#1401).
+                    let near_gap = side
+                        .gaps
+                        .iter()
+                        .filter(|g| g.between() && g.takes(far - near))
+                        .find(|g| (tx + middle - g.middle()).abs() < fine)
+                        .cloned();
                     if face < ends {
                         tx = -near;
                         side.snapped = Some("end_a");
@@ -2382,6 +2444,10 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                     } else if (tx + middle - l / 2.0).abs() < fine {
                         tx = l / 2.0 - middle;
                         side.snapped = Some("middle");
+                    } else if let Some(found) = near_gap {
+                        tx = found.middle() - middle;
+                        side.snapped = Some("gap");
+                        gap = Some(found);
                     } else if side.grid > 0.0 {
                         let grid = (face / side.grid).round() * side.grid;
                         let within = (side.snap / 4.0)
@@ -2399,13 +2465,27 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                     (None, Some("end_a"), _) | (None, _, None) => SideFrom::A,
                     (None, Some("end_b"), _) => SideFrom::B,
                     (None, Some("middle"), _) => SideFrom::Middle,
+                    (None, Some("gap"), _) => SideFrom::Gap,
                     (None, _, Some(l)) if l - (tx + far) < tx + near => SideFrom::B,
                     (None, _, Some(_)) => SideFrom::A,
                 };
-                let distance = offset_of(from, tx, rn, rf, length);
+                if from == SideFrom::Gap && gap.is_none() {
+                    gap = Some(
+                        crate::gap::gap_containing(&side.gaps, tx + middle)
+                            .cloned()
+                            .ok_or_else(no_gap)?,
+                    );
+                }
+                let distance = match (&gap, from) {
+                    (Some(g), SideFrom::Gap) => tx + rmid - g.middle(),
+                    _ => offset_of(from, tx, rn, rf, length),
+                };
                 // A click is no finer than a thousandth of a millimetre.
                 let distance = (distance * 1000.0).round() / 1000.0;
-                let tx = slide_of(from, distance, rn, rf, length)?;
+                let tx = match (&gap, from) {
+                    (Some(g), SideFrom::Gap) => g.middle() + distance - rmid,
+                    _ => slide_of(from, distance, rn, rf, length)?,
+                };
                 (from, ValueInput::Number(distance), tx)
             }
         };
@@ -2435,10 +2515,27 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             offset = ValueInput::Number(offset_of(flush, kept, rn, rf, length));
         }
         let name = target_length.map(|(id, _)| self.parameters().name(id));
-        let value = slide_value_of(from, &offset, rn, rf, name.as_deref())?;
+        let value = match (&gap, from) {
+            (Some(g), SideFrom::Gap) => {
+                crate::gap::gap_slide_value(g, &offset, rmid, name.as_deref())?
+            }
+            _ => slide_value_of(from, &offset, rn, rf, name.as_deref())?,
+        };
         side.offset = kept + near;
         side.from = from;
-        side.from_offset = offset_of(from, kept, rn, rf, length);
+        side.from_offset = match (&gap, from) {
+            (Some(g), SideFrom::Gap) => {
+                let o = kept + rmid - g.middle();
+                if o.abs() < 1e-9 { 0.0 } else { o }
+            }
+            _ => offset_of(from, kept, rn, rf, length),
+        };
+        // The free stretch it stands in, also when bound to another
+        // reference: a change of From to Middle of Gap keeps it in place.
+        side.gap = match gap {
+            Some(g) if from == SideFrom::Gap => Some(g),
+            _ => crate::gap::gap_containing(&side.gaps, kept + middle).cloned(),
+        };
         Ok((value, kept))
     }
 
@@ -3166,6 +3263,15 @@ pub(crate) fn make_part(
         framing: None,
         member: None,
         rule: None,
+        // Centred between the profiles around it (mitcad#1401).
+        gap: match &plan.spot {
+            Spot::Joint(j) if j.from == Some(SideFrom::Gap) => j
+                .side
+                .as_ref()
+                .and_then(|s| s.gap.as_ref())
+                .map(|g| g.neighbours()),
+            _ => None,
+        },
     };
     state.assembly.component_mut(made).expect("made").build = Some(record);
     Ok(Placed {
@@ -3486,20 +3592,44 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                 let (near, far) = self.side_reach(&info, joint, rotate);
                 let from_now = info.record.from.unwrap_or_default();
                 let new_from = from.unwrap_or(from_now);
+                let tx = j
+                    .position
+                    .get(&motion)
+                    .and_then(|id| self.parameters().value(*id))
+                    .unwrap_or(0.0);
+                // From the middle of the free stretch it stands in, between
+                // the other profiles on its slot (mitcad#1401).
+                let middle = (near + far) / 2.0;
+                let gap = if new_from == SideFrom::Gap {
+                    Some(crate::gap::gap_of_part(
+                        &*self,
+                        component,
+                        &info.name,
+                        j,
+                        tx + middle,
+                        length,
+                    )?)
+                } else {
+                    None
+                };
                 let value = match offset {
                     Some(value) => value.clone(),
                     None => {
-                        let tx = j
-                            .position
-                            .get(&motion)
-                            .and_then(|id| self.parameters().value(*id))
-                            .unwrap_or(0.0);
-                        let distance = offset_of(new_from, tx, near, far, length);
+                        let distance = match &gap {
+                            Some(g) => tx + middle - g.middle(),
+                            None => offset_of(new_from, tx, near, far, length),
+                        };
                         ValueInput::Number((distance * 1000.0).round() / 1000.0)
                     }
                 };
-                let value = slide_value_of(new_from, &value, near, far, target_name.as_deref())?;
-                Some((motion, value, new_from, from.is_some()))
+                let value = match &gap {
+                    Some(g) => {
+                        crate::gap::gap_slide_value(g, &value, middle, target_name.as_deref())?
+                    }
+                    None => slide_value_of(new_from, &value, near, far, target_name.as_deref())?,
+                };
+                let neighbours = gap.map(|g| g.neighbours());
+                Some((motion, value, new_from, from.is_some(), neighbours))
             }
             _ => None,
         };
@@ -3528,7 +3658,7 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         let side_turn = self.plan_side_lie(&info, input.flip);
         self.apply(|state| {
             let mut changed = Vec::new();
-            if let Some((motion, value, from, from_given)) = offset {
+            if let Some((motion, value, from, from_given, neighbours)) = offset {
                 let joint = joint.expect("checked");
                 edit_joint(state, joint, |j| {
                     j.position.insert(motion, value);
@@ -3539,6 +3669,7 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                     .and_then(|c| c.build.as_mut())
                 {
                     record.from = Some(from);
+                    record.gap = neighbours;
                 }
                 changed.push("offset".to_owned());
                 if from_given {

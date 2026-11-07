@@ -482,6 +482,22 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
   if (selection.size() == 1 && first.kind != SelectKind::Feature && (onBody(first) || !feature.isEmpty())) {
     addCall(QStringLiteral("browser"), tr("Find in Browser"), [this, first] { m_controller->findInBrowser(first); });
   }
+  // A linked design's occurrence, or a body of it (mitcad#1416): opened in
+  // a tab of its own, its file read again now, or every linked design's.
+  if (selection.size() == 1 && (first.kind == SelectKind::Component || onBody(first))) {
+    const QString component =
+        first.kind == SelectKind::Component ? first.owner : m_snapshot.bodies.value(first.owner).component;
+    for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
+      if (!component.isEmpty() && c.uid == component && c.linked && !c.library) {
+        addCall(QStringLiteral("open"), tr("Open Linked Design"), [this, component] { openLinkedDesign(component); });
+        if (!windowReadOnly()) {
+          addCall(QStringLiteral("update"), tr("Update Link"), [this, component] { updateLink(component); });
+          addCall(QStringLiteral("update"), tr("Update All Links"), [this] { updateLink(QString()); });
+        }
+        break;
+      }
+    }
+  }
   // Save As Mesh (mitcad#734): the bodies of the bodies, faces, edges,
   // vertices and components selected to mesh files; disabled with the
   // reason when none is a solid or mesh body.

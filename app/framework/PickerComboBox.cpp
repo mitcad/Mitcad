@@ -6,15 +6,20 @@
 #include <QIcon>
 #include <QImage>
 #include <QObject>
+#include <QPainter>
+#include <QPen>
 #include <QPixmap>
 #include <QPoint>
 #include <QRect>
+#include <QRectF>
 #include <QSize>
 #include <QStringList>
 #include <QStyle>
 #include <QStyleOptionComboBox>
 #include <QStylePainter>
 #include <QtLogging>
+
+#include "Appearances.hpp"
 
 namespace mitcad {
 namespace {
@@ -24,6 +29,20 @@ namespace {
 constexpr int kPickerSwatch = 32;
 
 } // namespace
+
+QImage materialSwatch(const QColor& color) {
+  constexpr int size = 32;
+  QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  painter.setRenderHint(QPainter::Antialiasing);
+  const QColor fill = color.isValid() ? color : Appearance().baseColor;
+  painter.setBrush(fill);
+  painter.setPen(QPen(fill.darker(140), 1));
+  const double edge = 1.5;
+  painter.drawRoundedRect(QRectF(edge, edge, size - 2 * edge, size - 2 * edge), size / 6.0, size / 6.0);
+  return image;
+}
 
 MiddleElideComboBox::MiddleElideComboBox(QWidget* parent) : QComboBox(parent) {
   setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);

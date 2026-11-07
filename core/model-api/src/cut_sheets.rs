@@ -154,13 +154,18 @@ pub(super) struct ExportCutSheetCommand {
     format: Option<String>,
     #[serde(default)]
     labels: bool,
+    /// A DXF file's length unit (`mm`, `in`, …); the design's when left
+    /// out (mitcad#1408).
+    #[serde(default)]
+    units: Option<String>,
 }
 
 /// `export_face_dxf` (mitcad#1049): a body seen square on to one of its
 /// planar faces from outside (in the occurrence that places it, wherever
 /// it is shown when left out), its outline at 1:1 as a cut sheet's part
 /// has it, the lower left corner of its box at the origin, written as DXF
-/// for laser, waterjet or plasma cutting.
+/// for laser, waterjet or plasma cutting, in `units` (the design's when
+/// left out, mitcad#1408).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ExportFaceDxfCommand {
@@ -169,6 +174,8 @@ pub(super) struct ExportFaceDxfCommand {
     #[serde(default)]
     occurrence: Option<OccurrencePath>,
     path: String,
+    #[serde(default)]
+    units: Option<String>,
 }
 
 named_enum! {
@@ -362,13 +369,15 @@ pub(super) trait CutSheetsOps<K: Kernel> {
     fn delete_cut_parts(&mut self, drawing: &str, parts: &[u32]) -> Result<Value, ApiError>;
 
     /// Writes a cut sheet as DXF or SVG (`format`, else the path's
-    /// extension); `check` refuses a path.
+    /// extension), a DXF file in `units` (the design's when left out,
+    /// mitcad#1408); `check` refuses a path.
     fn export_cut_sheet_checked(
         &self,
         drawing: &str,
         path: &str,
         format: Option<&str>,
         labels: bool,
+        units: Option<&str>,
         check: &dyn Fn(&str) -> Result<(), String>,
     ) -> Result<Value, ApiError>;
 }
@@ -688,8 +697,12 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             loops: cut_sheet::placed(&view.outline, [size[0] / 2.0, size[1] / 2.0], 0.0),
         };
         let path = &command.path;
+        let unit = super::exchange::dxf_unit(self, command.units.as_deref())?;
         let text = mitcad_dxf::write_string(
-            &cut_sheet::dxf(std::slice::from_ref(&placed), false),
+            &mitcad_model::exchange::dxf_in_unit(
+                cut_sheet::dxf(std::slice::from_ref(&placed), false),
+                unit,
+            ),
             &mitcad_dxf::WriteOptions::default(),
         )
         .map_err(|e| ApiError(format!("cannot write {path}: {e}")))?;
@@ -704,6 +717,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             "inner": placed.loops.len() - outer,
             "width": size[0],
             "height": size[1],
+            "units": unit.symbol(),
         }))
     }
 
@@ -818,6 +832,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 &c.path,
                 c.format.as_deref(),
                 c.labels,
+                c.units.as_deref(),
                 &|_: &str| Ok(()),
             ),
             CutSheetCommand::ExportFace(c) => self.export_face_dxf(&c),
@@ -895,9 +910,11 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
         path: &str,
         format: Option<&str>,
         labels: bool,
+        units: Option<&str>,
         check: &dyn Fn(&str) -> Result<(), String>,
     ) -> Result<Value, ApiError> {
         let (drawing, cut) = self.find_cut_sheet(drawing)?;
+        let unit = super::exchange::dxf_unit(self, units)?;
         let extension = std::path::Path::new(path)
             .extension()
             .and_then(|e| e.to_str())
@@ -932,7 +949,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
         }
         let bytes = if format == "dxf" {
             mitcad_dxf::write_string(
-                &cut_sheet::dxf(&parts, labels),
+                &mitcad_model::exchange::dxf_in_unit(cut_sheet::dxf(&parts, labels), unit),
                 &mitcad_dxf::WriteOptions::default(),
             )
             .map_err(|e| ApiError(format!("cannot write {path}: {e}")))?
@@ -958,6 +975,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             "sheets": 1,
             "width": cut.width,
             "height": cut.height,
+            "units": (format == "dxf").then_some(unit.symbol()),
             "warnings": layout.warnings,
         }))
     }

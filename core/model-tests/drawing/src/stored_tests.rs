@@ -1611,6 +1611,7 @@ fn the_sheet_comes_with_the_writers_pen_widths() {
     assert!(near(width("hatch"), 0.13), "{pens}");
     assert!(near(width("chain"), 0.18), "{pens}");
     assert!(near(width("frame"), 0.5), "{pens}");
+    assert!(near(width("extra_thick"), 0.7), "{pens}");
     assert_eq!(pens["hidden"]["dashes"], json!([3.0, 1.0]), "{pens}");
     assert_eq!(pens["thick"]["dashes"], json!([]), "{pens}");
     // Every pen the groups draw with is in the table.

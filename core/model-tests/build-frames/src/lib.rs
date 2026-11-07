@@ -21,3 +21,5 @@ mod two_points_tests;
 mod options_tests;
 // Corner connectors of a frame and their nuts (mitcad#1115).
 mod connector_corner_tests;
+// The middle of a free stretch of a side (mitcad#1401).
+mod side_gap_tests;

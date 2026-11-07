@@ -16,6 +16,8 @@
 //! parameters on the one timeline. The records only say what BUILD made,
 //! so that it can edit, connect and remove it again.
 
+// A part centred in a free stretch whose neighbour goes (mitcad#1401).
+mod gap;
 pub(crate) mod geometry;
 mod meta;
 // What BUILD reads of a placed part; the parts list and the properties
@@ -158,10 +160,18 @@ pub struct BuildRecord {
     /// which `build_upgrade` replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<u32>,
+    // The middle of a free stretch (mitcad#1401).
+    /// A part on a side placed from the middle of the free stretch it
+    /// stands in (`from` `gap`): the profiles on the same slot it is
+    /// centred between, towards end A and towards end B; None for the
+    /// side's end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<[Option<ComponentUid>; 2]>,
 }
 
 /// What a placement's offset along a profile is measured from
-/// (mitcad#417): end A, end B or the middle.
+/// (mitcad#417): end A, end B or the middle; on a side also the middle of
+/// the free stretch between the profiles standing on it (mitcad#1401).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SideFrom {
     #[default]
@@ -171,6 +181,8 @@ pub enum SideFrom {
     B,
     #[serde(rename = "middle")]
     Middle,
+    #[serde(rename = "gap")]
+    Gap,
 }
 
 impl SideFrom {
@@ -179,6 +191,7 @@ impl SideFrom {
             Self::A => "a",
             Self::B => "b",
             Self::Middle => "middle",
+            Self::Gap => "gap",
         }
     }
 }

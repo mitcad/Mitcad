@@ -417,6 +417,9 @@ const StepSpec kSpecs[] = {
     {"expect-native-qt-place", 3, 3, kIdle},
     // The wheel over a native control, an AppKit value field (mitcad#1350).
     {"native-wheel", 2, 3, kInputOfTarget},
+    // The wheel over a logged place without the model-idle gate: a panel's
+    // value field while its preview computes (mitcad#1407).
+    {"wheel-logged-now", 2, 3, kPlain},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -1077,20 +1080,27 @@ void TestDriver::leave(int code) {
   QCoreApplication::exit(code);
 }
 
-void TestDriver::finish() {
+bool TestDriver::verifyHeadlessCompletion() {
   if (headlessUiTest()) {
     auto* window = qobject_cast<MainWindow*>(m_main.data());
     if (QGuiApplication::platformName() != QStringLiteral("offscreen") || !window ||
         window->usesNativeUi() || window->viewer().context() != nullptr) {
       fail(m_line, QStringLiteral("headless workflow requires Qt offscreen without an OpenGL context"));
-      return;
+      return false;
     }
     QString platformError;
     if (!mac::headlessTestApplicationIsolated(platformError)) {
       fail(m_line, platformError);
-      return;
+      return false;
     }
     qInfo("Headless UI test verified: Qt offscreen without an OpenGL context");
+  }
+  return true;
+}
+
+void TestDriver::finish() {
+  if (!verifyHeadlessCompletion()) {
+    return;
   }
   if (!m_jobPickLabel.isEmpty()) {
     fail(m_jobPickLine, QStringLiteral("the armed pick's job '%1' never started").arg(m_jobPickLabel));
@@ -3808,9 +3818,11 @@ void TestDriver::run(const Step& step) {
                         modifiers, momentum ? Qt::ScrollMomentum : Qt::ScrollUpdate, false);
       QCoreApplication::sendEvent(view, &event);
     });
-  } else if (name == QLatin1String("wheel-logged")) {
+  } else if (name == QLatin1String("wheel-logged") || name == QLatin1String("wheel-logged-now")) {
     // Over a logged place (a panel's value field, mitcad#1254): the widget
-    // there gets the wheel, as the one under the mouse does.
+    // there gets the wheel, as the one under the mouse does. The -now form
+    // does not wait for the model (its step kind): the wheel over a field
+    // while the panel's preview computes (mitcad#1407).
     QRegularExpression re;
     if (!regex(a.at(0), re)) {
       return;
@@ -3818,7 +3830,7 @@ void TestDriver::run(const Step& step) {
     double notches = 0;
     Qt::KeyboardModifiers modifiers;
     if (!toNumber(a.at(1), notches) || (a.size() > 2 && !parseModifiers(a.at(2), modifiers))) {
-      fail(line, QStringLiteral("wheel-logged <regex> <notches> [mods]"));
+      fail(line, QStringLiteral("%1 <regex> <notches> [mods]").arg(name));
       return;
     }
     const auto point = std::make_shared<QPoint>();
@@ -5314,9 +5326,15 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("'%1' is not an exit code").arg(a.at(0)));
       return;
     }
+    if (static_cast<int>(code) == 0 && !verifyHeadlessCompletion()) {
+      return;
+    }
     qDebug().noquote() << QStringLiteral("TestDriver: quit (%1 of %2 steps)").arg(m_next).arg(m_steps.size());
     leave(static_cast<int>(code));
   } else if (name == QLatin1String("kill")) {
+    if (!verifyHeadlessCompletion()) {
+      return;
+    }
     qDebug().noquote() << QStringLiteral("TestDriver: kill (%1 of %2 steps)").arg(m_next).arg(m_steps.size());
     std::_Exit(0);
   } else if (name == QLatin1String("stay")) {

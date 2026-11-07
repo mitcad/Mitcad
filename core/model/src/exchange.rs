@@ -189,6 +189,10 @@ pub struct BaseInput<S> {
     pub replaces: Vec<BodyUid>,
     /// The component it goes into (F6); the active component when None.
     pub component: Option<ComponentUid>,
+    /// The control cages of the bodies that have one (an imported Form
+    /// body, mitcad#1365): `cages[i]` is body i's; bodies past the end of
+    /// the list have none.
+    pub cages: Vec<Option<Box<crate::features::ControlCage>>>,
 }
 
 impl<S> BaseInput<S> {
@@ -202,6 +206,7 @@ impl<S> BaseInput<S> {
             participants: Vec::new(),
             replaces: Vec::new(),
             component: None,
+            cages: Vec::new(),
         }
     }
 }
@@ -312,6 +317,7 @@ impl<K: Kernel> Document<K> {
                 brep: Brep::new(data),
                 number: None,
                 first_face: None,
+                cage: None,
             });
         }
         Ok(out)
@@ -349,7 +355,11 @@ impl<K: Kernel> Document<K> {
         for base in &features {
             let component = base.component.unwrap_or(self.active_component());
             self.state().editable(component)?;
-            let bodies = self.base_bodies(&base.bodies)?;
+            let mut bodies = self.base_bodies(&base.bodies)?;
+            // The bodies' control cages (mitcad#1365).
+            for (body, cage) in bodies.iter_mut().zip(&base.cages) {
+                body.cage.clone_from(cage);
+            }
             for (body, input) in bodies.iter().zip(&base.bodies) {
                 written_from.push((body.brep.clone(), input.shape.clone()));
             }
@@ -1538,11 +1548,13 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Writes the geometry of an evaluated sketch to a DXF file, in sketch
-    /// coordinates and millimetres. Returns the number of entities.
+    /// coordinates and in `unit` (mitcad#1408: the design's unless the
+    /// export names another). Returns the number of entities.
     pub fn export_sketch_dxf(
         &self,
         sketch: FeatureUid,
         path: &str,
+        unit: crate::expr::LengthUnit,
         options: &mitcad_dxf::WriteOptions,
     ) -> Result<usize, ModelError> {
         let entry = self
@@ -1581,9 +1593,62 @@ impl<K: Kernel> Document<K> {
             .collect();
         let drawing = sketch_drawing(curves.iter().map(|(l, n, g)| (*l, n.as_str(), g)))
             .map_err(|e| invalid(format!("{}: {e}", entry.name)))?;
+        let drawing = dxf_in_unit(drawing, unit);
         mitcad_dxf::write_file(&drawing, path, options)
             .map_err(|e| invalid(format!("cannot write {path}: {e}")))?;
         Ok(drawing.entities.len())
+    }
+}
+
+// --- The unit of a DXF export (mitcad#1408) ----------------------------------
+
+/// The DXF drawing unit (`$INSUNITS`) of a length unit: every unit a
+/// design can be in has one.
+pub fn dxf_units(unit: crate::expr::LengthUnit) -> mitcad_dxf::Units {
+    use crate::expr::LengthUnit;
+    use mitcad_dxf::Units;
+    match unit {
+        LengthUnit::Micrometre => Units::Microns,
+        LengthUnit::Millimetre => Units::Millimeters,
+        LengthUnit::Centimetre => Units::Centimeters,
+        LengthUnit::Metre => Units::Meters,
+        LengthUnit::Kilometre => Units::Kilometers,
+        LengthUnit::Inch => Units::Inches,
+        LengthUnit::Foot => Units::Feet,
+        LengthUnit::Yard => Units::Yards,
+        LengthUnit::Mile => Units::Miles,
+        LengthUnit::Mil => Units::Mils,
+    }
+}
+
+/// A drawing made in millimetres, written in `unit` instead: every
+/// coordinate, radius and text height divided by the unit's length in
+/// millimetres, and the drawing's `$INSUNITS` (and so `$MEASUREMENT`) the
+/// unit's. A millimetre drawing stays as it is.
+pub fn dxf_in_unit(
+    drawing: mitcad_dxf::Drawing,
+    unit: crate::expr::LengthUnit,
+) -> mitcad_dxf::Drawing {
+    let millimetres = unit.millimetres();
+    let mut drawing = if millimetres == 1.0 {
+        drawing
+    } else {
+        let scale = 1.0 / millimetres;
+        drawing.transformed(&mitcad_dxf::Affine::scale(scale, scale))
+    };
+    drawing.units = dxf_units(unit);
+    drawing
+}
+
+/// The `units` of a DXF export: the unit it names (`mm`, `in`, … as
+/// `set_units` reads them), or `default` (the design's) when it names none.
+pub fn dxf_export_unit(
+    units: Option<&str>,
+    default: crate::expr::LengthUnit,
+) -> Result<crate::expr::LengthUnit, String> {
+    match units {
+        None => Ok(default),
+        Some(text) => crate::file::parse_length_unit(text.trim()),
     }
 }
 

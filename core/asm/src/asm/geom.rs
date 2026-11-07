@@ -605,6 +605,17 @@ pub enum SplineGeom {
         curves: Box<[AsmCurve; 2]>,
         origin: P3,
     },
+    /// `off_spl_sur` (revision-gated layout) stored without its
+    /// approximation (mitcad_private#198): the support moved by `distance`
+    /// (model units) along the `du x dv` of its stored parameters, in the
+    /// support's parameters. `against`: that `du x dv` runs against the
+    /// normal of a plane support (its `v` reversed); a spline support's is
+    /// its B-spline's `du x dv`.
+    Offset {
+        support: Box<AsmSurface>,
+        distance: f64,
+        against: bool,
+    },
     Unsupported(String),
 }
 
@@ -1009,6 +1020,17 @@ fn embedded_surface_with_chart(
                         ..
                     },
                 ) => Ok(Chart::Procedural(Box::new(surface.clone()))),
+                // An offset of a spline, in the spline's parameters
+                // (mitcad_private#198).
+                (
+                    Err(_),
+                    AsmSurface::Spline {
+                        geom: SplineGeom::Offset { support, .. },
+                        ..
+                    },
+                ) if matches!(**support, AsmSurface::Spline { .. }) => {
+                    Ok(Chart::Procedural(Box::new(surface.clone())))
+                }
                 (chart, _) => chart,
             };
             return Ok(Some((surface, chart)));
@@ -1018,6 +1040,89 @@ fn embedded_surface_with_chart(
     c.interval()?;
     c.interval()?;
     Ok(Some((surface, chart)))
+}
+
+/// Reads a procedural surface's definition (revision-gated layout, after
+/// its revision integer): `None` when the record stores its approximation,
+/// which is then the surface.
+type ProceduralReader = fn(&AsmFile, &mut Cursor<'_>, usize) -> Result<Option<SplineGeom>>;
+
+/// The procedural spline-surface families whose definitions the reader
+/// evaluates where a record stores no approximation (mitcad#621,
+/// mitcad_private#198), by subtype name (with the legacy name). The order
+/// does not matter; a family read is one row more.
+const PROCEDURAL_SURFACES: &[(&str, &str, ProceduralReader)] = &[
+    ("rb_blend_spl_sur", "rbblnsur", rolling_ball_surface),
+    ("sum_spl_sur", "sumsur", sum_surface),
+    ("off_spl_sur", "offsur", offset_surface),
+];
+
+/// [`rolling_ball`] as a [`ProceduralReader`].
+fn rolling_ball_surface(
+    file: &AsmFile,
+    c: &mut Cursor,
+    depth: usize,
+) -> Result<Option<SplineGeom>> {
+    rolling_ball(file, c, depth).map(|rb| rb.map(|rb| SplineGeom::RollingBall(Box::new(rb))))
+}
+
+/// The reader of a procedural surface family's definition by its subtype
+/// name ([`PROCEDURAL_SURFACES`]).
+fn procedural_surface(name: &str) -> Option<ProceduralReader> {
+    PROCEDURAL_SURFACES
+        .iter()
+        .find(|(modern, legacy, _)| name == *modern || name == *legacy)
+        .map(|&(_, _, read)| read)
+}
+
+/// Reads a revision-gated `off_spl_sur` after its revision integer
+/// (mitcad_private#198, the layout of the published format notes): the
+/// support surface with its bounds, the offset distance, the pair of
+/// booleans in the sense slots (the first negates the direction of the
+/// offset), the two booleans of the extension prefix (the second gates an
+/// extension run) and the shared surface tail. `None` when it stores its
+/// approximation (tail form 0). Supports: planes and splines with a
+/// B-spline, whose parameters' `du x dv` is known.
+fn offset_surface(file: &AsmFile, c: &mut Cursor, depth: usize) -> Result<Option<SplineGeom>> {
+    let (support, chart) = embedded_surface_with_chart(file, c, depth + 1)?
+        .ok_or_else(|| GeomError("off_spl_sur without its support".into()))?;
+    let distance = c.double()?;
+    let negated = c.boolean()?;
+    c.boolean()?;
+    c.boolean()?;
+    if c.boolean()? {
+        // The extension run: a boolean, six integers, a boolean, a curve
+        // with its two parameter ends, two booleans, a tolerance and four
+        // integers.
+        c.boolean()?;
+        for _ in 0..6 {
+            c.int()?;
+        }
+        c.boolean()?;
+        embedded_curve(file, c, depth + 1)?;
+        c.boolean()?;
+        c.boolean()?;
+        c.double()?;
+        for _ in 0..4 {
+            c.int()?;
+        }
+    }
+    if c.enumeration()? == 0 {
+        return Ok(None);
+    }
+    let against = match (&chart, &support) {
+        (Ok(Chart::Plane { u_dir, v_dir, .. }), AsmSurface::Plane { normal, .. }) => {
+            let n = cross3(*u_dir, *v_dir);
+            n[0] * normal[0] + n[1] * normal[1] + n[2] * normal[2] < 0.0
+        }
+        (Ok(Chart::Spline(_)), _) => false,
+        _ => return err("off_spl_sur of a support whose parameters' normal is not known"),
+    };
+    Ok(Some(SplineGeom::Offset {
+        support: Box::new(support),
+        distance: if negated { -distance } else { distance },
+        against,
+    }))
 }
 
 /// Reads a revision-gated `sum_spl_sur` after its revision integer: the two
@@ -1306,19 +1411,11 @@ pub fn spline_surface_subtype(
             // (mitcad#622); a sum surface stored without its
             // approximation.
             let mut definition = Ok(None);
-            if let Some(Token::Int(_)) = c.peek() {
-                match name.as_str() {
-                    "rb_blend_spl_sur" | "rbblnsur" => {
-                        c.pos += 1;
-                        definition = rolling_ball(file, &mut c, depth)
-                            .map(|rb| rb.map(|rb| SplineGeom::RollingBall(Box::new(rb))));
-                    }
-                    "sum_spl_sur" | "sumsur" => {
-                        c.pos += 1;
-                        definition = sum_surface(file, &mut c, depth);
-                    }
-                    _ => {}
-                }
+            if let Some(Token::Int(_)) = c.peek()
+                && let Some(read) = procedural_surface(&name)
+            {
+                c.pos += 1;
+                definition = read(file, &mut c, depth);
             }
             match (definition, find_bs3_surface(file, def)?) {
                 (Ok(Some(geom)), _) => geom,
@@ -1892,9 +1989,18 @@ pub(crate) mod tests {
     /// (record 1) stored with its approximation, of fit tolerance 0.0043
     /// (0.043 mm in cm), with these offsets (mitcad#622).
     pub(crate) fn coarse_blend_face_file(offsets: [f64; 2]) -> AsmFile {
+        coarse_blend_face_file_with(offsets, floor_side)
+    }
+
+    /// [`coarse_blend_face_file`] with another first side (the floor
+    /// tilted: no longer a cylinder, mitcad_private#198).
+    pub(crate) fn coarse_blend_face_file_with(
+        offsets: [f64; 2],
+        first_side: impl FnOnce(&mut Writer),
+    ) -> AsmFile {
         file_with(|w| {
             w.record("spline-surface").head().bool(false);
-            rolling_ball_subtype_with(w, 0, offsets, floor_side);
+            rolling_ball_subtype_with(w, 0, offsets, first_side);
             w.bool(false).bool(false).bool(false).bool(false);
             w.bool(false).bool(false).bool(false).end();
             w.record("face")
@@ -2049,9 +2155,120 @@ pub(crate) mod tests {
         ));
     }
 
+    /// A revision-gated `off_spl_sur` of the floor z = 0 (its `v` reversed
+    /// when `reverse_v`) by `distance`, the first sense boolean `negated`,
+    /// with the tail in the given form (0 with an approximation, 2
+    /// without), then the face's ranges.
+    fn offset_surface_record(
+        w: &mut Writer,
+        distance: f64,
+        negated: bool,
+        reverse_v: bool,
+        form: i32,
+    ) {
+        w.record("spline-surface").head().bool(false);
+        w.sub_start().ident("off_spl_sur").int(20900);
+        w.ident("plane")
+            .pos([0.0; 3])
+            .vec([0.0, 0.0, 1.0])
+            .vec([1.0, 0.0, 0.0])
+            .bool(reverse_v);
+        w.bool(false).bool(false).bool(false).bool(false);
+        w.dbl(distance).bool(negated).bool(false);
+        w.bool(false).bool(false);
+        w.en(form);
+        if form == 0 {
+            w.ident("nubs")
+                .int(1)
+                .int(1)
+                .en(0)
+                .en(0)
+                .en(0)
+                .en(0)
+                .int(2)
+                .int(2);
+            w.dbl(0.0)
+                .int(1)
+                .dbl(1.0)
+                .int(1)
+                .dbl(0.0)
+                .int(1)
+                .dbl(1.0)
+                .int(1);
+            for p in [
+                [0.0, 0.0, distance],
+                [1.0, 0.0, distance],
+                [0.0, 1.0, distance],
+                [1.0, 1.0, distance],
+            ] {
+                w.dbl(p[0]).dbl(p[1]).dbl(p[2]);
+            }
+            w.dbl(0.0);
+        } else {
+            w.bool(true).dbl(0.0).bool(true).dbl(1.0);
+            w.bool(true).dbl(0.0).bool(true).dbl(1.0);
+            w.en(0).en(0).en(0).en(0);
+        }
+        for _ in 0..6 {
+            w.int(0);
+        }
+        w.bool(false).sub_end();
+        w.bool(false).bool(false).bool(false).bool(false).end();
+    }
+
+    #[test]
+    fn decodes_offset_surfaces_stored_without_their_approximation() {
+        // mitcad_private#198: the support, the distance (negated by the
+        // first sense boolean) and whether the support's du x dv runs
+        // against its normal.
+        let f = file_with(|w| offset_surface_record(w, 0.5, false, false, 2));
+        let s = surface_record(&f, 1).unwrap();
+        let AsmSurface::Spline {
+            geom:
+                SplineGeom::Offset {
+                    support,
+                    distance,
+                    against,
+                },
+            ..
+        } = s
+        else {
+            panic!("{s:?}")
+        };
+        assert!(matches!(*support, AsmSurface::Plane { normal, .. } if normal == [0.0, 0.0, 1.0]));
+        assert_eq!((distance, against), (0.5, false));
+        let f = file_with(|w| offset_surface_record(w, 0.5, true, true, 2));
+        let s = surface_record(&f, 1).unwrap();
+        assert!(
+            matches!(&s, AsmSurface::Spline { geom: SplineGeom::Offset { distance, against, .. }, .. } if *distance == -0.5 && *against),
+            "{s:?}"
+        );
+        // With its approximation: that.
+        let f = file_with(|w| offset_surface_record(w, 0.5, false, false, 0));
+        let s = surface_record(&f, 1).unwrap();
+        assert!(
+            matches!(
+                &s,
+                AsmSurface::Spline {
+                    geom: SplineGeom::BSpline { exact: false, .. },
+                    ..
+                }
+            ),
+            "{s:?}"
+        );
+    }
+
     fn floor_side(w: &mut Writer) {
         w.str("blend_support_surface");
         embedded_plane(w, [0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        w.ident("null_curve");
+    }
+
+    /// The floor tilted about x: the slice no longer runs along the
+    /// supports' intersection, so the blend is no cylinder.
+    pub(crate) fn tilted_floor_side(w: &mut Writer) {
+        w.str("blend_support_surface");
+        embedded_plane(w, [0.0; 3], [0.0, 0.1, 1.0], [1.0, 0.0, 0.0]);
         w.ident("null_curve");
     }
 

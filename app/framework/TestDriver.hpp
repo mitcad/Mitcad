@@ -135,6 +135,9 @@
 //                           log line matching regex has ("Panel <command>
 //                           input <id> at ..."), to the widget there, as
 //                           the one under the mouse (mitcad#1254)
+//   wheel-logged-now <regex> <notches> [mods]  the same without waiting for
+//                           the model: while a panel's preview computes
+//                           (mitcad#1407)
 //   wheel-burst <x%> <y%> <notches> <count> [mods]   <count> wheel events of
 //                           <notches>, one per tick (a quick burst)
 //   trackpad-scroll <x%> <y%> <dx> <dy> <mods> [momentum]
@@ -641,6 +644,7 @@ private:
   void tick();
   void run(const Step& step);
   void fail(int line, const QString& reason);
+  bool verifyHeadlessCompletion();
   void finish();
   void leave(int code);
 

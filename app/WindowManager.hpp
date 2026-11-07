@@ -29,6 +29,13 @@ public:
   // again instead of only being brought forward.
   MainWindow* openFile(MainWindow* source, const QString& path, QString& error, bool replaceAsked = false);
   MainWindow* findByPath(const QString& path) const;
+  // Opens `path` in a window of its own beside `source` (a new tab), or
+  // brings forward the window that has it open already; never replaces
+  // `source`'s design (Open Linked Design, mitcad#1416).
+  MainWindow* openFileBeside(MainWindow* source, const QString& path, QString& error);
+  // `source` saved its design to `path` (mitcad#1416): the other windows
+  // whose designs link that file offer to take it.
+  void designSaved(MainWindow* source, const QString& path);
   MainWindow* findByHandle(const QString& handle) const;
   MainWindow* windowForDocument(const QString& id) const;
   QString handle(MainWindow* window) const;

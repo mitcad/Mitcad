@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: MIT
+# The mouse wheel over Fillet's Radius while its preview computes
+# (mitcad#1407, GitHub mitcad/Mitcad#162), on fillet-wheel-busy.json (a
+# cylinder of 30 mm diameter and 12 mm height, F1.b0): Fillet on its top
+# edge, Radius 3 mm; then the wheel over the Radius field, which has the
+# keyboard, steps it 3 mm to 4 mm, whose preview the test's worker gate
+# holds, and four more notches (up, up, down, up) come while that preview
+# computes. 0.48.0 read the design's length unit from the document for
+# such a step and ended the application ("The document was read while a
+# job computes it"); now each notch steps the field with the unit the
+# window read before, nothing is evaluated while the job runs, and once it
+# ends only the last value, 6 mm, is evaluated and previewed. OK makes the
+# fillet of 6 mm (its logged volume checked).
+# Run by tools/ui-fillet-wheel-busy-test.sh (Linux) and
+# tools/ui-windows-fillet-wheel-busy-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Fillet on the cylinder's top edge, Radius 3 mm.
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F1[.]b0/E[{][^}]*F1:top[^}]*[}]'
+wait-log '^Fillet Edges: 1 edge'
+type-in '^Panel Fillet input sets[.]0[.]radius at ' '3 mm'
+wait-log '^Fillet Radius: 3 mm = 3 mm$' 30
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+expect-input-text sets.0.radius '^3 mm$'
+
+# The wheel faster than the preview computes: the first notch's preview is
+# held, the others come while it computes.
+mark
+hold-model-preview true
+wheel-logged-now '^Panel Fillet input sets[.]0[.]radius at ' 1
+expect-log '^Value field Fillet Radius: wheel stepped 3 mm to 4 mm$'
+wait-log '^Computing preview started' 30
+expect-model-busy true
+wheel-logged-now '^Panel Fillet input sets[.]0[.]radius at ' 1
+wheel-logged-now '^Panel Fillet input sets[.]0[.]radius at ' 1
+wheel-logged-now '^Panel Fillet input sets[.]0[.]radius at ' -1
+wheel-logged-now '^Panel Fillet input sets[.]0[.]radius at ' 1
+expect-log '^Value field Fillet Radius: wheel stepped 4 mm to 5 mm$'
+expect-log '^Value field Fillet Radius: wheel stepped 5 mm to 6 mm$'
+expect-log '^Value field Fillet Radius: wheel stepped 6 mm to 5 mm$'
+expect-input-text sets.0.radius '^6 mm$'
+expect-model-busy true
+# Nothing of it evaluated while the job runs (that would read the model),
+# and no preview shown: the held one has not ended.
+expect-no-log '^Fillet Radius: [56] mm = '
+expect-no-log '^Preview Fillet: ok'
+
+# The job ends: the last value only is evaluated and previewed. The held
+# 4 mm preview, superseded by the notches (CommandSession's generation),
+# is shown as "Preview Fillet: intermediate numeric result", never as
+# "Preview Fillet: ok": an "ok" since this mark is the preview of the
+# current inputs, which the 6 mm evaluation comes before (the pending
+# value is taken at the idle point, before the preview it asks for).
+mark
+hold-model-preview false
+wait-log '^Fillet Radius: 6 mm = 6 mm$' 30
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+expect-no-log '^Fillet Radius: 5 mm = '
+expect-input-text sets.0.radius '^6 mm$'
+
+# OK: the fillet of the last value, 6 mm (the cylinder's 2700 pi mm3 less
+# the ring the fillet takes off, 2 pi (15 - x) 36 (1 - pi/4) with x the
+# corner piece's centroid, 6 (5/6 - pi/4) / (1 - pi/4)), within 1e-6 of
+# it or 0.01 mm3, as tools/ui-fillet-handle-test.sh checks its fillets.
+mark
+button '^OK$'
+wait-log '^Added Fillet' 30
+wait-idle 30
+capture filleted 'Body \S+ [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${filleted} 7819.229367 1e-6 0.01
+expect-never 'The document was read while a job computes it|Input dropped while the model computes|TestDriver: FAIL'

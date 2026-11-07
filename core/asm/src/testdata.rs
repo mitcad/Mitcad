@@ -196,8 +196,21 @@ fn cube_writer(named: bool) -> Writer {
     cube_writer_with(named, true)
 }
 
+/// The cube of [`cube_blob`] whose faces carry these keys in their
+/// records' second header field (their history ids; the `.ipt` graphics
+/// faces name faces by them, mitcad#1367), in the order bottom, top,
+/// y = 0, x = 1, y = 1, x = 0.
+pub fn keyed_cube_blob(keys: [i32; 6]) -> Vec<u8> {
+    cube_writer_keyed(false, true, keys).finish()
+}
+
 /// [`cube_writer`], with or without the points' positions.
 fn cube_writer_with(named: bool, positions: bool) -> Writer {
+    cube_writer_keyed(named, positions, [-1; 6])
+}
+
+/// [`cube_writer_with`], the faces with these keys ([`keyed_cube_blob`]).
+fn cube_writer_keyed(named: bool, positions: bool, keys: [i32; 6]) -> Writer {
     // Record layout: 0 asmheader, 1 body, 2 lump, 3 shell,
     // faces 4..10, loops 10..16, coedges 16..40, edges 40..52,
     // vertices 52..60, points 60..68, curves 68..80, surfaces 80..86.
@@ -265,7 +278,7 @@ fn cube_writer_with(named: bool, positions: bool) -> Writer {
         let next = if f < 5 { face0 + f + 1 } else { -1 };
         w.record("face")
             .ptr(attrib(f))
-            .int(-1)
+            .int(keys[f as usize])
             .ptr(-1)
             .ptr(next)
             .ptr(loop0 + f)
@@ -416,11 +429,29 @@ fn cube_writer_with(named: bool, positions: bool) -> Writer {
 /// A cylinder of radius 1 cm and height 2 cm on the XY plane. Like ASM, the
 /// side face has no seam: it is bounded by the two circles only.
 pub fn cylinder_blob() -> Vec<u8> {
+    cylinder_blob_with(CylinderVariant::default())
+}
+
+/// What [`cylinder_blob_with`] changes in [`cylinder_blob`]
+/// (mitcad_private#198).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CylinderVariant {
+    /// The side's surface a spline of a subtype the reader does not know.
+    pub unknown_side: bool,
+    /// The top circle a curve of a subtype the reader does not know.
+    pub unknown_top: bool,
+    /// The side face in a subshell of the shell (record 26).
+    pub side_in_subshell: bool,
+}
+
+/// [`cylinder_blob`] with the changes `variant` names.
+pub fn cylinder_blob_with(variant: CylinderVariant) -> Vec<u8> {
     use std::f64::consts::TAU;
     // 0 asmheader, 1 body, 2 lump, 3 shell, faces 4 bottom 5 top 6 side,
     // loops 7 bottom 8 top 9 side-bottom 10 side-top, coedges 11..15 in the
     // same order, edges 15 bottom 16 top, vertices 17 18, points 19 20,
-    // circles 21 22, planes 23 24, cylinder 25.
+    // circles 21 22, planes 23 24, cylinder 25 (and the subshell 26).
+    let subshell = if variant.side_in_subshell { 26 } else { -1 };
     let mut w = Writer::new(2, 2);
     w.record("asmheader")
         .ptr(-1)
@@ -432,7 +463,7 @@ pub fn cylinder_blob() -> Vec<u8> {
     w.record("shell")
         .head()
         .ptr(-1)
-        .ptr(-1)
+        .ptr(subshell)
         .ptr(4)
         .ptr(-1)
         .ptr(2)
@@ -450,7 +481,7 @@ pub fn cylinder_blob() -> Vec<u8> {
         .end();
     w.record("face")
         .head()
-        .ptr(6)
+        .ptr(if variant.side_in_subshell { -1 } else { 6 })
         .ptr(8)
         .ptr(3)
         .ptr(-1)
@@ -463,7 +494,7 @@ pub fn cylinder_blob() -> Vec<u8> {
         .ptr(-1)
         .ptr(9)
         .ptr(3)
-        .ptr(-1)
+        .ptr(subshell)
         .ptr(25)
         .bool(false)
         .bool(false)
@@ -510,6 +541,17 @@ pub fn cylinder_blob() -> Vec<u8> {
     w.record("point").head().pos([1.0, 0.0, 0.0]).end();
     w.record("point").head().pos([1.0, 0.0, 2.0]).end();
     for z in [0.0, 2.0] {
+        if z > 0.0 && variant.unknown_top {
+            w.record("intcurve-curve")
+                .head()
+                .bool(false)
+                .sub_start()
+                .ident("mystery_int_cur")
+                .int(1)
+                .sub_end();
+            w.bool(false).bool(false).end();
+            continue;
+        }
         w.record("ellipse-curve")
             .head()
             .pos([0.0, 0.0, z])
@@ -531,20 +573,43 @@ pub fn cylinder_blob() -> Vec<u8> {
             .bool(false)
             .end();
     }
-    // Cone with sin 0, cos 1: a cylinder with the normal away from the axis.
-    w.record("cone-surface")
-        .head()
-        .pos([0.0; 3])
-        .vec([0.0, 0.0, 1.0])
-        .vec([1.0, 0.0, 0.0])
-        .dbl(1.0);
-    w.bool(false).bool(false).dbl(0.0).dbl(1.0).dbl(1.0);
-    w.bool(false)
-        .bool(false)
-        .bool(false)
-        .bool(false)
-        .bool(false)
-        .end();
+    if variant.unknown_side {
+        w.record("spline-surface")
+            .head()
+            .bool(false)
+            .sub_start()
+            .ident("mystery_spl_sur")
+            .int(1)
+            .sub_end();
+        w.bool(false).bool(false).bool(false).bool(false).end();
+    } else {
+        // Cone with sin 0, cos 1: a cylinder with the normal away from the
+        // axis.
+        w.record("cone-surface")
+            .head()
+            .pos([0.0; 3])
+            .vec([0.0, 0.0, 1.0])
+            .vec([1.0, 0.0, 0.0])
+            .dbl(1.0);
+        w.bool(false).bool(false).dbl(0.0).dbl(1.0).dbl(1.0);
+        w.bool(false)
+            .bool(false)
+            .bool(false)
+            .bool(false)
+            .bool(false)
+            .end();
+    }
+    if variant.side_in_subshell {
+        // Parent, next, child, first face, wire.
+        w.record("subshell")
+            .head()
+            .ptr(3)
+            .ptr(-1)
+            .ptr(-1)
+            .ptr(6)
+            .ptr(-1)
+            .end();
+    }
     w.finish()
 }
 
@@ -1082,6 +1147,88 @@ mod tests {
         assert!(b.body.is_solid());
         assert_eq!(b.body.faces[2].loops.len(), 2);
         assert_eq!(b.body.surfaces[2].kind(), "cylinder");
+    }
+
+    #[test]
+    fn reads_the_faces_of_subshells() {
+        // mitcad_private#198: before, a shell's subshells were not read.
+        let data = cylinder_blob_with(CylinderVariant {
+            side_in_subshell: true,
+            ..CylinderVariant::default()
+        });
+        let file = AsmFile::parse(&data).unwrap();
+        let b = convert_file(&file, &Options::default()).remove(0);
+        assert!(b.issues.is_empty(), "{:?}", b.issues);
+        assert_eq!(b.body.faces.len(), 3);
+        assert_eq!(b.body.lumps[0].shells[0].faces.len(), 3);
+        assert!(b.check.is_clean(), "{:?}", b.check);
+        assert!(b.body.is_solid());
+    }
+
+    #[test]
+    fn keeps_faces_and_edges_of_unknown_geometry() {
+        // mitcad_private#198: the side's surface does not decode. Before,
+        // the face was left out and the shell open; now it is kept, with
+        // its loops, on an unknown surface: the topology is closed, the
+        // builder leaves the face out (no solid).
+        let data = cylinder_blob_with(CylinderVariant {
+            unknown_side: true,
+            ..CylinderVariant::default()
+        });
+        let file = AsmFile::parse(&data).unwrap();
+        let b = convert_file(&file, &Options::default()).remove(0);
+        assert_eq!(b.body.faces.len(), 3);
+        assert_eq!(b.skipped_faces, 1);
+        let side = &b.body.faces[2];
+        assert_eq!(b.body.surfaces[side.surface].kind(), "unknown");
+        assert_eq!(side.loops.len(), 2);
+        assert!(b.check.is_clean(), "{:?}", b.check);
+        assert_eq!(b.check.free_edges, 0);
+        assert!(b.body.shell_is_closed(&b.body.lumps[0].shells[0]));
+        assert!(!b.body.is_solid());
+        assert!(
+            b.issues.iter().any(|i| i.starts_with("surface 25 ")),
+            "{:?}",
+            b.issues
+        );
+        let flat = crate::flat::FlatBody::from_body(&b.body);
+        assert_eq!(
+            flat.surfaces[side.surface].kind,
+            crate::flat::SURFACE_UNKNOWN
+        );
+        assert!(!flat.shells[0].closed);
+
+        // The top circle does not decode: before, its edge left both its
+        // loops; now it is kept on an unknown curve.
+        let data = cylinder_blob_with(CylinderVariant {
+            unknown_top: true,
+            ..CylinderVariant::default()
+        });
+        let file = AsmFile::parse(&data).unwrap();
+        let b = convert_file(&file, &Options::default()).remove(0);
+        assert_eq!((b.skipped_faces, b.unknown_edges), (0, 1));
+        assert_eq!(b.body.edges.len(), 2);
+        let top = &b.body.edges[1];
+        assert_eq!(b.body.curves[top.curve].kind(), "unknown");
+        assert_eq!(top.t, [0.0, std::f64::consts::TAU]);
+        assert_eq!(
+            b.body.faces[1].loops,
+            vec![vec![brep::Coedge {
+                edge: 1,
+                forward: true
+            }]]
+        );
+        assert!(b.check.is_clean(), "{:?}", b.check);
+        assert!(
+            b.issues
+                .iter()
+                .filter(|i| i.starts_with("edge 16 "))
+                .count()
+                == 1,
+            "{:?}",
+            b.issues
+        );
+        assert!(crate::convert::edge_curve(&file, 1, 16, &Options::default(), None).is_err());
     }
 
     #[test]

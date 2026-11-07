@@ -73,6 +73,7 @@ class LockController;
 class MeasureHistoryView;
 class MessageBand;
 class MessageCenter;
+class LinkWatcher;
 class MessageHistory;
 class ProjectIndicator;
 class ProjectsPanel;
@@ -362,12 +363,20 @@ public:
   bool designOpen() const override;
   // Material Library… of the Material tool (mitcad#1250; files/MainWindowPrint.cpp).
   void openMaterialLibrary(std::function<void()> closed) override;
+  // Edit Materials… and Edit Appearances… of the tools' pickers
+  // (mitcad#1415; files/MainWindowPrint.cpp).
+  void editMaterialsOn(const QString& key, std::function<void()> closed) override;
+  void editAppearancesOn(const QString& id, std::function<void()> closed) override;
   void exportFlatPattern(const QString& body) override;
   // Save As Mesh (mitcad#734; files/MainWindowSaveAsMesh.cpp).
   void saveAsMesh(const Selection& items) override;
   QString saveAsMeshBlocked(const Selection& items) const override;
   // Save Component as Design (mitcad#1057; files/MainWindowSaveComponent.cpp).
   void saveComponentAsDesign(const QString& component, const QString& name) override;
+  // Linked designs (mitcad#1416; files/MainWindowLinks.cpp): Open Linked
+  // Design, Update Link and Update All Links.
+  void openLinkedDesign(const QString& component) override;
+  void updateLink(const QString& component) override;
   // Drawings kept in the design (mitcad#707; drawings/MainWindowDrawings.cpp):
   // one opened over the 3D view, a new one in a component's Drawings folder
   // (the root's: "C0") opened at once.
@@ -1615,6 +1624,42 @@ private:
   MessageHistory* m_messageHistory = nullptr;
   QToolButton* m_messageHistoryButton = nullptr;
   QString m_loggedHistoryButton;
+  // The button the next status message posts with (showActionStatus,
+  // mitcad#1416): its label and what it does.
+  QString m_statusActionLabel;
+  std::function<void()> m_statusActionRun;
+  // The Docked status bar's button of the message shown (mitcad#1416),
+  // what it does, and its place last logged (logStatusActionPlace).
+  QToolButton* m_statusActionButton = nullptr;
+  std::function<void()> m_statusButtonRun;
+  QString m_loggedStatusAction;
+  void logStatusActionPlace();
+  // Linked designs (mitcad#1416; files/MainWindowLinks.cpp): a message with
+  // a button in the band (and the status line), and the files of the
+  // design's linked designs watched for changes.
+  void showActionStatus(const QString& message, NoticeLevel level, const QString& action,
+                        std::function<void()> run);
+  // An edit refused because the component is linked: the notice with Open
+  // Linked Design instead of the bare failure; false for any other error.
+  bool showLinkedRefusal(const QString& message);
+  // The notice itself: `component` (its name) is linked from `path`.
+  void showLinkedNotice(const QString& component, const QString& path);
+  // Opens the file a link's path names (relative to this design's folder)
+  // in a tab of its own, or brings its tab forward.
+  void openLinkedFile(const QString& path);
+  // What reading the linked files again on opening said: a line naming the
+  // file for each component that took its changed file, a warning for one
+  // that could not.
+  void showLinkMessages(const QJsonArray& messages);
+  // The linked files that changed since the design took their bodies (all,
+  // or those that are `file`): "<file> changed" with Update in the band.
+  // Nothing is updated on its own. Later, when the model is busy.
+  void checkLinkedFiles(const QString& file = QString());
+  // Another tab saved `path` (WindowManager::designSaved).
+  void linkedDesignSaved(const QString& path);
+  // The files the watcher watches: those the snapshot's linked designs name.
+  void refreshLinkWatch();
+  LinkWatcher* m_linkWatcher = nullptr;
   QLabel* m_rendererLabel = nullptr;
   FloatingLayout* m_floating = nullptr; // the central widget in Floating chrome
   GlassCard* m_commandCard = nullptr;
@@ -1753,7 +1798,15 @@ private:
   // each.
   MakeBodyCard* createMakeCard();
   void updateMakeCard();
-  void setMakeCardMaterial(const QString& id);
+  // The card's material chosen by its picker key (mitcad#1411): given to
+  // the body as Send to Slicer's material rows give it
+  // (bodyMaterialCommands), a library's copied into the design in the same
+  // undo step. Logs "Make card material of <body>: <id>".
+  void setMakeCardMaterial(const QString& key);
+  // The Material picker's Edit materials…: the Materials window on the
+  // body's material. Logs "Make card Edit materials… of <material>
+  // (<body>)".
+  void openMakeCardMaterials();
   // The card's printer (`kind` printer: the design's, on its root) or
   // process (the body's) chosen by its picker key (mitcad#1239), a
   // library's copied into the design in the same undo step.
@@ -2017,6 +2070,9 @@ private:
   // Asks for the distance between the two points and calibrates.
   void finishImageCalibration(const QString& name, const ImagePoint& first, const ImagePoint& second);
   QHash<QString, QImage> m_imageReferenceImages; // by digest
+  // HEIF images that no decoder here reads (mitcad#1304), by digest: told
+  // once, not decoded again on each refresh.
+  QHash<QString, bool> m_imageReferenceNoDecoder;
   ImageCalibration* m_imageCalibration = nullptr;
 
   // The Center of Mass marker (mitcad#1094; MainWindowCenterOfMass.cpp):

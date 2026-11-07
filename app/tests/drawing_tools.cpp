@@ -538,6 +538,9 @@ int drawingToolsTests() {
                         {{QStringLiteral("pen"), QStringLiteral("thick")}});
   CHECK(drawn.value(QStringLiteral("sheet")).toInt() == 1 && !drawn.contains(QStringLiteral("view")));
   CHECK(drawn.value(QStringLiteral("pen")).toString() == QStringLiteral("thick"));
+  drawn = line->command(QStringLiteral("D1"), 1, picks(0, {QPointF(1, 2), QPointF(3, 4)}),
+                        {{QStringLiteral("pen"), QStringLiteral("extra_thick")}});
+  CHECK(drawn.value(QStringLiteral("pen")).toString() == QStringLiteral("extra_thick"));
   drawn = line->command(QStringLiteral("D1"), 1, picks(2, {QPointF(1, 2), QPointF(3, 4)}),
                         {{QStringLiteral("attach"), QStringLiteral("sheet")}});
   CHECK(drawn.value(QStringLiteral("sheet")).toInt() == 1);
@@ -582,7 +585,11 @@ int drawingToolsTests() {
   command = drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("text_height"), QString());
   CHECK(command.value(QStringLiteral("text_height")).isNull());
   CHECK(drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("text_height"), QStringLiteral("0")).isEmpty());
-  CHECK(penChoices().size() == 4 && penChoices().first().first == QStringLiteral("thin"));
+  CHECK(penChoices().size() == 5 && penChoices().first().first == QStringLiteral("thin"));
+  // Extra Thick right after Thick (mitcad#1402).
+  CHECK(penChoices().at(1).first == QStringLiteral("thick") &&
+        penChoices().at(2).first == QStringLiteral("extra_thick") &&
+        penChoices().at(2).second == QStringLiteral("Extra Thick"));
   // Sheet templates (mitcad#707 phase 4): the query's built-in ones by id, a
   // library's as its data, then the simple title block.
   const QJsonObject templates{

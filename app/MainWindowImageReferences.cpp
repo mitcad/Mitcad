@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -29,6 +30,7 @@
 #include "framework/Dialogs.hpp"
 #include "framework/Json.hpp"
 #include "framework/ModelShapes.hpp"
+#include "view/HeifDecoder.hpp"
 #include "view/ImageCalibration.hpp"
 #include "view/ImageFile.hpp"
 #include "view/ImageReferences.hpp"
@@ -57,21 +59,53 @@ QString plain(double value) { return QString::number(value, 'g', 10); }
 // is the model's to refuse, not decoded here first.
 constexpr qint64 kEmbeddedImageLimit = qint64(32) << 20;
 
-// Why a HEIF file cannot be drawn, if it cannot: MitCad decodes HEIF itself
-// (view/ImageFile.hpp), and its decoder may refuse a file whose header the
-// model takes, or the build may have none. Other formats are Qt's, as
-// before; empty when the file is drawable or not HEIF.
-QString heifProblem(const QString& path) {
+// The size of a pixel of a file that states none (96 to the inch), which
+// the model gives a HEIF file.
+constexpr double kUnstatedPixelSize = 25.4 / 96.0;
+
+// A HEIF file as Insert › Image Reference embeds it (mitcad#1304): decoded
+// by the decoder that is there (view/HeifDecoder.hpp) and kept as a PNG
+// file upright, so that the design opens anywhere. Empty (nullopt) for any
+// other file, and for one larger than a design embeds (the model refuses
+// it with its own message). The panel builds its command on each change:
+// the last file's result is kept, by its path, size and time, except that
+// a file no decoder read is tried again (the decoder installed meanwhile),
+// and logged only the first time.
+std::optional<HeifPng> heifInsert(const QString& path) {
+  struct Kept {
+    QString path;
+    qint64 size = -1;
+    QDateTime modified;
+    std::optional<HeifPng> png;
+  };
+  static Kept kept;
+  const QFileInfo info(path);
+  const bool same =
+      kept.path == info.absoluteFilePath() && kept.size == info.size() && kept.modified == info.lastModified();
+  const bool missingBefore = same && kept.png && kept.png->result == HeifDecoded::Result::NoDecoder;
+  if (same && !missingBefore) {
+    return kept.png;
+  }
+  kept = Kept{info.absoluteFilePath(), info.size(), info.lastModified(), std::nullopt};
   QFile file(path);
-  if (QFileInfo(path).size() > kEmbeddedImageLimit || !file.open(QIODevice::ReadOnly) ||
-      !isHeifFile(file.peek(4096))) {
-    return {};
+  if (info.size() > kEmbeddedImageLimit || !file.open(QIODevice::ReadOnly) || !isHeifFile(file.peek(4096))) {
+    return kept.png;
   }
-  QString why;
-  if (decodeImageFile(file.readAll(), &why).isNull()) {
-    return why;
+  kept.png = heifAsPng(file.readAll());
+  if (missingBefore && kept.png->result == HeifDecoded::Result::NoDecoder) {
+    return kept.png;
   }
-  return {};
+  if (kept.png->result == HeifDecoded::Result::Decoded) {
+    qDebug().noquote() << QStringLiteral("Image Reference HEIF file %1 decoded: %2 x %3 pixels, %4 bytes as PNG")
+                              .arg(info.fileName())
+                              .arg(kept.png->width)
+                              .arg(kept.png->height)
+                              .arg(kept.png->png.size());
+  } else {
+    qDebug().noquote() << QStringLiteral("Image Reference HEIF file %1 not decoded: %2")
+                              .arg(info.fileName(), kept.png->error);
+  }
+  return kept.png;
 }
 
 // The panel's settings common to the insert, the edit and the outline:
@@ -150,10 +184,10 @@ CommandDef MainWindow::imageReferenceCommand() {
           QStringLiteral("choose"),
           [](const CommandState&) { return InputNote{QString(), {tr("Choose Image…")}, {}}; },
           [this, chosen](int, const CommandState&, const CommandContext&) {
-            // HEIF in builds with its decoder (MITCAD_HEIF, mitcad#850).
-            const QString filter = heifDecoderBuilt()
-                                       ? tr("Images (*.png *.jpg *.jpeg *.bmp *.webp *.heic *.heif);;All files (*)")
-                                       : tr("Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)");
+            // HEIF on every platform (mitcad#1304): a decoder is looked for
+            // only when such a file is chosen.
+            const QString filter = imageFileFilter();
+            qDebug().noquote() << QStringLiteral("Image Reference file dialog: %1").arg(filter);
             const QString path =
                 dialogOpenFileName(this, tr("Insert Image Reference"), dialogFolder(DialogGroup::Import), filter);
             if (!path.isEmpty()) {
@@ -232,12 +266,26 @@ CommandDef MainWindow::imageReferenceCommand() {
     if (!QFileInfo(file).isFile()) {
       return Built::failure(tr("There is no file %1.").arg(file), QStringLiteral("file"));
     }
-    const QString problem = heifProblem(file);
-    if (!problem.isEmpty()) {
-      return Built::failure(tr("The image cannot be read: %1.").arg(problem), QStringLiteral("file"));
-    }
     command.insert(QStringLiteral("cmd"), QStringLiteral("insert_image_reference"));
-    command.insert(QStringLiteral("path"), QFileInfo(file).absoluteFilePath());
+    const std::optional<HeifPng> heif = heifInsert(file);
+    if (!heif) {
+      command.insert(QStringLiteral("path"), QFileInfo(file).absoluteFilePath());
+      return Built::of({{QStringLiteral("commands"), QJsonArray{command}}});
+    }
+    // A HEIF file: the one message only when no decoder here reads it.
+    if (heif->result == HeifDecoded::Result::NoDecoder) {
+      return Built::failure(heifDecoderMissingMessage(), QStringLiteral("file"));
+    }
+    if (heif->result != HeifDecoded::Result::Decoded) {
+      return Built::failure(tr("The image cannot be read: %1.").arg(heif->error), QStringLiteral("file"));
+    }
+    // Embedded as the PNG file, its own name kept; the size a HEIF file has
+    // (96 pixels to the inch) unless a width is typed.
+    command.insert(QStringLiteral("data"), QString::fromLatin1(heif->png.toBase64()));
+    command.insert(QStringLiteral("file_name"), QFileInfo(file).fileName());
+    if (!command.contains(QStringLiteral("width"))) {
+      command.insert(QStringLiteral("scale"), kUnstatedPixelSize);
+    }
     return Built::of({{QStringLiteral("commands"), QJsonArray{command}}});
   };
   // Where the image goes, outlined while the panel is open (the model's
@@ -341,17 +389,25 @@ void MainWindow::followImageReferences() {
       continue;
     }
     QImage picture = m_imageReferenceImages.value(image.sha256);
-    if (picture.isNull()) {
+    // A HEIF image that no decoder here reads (one a design embedded as it
+    // was, before mitcad#1304) is not tried again on each refresh.
+    if (picture.isNull() && !m_imageReferenceNoDecoder.contains(image.sha256)) {
       QString why;
+      bool noDecoder = false;
       try {
         const QJsonObject file = queryObject({{QStringLiteral("query"), QStringLiteral("image_reference_image")},
                                               {QStringLiteral("name"), image.name}});
-        // HEIF through MitCad's decoder, the rest through Qt's readers
-        // (view/ImageFile.hpp).
+        // HEIF through the decoder that is there, the rest through Qt's
+        // readers (view/ImageFile.hpp).
         picture = decodeImageFile(QByteArray::fromBase64(file.value(QStringLiteral("data")).toString().toLatin1()),
-                                  &why);
+                                  &why, &noDecoder);
       } catch (const std::exception& e) {
         qWarning().noquote() << QStringLiteral("Image reference %1 not read: %2").arg(image.name, errorText(e));
+      }
+      if (noDecoder) {
+        // Said once, where the user sees it: what to install.
+        m_imageReferenceNoDecoder.insert(image.sha256, true);
+        showStatus(tr("%1 is a HEIF image: %2").arg(image.name, heifDecoderMissingMessage()), NoticeLevel::Warning);
       }
       if (picture.isNull()) {
         qWarning().noquote() << QStringLiteral("Image reference %1 cannot be drawn: %2").arg(image.name, why);

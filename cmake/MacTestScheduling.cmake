@@ -22,7 +22,9 @@ function(mitcad_macos_headless_tests)
         filament-variants make-tab dialog-gallery
         configurations material-color-parity update cut-conversion edit-auto-operation
         sketch-finish-layout appearance-edit-keys texture-folders insert-open-design
-        print-plates selection-owners assistant-setup bom-grouping timber-seating)
+        print-plates selection-owners assistant-setup bom-grouping)
+    # Timber seating drives the camera and captures the viewport through MCP.
+    # Keep its Qt desktop registration and shared Aqua lock for real OpenGL.
     # The Projects layout cases: Qt slots and bounds at 1x and 2x. Two of
     # them stay on the desktop for the window server's own bounds and glass.
     foreach(count IN ITEMS 0 1 24)

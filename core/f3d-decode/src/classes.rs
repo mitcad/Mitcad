@@ -97,6 +97,18 @@ pub const SKETCH_NAME_ANCHOR: &str = "5275CBA4-3D7D-40DC-A651-1DFF3FC8AFBF";
 pub const OFFSET: &str = "AFC07C10-99AC-5304-AE1B-DBEE335B0E43";
 /// One chain of a sketch offset: a root list of curves in chain order.
 pub const OFFSET_CHAIN: &str = "04E598FF-2979-5E41-8BC0-5C435C810909";
+// Mesh bodies (mitcad#1366, [`super::mesh`]).
+/// The timeline item of a design's mesh bodies (`MeshFeature`).
+pub const MESH_FEATURE: &str = "99F6967E-ED35-4222-B906-5CCF0AC70B53";
+/// A mesh body: its placements, presentation and references to its
+/// feature, its body holder ([`BLOB_HOLDER`]) and [`MESH_GUID`].
+pub const MESH_BODY: &str = "EA90DA22-556C-4C61-89BB-20C2681B7A9D";
+/// The GUID the mesh body's container repeats in its registry, and a
+/// reference back to [`MESH_ENTRY`].
+pub const MESH_GUID: &str = "A8338A26-5436-433C-8BAC-C3CF024AD595";
+/// A reference to [`MESH_GUID`] and the container's entry name
+/// `ParaMeshGeometry.<uuid>.paramesh`.
+pub const MESH_ENTRY: &str = "A1BAA3F6-4B67-4A0D-BACC-75F38A2230F3";
 
 /// Classes whose meaning is known, with the reference decoder's names.
 pub const KNOWN: &[(&str, &str)] = &[

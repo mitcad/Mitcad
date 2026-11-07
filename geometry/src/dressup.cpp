@@ -944,6 +944,19 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
       namer.generated(maker, vertices(v), face_name(feature, "corner", *name));
     }
   }
+  // The faces generated from an edge of the body outside the contours: port
+  // patch 1380 splits a concave contour at an arc of its chain tighter than
+  // the ball, and the corner it closes there with the arc's own ball, rolled
+  // on between the roundings, is generated from the arc's edge. Unnamed, the
+  // corner's edges were unnamed too, and a later sketch's curves along them
+  // found no edge to follow (mitcad#1397).
+  for (int i = 0; i < body.edge_count(); ++i) {
+    const TopoDS_Edge& edge = body.edge(i);
+    if (body.edge_name(i).empty() || maker.Contour(edge) != 0 || maker.Generated(edge).IsEmpty()) {
+      continue;
+    }
+    namer.generated(maker, edge, face_name(feature, role, body.edge_name(i)));
+  }
   name_consumed_faces(maker, body, namer);
   namer.carry_by_surface(body, role);
   name_after_nearest_edge(maker, feature, role, body, namer);

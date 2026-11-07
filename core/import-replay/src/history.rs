@@ -103,6 +103,41 @@ pub trait StoredGeometry<S> {
         let _ = index;
         false
     }
+    // Mesh bodies (mitcad#1366).
+    /// The mesh bodies the file stores that the timeline item with this
+    /// object id made (`Some`), or every one no call has taken yet
+    /// (`None`); each is given once.
+    fn take_meshes(&mut self, feature: Option<u64>) -> Vec<StoredMesh> {
+        let _ = feature;
+        Vec::new()
+    }
+}
+
+/// A mesh body the file stores (mitcad#1366): triangles that no history
+/// rebuilds, which come in as a base feature of their own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredMesh {
+    /// Where it comes from, for the report (its container).
+    pub source: String,
+    /// The object id of the timeline item that made it, when known.
+    pub feature: Option<u64>,
+    /// The component (object id) that holds it, when known.
+    pub component: Option<u64>,
+    /// Its name in the file, where it has one.
+    pub name: Option<String>,
+    /// Its triangles, or why they could not be read.
+    pub mesh: Result<MeshData, String>,
+    /// Its mesh body record (`_f3d.mesh_bodies[].id`), which its
+    /// physical material and appearance name it by (mitcad#1376).
+    pub id: Option<u64>,
+}
+
+/// A mesh body's triangles in millimetres, in its component's coordinates.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeshData {
+    pub points: Vec<[f64; 3]>,
+    /// Indices into `points`, counter-clockwise seen from outside.
+    pub triangles: Vec<[u32; 3]>,
 }
 
 /// The solids of a stored body of several lumps (disjoint pieces of one
@@ -838,6 +873,11 @@ impl<'g, S: Clone> Oracle<'g, S> {
     /// See [`StoredGeometry::component_names`].
     pub fn component_names(&mut self) -> std::collections::HashMap<u64, String> {
         self.geometry.component_names()
+    }
+
+    /// See [`StoredGeometry::take_meshes`] (mitcad#1366).
+    pub fn take_meshes(&mut self, feature: Option<u64>) -> Vec<StoredMesh> {
+        self.geometry.take_meshes(feature)
     }
 }
 

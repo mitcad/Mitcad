@@ -169,7 +169,7 @@ index a7569a0d..a6f9b5be 100644
 +    {
 +      return occ::handle<Geom2d_Curve>();
 +    }
-+    return anApp.Curve();
++    return occ::handle<Geom2d_Curve>(anApp.Curve());
 +  }
 +  catch (Standard_Failure const&)
 +  {

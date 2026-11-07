@@ -250,6 +250,11 @@ pub mod ffi {
         /// body hidden (`mitcad_ipt::testdata::test_part_with_hidden_body`):
         /// the cube shown, the cylinder hidden, mm.
         fn ipt_write_test_hidden_file(path: &str) -> Result<()>;
+        /// Writes an .ipt part file with appearances and a design for tests
+        /// (`mitcad_ipt::testdata::test_part_with_designed_appearances`,
+        /// mitcad#1375): the 10 mm cube in the default appearance, its top
+        /// and its face x = 10 mm in another, and the design that makes it.
+        fn ipt_write_test_appearance_file(path: &str) -> Result<()>;
         /// Writes a small project with .iam assemblies into a folder for
         /// tests (`mitcad_ipt::testassembly::write_test_project`): a top
         /// assembly as saved elsewhere, a sub-assembly and parts.
@@ -427,6 +432,15 @@ fn ipt_write_test_empty_file(path: &str) -> Result<(), String> {
 fn ipt_write_test_hidden_file(path: &str) -> Result<(), String> {
     std::fs::write(path, mitcad_ipt::testdata::test_part_with_hidden_body())
         .map_err(|e| format!("{path}: {e}"))
+}
+
+/// The part of [`ffi::ipt_write_test_appearance_file`].
+fn ipt_write_test_appearance_file(path: &str) -> Result<(), String> {
+    std::fs::write(
+        path,
+        mitcad_ipt::testdata::test_part_with_designed_appearances(),
+    )
+    .map_err(|e| format!("{path}: {e}"))
 }
 
 /// The project of [`ffi::ipt_write_test_assembly`].

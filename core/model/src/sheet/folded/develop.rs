@@ -152,6 +152,13 @@ pub(crate) fn chart_coordinates(
             let w = sub(d, scale(c.axis, v));
             let radius = dot(w, w).sqrt();
             let phi = dot(w, c.angular_direction).atan2(dot(w, c.radial_start));
+            // Past half a turn (a hem's bend, mitcad#1378) the angle goes on
+            // beyond 180 degrees.
+            let phi = if phi < -1e-9 && c.angle_extent > std::f64::consts::PI {
+                phi + std::f64::consts::TAU
+            } else {
+                phi
+            };
             if radius <= TOLERANCE || phi < -1e-9 || phi > c.angle_extent + 1e-9 {
                 return None;
             }

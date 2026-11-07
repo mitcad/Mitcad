@@ -52,6 +52,16 @@ QString dialogOpenFileName(QWidget* parent, const QString& title = {}, const QSt
 QString dialogSaveFileName(QWidget* parent, const QString& title = {}, const QString& directory = {},
                            const QString& filter = {}, QString* selectedFilter = nullptr);
 QString dialogDirectory(QWidget* parent, const QString& title = {}, const QString& directory = {});
+// The save dialog of a DXF export (mitcad#1408): its file types are the
+// length units the file can be written in ("DXF drawing in inches
+// (*.dxf)"), `unit` (mm, in, …: the design's) first and chosen; on
+// return `unit` is the one chosen. Empty when cancelled.
+QString dialogSaveDxf(QWidget* parent, const QString& title, const QString& suggested, QString& unit);
+// The units a DXF export offers: `first` (the design's), then mm, cm, m,
+// in and ft.
+QStringList dxfUnits(const QString& first);
+// "DXF drawing in inches (*.dxf)": the save dialog's file type of a unit.
+QString dxfUnitFilter(const QString& unit);
 // An existing file, with the dialog's buttons named (Use, Skip): a file the
 // user may decline to give (mitcad#196). Empty when declined.
 QString dialogChooseFile(QWidget* parent, const QString& title, const QString& directory, const QString& filter,

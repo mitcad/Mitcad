@@ -48,6 +48,50 @@ pub(super) fn read<K: Kernel>(
     Ok((state, rules.value))
 }
 
+/// A refusal of the kernel's sheet construction with the walls it names
+/// (`panel F6 slot 0`, `bend F4 slot 0`: two walls that meet, mitcad#1409)
+/// named by their features as the timeline shows them: `SheetFlange3`, a
+/// further wall `SheetFlange3 (wall 2)`, a bend `SheetFlange1 (bend)`.
+pub(crate) fn name_walls<K: Kernel>(ctx: &EvalContext<'_, K>, message: &str) -> String {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    let mut named = String::new();
+    let mut rest = message;
+    loop {
+        let found = ["panel F", "bend F"]
+            .iter()
+            .filter_map(|key| rest.find(key).map(|at| (at, *key)))
+            .min();
+        let Some((at, key)) = found else {
+            named.push_str(rest);
+            return named;
+        };
+        named.push_str(&rest[..at]);
+        let after = &rest[at + key.len()..];
+        let feature_digits = digits(after);
+        let slot_text = after[feature_digits..].strip_prefix(" slot ");
+        let parsed = slot_text.and_then(|slot_text| {
+            let slot_digits = digits(slot_text);
+            let feature = after[..feature_digits].parse::<u64>().ok()?;
+            let slot = slot_text[..slot_digits].parse::<u64>().ok()?;
+            Some((feature, slot, &slot_text[slot_digits..]))
+        });
+        let Some((feature, slot, tail)) = parsed else {
+            named.push_str(&rest[at..at + key.len()]);
+            rest = after;
+            continue;
+        };
+        let name = ctx.feature_name(FeatureUid(feature));
+        let panel = key.starts_with("panel");
+        named.push_str(&match (panel, slot) {
+            (true, 0) => name,
+            (true, k) => format!("{name} (wall {})", k + 1),
+            (false, 0) => format!("{name} (bend)"),
+            (false, k) => format!("{name} (bend {})", k + 1),
+        });
+        rest = tail;
+    }
+}
+
 pub(super) fn publish<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     state: SheetState,
@@ -65,7 +109,7 @@ pub(super) fn publish<K: Kernel>(
             },
             &ctx.uid.to_string(),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| name_walls(ctx, &e.to_string()))?;
     // A folded feature has one connected sheet. Never silently keep only the
     // first piece when relief or an oversized corner disconnects material.
     if geometry.solids.len() != 1 {
@@ -145,7 +189,7 @@ pub(super) fn publish_pieces<K: Kernel>(
             },
             &ctx.uid.to_string(),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| name_walls(ctx, &e.to_string()))?;
     if geometry.solids.is_empty() {
         return Err("sheet operation produced no material".into());
     }

@@ -16,6 +16,11 @@
 mod appearances;
 
 pub use appearances::{
-    AppearanceEntry, AppearanceReport, Appearances, Look, MaterialEntry, TextureEntry, density,
-    display_name, look, material_entry, mitcad_material,
+    AppearanceEntry, AppearanceReport, Appearances, Look, MaterialEntry, TextureEntry, apply,
+    density, display_name, look, material_entry, mitcad_material,
 };
+
+// The mesh bodies' physical materials and appearances (mitcad#1376).
+mod meshes;
+
+pub use meshes::mesh_appearances;

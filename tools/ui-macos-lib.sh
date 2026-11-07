@@ -366,6 +366,14 @@ ui_run_app() {
   elif [ "$UI_EXIT" -ne 0 ]; then
     ui_fail "$name: exit code $UI_EXIT"
     ui_log_tail
+  elif [ "${MITCAD_TEST_HEADLESS:-0}" = 1 ]; then
+    local isolation_checks
+    isolation_checks=$(grep -Fc 'Headless macOS application verified: activation prohibited, inactive, no visible native windows' "$UI_LOG_FILE" || :)
+    if ! grep -Fq 'Headless UI test verified: Qt offscreen without an OpenGL context' "$UI_LOG_FILE" ||
+        [ "${isolation_checks:-0}" -lt 3 ]; then
+      ui_fail "$name: missing final headless Qt/no-OpenGL or macOS application isolation proof"
+      ui_log_tail
+    fi
   fi
   ui_expect_presented "$name"
 }

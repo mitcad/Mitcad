@@ -13,7 +13,8 @@
 #     in place of the value, the measured 60.0 beside the field, undone
 #     and redone, then the field emptied: 60.0 again.
 #   - Center Pattern: one hole clicked, every hole of the pattern marked.
-#   - Edge Extension of one edge; a Line in the view, an Arc on the sheet
+#   - Edge Extension of one edge; a Line in the view (its pen Extra
+#     Thick, mitcad#1402), an Arc on the sheet
 #     and a Text in the view; the view dragged: the line drawn in it moves
 #     with it.
 #   - The view's Rotation in its panel (90), then Rotate 90° Right from its
@@ -22,6 +23,10 @@
 #     longer refused, the three views still drawn.
 #   - Its Scale typed (mitcad#1169): abc refused and not sent, 2:3 sent,
 #     the model's scale 0.667 and the field showing it as 1:1.5 (1:X or X:1).
+#   - A right click is the tool's Esc (mitcad#1404): two Lines on the sheet
+#     and a third's first end; a right drag keeps it, the first right click
+#     drops it and keeps the tool, the second ends the tool, neither opens
+#     a menu; with no tool a right click opens the sheet's menu.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-drawing-features-test.sh [screenshot.png]
@@ -287,10 +292,16 @@ ui_mark
 settled "Drawing tool Line"
 ui_step "Line"                             ui_click_logged "Drawing tool Line"
 ui_expect_new "Drawing tool: Line" "the line tool is on"
+# Its pen: Extra Thick (mitcad#1402), right after Thin and Thick.
+settled "Drawing panel drawingOption_pen"
+ui_step "Line: Extra Thick"                ui_click_logged "Drawing panel drawingOption_pen"
+ui_key Down Down Return
+ui_expect_new "Drawing option pen: extra_thick" "the extra thick pen"
 ui_step "its first end, on the view"       sheet_click 125 175
 ui_expect_new "Drawing point 1 at" "the first end"
 ui_step "its second end"                   sheet_click 175 175
 ui_expect_new '"type":"line"' "a line asked for"
+ui_expect_new '"pen":"extra_thick"' "drawn with the extra thick pen"
 ui_expect_new '"view":1' "in the view"
 ui_expect_new "4 = line" "drawn"
 no_refusal
@@ -425,6 +436,66 @@ ui_expect_new '"scale":"2:3"' "two thirds asked for"
 # or X:1 (ISO 5455): 1:1.5.
 ui_expect_new "Drawing view 1 scale: 1:1.5 (0.667)" "the model's scale, shown as 1:1.5"
 ui_expect_new "Drawing sheet drawn: 3 views" "drawn at 2:3"
+no_refusal
+
+echo "--- A right click is the tool's Esc (mitcad#1404)"
+# Two lines on the sheet's empty upper left, then a third's first end: a
+# right drag keeps it, the first right click drops it and keeps the tool,
+# the second ends the tool, and one with no tool opens the sheet's menu.
+ui_mark
+settled "Drawing tool Line"
+ui_step "Line"                             ui_click_logged "Drawing tool Line"
+ui_expect_new "Drawing tool: Line" "the line tool is on"
+settled "Drawing panel drawingOption_attach"
+ui_step "Drawn: On the Sheet"              ui_click_logged "Drawing panel drawingOption_attach"
+ui_key Down Return
+ui_expect_new "Drawing option attach: sheet" "on the sheet"
+ui_mark
+ui_step "the first line's first end"       sheet_click 30 250
+ui_step "its second end"                   sheet_click 80 250
+ui_expect_new '"type":"line"' "the first line asked for"
+no_refusal
+ui_mark
+ui_step "the second line's first end"      sheet_click 30 240
+ui_step "its second end"                   sheet_click 80 240
+ui_expect_new '"type":"line"' "the second line asked for"
+no_refusal
+ui_mark
+ui_step "a third line's first end"         sheet_click 30 230
+ui_expect_new "Drawing point 1 at" "a line in progress"
+# A right drag (well over 4 px) is not a click: the line stays in progress.
+read -r rx ry <<< "$(sheet_at 50 230)"
+read -r tx ty <<< "$(sheet_at 70 230)"
+ui_step "right drag"                       xdotool mousemove "$rx" "$ry" mousedown 3
+for i in 1 2 3 4; do
+  xdotool mousemove $((rx + (tx - rx) * i / 4)) $((ry + (ty - ry) * i / 4))
+  sleep 0.08
+done
+xdotool mouseup 3
+ui_sync
+ui_expect_new "Drawing right drag: not a click" "a right drag is not a click"
+grep -q "Drawing right-click\|Drawing picks dropped" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "the right drag ended the line in progress"
+ui_mark
+ui_step "right-click"                      sheet_click 55 220 3
+ui_expect_new "Drawing right-click: Esc of the tool" "the right click is the tool's Esc"
+ui_expect_new "Drawing picks dropped: Line" "the line in progress ends"
+ui_sync
+grep -q "Drawing tool: selection" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "the first right click ended the tool"
+grep -q "Context menu:" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "a right click with a tool opened a menu"
+echo "ok   the tool stays"
+ui_mark
+ui_step "right-click again"                sheet_click 55 210 3
+ui_expect_new "Drawing right-click: Esc of the tool" "the right click is the tool's Esc"
+ui_expect_new "Drawing tool: selection" "the tool ends"
+ui_sync
+grep -q "Context menu:" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "the right click that ended the tool opened a menu"
+echo "ok   no menu"
+ui_mark
+ui_step "right-click with no tool"         sheet_click 60 200 3
+ui_expect_new "Context menu: Sheet… | Add Revision… | Add Sheet" "the sheet's menu"
+ui_step "Escape (close the menu)"          ui_key Escape
 no_refusal
 ui_crashed && ui_fail "crashed"
 

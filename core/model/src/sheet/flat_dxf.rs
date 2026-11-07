@@ -16,7 +16,7 @@ use mitcad_vec3::vec2::distance as dist;
 
 use super::flat::FlatBend;
 use super::{BoundedCurve2Ext, MaterialRegion};
-use crate::exchange::LengthUnit;
+use crate::expr::LengthUnit;
 use crate::profile::SegmentGeometry;
 
 /// The exterior contour of the material.
@@ -33,6 +33,8 @@ pub const BEND_TANGENT: &str = "BEND_TANGENT";
 /// What a Flat Pattern drawing holds and how it is written.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlatDxfOptions {
+    /// The drawing unit (mitcad#1408: the export gives the design's unless
+    /// it names another).
     pub unit: LengthUnit,
     /// Also the tangent lines of the bends.
     pub tangents: bool,
@@ -41,21 +43,9 @@ pub struct FlatDxfOptions {
 impl Default for FlatDxfOptions {
     fn default() -> Self {
         Self {
-            unit: LengthUnit::Millimeter,
+            unit: LengthUnit::Millimetre,
             tangents: false,
         }
-    }
-}
-
-/// The drawing unit and the millimetres per unit.
-pub fn dxf_unit(unit: LengthUnit) -> (mitcad_dxf::Units, f64) {
-    use mitcad_dxf::Units;
-    match unit {
-        LengthUnit::Millimeter => (Units::Millimeters, 1.0),
-        LengthUnit::Centimeter => (Units::Centimeters, 10.0),
-        LengthUnit::Meter => (Units::Meters, 1000.0),
-        LengthUnit::Inch => (Units::Inches, 25.4),
-        LengthUnit::Foot => (Units::Feet, 304.8),
     }
 }
 
@@ -169,7 +159,7 @@ pub fn drawing(
     bends: &[FlatBend],
     options: &FlatDxfOptions,
 ) -> Result<mitcad_dxf::Drawing, String> {
-    use mitcad_dxf::{Affine, Layer};
+    use mitcad_dxf::Layer;
 
     let mut curves: Vec<(&'static str, String, SegmentGeometry)> = Vec::new();
     for (r, region) in regions.iter().enumerate() {
@@ -226,12 +216,7 @@ pub fn drawing(
             ..Layer::new(name)
         })
         .collect();
-    let (units, millimetres) = dxf_unit(options.unit);
-    if millimetres != 1.0 {
-        drawing = drawing.transformed(&Affine::scale(1.0 / millimetres, 1.0 / millimetres));
-    }
-    drawing.units = units;
-    Ok(drawing)
+    Ok(crate::exchange::dxf_in_unit(drawing, options.unit))
 }
 
 #[cfg(test)]

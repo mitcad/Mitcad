@@ -543,6 +543,22 @@ Decisions made while implementing Unfold, Refold and the Flat Pattern:
   area above `max(1e-6 mm2, 1e-9 * smaller area)` names both domains. Shared
   seams have no area. Folded configurations rely on the kernel's collision
   check of the constructed solid.
+- **Walls that meet (mitcad#1409).** Where the folded solid's walls meet
+  (the collision check finds faces that meet, or the solid checker refuses
+  the solid), every pair of material regions whose boxes meet is compared,
+  each region built on its own: a common volume above `1e-6 mm * t^2`
+  (deeper than the tolerance over a square of the thickness) refuses the
+  sheet naming both walls ("pass through each other"); else a common area
+  of their surfaces above `1e-6 mm * t` between regions no port joins
+  refuses it as a face contact ("touch over a face ... leave a seam gap").
+  Walls that touch only along a line or at a point, such as a full open
+  corner closed by welding at the exact inside dimension, are kept as they
+  are: not fused, their faces not merged, the corner line an edge of each
+  wall. A face contact (a half open corner, the closing wall lying on the
+  other wall's end) is refused because the one solid it makes is not
+  sound: the solid checker refuses it, and holes, cuts and fillets on it
+  fail. Nothing adds a clearance: the body is built at the entered
+  dimensions or refused. CLI `sheet_open_corner`.
 - **Flat Pattern.** One `FlatPatternDef` per body in `DocState::flat_patterns`
   (file field `flat_patterns`), with `stationary` (default: the body's lowest
   panel when the item is created), `x_axis` (only `panel_x`, the panel's own
@@ -702,8 +718,9 @@ Decisions made while implementing the command UI and the DXF export:
   `BEND_TANGENT` always declared, `$INSUNITS` and coordinates in the chosen
   unit, the pattern's frame. Up/down follow the viewed side, so exporting the
   back reverses them and mirrors `x`. Without an item the export uses a new
-  item's settings rather than refusing. The application exports in inches when
-  the document's unit is inches, else millimetres.
+  item's settings rather than refusing. The export writes the design's length
+  unit unless `units` names another (mitcad#1408); the application's save
+  dialog offers the units as file types, the design's first.
 - **Tests.** Model: `sheet/flat_dxf_tests.rs` (seam joining, hole circles,
   layers, inches, round trips through `mitcad-dxf`), `sheet/pick_tests.rs`,
   `sheet_ui_tests.rs` (inline rules and Undo, picks, sheet metal bodies, the display
@@ -786,7 +803,8 @@ Decisions made while closing the leftovers of mitcad#208 to mitcad#210:
 
 Decisions made while closing the import gaps of mitcad#211:
 
-- **Hems and the outer extent.** A flange's angle may reach 180 degrees.
+- **Hems and the outer extent.** A flange's angle may reach 180 degrees
+  (and since mitcad#1378 pass it, below).
   `X = (r+t) sin(min(|angle|, 90 degrees))` is how far the bend's outer
   surface reaches past its stationary tangent line. Position
   `side_tangent` puts the tangent line at `-X` (the outer surface touches
@@ -1051,6 +1069,72 @@ sheets unfold, refold and have a Flat Pattern:
   is part of the B-rep. CLI `sheet_perforate`: an L contour flange,
   staggered 33 holes (`9400 - 212.5 pi`), square 28 (`9400 - 150 pi`), the
   Flat Pattern (`4700 - 85 pi`), Unfold, a thickness edit, reopened.
+
+### Implementation notes (mitcad#1378)
+
+Hems past 180 degrees, for the `.f3d` rolled, teardrop, rope and double
+hems:
+
+- **Bends past half a turn.** A flange's signed angle may be anything
+  short of a full turn (`BendMetrics::past_half_turn`); Bend and Fold keep
+  the 180-degree limit. The bend's cylinder covers its angle (the
+  geometry's chart check allows less than `2 pi`), its developed strip is
+  the allowance `|angle| (r + K t)` as for any bend, its outer extent `X
+  = r + t`, and its virtual sharps do not exist (`inner`, `outer`,
+  `inside`, `outside` refused). Model points past 180 degrees map back to
+  their chart coordinates (`chart_coordinates` goes on past `pi`).
+- **A flange of its bend alone.** A straight length of 0 (within the
+  tolerance) leaves no wall: the bend's moving tangent line is a free
+  boundary (the strip's curve `41`), its record naming that line as its
+  moving boundary. A rolled hem is such a flange of 270 degrees.
+- **Hem forms.** `sheet_flange` with `hem` (`teardrop`, `rope`,
+  `double`) works its bends and walls out from the gap, setback, radius
+  and the hem's length (`flange_steps`, `hem_steps`; the formulas are in
+  `commands.md`). Bend `k` of the flange is its bend slot `k`, the wall
+  after it its panel slot `k`; the next bend starts at that wall's far end
+  (`51 + 100 k`), or at once on the bend's moving tangent line where no
+  wall follows (the rope's two bends meet directly: a seam between two
+  bends). The teardrop's angle has no closed form: it is the root of
+  `(r (1 + cos a) - g) cos a = (L - (r + t)(1 + sin a)) sin a` on `(0, pi/2)`,
+  found by bisection. Checked against the stored bodies of the `.f3d`
+  reference hems (t 2.5, on a 17500 mm3 panel 100 wide): teardrop
+  (r 2, gap 1, length 10) 20402.855, rope (the same sizes) 20561.79,
+  double (r 1, gap 2, setback 1, length 10) 22784.292, rolled (r 3,
+  270 degrees) 21131.913 mm3, which these formulas give to the stored
+  digits.
+- **Tests.** Model: `bends.rs` (`a_flange_bend_turns_past_half_a_turn_with_its_allowance`,
+  `hem_forms_give_their_bends_and_walls`), `develop_tests.rs`
+  (`chart_coordinates_go_on_past_half_a_turn`). OCCT: CLI
+  `sheet_flange_hem_past` (rolled, teardrop, rope and double hems on a
+  35 x 20 panel: volumes, bend angles and allowances, flat areas;
+  refusals). Import: `import-sheet` `hems_past_half_a_turn_are_flanges_with_their_form`
+  and the ctest `f3d.reference_hems` (the six reference hems parametric
+  and verified).
+
+### Implementation notes (mitcad#1383)
+
+The Flange panel edits what the `.f3d` and `.ipt` imports give a flange:
+
+- **Hem form.** Hem (None, Teardrop, Rope, Double) with Gap and a double
+  hem's Setback reads and writes `hem`. With a hem the panel hides Angle
+  and Measured and writes the length mode `outer_tangent` and an angle of
+  180 degrees to the side of the loaded angle and Flip (the model takes
+  only the angle's sign, and the import's angle is that 180 degrees).
+- **Width.** Width (Whole Edge, Offsets from the Ends, From the Middle)
+  replaces the Offsets from the Ends check: From the Middle reads and
+  writes `width` (`before`, `after`, and `root` with Own Overhang Root),
+  which the panel dropped before.
+- **Choices.** Measured adds Outer Tangent Length (`outer_tangent`) and
+  Position adds Tangent to Side (`side_tangent`), the imports' flanges'
+  references, which an edit had replaced by the first choice. The Angle
+  takes more than 180 degrees and the Length 0 (a rolled hem) as the
+  model does; the model refuses what it cannot build.
+- **Test.** `tools/ui-sheet-flange-hem-test.sh`: a teardrop hem loaded and
+  kept by an edit, changed to rope and double in the panel and each
+  loaded and kept, a flange of 90 degrees whose width from the middle
+  passes the edge's ends (root 0, then 3), a rolled hem of 270 degrees
+  and length 0; volumes as `cli.sheet_flange_hem_past` and
+  `cli.sheet_flange_overhang`, the saved definitions read back.
 
 ## Kernel seam
 

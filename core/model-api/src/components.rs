@@ -218,7 +218,36 @@ named_enum! {
             #[serde(default)]
             tolerance: Option<f64>,
         },
+        // Linked designs read again while the design is open (mitcad#1416):
+        // Update Link and Update All Links, one undo step.
+        "update_link" => UpdateLink {
+            /// The linked component (uid or name); left out: every linked
+            /// design.
+            #[serde(default)]
+            component: Option<String>,
+            /// The folder of relative link paths; left out: the design
+            /// file's.
+            #[serde(default)]
+            base: Option<String>,
+        },
     }
+}
+
+/// The `links` query (mitcad#1416): the linked designs, the files they
+/// are followed to and whether those changed since they were read. `base`:
+/// the design file's folder; left out, the folder it was read from.
+pub(crate) fn links_json<K: Kernel>(doc: &Document<K>, base: Option<&str>) -> Value {
+    let base = base.map(PathBuf::from);
+    let links: Vec<Value> = doc
+        .link_states(base.as_deref())
+        .iter()
+        .map(|l| {
+            json!({"component": l.component, "name": l.name, "path": l.path,
+                   "file": l.file.as_ref().map(|f| f.to_string_lossy().into_owned()),
+                   "options": l.options, "changed": l.changed, "problem": l.problem})
+        })
+        .collect();
+    json!({"links": links})
 }
 
 /// What Find Repeated Parts made (mitcad#1277), as `find_repeated_parts`
@@ -602,6 +631,12 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             ComponentCommand::FindRepeatedParts { feature, tolerance } => {
                 let found = self.find_repeated_parts(feature, tolerance)?;
                 repeated_parts_json(&found)
+            }
+            ComponentCommand::UpdateLink { component, base } => {
+                let uid = component.map(|c| self.component_ref(&c)).transpose()?;
+                let base = base.map(PathBuf::from);
+                let done = self.update_link(uid, base.as_deref())?;
+                json!({"updated": done.updated, "messages": done.messages})
             }
         })
     }

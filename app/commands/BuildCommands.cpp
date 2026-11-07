@@ -183,6 +183,10 @@ struct Shared {
     // A set's members as the model lays them out from the offset
     // (mitcad#492); -1 without a set.
     int setCount = -1;
+    // The free stretch between profiles it stands in (mitcad#1401), from
+    // end A; NaN without one.
+    double gapStart = kNaN;
+    double gapEnd = kNaN;
   };
   Side side;
   // Where the part shown last stands on a slot (mitcad#444): the foot's
@@ -861,6 +865,13 @@ const QString kTurn = QStringLiteral("turn");
 const Choices kFroms = {{QStringLiteral("a"), QStringLiteral("End A")},
                         {QStringLiteral("b"), QStringLiteral("End B")},
                         {QStringLiteral("middle"), QStringLiteral("Middle")}};
+// A part on a profile's side may also be centred in the free stretch
+// between the profiles standing on it (mitcad#1401); a wall's From has
+// only kFroms.
+const Choices kSideFroms = {{QStringLiteral("a"), QStringLiteral("End A")},
+                            {QStringLiteral("b"), QStringLiteral("End B")},
+                            {QStringLiteral("middle"), QStringLiteral("Middle")},
+                            {QStringLiteral("gap"), QStringLiteral("Middle of Gap")}};
 const Choices kEnds = {{QStringLiteral("a"), QStringLiteral("End A")}, {QStringLiteral("b"), QStringLiteral("End B")}};
 // State kept besides the inputs (mitcad#417): whether the side's Offset
 // and From were typed (sent as at.offset and at.from; a click leaves them
@@ -1398,6 +1409,9 @@ QString snapText(const QString& kind) {
   if (kind == QStringLiteral("middle")) {
     return QObject::tr("middle");
   }
+  if (kind == QStringLiteral("gap")) {
+    return QObject::tr("middle of gap");
+  }
   if (kind == QStringLiteral("grid")) {
     return QObject::tr("grid");
   }
@@ -1431,13 +1445,17 @@ QString endsText(const QJsonObject& ends) {
   return shown.isEmpty() ? QObject::tr("square ends") : QObject::tr("ends %1").arg(shown.join(QStringLiteral(", ")));
 }
 
-// A side's reference in a sentence: "end A", "end B", "the middle".
+// A side's reference in a sentence: "end A", "end B", "the middle", "the
+// middle of the gap".
 QString fromText(const QString& from) {
   if (from == QStringLiteral("b")) {
     return QObject::tr("end B");
   }
   if (from == QStringLiteral("middle")) {
     return QObject::tr("the middle");
+  }
+  if (from == QStringLiteral("gap")) {
+    return QObject::tr("the middle of the gap");
   }
   return QObject::tr("end A");
 }
@@ -1456,6 +1474,9 @@ Shared::Side sideOf(const QJsonObject& answer, double targetLength) {
   shown.width = side.value(QStringLiteral("width")).toDouble(kNaN);
   shown.longPoint = side.value(QStringLiteral("long_point")).toBool();
   shown.length = targetLength;
+  const QJsonObject gap = side.value(QStringLiteral("gap")).toObject();
+  shown.gapStart = gap.value(QStringLiteral("start")).toDouble(kNaN);
+  shown.gapEnd = gap.value(QStringLiteral("end")).toDouble(kNaN);
   for (const QJsonValue& value : answer.value(QStringLiteral("snaps")).toArray()) {
     const QJsonObject snap = value.toObject();
     const double offset = snap.value(QStringLiteral("offset")).toDouble(kNaN);
@@ -1890,7 +1911,7 @@ void fillFromClick(const Shared& shared, const QString& role, bool profile, Comm
     state.setText(QStringLiteral("offset"), cmd::lengthText(std::round(offset.toDouble() * 100.0) / 100.0, context));
     state.setValue(QStringLiteral("offset"), kNaN);
     qInfo().noquote() << QStringLiteral("BUILD side click: From %1, Offset %2 (%3)")
-                             .arg(cmd::label(kFroms, str(side, "from")), state.text(QStringLiteral("offset")),
+                             .arg(cmd::label(kSideFroms, str(side, "from")), state.text(QStringLiteral("offset")),
                                   str(side, "kind").isEmpty() ? QStringLiteral("between snaps") : str(side, "kind"));
     return;
   }
@@ -1917,7 +1938,9 @@ void fillFromClick(const Shared& shared, const QString& role, bool profile, Comm
 // From changed (mitcad#417): the part stays where it is, its offset from
 // the new reference recomputed from the side shown last: from end A the
 // near face, from end B the far face (towards A), from the middle the
-// part's centre (towards B). Sent as typed from then on.
+// part's centre (towards B), from the middle of the gap the part's centre
+// from the middle of the free stretch it stands in (mitcad#1401). Sent as
+// typed from then on.
 void keepPlace(const Shared& shared, CommandState& state, const CommandContext& context) {
   const Shared::Side side = shared.shownSide();
   const QString to = state.choice(QStringLiteral("from"));
@@ -1925,22 +1948,27 @@ void keepPlace(const Shared& shared, CommandState& state, const CommandContext& 
   // A tilted part's offset is to its foot's long point, a point (mitcad#444).
   const double width = side.longPoint ? 0.0 : side.width;
   const double length = side.length;
+  const QString gap = QStringLiteral("gap");
+  const double gapMiddle = (side.gapStart + side.gapEnd) / 2.0;
   const bool known = std::isfinite(side.offset) && std::isfinite(width) &&
-                     (std::isfinite(length) || (side.from == QStringLiteral("a") && to == QStringLiteral("a")));
+                     (std::isfinite(length) || (side.from == QStringLiteral("a") && to == QStringLiteral("a"))) &&
+                     ((side.from != gap && to != gap) || std::isfinite(gapMiddle));
   if (side.from.isEmpty() || side.from == to || !known) {
     return;
   }
   // The near face from end A, then the offset from the new reference.
   const double nearFace = side.from == QStringLiteral("b")        ? length - side.offset - width
                           : side.from == QStringLiteral("middle") ? length / 2.0 + side.offset - width / 2.0
+                          : side.from == gap                      ? gapMiddle + side.offset - width / 2.0
                                                                   : side.offset;
   const double offset = to == QStringLiteral("b")        ? length - nearFace - width
                         : to == QStringLiteral("middle") ? nearFace + width / 2.0 - length / 2.0
+                        : to == gap                      ? nearFace + width / 2.0 - gapMiddle
                                                          : nearFace;
   state.setText(QStringLiteral("offset"), cmd::lengthText(std::round(offset * 100.0) / 100.0, context));
   state.setValue(QStringLiteral("offset"), kNaN);
   qInfo().noquote() << QStringLiteral("BUILD From %1 keeps the part in place: Offset %2")
-                           .arg(cmd::label(kFroms, to), state.text(QStringLiteral("offset")));
+                           .arg(cmd::label(kSideFroms, to), state.text(QStringLiteral("offset")));
 }
 
 // The inputs where and how a part goes, after the picker; with
@@ -2074,7 +2102,7 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                       }
                     })
                     .withTooltip(QObject::tr("The distance from the reference From names; 0 is flush, or centered")));
-  inputs.append(choiceInput(QStringLiteral("from"), QObject::tr("From"), kFroms, QStringLiteral("a"))
+  inputs.append(choiceInput(QStringLiteral("from"), QObject::tr("From"), kSideFroms, QStringLiteral("a"))
                     .withVisible(onSide)
                     .withOnChange([shared](CommandState& state, const CommandContext& context) {
                       keepPlace(*shared, state, context);

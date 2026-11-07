@@ -1033,14 +1033,23 @@ pub fn read(file: &IptFile, label: &str) -> Result<Option<Design>, IptError> {
         .unwrap_or(DisplayUnit::Mm);
     // The sheet-metal style of the application segment (mitcad#211).
     let style = crate::sheet::Style::read(file);
-    Ok(Some(design_of_file(
+    let mut design = design_of_file(
         &dc,
         length,
         label,
         info.part_number.as_deref(),
         &style,
         Some(file),
-    )))
+    );
+    // The bodies' and faces' appearances (mitcad#1367).
+    if let Some(data) = crate::appearance::read(file) {
+        design
+            .dump
+            .f3d
+            .get_or_insert_with(Default::default)
+            .appearance = Some(data);
+    }
+    Ok(Some(design))
 }
 
 /// The design of a definitions segment.

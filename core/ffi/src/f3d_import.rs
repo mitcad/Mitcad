@@ -190,6 +190,8 @@ pub struct StoredFile {
     /// released. Healing a body of 5 000 faces took 25–45 s, a state of
     /// the history each.
     healed: Arc<Mutex<HashMap<usize, Option<SharedPtr<F3dBuilt>>>>>,
+    /// The design's mesh bodies, placed (mitcad#1366, [`read_meshes`]).
+    meshes: Vec<mitcad_import::StoredMesh>,
 }
 
 /// The smallest body (faces) whose build reuses healed faces
@@ -422,6 +424,7 @@ impl StoredFile {
             bases: Vec::new(),
             heirs: Vec::new(),
             healed: Arc::new(Mutex::new(HashMap::new())),
+            meshes: read_meshes(doc, dump),
         };
         // The threads converting the bodies, shared with the large bodies
         // healed while the file is read (mitcad#245), which take at most
@@ -1222,7 +1225,14 @@ impl StoredFile {
         // Edge ends up to 0.01 mm off their vertices (rolled-back B-spline
         // edges of some intermediate states) only widen the tolerances.
         let gaps = check.vertex_mismatches > 0 && check.max_vertex_gap > MAX_VERTEX_GAP;
-        if body.skipped_faces > 0 || check.unpaired_coedges > 0 || check.open_loops > 0 || gaps {
+        // (Faces and edges kept on unknown geometry are lost to the
+        // builder.)
+        if body.skipped_faces > 0
+            || body.unknown_edges > 0
+            || check.unpaired_coedges > 0
+            || check.open_loops > 0
+            || gaps
+        {
             return true;
         }
         if body.body.is_solid() {
@@ -1287,12 +1297,20 @@ pub struct F3dGeometry {
     file: Arc<StoredFile>,
     /// Per variant, its shape once built (None inside: it did not build).
     built: Vec<Option<Option<SharedPtr<Shape>>>>,
+    /// Per mesh body of the file, whether the replay took it
+    /// ([`StoredGeometry::take_meshes`], mitcad#1366).
+    meshes_taken: Vec<bool>,
 }
 
 impl F3dGeometry {
     pub fn new(file: Arc<StoredFile>) -> Self {
         let built = vec![None; file.variants.len()];
-        Self { file, built }
+        let meshes_taken = vec![false; file.meshes.len()];
+        Self {
+            file,
+            built,
+            meshes_taken,
+        }
     }
 
     /// The shape of a variant: built once by this try, or by another one
@@ -2195,6 +2213,160 @@ impl StoredGeometry<SharedPtr<Shape>> for F3dGeometry {
         };
         Ok(self.bodies(&variants).0)
     }
+
+    // Mesh bodies (mitcad#1366).
+    fn take_meshes(&mut self, feature: Option<u64>) -> Vec<mitcad_import::StoredMesh> {
+        let meshes = &self.file.meshes;
+        self.meshes_taken.resize(meshes.len(), false);
+        let mut out = Vec::new();
+        for (mesh, taken) in meshes.iter().zip(self.meshes_taken.iter_mut()) {
+            if !*taken && (feature.is_none() || mesh.feature == feature) {
+                *taken = true;
+                out.push(mesh.clone());
+            }
+        }
+        out
+    }
+}
+
+/// The design's mesh bodies (mitcad#1366): each mesh body record of the
+/// design (`_f3d.mesh_bodies`) with its container's triangles placed in
+/// millimetres, or why they could not be read; a container no record names
+/// is not placed, and comes in as such a reason.
+fn read_meshes(doc: &F3dFile, dump: Option<&Dump>) -> Vec<mitcad_import::StoredMesh> {
+    let records: &[mitcad_dump::MeshBody] = dump
+        .and_then(|d| d.f3d.as_ref())
+        .and_then(|f| f.mesh_bodies.as_deref())
+        .unwrap_or(&[]);
+    let entries = doc.mesh_entries();
+    fn base(entry: &str) -> &str {
+        entry.rsplit('/').next().unwrap_or(entry)
+    }
+    let mut named = HashSet::new();
+    let mut out: Vec<mitcad_import::StoredMesh> = records
+        .iter()
+        .map(|record| {
+            let entry = record
+                .file
+                .as_deref()
+                .and_then(|file| entries.iter().find(|e| base(e) == file));
+            if let Some(entry) = entry {
+                named.insert(entry.clone());
+            }
+            mitcad_import::StoredMesh {
+                source: record.file.clone().unwrap_or_else(|| {
+                    format!("the mesh body of object {}", record.id.unwrap_or_default())
+                }),
+                feature: record.feature,
+                component: record.component,
+                name: record.name.clone().filter(|n| !n.trim().is_empty()),
+                mesh: read_mesh(doc, record, entry.map(String::as_str)),
+                id: record.id,
+            }
+        })
+        .collect();
+    out.extend(
+        entries
+            .iter()
+            .filter(|e| !named.contains(*e))
+            .map(|e| mitcad_import::StoredMesh {
+                source: base(e).to_owned(),
+                feature: None,
+                component: None,
+                name: None,
+                mesh: Err("no mesh body of the design places it".to_owned()),
+                id: None,
+            }),
+    );
+    out
+}
+
+/// One mesh body record's triangles, placed in millimetres.
+fn read_mesh(
+    doc: &F3dFile,
+    record: &mitcad_dump::MeshBody,
+    entry: Option<&str>,
+) -> Result<mitcad_import::MeshData, String> {
+    if let Some(e) = &record.error {
+        return Err(e.clone());
+    }
+    let entry = entry.ok_or_else(|| match &record.file {
+        Some(file) => format!("the file has no container {file}"),
+        None => "the design names no container for it".to_owned(),
+    })?;
+    let data = doc.read_large(entry).map_err(|e| format!("{entry}: {e}"))?;
+    let container = mitcad_f3d_file::paramesh::parse(&data)?;
+    if let Some(key) = &record.key
+        && !container.has_property_text(key)
+    {
+        return Err(format!(
+            "its container does not repeat the design's key {key}"
+        ));
+    }
+    let placed = container.placed(record.transform.as_ref());
+    Ok(mitcad_import::MeshData {
+        points: placed.points,
+        triangles: placed.triangles,
+    })
+}
+
+/// The mesh bodies of one document, for the import of the stored bodies
+/// without the timeline (`import_f3d`, mitcad#1376).
+pub(crate) struct DocumentMeshes {
+    /// The document's name in an `.f3z` package; empty for an `.f3d` file.
+    pub document: String,
+    /// Its mesh bodies, placed as the timeline import's ([`read_meshes`]).
+    pub meshes: Vec<mitcad_import::StoredMesh>,
+    /// The materials and appearances its design names
+    /// (`_f3d.appearance`, the mesh bodies' in `meshes`).
+    pub appearance: Option<mitcad_dump::AppearanceData>,
+}
+
+/// The mesh bodies of an `.f3d` file, or of each document of an `.f3z`
+/// package, with the materials and appearances their designs name
+/// (mitcad#1376): the design streams are decoded only for a document that
+/// has mesh containers.
+pub(crate) fn file_meshes(path: &str) -> Result<Vec<DocumentMeshes>, String> {
+    let file = F3dFile::open(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let nested = file.documents();
+    if nested.is_empty() {
+        return Ok(document_meshes(String::new(), &file).into_iter().collect());
+    }
+    let mut out = Vec::new();
+    for name in nested {
+        let doc = file
+            .open_document(&name)
+            .map_err(|e| format!("{name}: {e}"))?;
+        out.extend(document_meshes(name, &doc));
+    }
+    Ok(out)
+}
+
+/// A document's mesh bodies; none when it has no mesh containers. A
+/// design that does not decode places none of them (each is then a
+/// reason, as in the timeline import).
+fn document_meshes(document: String, doc: &F3dFile) -> Option<DocumentMeshes> {
+    if doc.mesh_entries().is_empty() {
+        return None;
+    }
+    let label = if document.is_empty() {
+        "design"
+    } else {
+        document.as_str()
+    };
+    let mut dump = mitcad_f3d_design::decode_streams(doc, label)
+        .ok()
+        .and_then(|d| d.dump);
+    let meshes = read_meshes(doc, dump.as_ref());
+    let appearance = dump
+        .as_mut()
+        .and_then(|d| d.f3d.as_mut())
+        .and_then(|f| f.appearance.take());
+    Some(DocumentMeshes {
+        document,
+        meshes,
+        appearance,
+    })
 }
 
 /// The JSON of the `import_f3d` command with the timeline.
@@ -3511,6 +3683,179 @@ mod tests {
         assert_eq!(
             heal_while_reading(&[3, 4, 5, 6, 7], faces, &no_bases, &[]),
             vec![6, 7, 5, 4, 3]
+        );
+    }
+
+    /// A design's mesh body (mitcad#1366, `mitcad_f3d::testmeshes`): its
+    /// container's triangles placed in millimetres, with its item, its
+    /// component and its name; a container no record names is reported;
+    /// imported, the item comes in as a base feature of the mesh body.
+    #[test]
+    fn a_mesh_body_comes_in_with_its_placement() {
+        use mitcad_f3d::testmeshes as t;
+        use mitcad_model::Kernel as _;
+        let doc = F3dFile::from_bytes(t::mesh_file()).unwrap();
+        let design = mitcad_f3d_design::decode_streams(&doc, "test").unwrap();
+        let meshes = read_meshes(&doc, design.dump.as_ref());
+        assert_eq!(meshes.len(), 2);
+        let first = &meshes[0];
+        assert_eq!(
+            (first.feature, first.component),
+            (Some(t::MESH_ITEM), Some(t::ROOT_COMPONENT))
+        );
+        assert_eq!(first.name.as_deref(), Some(t::MESH_NAME));
+        let mesh = first.mesh.as_ref().unwrap();
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
+        assert!(near(mesh.points[0], [20.0, 0.0, 0.0]));
+        assert!(near(mesh.points[1], [21.0, 0.0, 0.0]));
+        assert_eq!(mesh.triangles.len(), 4);
+        assert_eq!(meshes[1].source, t::STRAY_FILE);
+        assert!(meshes[1].mesh.as_ref().unwrap_err().contains("places it"));
+        // The import.
+        let dir = std::env::temp_dir().join(format!("mitcad-f3d-mesh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mesh.f3d");
+        std::fs::write(&path, t::mesh_file()).unwrap();
+        let mut document = Document(mitcad_model::Document::new(OcctKernel));
+        let report = document
+            .import_timeline(&path.display().to_string(), &TimelineOptions::default())
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let design = &report.designs[0];
+        assert_eq!(design.items.len(), 1, "{}", report.text());
+        assert_eq!(
+            design.items[0].outcome.as_str(),
+            "parametric",
+            "{}",
+            report.text()
+        );
+        assert!(
+            design.warnings.iter().any(|w| w.contains(t::STRAY_FILE)),
+            "{}",
+            report.text()
+        );
+        let bodies = document.0.bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].name, t::MESH_NAME);
+        let kernel = document.0.kernel();
+        assert_eq!(
+            kernel.body_kind(bodies[0].shape).unwrap(),
+            mitcad_model::BodyKind::Mesh
+        );
+        let tolerance = mitcad_model::exchange::MeshTolerance {
+            deviation: 0.1,
+            angle: 0.5,
+            face_triangles: 0,
+            max_edge: 0.0,
+        };
+        let triangles = kernel.triangle_mesh(bodies[0].shape, &tolerance).unwrap();
+        assert_eq!(triangles.triangles.len(), 4);
+        assert!(
+            triangles
+                .vertices
+                .iter()
+                .any(|&v| near(v, [21.0, 0.0, 0.0]))
+        );
+        assert!(
+            triangles
+                .vertices
+                .iter()
+                .any(|&v| near(v, [20.0, 0.0, 1.0]))
+        );
+        // Its physical material and appearance, from its envelopes
+        // (mitcad#1376).
+        assert_eq!(meshes[0].id, Some(t::MESH_BODY_RECORD));
+        let attributes = document.0.body_attributes(bodies[0].uid);
+        assert_eq!(attributes.material.as_deref(), Some("steel"));
+        assert_eq!(attributes.appearance.as_deref(), Some("f3d_steel_satin"));
+        let looks = &design.appearances;
+        assert_eq!((looks.bodies_set, looks.bodies), (1, 1), "{looks:?}");
+        assert_eq!((looks.materials_set, looks.materials), (1, 1), "{looks:?}");
+        assert!(looks.gaps.is_empty(), "{looks:?}");
+    }
+
+    /// The import of the stored bodies alone (`import_f3d` without the
+    /// timeline) brings the synthetic design's mesh body in with its
+    /// placement, its physical material and its appearance (mitcad#1376);
+    /// the container no record names is reported as not read.
+    #[test]
+    fn the_stored_bodies_alone_bring_the_mesh_body_with_its_look() {
+        use mitcad_f3d::testmeshes as t;
+        use mitcad_model::Kernel as _;
+        let dir =
+            std::env::temp_dir().join(format!("mitcad-f3d-mesh-bodies-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mesh.f3d");
+        std::fs::write(&path, t::mesh_file()).unwrap();
+        let path = path.display().to_string();
+        let mut document = Document(mitcad_model::Document::new(OcctKernel));
+        let report: Value =
+            serde_json::from_str(&document.import_f3d(&path, "{}").unwrap()).unwrap();
+        let mut again = Document(mitcad_model::Document::new(OcctKernel));
+        let text = again.import_f3d(&path, r#"{"text": true}"#).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        // No B-rep bodies; the mesh body and the stray container.
+        assert_eq!(report["imported"], json!([]), "{report}");
+        let meshes = report["meshes"].as_array().unwrap();
+        assert_eq!(meshes.len(), 2, "{report}");
+        assert_eq!(meshes[0]["source"], t::MESH_FILE, "{report}");
+        assert_eq!(meshes[0]["triangles"], 4, "{report}");
+        assert_eq!(meshes[0]["material"], "steel", "{report}");
+        assert_eq!(meshes[0]["appearance"], "f3d_steel_satin", "{report}");
+        assert_eq!(meshes[1]["source"], t::STRAY_FILE, "{report}");
+        assert!(
+            meshes[1]["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("places it")),
+            "{report}"
+        );
+        assert!(report.get("mesh_gaps").is_none(), "{report}");
+        // The mesh body, placed 20 mm along X.
+        let bodies = document.0.bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].name, t::MESH_NAME);
+        let kernel = document.0.kernel();
+        assert_eq!(
+            kernel.body_kind(bodies[0].shape).unwrap(),
+            mitcad_model::BodyKind::Mesh
+        );
+        let tolerance = mitcad_model::exchange::MeshTolerance {
+            deviation: 0.1,
+            angle: 0.5,
+            face_triangles: 0,
+            max_edge: 0.0,
+        };
+        let triangles = kernel.triangle_mesh(bodies[0].shape, &tolerance).unwrap();
+        assert_eq!(triangles.triangles.len(), 4);
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
+        for corner in [[20.0, 0.0, 0.0], [21.0, 0.0, 0.0], [20.0, 0.0, 1.0]] {
+            assert!(
+                triangles.vertices.iter().any(|&v| near(v, corner)),
+                "{corner:?}"
+            );
+        }
+        // Its material and appearance, the appearance's parameters from
+        // the asset.
+        let attributes = document.0.body_attributes(bodies[0].uid);
+        assert_eq!(attributes.material.as_deref(), Some("steel"));
+        assert_eq!(attributes.appearance.as_deref(), Some("f3d_steel_satin"));
+        let satin = document.0.appearance("f3d_steel_satin").unwrap();
+        assert_eq!(satin.name, t::APPEARANCE_NAME);
+        assert_eq!(satin.base_color, [0.6262; 3]);
+        assert_eq!(satin.metalness, 1.0);
+        assert!((satin.roughness - t::APPEARANCE_ROUGHNESS).abs() < 1e-12);
+        // One undo step for the whole import.
+        assert_eq!(document.0.undo().as_deref(), Some("Import mesh.f3d"));
+        assert!(document.0.bodies().is_empty());
+        assert!(document.0.custom_appearances().is_empty());
+        // The text summary.
+        assert!(
+            text.contains("Imported 1 mesh bodies (1 not read)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("mesh body of 4 triangles, appearance f3d_steel_satin, material steel"),
+            "{text}"
         );
     }
 }

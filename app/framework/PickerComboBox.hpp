@@ -5,8 +5,10 @@
 // open a searchable picker (InputDef::choicePicker, mitcad#1108), shared
 // with the Make tab's body card (mitcad#1239: its Printer and Process).
 
+#include <QColor>
 #include <QComboBox>
 #include <QHash>
+#include <QImage>
 #include <QPointer>
 #include <QString>
 #include <QVector>
@@ -18,6 +20,12 @@ class QPaintEvent;
 class QWidget;
 
 namespace mitcad {
+
+// A material's swatch in a material picker and its field (mitcad#1141:
+// Send to Slicer's material rows; mitcad#1411: the Make card's Material):
+// a rounded square of its colour (none: the default look's grey, a default
+// appearance's base colour), as the Material tool's picker.
+QImage materialSwatch(const QColor& color);
 
 // A drop-down whose chosen text is cut in the middle, and only when it
 // must, so that a long name keeps its start and its end (mitcad#655: 3D

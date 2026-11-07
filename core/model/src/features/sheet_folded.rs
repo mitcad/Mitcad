@@ -64,6 +64,35 @@ pub enum SheetFlangeWidth<P> {
     },
 }
 
+/// A hem whose bends a flange works out from the hem's sizes
+/// (mitcad#1378). The flange's `length` is the hem's length, measured
+/// from the plane that touches its first bend's outer surface and is
+/// normal to the panel (length mode `outer_tangent`), to the hem's far
+/// end; its `radius` is the inside radius of every bend of the hem; its
+/// `angle` gives only the side the hem folds to (its sign), the bends'
+/// angles following from the sizes. Panel, gap and walls are measured on
+/// the sheet's thickness `t`, with `a = r + t`:
+///
+/// - `teardrop`: one bend of `180 + alpha` degrees and a straight wall
+///   coming back towards the panel, the inner corner of its end `gap`
+///   above the panel and its outer corner at the hem's length; the radius
+///   must be more than half the gap;
+/// - `rope`: a bend of `180 + alpha` degrees, `cos(alpha) = (gap + t) /
+///   (2 r + t)`, at once a bend of `alpha` the other way, then a wall
+///   parallel to the panel `gap` above it, ending at the hem's length
+///   (the radius more than half the gap);
+/// - `double`: the wall folded back over itself: two bends of 90 degrees
+///   with a wall of `gap + t` between them, a wall of `length - 2 a` over
+///   the panel, a bend of 180 degrees and a wall back under it, ending
+///   `setback` short of the first wall (`length - a - t - setback`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "form", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SheetHem<P> {
+    Teardrop { gap: P },
+    Rope { gap: P },
+    Double { gap: P, setback: P },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetLength<P> {
@@ -95,6 +124,9 @@ pub struct SheetFlangeDef<P = ParamId> {
     pub radius: Option<P>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relief: Option<Relief<P>>,
+    /// A hem form whose bends follow from its sizes (mitcad#1378).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hem: Option<SheetHem<P>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +287,24 @@ impl<P> SheetFlangeDef<P> {
                 .transpose()?,
             radius: self.radius.as_ref().map(|p| f("radius", p)).transpose()?,
             relief: map_relief(&self.relief, f)?,
+            hem: self
+                .hem
+                .as_ref()
+                .map(|h| {
+                    Ok(match h {
+                        SheetHem::Teardrop { gap } => SheetHem::Teardrop {
+                            gap: f("hem.gap", gap)?,
+                        },
+                        SheetHem::Rope { gap } => SheetHem::Rope {
+                            gap: f("hem.gap", gap)?,
+                        },
+                        SheetHem::Double { gap, setback } => SheetHem::Double {
+                            gap: f("hem.gap", gap)?,
+                            setback: f("hem.setback", setback)?,
+                        },
+                    })
+                })
+                .transpose()?,
         })
     }
 }

@@ -13,6 +13,11 @@
 //! - a body gets its file body's appearance: the stored body the final
 //!   comparison matched it with (`DesignReport::bodies`) is the one the
 //!   design's body record names through the body map (blob and record);
+//!   a record names every lump (`<source>#k`) of a stored body that comes
+//!   in as one body per solid (mitcad#1375, [`names_stored`]);
+//! - without a replay ([`apply`], the `.ipt` import of the bodies only,
+//!   mitcad#1375) the caller names the body that stands for each stored
+//!   one;
 //! - a face gets its own where the replay's body has faces through the
 //!   stored face's point ([`mitcad_import_replay::refs::face_pieces`]);
 //! - an occurrence's override goes to the bodies of its component when the
@@ -31,6 +36,7 @@ use serde_json::Value;
 use mitcad_import_base::body_scope;
 use mitcad_import_base::geom;
 use mitcad_import_replay::Importer;
+use mitcad_import_replay::components::Components;
 use mitcad_import_replay::internal::refs;
 // The report's types, in the core's `appearance_report` with the design's
 // report (mitcad#791); their paths here are kept.
@@ -358,7 +364,7 @@ pub fn material_entry(m: &AssetDef, assets: &[AssetDef]) -> MaterialEntry {
 
 /// A document appearance id from a name: `f3d_` and its letters and
 /// digits, the rest as `_`.
-fn id_of(name: &str) -> String {
+pub(crate) fn id_of(name: &str) -> String {
     let mut id = String::from("f3d_");
     let mut last = '_';
     for c in name.chars() {
@@ -377,7 +383,7 @@ fn id_of(name: &str) -> String {
 }
 
 /// The asset a reference names.
-fn asset_of<'a>(data: &'a AppearanceData, r: &AssetRef) -> Option<&'a AssetDef> {
+pub(crate) fn asset_of<'a>(data: &'a AppearanceData, r: &AssetRef) -> Option<&'a AssetDef> {
     let g = r.asset.as_deref()?;
     data.assets
         .iter()
@@ -416,6 +422,17 @@ fn subtree<K: Kernel>(
         .collect()
 }
 
+/// Whether a stored body's source (`stored`) is the one a body record
+/// names (`named`), or one of its lumps (`<named>#<k>`: a stored body of
+/// several solids comes in as one body per solid, mitcad#1375).
+pub fn names_stored(named: &str, stored: &str) -> bool {
+    stored == named
+        || stored
+            .strip_prefix(named)
+            .and_then(|rest| rest.strip_prefix('#'))
+            .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The appearances family's methods on the replay's `Importer`
 /// (mitcad#791): the core's timeline walk reaches them through its
 /// `Families` trait.
@@ -431,362 +448,459 @@ impl<K: Kernel> Appearances<K> for Importer<'_, K> {
         let Some(data) = dump.f3d.as_ref().and_then(|f| f.appearance.as_ref()) else {
             return;
         };
-        let assets: Vec<AssetDef> = data.assets.clone().unwrap_or_default();
-        let mut report = AppearanceReport::default();
-        // The replay's body for each stored one (blob#record).
-        let by_source: HashMap<String, BodyUid> = self
+        // The stored design's solids (the final comparison's) and the
+        // replay's body matched with each.
+        let stored: Vec<(String, Option<BodyUid>)> = self
             .report
             .bodies
             .iter()
-            .filter_map(|b| Some((b.source.clone(), b.uid?)))
+            .map(|b| (b.source.clone(), b.uid))
             .collect();
-        let mut made: HashMap<String, Option<String>> = HashMap::new();
-        let mut appearance_id = |doc: &mut mitcad_model::Document<K>,
-                                 report: &mut AppearanceReport,
-                                 r: &AssetRef|
-         -> Option<String> {
-            let a = asset_of(data, r)?;
-            let key = a.id.clone()?;
-            if let Some(id) = made.get(&key) {
-                return id.clone();
-            }
-            let mut l = look(a, &assets);
-            let base = id_of(&l.name);
-            let mut out = None;
-            for k in 1..1000 {
-                let id = if k == 1 {
-                    base.clone()
-                } else {
-                    format!("{base}_{k}")
-                };
-                let name = if k == 1 {
-                    l.name.clone()
-                } else {
-                    format!("{} ({k})", l.name)
-                };
-                match doc.appearance(&id) {
-                    // The same appearance from an earlier import: reuse it.
-                    Some(existing) => {
-                        let mut wanted = existing.clone();
-                        l.change.apply_to(&mut wanted);
-                        if *existing == wanted && existing.name == name {
-                            out = Some(id);
-                            break;
-                        }
-                    }
-                    None => {
-                        let taken = appearance::library().iter().any(|x| x.name == name)
-                            || doc.custom_appearances().iter().any(|x| x.name == name);
-                        if taken {
-                            continue;
-                        }
-                        l.change.id = Some(id.clone());
-                        l.change.name = Some(name);
-                        match doc.create_appearance(&l.change) {
-                            Ok(id) => out = Some(id),
-                            Err(e) => report.gaps.push(format!("appearance {}: {e}", l.name)),
-                        }
+        self.report.appearances =
+            apply_with_meshes(self.doc, data, &stored, &self.components, &self.mesh_bodies);
+    }
+}
+
+/// The file's appearances and materials (`data`, the dump's
+/// `_f3d.appearance`) on the document's bodies and faces: `stored` are the
+/// stored design's solids by their source (`blob#record`, an `.ipt` body's
+/// `<B-rep record>/<ASM body record>`, a lump of either `…#k`) with the
+/// document's body that stands for each, where one does; `components` the
+/// file's components as the document's, for the occurrences' overrides.
+/// The replay calls it after its timeline ([`Appearances`]); an import
+/// without a replay (the `.ipt` import's bodies only, mitcad#1375) with
+/// the bodies it added and no components. The changes are the caller's
+/// undo step.
+pub fn apply<K: Kernel>(
+    doc: &mut mitcad_model::Document<K>,
+    data: &AppearanceData,
+    stored: &[(String, Option<BodyUid>)],
+    components: &Components,
+) -> AppearanceReport {
+    apply_with_meshes(doc, data, stored, components, &[])
+}
+
+/// [`apply`], and the file's materials and appearances on the mesh bodies
+/// brought in (`meshes`: each mesh body record with the document's body,
+/// mitcad#1376), after the overrides.
+pub fn apply_with_meshes<K: Kernel>(
+    doc: &mut mitcad_model::Document<K>,
+    data: &AppearanceData,
+    stored: &[(String, Option<BodyUid>)],
+    components: &Components,
+    meshes: &[(u64, BodyUid)],
+) -> AppearanceReport {
+    let assets: Vec<AssetDef> = data.assets.clone().unwrap_or_default();
+    let mut report = AppearanceReport::default();
+    let mut made: HashMap<String, Option<String>> = HashMap::new();
+    let mut appearance_id = |doc: &mut mitcad_model::Document<K>,
+                             report: &mut AppearanceReport,
+                             r: &AssetRef|
+     -> Option<String> {
+        let a = asset_of(data, r)?;
+        let key = a.id.clone()?;
+        if let Some(id) = made.get(&key) {
+            return id.clone();
+        }
+        let mut l = look(a, &assets);
+        let base = id_of(&l.name);
+        let mut out = None;
+        for k in 1..1000 {
+            let id = if k == 1 {
+                base.clone()
+            } else {
+                format!("{base}_{k}")
+            };
+            let name = if k == 1 {
+                l.name.clone()
+            } else {
+                format!("{} ({k})", l.name)
+            };
+            match doc.appearance(&id) {
+                // The same appearance from an earlier import: reuse it.
+                Some(existing) => {
+                    let mut wanted = existing.clone();
+                    l.change.apply_to(&mut wanted);
+                    if *existing == wanted && existing.name == name {
+                        out = Some(id);
                         break;
                     }
                 }
-            }
-            if let Some(id) = &out {
-                report.appearances.push(AppearanceEntry {
-                    id: id.clone(),
-                    name: l.name.clone(),
-                    asset: key.clone(),
-                    schema: a.schema.clone().unwrap_or_default(),
-                    preset: a.name.clone().unwrap_or_default(),
-                    base_color: l.change.base_color.unwrap_or([0.8; 3]),
-                    notes: l.notes.clone(),
-                    texture: l.texture.clone(),
-                    maps: l.maps.clone(),
-                });
-            }
-            made.insert(key, out.clone());
-            out
-        };
-        let bodies: &[BodyLook] = data.bodies.as_deref().unwrap_or(&[]);
-        let mut materials: Vec<MaterialEntry> = Vec::new();
-        // Each body's faces and edges, read once for all its faces (an
-        // appearance changes no shape).
-        let mut indexes: HashMap<BodyUid, Option<refs::PieceIndex>> = HashMap::new();
-        // The stored design's solids (the final comparison's).
-        let stored: Vec<&str> = self
-            .report
-            .bodies
-            .iter()
-            .map(|b| b.source.as_str())
-            .collect();
-        let source = |b: &BodyLook| match (&b.blob, b.record) {
-            (Some(blob), Some(record)) => Some(format!("{blob}#{record}")),
-            _ => None,
-        };
-        // Stored solids no body record names.
-        for s in &stored {
-            if !bodies.iter().any(|b| source(b).as_deref() == Some(*s)) {
-                report.bodies += 1;
-                report
-                    .gaps
-                    .push(format!("stored body {s}: no body record names it"));
+                None => {
+                    let taken = appearance::library().iter().any(|x| x.name == name)
+                        || doc.custom_appearances().iter().any(|x| x.name == name);
+                    if taken {
+                        continue;
+                    }
+                    l.change.id = Some(id.clone());
+                    l.change.name = Some(name);
+                    match doc.create_appearance(&l.change) {
+                        Ok(id) => out = Some(id),
+                        Err(e) => report.gaps.push(format!("appearance {}: {e}", l.name)),
+                    }
+                    break;
+                }
             }
         }
-        for b in bodies {
-            let entity = b.entity.unwrap_or(0);
-            // A body record of a body the stored design does not hold (a
-            // snapshot blob's copy, one a later operation took): not a body
-            // of the design.
-            // One whose blob or record is not known is not joined (the
-            // stored solid it may be counts above).
-            let in_design = source(b).is_some_and(|s| stored.contains(&s.as_str()));
-            if !in_design {
-                match source(b) {
-                    Some(_) => report.not_in_design += 1,
-                    None => report.gaps.push(format!(
-                        "body record {entity}: {}",
-                        match b.blob {
-                            None => "the body map names no blob for it",
-                            Some(_) => "its selector names no body of its blob",
-                        }
-                    )),
-                }
-                continue;
+        if let Some(id) = &out {
+            report.appearances.push(AppearanceEntry {
+                id: id.clone(),
+                name: l.name.clone(),
+                asset: key.clone(),
+                schema: a.schema.clone().unwrap_or_default(),
+                preset: a.name.clone().unwrap_or_default(),
+                base_color: l.change.base_color.unwrap_or([0.8; 3]),
+                notes: l.notes.clone(),
+                texture: l.texture.clone(),
+                maps: l.maps.clone(),
+            });
+        }
+        made.insert(key, out.clone());
+        out
+    };
+    let bodies: &[BodyLook] = data.bodies.as_deref().unwrap_or(&[]);
+    let mut materials: Vec<MaterialEntry> = Vec::new();
+    // Each body's faces and edges, read once for all its faces (an
+    // appearance changes no shape).
+    let mut indexes: HashMap<BodyUid, Option<refs::PieceIndex>> = HashMap::new();
+    // (An `.ipt` body names its stored body itself, mitcad#1367.)
+    let source = |b: &BodyLook| match (&b.source, &b.blob, b.record) {
+        (Some(s), _, _) => Some(s.clone()),
+        (None, Some(blob), Some(record)) => Some(format!("{blob}#{record}")),
+        _ => None,
+    };
+    // Stored solids no body record names (itself or as one of its lumps).
+    for (s, _) in stored {
+        if !bodies
+            .iter()
+            .any(|b| source(b).is_some_and(|n| names_stored(&n, s)))
+        {
+            report.bodies += 1;
+            report
+                .gaps
+                .push(format!("stored body {s}: no body record names it"));
+        }
+    }
+    for b in bodies {
+        let entity = b.entity.unwrap_or(0);
+        // The stored solids the record names: its stored body, or each
+        // lump of a stored body of several solids (mitcad#1375).
+        let lumps: Vec<&(String, Option<BodyUid>)> = match source(b) {
+            Some(s) => stored.iter().filter(|(t, _)| names_stored(&s, t)).collect(),
+            None => Vec::new(),
+        };
+        // A body record of a body the stored design does not hold (a
+        // snapshot blob's copy, one a later operation took): not a body
+        // of the design.
+        // One whose blob or record is not known is not joined (the
+        // stored solid it may be counts above).
+        if lumps.is_empty() {
+            match source(b) {
+                Some(_) => report.not_in_design += 1,
+                None => report.gaps.push(format!(
+                    "body record {entity}: {}",
+                    match b.blob {
+                        None => "the body map names no blob for it",
+                        Some(_) => "its selector names no body of its blob",
+                    }
+                )),
             }
-            let uid = source(b).and_then(|s| by_source.get(&s).copied());
-            let why_none = || match (&b.blob, b.record) {
-                (None, _) => "the body map names no blob for it".to_owned(),
-                (Some(_), None) => "its selector names no body of its blob".to_owned(),
-                _ => "no body of the replay was matched with it".to_owned(),
-            };
-            // A body the file hides (its light bulb off, mitcad#1175): a
-            // copy kept beside the body made from it would cover that
-            // body's features in the view.
-            if b.light_bulb == Some(false) {
-                report.hidden += 1;
-                match uid {
-                    Some(uid) => match self.doc.set_body_visible(uid, false) {
-                        Ok(()) => report.hidden_set += 1,
-                        Err(e) => report.gaps.push(format!("body {entity}: hidden: {e}")),
-                    },
-                    None => report
-                        .gaps
-                        .push(format!("body {entity}: hidden: {}", why_none())),
-                }
-            }
-            if b.appearance.is_none() {
-                report.bodies += 1;
+            continue;
+        }
+        // The document's bodies for them; the record counts as set only
+        // when every lump has one.
+        let uids: Vec<BodyUid> = lumps.iter().filter_map(|(_, u)| *u).collect();
+        let whole = uids.len() == lumps.len();
+        let why_none = || match (&b.blob, b.record) {
+            _ if b.source.is_some() => "no body of the replay was matched with it".to_owned(),
+            (None, _) => "the body map names no blob for it".to_owned(),
+            (Some(_), None) => "its selector names no body of its blob".to_owned(),
+            _ => "no body of the replay was matched with it".to_owned(),
+        };
+        if !uids.is_empty() && !whole {
+            report.gaps.push(format!(
+                "body {entity}: {} of its {} solids: no body of the replay was matched with them",
+                lumps.len() - uids.len(),
+                lumps.len()
+            ));
+        }
+        // A body the file hides (its light bulb off, mitcad#1175): a
+        // copy kept beside the body made from it would cover that
+        // body's features in the view.
+        if b.light_bulb == Some(false) {
+            report.hidden += 1;
+            if uids.is_empty() {
                 report
                     .gaps
-                    .push(format!("body {entity}: its record names no appearance"));
+                    .push(format!("body {entity}: hidden: {}", why_none()));
             }
-            if let Some(r) = &b.appearance {
-                report.bodies += 1;
-                match (uid, appearance_id(self.doc, &mut report, r)) {
-                    (Some(uid), Some(id)) => match self.doc.set_body_appearance(uid, Some(&id)) {
-                        Ok(()) => report.bodies_set += 1,
-                        Err(e) => report.gaps.push(format!("body {entity}: {e}")),
-                    },
-                    (None, _) => report.gaps.push(format!("body {entity}: {}", why_none())),
-                    (_, None) => report.gaps.push(format!(
-                        "body {entity}: its appearance {} is not in the file's assets",
-                        r.token.as_deref().unwrap_or("")
-                    )),
+            let mut all = whole;
+            for &uid in &uids {
+                if let Err(e) = doc.set_body_visible(uid, false) {
+                    report.gaps.push(format!("body {entity}: hidden: {e}"));
+                    all = false;
                 }
             }
-            if let Some(r) = &b.material {
-                report.materials += 1;
-                match asset_of(data, r) {
-                    None => report.gaps.push(format!(
-                        "body {entity}: its material {} is not in the file's assets",
-                        r.preset.as_deref().unwrap_or("")
-                    )),
-                    Some(m) => {
-                        let key = m.id.clone().unwrap_or_default();
-                        let i = match materials.iter().position(|x| x.asset == key) {
-                            Some(i) => i,
-                            None => {
-                                materials.push(material_entry(m, &assets));
-                                materials.len() - 1
+            if all && !uids.is_empty() {
+                report.hidden_set += 1;
+            }
+        }
+        if b.appearance.is_none() {
+            report.bodies += 1;
+            report
+                .gaps
+                .push(format!("body {entity}: its record names no appearance"));
+        }
+        if let Some(r) = &b.appearance {
+            report.bodies += 1;
+            match (uids.is_empty(), appearance_id(doc, &mut report, r)) {
+                (false, Some(id)) => {
+                    let mut all = whole;
+                    for &uid in &uids {
+                        if let Err(e) = doc.set_body_appearance(uid, Some(&id)) {
+                            report.gaps.push(format!("body {entity}: {e}"));
+                            all = false;
+                        }
+                    }
+                    if all {
+                        report.bodies_set += 1;
+                    }
+                }
+                (true, _) => report.gaps.push(format!("body {entity}: {}", why_none())),
+                (_, None) => report.gaps.push(format!(
+                    "body {entity}: its appearance {} is not in the file's assets",
+                    r.token.as_deref().unwrap_or("")
+                )),
+            }
+        }
+        if let Some(r) = &b.material {
+            report.materials += 1;
+            match asset_of(data, r) {
+                None => report.gaps.push(format!(
+                    "body {entity}: its material {} is not in the file's assets",
+                    r.preset.as_deref().unwrap_or("")
+                )),
+                Some(m) => {
+                    let key = m.id.clone().unwrap_or_default();
+                    let i = match materials.iter().position(|x| x.asset == key) {
+                        Some(i) => i,
+                        None => {
+                            materials.push(material_entry(m, &assets));
+                            materials.len() - 1
+                        }
+                    };
+                    materials[i].bodies += 1;
+                    if let Some(id) = materials[i].mitcad.clone()
+                        && !uids.is_empty()
+                    {
+                        let mut all = whole;
+                        for &uid in &uids {
+                            if let Err(e) = doc.set_body_material(uid, Some(&id)) {
+                                report.gaps.push(format!("body {entity}: {e}"));
+                                all = false;
                             }
-                        };
-                        materials[i].bodies += 1;
-                        if let (Some(uid), Some(id)) = (uid, materials[i].mitcad.clone()) {
-                            match self.doc.set_body_material(uid, Some(&id)) {
-                                Ok(()) => report.materials_set += 1,
-                                Err(e) => report.gaps.push(format!("body {entity}: {e}")),
-                            }
+                        }
+                        if all {
+                            report.materials_set += 1;
                         }
                     }
                 }
             }
-            for f in b.faces.iter().flatten() {
-                report.faces += 1;
-                let guid = f.guid.as_deref().unwrap_or("");
-                let Some(uid) = uid else {
-                    report
-                        .gaps
-                        .push(format!("face {guid} of body {entity}: {}", why_none()));
-                    continue;
-                };
-                let Some(fps) = &f.faces else {
-                    report.gaps.push(format!(
-                        "face {guid} of body {entity}: {}",
-                        f.why.as_deref().unwrap_or("not found in the stored design")
-                    ));
-                    continue;
-                };
-                let Some(id) = f
-                    .appearance
-                    .as_ref()
-                    .and_then(|r| appearance_id(self.doc, &mut report, r))
-                else {
-                    report.gaps.push(format!(
-                        "face {guid} of body {entity}: its appearance is not in the file's assets"
-                    ));
-                    continue;
-                };
-                let mut names: Vec<String> = Vec::new();
-                let clock = std::time::Instant::now();
+        }
+        for f in b.faces.iter().flatten() {
+            report.faces += 1;
+            let guid = f.guid.as_deref().unwrap_or("");
+            if uids.is_empty() {
+                report
+                    .gaps
+                    .push(format!("face {guid} of body {entity}: {}", why_none()));
+                continue;
+            }
+            let Some(fps) = &f.faces else {
+                report.gaps.push(format!(
+                    "face {guid} of body {entity}: {}",
+                    f.why.as_deref().unwrap_or("not found in the stored design")
+                ));
+                continue;
+            };
+            let Some(id) = f
+                .appearance
+                .as_ref()
+                .and_then(|r| appearance_id(doc, &mut report, r))
+            else {
+                report.gaps.push(format!(
+                    "face {guid} of body {entity}: its appearance is not in the file's assets"
+                ));
+                continue;
+            };
+            // The faces found, by the body (of the record's lumps) they
+            // are on.
+            let mut found: Vec<(BodyUid, Vec<String>)> =
+                uids.iter().map(|&u| (u, Vec::new())).collect();
+            let clock = std::time::Instant::now();
+            {
+                let view: &mitcad_model::Document<K> = &*doc;
                 for fp in fps {
-                    let index = indexes
-                        .entry(uid)
-                        .or_insert_with(|| refs::PieceIndex::new(self.doc, uid));
-                    let mut pieces = match index {
-                        Some(index) => refs::face_pieces_in(self.doc, uid, fp, index),
-                        None => Vec::new(),
-                    };
-                    if pieces.is_empty()
-                        && let Some((_, face)) =
-                            refs::resolve_face_where(self.doc, fp, &|b| b == uid)
-                    {
-                        pieces.push(face);
+                    let mut any = false;
+                    for (uid, names) in &mut found {
+                        let uid = *uid;
+                        let index = indexes
+                            .entry(uid)
+                            .or_insert_with(|| refs::PieceIndex::new(view, uid));
+                        let pieces = match index {
+                            Some(index) => refs::face_pieces_in(view, uid, fp, index),
+                            None => Vec::new(),
+                        };
+                        for p in pieces {
+                            any = true;
+                            let p = p.to_string();
+                            if !names.contains(&p) {
+                                names.push(p);
+                            }
+                        }
                     }
-                    for p in pieces {
-                        let p = p.to_string();
+                    if !any
+                        && let Some((body, face)) =
+                            refs::resolve_face_where(view, fp, &|x| uids.contains(&x))
+                        && let Some((_, names)) = found.iter_mut().find(|(u, _)| *u == body)
+                    {
+                        let p = face.to_string();
                         if !names.contains(&p) {
                             names.push(p);
                         }
                     }
                 }
-                if mitcad_import_replay::tracing() {
-                    eprintln!(
-                        "import: appearance of face {guid} of body {entity}: {} pieces of {} \
-                         stored faces in {:.2} s",
-                        names.len(),
-                        fps.len(),
-                        clock.elapsed().as_secs_f64()
-                    );
-                }
-                if names.is_empty() {
-                    // How far the nearest face of the replayed body is.
-                    let near = fps
-                        .first()
-                        .and_then(|fp| fp.point_on_face)
-                        .map(geom::mm3)
-                        .and_then(|p| {
-                            let shape = body_scope::shape(self.doc, uid)?;
-                            let kernel = self.doc.kernel();
-                            kernel
-                                .faces(shape)
-                                .ok()?
-                                .iter()
-                                .filter_map(|f| f.names.first()?.parse().ok())
-                                .filter_map(|name| {
-                                    let near = kernel.face_point_normal(shape, &name, p).ok()?;
-                                    Some(geom::distance(near.point, p))
-                                })
-                                .min_by(f64::total_cmp)
-                        });
-                    report.gaps.push(format!(
-                        "face {guid} of body {entity}: the replay's body has no face there{}",
-                        near.map_or(String::new(), |d| format!(
-                            " (its nearest face is {d:.4} mm from the stored face's point)"
-                        ))
-                    ));
-                    continue;
-                }
-                match self.doc.set_face_appearance(uid, &names, Some(&id)) {
-                    Ok(()) => report.faces_set += 1,
-                    Err(e) => report
-                        .gaps
-                        .push(format!("face {guid} of body {entity}: {e}")),
-                }
             }
-        }
-        // Overrides: a component's own (the root's) first, then the
-        // occurrences'; each covers the bodies of its component and of the
-        // components placed inside it.
-        let mut overrides: Vec<_> = data.occurrences.iter().flatten().collect();
-        overrides.sort_by_key(|o| o.object_id.is_some());
-        for o in overrides {
-            report.overrides += 1;
-            let what = match o.object_id {
-                Some(object) => format!("override of occurrence {object}"),
-                None => format!("override of component {}", o.component.unwrap_or(0)),
-            };
-            let component = match o.object_id {
-                Some(object) => self
-                    .components
-                    .occurrence(object)
-                    .and_then(|occurrence| self.doc.assembly().occurrence(occurrence))
-                    .map(|x| x.component),
-                None => o.component.and_then(|c| self.components.of_object(c)),
-            };
-            let Some(component) = component else {
-                report.gaps.push(format!("{what}: it did not come in"));
-                continue;
-            };
-            let below = subtree(self.doc, component);
-            // Each placed only under it, and it once.
-            let once = paths(self.doc, ComponentUid::ROOT, component) == 1;
-            if let Some((c, n, inside)) = below.iter().find_map(|&(c, inside)| {
-                let n = paths(self.doc, ComponentUid::ROOT, c);
-                (!once || n != inside).then_some((c, n, inside))
-            }) {
+            let pieces: usize = found.iter().map(|(_, names)| names.len()).sum();
+            if mitcad_import_replay::tracing() {
+                eprintln!(
+                    "import: appearance of face {guid} of body {entity}: {pieces} pieces of {} \
+                     stored faces in {:.2} s",
+                    fps.len(),
+                    clock.elapsed().as_secs_f64()
+                );
+            }
+            if pieces == 0 {
+                // How far the nearest face of the record's bodies is.
+                let near = fps
+                    .first()
+                    .and_then(|fp| fp.point_on_face)
+                    .map(geom::mm3)
+                    .and_then(|p| {
+                        let view: &mitcad_model::Document<K> = &*doc;
+                        let kernel = view.kernel();
+                        uids.iter()
+                            .filter_map(|&uid| body_scope::shape(view, uid))
+                            .filter_map(|shape| {
+                                let faces = kernel.faces(shape).ok()?;
+                                faces
+                                    .iter()
+                                    .filter_map(|f| f.names.first()?.parse().ok())
+                                    .filter_map(|name| {
+                                        let near =
+                                            kernel.face_point_normal(shape, &name, p).ok()?;
+                                        Some(geom::distance(near.point, p))
+                                    })
+                                    .min_by(f64::total_cmp)
+                            })
+                            .min_by(f64::total_cmp)
+                    });
                 report.gaps.push(format!(
-                    "{what}: component {c} is placed {n} times, {inside} of them under it, and \
-                     Mitcad keeps one appearance per body"
+                    "face {guid} of body {entity}: the replay's body has no face there{}",
+                    near.map_or(String::new(), |d| format!(
+                        " (its nearest face is {d:.4} mm from the stored face's point)"
+                    ))
                 ));
                 continue;
             }
-            let Some(id) = o
-                .appearance
-                .as_ref()
-                .and_then(|r| appearance_id(self.doc, &mut report, r))
-            else {
-                report.gaps.push(format!(
-                    "{what}: its appearance is not in the file's assets"
-                ));
-                continue;
-            };
             let mut all = true;
-            for &(c, _) in &below {
-                for uid in self.doc.component_bodies(c) {
-                    if let Err(e) = self.doc.set_body_appearance(uid, Some(&id)) {
-                        report.gaps.push(format!("{what}: {e}"));
-                        all = false;
-                    }
+            for (uid, names) in found.iter().filter(|(_, names)| !names.is_empty()) {
+                if let Err(e) = doc.set_face_appearance(*uid, names, Some(&id)) {
+                    report
+                        .gaps
+                        .push(format!("face {guid} of body {entity}: {e}"));
+                    all = false;
                 }
             }
             if all {
-                report.overrides_set += 1;
+                report.faces_set += 1;
             }
         }
-        for w in data.warnings.iter().flatten() {
-            report.gaps.push(format!("decoding: {w}"));
-        }
-        // Face references to faces the stored design does not have (not
-        // faces of the design): noted only.
-        for f in data.faces.iter().flatten() {
-            report.gaps.push(format!(
-                "face reference {} (not a face of the design): {}",
-                f.guid.as_deref().unwrap_or(""),
-                f.why.as_deref().unwrap_or("not found")
-            ));
-        }
-        report.physical_materials = materials;
-        self.report.appearances = report;
     }
+    // Overrides: a component's own (the root's) first, then the
+    // occurrences'; each covers the bodies of its component and of the
+    // components placed inside it.
+    let mut overrides: Vec<_> = data.occurrences.iter().flatten().collect();
+    overrides.sort_by_key(|o| o.object_id.is_some());
+    for o in overrides {
+        report.overrides += 1;
+        let what = match o.object_id {
+            Some(object) => format!("override of occurrence {object}"),
+            None => format!("override of component {}", o.component.unwrap_or(0)),
+        };
+        let component = match o.object_id {
+            Some(object) => components
+                .occurrence(object)
+                .and_then(|occurrence| doc.assembly().occurrence(occurrence))
+                .map(|x| x.component),
+            None => o.component.and_then(|c| components.of_object(c)),
+        };
+        let Some(component) = component else {
+            report.gaps.push(format!("{what}: it did not come in"));
+            continue;
+        };
+        let below = subtree(doc, component);
+        // Each placed only under it, and it once.
+        let once = paths(doc, ComponentUid::ROOT, component) == 1;
+        if let Some((c, n, inside)) = below.iter().find_map(|&(c, inside)| {
+            let n = paths(doc, ComponentUid::ROOT, c);
+            (!once || n != inside).then_some((c, n, inside))
+        }) {
+            report.gaps.push(format!(
+                "{what}: component {c} is placed {n} times, {inside} of them under it, and \
+                 Mitcad keeps one appearance per body"
+            ));
+            continue;
+        }
+        let Some(id) = o
+            .appearance
+            .as_ref()
+            .and_then(|r| appearance_id(doc, &mut report, r))
+        else {
+            report.gaps.push(format!(
+                "{what}: its appearance is not in the file's assets"
+            ));
+            continue;
+        };
+        let mut all = true;
+        for &(c, _) in &below {
+            for uid in doc.component_bodies(c) {
+                if let Err(e) = doc.set_body_appearance(uid, Some(&id)) {
+                    report.gaps.push(format!("{what}: {e}"));
+                    all = false;
+                }
+            }
+        }
+        if all {
+            report.overrides_set += 1;
+        }
+    }
+    for w in data.warnings.iter().flatten() {
+        report.gaps.push(format!("decoding: {w}"));
+    }
+    // Face references to faces the stored design does not have (not
+    // faces of the design): noted only.
+    for f in data.faces.iter().flatten() {
+        report.gaps.push(format!(
+            "face reference {} (not a face of the design): {}",
+            f.guid.as_deref().unwrap_or(""),
+            f.why.as_deref().unwrap_or("not found")
+        ));
+    }
+    // The mesh bodies' (mitcad#1376, `meshes.rs`), after the overrides.
+    crate::meshes::apply(doc, data, meshes, &mut made, &mut materials, &mut report);
+    report.physical_materials = materials;
+    report
 }
 
 #[cfg(test)]
@@ -889,6 +1003,22 @@ mod tests {
         let written = asset(json!({"id": "W", "schema": "PhysMatSchema",
             "description": "Acrylonitrile butadiene styrene"}));
         assert_eq!(mitcad_material(&written, Some(1060.0)), Some("abs"));
+    }
+
+    /// A record's stored body is the stored solid of its source or one of
+    /// its lumps (`#k`, mitcad#1375), never another body whose source
+    /// begins the same.
+    #[test]
+    fn a_source_names_its_stored_body_and_its_lumps() {
+        assert!(names_stored("PmBRepSegment#1/7", "PmBRepSegment#1/7"));
+        assert!(names_stored("PmBRepSegment#1/7", "PmBRepSegment#1/7#0"));
+        assert!(names_stored("PmBRepSegment#1/7", "PmBRepSegment#1/7#12"));
+        assert!(!names_stored("PmBRepSegment#1/7", "PmBRepSegment#1/70"));
+        assert!(!names_stored("PmBRepSegment#1/7", "PmBRepSegment#1/7#"));
+        assert!(!names_stored("PmBRepSegment#1/7", "PmBRepSegment#1/7#a"));
+        // The `.f3d` decoder's `blob#record`.
+        assert!(names_stored("BREP.test.smbh#7", "BREP.test.smbh#7"));
+        assert!(!names_stored("BREP.test.smbh#7", "BREP.test.smbh#71"));
     }
 
     #[test]

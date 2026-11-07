@@ -115,6 +115,10 @@ fn the_default_line_set_is_iso_128s_lighter_one() {
     assert!(same(Pen::Hidden.width(), 0.18));
     assert!(same(Pen::Hatch.width(), 0.13));
     assert!(same(Pen::Frame.width(), 0.5));
+    // Extra wide twice wide (mitcad#1402), on its own DXF layer.
+    assert!(same(Pen::ExtraThick.width(), 2.0 * Pen::Thick.width()));
+    assert_eq!(Pen::ExtraThick.layer(), "EXTRA_THICK");
+    assert_eq!(Pen::ExtraThick.name(), "extra_thick");
     assert!((detail_size() - 0.7).abs() < 1e-12);
     // The writers draw with that table.
     let mut g = Group::new("view");

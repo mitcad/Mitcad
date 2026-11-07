@@ -1,0 +1,59 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Native macOS dependency compiler diagnostics in the 0.49.0 RC4 build:
+remove one unused contact-curve binding, name GC_MakeSegment2d directly
+instead of its deprecated compatibility alias, and copy the returned
+B-spline knot array before reparametrising it. The mutable copy and the
+segment implementation stay the same; no warning-suppression flags or
+geometric tolerance changes are introduced.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -2362,7 +2362,6 @@
+   const occ::handle<ChFiDS_SurfData> a  = A->SetOfSurfData()->Value(ia);
+   const occ::handle<ChFiDS_SurfData> b  = B->SetOfSurfData()->Value(ib);
+   const occ::handle<Geom_Curve>&     CA = DStr.Curve(a->Interference(ka).LineIndex()).Curve();
+-  const occ::handle<Geom_Curve>&     CB = DStr.Curve(b->Interference(kb).LineIndex()).Curve();
+   theX[0]                               = CA->Value(tA[0]);
+   theX[1]                               = CA->Value(tA[1]);
+   const occ::handle<Geom_Curve> R =
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -77,7 +77,7 @@
+ #include <BRepLib.hxx>
+ #include <BRepLib_MakeEdge.hxx>
+ #include <BRepLib_MakeWire.hxx>
+-#include <GCE2d_MakeSegment.hxx>
++#include <GC_MakeSegment2d.hxx>
+ #include <Geom_Line.hxx>
+ #include <GeomFill_ConstrainedFilling.hxx>
+ #include <IntCurveSurface_HInter.hxx>
+@@ -19205,10 +19205,10 @@
+   // (Counterclockwise in the parameters, the curve first.)
+   const bool       ccw = gp_Vec2d(a, b).Crossed(gp_Vec2d(a, e)) > 0.;
+   BRepLib_MakeEdge mk0(L2, SB, pf, pl);
+-  BRepLib_MakeEdge mk1(GCE2d_MakeSegment(b, c).Value(), SB);
++  BRepLib_MakeEdge mk1(GC_MakeSegment2d(b, c).Value(), SB);
+   BRepLib_MakeEdge mk2 =
+-    aFar.IsNull() ? BRepLib_MakeEdge(GCE2d_MakeSegment(c, e).Value(), SB) : BRepLib_MakeEdge(aFar, SB, pf, pl);
+-  BRepLib_MakeEdge mk3(GCE2d_MakeSegment(e, a).Value(), SB);
++    aFar.IsNull() ? BRepLib_MakeEdge(GC_MakeSegment2d(c, e).Value(), SB) : BRepLib_MakeEdge(aFar, SB, pf, pl);
++  BRepLib_MakeEdge mk3(GC_MakeSegment2d(e, a).Value(), SB);
+   if (!mk0.IsDone() || !mk1.IsDone() || !mk2.IsDone() || !mk3.IsDone())
+   {
+     return false;
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -1901,7 +1901,7 @@
+       GeomAdaptor_Curve          aGC(theC);
+       const double               aLen = GCPnts_AbscissaPoint::Length(aGC);
+       NCollection_Array1<double> aKnots(1, theC->NbKnots());
+-      theC->Knots(aKnots);
++      aKnots = theC->Knots();
+       BSplCLib::Reparametrize(theStart, theStart + aLen, aKnots);
+       theC->SetKnots(aKnots);
+       return theStart + aLen;

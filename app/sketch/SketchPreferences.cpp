@@ -32,4 +32,15 @@ QJsonObject withFirstDimensionScale(const QJsonObject& command) {
   return asked;
 }
 
+// Click adds to the selection in sketches (mitcad#1403).
+namespace {
+
+const char* const kClickAddsSetting = "sketch/clickAddsToSelection";
+
+} // namespace
+
+bool clickAddsToSelection() { return QSettings().value(QLatin1String(kClickAddsSetting), false).toBool(); }
+
+void saveClickAddsToSelection(bool on) { QSettings().setValue(QLatin1String(kClickAddsSetting), on); }
+
 } // namespace mitcad::sketch

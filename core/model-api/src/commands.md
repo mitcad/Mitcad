@@ -3871,6 +3871,9 @@ by hand.
   order (body 0's first) in the kernel's face order, so the names stay as
   long as the data does. Edges and vertices follow:
   `E{F4:import(0)|F4:import(3)}`.
+- `cage` (optional, per body): the control cage an imported Form body was
+  made from, kept as data ([*Control cages of imported Form
+  bodies*](#control-cages-of-imported-form-bodies-mitcad1365)).
 
 ### Component features
 
@@ -6415,7 +6418,7 @@ constraints.
 |---|---|---|
 | `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences` |
 | `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052); USDZ also `materials`, `skipped`, `warnings` |
-| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`) | `path`, `entities` |
+| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)) | `path`, `entities`, `units` (the unit written) |
 
 - `import_file` adds one base feature: a body per STEP part or solid,
   IGES solid, BRep compound member or OBJ object, one mesh body for STL;
@@ -6450,9 +6453,31 @@ constraints.
   3MF; USDZ writes the bodies' appearances, [USDZ](#usdz)). Mesh bodies go
   only to STL, OBJ, BRep, 3MF and USDZ. It changes nothing (no
   undo step, `recomputed` 0).
-- `export_sketch` writes the sketch's curves in sketch coordinates and
-  millimetres (`$INSUNITS` mm), each curve segment of its profiles once.
-  Periodic splines are not written.
+- `export_sketch` writes the sketch's curves in sketch coordinates and in
+  the design's length unit (`$INSUNITS` set to it; `units` names another,
+  [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), each curve
+  segment of its profiles once. Periodic splines are not written.
+
+### The length unit of DXF exports (mitcad#1408)
+
+Every DXF export writes its coordinates in the design's length unit
+(`set_units`) unless it names another in `units`: `export_sketch`,
+`export_flat_pattern_dxf`, `export_face_dxf`, `export_cut_sheet` and
+`export_drawing` as DXF. `units` takes the units `set_units` reads (`mm`,
+`cm`, `m`, `in`, `ft`, `um`, `km`, `yd`, `mi`, `mil`); an unknown one is
+refused. The header names the unit: `$INSUNITS` its code (inches 1,
+millimetres 4, centimetres 5, …) and `$MEASUREMENT` 0 for the imperial
+units, 1 for the metric ones. So an inch design's files are in inches
+(`$INSUNITS` 1, `$MEASUREMENT` 0) and a millimetre design's in millimetres,
+as before. The file holds the same geometry in either unit: its
+coordinates, radii and text heights are the millimetres divided by the
+unit's length (25.4 for inches). A drawing's DXF is the sheet in that unit
+of paper: an A3 sheet in inches is 16.54 x 11.69, and a 1:1 view measures
+the model in inches; its texts scale with it, and line widths are not
+written (each pen is a layer). `sketch.import_dxf` and `dxf_info` read the
+unit back from `$INSUNITS`, so a MitCad DXF comes back at its size in a
+design of any unit. Each command's result names the unit written (`units`;
+`export_drawing`: `file_units`, as its `units` is the unit of the values).
 
 ### STEP assemblies as components (mitcad#1274)
 
@@ -6757,6 +6782,14 @@ An importer that builds bodies itself adds them without files:
   file without history, one base feature per body (`{"history": true}`
   also takes the `.smbh` blobs, `{"owners": true}` bodies of which only
   faces are saved, `{"text": true}` returns a summary instead of JSON).
+  The file's mesh bodies come in after them, one base feature each,
+  placed as the import with the timeline places them, with the physical
+  material and appearance their records name (mitcad#1376); the report's
+  `meshes` lists each: `source` (its container), `triangles`, `feature`,
+  `bodies`, `appearance` and `material` (the body's ids, null where none
+  came in), or `error` for one that could not be read; `mesh_gaps` says
+  what of their materials and appearances did not come in. The import is
+  one undo step.
   `mitcad::bridge::f3d_bodies` (`core/cpp/bridge/exchange.hpp`, also
   callable from Rust) builds the bodies of an .f3d file into a
   `ShapeList` with their blob, record and build report.
@@ -6874,6 +6907,10 @@ materials, after the replay (part of its undo step):
   comma, or the last part of its classification; also with a grade after
   it, `Aluminum 6061`; ABS written out) and its density within 2 %.
   Every material is listed in the report.
+- A mesh body (mitcad#1366) gets the physical material and the
+  appearance its record's presentation envelopes name, as a body does
+  (mitcad#1376), after the occurrences' overrides: one an override
+  covers keeps the override's. They are counted with the bodies'.
 
 The report's `appearances`: `bodies`, `bodies_set` (the stored design's
 solids, and those whose replayed body got the file's appearance),
@@ -7366,7 +7403,10 @@ or `Document::import_ipt(path, json)` for the report alone) imports an
   flanges on one edge and cuts through the sheet replay as `sheet_rules`
   (named `Sheet rules <style>`, before the first face), `sheet_face`,
   `sheet_flange` and `sheet_cut` (mitcad#211; the `.f3d` import's base and
-  edge flanges likewise; `core/import/docs/f3d-sheet-metal.md`, *Sheet metal*).
+  edge flanges likewise, its open and flat hems as `sheet_flange`s of 180
+  degrees, mitcad#1364, its rolled hems as flanges past 180 degrees with no
+  wall and its teardrop, rope and double hems as flanges with that `hem`
+  form, mitcad#1378; `core/import/docs/f3d-sheet-metal.md`, *Sheet metal*).
 - **Bodies only** (`bodies_only`, and files without definitions; stage
   1): one base feature per body (solids and sheet bodies), built from the
   file's B-rep record with OCCT.
@@ -10786,12 +10826,17 @@ records full-side coplanar adjacency even when the kernel merges physical caps.
 Flange requires a straight free material boundary. Length modes are `tangent`,
 `inner` and `outer`. The straight length is respectively entered length,
 length minus `r*tan(abs(angle)/2)`, or length minus
-`(r+t)*tan(abs(angle)/2)`; it must remain positive. Positions `inside`,
+`(r+t)*tan(abs(angle)/2)`; it must not be negative, and a straight length
+of 0 makes a flange of its bend alone, with no wall (a rolled hem,
+mitcad#1378). Positions `inside`,
 `outside` and default `bend_line` place the stationary tangent at minus the
 outer setback, minus the inner setback, or minus half the allowance. The
-signed angle is nonzero and at most pi either way: a 180-degree flange is a
-hem (mitcad#242), whose inner and outer virtual sharps do not exist, so
-`inner`, `outer`, `inside` and `outside` refuse it. Two more references
+signed angle is nonzero and less than a full turn either way (a flange may
+bend past 180 degrees, mitcad#1378; Bend and Fold stay at most pi): a
+flange of 180 degrees or more is a hem (mitcad#242), whose inner and outer
+virtual sharps do not exist, so `inner`, `outer`, `inside` and `outside`
+refuse it. Its developed length is the bend allowance `abs(angle) (r +
+K t)` for any angle. Two more references
 (mitcad#242, the `.f3d` flanges) use the bend's outer extent
 `X = (r+t)*sin(min(abs(angle), pi/2))`, how far its outer surface reaches
 past the stationary tangent: position `side_tangent` places the
@@ -10835,6 +10880,43 @@ a flat termination; round relief has a semicircular end and its depth includes
 that tip, so depth must also exceed half the width. Tear uses the explicitly
 entered positive-width, square-ended slit. Its contour is rectangular; the
 policy does not invent an unreported gap or claim a zero-width solid cut.
+
+**Hem forms of a flange (mitcad#1378).** An optional `"hem"` makes the
+flange a hem whose bends follow from its sizes: `{"form":"teardrop",
+"gap":g}`, `{"form":"rope","gap":g}` or `{"form":"double","gap":g,
+"setback":s}` (parameter slots `hem.gap`, `hem.setback`). The flange's
+`length` is then the hem's length `L`, measured from the plane touching the
+first bend's outer surface normal to the panel (the length mode must be
+`outer_tangent`), its `radius` (or the rule's) the inside radius `r` of
+every bend, and its `angle` gives only the side it folds to (its sign); `t`
+is the thickness, `a = r + t`.
+
+- `teardrop`: one bend of `pi + alpha` and a straight wall coming back
+  towards the panel: the inner corner of the wall's end lies `g` above the
+  panel and its outer corner at `L`, i.e. `s sin(alpha) = r (1 +
+  cos(alpha)) - g` and `s cos(alpha) = L - a (1 + sin(alpha))` for the
+  wall `s`. The radius must be more than half the gap and `L > 2 a`.
+- `rope`: a bend of `pi + alpha` with `cos(alpha) = (g + t) / (2 r + t)`,
+  at once a bend of `alpha` the other way, then a wall `g` above the panel,
+  parallel to it, of `L - a - (2 r + t) sin(alpha)` (not negative). The
+  radius must be more than half the gap.
+- `double`: the wall folded back over itself: 90 degrees, a wall of `g +
+  t`, 90 degrees, a wall of `L - 2 a` over the panel, 180 degrees and a wall
+  of `L - a - t - s` back under it, ending `s` short of the first wall.
+
+Each bend is a bend of the flange (`bend` slots 0, 1, ...; strip curves
+`40 + 100 k`), each wall a panel of it (`panel` slot `k`; its root curve
+`53 + 100 k`, its far end `51 + 100 k`); a bend followed at once by the
+next (the rope's) or by no wall joins it directly. Offsets apply; a width
+past the boundary needs a flange of one bend and a wall.
+
+```json
+{"type":"sheet_flange","body":"F3.b0",
+ "boundary":{"panel":{"feature":"F3","slot":0},
+             "curve":{"type":"sketch","sketch":"F2","segment":"c2[c1,c3]"}},
+ "angle":3.141592653589793,"length":{"mode":"outer_tangent","value":25},
+ "position":"side_tangent","hem":{"form":"teardrop","gap":2}}
+```
 
 ```json
 {"type":"sheet_bend","body":"F3.b0","moving_body":"F5.b0",
@@ -10944,6 +11026,21 @@ plane or cylinder embedding. Plane `front_to_back_sign` is `positive` or
 `negative`; this is independent of chart winding and remains explicit when a
 bend is opened by the geometry primitives. A failed or disconnected folded
 result publishes no partial pieces and blocks only the intended input sheets.
+
+### Walls of one sheet that meet (mitcad#1409)
+
+A flange (or another folded feature) whose walls meet walls of the same
+sheet that no bend joins them to is built only where they touch along a
+line or at a point: a full open corner, the closing wall's end on the
+corner line of the other wall at the exact inside dimension, is accepted as
+it is, neither fused nor its faces merged. Walls that touch over a face (a
+half open corner) are refused, `sheet walls SheetFlange1 and SheetFlange3
+touch over a face, which a sheet body cannot hold: leave a seam gap between
+them`; walls that pass into each other (more than 1e-6 mm deep) are refused,
+`sheet walls SheetFlange1 and SheetFlange3 pass through each other`. A wall
+is named by its feature, a further wall of it `SheetFlange3 (wall 2)`, a
+bend `SheetFlange1 (bend)`. No clearance is added. See
+[the sheet-metal contract](../../../docs/sheet-metal.md).
 
 ## Sheet Unfold, Refold and Flat Pattern
 
@@ -11235,7 +11332,7 @@ not valid.
 
 ```json
 {"cmd":"export_flat_pattern_dxf","body":"F3.b0","path":"flat.dxf",
- "unit":"mm","version":"r2000","tangents":false,"reference_side":"front"}
+ "units":"mm","version":"r2000","tangents":false,"reference_side":"front"}
 ```
 
 Writes the body's (uid or name) Flat Pattern to a `.dxf` file: the item's
@@ -11259,9 +11356,12 @@ one `LINE`, a hole one `CIRCLE`); exact arcs, ellipses and splines are kept.
 All four (five) layers are declared even when empty. Coordinates are the
 pattern's frame (the fixed panel's material axes on the viewed side; `back`
 mirrors `x`), so the drawing stays put when the body is edited, and are
-written in `unit` (`mm` default, `cm`, `m`, `in`, `ft`) with `$INSUNITS` set.
-`version` is `r2000` (default) or `r12`. The answer has `path`, `body`, `unit`,
-`stationary`, `reference_side`, `entities`, `layers` (`name`, `entities`),
+written in `units` (the design's length unit when left out, mitcad#1408;
+`mm`, `cm`, `m`, `in`, `ft` and the other units `set_units` reads; `unit` is
+its older name) with `$INSUNITS` and `$MEASUREMENT` set
+([DXF units](#the-length-unit-of-dxf-exports-mitcad1408)).
+`version` is `r2000` (default) or `r12`. The answer has `path`, `body`, `unit`
+and `units` (both the unit written), `stationary`, `reference_side`, `entities`, `layers` (`name`, `entities`),
 `bends` (`up`, `down`) and `bounds` (in the unit). `mitcad-cli export-flat`
 runs it; MCP's `model_export` takes `format: "dxf"` with `flat_pattern` (the
 body) instead of `sketch`. The `sheet_reference`, `sheet_seam` and
@@ -12180,7 +12280,7 @@ points*).
 | Command | Fields | Result |
 |---|---|---|
 | `build_place` | `part` (`{"library", "url", "rev", "component", "config"}`, or `{"source": "S1", "config"}` to reuse a source), `at` (below), `rotate` (an angle: 0, 90, 180 or 270 deg; a number is radians), `flip` (true: the other end first), `length` (a value, or `{"bind": {"occurrence", "geometry"}, "mode": "face"/"centre"/"through", "add"}`; left out: the source's default), `mitre` (`{"angle", "cut": "new"/"existing"/"shared"/"none"}`; left out: none, also on a square corner; `shared` on a corner at another angle at offset 0, mitcad#427; every cut keeps the lengths as long points and a shared one makes the outer corners meet, mitcad#443), `tilt` (on a side, mitcad#444: an angle from -80 to 80 deg, positive towards the target's end B; *Tilt*), `parameters` (other source parameters), `name` | `component`, `occurrence`, `name`, `features` (everything it added), `joint`, `bound`, `adds`, `warnings`, `place` (`side`, `end`, `frame`, `geometry` or `grounded`); undo step `Place <designation>` |
-| `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`); undo step `Edit <name>` |
+| `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`, on a side `gap`, mitcad#1401; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`); undo step `Edit <name>` |
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
 | `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them) and `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths); the parts placed on it keep where they are; `notices` for the cut-scope exclusions it dropped (mitcad#1236); undo step `Remove <name>` |
@@ -12205,7 +12305,8 @@ points*).
   - a slot frame is `side` at that slot; another frame (a rail's) is a
     mate.
 - `from` (mitcad#417) is what `offset` is measured from on a side or a
-  rail: `a` (the default), `b` or `middle`. It is accepted on an end and
+  rail: `a` (the default), `b` or `middle`; on a side also `gap` (*Middle
+  of Gap* below, mitcad#1401). It is accepted on an end and
   not used there.
 - `offset` (a length: a number in mm or an expression) replaces the
   click on a side:
@@ -12268,6 +12369,49 @@ the reference the click resolved to:
   `changed` has `offset` and `from`).
 - `build_preview`'s `side` gives `from` and `offset` as `at.from` and
   `at.offset` take them.
+
+**Middle of Gap (mitcad#1401).** The profiles standing on a side's slot
+(BUILD profiles whose slider joint is on that slot frame of that target)
+split it into free stretches, each from the far face of the profile
+towards end A (or end A) to the near face of the one towards end B (or
+end B). A part on the side can be centred in one and stay centred there:
+
+- A click within a quarter width (at least `at.snap`) of the middle of a
+  free stretch that a profile bounds and the new part fits in centres it
+  there: `side.kind` `gap`, from `gap`, offset 0. The side's middle
+  comes first where the two are the same place (a stretch without a
+  profile is the whole side: its middle is the side's).
+- `at.from` `gap`: `offset` is the new part's middle from the middle of
+  the free stretch the click (`at.point`, needed) is in, positive towards
+  end B; a click in no free stretch (on a profile) is refused (`there is
+  no free stretch between profiles where the side was clicked`).
+- The joint's `position.tx` is the middle of the bounding faces, an
+  expression of the two profiles' slides: for 30 profiles (`d14`, `d20`
+  their slides, each face 15 from its slide) `(d14 + d20) / 2` between
+  two, `d20 / 2 - 7.5` from end A, `(d14 + d12) / 2 + 7.5` to end B
+  (`d12` the target's length), less the new part's middle from its frame,
+  plus the offset. So the part stays centred when either profile moves or
+  the target's length changes. The component's record keeps
+  `from` `gap` and `gap`, the two profiles (`[a, b]`, null for an end).
+- When one of the two goes (`build_remove`, a delete, its joint deleted),
+  the part keeps its place and is bound to the end of the side nearer its
+  frame: from end A its slide as a number, from end B the target's length
+  less its distance from there (`d12 - 242.5`); its record's `from` is
+  then `a` or `b` and its `gap` goes. Nothing is refused and the gone
+  profile's slide parameter goes with it.
+- `build_edit`'s `at.from` `gap` keeps the part in place, centred in the
+  free stretch it stands in between the other profiles on its slot (its
+  offset the distance from that stretch's middle); a profile whose slide
+  uses the part's (one centred against it) is left out, so no cycle is
+  made. An offset alone on a part from `gap` is from the middle of the
+  stretch it stands in. A wall's `from` (*timber frames*) is never `gap`
+  (refused).
+- `build_preview`'s `snaps` have a `gap` at the middle of each free
+  stretch a profile bounds and the part fits in (where no end or middle
+  snap is); its `side` has `gap`: `{start, end, a, b}`, the free stretch
+  the part stands in (from end A; null on a profile), whatever its
+  reference, so that a change of From to Middle of Gap can keep it in
+  place. `build_parts` gives `gap` (the record's, else null).
 
 **Tilt (mitcad#444).** A profile on a side can lean along its host: a
 brace. `tilt` (an angle, `build_place`, `build_preview`, `build_edit`;
@@ -12386,8 +12530,8 @@ radians, as joints have them.
 
 | Query | Fields | Result |
 |---|---|---|
-| `build_preview` | `build_place`'s, `build_panel`'s or `build_connect`'s fields | what the command would do, without changing anything. A placing: `frame` (the new part's own axes at its end A, z running from A to B), `place` (`side`, `end`, `frame`, `geometry` or `grounded`, as `auto` decided), `length` (`value`: the length given, else what the part's ray gives in `mode`, else the source's default; `default`; `target`: what the ray meets first, `{occurrence, geometry}` with a frame of another BUILD part facing it, or the `bind` given, null when nothing; and `mode`), `ends` (`a`, `b`: `{angle, tilt}` or null; `target`: the target's end cut), `tilt` (radians, mitcad#444), `snaps` (on a side, mitcad#394: `{kind, offset, point}` for each place a click snaps to: `kind` `end_a`, `end_b`, `middle` or `grid`, `offset` the new part's near face from end A, `point` where its middle then stands on the slot, in the design), `side` (on a side: `{kind, from, offset, point, width}`: the snap the click took (`end_a`, `end_b`, `middle`, `grid`), null between snaps, or `clamped` when the placement was kept within the target; the reference and the offset from it the click resolved to, or the typed ones, as `at.from` and `at.offset` take them (mitcad#417); where the part stands; its width along the slot; `foot`, where the part's frame meets the slot, a tilted part's foot long point, in the design; null elsewhere), `end` (on an end, mitcad#417: `{zone, direction, turns, offset, mitre}`: `zone` `straight` or `edge` (what the click chose) or `given` (`at.direction`); `direction` the new part's axis in the host's coordinates; `turns` the four unit vectors square to the target in the host's coordinates, +x, +y, -x, -y of its end frame; `offset` a corner's offset, null when straight; `mitre` `{cut, angle}` the placement will use, the default resolved (`cut` `none`, `new`, `existing` or `shared`, `angle` in radians or null); null elsewhere), `host` (as `build_host` answers), `designation`, `warnings`. A panel: `frame`, `fits`, `reason`, `width`, `height`, `bound`. A connector: `frame`, `junction`, `fasteners` (`{frame, at}`), `fastener_parts`, `machining` (`{component, at, point, diameter, depth, thread}`). All: `body` (`"see analysis_shape"`) and `problems` (the refusal the command would give, then nothing else) |
-| `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode}`, or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b` or `middle`, else null) |
+| `build_preview` | `build_place`'s, `build_panel`'s or `build_connect`'s fields | what the command would do, without changing anything. A placing: `frame` (the new part's own axes at its end A, z running from A to B), `place` (`side`, `end`, `frame`, `geometry` or `grounded`, as `auto` decided), `length` (`value`: the length given, else what the part's ray gives in `mode`, else the source's default; `default`; `target`: what the ray meets first, `{occurrence, geometry}` with a frame of another BUILD part facing it, or the `bind` given, null when nothing; and `mode`), `ends` (`a`, `b`: `{angle, tilt}` or null; `target`: the target's end cut), `tilt` (radians, mitcad#444), `snaps` (on a side, mitcad#394: `{kind, offset, point}` for each place a click snaps to: `kind` `end_a`, `end_b`, `middle`, `gap` (mitcad#1401) or `grid`, `offset` the new part's near face from end A, `point` where its middle then stands on the slot, in the design), `side` (on a side: `{kind, from, offset, point, width, gap}`: the snap the click took (`end_a`, `end_b`, `middle`, `gap`, `grid`), null between snaps, or `clamped` when the placement was kept within the target; the reference and the offset from it the click resolved to, or the typed ones, as `at.from` and `at.offset` take them (mitcad#417); where the part stands; its width along the slot; `foot`, where the part's frame meets the slot, a tilted part's foot long point, in the design; null elsewhere), `end` (on an end, mitcad#417: `{zone, direction, turns, offset, mitre}`: `zone` `straight` or `edge` (what the click chose) or `given` (`at.direction`); `direction` the new part's axis in the host's coordinates; `turns` the four unit vectors square to the target in the host's coordinates, +x, +y, -x, -y of its end frame; `offset` a corner's offset, null when straight; `mitre` `{cut, angle}` the placement will use, the default resolved (`cut` `none`, `new`, `existing` or `shared`, `angle` in radians or null); null elsewhere), `host` (as `build_host` answers), `designation`, `warnings`. A panel: `frame`, `fits`, `reason`, `width`, `height`, `bound`. A connector: `frame`, `junction`, `fasteners` (`{frame, at}`), `fastener_parts`, `machining` (`{component, at, point, diameter, depth, thread}`). All: `body` (`"see analysis_shape"`) and `problems` (the refusal the command would give, then nothing else) |
+| `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode}`, or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b`, `middle` or `gap`, else null), `gap` (from `gap`, mitcad#1401: the two profiles it is centred between, `[a, b]`, null for an end; else null) |
 | `build_junctions` | `components` (optional: only the junctions of these) | `junctions`: `id` (`<a's component>:<a's at>\|<b's component>:<b's at>`, stable while the two parts and their meeting stay), `kind` (`L`, `T`, `cross`, `inline`), `a` and `b` (`component`, `occurrence`, `at` (`end_a`, `end_b`, the slot frame, or `side` on a closed side), `frame` (the part's own axes at its end A), `at_frame` (the `at` frame)), `angle` (between the axes), `systems` (`B8/30`), `space` (the free room in the inner corner: `{"x", "y", "z"}`: along a, along b to its farther end, across), `connectors` (components already there) |
 | `build_cut_list` | `kerf` (optional, default 3 mm) | `rows`, one per group of identical results (source, row, length, ends, machining and own features the same): `source`, `designation`, `supplier`, `part_number`, `config`, `length` (the part's length, its long point: the body's length on the long side of its angled ends, mitcad#443), `ends` (`a`, `b`: `{angle, tilt}` or null), `machining` (`{at, diameter, depth, thread, connector}`: holes from connectors, and the part's own, `connector` null), `features` (how many own features the part has: holes, cuts), `quantity`, `mass` (each, kg; a section of a typed size, mitcad#1328: the value of its build block's `area_parameter`, the source's parameter of its area in the part's combination, times the density and the length), `components`, and for a section of a typed size `size` (its options' values but the length, `B 76.2, T 4.8`: its rows and stock apart from its source's other sizes). `stock`: per source and row (and typed size, whose `designation` is the source's name with its `size` in parentheses), cut from its longest stock length, `{"source", "designation", "stock_length", "pieces": [lengths in cutting order], "bars" (where each stock piece's cuts end in `pieces`), "needed", "offcut", "too_long"}`, longest pieces first into the first stock piece they fit (a kerf after each). `kerf`. `other`: the parts list's rows for everything else |
 | `build_host` | | the BUILD host (mitcad#394, *Where parts go*): `component` (its uid), `name`, `path` (its first occurrence path from the root, uids joined by `/`, `""` for the root) and `active` (the active component); the app gives paths from it and points in its coordinates |
@@ -14478,12 +14622,12 @@ holes from `Kernel::round_holes`, their threads from the `threads` query.
 | `dimensions` | true | the width and height of each orthographic view, and one callout per hole size (`4x Ø6.6 THRU`, `CBORE Ø11 DEPTH 6.8`, a tapped hole by its thread) |
 | `sketch_dimensions` | false | the distances, lengths, radii and diameters of the sketches whose plane faces a view square on, in that view |
 | `hole_table` | true | the holes each view shows end on, tagged per view (`A1`, `A2`, … `B1`), with X and Y from the view's lower left corner, size, depth and thread |
-| `units` | the design's length unit | the unit of the values (`mm`, `in`, …) |
+| `units` | the design's length unit | the unit of the values (`mm`, `in`, …), and of a DXF file's coordinates: the sheet in that unit of paper (mitcad#1408, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)); with `drawing` only the DXF file's unit (each sheet's own, else the design's, when left out) |
 | `title` | `Untitled` | the design's name in the title block |
 | `date` | today (UTC) | the date in the title block |
 | `per_body` | false | a sheet per body: pages of one PDF, or SVG, DXF and DWG files `<name>-2.svg`, … |
 | `exact` | true | exact edges; false: from a triangulation (quicker on large bodies; also the fallback when the exact projection fails, and for mesh bodies). Views of bodies with free-form faces (not planes, cylinders, cones, spheres or tori), or with many edges on B-splines against many faces (mitcad#1033), come from a triangulation within a 2000th of the bodies' size either way, their edges as lines and arcs where they follow them within 1.5 times that, polylines elsewhere (mitcad#962: exact edges took half a minute a view on modelled threads) |
-| `drawing` | none | a drawing kept in the design (`D1` or its name, *Drawings in the design*), written as it is: its sheets, views and title blocks; the fields above are then its own and refused, except `title` (where its sheets have none) |
+| `drawing` | none | a drawing kept in the design (`D1` or its name, *Drawings in the design*), written as it is: its sheets, views and title blocks; the fields above are then its own and refused, except `title` (where its sheets have none) and `units` (a DXF file's unit) |
 | `sheet` | all | with `drawing`: one sheet's index (0 the first) |
 
 Without `drawing` the export lays out a temporary drawing from the fields
@@ -14582,11 +14726,14 @@ Files: SVG in millimetres (`width="420mm"`), a `<g class="…">` per group:
 `hole-row` (`id` the tag), `hole-datum`, `section-line`, `view-label`,
 `frame`, `title-block`. PDF 1.4, a page per sheet, the standard Helvetica
 font in WinAnsi encoding (`Ø`, `°`), uncompressed. DXF (R2000) in paper
-millimetres, a layer per kind of line: `VISIBLE`, `HIDDEN`, `THIN`, `HATCH`,
-`SECTION_LINE`, `FRAME`, and `TEXT` (the writer has no dashed line types:
+of the file's length unit (`units`, else the sheet's, else the design's:
+an inch design's sheet in inches of paper, its texts scaled with it,
+mitcad#1408), a layer per kind of line: `VISIBLE`, `HIDDEN`, `THIN`, `HATCH`,
+`SECTION_LINE`, `FRAME`, `EXTRA_THICK` (lines and arcs drawn with the
+`extra_thick` pen, mitcad#1402), and `TEXT` (the writer has no dashed line types:
 hidden edges are told apart by their layer; arrowheads are outlines). DWG
 (R2000, `AC1015`, mitcad#728; `core/model-drawing/src/dwg.rs`) holds what the DXF file
-holds, on the same layers, written by MitCad's own writer
+holds in paper millimetres, on the same layers, written by MitCad's own writer
 (`core/dwg/src/write.rs`, [README](../../dwg/README.md#writer)): lines,
 arcs, circles and single-line texts (a text of several lines as a text
 per line) in model space, the sheet as the layout's paper and limits;
@@ -14595,7 +14742,8 @@ texts in code page 1252, other characters as `\U+XXXX`.
 The answer: `path`, `format`, `files`, `sheets`, `pages` (of a PDF; 1
 otherwise), `sheet`, `orientation`, `scale` (`"1:1"`, of the first sheet)
 and `scales`, `views` (per sheet), `bodies` and `body_names`, `dimensions`,
-`holes`, `hole_table_rows`, `units`, `polygonal` (a view came from a
+`holes`, `hole_table_rows`, `units` (of the values), `file_units` (DXF:
+the first file's length unit), `polygonal` (a view came from a
 triangulation) and `warnings` (a view that shows nothing, views that do not
 fit at the given scale, rows the table had no room for, holes that could not
 be found). Refused: an unknown format, unit, view or sheet, no views, a
@@ -18299,10 +18447,11 @@ with `geometry` its `groups` as the export writes them (`class`, `id`,
 `items`: `{"line": [a, b], "pen"}`, `{"arc": {"center", "radius",
 "start", "end"}, "pen"}`, `{"polyline": points, "closed", "pen"}`,
 `{"fill": points}`, `{"shade": points, "grey"}`, `{"text", "at",
-"height", "angle", "anchor"}`; pens `thick`, `thin`, `hidden`, `hatch`,
-`chain`, `frame`) and `pens`, the writers' widths and dashes of those pens
-in sheet millimetres (`{"thick": {"width": 0.35, "dashes": []}, …}`,
-mitcad#1112: the application draws the sheet with them). Groups: `view` (`id` `view-front`, … by its direction,
+"height", "angle", "anchor"}`; pens `thick`, `extra_thick`, `thin`,
+`hidden`, `hatch`, `chain`, `frame`) and `pens`, the writers' widths and
+dashes of those pens in sheet millimetres (`{"thick": {"width": 0.35,
+"dashes": []}, "extra_thick": {"width": 0.7, …}, …}`, mitcad#1112 and
+mitcad#1402: the application draws the sheet with them). Groups: `view` (`id` `view-front`, … by its direction,
 `view-section`, `view-detail`, else `view-V<id>`), `view-label`,
 `section-line`, `detail-circle`, the automatic annotations' groups,
 `frame`, `title-block`.
@@ -18904,7 +19053,8 @@ takes `"type": "line"` (`points`: its two ends), `"arc"` (`points`: its
 centre, its start and its end, counter-clockwise from the start; an end
 the way the start lies makes a whole circle) and `"text"` with a `view`
 (`at`, `text`, `height`), each with `pen` (`thin` (default), `thick`,
-`hidden`, `chain`; not a text's) and, instead of a view, a `sheet` (0):
+`extra_thick` (0.7 mm, ISO 128's extra wide line, mitcad#1402), `hidden`,
+`chain`; not a text's) and, instead of a view, a `sheet` (0):
 points are sheet millimetres. On the sheet they are kept in sheet
 millimetres (a text on the sheet is a text note); in a view in its
 coordinates (model millimetres in the view's plane), so that they move,
@@ -19533,8 +19683,10 @@ file states no pixel size (96 to the inch). Refused with the reason: AVIF
 (AV1), other codecs (`coded as 'jpeg'`), an image sequence without a
 still image, a protected item, more than 10 bits per channel, a file cut
 short. The model keeps the file's bytes as they are; decoding the pixels
-is the application's (builds with `MITCAD_HEIF`, libheif and libde265;
-docs/development.md, "Licence policy").
+is the application's, with the operating system's decoder (mitcad#1304;
+app/COMMANDS.md, "Image references"), and its Insert › Image Reference
+embeds a HEIF file as a PNG file of the upright image (`data`), so that
+the design opens where no HEIF decoder is.
 
 - **Its plane** is a [plane reference](#references-to-geometry) (an origin
   plane, a construction plane, a planar face or a fixed plane) with an
@@ -19924,7 +20076,7 @@ gone or no longer planar says why.
 | `add_cut_sheet_parts` | `drawing`, `bodies`, `face` (a planar face of the one body given; its largest when left out), `count` (1 to 1000), `at` (where the first one's middle goes; each in a free place of the sheet when left out, in rows from the top left 5 mm apart, beside the sheet when none is left) | `parts`, `warnings`; undo step `Add part 3 to CutSheet1` or `Add 4 parts to CutSheet1` |
 | `edit_cut_sheet_part` | `drawing`, `part`, `place` or `move` (`[dx, dy]`), `rotation` (degrees) or `turn` (degrees more: 90 a quarter turn left, -90 right), `face` (null: the largest) | undo step `Move part 3 of CutSheet1`, `Turn part 3 of CutSheet1` or `Edit part 3 of CutSheet1` |
 | `delete_cut_sheet_parts` | `drawing`, `parts` (ids) | `deleted`; undo step `Delete part 3 of CutSheet1` or `Delete 2 parts of CutSheet1` |
-| `export_cut_sheet` | `drawing`, `path`, `format` (`dxf` or `svg`; from the extension when left out), `labels` (false) | `path`, `format`, `parts` (written), `outer`, `inner` (loops written), `labels`, `width`, `height`, `warnings` |
+| `export_cut_sheet` | `drawing`, `path`, `format` (`dxf` or `svg`; from the extension when left out), `labels` (false), `units` (a DXF file's length unit; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)) | `path`, `format`, `parts` (written), `outer`, `inner` (loops written), `labels`, `width`, `height`, `units` (a DXF file's unit; null for SVG), `warnings` |
 
 A body in `bodies` is its uid or name (`"F2.b0"`, `"Rib 3"`), or
 `{"body", "occurrence"}` with the occurrence that places it (a path from
@@ -19989,7 +20141,8 @@ moved by its poles, and cut to a part of its range by knot insertion
 (`mitcad_model_drawing::bspline`). Lines and arcs of a polyline stay a
 polyline.
 
-**The files.** DXF (R2000, millimetres, 1:1): outer boundaries on the
+**The files.** DXF (R2000, 1:1, in the design's length unit unless
+`units` names another, mitcad#1408): outer boundaries on the
 layer `CUT_OUTER`, inner loops on `CUT_INNER` (the Flat Pattern's
 names, *DXF export* of Sheet-metal), lines as `LINE`, arcs as `ARC`,
 whole circles as `CIRCLE`, B-splines as `SPLINE`s with their own
@@ -21150,7 +21303,7 @@ cutter, without a cut sheet:
 
 ```json
 {"cmd": "export_face_dxf", "body": "F2.b0", "face": "F2:top",
- "occurrence": "O1", "path": "plate.dxf"}
+ "occurrence": "O1", "path": "plate.dxf", "units": "in"}
 ```
 
 The body is seen square on to its planar face `face` from outside, in the
@@ -21158,16 +21311,19 @@ occurrence that places it (`occurrence`, uids or names; wherever it is
 shown when left out), and its outline is worked out as a
 [cut sheet](#cut-sheets)'s part has it: the silhouette of the projection
 along the face's normal, outer loops on the layer `CUT_OUTER`, holes on
-`CUT_INNER`, at 1:1 in millimetres with the lower left corner of its box
-at the origin. Nothing is added to the design and nothing is an undo
-step (class file IO). The answer: `path`, `body`, `name` (the body's),
-`face`, `outer` and `inner` (the loops written), `width` and `height`
-(the outline's box, mm). A face that is not one of the body's planar
+`CUT_INNER`, at 1:1 with the lower left corner of its box at the origin,
+in `units` (the design's length unit when left out, mitcad#1408,
+[DXF units](#the-length-unit-of-dxf-exports-mitcad1408)). Nothing is added
+to the design and nothing is an undo step (class file IO). The answer:
+`path`, `body`, `name` (the body's), `face`, `outer` and `inner` (the
+loops written), `width` and `height` (the outline's box, mm) and `units`
+(the unit written). A face that is not one of the body's planar
 faces, or a body that is gone, is refused with the reason
 (`F7:top is no planar face of Body1`).
 
 Test: `a_face_s_outline_is_written_at_full_size_from_the_origin`
-(`core/model-tests/drawing/src/face_dxf_tests.rs`, mock kernel).
+(`core/model-tests/drawing/src/face_dxf_tests.rs`, mock kernel); the unit:
+`core/model-tests/drawing/src/dxf_units_tests.rs`.
 
 ## Bodies that differ from their component
 
@@ -22545,6 +22701,43 @@ hover's items, horizontal and vertical in both orders;
 `tools/ui-drawing-corners-test.sh`, `app.ui-windows-drawing-corners`
 (`tools/ui-windows-drawing-corners-test.ps1`).
 
+## Control cages of imported Form bodies (mitcad#1365)
+
+A body of a [base feature](#base) may carry `cage`, the control cage its
+faces were made from (an `.f3d` file's Form body; the `.f3d` import sets
+it, see `core/import/docs/f3d-fallbacks.md`, *Form bodies and their
+control cages*):
+
+```json
+{"name": "Body1", "brep": {…},
+ "cage": {"source": "TSpline.<uuid>.tsm", "degree": 3,
+          "vertices": [{"position": [0, 0, 0], "tag": "dart"},
+                       {"position": [20, 0, 0], "weight": 0.5}, …],
+          "faces": [[1, 2, 0], …],
+          "edges": [{"vertices": [0, 1], "knot": 2, "crease": true, "boundary": true}, …],
+          "grips": [{"vertex": 2, "position": [1, 2, 3]}],
+          "settings": {"end-conditions": "SUBD_CREASES"},
+          "tolerance": 0.01, "geometric_tolerance": 0.001,
+          "native": ["105sym 0", …]}}
+```
+
+Lengths are mm in the body's component. `vertices` are the control
+vertices with their own control points (`weight` when not 1; `tag`
+`dart`, `crease` or `corner` by the creased edges at them, absent when
+smooth); `faces` their rings (indices into `vertices`); `edges` with the
+knot interval (when not 1), `crease` and `boundary`; `grips` the secondary
+control points of vertices; `settings`, the tolerances and `native` (the
+source's other records, as written) what the source declares. MitCad has
+no subdivision or T-spline surfaces: the cage is saved and read with the
+design and does not take part in the body's evaluation (the body is its
+B-rep data; the cage is not in the definition's fingerprint). A cage whose
+indices name no vertex, whose numbers are not finite or whose knot
+intervals are not positive fails the feature's check.
+
+Tests: `core/model/src/features/cage.rs` (`cargo test -p mitcad-model
+cage`), `core/f3d-design/src/cage.rs`, `core/import-replay/src/cages.rs`,
+`core/dump/src/cage.rs`.
+
 ## Midpoint lines and normal arcs (mitcad#1393)
 
 **Midpoint line.** `sketch.add_line` with `"mode": "midpoint"` takes the
@@ -22575,3 +22768,58 @@ The sketch Line tool draws both kinds of arc by a drag from a chain's end
 or from the end of a line or an arc, and the Midpoint Line tool draws the
 midpoint line (`app/COMMANDS.md`, "The line tool's arcs and Midpoint
 Line"). Tests: `core/model-tests/sketch/src/sketch_line_arcs_1393_tests.rs`.
+
+## Linked designs read again while open (mitcad#1416)
+
+`update_links` reads the linked designs' files when a design opens
+([External components](#components-and-occurrences)). While the design is
+open, the `links` query says which of those files changed since the
+design took their bodies, and `update_link` reads them again at once.
+Both follow a link as `update_links` does: only a file in the design's
+project (mitcad#929), from `base`, the design file's folder (left out: the
+folder the design was read from; a design never saved follows no link).
+
+| Command | Fields | Result |
+|---|---|---|
+| `update_link` | `component` (uid or name; left out: every linked design), `base` (optional) | `updated` (the components that took their file again), `messages` (a line per component read) |
+
+| Query | Fields | Result |
+|---|---|---|
+| `links` | `base` (optional) | `links`: per linked design (not library parts), in the order of the components, `component`, `name`, `path` (as the design saves it), `file` (the file it is followed to; null when not followed), `options` (linked with options), `changed` (the file is not the text the component last took), `problem` (why it is not followed or cannot be read; null) |
+
+- **One undo step.** `update_link` takes the changed files' bodies (a
+  design linked with options its design) as one undo step, `Update Link
+  <component>` or `Update All Links`; their links take the files' new
+  digests, so `links` says `changed: false` until the files change again.
+  A file that did not change gives the line `<component> is up to date
+  with <path>` and, when no file changed, nothing changes and there is no
+  undo step. A file not followed, not readable or not a design keeps its
+  component's bodies with the same lines as `update_links` ("…; it keeps
+  the bodies saved with the project"). `component` that is no linked design
+  (the root, a component of this design, a library part) is refused:
+  "<name> is not a linked design; only a design linked from a file is read
+  again".
+- **The same reading.** `update_links` and `update_link` read a file the
+  same way (`core/model/src/document/link_updates.rs`): its digest against
+  the link's, its design with its B-rep data from the store of the project
+  it is in, its visible bodies (or its envelope, for a link shown by its
+  envelope) as the component's base feature's bodies, its mount frames.
+  `update_links` keeps the lines as load warnings (`mitcad-cli info`
+  prints them as `Warning: …`), and the application shows them in the
+  message band when it opens a design.
+- Both are file IO (they read the linked files): not for external clients.
+- The application's Open Linked Design, Update Link, Update All Links and
+  its "<file> changed" notice with Update (`app/COMMANDS.md`, "Linked
+  designs").
+
+```json
+{"query": "links", "base": "/projects/lamp/assembly"}
+{"cmd": "update_link", "component": "Electronics", "base": "/projects/lamp/assembly"}
+{"cmd": "update_link", "base": "/projects/lamp/assembly"}
+```
+
+Tests: `core/model-tests/assembly/src/link_update_tests.rs` (a holder and
+its linked designs saved in a project, opened, changed while open, Update
+Link and Update All Links undone), the ctest
+`cli.linked_design_update_reported` (a reported holder whose linked file
+changed after it was saved, under `MITCAD_MITCAD_REPORTED`).

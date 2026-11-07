@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+
 #include <QFrame>
 #include <QObject>
 #include <QPointer>
@@ -42,6 +44,16 @@ public:
   // about (its history row selects it), or empty. An empty text clears a
   // message shown in full that is no problem.
   void post(const QString& text, NoticeLevel level, const QString& feature = QString());
+  // A message with a button (mitcad#1416: "<file> changed" with Update, a
+  // linked component with Open Linked Design): `action` its label, `run`
+  // what it does. Shown in full, it stays until it is closed, its button is
+  // pressed or another message takes its place (it does not fade); the
+  // button turns it into the stub and runs `run`. Logged `Message band
+  // action: <label>` with the message, and `Message band action <label>
+  // pressed: <text>`.
+  void postAction(const QString& text, NoticeLevel level, const QString& action, std::function<void()> run);
+  // The button of the message shown in full was pressed.
+  void runAction();
   // The user closed the message shown in full (the band's ×).
   void close();
   // The next command started: an error shown in full gives way.
@@ -66,6 +78,10 @@ private:
 
   MessageLog m_log;
   QTimer m_timer; // the message shown in full: until it fades (not watched: it is long)
+  // The button of the latest message posted with one: its text and what
+  // the button does (mitcad#1416).
+  QString m_actionText;
+  std::function<void()> m_actionRun;
 };
 
 // The message band's content (Floating, mitcad#1042): a message in full,
@@ -117,12 +133,14 @@ private:
   QWidget* m_fullRow = nullptr;
   QLabel* m_icon = nullptr;
   QLabel* m_text = nullptr;
+  QToolButton* m_action = nullptr; // the message's button (mitcad#1416)
   QToolButton* m_close = nullptr;
   QToolButton* m_stub = nullptr;
   int m_width = 0;
   bool m_refreshing = false;
   QString m_loggedPlaces;
   QString m_loggedTextPlace;
+  QString m_loggedActionPlace; // the button's (mitcad#1416)
   bool m_noticeHovered = false; // noticeHovered with a feature last
 };
 

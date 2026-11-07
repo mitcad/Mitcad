@@ -66,6 +66,16 @@ public:
 
   // Shows the appearances as the model has them now.
   void refresh();
+  // The appearance `id` selected and in sight, its group expanded
+  // (mitcad#1415: Edit Appearances… of the Appearance tool's picker, on its
+  // current appearance); logged `Appearances on <id>`. Nothing changes for
+  // an id it does not list (Default, empty).
+  void showAppearance(const QString& id);
+
+  // Called once when the window closes next (mitcad#1415: the Appearance
+  // tool reads its appearances again); taken before it is called. The
+  // closing is logged `Appearances closed`.
+  std::function<void()> whenClosed;
 
 private:
   struct NumberField {
@@ -113,6 +123,7 @@ private:
   void finishUse(const QString& sourceId, const TextureAsset& asset, const TextureFiles& files,
                  const QString& error);
   void showEvent(QShowEvent* event) override;
+  void hideEvent(QHideEvent* event) override;
   // The places are logged again when the dialog's size changes.
   void resizeEvent(QResizeEvent* event) override;
 

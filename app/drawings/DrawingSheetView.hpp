@@ -253,7 +253,8 @@ signals:
   void annotationTipMoved(int id, QPointF delta);
   void annotationDeleteRequested(int id);
   // Esc: the picks so far, the tool, the selection or the drawing is done
-  // (the workspace says which).
+  // (the workspace says which). Also a right click while a tool picks
+  // (mitcad#1404): the picks so far, else the tool.
   void toolCancelled();
   // A tool's line or circle is drawn: the next click places its view.
   void placing();
@@ -430,6 +431,11 @@ private:
   QPointF m_dragSnap;
   QString m_snapHint;
   Qt::KeyboardModifiers m_releaseModifiers;
+  // The last right press (mitcad#1404): whether a tool was picking then,
+  // and where (widget px). Its release, moved at most 4 px, is the tool's
+  // Esc, and its context menu (on Windows after the release) is none.
+  bool m_rightPressTool = false;
+  QPointF m_rightPressAt;
 };
 
 } // namespace mitcad::drawings

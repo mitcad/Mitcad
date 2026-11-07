@@ -1358,7 +1358,7 @@ void MainWindow::exportFile() {
   // of the type it starts with (the last export's, or DXF for a sketch).
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(safeFileName(exportName(m_selection)));
   const std::optional<ExportChoice> choice = askExport(this, suggested, static_cast<int>(selected.size()), sketches,
-                                                       sketch, !m_snapshot.occurrences.isEmpty());
+                                                       sketch, !m_snapshot.occurrences.isEmpty(), lengthUnit());
   if (!choice) {
     return;
   }
@@ -1401,7 +1401,9 @@ void MainWindow::exportFile() {
   }
   QJsonObject command;
   if (choice->format == QStringLiteral("dxf")) {
-    command = cmd("export_sketch", {{QStringLiteral("sketch"), choice->sketch}, {QStringLiteral("path"), choice->path}});
+    command = cmd("export_sketch", {{QStringLiteral("sketch"), choice->sketch},
+                                    {QStringLiteral("path"), choice->path},
+                                    {QStringLiteral("units"), choice->dxfUnit}});
   } else {
     command = cmd("export", {{QStringLiteral("path"), choice->path}, {QStringLiteral("format"), choice->format}});
     if (choice->selectedOnly) {
@@ -1446,6 +1448,10 @@ void MainWindow::exportFile() {
   if (choice->format == QStringLiteral("step") || choice->format == QStringLiteral("iges")) {
     what += QStringLiteral(", ") + choice->unit;
   }
+  if (choice->format == QStringLiteral("dxf")) {
+    // The unit written (mitcad#1408).
+    what += tr(", in %1").arg(result.value(QStringLiteral("units")).toString(choice->dxfUnit));
+  }
   if (choice->format != QStringLiteral("dxf") && !choice->coordinates.isEmpty()) {
     what += QStringLiteral(", %1 coordinates").arg(choice->coordinates);
   }
@@ -1462,20 +1468,25 @@ void MainWindow::exportFile() {
 void MainWindow::exportSketch(const QString& sketch) {
   const QString name = featureName(sketch);
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
-  const QString path = dialogSaveFileName(this, tr("Export DXF"), suggested, tr("DXF drawings (*.dxf)"));
+  // In the design's length unit unless another is chosen (mitcad#1408).
+  QString unit = lengthUnit();
+  const QString path = dialogSaveDxf(this, tr("Export DXF"), suggested, unit);
   if (path.isEmpty()) {
     return;
   }
   rememberDialogFolder(DialogGroup::Export, path);
   QJsonObject result;
-  if (!runCommand(cmd("export_sketch", {{QStringLiteral("sketch"), sketch}, {QStringLiteral("path"), path}}),
+  if (!runCommand(cmd("export_sketch", {{QStringLiteral("sketch"), sketch},
+                                        {QStringLiteral("path"), path},
+                                        {QStringLiteral("units"), unit}}),
                   &result)) {
     sheetCritical(this, tr("Export DXF"), tr("Could not export:\n%1").arg(m_lastError));
     return;
   }
-  qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities")
+  qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities, in %3")
                            .arg(path)
-                           .arg(result.value(QStringLiteral("entities")).toInt());
+                           .arg(result.value(QStringLiteral("entities")).toInt())
+                           .arg(result.value(QStringLiteral("units")).toString(unit));
 }
 
 // The top-level fields a newer MitCad wrote that this one did not read

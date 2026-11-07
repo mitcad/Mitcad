@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Open Image Denoise 2.5.1: omit the obsolete eager-binding flag on modern macOS.
+# Original: https://github.com/RenderKit/oidn/blob/v2.5.1/cmake/oidn_platform.cmake
+# Copyright 2016 Intel Corporation. Modification by Mitcad contributors.
+--- a/cmake/oidn_platform.cmake
++++ b/cmake/oidn_platform.cmake
+@@ -264,7 +264,7 @@
+     endif()
+ 
+     if(APPLE)
+-      if(NOT IOS)
++      if(NOT IOS AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.4)
+         append(CMAKE_SHARED_LINKER_FLAGS "-Wl,-bind_at_load")
+         append(CMAKE_EXE_LINKER_FLAGS "-Wl,-bind_at_load")
+       endif()

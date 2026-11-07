@@ -1,18 +1,38 @@
 // SPDX-License-Identifier: MIT
-// HEIF images of image references (mitcad#850, view/ImageFile.hpp): HEIF
-// files told from the other formats, and HEIF files the test makes decoded
-// as they are shown (a quarter turn applied), with 8 and 10 bits per
-// channel; a file cut short and other bytes refused with the reason.
+// HEIF images of image references (mitcad#850, mitcad#1304;
+// view/ImageFile.hpp, view/HeifDecoder.hpp): HEIF files told from the
+// other formats; through a decoder of the test's own, a HEIF file with no
+// decoder giving the message and nothing else, and one decoded embedded
+// as an upright PNG that reads back with no decoder; no decoder asked and
+// nothing logged for other images; the EXIF orientations; the platform's
+// decoder on a HEIF file the test makes (macOS decodes it upright; Windows
+// and Linux decode it upright or have no decoder, never another failure);
+// the run-time libheif with a library that is not there; and in a build
+// with MITCAD_HEIF its libheif decoding the test's files as they are shown
+// (a quarter turn applied), with 8 and 10 bits per channel, a file cut
+// short and other bytes refused with the reason.
 #include "view/ImageFile.hpp"
 
 #include <cstddef>
 #include <cstdio>
+#include <array>
 #include <cstdlib>
+#include <initializer_list>
+#include <utility>
 
 #include <QBuffer>
 #include <QByteArray>
+#include <QColor>
+#include <QDir>
 #include <QImage>
 #include <QString>
+#include <QTransform>
+#include <QtGlobal>
+#include <QtLogging>
+
+#include "platform/PlatformHeif.hpp"
+#include "view/HeifDecoder.hpp"
+#include "view/HeifLibrary.hpp"
 
 namespace {
 
@@ -101,8 +121,9 @@ QByteArray fullBox(const char* kind, int version, const QByteArray& body) {
 
 // A HEIF file of one HEVC image item, 64 x 32 pixels coded, turned `turns`
 // quarter turns anticlockwise (an irot property; none for 0): the files
-// tools/heif-test-fixture.py writes.
-QByteArray heifFile(const QByteArray& hvcc, const QByteArray& data, int turns) {
+// tools/heif-test-fixture.py writes; then mirrored when `mirror` is 0 or 1
+// (an imir property of that axis, after the irot).
+QByteArray heifFile(const QByteArray& hvcc, const QByteArray& data, int turns, int mirror = -1) {
   QByteArray brands("heic", 4);
   put32(brands, 0);
   brands.append("mif1heic", 8);
@@ -125,6 +146,10 @@ QByteArray heifFile(const QByteArray& hvcc, const QByteArray& data, int turns) {
   if (turns != 0) {
     properties += box("irot", QByteArray(1, static_cast<char>(turns)));
     associations.append(static_cast<char>(0x84));
+  }
+  if (mirror >= 0) {
+    properties += box("imir", QByteArray(1, static_cast<char>(mirror)));
+    associations.append(static_cast<char>(0x80 | (turns != 0 ? 5 : 4)));
   }
   const auto metaBox = [&](unsigned offset) {
     QByteArray hdlr(4, '\0');
@@ -185,6 +210,32 @@ bool quarters(const QImage& image, QRgb topLeft, QRgb topRight, QRgb bottomLeft,
          closeTo(image.pixel(3 * w / 4, 3 * h / 4), bottomRight);
 }
 
+// The quarters' middles (top left, top right, bottom left, bottom right) as
+// the nearest of red, green, blue and white: "RG/BW" for the fixture as
+// coded, whatever YCbCr matrix the decoder took.
+QString nearestQuarters(const QImage& image) {
+  const auto nearest = [](QRgb pixel) {
+    const std::pair<QRgb, char> colours[] = {{kRed, 'R'}, {kGreen, 'G'}, {kBlue, 'B'}, {kWhite, 'W'}};
+    char best = '?';
+    int distance = 0;
+    for (const auto& colour : colours) {
+      const int dr = qRed(pixel) - qRed(colour.first);
+      const int dg = qGreen(pixel) - qGreen(colour.first);
+      const int db = qBlue(pixel) - qBlue(colour.first);
+      const int d = dr * dr + dg * dg + db * db;
+      if (best == '?' || d < distance) {
+        best = colour.second;
+        distance = d;
+      }
+    }
+    return QChar::fromLatin1(best);
+  };
+  const int w = image.width();
+  const int h = image.height();
+  return QString(nearest(image.pixel(w / 4, h / 4))) + nearest(image.pixel(3 * w / 4, h / 4)) + QLatin1Char('/') +
+         nearest(image.pixel(w / 4, 3 * h / 4)) + nearest(image.pixel(3 * w / 4, 3 * h / 4));
+}
+
 QByteArray pngFile() {
   QImage image(4, 2, QImage::Format_RGB32);
   image.fill(Qt::gray);
@@ -213,15 +264,226 @@ void formatTests() {
   CHECK(!png.isNull() && png.width() == 4 && png.height() == 2 && why.isEmpty());
   CHECK(mitcad::decodeImageFile(QByteArray("no image"), &why).isNull());
   CHECK(why == QStringLiteral("Qt cannot read the image"));
+
+  // The file dialog lists HEIF on every platform (mitcad#1304).
+  const QString filter = mitcad::imageFileFilter();
+  CHECK(filter.contains(QStringLiteral("*.heic")) && filter.contains(QStringLiteral("*.heif")));
+  CHECK(filter.contains(QStringLiteral("*.png")) && filter.contains(QStringLiteral("*.jpg")));
 }
 
-void decodeTests() {
+// The Qt messages logged while a check runs (none expected).
+int g_logged = 0;
+void countMessage(QtMsgType, const QMessageLogContext&, const QString&) { ++g_logged; }
+
+// 64 x 32 pixels of flat quarters as the fixture's (top left red, top
+// right green, bottom left blue, bottom right white), as a decoder that
+// leaves the orientation to its caller gives them.
+QImage quartersImage(QImage::Format format = QImage::Format_ARGB32) {
+  QImage image(64, 32, format);
+  for (int y = 0; y < 32; ++y) {
+    for (int x = 0; x < 64; ++x) {
+      image.setPixel(x, y, y < 16 ? (x < 32 ? kRed : kGreen) : (x < 32 ? kBlue : kWhite));
+    }
+  }
+  return image;
+}
+
+mitcad::HeifDecoded decodedAs(const QImage& image, int orientation) {
+  mitcad::HeifDecoded decoded;
+  decoded.result = mitcad::HeifDecoded::Result::Decoded;
+  decoded.image = image;
+  decoded.orientation = orientation;
+  return decoded;
+}
+
+void orientationTests() {
+  using mitcad::orientedImage;
+  const QImage stored = quartersImage(QImage::Format_RGB32);
+  CHECK(orientedImage(stored, 1) == stored);
+  CHECK(orientedImage(stored, 0) == stored && orientedImage(stored, 9) == stored);
+  CHECK(quarters(orientedImage(stored, 2), kGreen, kRed, kWhite, kBlue));
+  CHECK(quarters(orientedImage(stored, 3), kWhite, kBlue, kGreen, kRed));
+  CHECK(quarters(orientedImage(stored, 4), kBlue, kWhite, kRed, kGreen));
+  for (int turned : {5, 6, 7, 8}) {
+    const QImage image = orientedImage(stored, turned);
+    CHECK(image.width() == 32 && image.height() == 64);
+  }
+  CHECK(quarters(orientedImage(stored, 5), kRed, kBlue, kGreen, kWhite));
+  // 6: to be turned a quarter clockwise, the left side to the top.
+  CHECK(quarters(orientedImage(stored, 6), kBlue, kRed, kWhite, kGreen));
+  CHECK(quarters(orientedImage(stored, 7), kWhite, kGreen, kBlue, kRed));
+  // 8: a quarter anticlockwise, the right side to the top (as an irot of 1).
+  CHECK(quarters(orientedImage(stored, 8), kGreen, kWhite, kRed, kBlue));
+}
+
+void injectedDecoderTests() {
+  const QByteArray file = heifFile(bytesOf(kHvcc8), bytesOf(kData8), 0);
+  int asked = 0;
+  const QtMessageHandler previous = qInstallMessageHandler(countMessage);
+  g_logged = 0;
+
+  // No decoder: the message names what to install, and nothing else is
+  // said (no log line) or embedded.
+  mitcad::setHeifDecoderForTests([&asked](const QByteArray&) {
+    ++asked;
+    return mitcad::HeifDecoded::missing();
+  });
+  const mitcad::HeifPng none = mitcad::heifAsPng(file);
+  CHECK(none.result == mitcad::HeifDecoded::Result::NoDecoder);
+  CHECK(none.png.isEmpty() && none.width == 0 && none.height == 0);
+  QString why;
+  bool noDecoder = false;
+  CHECK(mitcad::decodeImageFile(file, &why, &noDecoder).isNull());
+  CHECK(noDecoder && why.contains(QStringLiteral("no HEIF decoder")));
+  CHECK(asked == 2);
+  const QString message = mitcad::heifDecoderMissingMessage();
+#if defined(Q_OS_WIN)
+  CHECK(message.contains(QStringLiteral("HEIF Image Extensions")) &&
+        message.contains(QStringLiteral("HEVC Video Extensions")) && message.contains(QStringLiteral("Microsoft Store")));
+#elif defined(Q_OS_MACOS)
+  CHECK(message.contains(QStringLiteral("macOS")));
+#else
+  CHECK(message.contains(QStringLiteral("libheif")) && message.contains(QStringLiteral("HEVC plugin")));
+#endif
+
+  // Other images never ask the HEIF decoder, nor log a word.
+  asked = 0;
+  CHECK(!mitcad::decodeImageFile(pngFile(), &why, &noDecoder).isNull() && !noDecoder);
+  CHECK(g_logged == 0);
+  qInstallMessageHandler(previous);
+  CHECK(mitcad::decodeImageFile(QByteArray("no image"), &why, &noDecoder).isNull() && !noDecoder);
+  CHECK(asked == 0);
+
+  // A decoder that gives the pixels as stored and the orientation 8 (a
+  // quarter anticlockwise): embedded as a PNG file of 32 x 64 pixels,
+  // upright, with no alpha channel (every pixel opaque), at 96 pixels to
+  // the inch.
+  mitcad::setHeifDecoderForTests([](const QByteArray&) { return decodedAs(quartersImage(), 8); });
+  const mitcad::HeifPng png = mitcad::heifAsPng(file);
+  CHECK(png.result == mitcad::HeifDecoded::Result::Decoded);
+  CHECK(png.width == 32 && png.height == 64);
+  CHECK(png.png.startsWith(QByteArray("\x89PNG\r\n\x1a\n", 8)));
+  CHECK(!mitcad::isHeifFile(png.png));
+  // The design opens without a decoder: its PNG goes through Qt.
+  mitcad::setHeifDecoderForTests([](const QByteArray&) { return mitcad::HeifDecoded::missing(); });
+  const QImage embedded = mitcad::decodeImageFile(png.png, &why, &noDecoder);
+  CHECK(why.isEmpty() && !noDecoder);
+  CHECK(embedded.width() == 32 && embedded.height() == 64);
+  CHECK(!embedded.isNull() && quarters(embedded, kGreen, kWhite, kRed, kBlue));
+  CHECK(!embedded.hasAlphaChannel());
+  CHECK(embedded.dotsPerMeterX() == 3780 && embedded.dotsPerMeterY() == 3780);
+
+  // An image with a transparent pixel keeps its alpha channel.
+  QImage clear = quartersImage();
+  clear.setPixel(0, 0, qRgba(0, 0, 0, 0));
+  mitcad::setHeifDecoderForTests([clear](const QByteArray&) { return decodedAs(clear, 1); });
+  const QImage kept = QImage::fromData(mitcad::heifAsPng(file).png);
+  CHECK(kept.hasAlphaChannel() && qAlpha(kept.pixel(0, 0)) == 0 && qAlpha(kept.pixel(40, 20)) == 255);
+
+  // A decoder that refuses the file: its reason, not the message.
+  mitcad::setHeifDecoderForTests(
+      [](const QByteArray&) { return mitcad::HeifDecoded::failed(QStringLiteral("the HEIF file is cut short")); });
+  const mitcad::HeifPng refused = mitcad::heifAsPng(file);
+  CHECK(refused.result == mitcad::HeifDecoded::Result::Failed);
+  CHECK(refused.error == QStringLiteral("the HEIF file is cut short") && refused.png.isEmpty());
+  CHECK(mitcad::decodeImageFile(file, &why, &noDecoder).isNull() && !noDecoder &&
+        why == QStringLiteral("the HEIF file is cut short"));
+  mitcad::setHeifDecoderForTests({});
+
+  // MITCAD_TEST_HEIF_DECODER=none (the UI tests'): no decoder whatever the
+  // build and the platform have.
+  qputenv("MITCAD_TEST_HEIF_DECODER", "none");
+  CHECK(mitcad::decodeHeif(file).result == mitcad::HeifDecoded::Result::NoDecoder);
+  qunsetenv("MITCAD_TEST_HEIF_DECODER");
+}
+
+// The platform's own decoder on the fixture turned a quarter
+// anticlockwise (irot 1): macOS always decodes it; Windows and Linux
+// decode it or have no decoder (the extensions, or libheif with its HEVC
+// plugin, not installed), but never fail on it otherwise. One that decodes
+// it gets every irot and imir upright.
+void platformDecoderTests() {
+  const QByteArray file = heifFile(bytesOf(kHvcc8), bytesOf(kData8), 1);
+  const mitcad::HeifDecoded decoded = mitcad::platformDecodeHeif(file);
+  const char* result = decoded.result == mitcad::HeifDecoded::Result::Decoded     ? "decoded"
+                       : decoded.result == mitcad::HeifDecoded::Result::NoDecoder ? "no decoder"
+                                                                                  : "failed";
+  std::fprintf(stderr, "heif_image.cpp: the platform's HEIF decoder: %s%s%s\n", result,
+               decoded.error.isEmpty() ? "" : ": ", qPrintable(decoded.error));
+#if defined(Q_OS_MACOS)
+  CHECK(decoded.result == mitcad::HeifDecoded::Result::Decoded);
+#else
+  CHECK(decoded.result != mitcad::HeifDecoded::Result::Failed);
+#endif
+  if (decoded.result != mitcad::HeifDecoded::Result::Decoded) {
+    return;
+  }
+  // Every turn (irot 0 to 3), unmirrored and mirrored about either axis
+  // (imir 0 and 1 after the irot): upright exactly once, the decoder's own
+  // transform and the orientation it reports together (WIC and ImageIO
+  // apply the file's irot and imir themselves and report 1). Each quarter
+  // is taken as the nearest of the four colours: WIC decodes with BT.709
+  // although the file says BT.601 (red comes as 255, 25, 0, green as 0,
+  // 216, 0).
+  std::array<QString, 3> mirrored{};
+  for (int mirror = -1; mirror <= 1; ++mirror) {
+    for (int turns = 0; turns < 4; ++turns) {
+      const mitcad::HeifDecoded each =
+          mitcad::platformDecodeHeif(heifFile(bytesOf(kHvcc8), bytesOf(kData8), turns, mirror));
+      CHECK(each.result == mitcad::HeifDecoded::Result::Decoded);
+      if (each.result != mitcad::HeifDecoded::Result::Decoded) {
+        continue;
+      }
+      const QImage upright = mitcad::orientedImage(each.image, each.orientation);
+      const QImage turned = quartersImage().transformed(QTransform().rotate(-90.0 * turns));
+      // imir 0 mirrors top to bottom (about the horizontal axis, as
+      // libheif and WIC read it), 1 left to right; a decoder that reads the
+      // axes the other way round passes too, but the two must differ.
+      const QString top = nearestQuarters(turned.transformed(QTransform(1, 0, 0, -1, 0, 0)));
+      const QString side = nearestQuarters(turned.transformed(QTransform(-1, 0, 0, 1, 0, 0)));
+      const QString got = nearestQuarters(upright);
+      const bool sized = upright.width() == turned.width() && upright.height() == turned.height();
+      const bool placed = mirror < 0 ? got == nearestQuarters(turned) : (got == top || got == side);
+      if (!sized || !placed) {
+        std::fprintf(stderr, "heif_image.cpp: irot %d imir %d: %dx%d %s (orientation %d), not %dx%d %s\n", turns,
+                     mirror, upright.width(), upright.height(), qPrintable(got), each.orientation, turned.width(),
+                     turned.height(), qPrintable(mirror < 0 ? nearestQuarters(turned) : top + QStringLiteral(" or ") + side));
+      }
+      CHECK(sized && placed);
+      if (turns == 0) {
+        mirrored[static_cast<std::size_t>(mirror + 1)] = got;
+      }
+    }
+  }
+  CHECK(mirrored[1] != mirrored[2] && mirrored[1] != mirrored[0] && mirrored[2] != mirrored[0]);
+}
+
+// The run-time libheif (Linux's, view/HeifLibrary.hpp) with a library that
+// is not there: no decoder, and on Linux the platform's decoder and the
+// embedding say so too (MITCAD_TEST_HEIF_LIBRARY, the UI test's).
+void libraryTests() {
+  const QByteArray file = heifFile(bytesOf(kHvcc8), bytesOf(kData8), 0);
+  const QString absent = QDir::temp().filePath(QStringLiteral("mitcad-no-such-folder/libheif.so.1"));
+  const mitcad::HeifDecoded decoded = mitcad::decodeHeifWithLibrary(absent, file);
+  CHECK(decoded.result == mitcad::HeifDecoded::Result::NoDecoder);
+  CHECK(!decoded.error.isEmpty() && decoded.image.isNull());
+  // Asked again: looked for again, still not there.
+  CHECK(mitcad::decodeHeifWithLibrary(absent, file).result == mitcad::HeifDecoded::Result::NoDecoder);
+#if !defined(Q_OS_WIN) && !defined(Q_OS_MACOS)
+  qputenv("MITCAD_TEST_HEIF_LIBRARY", absent.toLocal8Bit());
+  CHECK(mitcad::platformDecodeHeif(file).result == mitcad::HeifDecoded::Result::NoDecoder);
+  if (!mitcad::heifDecoderBuilt()) {
+    CHECK(mitcad::heifAsPng(file).result == mitcad::HeifDecoded::Result::NoDecoder);
+  }
+  qunsetenv("MITCAD_TEST_HEIF_LIBRARY");
+#endif
+}
+
+// The libheif and libde265 a build with MITCAD_HEIF links (mitcad#850).
+void bundledDecoderTests() {
   QString why;
   const QByteArray file = heifFile(bytesOf(kHvcc8), bytesOf(kData8), 0);
   if (!mitcad::heifDecoderBuilt()) {
-    // A build without the decoder (MITCAD_HEIF off) says so.
-    CHECK(mitcad::decodeImageFile(file, &why).isNull());
-    CHECK(why.contains(QStringLiteral("no HEIF decoder")));
     return;
   }
   const QImage upright = mitcad::decodeImageFile(file, &why);
@@ -265,6 +527,10 @@ void decodeTests() {
 int heifImageTests() {
   failures = 0;
   formatTests();
-  decodeTests();
+  orientationTests();
+  injectedDecoderTests();
+  platformDecoderTests();
+  libraryTests();
+  bundledDecoderTests();
   return failures;
 }

@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: MIT
+# Linked designs while the holder is open (mitcad#1416), on holder.mitcad
+# linking part.mitcad (a 10 mm cube) in the same folder: selecting the
+# linked occurrence shows nothing; an edit of it (Activate Component) shows
+# "part is linked from part.mitcad" with Open Linked Design, which opens the
+# part in a tab of its own; the part changed and saved in that tab, the
+# holder's band says "part.mitcad changed" with Update, which takes the new
+# bodies as one undo step; the context menu's Open Linked Design brings the
+# part's tab forward, and opens it again once closed; Update Link of the
+# context menu takes a later change. All geometry is synthetic. The
+# buttons are clicked where they are logged: the Floating message band's
+# (Linux) or the Docked status bar's (the Windows ctest), both logged as
+# `Message band action <label> at x,y`.
+wait-idle
+capture-document-window holder
+expect-model-bodies 1 1000
+capture-undo-depth holderUndo
+
+# Selecting alone: no notice.
+mark
+click-logged '^Browser Root/part:1 at '
+wait-idle
+expect-no-log '^Message band action: Open Linked Design$'
+
+# An edit of the linked component: the notice instead of the bare failure.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Activate Component'
+wait-log '^Message band: info part is linked from part[.]mitcad$'
+expect-log '^Message band action: Open Linked Design$'
+expect-no-log '^Message band: error part is linked from'
+expect-undo-depth ${holderUndo} 0
+screenshot '${MITCAD_TEST_WORK}/linked-notice.png'
+
+# Open Linked Design from the notice: the part in a tab of its own.
+mark
+click-logged '^Message band action Open Linked Design at '
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+wait-idle
+expect-document-windows 2
+capture-document-window part
+expect-model-bodies 1 1000
+capture-undo-depth partUndo
+
+# The part changed and saved in its tab: the holder offers Update.
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[20,0],"length":2,"width":2,"height":2,"operation":"new_body"}}'
+expect-model-bodies 2 1008
+mark
+command file.save
+wait-log '^Saved .*/part[.]mitcad$'
+focus-document-window holder
+wait-log '^Linked design saved in another tab: part[.]mitcad$'
+wait-log '^Message band: info part[.]mitcad changed$'
+expect-log '^Message band action: Update$'
+# Nothing is taken on its own.
+expect-model-bodies 1 1000
+expect-undo-depth ${holderUndo} 0
+screenshot '${MITCAD_TEST_WORK}/linked-changed.png'
+
+# Update: the new bodies, one undo step.
+mark
+click-logged '^Message band action Update at '
+wait-log '^Update Link C1: 1 updated; part is updated from part[.]mitcad$'
+wait-idle
+expect-model-bodies 2 1008
+expect-undo-depth ${holderUndo} 1
+command edit.undo
+expect-model-bodies 1 1000
+expect-undo-depth ${holderUndo} 0
+command edit.redo
+expect-model-bodies 2 1008
+
+# Open Linked Design of the context menu: the part's tab comes forward.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Open Linked Design'
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+expect-document-window-active part
+expect-document-windows 2
+
+# A later change, taken by Update Link of the context menu.
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[30,0],"length":2,"width":2,"height":2,"operation":"new_body"}}'
+expect-model-bodies 3 1016
+mark
+command file.save
+wait-log '^Saved .*/part[.]mitcad$'
+command file.close
+expect-document-window-gone part
+expect-document-windows 1
+focus-document-window holder
+capture-undo-depth holderUndo
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Update Link'
+wait-log '^Update Link C1: 1 updated; part is updated from part[.]mitcad$'
+wait-idle
+expect-model-bodies 3 1016
+expect-undo-depth ${holderUndo} 1
+
+# Closed, it opens again from the context menu, in a tab of its own.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Open Linked Design'
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+wait-idle
+expect-document-windows 2
+expect-model-bodies 3 1016
+quit

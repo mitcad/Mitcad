@@ -1467,91 +1467,19 @@ impl<K: Kernel> Document<K> {
     /// file has changed; `base` is the directory of the design file.
     /// Returns what happened, one line per link that changed or could not
     /// be read (a component whose file is missing keeps the bodies saved
-    /// with the project).
+    /// with the project). The linked designs are read as `update_link`
+    /// reads them while the design is open (mitcad#1416, `link_updates.rs`).
     pub fn update_links(&mut self, base: Option<&Path>) -> Result<Vec<String>, ModelError> {
-        let links: Vec<(ComponentUid, ExternalLink)> = self
-            .state
-            .assembly
-            .components
-            .iter()
-            // Library parts are read from their libraries (mitcad#64).
-            .filter(|c| c.library.is_none())
-            // A design linked with options is a source (mitcad#801).
-            .filter(|c| self.state.options_part(c.uid).is_none())
-            .filter_map(|c| Some((c.uid, c.link.clone()?)))
-            .collect();
         let mut messages = Vec::new();
         let mut updates = self.library_link_updates(&mut messages)?;
-        let sources = self.options_file_updates(base, &mut messages);
-        for (component, link) in links {
-            let name = self.state.assembly.name(component);
-            // Only a file in the design's project is read (mitcad#929).
-            let resolved = match followed_link(&link.path, base) {
-                Ok(resolved) => resolved,
-                Err(why) => {
-                    messages.push(format!(
-                        "{name}: {why}; it keeps the bodies saved with the project"
-                    ));
-                    continue;
-                }
-            };
-            let text = match std::fs::read_to_string(&resolved) {
-                Ok(text) => text,
-                Err(e) => {
-                    messages.push(format!(
-                        "{name}: cannot read {} ({e}); it keeps the bodies saved with the project",
-                        link.path
-                    ));
-                    continue;
-                }
-            };
-            let new_digest = digest(&text);
-            if new_digest == link.digest {
-                continue;
-            }
-            let parts = match crate::file::load_state_at(&text, &resolved) {
-                // A link shown by its envelope takes the file's envelope
-                // again (mitcad#1271).
-                Ok((source, _)) => match link.envelope {
-                    Some(detail) => self
-                        .design_envelope(&source, &link.path, Some(detail))
-                        .map(|(bodies, mounts, _)| (bodies, mounts)),
-                    None => self.design_parts(&source, &link.path),
-                },
-                Err(e) => Err(invalid(e.to_string())),
-            };
-            match parts {
-                Ok((bodies, mounts)) => {
-                    messages.push(format!("{name} is updated from {}", link.path));
-                    updates.push((component, link, new_digest, bodies, mounts));
-                }
-                // Cancelled (P7): the document stays as it was.
-                Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
-                Err(e) => messages.push(format!(
-                    "{name}: {e}; it keeps the bodies saved with the project"
-                )),
-            }
-        }
+        let sources = self.options_file_updates(base, &|_| true, &mut messages);
+        updates.extend(self.file_link_updates(base, &|_| true, &mut messages)?);
         // Part of opening the file: no undo step, but a new revision. The
         // new state is computed before it is taken.
         if !updates.is_empty() || !sources.is_empty() {
             let mut state = self.state.clone();
             super::component_options::apply_file_updates(&mut state, sources)?;
-            for (component, link, digest, bodies, mounts) in updates {
-                // Its mount frames follow the file (mitcad#525).
-                super::mounts::update_linked_mounts(&mut state, component, &mounts)?;
-                let position = state.require(link.feature)?;
-                let mut entry = (*state.features[position]).clone();
-                if let FeatureDef::Base(base) = &mut entry.def {
-                    base.bodies = bodies;
-                }
-                state.features[position] = std::sync::Arc::new(entry);
-                if let Some(c) = state.assembly.component_mut(component)
-                    && let Some(l) = c.link.as_mut()
-                {
-                    l.digest = digest;
-                }
-            }
+            super::link_updates::apply_link_updates(&mut state, updates)?;
             // A file read again leaves its old source unused (mitcad#801).
             state.prune_library_sources(&self.state);
             let result = self.compute(&state)?;

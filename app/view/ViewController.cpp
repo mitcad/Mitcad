@@ -70,6 +70,7 @@
 #include "../framework/Icons.hpp"
 #include "../framework/LengthUnits.hpp"
 #include "../framework/PanelTree.hpp"
+#include "../framework/PreferencesPageLayout.hpp"
 #include "../framework/SettingsWindow.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacChrome.hpp"
@@ -258,7 +259,9 @@ const PreferencePage kPreferencePages[] = {
     // Folders of font files for sketch text (mitcad#473).
     {"fonts", QT_TRANSLATE_NOOP("View", "Fonts"), "font folders text ttf otf woff typeface"},
     // The first dimension scales the sketch (mitcad#860).
-    {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"), "sketch dimension first scale proportion drawn size"},
+    // Click adds to the selection in sketches (mitcad#1403).
+    {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"),
+     "sketch dimension first scale proportion drawn size click select selection add ctrl multiple"},
     // The suppliers' shops: the region of the product links and the shops
     // the Supplier filters start with (mitcad#950).
     {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
@@ -1517,6 +1520,26 @@ void ViewController::showPreferences(const QString& page) {
   } else {
     connect(dialog.get(), &QDialog::accepted, firstDimensionScale, applyScaleToFirstDimension);
   }
+  // Click adds to the selection in sketches (mitcad#1403), off by default:
+  // a plain click adds or removes as Ctrl+click does.
+  auto* clickAdds = new QCheckBox(tr("Click &adds to the selection in sketches"));
+  clickAdds->setObjectName(QStringLiteral("clickAddsToSelection"));
+  clickAdds->setChecked(sketch::clickAddsToSelection());
+  clickAdds->setToolTip(tr("A click adds to the selection or removes from it; Esc or empty space clears it"));
+  control(sketchForm, clickAdds);
+  const auto applyClickAdds = [clickAdds] {
+    const bool on = clickAdds->isChecked();
+    if (on == sketch::clickAddsToSelection()) {
+      return;
+    }
+    sketch::saveClickAddsToSelection(on);
+    qDebug().noquote() << QStringLiteral("Preferences: click adds to the selection in sketches %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(clickAdds, &QCheckBox::toggled, host, applyClickAdds);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, clickAdds, applyClickAdds);
+  }
   groups.insert(QStringLiteral("sketch"), sketchBox);
   // Suppliers (mitcad#950): the region of the product links and the shops
   // the Supplier filters start with. Saved when the dialog is accepted, at
@@ -2176,7 +2199,7 @@ void ViewController::showPreferences(const QString& page) {
         form->setContentsMargins(0, 0, 0, 0);
         form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
       }
-      auto* content = new QWidget;
+      auto* content = new PreferencesPageContent;
       auto* contentLayout = new QVBoxLayout(content);
       contentLayout->setContentsMargins(0, 0, 0, 0);
       const bool fills = pageFills(entry.id);
@@ -2249,7 +2272,7 @@ void ViewController::showPreferences(const QString& page) {
   auto* pages = new QListWidget;
   auto* stack = new QStackedWidget;
   for (const PreferencePage& entry : kPreferencePages) {
-    auto* content = new QWidget;
+    auto* content = new PreferencesPageContent;
     auto* contentLayout = new QVBoxLayout(content);
     contentLayout->setContentsMargins(0, 0, 0, 0);
     const bool fills = pageFills(entry.id);

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/MainWindowImageReferences.cpp app/OcctViewer.cpp app/view app/browser app/framework tools/cli
+# check-all sources: app/MainWindowImageReferences.cpp app/OcctViewer.cpp app/view app/browser app/framework tools/cli app/platform/windows app/platform/PlatformHeif.hpp
 # check-all sources: core/model/src/document core/model/src/file core/model-api/src core/model-base/src
 # Input-driven Windows UI test of image references (mitcad#782) in the
 # build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
@@ -17,7 +17,14 @@
 #   3. (Through Bodies: in the view's image layer, before the sketch
 #      layers.)
 #   4. Its light bulb off: not drawn, Calibrate refused; saved, opened again, its light bulb
-#      on: drawn as it was.
+#      on: drawn as it was. Nothing in the log speaks of HEIF (mitcad#1304:
+#      no decoder looked for at start, no notice).
+#   5. HEIF with WIC's decoder missing (MITCAD_TEST_HEIF_DECODER=none):
+#      Choose Image's filter lists .heic and .heif; a HEIF file gives the
+#      panel's one message, naming HEIF Image Extensions and HEVC Video
+#      Extensions from the Microsoft Store, and is not inserted; a PNG file
+#      is inserted as before (40 x 20 pixels at 96 to the inch: 10.6 x
+#      5.3 mm).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-image-references-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -68,6 +75,15 @@ function Expect-Drawn([string]$Pattern, [string]$Description) {
     Start-Sleep -Milliseconds 200
   }
   Ui-Fail "${Description}: no 'Image references drawn: $Pattern' since the mark"
+}
+# Expect-NoHeif "when" ["allowed prefix"]: nothing in the run's log speaks of
+# HEIF (the app's words, in upper case; paths are not), but for lines that
+# start with the prefix: no decoder looked for, no notice given, while no
+# HEIF file is used (mitcad#1304).
+function Expect-NoHeif([string]$When, [string]$Allowed = '') {
+  $lines = @(Ui-LogLines | Where-Object { $_ -cmatch 'HEIF|HEIC' -and ($Allowed -eq '' -or -not $_.StartsWith($Allowed)) })
+  if ($lines.Count -gt 0) { Ui-Fail "the log speaks of HEIF ${When}: $(($lines | Select-Object -First 3) -join ' / ')" }
+  Write-Host "ok   nothing about HEIF in the log $When"
 }
 # Expect-Width "name" width: its width in the last "Image references
 # drawn" line within 2 % of the one expected (clicks land on whole pixels).
@@ -147,5 +163,71 @@ Ui-Step 'Image1''s light bulb on'        { Ui-ClickLogged 'Browser eye Root/Imag
 Ui-ExpectNew 'Visibility Root/Images/Image1: shown' 'shown'
 Expect-Drawn 'Image1 .* 70% through' 'drawn as it was saved'
 Expect-Width 'Image1' 100
+Expect-NoHeif 'with no HEIF file used'
+
+Write-Host '--- 5. HEIF with no decoder: listed by the picker, the one message, a PNG file inserted as before'
+# tools/heif-test-photo.sh's HEIF file: 64 x 32 pixels turned a quarter by
+# its irot.
+$heif = Join-Path $work 'photo.heic'
+$hex = '000000186674797068656963000000006d69663168656963' +
+  '0000014a6d657461000000000000002168646c7200000000' +
+  '000000007069637400000000000000000000000000000000' +
+  '0e7069746d0000000000010000001e696c6f630000000044' +
+  '0000010001000000010000016a000000690000002369696e' +
+  '6600000000000100000015696e6665020000000001000068' +
+  '76633100000000ce69707270000000af6970636f00000077' +
+  '687663430101600000009000000000001ef000fcfdf8f800' +
+  '000f03a00001001840010c01ffff01600000030090000003' +
+  '000003001e959809a10001002b4201010160000003009000' +
+  '0003000003001ea02082165959ae4cae6e04040c08000003' +
+  '000800000300c840a2000100064401c171a1120000001469' +
+  '73706500000000000000400000002000000013636f6c726e' +
+  '636c780001000d0006800000000969726f74010000001769' +
+  '706d61000000000000000100010481020384000000716d64' +
+  '6174000000652801af04783c862ff43948b320280cb8e465' +
+  'd1cc14b89450582c9faf6c9aac2cffb1ec4c149b6d7f7072' +
+  'a283fb63c890ba6ce9e921695a8fcbfd38cb86dcc4ab7ba9' +
+  '7dad653b8152447868fc34b48752efff86a872831b687ef4' +
+  '80109593058abf6a3dba7e'
+$heifBytes = New-Object byte[] ($hex.Length / 2)
+for ($i = 0; $i -lt $heifBytes.Length; $i++) { $heifBytes[$i] = [Convert]::ToByte($hex.Substring(2 * $i, 2), 16) }
+[IO.File]::WriteAllBytes($heif, $heifBytes)
+if ((Get-Item $heif).Length -ne 467) { Ui-Fail 'the HEIF file is not 467 bytes' }
+# A 40 x 20 pixel PNG file at 96 pixels to the inch: 10.6 x 5.3 mm.
+Add-Type -AssemblyName System.Drawing
+$png = Join-Path $work 'mark.png'
+$bitmap = New-Object System.Drawing.Bitmap 40, 20
+try {
+  $bitmap.SetResolution(96, 96)
+  $bitmap.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally { $bitmap.Dispose() }
+
+# WIC's HEIF decoder missing, whether or not this Windows has the
+# extensions (the VM may have the HEIF Image Extensions without HEVC).
+$env:MITCAD_TEST_HEIF_DECODER = 'none'
+Ui-StartApp 'image-references-heif' @('--open', $design)
+Ui-Mark
+Ui-Step 'Image Reference (F8)'           { Ui-Key 'F8' }
+Ui-ExpectNew 'Command Image Reference started' 'the panel opened'
+Ui-Step 'Choose Image...'                { Ui-ClickLogged 'Panel Image Reference action choose.0' }
+Ui-ExpectNew 'Image Reference file dialog: Images (*.png *.jpg *.jpeg *.bmp *.webp *.heic *.heif)' `
+  'the picker lists .heic and .heif'
+Ui-Step 'cancel the dialog' {
+  Ui-FocusDialog '^Insert Image Reference$'
+  Ui-Key 'Escape'
+  Ui-FocusMain
+}
+Expect-NoHeif 'before a HEIF file is chosen' 'Image Reference file dialog: '
+Ui-Step 'click the plate''s top'         { Ui-ClickPick 'face F1.b0/F1:top' }
+Ui-ExpectNew 'Image Reference Plane: 1 face' 'the face picked'
+Ui-Step 'the HEIF file'                  { Ui-TypeIn 'Panel Image Reference input file' $heif }
+Ui-ExpectNew ('Panel Image Reference error: Reading HEIF and HEIC images on Windows needs HEIF Image Extensions ' +
+  'and HEVC Video Extensions from the Microsoft Store.') 'the one message, naming the two extensions' 15
+Ui-Step 'the PNG file instead'           { Ui-TypeIn 'Panel Image Reference input file' $png }
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Inserted image reference from mark.png' 'a PNG file inserted as before' 30
+Expect-Drawn '(.*, )?Image2 10\.6 x 5\.3 mm 50% behind' 'drawn 10.6 x 5.3 mm'
+if ((Ui-LogText) -match 'Inserted image reference from photo\.heic') { Ui-Fail 'a HEIF file was inserted with no decoder' }
+Remove-Item Env:MITCAD_TEST_HEIF_DECODER -ErrorAction SilentlyContinue
 
 Ui-Finish 'UI Windows image references test'

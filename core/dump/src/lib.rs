@@ -511,6 +511,8 @@ pub enum Detail {
     Emboss(Box<EmbossDetail>),
     // Moved faces (mitcad#343).
     MoveFace(Box<MoveFaceDetail>),
+    // Drafts (mitcad#1363).
+    Draft(Box<DraftDetail>),
     /// Any other type (or an unknown one): the JSON object as is.
     Other(Map<String, Value>),
 }
@@ -554,6 +556,7 @@ impl Detail {
             }
             Some("EmbossFeature") => Detail::Emboss(Box::new(EmbossDetail::from_map(map))),
             Some("MoveFaceFeature") => Detail::MoveFace(Box::new(MoveFaceDetail::from_map(map))),
+            Some("DraftFeature") => Detail::Draft(Box::new(DraftDetail::from_map(map))),
             _ => Detail::Other(map),
         }
     }
@@ -1553,6 +1556,12 @@ record! {
         /// The appearances and physical materials of the bodies, faces and
         /// occurrences (mitcad#228).
         "appearance" => appearance: AppearanceData,
+        /// The mesh bodies and their containers (mitcad#1366); absent
+        /// without any.
+        "mesh_bodies" => mesh_bodies: Vec<MeshBody>,
+        /// The control cages of the document's Form bodies (mitcad#1365,
+        /// [`cage`]).
+        "cages" => cages: Vec<cage::FormCage>,
     }
 }
 
@@ -1604,6 +1613,29 @@ record! {
 }
 
 record! {
+    /// A mesh body of the design (mitcad#1366): its container, the
+    /// timeline item that made it, its component and its placement.
+    pub struct MeshBody {
+        /// The mesh body record.
+        "id" => id: u64,
+        /// The container's entry name `ParaMeshGeometry.<uuid>.paramesh`.
+        "file" => file: String,
+        /// The GUID the container's registry repeats (lower case).
+        "key" => key: String,
+        /// The timeline item that made it (`timeline.items[]._f3d.object_id`).
+        "feature" => feature: u64,
+        /// The component that holds it (`components[]._f3d.object_id`).
+        "component" => component: u64,
+        "name" => name: String,
+        /// From the container's coordinates to the design's centimetres,
+        /// row-major; absent for the identity.
+        "transform" => transform: [[f64; 4]; 4],
+        /// Why its placement is not read.
+        "error" => error: String,
+    }
+}
+
+record! {
     /// BulkStream bytes explained by the decoder (timeline format study, 14).
     pub struct Coverage {
         "bulk_bytes" => bulk_bytes: u64,
@@ -1638,6 +1670,10 @@ record! {
         "occurrences" => occurrences: Vec<OccurrenceLook>,
         /// What did not decode or join.
         "warnings" => warnings: Vec<String>,
+        /// The mesh bodies' physical materials and appearances, from their
+        /// presentation envelopes (mitcad#1376): `entity` is the mesh body
+        /// record (`_f3d.mesh_bodies[].id`); absent without any.
+        "meshes" => meshes: Vec<BodyLook>,
     }
 }
 
@@ -1686,6 +1722,10 @@ record! {
         /// The body's light bulb (false: hidden), where the record gives
         /// it (mitcad#1175).
         "light_bulb" => light_bulb: bool,
+        /// The stored body as the replay names it (`StoredBody::source`),
+        /// where it is not `blob#record`: an `.ipt` body is `<B-rep
+        /// record>/<ASM body record>` (mitcad#1367).
+        "source" => source: String,
     }
 }
 
@@ -1757,3 +1797,32 @@ record! {
         "faces" => faces: Vec<Reference>,
     }
 }
+
+record! {
+    /// `DraftFeature` detail (mitcad#1363): the drafted faces, the neutral
+    /// plane (a planar face, or an origin or construction plane), the
+    /// tangent-chain flag and the first angle as `draftDefinition.angle`
+    /// (radians; its sign with the plane gives the pull direction,
+    /// SCHEMA.md). The stream decoder adds the second angle scalar, the
+    /// faces of a neutral group of more than one face, and a parting-line
+    /// draft's pull plane and parting tool.
+    pub struct DraftDetail {
+        "inputFaces" => input_faces: Vec<Reference>,
+        "plane" => plane: Reference,
+        "isTangentChain" => is_tangent_chain: bool,
+        "isDirectionFlipped" => is_direction_flipped: bool,
+        "draftDefinition" => draft_definition: Definition,
+        /// The second angle scalar (the opposite side's angle).
+        "_f3d_angle_two" => angle_two: Reference,
+        /// The neutral group's faces where it has more than one.
+        "_f3d_neutral_faces" => neutral_faces: Vec<Reference>,
+        /// A parting-line draft: the plane whose normal is the pull
+        /// direction, and the faces of the parting tool.
+        "_f3d_pull_plane" => pull_plane: Reference,
+        "_f3d_parting_tool" => parting_tool: Vec<Reference>,
+    }
+}
+
+// The control cages of Form bodies (mitcad#1365): `_f3d.cages`.
+pub mod cage;
+pub use cage::FormCage;

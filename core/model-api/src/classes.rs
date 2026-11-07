@@ -371,6 +371,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_link_envelope", FileIo),
     // View › Show of the whole design (mitcad#1287): display state.
     ("set_view_show", Model),
+    // Update Link reads a linked design's file again (mitcad#1416).
+    ("update_link", FileIo),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -577,6 +579,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("file_structure", FileIo),
     // The corners a drawing sheet's views show (mitcad#1338).
     ("drawing_corners", Model),
+    // Whether linked designs' files changed: it reads them (mitcad#1416).
+    ("links", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

@@ -1461,6 +1461,26 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         }
       }
     }
+    // A linked design (mitcad#1416): opened in a tab of its own, and its
+    // file read again now, this one's or every linked design's.
+    for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
+      if (!root && c.uid == node.uid && c.linked && !c.library) {
+        const QString component = c.uid;
+        menu.separator();
+        menu.add(QStringLiteral("open"), tr("Open Linked Design"),
+                 [this, component] { m_host.openLinkedDesign(component); });
+        menu.add(QStringLiteral("update"), tr("Update Link"), [this, component] {
+          if (canChange()) {
+            m_host.updateLink(component);
+          }
+        });
+        menu.add(QStringLiteral("update"), tr("Update All Links"), [this] {
+          if (canChange()) {
+            m_host.updateLink(QString());
+          }
+        });
+      }
+    }
     // The whole design turned by quarter turns (mitcad#502).
     if (root) {
       menu.add(QStringLiteral("orientation-cube"), tr("Reorient Design…"), [this] { openReorient(); });
@@ -3325,6 +3345,23 @@ void BrowserController::openLibrary(const QString& kind, std::function<void()> c
   qDebug().noquote() << QStringLiteral("%1 opened%2").arg(title, onDesign ? QString() : QStringLiteral(" without a design"));
   qDebug().noquote() << QStringLiteral("%1 library opened%2").arg(title, first ? QStringLiteral(", first opening")
                                                                                : QString());
+}
+
+void BrowserController::editMaterialsOn(const QString& key, std::function<void()> closed) {
+  bool first = false;
+  MaterialsDialog* const manager = showMaterialsManager(&first);
+  manager->whenClosed = std::move(closed);
+  manager->open(key);
+  qDebug().noquote() << QStringLiteral("Materials opened%1").arg(manager->onDesign() ? QString()
+                                                                                     : QStringLiteral(" without a design"));
+}
+
+void BrowserController::editAppearancesOn(const QString& id, std::function<void()> closed) {
+  openAppearances({});
+  if (m_appearances) {
+    m_appearances->whenClosed = std::move(closed);
+    m_appearances->showAppearance(id);
+  }
 }
 
 void BrowserController::openMaterialsOf(const QStringList& bodies, const QString& component) {

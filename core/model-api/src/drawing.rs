@@ -53,6 +53,11 @@ pub(super) struct ExportDrawingCommand {
     sheet: Option<usize>,
     /// A kept drawing's title where it has none of its own.
     title: Option<String>,
+    /// `units`: the length unit of a DXF file (mitcad#1408); a temporary
+    /// drawing's values are in it too ([`DrawingOptions::units`]), a kept
+    /// drawing keeps its own. Each sheet's unit (or the design's) when
+    /// left out.
+    file_units: Option<String>,
     options: DrawingOptions,
 }
 
@@ -92,8 +97,16 @@ impl<'de> Deserialize<'de> for ExportDrawingCommand {
                 None
             }
         };
+        let file_units = match map.get("units") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(units)) => Some(units.clone()),
+            Some(_) => return Err(D::Error::custom("\"units\" must be a string")),
+        };
         let mut title = None;
         if drawing.is_some() {
+            // A kept drawing's file may be written in another unit; its
+            // values keep the drawing's.
+            map.remove("units");
             title = match map.remove("title") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(title)) => Some(title),
@@ -118,6 +131,7 @@ impl<'de> Deserialize<'de> for ExportDrawingCommand {
             drawing,
             sheet,
             title,
+            file_units,
             options,
         })
     }
@@ -923,6 +937,7 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
                 &command.path,
                 command.format.as_deref(),
                 false,
+                command.file_units.as_deref(),
                 &check,
             );
         }
@@ -1001,6 +1016,24 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
             .first()
             .map(|c| c.sheet.title.clone())
             .unwrap_or_default();
+        // A DXF file's length unit (mitcad#1408): the one asked for, else
+        // its sheet's, else the design's; the sheet in that unit of paper,
+        // so that a 1:1 view measures the model in it.
+        let file_unit = command
+            .file_units
+            .as_deref()
+            .map(|units| super::exchange::dxf_unit(self, Some(units)))
+            .transpose()?;
+        let design_unit = self.parameters().context().default_length_unit;
+        let sheet_unit = |i: usize| {
+            file_unit.unwrap_or_else(|| {
+                drawing.sheets[indices[i]]
+                    .units
+                    .as_deref()
+                    .and_then(|symbol| mitcad_model::file::parse_length_unit(symbol).ok())
+                    .unwrap_or(design_unit)
+            })
+        };
         match format {
             Format::Pdf => {
                 let pages: Vec<_> = composed.iter().map(|c| c.sheet.clone()).collect();
@@ -1018,7 +1051,10 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
                     } else {
                         let options = mitcad_dxf::WriteOptions::default();
                         mitcad_dxf::write_string(
-                            &mitcad_model_drawing::dxf::drawing(&c.sheet),
+                            &mitcad_model::exchange::dxf_in_unit(
+                                mitcad_model_drawing::dxf::drawing(&c.sheet),
+                                sheet_unit(i),
+                            ),
                             &options,
                         )
                         .map_err(|e| ApiError(format!("cannot write {path}: {e}")))?
@@ -1088,6 +1124,10 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
         });
         if command.drawing.is_some() {
             result["drawing"] = json!(drawing.uid);
+        }
+        if format == Format::Dxf {
+            // The length unit of the (first) DXF file.
+            result["file_units"] = json!(sheet_unit(0).symbol());
         }
         Ok(result)
     }

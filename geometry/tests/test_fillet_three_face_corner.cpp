@@ -40,6 +40,7 @@
 #include <string>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBndLib.hxx>
@@ -77,6 +78,8 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "mitcad/geometry/dressup.hpp"
+#include "mitcad/geometry/import.hpp"
 
 namespace test {
 namespace {
@@ -630,6 +633,69 @@ void test_rounding_over_a_trimmed_torus() {
               volume_of(shape) - volume_of(result));
 }
 
+// MitCad's fillet of the chain names the corners' faces after the concave
+// arcs' edges they are generated from, outside the contours (mitcad#1397):
+// before, the strip and the triangle had no names, nor had their edges, and
+// a later sketch's curves along those edges found none to follow.
+void test_corner_faces_named() {
+  const TopoDS_Shape shape = body();
+  CHECK(!shape.IsNull());
+  if (shape.IsNull()) {
+    return;
+  }
+  const mitcad::geometry::ShapePtr named = mitcad::geometry::import_body(shape, "F1", 0);
+  const std::vector<TopoDS_Edge>   chain = chain_edges(named->occt());
+  std::vector<std::string>         names;
+  std::vector<std::string>         arcs; // the concave arcs' edges
+  for (int i = 0; i < named->edge_count(); ++i) {
+    for (const TopoDS_Edge& e : chain) {
+      if (!named->edge(i).IsSame(e)) {
+        continue;
+      }
+      names.push_back(named->edge_name(i));
+      for (TopExp_Explorer f(named->occt(), TopAbs_FACE); f.More(); f.Next()) {
+        const BRepAdaptor_Surface s(TopoDS::Face(f.Current()), false);
+        bool on = false;
+        for (TopExp_Explorer x(f.Current(), TopAbs_EDGE); x.More() && !on; x.Next()) {
+          on = x.Current().IsSame(e);
+        }
+        if (on && s.GetType() == GeomAbs_Cylinder && std::abs(s.Cylinder().Radius() - kRk) < 1e-6) {
+          arcs.push_back(named->edge_name(i));
+        }
+      }
+    }
+  }
+  CHECK(arcs.size() == 2);
+  const mitcad::geometry::ShapePtr rounded = mitcad::geometry::fillet("F2", *named, names, 3.);
+  int unnamed = 0;
+  for (int i = 0; i < rounded->face_count(); ++i) {
+    unnamed += rounded->face_names(i).empty() ? 1 : 0;
+  }
+  // (A degenerated edge, the triangle's apex, has no name of its own.)
+  int unnamed_edges = 0;
+  for (int i = 0; i < rounded->edge_count(); ++i) {
+    if (rounded->edge_name(i).empty() && !BRep_Tool::Degenerated(rounded->edge(i))) {
+      const BRepAdaptor_Curve c(rounded->edge(i));
+      const gp_Pnt            m = c.Value(0.5 * (c.FirstParameter() + c.LastParameter()));
+      std::printf("unnamed edge at %.4f %.4f %.4f\n", m.X(), m.Y(), m.Z());
+      ++unnamed_edges;
+    }
+  }
+  CHECK(unnamed == 0);
+  CHECK(unnamed_edges == 0);
+  // Each corner's strip and triangle, after its arc's edge.
+  for (const std::string& arc : arcs) {
+    int corner = 0;
+    for (int i = 0; i < rounded->face_count(); ++i) {
+      for (const std::string& n : rounded->face_names(i)) {
+        corner += n.rfind("F2:fillet(" + arc + ")", 0) == 0 ? 1 : 0;
+      }
+    }
+    std::printf("faces named after the arc's edge %s: %d\n", arc.c_str(), corner);
+    CHECK(corner == 2);
+  }
+}
+
 } // namespace
 } // namespace test
 
@@ -638,6 +704,7 @@ int main() {
   test::guarded("test_other_radii", test::test_other_radii);
   test::guarded("test_reported_body", test::test_reported_body);
   test::guarded("test_rounding_over_a_trimmed_torus", test::test_rounding_over_a_trimmed_torus);
+  test::guarded("test_corner_faces_named", test::test_corner_faces_named);
   if (test::failures == 0) {
     std::puts("test_fillet_three_face_corner: all checks passed");
   }

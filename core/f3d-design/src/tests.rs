@@ -5170,3 +5170,120 @@ fn derive_items_name_their_source_bodies_and_placements() {
     assert_eq!(empty["entities"], json!([]));
     assert_eq!(empty["source"]["name"], "Assembly");
 }
+
+/// A draft's record (mitcad#1363), laid out as the controlled model's and
+/// the corpus' drafts: `u32 3 | u32 1 | u8 0 | u8 chain` after the root
+/// part, the angle holders, the input slots (role 16 the drafted faces,
+/// role 33 the neutral plane: a face, an origin plane, or a plane and a
+/// face for a parting line) and the ordered reference table before the
+/// tail; the angles by their roles `Angle1` and `Angle2`.
+fn draft_design(neutral: &[&[u64]], chain: u8) -> Value {
+    const DRAFT: &str = "F4163A07-9E71-4C46-BD92-ACE5B5B40BED";
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const SLOT_KEY: &str = "2DF7DA30-A4E4-4260-AFD1-D9C7154CB44B";
+    let mut d = sample();
+    for (g, v) in [
+        (DRAFT, 5),
+        (RECIPE, 1),
+        (FACE_REF, 3),
+        (BODY_INPUT, 1),
+        (SLOT_KEY, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(700)]),
+    );
+    // The drafted face (tag 2) and a face of the body (tag 5).
+    for (input, recipe_id, tag) in [(711, 751, "2"), (712, 752, "5")] {
+        d.obj(input, FACE_REF, cat(&[&[0, 0], &r(recipe_id)]));
+        d.obj(recipe_id, RECIPE, recipe("face", &[(tag, 301)], &[]));
+    }
+    let slot = |inputs: &[u64], key: u64, role: u32| {
+        let mut b = cat(&[&[0, 0], &u32b(inputs.len() as u32)]);
+        b.extend(inputs.iter().flat_map(|&i| r(i)));
+        b.extend(cat(&[&[0; 6], &r(key), &u32b(0), &u32b(role), &[0; 4]]));
+        b
+    };
+    d.obj(720, BODY_INPUT, slot(&[711], 730, 16));
+    d.obj(730, SLOT_KEY, vec![0, 0]);
+    let mut table = vec![r(720), r(711)];
+    for (k, &inputs) in neutral.iter().enumerate() {
+        let (id, key) = (721 + k as u64, 731 + k as u64);
+        d.obj(id, BODY_INPUT, slot(inputs, key, 33));
+        d.obj(key, SLOT_KEY, vec![0, 0]);
+        table.push(r(id));
+        table.extend(inputs.iter().map(|&i| r(i)));
+    }
+    table.extend([r(740), r(741)]);
+    d.obj(740, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+    d.obj(741, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+    let p = parameter(40, Some(740), "-5 deg", "Angle1", "", "deg", "d40", -0.0873);
+    d.obj(742, PARAMETER, p);
+    let p = parameter(41, Some(741), "0.0 deg", "Angle2", "", "deg", "d41", 0.0);
+    d.obj(743, PARAMETER, p);
+    d.obj(
+        700,
+        DRAFT,
+        cat(&[
+            &[0, 0],
+            &u32b(3),
+            &u32b(1),
+            &[0, chain],
+            &u32b(1),
+            &r(740),
+            &r(741),
+            &f64s(&[3.0, 1.0]),
+            &[0, 0],
+            &u32b(table.len() as u32),
+            &table.concat(),
+            &tail(8, "Draft", 1, "", [0, 0, 0], 701),
+        ]),
+    );
+    d.obj(701, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    v["timeline"]["items"][2].clone()
+}
+
+#[test]
+fn draft_faces_neutral_plane_and_angles() {
+    let tag = |x: &Value| x["_f3d"]["entities"][0][0]["tag"].clone();
+    // About a face of the body, with the tangent chain.
+    let item = draft_design(&[&[712]], 1);
+    assert_eq!(item["objectType"], "DraftFeature");
+    assert_eq!(item["name"], "Draft1");
+    let detail = &item["detail"];
+    let faces = detail["inputFaces"].as_array().unwrap();
+    assert_eq!(faces.len(), 1, "{detail}");
+    assert_eq!(faces[0]["kind"], "face");
+    assert_eq!(tag(&faces[0]), "2");
+    assert_eq!(detail["plane"]["kind"], "face", "{detail}");
+    assert_eq!(tag(&detail["plane"]), "5");
+    assert_eq!(detail["isTangentChain"], true);
+    assert_eq!(detail["draftDefinition"]["_type"], "AngleExtentDefinition");
+    assert_eq!(detail["draftDefinition"]["angle"]["name"], "d40");
+    assert_eq!(detail["draftDefinition"]["angle"]["value"], -0.0873);
+    assert_eq!(detail["_f3d_angle_two"]["name"], "d41");
+    assert!(detail.get("_f3d_parting_tool").is_none());
+
+    // About the XY plane (an entity input), without the tangent chain.
+    let item = draft_design(&[&[60]], 0);
+    let detail = &item["detail"];
+    assert_eq!(detail["plane"]["kind"], "construction_plane", "{detail}");
+    assert_eq!(detail["plane"]["origin"], "XY");
+    assert_eq!(detail["isTangentChain"], false);
+
+    // A parting line: the plane gives the pull direction, the face is the
+    // parting tool; there is no neutral plane.
+    let item = draft_design(&[&[60], &[712]], 1);
+    let detail = &item["detail"];
+    assert!(detail.get("plane").is_none(), "{detail}");
+    assert_eq!(detail["_f3d_pull_plane"]["origin"], "XY", "{detail}");
+    let tool = detail["_f3d_parting_tool"].as_array().unwrap();
+    assert_eq!(tool.len(), 1);
+    assert_eq!(tag(&tool[0]), "5");
+}

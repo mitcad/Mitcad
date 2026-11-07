@@ -1414,7 +1414,9 @@ any annotation whose pick is gone.
 waterjet or plasma cutter. Select a planar face of the body, choose the
 command in the Laser group (or right-click the face and choose it there)
 and save the file. MitCad looks at the body square to that face from
-outside and writes its outline at 1:1 in millimeters: the outer outline
+outside and writes its outline at 1:1 in the design's length unit, or in
+the unit you choose as the file type ([The unit of a DXF
+file](#the-unit-of-a-dxf-file)): the outer outline
 on the layer `CUT_OUTER`, the holes on `CUT_INNER`, the lower left corner
 of the outline at the origin. The design does not change. For a
 sheet-metal part, **Export Flat Pattern…** writes its unfolded flat
@@ -1440,8 +1442,19 @@ the Create row. Its rows go from the widest choice to the body's own:
   others under their printers, and those for any printer last. The one
   you choose is set for the body; a process from a library is copied into
   the design. **Processes…** opens the Processes manager.
-- **Material**: the body's material. Choose another one in the list to
-  set it on the body.
+- **Material**: the body's material. Click it to open the Material
+  Picker, the same one as in Send to Slicer's material rows: the
+  materials with their color swatches, the 3D printing filaments first,
+  grouped by where they are (This design, the 3MF files they were
+  imported from, This project, My library, Built-in), the body's own
+  marked *Current*. Type a part of a name to find one and press Enter:
+  the body gets it at once. A material from This project or My library is
+  copied into the design in the same undo step. If you gave the body an
+  appearance by hand that the material does not offer, MitCad asks
+  whether to replace it. While the body has no material of its own, the
+  row shows the design's default, for example *Default (Steel)*. The last
+  row, **Edit materials…**, opens the Materials window on the body's
+  material.
 - The print values that differ from the profiles, each with the icon of
   where it is set: the body, the occurrence or the component. Type a new
   value and press Enter to set it on the body.
@@ -3682,6 +3695,16 @@ Shift with the other mouse buttons and the wheel navigates as before. A
 right click offers the commands for what Shift+click would select. Thus
 a face still offers Project.
 
+**Click adds to the selection in sketches** (Preferences › Sketch, off
+by default) selects several items without Ctrl. While it is on, a click
+with no tool running adds an item to the selection, and a click on a
+selected item removes it, as Ctrl+click does. A click on empty space or
+Esc clears the selection. A right click on an item that is not selected
+adds it, and the menu offers the commands for all that is selected. A
+window, and the picks of tools and commands such as Sketch Dimension,
+the constraints, Project and Intersect, work as before. A double-click
+is two clicks: on a line it adds the line and removes it again.
+
 **Project** (P) has rows of its own while it runs, shown in the same
 control:
 
@@ -5269,6 +5292,12 @@ one of them is for all of them; on a body that is not selected, it is
 for that body only. **fx** beside the picker button makes the appearance
 follow a parameter ([Values that follow
 parameters](#values-that-follow-parameters)).
+**Edit Appearances…**, the last entry of the picker below a line, opens
+the Appearances window on the appearance the picker button shows while
+the panel stays open: make a new appearance there or change one, close
+the window, and the picker offers it, with the bodies and faces you
+picked still picked. Reach it with the mouse, or with the keyboard as the
+other entries (Down, or type *Edit*, then Enter).
 
 The Appearances window lists the design's own appearances first, under
 *This Design*, then the library grouped by class under the headings
@@ -5381,7 +5410,10 @@ follow parameters](#values-that-follow-parameters)).
 **Material Library…** under the picker button opens the Materials
 manager on My library while the panel stays open: make or change a
 material there, close the manager, and the picker offers it, with the
-bodies you picked still picked.
+bodies you picked still picked. **Edit Materials…**, the last entry of
+the picker below a line, does the same on the material the picker button
+shows: the Materials manager opens on it, and once you close the manager
+the picker offers what you made or changed there.
 
 **Edit Materials** (Make › Materials) opens the **Materials** manager,
 which manages the materials and assigns none. Its list groups the
@@ -6263,7 +6295,24 @@ been saved, asks for **Save** first; **Cancel** leaves both designs unchanged.
 Saving uses the source design's normal Save or Save As workflow. The destination
 cannot select itself. Insertion and Undo affect the destination only.
 MitCad reads a linked design again when you open the design that
-holds it.
+holds it; the message band names each linked design it took again
+("Electronics is updated from board.mitcad"), and warns about one it could
+not read.
+
+**Work with a linked design.** A linked component changes only with its own
+file. When you try to edit it (activate it, double-click its feature in
+the timeline or the browser, or start a command on it), the message band
+says "Electronics is linked from board.mitcad" with
+**Open Linked Design**, which opens that design in a tab of its own; just
+selecting the component shows nothing. Right-click a linked component's row
+in the browser, or the component or one of its bodies in the view, for
+**Open Linked Design**, **Update Link** (read that design's file again now)
+and **Update All Links** (every linked design's). Each update is one step
+that Undo takes back. While the holder is open, MitCad watches the linked
+files: when one changes on disk, or you save it in another tab, the
+message band says "board.mitcad changed" with **Update**. Nothing is
+updated on its own; the message stays until you press Update or close it.
+In the Docked layout the message and its button are in the status bar.
 
 **Show a linked design by its envelope.** A linked design of many parts,
 such as a machine in a production-line layout, can be heavy. Right-click
@@ -6870,17 +6919,29 @@ snaps there, and the preview marks the snap. The new profile never sticks
 out past an end. Snaps keep a size on the screen. Thus they also work in
 a zoomed-out view.
 
-The click fills **Offset** and **From** (End A, End B or Middle):
+The click fills **Offset** and **From** (End A, End B, Middle or Middle
+of Gap):
 
 - Flush with end B is From End B, Offset 0
 - On the middle is From Middle, Offset 0
+- On the middle of a gap is From Middle of Gap, Offset 0
 - Elsewhere it is the nearer end and the distance from it
+
+A gap is the free stretch of the side between the profiles that stand on
+it, or between one of them and an end of the side. The preview marks the
+middle of each gap. For example, on a frame side with a cross member in
+the middle, click near the middle of either half. The new cross member
+goes in the middle of that half. It stays there when the middle member
+moves or the side gets longer. When you delete one of the profiles
+around it, the profile stays where it is. It is then bound to the nearer
+end of the side.
 
 The profile stays bound to that place. When the profile it is on becomes
 longer, one flush with end B stays flush with end B. One on the middle
 stays on the middle. When you type an offset, MitCad moves the profile
 from the same reference. From end A the reference is its near face. From
-end B it is its far face, and from the middle it is its center. When you
+end B it is its far face, and from the middle or the middle of a gap it
+is its center. When you
 change **From**, the profile stays where it is, and the panel shows its
 offset from the new reference. A new click replaces both.
 
@@ -8050,11 +8111,27 @@ sheet that uses those rules follows the change.
 
 **Export Flat Pattern** writes the Flat Pattern of the selected sheet to
 a DXF file. The file has the cut contours and the bend lines of the
-sheet.
+sheet, in the design's length unit or in the unit you choose as the file
+type ([The unit of a DXF file](#the-unit-of-a-dxf-file)).
 
 The Length of a **Flange** is *Measured* from one of two lines. The
 first is the tangent line of the bend. The second is the virtual sharp
-corner of the inner or the outer surfaces.
+corner of the inner or the outer surfaces. *Outer Tangent Length* measures
+from the plane that touches the outside of the bend. The Angle can be
+more than 180 degrees. A Length of 0 makes the bend alone, without a wall:
+a rolled hem.
+
+**Hem** makes the flange a Teardrop, Rope or Double hem. Type the hem's
+**Gap**, and for a double hem its **Setback**. The bends then follow from
+the gap, the Length and the bend radius. Flip turns the hem to the other
+side of the face.
+
+**Width** sets how much of the edge the flange covers. *Whole Edge* covers
+all of it. *Offsets from the Ends* leaves the Start Offset and the End
+Offset free. *From the Middle* covers **Before the Middle** and **After
+the Middle** from the middle of the edge. This width can pass the ends of
+the edge. **Own Overhang Root** sets how far the wall past the ends is cut
+back; 0 starts it at the end of the bend.
 
 **Bend** makes one bend between two edges. With the Bend Type *Double
 Bend*, it makes two opposite bends of the angle with a straight between
@@ -9306,7 +9383,7 @@ file's history.
 |---|---|---|---|
 | MitCad design (`.mitcad`) | Open, Insert Component | Save | Yes |
 | FreeCAD (`.FCStd`) | Open, Import | None | Features, sketches and parameters |
-| `.f3d`, `.f3z` | Open, Import | None | Features, sketches and parameters |
+| `.f3d`, `.f3z` | Open, Import. Mesh bodies come in as mesh bodies, in their components | None | Features, sketches and parameters |
 | `.ipt` (parts) | Open, Import | None | Features, sketches and parameters. A feature that MitCad cannot replay is imported as the bodies that the file stored after it |
 | `.iam` (assemblies) | Open, Import. Parts become components with their history or with their bodies. Sub-assemblies become components | None | The parts' features, or their bodies |
 | IFC (`.ifc`, `.ifczip`) | Open, Import. Storeys become components, elements become features, bodies and meshes | None | Swept solids and their cuts as features |
@@ -9460,9 +9537,17 @@ planar face, and it changes no geometry.
 2. Click **Choose Image…**, or type the image file's path in **Image**.
    MitCad reads PNG, JPEG, BMP, WebP and HEIF (`.heic`, `.heif`)
    files. A HEIF photo is shown the right way up: MitCad turns, mirrors
-   and crops it as the file says. MitCad reads HEIF images coded with HEVC, the usual kind of phone
-   photo, with 8 or 10 bits per channel; it tells you when a file is of
-   another kind, such as AVIF or an image sequence.
+   and crops it as the file says, and keeps it in the design as a PNG
+   image, so the design opens on any computer.
+
+   MitCad reads HEIF photos with the decoder your system already has; it
+   does not include one. macOS always has it. On Windows it needs **HEIF
+   Image Extensions** and **HEVC Video Extensions** from the Microsoft
+   Store (some computers come with them). On Linux it needs your
+   distribution's libheif with its HEVC plugin (for example the packages
+   libheif1 and libheif-plugin-libde265). If you never open a HEIF file,
+   you do not need any of this: MitCad says what to install only when you
+   choose a HEIF file it cannot read.
 3. Pick an origin plane, a construction plane or a planar face.
 4. Set the other values if you need to, then click **OK**.
 
@@ -9554,6 +9639,28 @@ custom deviation applies to every face.
 **Send to Slicer** (Make › 3D Print) sends the selected bodies, or every
 visible body, to a slicer ([3D printing](#3d-printing)).
 
+#### The unit of a DXF file
+
+Every DXF file that MitCad writes is in the design's length unit, unless
+you choose another: a sketch's DXF, Export Flat Pattern, Export Face as
+DXF, a cut sheet and a drawing as DXF. An inch design writes inches, a
+millimeter design millimeters. The Export dialog and Export Drawing have
+a **DXF unit** row; the save dialogs of Export Flat Pattern, Export Face
+as DXF, Export DXF and the Drawing tab's DXF… offer the units as file
+types, such as *DXF drawing in inches (\*.dxf)*. The design's unit is the
+first one and is selected.
+
+The file names its unit in its header, so programs that read the header
+(and MitCad's own Insert DXF) read the right size. A cutting program that
+does not read the header takes the numbers in the unit it is set to:
+choose that unit when you export. The log line of each export names the
+unit written, for example `…, in in`.
+
+A drawing's DXF file is the sheet in that unit of paper. In inches, an A3
+sheet is 16.54 by 11.69, and a view at 1:1 measures the model in inches.
+The texts are scaled with the sheet. DWG files stay in millimeters of
+paper.
+
 #### Save as Mesh
 
 **Save as Mesh…** in the context menu of a body or a component, in the
@@ -9636,6 +9743,14 @@ joint. Thus nothing moves. Components inserted from other designs, for
 example fasteners, are imported as empty components. Such a component
 is named after the item that inserted it. Its bodies are not in the
 file, but its joints and positions are.
+
+Mesh bodies of the design (scanned or inserted meshes) are imported as
+MitCad mesh bodies, with the file's triangles at the file's placement.
+They are in a base feature at the place of the item that made them, in
+its component. A mesh that MitCad cannot read is left out, and the
+report warns with the reason. A mesh body keeps the file's material and
+appearance, as the other bodies do. `mitcad-cli import-f3d
+--bodies-only` brings the mesh bodies in as well.
 
 Bodies and faces keep the file's appearances. Each appearance that the
 design uses becomes an appearance of the design. It keeps the file's
@@ -10533,7 +10648,13 @@ Projects card, the Command card) are hidden while the drawing is open.
 view again, with Solid and Build back and the tab you opened the drawing
 from shown; only Close Drawing closes the drawing. Esc
 ends the active tool, then clears the selection, and leaves the
-drawing open. A command chosen on the toolbar also leads back to the
+drawing open. A right-click on the sheet while a drawing tool is on does
+what Esc does in that tool, without a menu, as in a sketch: the first
+right-click drops what is in progress (a line's first end, the edges a
+dimension picked so far) and keeps the tool, and a right-click with
+nothing in progress ends the tool. A right-button drag is not a click.
+With no tool on, a right-click opens the menu of what is under the
+pointer, or the sheet's menu, as before. A command chosen on the toolbar also leads back to the
 3D view, but the single-key shortcuts of its commands (E for
 Extrude, H for Hole and the others) do nothing while the sheet or its
 panel has the keyboard, so a stray key does not leave the drawing.
@@ -10560,8 +10681,10 @@ Moving a view, or changing its scale or label, projects nothing again.
 **Lines.** MitCad draws the lines of ISO 128's lighter set: visible
 edges 0.35 mm wide; dimensions, tangent edges and thread roots
 0.18 mm; hidden edges 0.18 mm dashed; hatching 0.13 mm; the frame
-0.5 mm. The sheet on the screen, the PDF and the SVG file use the same
-widths. Lines closer together than twice the visible line's width
+0.5 mm. A line or an arc drawn by hand can also be extra thick, 0.7 mm
+(ISO 128's extra wide line: narrow, wide and extra wide at 1:2:4); a
+DXF or DWG file has such lines on a layer of their own, `EXTRA_THICK`.
+The sheet on the screen, the PDF and the SVG file use the same widths. Lines closer together than twice the visible line's width
 (0.7 mm on the sheet) would run into a blot, so a view leaves out what
 is smaller than that at its scale. A fillet or chamfer smaller than
 0.7 mm on the sheet is drawn as a sharp corner: the edges on either
@@ -10702,7 +10825,7 @@ tools, as icons:
 | Baseline | Several dimensions at once: from the first point to each of the others (Baseline) or from each to the next (Chain). Click the points, then a free place. |
 | Center Mark | Center lines across a circle, or the centerline of a hole or a shaft seen from the side. Click the circle or the round face. |
 | Centerline | A centerline through two circles, or between two edges. Click the two sides of a curved slot for its center arc, through the centers of its ends. |
-| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Line* chooses thin, thick, dashed or a center line. |
+| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Line* chooses thin, thick, extra thick (0.7 mm), dashed or a center line. |
 | Arc | An arc drawn by hand: click its center, its start, then its end, counter-clockwise. Its clicks snap as a line's do, so an arc can run from one center to another. In a view or on the sheet, as a line. |
 | Center Pattern | Center marks on every hole of a pattern in one step. Click one hole seen end on: MitCad finds the holes of the same size of that body the view shows. On a bolt circle it draws the circle through their centers (an arc when they stand on a part of it) and a line through each; in a row, the line through them; else a center mark on each. |
 | Edge Extension | Thin lines that run straight edges on: two edges to where their lines meet (a corner rounded or chamfered away), or one edge beyond both its ends (*Edges: One, Both Ways*; how far, in millimeters of paper, is its *Length* in the panel: 10 unless set). |
@@ -10733,8 +10856,8 @@ diagonally beyond them, for the distance straight from one to the
 other (from an edge: square to it). Clicking the same edge or circle
 twice counts once: it never makes a dimension of 0. The annotation keeps
 what it picked, not a place on the paper: when you change the design, the
-dimension changes with it. A tool stays on for the next annotation; Esc
-drops the picks so far, then ends the tool.
+dimension changes with it. A tool stays on for the next annotation; Esc,
+or a right-click on the sheet, drops the picks so far, then ends the tool.
 
 **Dimension spacing:** a new dimension snaps to the spacing of the
 dimension you placed before it in the drawing, and to two, three or
@@ -10925,7 +11048,9 @@ named in the panel and in the status bar. A component whose body is deleted
 keeps a red box on the sheet until it is deleted or the body comes back.
 
 **Writing the file.** The Cut Sheet tab's **Export** › **DXF…** or **SVG…** writes the
-components at 1:1 in millimeters. Outer boundaries are on the layer
+components at 1:1: an SVG file in millimeters, a DXF file in the
+design's length unit or the unit you choose ([The unit of a DXF
+file](#the-unit-of-a-dxf-file)). Outer boundaries are on the layer
 `CUT_OUTER` and holes on `CUT_INNER`, as the sheet-metal Flat Pattern's
 DXF names them; arcs and circles stay arcs and circles, and curved
 edges (splines) stay splines with their own control points (in SVG,
@@ -10942,7 +11067,7 @@ drawing has one of these formats:
 |--------|-----------------------------|
 | PDF    | To print or to send         |
 | SVG    | For documents and web pages |
-| DXF    | For other drawing programs  |
+| DXF    | For other drawing programs, in the unit of the DXF unit row ([The unit of a DXF file](#the-unit-of-a-dxf-file)) |
 | DWG    | For other drawing programs: version R2000, with what the DXF file holds |
 
 **Bodies.** MitCad draws the selected bodies or every visible body,
@@ -11210,7 +11335,7 @@ guide that explains its settings.
 | **Textures** | The *Local Folders* of the texture sources. *Allow texture sources on the internet* | [Textures](#textures) |
 | **AI Assistants** | Connect AI Assistant…, and the folders that an AI assistant connected through MCP can save to and open from | [mcp.md](mcp.md) |
 | **Fonts** | The folders of font files that the font chooser of Edit Text lists | [Text, fonts and QR codes](#text-fonts-and-qr-codes) |
-| **Sketch** | **Scale the sketch to its first dimension**: on or off | [Dimensions](#dimensions) |
+| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
 
 
 **Layout.** The **Layout** setting of the Display page selects how the
@@ -11560,7 +11685,8 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   - `--hang-limit S` interrupts a geometry kernel that hangs
   - `--no-verify` skips the comparison with the file
   - `--no-fallback` leaves out the items that do not replay
-  - `--bodies-only` imports the bodies only
+  - `--bodies-only` imports the bodies only, the mesh bodies with their
+    materials and appearances among them
   - `--json` prints the reports as JSON
 - `import-fcstd part.FCStd --save part.mitcad [--report report.json]
   [--bodies-only]`: imports a FreeCAD document. `--bodies-only` imports
@@ -11594,8 +11720,9 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   design. A `.3mf` file holds the solid and mesh bodies as the parts of
   one object. A `.usdz` file holds the shown bodies with their
   appearances, with the textures relative to the design's folder.
-- `export-sketch part.mitcad Sketch1 sketch.dxf [--r12]`: exports a
-  sketch.
+- `export-sketch part.mitcad Sketch1 sketch.dxf [--unit in] [--r12]`:
+  exports a sketch, in the design's length unit unless `--unit` gives
+  another.
 - `render part.mitcad -o image.png [--view Front] [--size 1920x1080]
   [--samples 128] [--time-limit 60] [--format png|png16|jpeg|exr]
   [--transparent] [--no-denoise]`: renders the visible bodies as Render

@@ -1052,14 +1052,46 @@ their class (`core/f3d-decode/src/classes.rs`, `ITEM_TYPES` and
   (assembly relationships and tangent relationships come in as
   constraint sets: *Assembly relationships*), assembly contexts
   (`Context`),
-  canvases, timeline groups (`Group`, named by their own name; their items
-  follow them) and mesh bodies (`MeshFeature`; meshes are left out).
+  canvases and timeline groups (`Group`, named by their own name; their
+  items follow them).
+- **Mesh bodies** (`MeshFeature`, mitcad#1366): the item comes in as a
+  base feature of its mesh bodies, the triangles of their containers
+  (`ParaMeshGeometry.<uuid>.paramesh`) placed by their records, in its
+  component where it stands on the timeline (suppressed when the item is
+  suppressed in the file); the meshes no item brings in come in at the
+  end, a base feature per component, and one that cannot be read is a
+  warning ([*The published format descriptions*](f3d-undecoded.md#the-published-format-descriptions-mitcad154)).
+  A mesh body gets the physical material and appearance its record
+  names (mitcad#1376, [*Mesh bodies*](f3d-appearances.md#mesh-bodies-mitcad1376));
+  the import of the stored bodies alone (`import_f3d` without the
+  timeline) brings the mesh bodies in too, a base feature each.
 - **Changes bodies, not translated**: the history states stand in for
   them (fallback), with the reason in the report. Sheet metal flanges
   (`FlangeFeature`) the decoder does not read ([*Sheet metal*](f3d-sheet-metal.md#sheet-metal) below),
   electronics boards
-  (`PCBFeature`) and drafts
-  (`DraftFeature`), whose inputs are not decoded; components mirrored into new ones (`MirrorComponent`).
+  (`PCBFeature`), whose inputs are not decoded; components mirrored into new ones (`MirrorComponent`).
+  Drafts (`DraftFeature`, mitcad#1363) come in as MitCad's `draft`, one
+  per body of their drafted faces: the decoder reads the drafted faces
+  (the input slots of role 16), the neutral plane (the slot of role 33:
+  a face, or an origin or construction plane), the angle (the parameter
+  of role `Angle1`), the second angle (`Angle2`) and the tangent-chain
+  flag (SCHEMA.md). The file stores no flip: it pulls along the neutral
+  face's outward normal and along a plane's normal, so a face draft is
+  MitCad's with `flip` (the reference model of a face drafted 5 degrees
+  about the bottom face grows by the wedge, 49 049.86 mm³, as MitCad's
+  flipped draft does) and a plane draft is MitCad's without it; the other
+  way is a guess the history checks after it. Not translated: a zero
+  angle, a neutral group of several faces, and a parting-line draft whose
+  parting tool is more than one face (MitCad's draft turns faces about
+  one plane; parting-line drafts are not modelled). A parting-line draft
+  about one parting face, and a draft with a second angle (whether it is
+  two-sided or symmetric is not decoded), come as guesses only the
+  history can confirm. The backup corpus' one draft (`fc1b7b7e` item 18)
+  is read in full and agrees with the file's own dump of it (the API
+  reference: the face, the angle, the tangent chain on, not flipped): a
+  cylinder 6 mm across and 1.5 mm long drafted -45 degrees about its end
+  face, whose stored state (24.74 mm³) is the frustum that MitCad's
+  flipped draft of -45 degrees makes.
   Moved faces (`MoveFaceFeature`, mitcad#343) come in as MitCad's
   `move_face`: the decoder reads their faces (named faces, found in the
   history at the item's place) and their motion (the rigid matrix of their

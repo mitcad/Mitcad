@@ -753,6 +753,14 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/f3d-parameters.cmake")
   set_tests_properties(f3d.corpus_parameters PROPERTIES SKIP_REGULAR_EXPRESSION "f3d parameters: skipped")
 
+  # The reference sheet-metal hems of every form (mitcad#1378), found by
+  # their content ids in MITCAD_F3D_MODELS: each hem parametric and
+  # verified against the file's history; skipped without the designs.
+  add_test(NAME f3d.reference_hems
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/f3d-hems-test.cmake")
+  set_tests_properties(f3d.reference_hems PROPERTIES SKIP_REGULAR_EXPRESSION "reference hems: skipped")
+
   # Recompute speed (P10): a generated model with the joins, patterns and
   # fillets that slowed down imported designs, saved, then opened with the
   # time of each feature reported (ctest -V, or Testing/Temporary/
@@ -1117,6 +1125,12 @@ if(BUILD_TESTING)
   # Hems up to 180 degrees, the side-tangent position, the outer-tangent
   # datum and widths from the boundary's middle (mitcad#242).
   add_test(NAME cli.sheet_flange_hem COMMAND mitcad-cli run "${scripts}/sheet_flange_hem.json")
+  # Bends past 180 degrees: rolled, teardrop, rope and double hems, their
+  # volumes and flat lengths (mitcad#1378).
+  add_test(NAME cli.sheet_flange_hem_past COMMAND mitcad-cli run "${scripts}/sheet_flange_hem_past.json")
+  # Walls of one sheet that meet: a full open corner accepted, a face
+  # contact and a penetration refused naming both walls (mitcad#1409).
+  add_test(NAME cli.sheet_open_corner COMMAND mitcad-cli run "${scripts}/sheet_open_corner.json")
   # A face joined to a sheet in its panel's plane (mitcad#242).
   add_test(NAME cli.sheet_face_join COMMAND mitcad-cli run "${scripts}/sheet_face_join.json")
   # The sheet-domain adapter of ordinary features (mitcad#242).
@@ -1553,6 +1567,23 @@ if(BUILD_TESTING)
   set_tests_properties(cli.geometry_cases PROPERTIES SKIP_REGULAR_EXPRESSION "geometry cases: skipped")
   if(WIN32)
     set_property(TEST cli.geometry_cases APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A design holding a linked design changed after it was saved, from an
+# issue report (mitcad#1416) under MITCAD_MITCAD_REPORTED: opened, it takes
+# the changed file's bodies with a load warning naming the file; skipped
+# without the report's files.
+if(BUILD_TESTING)
+  add_test(NAME cli.linked_design_update_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/linked-design-update"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/linked-design-update-test.cmake")
+  set_tests_properties(cli.linked_design_update_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "linked design update: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.linked_design_update_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

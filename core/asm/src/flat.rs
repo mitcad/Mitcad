@@ -22,6 +22,14 @@
 //! | surface 7 ruled | from_kind from_ints... to_kind to_ints... | from_reals... to_reals... |
 //! | surface 8 arc sweep | n (kind ints...) n times | weights(n) reals... n times |
 //! | surface 9 rolling ball | (is_curve kind ints...) twice, spine_kind spine_ints... | radius v0 v1 needed0 needed1 support_reals... twice, spine_reals... |
+//! | curve 5 unknown | - | - |
+//! | surface 10 offset | basis_kind basis_ints... | distance basis_reals... |
+//! | surface 11 unknown | - | - |
+//!
+//! A helix ([`Curve::Helix`]) is encoded as its B-spline (curve 2). An
+//! unknown curve or surface (an edge or face the reader could not decode)
+//! is left out by the builder, and a shell with a face on an unknown
+//! surface is not closed.
 //!
 //! A face's point loops (`Face::point_loops`) are the range
 //! `first_point_loop .. first_point_loop + point_loop_count` of
@@ -34,6 +42,7 @@ pub const CURVE_ELLIPSE: i32 = 1;
 pub const CURVE_BSPLINE: i32 = 2;
 pub const CURVE_INTERPOLATED: i32 = 3;
 pub const CURVE_ON_SURFACE: i32 = 4;
+pub const CURVE_UNKNOWN: i32 = 5;
 
 pub const SURFACE_PLANE: i32 = 0;
 pub const SURFACE_CONE: i32 = 1;
@@ -45,6 +54,8 @@ pub const SURFACE_REVOLUTION: i32 = 6;
 pub const SURFACE_RULED: i32 = 7;
 pub const SURFACE_ARC_SWEEP: i32 = 8;
 pub const SURFACE_ROLLING_BALL: i32 = 9;
+pub const SURFACE_OFFSET: i32 = 10;
+pub const SURFACE_UNKNOWN: i32 = 11;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlatGeometry {
@@ -130,6 +141,8 @@ fn ni(v: usize) -> i32 {
 /// Appends the curve's data; returns its kind.
 fn encode_curve(c: &Curve, ints: &mut Vec<i32>, reals: &mut Vec<f64>) -> i32 {
     match c {
+        Curve::Helix(h) => encode_curve(&Curve::BSpline(h.bspline(h.spans)), ints, reals),
+        Curve::Unknown(_) => CURVE_UNKNOWN,
         Curve::Line { origin, dir } => {
             reals.extend_from_slice(origin);
             reals.extend_from_slice(dir);
@@ -200,6 +213,14 @@ fn encode_curve(c: &Curve, ints: &mut Vec<i32>, reals: &mut Vec<f64>) -> i32 {
 
 fn encode_surface(s: &Surface, ints: &mut Vec<i32>, reals: &mut Vec<f64>) -> i32 {
     match s {
+        Surface::Offset { basis, distance } => {
+            reals.push(*distance);
+            let at = ints.len();
+            ints.push(0);
+            ints[at] = encode_surface(basis, ints, reals);
+            SURFACE_OFFSET
+        }
+        Surface::Unknown(_) => SURFACE_UNKNOWN,
         Surface::Plane {
             origin,
             normal,
@@ -421,7 +442,8 @@ impl FlatBody {
                     lump: n(li),
                     first_face: n(f.shell_faces.len()),
                     face_count: n(shell.faces.len()),
-                    closed: body.shell_is_closed(shell),
+                    // Closed where the builder makes every face too.
+                    closed: body.shell_is_closed_solid(shell),
                 });
                 f.shell_faces.extend(shell.faces.iter().map(|&i| n(i)));
             }
@@ -607,5 +629,89 @@ mod tests {
         );
         let reals = &f.reals[s.real_offset as usize..(s.real_offset + s.real_count) as usize];
         assert_eq!(reals.len(), 5 + 9 + 11 + 6 + 9);
+    }
+
+    #[test]
+    fn encodes_helices_offsets_and_unknown_geometry() {
+        // mitcad_private#198: a helix goes as its B-spline, an offset as its
+        // distance and basis, unknown geometry as its kind alone; a shell
+        // with a face on an unknown surface is not closed.
+        let helix = crate::brep::Helix {
+            center: [0.0; 3],
+            major: [10.0, 0.0, 0.0],
+            minor: [0.0, 10.0, 0.0],
+            pitch: [0.0, 0.0, 2.0],
+            scale: 1.0,
+            growth: 0.0,
+            range: [0.0, 2.0 * std::f64::consts::TAU],
+            spans: 24,
+        };
+        let plane = Surface::Plane {
+            origin: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            u_dir: [1.0, 0.0, 0.0],
+        };
+        let face = |surface: usize| Face {
+            surface,
+            reversed: false,
+            double_sided: false,
+            loops: vec![vec![
+                Coedge {
+                    edge: 0,
+                    forward: true,
+                },
+                Coedge {
+                    edge: 0,
+                    forward: false,
+                },
+            ]],
+            point_loops: vec![],
+        };
+        let body = Body {
+            lumps: vec![Lump {
+                shells: vec![Shell {
+                    faces: vec![0, 1],
+                    wire_edges: vec![],
+                }],
+            }],
+            faces: vec![face(0), face(1)],
+            edges: vec![Edge {
+                curve: 1,
+                t: [0.0, 1.0],
+                vertices: [0, 0],
+                tolerance: 0.0,
+            }],
+            vertices: vec![Vertex {
+                point: [0.0; 3],
+                tolerance: 0.0,
+            }],
+            curves: vec![Curve::Helix(helix), Curve::Unknown("why".into())],
+            surfaces: vec![
+                Surface::Offset {
+                    basis: Box::new(plane),
+                    distance: 1.5,
+                },
+                Surface::Unknown("why".into()),
+            ],
+            transform: None,
+        };
+        assert!(body.shell_is_closed(&body.lumps[0].shells[0]));
+        let f = FlatBody::from_body(&body);
+        let c = f.curves[0];
+        assert_eq!(c.kind, CURVE_BSPLINE);
+        // Degree 7, 25 knots, 4 * 24 + 4 poles, polynomial, not periodic.
+        assert_eq!(
+            &f.ints[c.int_offset as usize..c.int_offset as usize + 5],
+            &[7, 25, 100, 0, 0]
+        );
+        assert_eq!(f.curves[1].kind, CURVE_UNKNOWN);
+        assert_eq!((f.curves[1].int_count, f.curves[1].real_count), (0, 0));
+        let s = f.surfaces[0];
+        assert_eq!(s.kind, SURFACE_OFFSET);
+        assert_eq!(f.ints[s.int_offset as usize], SURFACE_PLANE);
+        assert_eq!(f.reals[s.real_offset as usize], 1.5);
+        assert_eq!(s.real_count, 1 + 9);
+        assert_eq!(f.surfaces[1].kind, SURFACE_UNKNOWN);
+        assert!(!f.shells[0].closed);
     }
 }

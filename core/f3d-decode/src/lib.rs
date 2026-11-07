@@ -34,3 +34,5 @@ pub mod stream;
 pub mod unicode;
 // Synthetic design streams for tests (mitcad#196).
 pub mod writer;
+// The design's mesh bodies and their containers (mitcad#1366).
+pub mod mesh;

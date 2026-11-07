@@ -8,11 +8,14 @@
 #include <QComboBox>
 #include <QDebug>
 #include <QGridLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLayoutItem>
 #include <QLineEdit>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QSizePolicy>
 #include <QStandardItem>
 #include <QStandardItemModel>
@@ -32,6 +35,8 @@ namespace {
 
 // The value of a picker's last row, Printers… or Processes… (mitcad#1239).
 QString managerRow() { return QStringLiteral("__manager"); }
+// The Material picker's last row, Edit materials… (mitcad#1411).
+QString editMaterialsRow() { return QStringLiteral("__edit_materials"); }
 
 // A level and its owner in words, as the Properties window's Source
 // column names them: "body Body1", "component Root".
@@ -219,6 +224,79 @@ PickerComboBox* MakeBodyCard::profilePicker(const QString& kind, const QVector<P
   return box;
 }
 
+PickerComboBox* MakeBodyCard::materialPicker() {
+  auto* box = new PickerComboBox(tr("Material"), this);
+  box->setObjectName(QStringLiteral("makeCardMaterial"));
+  fitToCard(box);
+  box->setToolTip(tr("The body's material; another one is set on the body"));
+  // The swatches as small as Send to Slicer's material rows'.
+  box->setIconSize(QSize(16, 16));
+  // Its own or its component's: that one is the body's, tagged Current.
+  const bool own =
+      m_data.materialLevel == QLatin1String("body") || m_data.materialLevel == QLatin1String("component");
+  const QString current = own ? m_data.materialKey : QString();
+  const auto swatch = [this](const QString& key) {
+    for (const MaterialPickerRow& material : std::as_const(m_data.materials)) {
+      if (material.key == key) {
+        return QIcon(QPixmap::fromImage(materialSwatch(material.color)));
+      }
+    }
+    return QIcon();
+  };
+  {
+    const QSignalBlocker blocker(box);
+    // The design's default while the body has none of its own, first and
+    // without a heading (as the Printer's Slicer default), named as the
+    // Material tool names it; then the materials under their headings, the
+    // FDM plastics first (the picker carries the headings), as Send to
+    // Slicer's material rows list them.
+    if (!own) {
+      box->addItem(swatch(m_data.materialKey), tr("Default (%1)").arg(m_data.material), QString());
+    }
+    QVector<ChoicePickerRow> picks;
+    for (const MaterialPickerRow& material : std::as_const(m_data.materials)) {
+      box->addItem(QIcon(QPixmap::fromImage(materialSwatch(material.color))), material.name, material.key);
+      const QString tag = own && material.key == current ? tr("Current") : QString();
+      picks.append(ChoicePickerRow{material.key, material.heading, QString(), tag, material.heading});
+    }
+    if (own && box->findData(current) < 0) {
+      box->addItem(m_data.material, current); // a material no list has
+    }
+    // Last, below a line: Edit materials…, the Materials window on the
+    // body's material. The wheel and the arrow keys on the closed field
+    // pass over both (not enabled in its list; the picker lists them all
+    // the same).
+    box->addItem(QString(), choiceSeparatorPrefix() + editMaterialsRow());
+    box->addItem(tr("Edit materials…"), editMaterialsRow());
+    if (auto* model = qobject_cast<QStandardItemModel*>(box->model())) {
+      for (int i = box->count() - 2; i < box->count(); ++i) {
+        QStandardItem* item = model->item(i);
+        item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+      }
+    }
+    box->setRows(picks);
+    box->setCurrentIndex(std::max(0, box->findData(current)));
+  }
+  connect(box, &QComboBox::activated, this, [this, box, current](int index) {
+    const QString key = box->itemData(index).toString();
+    // The field shows the body's material until the data has the one
+    // chosen (a refusal, or Cancel to the appearance question, leaves it).
+    {
+      const QSignalBlocker blocker(box);
+      box->setCurrentIndex(std::max(0, box->findData(current)));
+    }
+    if (key == editMaterialsRow()) {
+      emit materialsRequested();
+      return;
+    }
+    if (key.isEmpty() || key == current || isChoiceSeparator(key) || key.startsWith(choiceHeadingPrefix())) {
+      return; // not a material, or the body's already
+    }
+    emit materialChosen(key);
+  });
+  return box;
+}
+
 void MakeBodyCard::rebuild() {
   // A field that had the keyboard goes with the rows: the keyboard goes
   // back to the window, whose shortcuts (Undo) then work.
@@ -261,33 +339,13 @@ void MakeBodyCard::rebuild() {
   m_process->setToolTip(tr("The process profile the body prints with; another one is chosen for the body"));
   m_grid->addWidget(m_process, row++, 2, 1, 2);
 
-  // The material, chosen from the design's materials.
+  // The material, chosen from the design's and the libraries' materials
+  // (mitcad#1411).
   m_grid->addWidget(levelIcon(m_data.materialLevel == QLatin1String("default") ? QString() : m_data.materialLevel,
                               QString()),
                     row, 0);
   m_grid->addWidget(new QLabel(tr("Material"), this), row, 1);
-  m_material = new QComboBox(this);
-  m_material->setObjectName(QStringLiteral("makeCardMaterial"));
-  fitToCard(m_material);
-  m_material->setToolTip(tr("The body's material; another one is set on the body"));
-  {
-    const QSignalBlocker blocker(m_material);
-    for (const auto& [id, name] : m_data.materials) {
-      m_material->addItem(name, id);
-    }
-    int current = m_material->findData(m_data.materialId);
-    if (current < 0) {
-      m_material->addItem(m_data.material, m_data.materialId);
-      current = m_material->count() - 1;
-    }
-    m_material->setCurrentIndex(current);
-  }
-  connect(m_material, &QComboBox::activated, this, [this](int index) {
-    const QString id = m_material->itemData(index).toString();
-    if (id != m_data.materialId) {
-      emit materialChosen(id);
-    }
-  });
+  m_material = materialPicker();
   m_grid->addWidget(m_material, row++, 2, 1, 2);
 
   // The values that differ from the profiles, each with its level's icon;

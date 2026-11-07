@@ -61,7 +61,7 @@ QCheckBox* check(const QString& text, bool on, const QString& tip = {}) {
 
 std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, int selectedBodies,
                                         const QStringList& analyses, const QList<DrawingTarget>& drawings,
-                                        const QString& last) {
+                                        const QString& last, const QString& designUnit) {
   QSettings store;
   DrawingSettings s = DrawingSettings::load(store);
   QDialog dialog(parent);
@@ -88,6 +88,17 @@ std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, in
   }
   format->setCurrentIndex(std::max(0, formatOfSuffix(QFileInfo(start).suffix())));
   form->addRow(QObject::tr("F&ormat:"), format);
+  // A DXF file's length unit (mitcad#1408): the design's first; the sheet
+  // is written in that unit of paper.
+  auto* dxfUnit = new QComboBox;
+  dxfUnit->addItems(dxfUnits(designUnit));
+  dxfUnit->setCurrentIndex(0);
+  dxfUnit->setToolTip(QObject::tr("The length unit of the DXF file: the sheet in that unit of paper"));
+  form->addRow(QObject::tr("DXF unit:"), dxfUnit);
+  const auto showDxfUnit = [form, format, dxfUnit] {
+    form->setRowVisible(dxfUnit, format->currentData().toString() == QStringLiteral("dxf"));
+  };
+  showDxfUnit();
   // Which drawing of the design it writes (mitcad#725): the one it laid out
   // last first; another of the root's drawings, written as it is (it
   // follows the model; what was made on it by hand stays); or a new one,
@@ -209,7 +220,8 @@ std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, in
   layout->addWidget(buttons);
 
   // The file's extension follows the format and the format the extension.
-  QObject::connect(format, &QComboBox::currentIndexChanged, &dialog, [file, format](int index) {
+  QObject::connect(format, &QComboBox::currentIndexChanged, &dialog, [file, format, showDxfUnit](int index) {
+    showDxfUnit();
     const QFileInfo info(file->text());
     if (formatOfSuffix(info.suffix()) != index && !file->text().isEmpty()) {
       const QString base = info.suffix().isEmpty() ? file->text() : file->text().chopped(info.suffix().size() + 1);
@@ -285,6 +297,7 @@ std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, in
     choice.selectedOnly = bodies->currentIndex() == 1;
     choice.section = section->currentData().toString();
     choice.drawing = target->currentData().toString();
+    choice.dxfUnit = dxfUnit->currentText();
     if (choice.path.isEmpty()) {
       message->setText(QObject::tr("Give the file to write."));
       continue;

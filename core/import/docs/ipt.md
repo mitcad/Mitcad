@@ -51,6 +51,17 @@ FreeCAD documents; Cancel only).
   body that OCCT cannot build is reported (`skipped`) and left out.
 - The document's length unit becomes the part's (the model settings'
   unit code); the material is set when MitCad's library has it.
+- Appearances (mitcad#1367, `core/ipt/README.md`, *Appearances*): with
+  the history, each stored body takes the part's default appearance, or
+  the one style all its faces have, and its faces of other styles theirs,
+  as the `.f3d` import's appearances (`mitcad-import-appearances`; the
+  report's `appearances`). An appearance of the file's `Protein` package
+  comes in with its parameters; a library preset the file does not hold
+  as a generic appearance of the style's own diffuse colour and opacity.
+  The physical material is recorded where the package holds it. The
+  import of the bodies only sets the same on its bodies (mitcad#1375, the
+  report's `appearances` and a line of the text report), and a stored
+  body of several solids gets its appearance on each of them.
 - The report lists the part number, material, units, the release that
   saved the file, each B-rep record (ASM version, bodies, the states of
   the ASM history it carries) and each body (solid or sheet, valid,
@@ -59,7 +70,7 @@ FreeCAD documents; Cancel only).
   agreeing with the stored values), the features and the replay's report.
 - Assemblies (`.iam`, stage 4) are an import of their own, which imports
   each part this way ([*.iam import*](iam.md#iam-import) below).
-- Not yet: body names and colours, files whose B-rep record is not an ASM
+- Not yet: body names, files whose B-rep record is not an ASM
   file (older releases); what the
   definitions segment does not tell (core/ipt/README.md, *What the files
   do not tell*) comes in as the bodies of the history states.

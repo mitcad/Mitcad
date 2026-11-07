@@ -3121,6 +3121,13 @@ impl<K: Kernel> FramesCrateOps<K> for Document<K> {
     ) -> Result<Option<StartJunction>, ModelError> {
         // Not kept: only how it starts (mitcad#514, mitcad#515).
         let (typed_from, typed_offset) = (def.from.take(), def.offset.take());
+        // The middle of a free stretch is a part's on a profile's side
+        // (mitcad#1401), not a wall's.
+        if typed_from == Some(SideFrom::Gap) {
+            return Err(refuse(
+                "a wall starts from end A, end B or the middle of the wall it is on",
+            ));
+        }
         let (snap, auto_end) = (def.snap.take(), def.auto_end.take());
         let face = def.face.take();
         if def.square.take() != Some(true) {
@@ -3239,7 +3246,7 @@ impl<K: Kernel> FramesCrateOps<K> for Document<K> {
                 let at_of = |from: SideFrom, offset: f64| match from {
                     SideFrom::A => ends[0] + offset + half,
                     SideFrom::B => ends[1] - offset - half,
-                    SideFrom::Middle => middle + offset,
+                    SideFrom::Middle | SideFrom::Gap => middle + offset,
                 };
                 let (mut from, mut offset) = if typed {
                     (typed_from.unwrap_or_default(), self.mm(&typed_offset, 0.0)?)
@@ -3516,7 +3523,7 @@ impl<K: Kernel> FramesCrateOps<K> for Document<K> {
             let at_of = |from: SideFrom, offset: f64| match from {
                 SideFrom::A => t0 + offset + half,
                 SideFrom::B => t1 - offset - half,
-                SideFrom::Middle => middle + offset,
+                SideFrom::Middle | SideFrom::Gap => middle + offset,
             };
             let (mut from, mut offset) = if typed {
                 (typed_from.unwrap_or_default(), self.mm(&typed_offset, 0.0)?)

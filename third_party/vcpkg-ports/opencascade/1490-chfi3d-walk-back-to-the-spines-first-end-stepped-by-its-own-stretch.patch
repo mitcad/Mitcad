@@ -1,0 +1,54 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the step of a walk back to the spine's first end is taken from the
+stretch it walks, from its start to that end, as a forward walk's is
+(mitcad#1397).
+
+ComputeData shortens the walk's largest step to a fifth of the stretch it
+walks where that stretch is short, the stretch taken as First to Last. A
+forward walk to the spine's last end (intl) has them at its start and at
+that end. A walk back to the spine's first end (intf) has First at that
+end and Last at the guide's extension before it, a hundredth of the
+guide, which ComputeData took for its stretch: such a walk's step was a
+fifth of that, fifty times shorter than the same walk's forward.
+
+The case: a box's top edges rounded with 1 meet in a mitre at a corner,
+and the vertical edge below it and the mitre, one tangent chain, are
+rounded with 1 too (two reported designs' items replayed). Over the mitre
+the ball stays put, its centre on both cylinders' axes, its section
+vanishing at the top. Where the spine runs from the top down, the mitre's
+piece is walked back from the vertical edge's analytic piece to the top;
+its contacts leave the cylinders' edges tangentially, so at a step of
+0.004 on a guide of 1.9 they stayed on those edges within the tolerance,
+the first step was taken for one leaving the faces and halved, and the
+walk failed. The spine from the bottom up rounded it. Now the stretch of
+a walk back to the first end runs from its start to First, and the walk
+gets the forward walk's step: the corner is the ball's eighth either way.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+@@ -2609,10 +2609,19 @@
+   TopoDS_Face bif;
+   // Max step is relevant, but too great, the vector is required to detect
+   // the twists.
+-  if ((std::abs(Last - First) <= MS * 5.)
+-      && (std::abs(Last - First) >= 0.01 * std::abs(NewFirst - Target)))
++  // (The stretch walked: First to Last, but a walk back to the spine's first
++  // end (intf) has First at that end and Last at the guide's extension before
++  // it, so its stretch runs from its start to First. Taken as First to Last,
++  // the extension, a hundredth of the guide, gave it a fifth of that as its
++  // step, fifty times shorter than the forward walk's: a contact leaving its
++  // face's edge tangentially, past a mitre between two roundings of the
++  // ball's radius, stayed on the edge within the tolerance at every first
++  // step tried, and the walk failed.)
++  const double aSpan =
++    (!Forward && !Inside && intf) ? std::abs(NewFirst - First) : std::abs(Last - First);
++  if ((aSpan <= MS * 5.) && (aSpan >= 0.01 * std::abs(NewFirst - Target)))
+   {
+-    MS = std::abs(Last - First) * 0.2;
++    MS = aSpan * 0.2;
+   }
+ 
+   while (again < 3)

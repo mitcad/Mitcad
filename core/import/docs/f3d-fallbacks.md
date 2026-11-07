@@ -555,3 +555,39 @@ report's `bodies[].file_faces` and `mitcad_faces`), and a replayed body
 the file does not store. Like every warning it is among the import's
 notices, which the application shows after the import. Where a fallback
 brought the stored bodies, they agree and nothing is said.
+
+## Form bodies and their control cages (mitcad#1365)
+
+The import has no translation of a Form item: its bodies come in as the
+file's stored bodies, through a fallback base feature, like any item it
+cannot rebuild. The cage those bodies were made from is a
+`TSplines.BlobParts/*.tsm` entry of the document (a line-oriented
+`TS0200` program). The stream decoder reads every such entry into
+`_f3d.cages` (SCHEMA.md; `core/f3d-design/src/cage.rs`): the control
+vertices with their own grips, the faces as vertex rings, the edges with
+their knot intervals, creases and boundary, the vertices' subdivision tags
+(smooth, dart, crease, corner by their creased edges) and the secondary
+grips; the symmetry blocks, editor selections, grip layouts and the
+edge-knot mirror are kept as written. A cage is joined to the design by
+its entry's name: the object that holds `TSpline.<uuid>.tsm` (the cage's
+serializer) refers to the cage's surface record right after the name, and
+the timeline item that the records referring to either refer to is the
+Form item.
+
+MitCad has no subdivision or T-spline surfaces and no cage editor, so the
+cage is kept as data with the body (`BaseBody::cage`,
+`core/model/src/features/cage.rs`, in mm): it is saved and read with the
+design and does not take part in the body's evaluation. When a fallback
+brings in new bodies (`core/import-replay/src/cages.rs`), each cage that
+no body of the design keeps yet, and whose item is not after the items
+replayed so far, goes to the new body it encloses most closely: a surface
+lies in the convex hull of its control points, so a Form body's box lies
+inside its cage's grip box (with a margin of 2 % of the box's diagonal
+plus 0.1 mm for the kernel's loose boxes of curved faces); the body whose
+box comes closest to the cage's takes it, each body and each cage once. A
+cage that encloses no new body stays in the dump only.
+
+None of the private corpora's files holds a cage entry (6.11.2026), so the
+decoding and the join are checked on synthetic programs and records only
+(`core/f3d-design/src/cage.rs`, `core/import-replay/src/cages.rs`,
+`core/model/src/features/cage.rs` tests).

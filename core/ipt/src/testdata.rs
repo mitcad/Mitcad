@@ -278,3 +278,237 @@ pub fn test_part_with_hidden_design_body() -> Vec<u8> {
         ],
     )
 }
+
+/// The asset GUID of the document's appearance of
+/// [`test_part_with_appearances`].
+pub const BLUE_ASSET: &str = "0B1E0000-0000-4000-8000-000000000001";
+
+/// A u32-counted UTF-16 text.
+fn text16(s: &str) -> Vec<u8> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let mut out = (units.len() as u32).to_le_bytes().to_vec();
+    for u in units {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    out
+}
+
+/// A style's colours as the records keep them (`appearance::Colors`):
+/// ambient and diffuse this colour, specular white, emissive black and a
+/// shininess of 50.
+pub fn style_colors(diffuse: [f32; 4]) -> [u8; 68] {
+    let mut out = Vec::new();
+    let white = [1.0f32; 4];
+    let black = [0.0, 0.0, 0.0, 1.0f32];
+    for c in [diffuse, diffuse, white, black] {
+        for x in c {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&50.0f32.to_le_bytes());
+    let mut c = [0u8; 68];
+    c.copy_from_slice(&out);
+    c
+}
+
+/// A rendering or material style record of the application segment
+/// (`appearance`): its prefix (27 bytes from major 23 on, else 25), name,
+/// long name, label and, from major 17 on, the asset's GUID, the preset
+/// and the library, then its colours.
+pub fn rendering_style(
+    name: &str,
+    guid: &str,
+    preset: &str,
+    library: &str,
+    diffuse: [f32; 4],
+    major: u8,
+) -> Vec<u8> {
+    let mut out = vec![0u8; if major > 22 { 27 } else { 25 }];
+    out.extend(text16(name));
+    out.extend(text16(""));
+    out.extend_from_slice(&[0, 0]);
+    out.extend(text16(&format!("1:{name}\n")));
+    if major > 16 {
+        for s in [guid, preset, library] {
+            out.extend(text16(s));
+        }
+        out.extend_from_slice(&[0, 0, 2, 0]);
+        out.extend_from_slice(&[0x5A; 16]);
+    }
+    out.extend_from_slice(&style_colors(diffuse));
+    out.extend_from_slice(&[0; 8]);
+    out
+}
+
+/// The record of the document's default styles: the material style's and
+/// the rendering style's records (indices).
+fn default_styles(material: u32, rendering: u32) -> Vec<u8> {
+    let mut out = vec![0, 0, 0, 0, 1, 0];
+    for r in [material, rendering] {
+        out.extend_from_slice(&((r + 1) | 0x8000_0000).to_le_bytes());
+    }
+    out.extend_from_slice(&[0; 28 + 1 + 4 + 8]);
+    out
+}
+
+/// A face of the graphics segment: its style list (a record index, or none)
+/// and its key.
+fn graphics_face(styles: Option<u32>, key: u32) -> Vec<u8> {
+    let mut out = vec![0, 0, 0, 0, 0, 0];
+    out.extend_from_slice(&0x4540_0000u32.to_le_bytes());
+    out.extend_from_slice(&styles.map_or(0, |s| (s + 1) | 0x8000_0000).to_le_bytes());
+    out.extend_from_slice(&[0; 12]);
+    // No edges, the visibility, the box, the key, two u32.
+    out.extend_from_slice(&[2, 0, 0, 0x30, 0, 0, 0, 0]);
+    out.push(0);
+    for x in [0.0f64, 0.0, 0.0, 1.0, 1.0, 1.0] {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out.extend_from_slice(&key.to_le_bytes());
+    out.extend_from_slice(&[0; 8]);
+    out
+}
+
+/// A list of the graphics segment of these records (indices).
+fn graphics_list(items: &[u32]) -> Vec<u8> {
+    let mut out = vec![2, 0, 0, 0x30];
+    out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+    if !items.is_empty() {
+        out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x1000_0000u32.to_le_bytes());
+    }
+    for i in items {
+        out.extend_from_slice(&((i + 1) | 0x8000_0000).to_le_bytes());
+    }
+    out
+}
+
+/// A primary colour style of the graphics segment (94 bytes) with a
+/// style's colours.
+fn primary_color(colors: [u8; 68]) -> Vec<u8> {
+    let mut out = vec![2, 0, 0, 0];
+    out.extend_from_slice(&[0; 16]);
+    out.extend_from_slice(&colors);
+    out.extend_from_slice(&[0, 0, 0, 0, 0, 1]);
+    out
+}
+
+/// A `Protein` stream of one appearance of the document: a generic one of
+/// the colour (0.41, 0.49, 0.54) with the GUID [`BLUE_ASSET`].
+fn protein_stream() -> Vec<u8> {
+    let schema = r#"<?xml version="1.0"?><AssetSchema><UID val="GenericSchema"/><String id="AssetLibID" val=""/><Color id="generic_diffuse" valR="1" valG="1" valB="1" valA="1"/></AssetSchema>"#;
+    let str32 = |s: &str| {
+        let mut out = (s.len() as u32).to_le_bytes().to_vec();
+        out.extend_from_slice(s.as_bytes());
+        out
+    };
+    let mut rec = Vec::new();
+    for s in ["GenericSchema", BLUE_ASSET, "Generic", "LIB"] {
+        rec.extend(str32(s));
+    }
+    for c in [0.41f64, 0.49, 0.54, 1.0] {
+        rec.extend_from_slice(&c.to_le_bytes());
+    }
+    let zip = mitcad_f3d_file::zip::stored_zip(&[
+        ("F/Schemas/GenericSchema.xml", schema.as_bytes()),
+        (
+            "F/AssetData/InstanceProperties.bin",
+            &mitcad_f3d_file::protein::paged_stream(&[rec]),
+        ),
+    ]);
+    let mut out = (zip.len() as u32).to_le_bytes().to_vec();
+    out.extend(zip);
+    out
+}
+
+/// A part of the keyed cube (`mitcad_asm::testdata::keyed_cube_blob`, the
+/// faces' keys 11 bottom, 12 top, 14 y = 0, 13 x = 1, 15 y = 1, 16 x = 0)
+/// with the appearances (mitcad#1367): a `Protein` package of one asset,
+/// the material style `Steel` and the rendering styles `Semi-Polished`
+/// (the default, a library preset not in the package), `Blue Grey` (the
+/// package's asset) and `Red`; the faces of the keys in `colored` have the
+/// colours of the style `colored_style` (1 Blue Grey, 2 Red); with the
+/// definitions `design`, when given.
+fn test_part_with_face_colors(
+    colored: &[u32],
+    colored_style: usize,
+    design: Option<(u8, Records)>,
+) -> Vec<u8> {
+    use crate::appearance::{
+        DEFAULT_STYLES, GRAPHICS_FACE, MATERIAL_STYLE, PRIMARY_COLOR, RENDERING_STYLE, STYLE_LIST,
+    };
+    let styles = [
+        ("Semi-Polished", "", "Metal-045", [0.75f32, 0.75, 0.75, 1.0]),
+        ("Blue Grey", BLUE_ASSET, "", [0.25, 0.5, 0.75, 1.0]),
+        ("Red", "", "Paint-001", [0.8, 0.1, 0.1, 1.0]),
+    ];
+    let mut app = vec![
+        (0u8, default_styles(1, 2)),
+        (
+            1,
+            rendering_style("Steel", "", "MaterialInv_029", "LIB", [0.5; 4], 25),
+        ),
+    ];
+    for (name, guid, preset, c) in styles {
+        app.push((2, rendering_style(name, guid, preset, "LIB", c, 25)));
+    }
+    let (am, ab) = rse::write_segment(
+        crate::appearance::APP_SEGMENT,
+        [0x46; 16],
+        &[DEFAULT_STYLES, MATERIAL_STYLE, RENDERING_STYLE],
+        &app,
+    );
+    // Faces 0..6, the style list 6 and the primary colour 7.
+    let mut graphics: Vec<(u8, Vec<u8>)> = (11..17u32)
+        .map(|key| {
+            let list = colored.contains(&key).then_some(6);
+            (0u8, graphics_face(list, key))
+        })
+        .collect();
+    graphics.push((1, graphics_list(&[7])));
+    graphics.push((2, primary_color(style_colors(styles[colored_style].3))));
+    let (gm, gb) = rse::write_segment(
+        crate::appearance::GRAPHICS_SEGMENT,
+        [0x47; 16],
+        &[GRAPHICS_FACE, STYLE_LIST, PRIMARY_COLOR],
+        &graphics,
+    );
+    part_file_with_streams(
+        &TestPart {
+            bodies: vec![mitcad_asm::testdata::keyed_cube_blob([
+                11, 12, 14, 13, 15, 16,
+            ])],
+            part_number: "MITCAD-TEST-APPEARANCE",
+            material: "Steel",
+            length_unit: 11269,
+            design,
+        },
+        &[
+            ("RSeStorage/Mtestappsegment", am),
+            ("RSeStorage/Btestappsegment", ab),
+            ("RSeStorage/Mtestgraphicssegment", gm),
+            ("RSeStorage/Btestgraphicssegment", gb),
+            ("Protein", protein_stream()),
+        ],
+    )
+}
+
+/// The appearance part ([`test_part_with_face_colors`]) whose top and face
+/// x = 1 are blue grey.
+pub fn test_part_with_appearances() -> Vec<u8> {
+    test_part_with_face_colors(&[12, 13], 1, None)
+}
+
+/// The appearance part whose faces are all red.
+pub fn test_part_with_body_appearance() -> Vec<u8> {
+    test_part_with_face_colors(&[11, 12, 13, 14, 15, 16], 2, None)
+}
+
+/// The appearance part of [`test_part_with_appearances`] (its top and face
+/// x = 1 blue grey) with the design that makes its cube
+/// (`testdesign::cube_design`, as [`test_part_with_design`]'s): the import
+/// with the history and the import of the bodies only give it the same
+/// appearances (mitcad#1375).
+pub fn test_part_with_designed_appearances() -> Vec<u8> {
+    test_part_with_face_colors(&[12, 13], 1, Some((25, crate::testdesign::cube_design(25))))
+}

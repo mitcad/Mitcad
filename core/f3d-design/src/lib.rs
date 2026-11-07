@@ -46,12 +46,16 @@ mod nonfinite;
 pub mod package;
 // Where derives' placements without a matrix are (mitcad#324).
 pub mod derive_sources;
+// The control cages of Form bodies (mitcad#1365).
+pub mod cage;
 // The streams, records and sketches are decoded by `mitcad-f3d-decode`
 // (mitcad#779), re-exported here under their old paths: the learning
 // dump's raw records (mitcad#96), the synthetic design streams for tests
 // (mitcad#196) and the curves edge inputs store beside their recipes
 // (mitcad#306) among them.
 pub use mitcad_f3d_decode::{classes, curve, decode, learn, recipe, sketch, stream, writer};
+// The design's mesh bodies (mitcad#1366).
+pub use mitcad_f3d_decode::mesh;
 
 // Python's character tables, for the names `build` keeps.
 use mitcad_f3d_decode::unicode;
@@ -412,6 +416,8 @@ pub fn decode_streams(doc: &F3dFile, label: &str) -> Result<FileDesign, String> 
     // bodies' records in the blobs come with the inputs.
     dump.f3d.get_or_insert_with(Default::default).appearance =
         Some(appearance::decode(&design.segment, doc));
+    // The control cages of Form bodies (mitcad#1365).
+    cage::decode_into(&mut dump, &design.segment, doc);
     Ok(FileDesign {
         label: label.to_string(),
         dump: Some(dump),

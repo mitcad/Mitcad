@@ -1085,6 +1085,9 @@ impl DocState {
                 .is_none_or(|p| !removed.contains(&p.feature))
         });
         self.marker -= before_marker;
+        // A part centred between profiles one of which went is bound to
+        // its side's nearer end before the parameters go (mitcad#1401).
+        self.fall_back_gaps();
         for owner in &order {
             self.release_params(*owner);
         }
@@ -4576,3 +4579,7 @@ mod envelope;
 // moved occurrences and renamed bodies (mitcad#1318).
 mod follow_paths;
 pub(crate) use follow_paths::Follow;
+// Linked designs read again while the design is open, and which of their
+// files changed (mitcad#1416).
+mod link_updates;
+pub use link_updates::{LinkState, LinksUpdated};

@@ -7,6 +7,7 @@
 # check-all sources: core/model-api/src/annotations.rs app/view/MeasurementOverlay.cpp app/framework/CommandSession.cpp
 # check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
 # check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/print/ProfilePickerRows.cpp
+# check-all sources: app/print/SlicerMaterialRows.cpp app/print/MaterialsDialog.cpp app/print/MaterialMenuChoices.cpp
 # The Make tab (mitcad#1049) through the real UI, in the Floating layout,
 # then in the Docked one, on a design mitcad-cli makes: a sheet-metal
 # plate with its flat pattern (Body1) and a 40 x 30 x 10 block with a
@@ -52,6 +53,13 @@
 #     picker lists Bench's library process first, and choosing it sets it
 #     on the body (copied into the design, one undo step); the Printer
 #     picker's last row, Printers…, opens the Printers manager on Bench.
+#   - The card's Material picker (mitcad#1411), on a box in a project
+#     whose library has Project PETG, and My library with Shop TPU: the
+#     picker on the design's default lists both under their headings (This
+#     project, My library); Shop TPU chosen is the body's, copied into the
+#     design (under This design then, the picker on it); one Undo takes both
+#     back; Edit materials…, the picker's last row, opens the Materials
+#     window for the body and changes nothing.
 #   - Docked: the Make tab with its four groups.
 # tools/ui-windows-make-tab-test.ps1 does the same in the Windows VM.
 #
@@ -110,6 +118,24 @@ for process in "fine-bench:Fine @Bench:0.12" "coarse-alpha:Coarse @Alpha:0.28"; 
   printf '{"format": "mitcad-print-item", "version": 1, "profile": {"id": "%s", "name": "%s", "kind": "process", "values": {"layer_height": %s}, "version": 1}}\n' \
     "$id" "$name" "$layer" > "$MITCAD_PRINT_LIBRARY_DIR/print/processes/$id.json"
 done
+# The card's Material picker (mitcad#1411): a box in a project whose
+# library has the material Project PETG; My library gets Shop TPU before
+# that part starts (material_item writes an item file as Save to does).
+PROJECT=$WORK/project
+mkdir -p "$PROJECT/.mitcad" "$PROJECT/print-library/materials"
+printf '{"format": "mitcad-project", "version": 1}\n' > "$PROJECT/.mitcad/project.json"
+material_item() {
+  printf '{"format": "mitcad-print-item", "version": 1, "material": {"id": "%s", "name": "%s", "density": 1.25, "filament": {"filament_type": "%s", "temperature": 230}, "version": 1}}\n' \
+    "$2" "$3" "$4" > "$1/$2.json"
+}
+material_item "$PROJECT/print-library/materials" project_petg "Project PETG" PETG
+cat > "$WORK/material.json" << EOF
+[
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-10,-10],"length":20,"width":20,"height":20,"operation":"new_body"}}
+]
+EOF
+"$CLI" run "$WORK/material.json" --save "$PROJECT/material.mitcad" > "$WORK/cli-material.log" 2>&1 ||
+  { cat "$WORK/cli-material.log"; ui_fail "mitcad-cli (material)"; }
 
 # menu_line "TAB/GROUP": the entries of that group's menu as last logged.
 menu_line() { grep -F "Ribbon menu $1: " "$UI_LOG" | tail -1 | sed "s|.*Ribbon menu $1: ||"; }
@@ -509,6 +535,70 @@ if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Make card Printer set: "; the
   ui_fail "Printers… changed the printer"
 fi
 echo "ok   Printers… keeps the printer"
+
+echo "--- The card's Material picker (mitcad#1411)"
+mkdir -p "$MITCAD_PRINT_LIBRARY_DIR/materials"
+material_item "$MITCAD_PRINT_LIBRARY_DIR/materials" shop_tpu "Shop TPU" TPU
+ui_stop_app
+ui_start_app --open "$PROJECT/material.mitcad" --no-native-dialogs --chrome=floating
+ui_expect_log "Opened $PROJECT/material.mitcad" "the box in the project opened"
+ui_mark
+ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
+ui_mark
+ui_step "select Body1 in the Browser"      ui_click_logged "Browser Root/Bodies/Body1"
+ui_expect_new "Make card: Body1: material Steel (default)" "Body1 of the design's default"
+ui_expect_new "Make card material at" "the Material row's place"
+ui_mark
+ui_step "open the Material picker"         ui_click_logged "Make card material"
+ui_expect_new "Material picker opened: " "the card's Material picker opened"
+ui_expect_new "current Default (Steel)" "on the design's default"
+ui_expect_new "Material picker sections: This project 1 | My library 1 | Built-in " \
+  "the project's and My library's materials under their headings, the built-in ones after them"
+ui_focus_dialog '^Material Picker$'
+ui_mark
+xdotool type --delay 40 -- "Shop TPU"
+ui_expect_new "Material picker search: Shop TPU, first Shop TPU" "My library's Shop TPU found"
+ui_mark
+ui_step "choose (Enter)"                   ui_key Return
+ui_expect_new "Material picker chose: Shop TPU" "Shop TPU chosen"
+ui_focus_main
+ui_expect_new "Make card material of Body1: shop_tpu" "given to Body1"
+ui_expect_new "Material shop_tpu set for 1 body(ies), appearance " "as Send to Slicer's material rows give it"
+ui_expect_new "Make card: Body1: material Shop TPU (body)" "the card shows it, set on the body"
+ui_mark
+ui_step "open the Material picker"         ui_click_logged "Make card material"
+ui_expect_new "Material picker opened: " "opened again"
+ui_expect_new "current Shop TPU" "on Shop TPU now"
+ui_expect_new "Material picker sections: This design 1 | This project 1 | Built-in " \
+  "Shop TPU copied into the design: under This design, My library has no other"
+ui_focus_dialog '^Material Picker$'
+ui_step "close it (Esc)"                   ui_key Escape
+ui_focus_main
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "Undo: Set Material of Body1" "one undo step"
+ui_expect_new "Make card: Body1: material Steel (default)" "the design's default again"
+ui_mark
+ui_step "open the Material picker"         ui_click_logged "Make card material"
+ui_expect_new "Material picker sections: This project 1 | My library 1 | Built-in " \
+  "the copy gone with the same step: Shop TPU in My library again"
+ui_focus_dialog '^Material Picker$'
+ui_mark
+xdotool type --delay 40 -- "Edit materials"
+ui_expect_new "Material picker search: Edit materials, first Edit materials…" "its last row, Edit materials…"
+ui_mark
+ui_step "Edit materials… (Enter)"          ui_key Return
+ui_expect_new "Make card Edit materials… of Steel (Body1)" "for the body's material"
+ui_expect_new "Materials opened for bodies F1.b0" "the Materials window opened for Body1"
+ui_focus_dialog '^Materials$'
+ui_step "close"                            ui_click_logged "Materials close"
+ui_focus_main
+ui_sync
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Make card material of "; then
+  ui_fail "Edit materials… changed the material"
+fi
+echo "ok   Edit materials… keeps the material"
 
 echo "--- Docked: the Make tab and its groups"
 ui_stop_app

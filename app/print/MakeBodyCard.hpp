@@ -15,7 +15,12 @@
 // searchable pickers as Send to Slicer's (PickerComboBox,
 // profilePickerRows): the design's and the libraries' profiles, a
 // library's copied into the design as it is chosen; their last rows open
-// the Printers and the Processes managers. Add Print Value… under the
+// the Printers and the Processes managers. The material is chosen in the
+// Material Picker of Send to Slicer's material rows (mitcad#1411,
+// materialPickerRows): the materials with their swatches under where they
+// live, the body's tagged Current, a library's copied into the design as
+// it is given to the body; its last row, Edit materials…, opens the
+// Materials window on the body's material. Add Print Value… under the
 // values asks for a setting to add to the body (PrintValuePicker,
 // mitcad#1178); a value set on the body has a remove button, which clears
 // it there. Send to Slicer, the last row (mitcad#1377), opens Send to
@@ -30,8 +35,8 @@
 #include <QVector>
 
 #include "ProfilePickerRows.hpp"
+#include "SlicerMaterialRows.hpp"
 
-class QComboBox;
 class QGridLayout;
 class QLabel;
 class QLineEdit;
@@ -58,11 +63,15 @@ struct MakeCardValue {
 struct MakeCardData {
   QString body; // the body's name
   // Its material: name, id and where it comes from (body, component or
-  // default), and the materials it can have (id, name).
+  // default), its picker key ("<place>/<id>", the default's too), and the
+  // materials it can have as Send to Slicer's material picker lists them
+  // (mitcad#1411, materialPickerRows): the FDM plastics first, under This
+  // design, Imported from <file>.3mf, This project, My library, Built-in.
   QString material;
   QString materialId;
   QString materialLevel;
-  QVector<QPair<QString, QString>> materials;
+  QString materialKey;
+  QVector<MaterialPickerRow> materials;
   // The printer and process profiles it prints with ("Slicer default"
   // when none is chosen), their pickers' keys ("<place>/<id>"; empty for
   // none), the level that chose each and its name.
@@ -85,7 +94,8 @@ struct MakeCardData {
 
   bool operator==(const MakeCardData& other) const {
     return body == other.body && material == other.material && materialId == other.materialId &&
-           materialLevel == other.materialLevel && materials == other.materials && printer == other.printer &&
+           materialLevel == other.materialLevel && materialKey == other.materialKey && materials == other.materials &&
+           printer == other.printer &&
            printerId == other.printerId && printerLevel == other.printerLevel && printerOwner == other.printerOwner &&
            process == other.process && processId == other.processId && processLevel == other.processLevel &&
            processOwner == other.processOwner && printers == other.printers && processes == other.processes &&
@@ -143,10 +153,13 @@ public:
   QStringList places() const;
 
 signals:
-  // Another material chosen (its id), or another printer or process
-  // profile (its picker key, "<place>/<id>"): the printer for the whole
-  // design, the process for the body.
-  void materialChosen(const QString& id);
+  // Another material chosen, or another printer or process profile (its
+  // picker key, "<place>/<id>"): the printer for the whole design, the
+  // process and the material for the body.
+  void materialChosen(const QString& key);
+  // The Material picker's last row, Edit materials… (mitcad#1411): the
+  // Materials window on the body's material.
+  void materialsRequested();
   void printerChosen(const QString& key);
   void processChosen(const QString& key);
   // A picker's last row, Printers… or Processes… (`kind` printer or
@@ -168,6 +181,8 @@ private:
   // A printer or process picker (`kind`) of the rows, on `current`.
   PickerComboBox* profilePicker(const QString& kind, const QVector<ProfilePickerRow>& rows, const QString& current,
                                 const QString& currentName);
+  // The Material picker (mitcad#1411) on the body's material.
+  PickerComboBox* materialPicker();
 
   MakeCardData m_data;
   MakeCardValue m_pending; // key empty: none
@@ -175,7 +190,7 @@ private:
   QGridLayout* m_grid = nullptr;
   PickerComboBox* m_printer = nullptr;
   PickerComboBox* m_process = nullptr;
-  QComboBox* m_material = nullptr;
+  PickerComboBox* m_material = nullptr;
   QHash<QString, QLineEdit*> m_fields;    // the values' fields, by key
   QHash<QString, QWidget*> m_removes;     // the body values' remove buttons, by key
   QHash<QString, QString> m_icons;        // the values' level icons, by key

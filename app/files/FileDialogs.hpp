@@ -24,7 +24,8 @@ struct ExportChoice {
   QString refinement; // STL, OBJ, 3MF, USDZ, web page: low, medium, high
   bool ascii = false; // STL
   bool selectedOnly = false;
-  QString sketch; // DXF: the sketch's uid
+  QString sketch;  // DXF: the sketch's uid
+  QString dxfUnit; // DXF: the file's length unit, the design's unless chosen (mitcad#1408)
   // Bodies (mitcad#19): design (where the design shows them, the
   // default) or component (each in its component's coordinates); empty
   // when the design has no occurrences to choose by.
@@ -41,10 +42,11 @@ struct ExportChoice {
 // how many bodies the selection stands for; `sketches`: (uid, name);
 // `sketch` the one to offer first, which starts the dialog as DXF (a sketch
 // edited or selected); `occurrences`: the design places bodies by
-// occurrences, so that the bodies' coordinates can be chosen.
+// occurrences, so that the bodies' coordinates can be chosen;
+// `designUnit`: the design's length unit, a DXF file's first (mitcad#1408).
 std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
-                                      const QString& sketch, bool occurrences);
+                                      const QString& sketch, bool occurrences, const QString& designUnit);
 
 // The type Export starts with (mitcad#1164): an index into its list of
 // types (STEP AP214, STEP AP242, IGES, STL, OBJ, BRep, DXF, 3MF, USDZ, web

@@ -239,6 +239,209 @@ impl BSplineSurface {
     }
 }
 
+/// A helix (conical where it grows), exactly: at angle `t` the point
+/// `center + (scale + growth t / 2 pi) (major cos t + minor sin t) + pitch t
+/// / 2 pi` over `range` (mitcad_private#198: before, it was interpolated
+/// through 48 samples a turn). `scale` is 1 for a helix as the file stores
+/// it; the helices that bound a thread's surfaces are scaled towards or
+/// from the axis. The builder gets it as the B-spline of [`Helix::bspline`]
+/// with `spans` knot spans, within a few nanometres of it; the helices of
+/// one surface share their range and spans, so their B-splines share their
+/// knots.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Helix {
+    pub center: P3,
+    pub major: P3,
+    pub minor: P3,
+    /// Advance per turn.
+    pub pitch: P3,
+    pub scale: f64,
+    /// Radial growth per turn, as a fraction of `major` and `minor`.
+    pub growth: f64,
+    /// The angles it spans (increasing).
+    pub range: [f64; 2],
+    /// The knot spans of its B-spline ([`helix_spans`]).
+    pub spans: usize,
+}
+
+/// Knot spans a turn of a helix's B-spline: degree 7 Hermite pieces of a
+/// twelfth of a turn are within 6e-10 of the radius of the helix (the
+/// remainder of the interpolation, `|f^(8)| h^8 / (8! 2^8)`, with `h` the
+/// piece's angle), 1e-7 mm on a helix of 100 mm radius.
+pub const HELIX_SPANS_PER_TURN: f64 = 12.0;
+
+/// The fewest spans a turn of a long helix's B-spline: an eighth of a turn
+/// is within 1.4e-8 of the radius.
+pub const MIN_HELIX_SPANS_PER_TURN: f64 = 8.0;
+
+/// The knot spans of the B-spline of a helix of `turns` turns: twelve a
+/// turn, within `max` while eight a turn are; `None` when even those are
+/// more than `max`.
+pub fn helix_spans(turns: f64, max: usize) -> Option<usize> {
+    let turns = turns.abs();
+    let n = ((turns * HELIX_SPANS_PER_TURN).ceil() as usize).max(1);
+    if n <= max {
+        Some(n)
+    } else if turns * MIN_HELIX_SPANS_PER_TURN <= max as f64 {
+        Some(max)
+    } else {
+        None
+    }
+}
+
+/// The degree of a helix's B-spline.
+const HELIX_DEGREE: usize = 7;
+
+impl Helix {
+    /// The point and its first three derivatives at `t`.
+    fn jet(&self, t: f64) -> [P3; 4] {
+        let tau = std::f64::consts::TAU;
+        let (s, c) = t.sin_cos();
+        let r = add(scale(self.major, c), scale(self.minor, s));
+        let dr = add(scale(self.major, -s), scale(self.minor, c));
+        let g = self.scale + self.growth * t / tau;
+        let dg = self.growth / tau;
+        // r'' = -r, r''' = -r'; g'' = 0.
+        [
+            add(add(self.center, scale(r, g)), scale(self.pitch, t / tau)),
+            add(
+                add(scale(r, dg), scale(dr, g)),
+                scale(self.pitch, 1.0 / tau),
+            ),
+            sub(scale(dr, 2.0 * dg), scale(r, g)),
+            sub(scale(r, -3.0 * dg), scale(dr, g)),
+        ]
+    }
+
+    pub fn eval(&self, t: f64) -> P3 {
+        self.jet(t)[0]
+    }
+
+    /// The derivative at `t`.
+    pub fn derivative(&self, t: f64) -> P3 {
+        self.jet(t)[1]
+    }
+
+    /// The turns it spans.
+    pub fn turns(&self) -> f64 {
+        (self.range[1] - self.range[0]).abs() / std::f64::consts::TAU
+    }
+
+    /// The length from `a` to `b` (Gauss-Legendre, five points in each
+    /// 24th of a turn).
+    pub fn length(&self, a: f64, b: f64) -> f64 {
+        const X: [f64; 5] = [
+            0.0,
+            -0.538_469_310_105_683,
+            0.538_469_310_105_683,
+            -0.906_179_845_938_664,
+            0.906_179_845_938_664,
+        ];
+        const W: [f64; 5] = [
+            0.568_888_888_888_889,
+            0.478_628_670_499_366,
+            0.478_628_670_499_366,
+            0.236_926_885_056_189,
+            0.236_926_885_056_189,
+        ];
+        let (lo, hi) = (a.min(b), a.max(b));
+        let pieces =
+            (((hi - lo) / std::f64::consts::TAU * 24.0).ceil() as usize).clamp(1, 1_000_000);
+        let h = (hi - lo) / pieces as f64;
+        let mut sum = 0.0;
+        for k in 0..pieces {
+            let mid = lo + h * (k as f64 + 0.5);
+            for (x, w) in X.iter().zip(W) {
+                sum += w * norm(self.derivative(mid + 0.5 * h * x));
+            }
+        }
+        0.5 * h * sum
+    }
+
+    /// The B-spline of degree 7 through it in `spans` pieces of equal
+    /// angle, each matching the helix's point and first three derivatives
+    /// at its ends (Hermite), joined C3: interior knots of multiplicity 4.
+    /// Each pole is the blossom of a piece at its seven knots (the pieces
+    /// meeting at a knot agree there to the third derivative, so any piece
+    /// under the pole's knots gives it).
+    pub fn bspline(&self, spans: usize) -> BSplineCurve {
+        let n = spans.max(1);
+        let (a, b) = (self.range[0], self.range[1]);
+        let mut tau: Vec<f64> = (0..=n).map(|j| a + (b - a) * j as f64 / n as f64).collect();
+        // (Its ends exactly the helix's.)
+        tau[n] = b;
+        // The Bezier points of each piece from the derivatives at its ends:
+        // n(n-1)..(n-k+1) times the k-th forward difference is the k-th
+        // derivative (in the piece's parameter, `h^k` times the helix's).
+        let d = HELIX_DEGREE as f64;
+        let (d1, d2, d3) = (d, d * (d - 1.0), d * (d - 1.0) * (d - 2.0));
+        let pieces: Vec<[P3; HELIX_DEGREE + 1]> = tau
+            .windows(2)
+            .map(|w| {
+                let h = w[1] - w[0];
+                let s = self.jet(w[0]);
+                let e = self.jet(w[1]);
+                let mut p = [[0.0; 3]; HELIX_DEGREE + 1];
+                p[0] = s[0];
+                p[1] = add(p[0], scale(s[1], h / d1));
+                p[2] = add(sub(scale(p[1], 2.0), p[0]), scale(s[2], h * h / d2));
+                p[3] = add(
+                    add(sub(scale(p[2], 3.0), scale(p[1], 3.0)), p[0]),
+                    scale(s[3], h * h * h / d3),
+                );
+                p[7] = e[0];
+                p[6] = sub(p[7], scale(e[1], h / d1));
+                p[5] = add(sub(scale(p[6], 2.0), p[7]), scale(e[2], h * h / d2));
+                p[4] = sub(
+                    add(sub(scale(p[5], 3.0), scale(p[6], 3.0)), p[7]),
+                    scale(e[3], h * h * h / d3),
+                );
+                p
+            })
+            .collect();
+        let mut mults = vec![4; n + 1];
+        mults[0] = HELIX_DEGREE + 1;
+        mults[n] = HELIX_DEGREE + 1;
+        let flat = full_knots(&tau, &mults);
+        let count = flat.len() - HELIX_DEGREE - 1;
+        let poles = (0..count)
+            .map(|i| {
+                // The piece whose span (flat knots 4j + 7, 4j + 8) lies
+                // under the pole's knots i + 1 ..= i + 7.
+                let j = i.saturating_sub(HELIX_DEGREE).div_ceil(4).min(n - 1);
+                blossom(
+                    &pieces[j],
+                    tau[j],
+                    tau[j + 1],
+                    &flat[i + 1..=i + HELIX_DEGREE],
+                )
+            })
+            .collect();
+        BSplineCurve {
+            degree: HELIX_DEGREE,
+            knots: tau,
+            mults,
+            poles,
+            weights: None,
+            periodic: false,
+        }
+    }
+}
+
+/// The blossom of the Bezier curve `points` over `[a, b]` at `args` (one
+/// argument per degree): de Casteljau's steps, each at its own argument.
+fn blossom(points: &[P3], a: f64, b: f64, args: &[f64]) -> P3 {
+    let mut p = points.to_vec();
+    for &u in args {
+        let s = (u - a) / (b - a);
+        p = p
+            .windows(2)
+            .map(|w| add(scale(w[0], 1.0 - s), scale(w[1], s)))
+            .collect();
+    }
+    p[0]
+}
+
 /// 3D curve. Parameterisation as in OCCT: lines by arc length, ellipses by
 /// angle from the major axis towards `normal x major`.
 #[derive(Clone, Debug, PartialEq)]
@@ -257,7 +460,7 @@ pub enum Curve {
     },
     BSpline(BSplineCurve),
     /// Curve known by points at parameters; the builder interpolates it
-    /// (used for helices).
+    /// (used for curves on surfaces stored without their approximation).
     Interpolated {
         params: Vec<f64>,
         points: Vec<P3>,
@@ -270,6 +473,12 @@ pub enum Curve {
         surface: Box<Surface>,
         pcurve: BSplineCurve2d,
     },
+    /// A helix, exactly ([`Helix`]).
+    Helix(Helix),
+    /// The curve of an edge the reader could not decode (why): the edge
+    /// is kept so that its loops stay closed, the builder leaves it out
+    /// (mitcad_private#198). Not evaluated: NaN.
+    Unknown(String),
 }
 
 impl Curve {
@@ -319,16 +528,19 @@ impl Curve {
                 }
                 p
             }
-            Curve::OnSurface { .. } => [f64::NAN; 3],
+            Curve::OnSurface { .. } | Curve::Unknown(_) => [f64::NAN; 3],
+            Curve::Helix(h) => h.eval(t),
         }
     }
 
-    /// Parameter range of bounded curves (B-splines, interpolated curves).
+    /// Parameter range of bounded curves (B-splines, interpolated curves,
+    /// helices).
     pub fn range(&self) -> Option<(f64, f64)> {
         match self {
             Curve::BSpline(b) => Some(b.range()),
             Curve::Interpolated { params, .. } => Some((*params.first()?, *params.last()?)),
             Curve::OnSurface { pcurve, .. } => Some(pcurve.range()),
+            Curve::Helix(h) => Some((h.range[0], h.range[1])),
             _ => None,
         }
     }
@@ -343,6 +555,8 @@ impl Curve {
             Curve::BSpline(_) => "bspline",
             Curve::Interpolated { .. } => "interpolated",
             Curve::OnSurface { .. } => "on surface",
+            Curve::Helix(_) => "helix",
+            Curve::Unknown(_) => "unknown",
         }
     }
 }
@@ -362,6 +576,8 @@ impl Curve {
 /// - `ArcSweep`: du x dv, `u` in [0, 1] along the arcs.
 /// - `RollingBall`: du x dv, `u` across the section from the first
 ///   support's contact, `v` along the spine.
+/// - `Offset`: the basis's.
+/// - `Unknown`: none (the face's geometry is unknown).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Surface {
     Plane {
@@ -435,6 +651,17 @@ pub enum Surface {
         /// cannot walk the ball (as before mitcad#622).
         stored: Option<Box<Surface>>,
     },
+    /// `basis` moved by `distance` along its natural normal (OCCT
+    /// `Geom_OffsetSurface`; the basis's parameters): an offset surface
+    /// stored without its approximation (mitcad_private#198).
+    Offset {
+        basis: Box<Surface>,
+        distance: f64,
+    },
+    /// The surface of a face the reader could not decode (why): the face
+    /// is kept with its loops so that the body's topology stays closed,
+    /// the builder leaves it out (mitcad_private#198).
+    Unknown(String),
 }
 
 /// What a rolling ball touches on one side.
@@ -458,6 +685,8 @@ impl Surface {
             Surface::BSpline(_) => "bspline",
             Surface::Extrusion { .. } => "extrusion",
             Surface::Revolution { .. } => "revolution",
+            Surface::Offset { .. } => "offset",
+            Surface::Unknown(_) => "unknown",
         }
     }
 
@@ -694,13 +923,25 @@ impl Body {
         self.lumps.extend(pieces);
     }
 
-    /// Every shell of every lump is closed: the body is a solid.
+    /// The shell is closed ([`Body::shell_is_closed`]) and the builder makes
+    /// each of its faces: none is on an unknown surface (mitcad_private#198:
+    /// such a face keeps the topology closed, but has no geometry).
+    pub fn shell_is_closed_solid(&self, shell: &Shell) -> bool {
+        self.shell_is_closed(shell)
+            && shell
+                .faces
+                .iter()
+                .all(|&f| !matches!(self.surfaces[self.faces[f].surface], Surface::Unknown(_)))
+    }
+
+    /// Every shell of every lump is closed and has no face on an unknown
+    /// surface: the body is a solid.
     pub fn is_solid(&self) -> bool {
         !self.lumps.is_empty()
             && self
                 .lumps
                 .iter()
-                .all(|l| l.shells.iter().all(|s| self.shell_is_closed(s)))
+                .all(|l| l.shells.iter().all(|s| self.shell_is_closed_solid(s)))
     }
 
     /// Checks topology and geometry consistency. `tolerance` (mm) is the
@@ -853,6 +1094,55 @@ mod tests {
             let t = std::f64::consts::TAU * f64::from(k) / 200.0;
             assert!(dist(curve.eval(t), helix(t)) < 1e-3, "t {t}");
         }
+    }
+
+    /// mitcad_private#198: a tapered helix of 33 mm radius and 2.1 mm pitch
+    /// over 3.4 turns. Its B-spline (degree 7, twelve spans a turn, interior
+    /// knots of multiplicity 4) is within 1e-7 mm of it, its ends on the
+    /// helix's; its length is the integral's.
+    #[test]
+    fn helices_are_exact_b_splines() {
+        let tau = std::f64::consts::TAU;
+        let helix = Helix {
+            center: [1.0, 2.0, 3.0],
+            major: [33.0, 0.0, 0.0],
+            minor: [0.0, 33.0, 0.0],
+            pitch: [0.0, 0.0, 2.1],
+            scale: 1.0,
+            growth: 0.05,
+            range: [0.3, 0.3 + 3.4 * tau],
+            spans: 0,
+        };
+        let spans = helix_spans(helix.turns(), 2160).unwrap();
+        assert_eq!(spans, 41);
+        let b = helix.bspline(spans);
+        assert!(b.is_valid());
+        assert_eq!(b.degree, 7);
+        assert_eq!(b.poles.len(), 4 * spans + 4);
+        assert_eq!(b.mults[1], 4);
+        assert_eq!(b.range(), (helix.range[0], helix.range[1]));
+        for k in 0..=2000 {
+            let t = helix.range[0] + (helix.range[1] - helix.range[0]) * f64::from(k) / 2000.0;
+            let d = dist(b.eval(t), helix.eval(t));
+            assert!(d < 1e-7, "t {t}: {d:e} mm");
+        }
+        // A helix without taper: the length of the unrolled line.
+        let plain = Helix {
+            growth: 0.0,
+            ..helix.clone()
+        };
+        let want = 3.4 * (tau * 33.0).hypot(2.1);
+        let got = plain.length(plain.range[0], plain.range[1]);
+        assert!((got - want).abs() < 1e-9 * want, "{got} {want}");
+        // The derivative is the curve's.
+        let t = 2.0;
+        let h = 1e-6;
+        let fd = scale(sub(helix.eval(t + h), helix.eval(t - h)), 0.5 / h);
+        assert!(dist(fd, helix.derivative(t)) < 1e-5);
+        // Long helices take fewer spans a turn, up to the most.
+        assert_eq!(helix_spans(200.0, 2160), Some(2160));
+        assert_eq!(helix_spans(300.0, 2160), None);
+        assert_eq!(helix_spans(0.01, 2160), Some(1));
     }
 
     /// One closed edge: two faces use it once each way, a third twice (its

@@ -131,6 +131,13 @@ if [ ! -f "$OIDN_SRC/.mitcad-deployment-target" ]; then
   patch -d "$OIDN_SRC" -p1 < "$OIDN_PATCH"
   touch "$OIDN_SRC/.mitcad-deployment-target"
 fi
+# The current macOS linker rejects OIDN's legacy eager-binding option with
+# a deprecation warning. Preserve it only for older deployment targets.
+OIDN_BINDING_PATCH=$REPO/third_party/oidn/modern-macos-binding.patch
+if [ ! -f "$OIDN_SRC/.mitcad-modern-binding" ]; then
+  patch -d "$OIDN_SRC" -p1 < "$OIDN_BINDING_PATCH"
+  touch "$OIDN_SRC/.mitcad-modern-binding"
+fi
 # The source/tool pins and build inputs are part of the completion stamp.
 # A changed archive or dependency baseline must never reuse an old export.
 BUILDER_SHA256=$(shasum -a 256 "$0" | cut -d ' ' -f 1)
@@ -142,7 +149,7 @@ CYCLES_PREVIEW_BATCH_PATCH=$REPO/third_party/cycles/denoiser-preview-batches.pat
 CYCLES_EXTERNAL_BUFFER_PATCH=$REPO/third_party/cycles/metal-external-buffer-usage.patch
 CYCLES_NATIVE_DISPLAY_PATCH=$REPO/third_party/cycles/native-display-passes.patch
 RENDER_INPUT_SHA256=$(shasum -a 256 "$REPO/vcpkg.json" "$REPO/triplets/$TRIPLET.cmake" \
-  "$OIDN_PATCH" "$CYCLES_PATCH" "$CYCLES_DIAGNOSTICS_PATCH" "$CYCLES_PIPELINE_PATCH" \
+  "$OIDN_PATCH" "$OIDN_BINDING_PATCH" "$CYCLES_PATCH" "$CYCLES_DIAGNOSTICS_PATCH" "$CYCLES_PIPELINE_PATCH" \
   "$CYCLES_CANCELLATION_PATCH" "$CYCLES_PREVIEW_BATCH_PATCH" "$CYCLES_EXTERNAL_BUFFER_PATCH" \
   "$CYCLES_NATIVE_DISPLAY_PATCH" \
   | cut -d ' ' -f 1 | shasum -a 256 | cut -d ' ' -f 1)

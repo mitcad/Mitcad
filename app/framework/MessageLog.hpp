@@ -13,13 +13,16 @@ namespace mitcad {
 
 // One message of the session's history (mitcad#1042): when it came, its
 // level, its text and the feature it is about (its uid; empty when it is
-// about none). A message repeated at once is one entry, counted.
+// about none). A message repeated at once is one entry, counted. `action`:
+// the label of the button the band shows with it (mitcad#1416: Update, Open
+// Linked Design); empty for none.
 struct MessageEntry {
   QDateTime time;
   NoticeLevel level = NoticeLevel::Hint;
   QString text;
   QString feature;
   int count = 1;
+  QString action;
 };
 
 // What the message band shows and the session's message history
@@ -57,7 +60,9 @@ public:
   // of a higher level is shown (see above). Returns whether it is shown in
   // full now. An empty text records nothing and turns a message shown in
   // full that is not a problem into the stub (a cleared status line).
-  bool add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time);
+  // `action`: the label of the message's button (mitcad#1416), or empty.
+  bool add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time,
+           const QString& action = QString());
 
   // The message shown in full timed out: the stub. Not for an error.
   // Returns whether the band changed.

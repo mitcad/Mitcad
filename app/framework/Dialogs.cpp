@@ -310,6 +310,50 @@ QString dialogSaveFileName(QWidget* parent, const QString& title, const QString&
   return fileNameDialog(parent, title, directory, filter, selectedFilter, QFileDialog::AcceptSave);
 }
 
+QStringList dxfUnits(const QString& first) {
+  QStringList units{first.isEmpty() ? QStringLiteral("mm") : first};
+  for (const char* unit : {"mm", "cm", "m", "in", "ft"}) {
+    const QString name = QLatin1String(unit);
+    if (!units.contains(name)) {
+      units << name;
+    }
+  }
+  return units;
+}
+
+QString dxfUnitFilter(const QString& unit) {
+  // The units a design can be in (core/expr's LengthUnit).
+  const QString name = unit == QStringLiteral("mm")    ? QObject::tr("millimeters")
+                       : unit == QStringLiteral("cm")  ? QObject::tr("centimeters")
+                       : unit == QStringLiteral("m")   ? QObject::tr("meters")
+                       : unit == QStringLiteral("in")  ? QObject::tr("inches")
+                       : unit == QStringLiteral("ft")  ? QObject::tr("feet")
+                       : unit == QStringLiteral("um")  ? QObject::tr("micrometers")
+                       : unit == QStringLiteral("km")  ? QObject::tr("kilometers")
+                       : unit == QStringLiteral("yd")  ? QObject::tr("yards")
+                       : unit == QStringLiteral("mi")  ? QObject::tr("miles")
+                       : unit == QStringLiteral("mil") ? QObject::tr("mils")
+                                                       : unit;
+  return QObject::tr("DXF drawing in %1 (*.dxf)").arg(name);
+}
+
+QString dialogSaveDxf(QWidget* parent, const QString& title, const QString& suggested, QString& unit) {
+  const QStringList units = dxfUnits(unit);
+  QStringList filters;
+  for (const QString& each : units) {
+    filters << dxfUnitFilter(each);
+  }
+  QString chosen = filters.first();
+  const QString path = dialogSaveFileName(parent, title, suggested, filters.join(QStringLiteral(";;")), &chosen);
+  if (path.isEmpty()) {
+    return path;
+  }
+  const qsizetype at = filters.indexOf(chosen);
+  unit = units.at(at < 0 ? 0 : at);
+  qDebug().noquote() << QStringLiteral("%1 dialog: unit %2 (%3)").arg(title, unit, units.join(QStringLiteral(" | ")));
+  return path;
+}
+
 QString dialogChooseFile(QWidget* parent, const QString& title, const QString& directory, const QString& filter,
                          const QString& acceptLabel, const QString& rejectLabel) {
   QFileDialog dialog(parent, title, directory, filter);

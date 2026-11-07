@@ -124,7 +124,7 @@ fn dressup_overlay<K: Kernel>(
             },
             &ctx.uid.to_string(),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| super::folded::name_walls(ctx, &e.to_string()))?;
     let [solid] = geometry.solids.as_slice() else {
         return Ok(None);
     };

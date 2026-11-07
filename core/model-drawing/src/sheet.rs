@@ -13,6 +13,9 @@ use super::P2;
 pub enum Pen {
     /// Visible edges: continuous wide.
     Thick,
+    /// Lines drawn by hand to stand out: continuous extra wide, twice as
+    /// wide as the wide line (mitcad#1402).
+    ExtraThick,
     /// Dimension, extension and leader lines, tangent edges, a thread's
     /// roots, the title block's cells: continuous narrow.
     Thin,
@@ -28,8 +31,9 @@ pub enum Pen {
 
 impl Pen {
     /// Every pen, in the order of the table the drawing query gives.
-    pub const ALL: [Pen; 6] = [
+    pub const ALL: [Pen; 7] = [
         Self::Thick,
+        Self::ExtraThick,
         Self::Thin,
         Self::Hidden,
         Self::Hatch,
@@ -38,12 +42,15 @@ impl Pen {
     ];
 
     /// The line width, mm: ISO 128's 0.35 series (mitcad#1112), wide
-    /// lines twice as wide as narrow ones. The one table of widths: the
-    /// PDF and SVG writers take them from here and the application's sheet
-    /// from the drawing query (`pens`).
+    /// lines twice as wide as narrow ones and extra wide ones twice as wide
+    /// as wide ones (narrow, wide, extra wide at 1:2:4; the extra wide line
+    /// mitcad#1402). The one table of widths: the PDF and SVG writers take
+    /// them from here and the application's sheet from the drawing query
+    /// (`pens`).
     pub fn width(self) -> f64 {
         match self {
             Self::Thick => 0.35,
+            Self::ExtraThick => 0.7,
             // ISO 128 draws hidden outlines with the narrow line.
             Self::Thin | Self::Chain | Self::Hidden => 0.18,
             Self::Hatch => 0.13,
@@ -55,6 +62,7 @@ impl Pen {
     pub fn name(self) -> &'static str {
         match self {
             Self::Thick => "thick",
+            Self::ExtraThick => "extra_thick",
             Self::Thin => "thin",
             Self::Hidden => "hidden",
             Self::Hatch => "hatch",
@@ -76,6 +84,7 @@ impl Pen {
     pub fn layer(self) -> &'static str {
         match self {
             Self::Thick => "VISIBLE",
+            Self::ExtraThick => "EXTRA_THICK",
             Self::Thin => "THIN",
             Self::Hidden => "HIDDEN",
             Self::Hatch => "HATCH",

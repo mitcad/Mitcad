@@ -15,6 +15,8 @@
 #include <Adaptor3d_CurveOnSurface.hxx>
 #include <Approx_Curve3d.hxx>
 #include <BRepAlgoAPI_Check.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -22,11 +24,14 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
 #include <BRepLib.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <BndLib_Add2dCurve.hxx>
+#include <Bnd_Box.hxx>
 #include <Bnd_Box2d.hxx>
+#include <GProp_GProps.hxx>
 #include <Geom2dAdaptor_Curve.hxx>
 #include <Geom2dConvert.hxx>
 #include <Geom2d_BSplineCurve.hxx>
@@ -38,6 +43,7 @@
 #include <Geom_Plane.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
+#include <NCollection_List.hxx>
 #include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -148,8 +154,9 @@ Embedding make_embedding(const SheetPatch& patch, double thickness) {
     detail::require_positive("sheet inside radius", c.inside_radius);
     detail::require_positive("sheet neutral radius", c.neutral_radius);
     detail::require_positive("sheet bend angle", c.angle_extent);
+    // A flange's bend may turn past 180 degrees, short of a full turn (a hem, mitcad#1378).
     if (c.neutral_radius < c.inside_radius || c.neutral_radius > c.inside_radius + thickness ||
-        c.angle_extent > kPi + kAngularTolerance || std::abs(c.axis.Dot(c.radial_start)) > kAngularTolerance ||
+        c.angle_extent >= 2 * kPi - kAngularTolerance || std::abs(c.axis.Dot(c.radial_start)) > kAngularTolerance ||
         std::abs(c.axis.Dot(c.angular_direction)) > kAngularTolerance ||
         std::abs(c.radial_start.Dot(c.angular_direction)) > kAngularTolerance) {
       throw std::invalid_argument("invalid sheet cylinder radius, angle or orthogonal basis");
@@ -691,6 +698,129 @@ std::optional<SheetChartShapeSpec> holes_filled(const SheetChartShapeSpec& spec)
 
 SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisions);
 
+// A domain as the model names it in messages: `panel F4 slot 0`.
+std::string domain_label(const SheetDomainRef& d) {
+  return std::string(d.kind == SheetDomainKind::Panel ? "panel " : "bend ") + d.feature + " slot " +
+         std::to_string(d.slot);
+}
+
+// One material region on its own: its caps, and walls all round it, also
+// where it shares a port with a neighbour. Empty when it does not close.
+std::optional<TopoDS_Solid> region_solid(const MaterialRegion& region, const Embedding& embedding, double tolerance) {
+  std::vector<Port> none;
+  std::vector<NamedFace> faces;
+  region_faces(region, embedding, 0, none, tolerance, faces);
+  BRepBuilderAPI_Sewing sewing(tolerance);
+  sewing.SetMaxTolerance(tolerance);
+  for (const auto& face : faces) sewing.Add(face.face);
+  detail::interruptible([&](const Message_ProgressRange& range) { sewing.Perform(range); });
+  if (sewing.NbFreeEdges() != 0 || sewing.NbMultipleEdges() != 0) return std::nullopt;
+  TopExp_Explorer it(sewing.SewedShape(), TopAbs_SHELL);
+  if (!it.More()) return std::nullopt;
+  const auto shell = TopoDS::Shell(it.Current());
+  it.Next();
+  if (it.More() || !BRep_Tool::IsClosed(shell)) return std::nullopt;
+  BRepBuilderAPI_MakeSolid maker(shell);
+  if (!maker.IsDone()) return std::nullopt;
+  TopoDS_Solid solid = maker.Solid();
+  if (!BRepLib::OrientClosedSolid(solid)) return std::nullopt;
+  return solid;
+}
+
+TopoDS_Shape common_of(const TopoDS_Shape& a, const TopoDS_Shape& b) {
+  BRepAlgoAPI_Common common;
+  NCollection_List<TopoDS_Shape> objects, tools;
+  objects.Append(a);
+  tools.Append(b);
+  common.SetArguments(objects);
+  common.SetTools(tools);
+  common.SetNonDestructive(true);
+  detail::build(common);
+  if (!common.IsDone() || common.HasErrors()) {
+    throw std::invalid_argument("sheet material charts intersect in the current configuration");
+  }
+  return common.Shape();
+}
+
+double area_of(const TopoDS_Shape& shape) {
+  GProp_GProps properties;
+  BRepGProp::SurfaceProperties(shape, properties);
+  return properties.Mass();
+}
+
+// Two walls of one sheet that meet where no port joins them.
+struct WallMeeting {
+  std::size_t first, second;
+  bool shares_volume;  // else they touch over a face
+};
+
+// Where the shell of one sheet meets itself (the self-interference check
+// found faces that meet, or the checker refused the solid): the two
+// material regions that meet in a way one solid cannot hold. First a pair
+// whose material shares volume, more than the tolerance deep over a square
+// of the thickness (a common volume above `tolerance t^2`); else a pair
+// not joined by a port whose surfaces touch over a face (a common area
+// above `tolerance t`), such as a half open corner, whose solid the
+// checker refuses (mitcad#1409). Walls that touch only along a line or at
+// a point (a full open corner closed by welding at the exact inside
+// dimension) give none: the sheet keeps them as they are, neither fused
+// nor their faces merged, the corner line an edge of each. Throws the
+// collision refusal when a region does not close on its own, meets itself
+// or a common fails, as nothing then tells contact from penetration.
+std::optional<WallMeeting> meeting_walls(const SheetChartShapeSpec& spec, const std::vector<Embedding>& embeddings,
+                                         const std::vector<RegionMembership>& membership,
+                                         const std::vector<std::size_t>& member_patch,
+                                         const std::vector<std::size_t>& members) {
+  const auto refused = [] { return std::invalid_argument("sheet material charts intersect in the current configuration"); };
+  std::vector<TopoDS_Solid> solids;
+  std::vector<Bnd_Box> boxes;
+  for (const std::size_t m : members) {
+    const auto& patch = spec.patches.at(member_patch[m]);
+    const auto solid = region_solid(patch.regions.at(membership[m].region), embeddings[member_patch[m]], spec.tolerance);
+    if (!solid) throw refused();
+    BRepAlgoAPI_Check itself;
+    itself.SetData(*solid, false, true);
+    detail::interruptible([&](const Message_ProgressRange& range) { itself.Perform(range); });
+    if (itself.HasErrors() || !itself.IsValid()) throw refused();
+    Bnd_Box box;
+    BRepBndLib::Add(*solid, box);
+    box.Enlarge(spec.tolerance);
+    solids.push_back(*solid);
+    boxes.push_back(box);
+  }
+  const auto joined = [&](std::size_t a, std::size_t b) {
+    const auto key_a = domain_key(membership[a].domain), key_b = domain_key(membership[b].domain);
+    return std::any_of(spec.ports.begin(), spec.ports.end(), [&](const ShapePort& port) {
+      const auto first = domain_key(port.first.boundary.domain), second = domain_key(port.second.boundary.domain);
+      return (first == key_a && second == key_b) || (first == key_b && second == key_a);
+    });
+  };
+  std::optional<WallMeeting> touching;
+  for (std::size_t i = 0; i < solids.size(); ++i) for (std::size_t j = i + 1; j < solids.size(); ++j) {
+    if (boxes[i].IsOut(boxes[j])) continue;
+    if (detail::volume_of(common_of(solids[i], solids[j])) > spec.tolerance * spec.thickness * spec.thickness) {
+      return WallMeeting{members[i], members[j], true};
+    }
+    if (touching || joined(members[i], members[j])) continue;
+    TopExp_Explorer a(solids[i], TopAbs_SHELL), b(solids[j], TopAbs_SHELL);
+    if (area_of(common_of(a.Current(), b.Current())) > spec.tolerance * spec.thickness) {
+      touching = WallMeeting{members[i], members[j], false};
+    }
+  }
+  return touching;
+}
+
+// The refusal of two walls `meeting_walls` found, in the domains' terms.
+std::invalid_argument meeting_refusal(const WallMeeting& meeting, const std::vector<RegionMembership>& membership) {
+  const auto first = domain_label(membership[meeting.first].domain);
+  const auto second = domain_label(membership[meeting.second].domain);
+  if (meeting.shares_volume) {
+    return std::invalid_argument("sheet walls " + first + " and " + second + " pass through each other");
+  }
+  return std::invalid_argument("sheet walls " + first + " and " + second +
+                               " touch over a face, which a sheet body cannot hold: leave a seam gap between them");
+}
+
 } // namespace
 
 SheetChartGeometry sheet_shape(const SheetChartShapeSpec& spec) {
@@ -797,16 +927,40 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
         BRepBuilderAPI_MakeSolid maker(shell);
         TopoDS_Solid solid = maker.Solid();
         if (!BRepLib::OrientClosedSolid(solid)) throw std::runtime_error("sheet chart shell has no consistent material side");
-        detail::require_valid(solid, "sheet chart solid");
+        // Walls of this shell that meet where no port joins them: the
+        // checker refuses a solid whose walls touch over a face or pass
+        // through each other; the self-interference check below finds walls
+        // that meet at all (mitcad#1409).
+        const auto meeting = [&] {
+          std::vector<std::size_t> group_members;
+          for (const NamedFace* face : mine) group_members.push_back(face->member);
+          std::sort(group_members.begin(), group_members.end());
+          group_members.erase(std::unique(group_members.begin(), group_members.end()), group_members.end());
+          return meeting_walls(spec, embeddings, membership, member_patch, group_members);
+        };
+        try {
+          detail::require_valid(solid, "sheet chart solid");
+        } catch (const std::runtime_error&) {
+          std::optional<WallMeeting> found;
+          try {
+            found = meeting();
+          } catch (const std::invalid_argument&) {
+          }
+          if (!found) throw;
+          throw meeting_refusal(*found, membership);
+        }
         // Topological validity alone permits intersecting nonadjacent walls
         // in a connected folded sheet. Check geometric self-interference as
-        // well.
+        // well; where faces meet, walls that touch only along a line or at a
+        // point are kept, the others refused naming both.
         if (check_collisions) {
           BRepAlgoAPI_Check collision;
           collision.SetData(solid, false, true);
           detail::interruptible([&](const Message_ProgressRange& range) { collision.Perform(range); });
           if (collision.HasErrors() || !collision.IsValid()) {
-            throw std::invalid_argument("sheet material charts intersect in the current configuration");
+            if (const auto found = meeting()) {
+              throw meeting_refusal(*found, membership);
+            }
           }
         }
         detail::FaceNamer namer(solid);

@@ -129,8 +129,9 @@ public:
   // selection; the drawing stays open (mitcad#725).
   void escape();
   // Exports the drawing to a file (pdf, svg, dxf by its extension); false
-  // with the model's reason shown.
-  bool exportTo(const QString& path);
+  // with the model's reason shown. `units`: a DXF file's length unit when
+  // not its sheet's (or the design's) (mitcad#1408).
+  bool exportTo(const QString& path, const QString& units = QString());
   // File › Print (mitcad#1089): the drawing's sheets (a cut sheet's one) as
   // SVG files in `folder`, as its export writes them, without a status
   // message; empty with the model's reason in `error` when they could not be

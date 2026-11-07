@@ -84,7 +84,13 @@ fn lost_faces(body: &ConvertedBody, last: bool, stored_solids: &HashSet<usize>) 
     }
     let check = &body.check;
     let gaps = check.vertex_mismatches > 0 && check.max_vertex_gap > MAX_VERTEX_GAP;
-    if body.skipped_faces > 0 || check.unpaired_coedges > 0 || check.open_loops > 0 || gaps {
+    // (Faces and edges kept on unknown geometry are lost to the builder.)
+    if body.skipped_faces > 0
+        || body.unknown_edges > 0
+        || check.unpaired_coedges > 0
+        || check.open_loops > 0
+        || gaps
+    {
         return true;
     }
     !body.body.is_solid() && stored_solids.contains(&body.record)

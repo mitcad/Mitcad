@@ -38,6 +38,10 @@ pub enum EntryKind {
     NestedDocument,
     Json,
     Other,
+    /// A mesh body's container
+    /// `ParaMeshGeometry.BlobParts/ParaMeshGeometry.<uuid>.paramesh`
+    /// (mitcad#1366, [`crate::paramesh`]).
+    MeshGeometry,
 }
 
 /// One entry with its classification.
@@ -178,6 +182,8 @@ fn classify(name: &str) -> (Option<String>, EntryKind) {
         EntryKind::Image
     } else if parts.contains(&"DesignConfigurationTable.BlobParts") {
         EntryKind::DesignConfiguration
+    } else if parts.contains(&crate::paramesh::FOLDER) && file.ends_with(".paramesh") {
+        EntryKind::MeshGeometry
     } else if file.ends_with(".json") {
         EntryKind::Json
     } else {
@@ -341,6 +347,16 @@ impl F3dFile {
                 }),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// The entries of the mesh bodies' containers (mitcad#1366), in the
+    /// archive's order.
+    pub fn mesh_entries(&self) -> Vec<String> {
+        self.entries()
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::MeshGeometry)
+            .map(|e| e.name)
             .collect()
     }
 

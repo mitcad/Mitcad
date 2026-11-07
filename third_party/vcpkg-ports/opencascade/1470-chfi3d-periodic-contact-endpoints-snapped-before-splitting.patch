@@ -1,0 +1,57 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Follow-up to mitcad#1392 and mitcad#1399, found by the macOS release tests.
+
+Snap periodic contact endpoints within OCCT's parameter precision before
+splitting their SurfData. A projected start just below zero otherwise
+becomes the previous period's end when the circle is trimmed: the split
+rim of a boss rounded at its foot and rim acquired a wire extending past
+a full turn, an unorientable torus face and a wrong volume. The existing
+parameter precision and all geometric assertions stay unchanged.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -14,6 +14,7 @@
+ // Alternatively, this file may be used under the terms of Open CASCADE
+ // commercial license or contractual agreement.
+ 
++#include <cmath>
+ #include <initializer_list>
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Blend_FuncInv.hxx>
+@@ -1933,6 +1934,33 @@
+                                                     const int                           ons,
+                                                     const double                        t)
+ {
++  // A periodic contact's projected endpoint can lie just outside its
++  // period by rounding error. Snap it within parameter precision before
++  // splitting: trimming a circle from a tiny negative parameter would
++  // otherwise start at the previous period's end.
++  for (int aSide = 1; aSide <= 2; aSide++)
++  {
++    ChFiDS_FaceInterference& aFI = Fd->ChangeInterference(aSide);
++    if (aFI.LineIndex() <= 0)
++    {
++      continue;
++    }
++    const occ::handle<Geom_Curve>& aCurve = DStr.Curve(aFI.LineIndex()).Curve();
++    if (aCurve.IsNull() || !aCurve->IsPeriodic())
++    {
++      continue;
++    }
++    const double anOrigin = aCurve->FirstParameter(), aPeriod = aCurve->Period();
++    for (const bool aFirst : {true, false})
++    {
++      const double aValue = aFirst ? aFI.FirstParameter() : aFI.LastParameter();
++      const double aBoundary = anOrigin + std::round((aValue - anOrigin) / aPeriod) * aPeriod;
++      if (std::abs(aValue - aBoundary) <= Precision::PConfusion())
++      {
++        aFI.SetParameter(aBoundary, aFirst);
++      }
++    }
++  }
+   const int                      opp = 3 - ons;
+   const ChFiDS_FaceInterference& FN  = Fd->Interference(ons);
+   const ChFiDS_FaceInterference& FO  = Fd->Interference(opp);

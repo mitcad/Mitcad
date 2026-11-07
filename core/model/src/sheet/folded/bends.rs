@@ -32,11 +32,32 @@ impl BendMetrics {
         radius: Option<f64>,
         rules: &SheetRulesDef<f64>,
     ) -> Result<Self, String> {
-        let radius = radius.unwrap_or(rules.bend_radius);
         if !angle.is_finite() || angle.abs() <= 1e-9 || angle.abs() > std::f64::consts::PI + 1e-12 {
             return Err("sheet bend angle must be nonzero and at most 180 degrees".into());
         }
-        let angle = angle.clamp(-std::f64::consts::PI, std::f64::consts::PI);
+        Self::sized(
+            angle.clamp(-std::f64::consts::PI, std::f64::consts::PI),
+            radius,
+            rules,
+        )
+    }
+    /// A flange's bend, which may turn past 180 degrees up to less than a
+    /// full turn (a rolled, teardrop or rope hem, mitcad#1378): its
+    /// allowance is the same arc of the neutral surface, `|angle| (r +
+    /// k t)`, and its outer extent `r + t`.
+    pub(super) fn past_half_turn(
+        angle: f64,
+        radius: Option<f64>,
+        rules: &SheetRulesDef<f64>,
+    ) -> Result<Self, String> {
+        if !angle.is_finite() || angle.abs() <= 1e-9 || angle.abs() >= std::f64::consts::TAU - 1e-9
+        {
+            return Err("sheet flange bend angle must be nonzero and less than 360 degrees".into());
+        }
+        Self::sized(angle, radius, rules)
+    }
+    fn sized(angle: f64, radius: Option<f64>, rules: &SheetRulesDef<f64>) -> Result<Self, String> {
+        let radius = radius.unwrap_or(rules.bend_radius);
         if !radius.is_finite() || radius <= TOLERANCE {
             return Err("sheet inside radius must be positive".into());
         }
@@ -55,12 +76,12 @@ impl BendMetrics {
         })
     }
     /// The inner or outer setback, refused where the virtual sharp does
-    /// not exist (a bend of 180 degrees).
+    /// not exist (a bend of 180 degrees or more).
     pub(super) fn setback(&self, value: f64, what: &str) -> Result<f64, String> {
         if self.angle.abs() >= std::f64::consts::PI - 1e-9 || !value.is_finite() {
             return Err(format!(
-                "a 180-degree bend has no {what} virtual sharp; measure it from the tangent or \
-                 the outer tangent"
+                "a bend of 180 degrees or more has no {what} virtual sharp; measure it from the \
+                 tangent or the outer tangent"
             ));
         }
         Ok(value)
@@ -577,6 +598,37 @@ pub(super) fn add_bend_strip<K: Kernel>(
     strip_regions: Option<Vec<MaterialRegion>>,
     slot: u32,
 ) -> Result<(), String> {
+    bend_strip(
+        ctx,
+        state,
+        metrics,
+        cylinder,
+        stationary,
+        Some(moving_side),
+        width,
+        strip_regions,
+        slot,
+    )
+    .map(|_| ())
+}
+
+/// A bend as [`add_bend_strip`], whose moving tangent line may be left
+/// free (`moving_side` none: a flange's bend with no wall after it, or one
+/// followed at once by the next bend of a hem, mitcad#1378): the stretches
+/// of that line (generated curve `41 + 100 slot`), for the next bend's
+/// seam. Its record names that line as its moving boundary.
+#[allow(clippy::too_many_arguments)]
+fn bend_strip<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    state: &mut SheetState,
+    metrics: &BendMetrics,
+    cylinder: CylinderEmbedding,
+    stationary: Vec<ShapePortSide>,
+    moving_side: Option<Vec<ShapePortSide>>,
+    width: f64,
+    strip_regions: Option<Vec<MaterialRegion>>,
+    slot: u32,
+) -> Result<Vec<ShapePortSide>, String> {
     let id = BendId {
         feature: ctx.uid,
         slot,
@@ -594,13 +646,18 @@ pub(super) fn add_bend_strip<K: Kernel>(
     };
     let left = sides(&strip, &generated(ctx.uid, curves + 3), Isometry2::IDENTITY)?;
     let right = sides(&strip, &generated(ctx.uid, curves + 1), Isometry2::IDENTITY)?;
-    let (Some(first), Some(last)) = (stationary.first(), moving_side.first()) else {
+    let moving = match &moving_side {
+        Some(m) => m.first(),
+        None => right.first(),
+    };
+    let (Some(first), Some(last)) = (stationary.first(), moving) else {
         return Err("tangent port must be one unique uninterrupted straight boundary".into());
     };
+    let moving = last.boundary.clone();
     state.bends.push(BendDomain {
         id,
         stationary: first.boundary.clone(),
-        moving: last.boundary.clone(),
+        moving,
         folded_embedding: cylinder,
         signed_angle: metrics.angle,
         k_factor: metrics.k,
@@ -614,9 +671,15 @@ pub(super) fn add_bend_strip<K: Kernel>(
         rules_version: state.rules_version.clone(),
     });
     pair_all(state, stationary, left, width)?;
-    pair_all(state, right, moving_side, width)?;
+    let free = match moving_side {
+        Some(moving_side) => {
+            pair_all(state, right, moving_side, width)?;
+            Vec::new()
+        }
+        None => right,
+    };
     state.charts.push(strip);
-    Ok(())
+    Ok(free)
 }
 
 /// The distances the flange leaves free at the start and the end of the
@@ -792,23 +855,20 @@ pub(crate) fn flange<K: Kernel>(
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
     free(&state, &d.boundary)?;
-    let metrics = BendMetrics::new(d.angle, d.radius, &rules)?;
-    let length = d.length.value
-        - match d.length.mode {
-            SheetLengthMode::Tangent => 0.0,
-            SheetLengthMode::Inner => metrics.setback(metrics.inner, "inner")?,
-            SheetLengthMode::Outer => metrics.setback(metrics.outer, "outer")?,
-            SheetLengthMode::OuterTangent => metrics.extent,
-        };
-    if !length.is_finite() || length <= TOLERANCE {
-        return Err("sheet flange length is shorter than its requested setback".into());
-    }
+    let steps = flange_steps(d, &rules)?;
+    let first = steps[0];
+    let mut metrics = BendMetrics::past_half_turn(first.angle, Some(first.radius), &rules)?;
     let frame = port_frame(&state, &d.boundary)?;
     // The bend covers the boundary between the flange's ends; a wall wider
     // than the boundary overhangs past them (mitcad#242).
     let (lo, hi) = flange_span(d, frame.width)?;
     let (start, end) = (lo.max(0.0), hi.max(0.0));
     let overhang = (-lo.min(0.0), -hi.min(0.0));
+    if (overhang.0 > 0.0 || overhang.1 > 0.0) && (steps.len() > 1 || first.wall <= 0.0) {
+        return Err(
+            "a sheet flange's width passes its boundary only with one bend and a wall".into(),
+        );
+    }
     let width = frame.width - start - end;
     let tangent = metrics.offset(d.position)?;
     let relief = d.relief.as_ref().unwrap_or(&rules.bend_relief);
@@ -858,28 +918,254 @@ pub(crate) fn flange<K: Kernel>(
     let mut axial = frame.to_operation;
     axial.origin[1] -= start;
     let stationary = side(chart(&state, d.boundary.panel)?, &tangent_piece, axial)?;
-    let constructed = construction(&frame, tangent, start, &metrics);
-    let moving = SheetPatch {
-        domain: SheetDomainRef::Panel(PanelId {
-            feature: ctx.uid,
-            slot: 0,
-        }),
-        regions: vec![wall_region(ctx.uid, length, width, overhang, root)?],
-        embedding: constructed.moving.clone(),
-    };
-    let moving_side = side(&moving, &generated(ctx.uid, 53), Isometry2::IDENTITY)?;
-    add_strip(
-        ctx,
-        &mut state,
-        &metrics,
-        constructed,
-        moving,
-        vec![stationary],
-        vec![moving_side],
-        width,
-        None,
-    )?;
+    let mut constructed = construction(&frame, tangent, start, &metrics);
+    let mut stationary = vec![stationary];
+    // Each bend and the wall after it (a hem's several, mitcad#1378): bend
+    // `k` is the feature's bend slot `k` (strip curves `40 + 100 k`), its
+    // wall panel slot `k` (curves `50 + 100 k`, the root `53 + 100 k`, the
+    // far end `51 + 100 k`). The next bend starts at the wall's far end, or
+    // at the bend's moving tangent line where no wall follows it; the last
+    // bend's line is left free where it has no wall.
+    for (k, step) in steps.iter().enumerate() {
+        let slot = k as u32;
+        if k > 0 {
+            metrics = BendMetrics::past_half_turn(step.angle, Some(step.radius), &rules)?;
+            let previous = steps[k - 1].wall;
+            let frame = wall_end_frame(&constructed.moving, previous, width)?;
+            constructed = construction(&frame, 0.0, 0.0, &metrics);
+        }
+        if step.wall <= 0.0 {
+            stationary = bend_strip(
+                ctx,
+                &mut state,
+                &metrics,
+                constructed.cylinder.clone(),
+                stationary,
+                None,
+                width,
+                None,
+                slot,
+            )?;
+            continue;
+        }
+        let region = if k == 0 {
+            wall_region(ctx.uid, step.wall, width, overhang, root)?
+        } else {
+            rectangle(ctx.uid, 50 + 100 * slot, [0.0, 0.0], [step.wall, width])?
+        };
+        let moving = SheetPatch {
+            domain: SheetDomainRef::Panel(PanelId {
+                feature: ctx.uid,
+                slot,
+            }),
+            regions: vec![region],
+            embedding: constructed.moving.clone(),
+        };
+        let moving_side = side(
+            &moving,
+            &generated(ctx.uid, 53 + 100 * slot),
+            Isometry2::IDENTITY,
+        )?;
+        let far = side(
+            &moving,
+            &generated(ctx.uid, 51 + 100 * slot),
+            Isometry2::IDENTITY,
+        )?;
+        add_bend_strip(
+            ctx,
+            &mut state,
+            &metrics,
+            constructed.cylinder.clone(),
+            stationary,
+            vec![moving_side],
+            width,
+            None,
+            slot,
+        )?;
+        state.charts.push(moving);
+        stationary = vec![far];
+    }
     publish(ctx, state, &rules, None)
+}
+
+/// One bend of a flange and the straight wall after it (0: none).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct FlangeStep {
+    /// The signed bend angle (radians; up to less than a full turn).
+    pub(super) angle: f64,
+    /// The inside radius.
+    pub(super) radius: f64,
+    /// The wall's straight length after the bend.
+    pub(super) wall: f64,
+}
+
+/// The bends and walls of a flange: one bend and its wall (none where its
+/// length leaves no straight part, a rolled hem's, mitcad#1378), or a
+/// hem's bends worked out from its sizes ([`SheetHem`]).
+pub(super) fn flange_steps(
+    d: &SheetFlangeDef<f64>,
+    rules: &SheetRulesDef<f64>,
+) -> Result<Vec<FlangeStep>, String> {
+    let metrics = BendMetrics::past_half_turn(d.angle, d.radius, rules)?;
+    if let Some(hem) = &d.hem {
+        if d.length.mode != SheetLengthMode::OuterTangent {
+            return Err(
+                "a hem's length is measured from the plane touching its bend's outer surface \
+                 (length mode outer_tangent)"
+                    .into(),
+            );
+        }
+        return hem_steps(
+            hem,
+            metrics.angle.signum(),
+            metrics.radius,
+            rules.thickness,
+            d.length.value,
+        );
+    }
+    let length = d.length.value
+        - match d.length.mode {
+            SheetLengthMode::Tangent => 0.0,
+            SheetLengthMode::Inner => metrics.setback(metrics.inner, "inner")?,
+            SheetLengthMode::Outer => metrics.setback(metrics.outer, "outer")?,
+            SheetLengthMode::OuterTangent => metrics.extent,
+        };
+    if !length.is_finite() || length < -TOLERANCE {
+        return Err("sheet flange length is shorter than its requested setback".into());
+    }
+    Ok(vec![FlangeStep {
+        angle: metrics.angle,
+        radius: metrics.radius,
+        wall: if length <= TOLERANCE { 0.0 } else { length },
+    }])
+}
+
+/// A hem's bends and walls (mitcad#1378; the forms' geometry:
+/// [`SheetHem`]), folding to the side `sign`, of inside radius `r` on a
+/// sheet of thickness `t`, `length` its length from the plane touching
+/// the first bend's outer surface.
+pub(super) fn hem_steps(
+    hem: &SheetHem<f64>,
+    sign: f64,
+    r: f64,
+    t: f64,
+    length: f64,
+) -> Result<Vec<FlangeStep>, String> {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let a = r + t;
+    let step = |angle: f64, wall: f64| FlangeStep {
+        angle: sign * angle,
+        radius: r,
+        wall: if wall <= TOLERANCE { 0.0 } else { wall },
+    };
+    let positive = |v: f64, what: &str| {
+        if v.is_finite() && v >= 0.0 {
+            Ok(v)
+        } else {
+            Err(format!("a hem's {what} must not be negative"))
+        }
+    };
+    if !length.is_finite() {
+        return Err("a hem's length is not a number".into());
+    }
+    match hem {
+        SheetHem::Teardrop { gap } => {
+            let g = positive(*gap, "gap")?;
+            if r <= g / 2.0 + TOLERANCE {
+                return Err("a teardrop hem's inside radius must be more than half its gap".into());
+            }
+            if length <= 2.0 * a + TOLERANCE {
+                return Err(format!(
+                    "a teardrop hem's length must be more than its bend's outer diameter {:.4} mm",
+                    2.0 * a
+                ));
+            }
+            // The bend turns `180 + alpha` degrees; its wall, `s` long,
+            // ends with its inner corner `g` above the panel and its outer
+            // corner at the length: `s sin(alpha) = r (1 + cos(alpha)) - g`
+            // and `s cos(alpha) = length - a (1 + sin(alpha))`.
+            let rise = |alpha: f64| r * (1.0 + alpha.cos()) - g;
+            let run = |alpha: f64| length - a * (1.0 + alpha.sin());
+            let f = |alpha: f64| rise(alpha) * alpha.cos() - run(alpha) * alpha.sin();
+            let (mut lo, mut hi) = (0.0_f64, FRAC_PI_2);
+            for _ in 0..200 {
+                let mid = (lo + hi) / 2.0;
+                if f(mid) > 0.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let alpha = (lo + hi) / 2.0;
+            let (rise, run) = (rise(alpha), run(alpha));
+            if rise < -TOLERANCE || run < -TOLERANCE {
+                return Err("a teardrop hem's wall does not reach back to its gap".into());
+            }
+            Ok(vec![step(PI + alpha, rise.max(0.0).hypot(run.max(0.0)))])
+        }
+        SheetHem::Rope { gap } => {
+            let g = positive(*gap, "gap")?;
+            if r <= g / 2.0 + TOLERANCE {
+                return Err("a rope hem's inside radius must be more than half its gap".into());
+            }
+            // The second bend's centre lies `2 r + t` from the first's, at
+            // the height that puts the wall `g` above the panel.
+            let alpha = ((g + t) / (2.0 * r + t)).acos();
+            let wall = length - a - (2.0 * r + t) * alpha.sin();
+            if wall < -TOLERANCE {
+                return Err(format!(
+                    "a rope hem's length must reach past its second bend, {:.4} mm",
+                    a + (2.0 * r + t) * alpha.sin()
+                ));
+            }
+            Ok(vec![step(PI + alpha, 0.0), step(-alpha, wall)])
+        }
+        SheetHem::Double { gap, setback } => {
+            let g = positive(*gap, "gap")?;
+            let setback = positive(*setback, "setback")?;
+            let over = length - 2.0 * a;
+            let under = length - a - t - setback;
+            if over < -TOLERANCE || under <= TOLERANCE {
+                return Err(format!(
+                    "a double hem's length must be at least {:.4} mm and leave a wall under its \
+                     second fold",
+                    (2.0 * a).max(a + t + setback)
+                ));
+            }
+            Ok(vec![
+                step(FRAC_PI_2, g + t),
+                step(FRAC_PI_2, over),
+                step(PI, under),
+            ])
+        }
+    }
+}
+
+/// The port frame at the far end of a flange's wall `wall` long, whose
+/// chart is `moving` (a bend's moving embedding: `u` along the wall from
+/// the bend, `v` axial over `width`): the frame of the wall's far edge, as
+/// [`port_frame`] gives a panel's boundary; at the bend's moving tangent
+/// line itself where `wall` is 0.
+fn wall_end_frame(moving: &SheetEmbedding, wall: f64, width: f64) -> Result<PortFrame, String> {
+    let SheetEmbedding::Plane {
+        front_frame,
+        front_to_back_sign,
+    } = moving
+    else {
+        return Err("a flange's wall is not planar".into());
+    };
+    Ok(PortFrame {
+        origin: front_frame.point([wall, 0.0]),
+        m: front_frame.x_axis,
+        e: front_frame.y_axis,
+        n: scale(front_frame.normal(), front_to_back_sign.sign()),
+        to_operation: Isometry2 {
+            origin: [-wall, 0.0],
+            x_axis: [1.0, 0.0],
+            y_axis: [0.0, 1.0],
+        },
+        width,
+    })
 }
 
 pub(crate) fn bend<K: Kernel>(
@@ -2237,6 +2523,173 @@ mod tests {
                 }
             )
             .is_err()
+        );
+    }
+
+    /// Rules of thickness 2.5, bend radius 2.5 and K-factor 0.44 (the
+    /// reference hems' rule, mitcad#1378).
+    fn hem_rules() -> SheetRulesDef<f64> {
+        serde_json::from_value(serde_json::json!({
+            "thickness": 2.5, "bend_radius": 2.5,
+            "allowance": {"type": "k_factor", "k": 0.44}, "reference_side": "front",
+            "bend_relief": {"type": "rectangular", "width": 2.5, "depth": 1.25},
+            "corner_relief": {"type": "rectangular", "width": 2.5, "depth": 1.25}
+        }))
+        .expect("rules")
+    }
+
+    /// A flange of the given angle, length, radius and hem on a sketch
+    /// boundary.
+    fn hem_flange(
+        angle: f64,
+        mode: &str,
+        length: f64,
+        radius: f64,
+        hem: serde_json::Value,
+    ) -> SheetFlangeDef<f64> {
+        let mut v = serde_json::json!({
+            "body": "F3.b0",
+            "boundary": {"panel": {"feature": "F3", "slot": 0},
+                         "curve": {"type": "sketch", "sketch": "F2", "segment": "c2[c1,c3]"}},
+            "angle": angle, "length": {"mode": mode, "value": length},
+            "position": "side_tangent", "radius": radius,
+        });
+        if !hem.is_null() {
+            v["hem"] = hem;
+        }
+        serde_json::from_value(v).expect("flange")
+    }
+
+    /// A flange's bend may turn past 180 degrees, short of a full turn
+    /// (mitcad#1378): its flat length is the bend allowance `|angle| (r +
+    /// k t)`, its outer extent `r + t`; its virtual sharps do not exist.
+    /// Bends and folds keep the 180-degree limit.
+    #[test]
+    fn a_flange_bend_turns_past_half_a_turn_with_its_allowance() {
+        use std::f64::consts::{PI, TAU};
+        let rules = hem_rules();
+        let m = BendMetrics::past_half_turn(1.5 * PI, Some(3.0), &rules).expect("270 degrees");
+        assert!((m.allowance - 1.5 * PI * (3.0 + 0.44 * 2.5)).abs() < 1e-12);
+        assert!((m.extent - 5.5).abs() < 1e-12);
+        assert!(m.setback(m.outer, "outer").is_err());
+        assert!(m.offset(SheetPosition::Inside).is_err());
+        assert!((m.offset(SheetPosition::SideTangent).unwrap() + 5.5).abs() < 1e-12);
+        let m = BendMetrics::past_half_turn(-1.5 * PI, Some(3.0), &rules).expect("either side");
+        assert!((m.angle + 1.5 * PI).abs() < 1e-12);
+        for refused in [0.0, TAU, -TAU, 7.0, f64::NAN] {
+            assert!(BendMetrics::past_half_turn(refused, Some(3.0), &rules).is_err());
+        }
+        assert!(BendMetrics::new(1.5 * PI, Some(3.0), &rules).is_err());
+        assert!(BendMetrics::new(PI, Some(3.0), &rules).is_ok());
+        // A rolled hem: 270 degrees and no wall (its length 0 from the
+        // tangent line); a length short of the outer extent is refused.
+        let steps = flange_steps(
+            &hem_flange(1.5 * PI, "tangent", 0.0, 3.0, serde_json::Value::Null),
+            &rules,
+        )
+        .expect("a rolled hem");
+        assert_eq!(
+            steps,
+            vec![FlangeStep {
+                angle: 1.5 * PI,
+                radius: 3.0,
+                wall: 0.0
+            }]
+        );
+        let flange = hem_flange(1.5 * PI, "outer_tangent", 5.0, 3.0, serde_json::Value::Null);
+        assert!(flange_steps(&flange, &rules).is_err());
+        let flange = hem_flange(
+            1.5 * PI,
+            "outer_tangent",
+            15.5,
+            3.0,
+            serde_json::Value::Null,
+        );
+        let steps = flange_steps(&flange, &rules).expect("a wall of 10");
+        assert!((steps[0].wall - 10.0).abs() < 1e-12);
+    }
+
+    /// The hem forms' bends from their sizes (mitcad#1378), on the
+    /// reference hems' sheet (t 2.5): each form's defining distances hold,
+    /// and the bodies' volumes these give are the stored ones (teardrop
+    /// 20402.855, rope 20561.79, double 22784.292 mm3 on the 17500 mm3
+    /// panel, 100 wide).
+    #[test]
+    fn hem_forms_give_their_bends_and_walls() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let t = 2.5;
+        let ring = |r: f64, angle: f64| angle.abs() / 2.0 * ((r + t) * (r + t) - r * r);
+        let volume = |r: f64, steps: &[FlangeStep]| {
+            17500.0 - (steps[0].radius + t) * t * 100.0
+                + steps
+                    .iter()
+                    .map(|s| (ring(r, s.angle) + s.wall * t) * 100.0)
+                    .sum::<f64>()
+        };
+        // Teardrop, radius 2, gap 1, length 10: the wall's inner end
+        // corner 1 above the panel, its outer end corner 10 from the side.
+        let (r, a) = (2.0, 4.5);
+        let steps = hem_steps(&SheetHem::Teardrop { gap: 1.0 }, 1.0, r, t, 10.0).expect("teardrop");
+        assert_eq!(steps.len(), 1);
+        let alpha = steps[0].angle - PI;
+        let s = steps[0].wall;
+        assert!((alpha.to_degrees() - 46.906_427).abs() < 1e-5, "{alpha}");
+        assert!((s - 3.240_561).abs() < 1e-5, "{s}");
+        assert!((a + r * alpha.cos() - s * alpha.sin() - (t + 1.0)).abs() < 1e-9);
+        assert!((a + a * alpha.sin() + s * alpha.cos() - 10.0).abs() < 1e-9);
+        assert!((volume(r, &steps[..]) - 20402.855).abs() < 1e-3);
+        // Rope, radius 2, gap 1, length 10: 237.42 degrees, at once -57.42,
+        // then a wall of 0.0228 one gap above the panel.
+        let steps = hem_steps(&SheetHem::Rope { gap: 1.0 }, 1.0, r, t, 10.0).expect("rope");
+        let alpha = (3.5f64 / 6.5).acos();
+        assert_eq!(steps.len(), 2);
+        assert!((steps[0].angle - (PI + alpha)).abs() < 1e-12);
+        assert_eq!(steps[0].wall, 0.0);
+        assert!((steps[1].angle + alpha).abs() < 1e-12);
+        assert!((steps[1].wall - (10.0 - a - 6.5 * alpha.sin())).abs() < 1e-12);
+        assert!((steps[1].wall - 0.022_774).abs() < 1e-6);
+        assert!((volume(r, &steps[..]) - 20561.79).abs() < 1e-2);
+        // Double, radius 1 (half the gap), gap 2, setback 1, length 10:
+        // 90, 4.5, 90, 3, 180, 3; to the other side every angle turns.
+        let steps = hem_steps(
+            &SheetHem::Double {
+                gap: 2.0,
+                setback: 1.0,
+            },
+            -1.0,
+            1.0,
+            t,
+            10.0,
+        )
+        .expect("double");
+        let angles: Vec<f64> = steps.iter().map(|s| s.angle).collect();
+        let walls: Vec<f64> = steps.iter().map(|s| s.wall).collect();
+        assert_eq!(angles, [-FRAC_PI_2, -FRAC_PI_2, -PI]);
+        assert_eq!(walls, [4.5, 3.0, 3.0]);
+        assert!((volume(1.0, &steps[..]) - 22784.292).abs() < 1e-3);
+        // Refused: a radius not more than half the gap, a length too short.
+        assert!(hem_steps(&SheetHem::Teardrop { gap: 4.0 }, 1.0, r, t, 10.0).is_err());
+        assert!(hem_steps(&SheetHem::Rope { gap: 4.0 }, 1.0, r, t, 10.0).is_err());
+        assert!(hem_steps(&SheetHem::Teardrop { gap: 1.0 }, 1.0, r, t, 9.0).is_err());
+        assert!(hem_steps(&SheetHem::Rope { gap: 1.0 }, 1.0, r, t, 9.0).is_err());
+        let short = SheetHem::Double {
+            gap: 2.0,
+            setback: 1.0,
+        };
+        assert!(hem_steps(&short, 1.0, 1.0, t, 6.0).is_err());
+        assert!(hem_steps(&SheetHem::Teardrop { gap: -1.0 }, 1.0, r, t, 10.0).is_err());
+        // Through the flange: the hem's length is from the outer tangent
+        // plane only, its radius the flange's.
+        let rules = hem_rules();
+        let hem = serde_json::json!({"form": "teardrop", "gap": 1.0});
+        let flange = hem_flange(PI, "outer_tangent", 10.0, 2.0, hem.clone());
+        let steps = flange_steps(&flange, &rules).expect("a teardrop flange");
+        assert!((steps[0].wall - 3.240_561).abs() < 1e-5);
+        let flange = hem_flange(-PI, "tangent", 10.0, 2.0, hem);
+        assert!(
+            flange_steps(&flange, &rules)
+                .unwrap_err()
+                .contains("outer_tangent")
         );
     }
 }

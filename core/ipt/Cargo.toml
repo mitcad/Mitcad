@@ -25,6 +25,12 @@ mitcad-asm = { path = "../asm" }
 mitcad-dump = { path = "../dump" }
 # Vector helpers on [f64; 3].
 mitcad-vec3 = { path = "../vec3" }
+# The appearance assets of the `Protein` stream, the same packages as the
+# `.f3d` documents' (mitcad#1367).
+mitcad-f3d-file = { path = "../f3d-file" }
+# The faces of the stored bodies and points inside them, for the faces'
+# appearances (mitcad#1367).
+mitcad-f3d-names = { path = "../f3d-names" }
 # Pure-Rust decompressors of the segment streams (zlib, zstd); zlib also
 # compresses (test files).
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }

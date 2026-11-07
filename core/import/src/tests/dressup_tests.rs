@@ -866,3 +866,108 @@ fn moved_faces_come_in_as_a_move_face() {
     );
     assert!(def.is_none());
 }
+
+/// A draft (mitcad#1363) comes in as MitCad's `draft`: about its neutral
+/// face pulled out of the material (`flip`, as the file's face drafts
+/// pull), about an origin plane along its normal; the other way is a
+/// guess after it, and a zero angle is not translated.
+#[test]
+fn drafts_come_in_about_their_neutral_plane() {
+    let kernel = || TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    };
+    let base = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(kernel());
+    import_design(
+        &mut reference,
+        &timeline_dump(base.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let faces = reference.bodies()[0].shape.faces.clone();
+    let side = faces.iter().find(|f| f.role == "side").cloned().unwrap();
+    let bottom = faces.iter().find(|f| f.role == "start").cloned().unwrap();
+    let face = |f: &mitcad_model::FaceName| {
+        json!({"kind": "face", "objectType": "BRepFace", "geometry": {"type": "Plane"},
+               "point_on_face": face_point(f).map(|x| x / 10.0),
+               "_f3d": {"recipe": "bounded_face"}})
+    };
+    let drafted = |plane: Value, value: f64| {
+        json!({"index": 2, "name": "Draft1", "objectType": "DraftFeature", "detail": {
+            "inputFaces": [face(&side)], "plane": plane, "isTangentChain": true,
+            "draftDefinition": {"_type": "AngleExtentDefinition",
+                                "angle": param("d7", "5 deg", value, "deg")},
+            "_f3d_angle_two": param("d8", "0.0 deg", 0.0, "deg")}})
+    };
+    let run = |item: Value| {
+        let value = item["detail"]["draftDefinition"]["angle"]["value"].clone();
+        let mut items = base.clone();
+        items.push(item);
+        let dump = dump(json!({
+            "schema": "mitcad-f3d-dump", "schema_version": 2,
+            "source": {"mode": "f3d_stream", "file": "test.f3d"},
+            "parameters": {"model": [
+                {"name": "d2", "expression": "10 mm", "value": 1.0, "unit": "mm"},
+                {"name": "d3", "expression": "0.0 deg", "value": 0.0, "unit": "deg"},
+                {"name": "d7", "expression": "5 deg", "value": value, "unit": "deg"},
+                {"name": "d8", "expression": "0.0 deg", "value": 0.0, "unit": "deg"}
+            ]},
+            "timeline": {"items": items}
+        }));
+        let mut doc = Document::new(kernel());
+        let report = import_design(&mut doc, &dump, &mut NoGeometry, &Options::default());
+        let query = json!({"query": "feature", "uid": "F3"}).to_string();
+        let def = doc
+            .query(&query)
+            .ok()
+            .and_then(|a| serde_json::from_str::<Value>(&a).ok())
+            .map(|a| a["def"].clone())
+            .filter(|d| d["type"] == "draft");
+        (report, def)
+    };
+    let angle = 5f64.to_radians();
+
+    // About the bottom face: pulled out of the material.
+    let (report, def) = run(drafted(face(&bottom), angle));
+    let item = report.items.iter().find(|i| i.name == "Draft1").unwrap();
+    assert_eq!(item.outcome, Outcome::Parametric, "{}", report.text());
+    assert_eq!(item.input_provenance, Some(InputProvenance::Read));
+    let def = def.expect("a draft");
+    assert_eq!(def["body"], "F2.b0", "{def}");
+    assert_eq!(def["faces"], json!([side.to_string()]));
+    assert_eq!(
+        def["plane"],
+        json!({"body": "F2.b0", "face": bottom.to_string()})
+    );
+    assert_eq!(def["flip"], true, "{def}");
+    // (`tangent_chain` true is the default, left out.)
+    assert_ne!(def["tangent_chain"], false, "{def}");
+    assert_eq!(def["angle"], "d7", "{def}");
+    assert!(def.get("angle2").is_none_or(Value::is_null), "{def}");
+
+    // About the XY plane: along its normal.
+    let xy = json!({"kind": "construction_plane", "name": "XY", "origin": "XY"});
+    let (report, def) = run(drafted(xy, angle));
+    let item = report.items.iter().find(|i| i.name == "Draft1").unwrap();
+    assert_eq!(item.outcome, Outcome::Parametric, "{}", report.text());
+    let def = def.expect("a draft");
+    assert_eq!(def["plane"], "xy", "{def}");
+    assert_ne!(def["flip"], true, "{def}");
+
+    // A zero angle: not translated.
+    let (report, def) = run(drafted(face(&bottom), 0.0));
+    let item = report.items.iter().find(|i| i.name == "Draft1").unwrap();
+    assert_ne!(item.outcome, Outcome::Parametric, "{}", report.text());
+    assert!(
+        item.note
+            .as_deref()
+            .is_some_and(|n| n.contains("angle zero")),
+        "{}",
+        report.text()
+    );
+    assert!(def.is_none());
+}

@@ -314,16 +314,17 @@ const char* const kUsage = R"(usage:
       file of moved components is an assembly); --coordinates component
       writes each body once in its component's coordinates, --occurrence
       (Arm:1/Pin:2) only what that occurrence places.
-  mitcad-cli export-sketch <file.mitcad> <sketch> <out.dxf> [--r12]
+  mitcad-cli export-sketch <file.mitcad> <sketch> <out.dxf> [--unit mm|cm|m|in|ft] [--r12]
       Writes the geometry of a sketch (uid or name) to a DXF file (R2000,
-      or R12 with --r12).
+      or R12 with --r12), in the design's length unit unless --unit says
+      otherwise.
   mitcad-cli export-flat <file.mitcad> <body> <out.dxf> [--unit mm|cm|m|in|ft]
                          [--back] [--tangents] [--r12]
       Writes the Flat Pattern of a sheet-metal body (uid or name) to a DXF
       file: the cut contours on CUT_OUTER and CUT_INNER, bend centre lines
       on BEND_UP and BEND_DOWN (--tangents: tangent lines on BEND_TANGENT),
       in the fixed panel's frame seen from its front (--back: the back),
-      in millimetres unless --unit says otherwise. An invalid pattern is
+      in the design's length unit unless --unit says otherwise. An invalid pattern is
       refused with its reasons.
 )"
                           R"(  mitcad-cli export-drawing <file.mitcad> <out.pdf|out.svg|out.dxf|out.dwg> [--bodies <b>,...]
@@ -835,7 +836,7 @@ int export_bodies(const std::vector<std::string>& args) {
 int export_sketch(const std::vector<std::string>& args) {
   Arguments a;
   std::string problem;
-  if (!parse_arguments(args, {}, {"--r12", "--json"}, a, problem)) {
+  if (!parse_arguments(args, {"--unit"}, {"--r12", "--json"}, a, problem)) {
     return usage(problem);
   }
   if (a.positional.size() != 3) {
@@ -843,6 +844,10 @@ int export_sketch(const std::vector<std::string>& args) {
   }
   std::string command = R"({"cmd": "export_sketch", "sketch": )" + json_string(a.positional[1]) +
                         R"(, "path": )" + json_string(a.positional[2]);
+  // The file's length unit (mitcad#1408): the design's unless given.
+  if (const std::string* unit = a.option("--unit")) {
+    command += R"(, "units": )" + json_string(*unit);
+  }
   if (a.flag("--r12")) {
     command += R"(, "version": "r12")";
   }
@@ -866,7 +871,7 @@ int export_flat(const std::vector<std::string>& args) {
   std::string command = R"({"cmd": "export_flat_pattern_dxf", "body": )" + json_string(a.positional[1]) +
                         R"(, "path": )" + json_string(a.positional[2]);
   if (const std::string* unit = a.option("--unit")) {
-    command += R"(, "unit": )" + json_string(*unit);
+    command += R"(, "units": )" + json_string(*unit);
   }
   if (a.flag("--back")) {
     command += R"(, "reference_side": "back")";

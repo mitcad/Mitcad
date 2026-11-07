@@ -708,6 +708,15 @@ impl Kernel for TestKernel {
         self.mock.move_faces(feature, body, faces, motion)
     }
 
+    fn draft(
+        &self,
+        feature: FeatureUid,
+        body: &MockShape,
+        spec: &mitcad_model::DraftSpec<'_, MockShape>,
+    ) -> Result<MockShape, KernelError> {
+        self.mock.draft(feature, body, spec)
+    }
+
     fn face_cylinder(
         &self,
         shape: &MockShape,

@@ -469,6 +469,107 @@ fn lines_arcs_and_texts_are_drawn_on_the_sheet_and_in_views() {
     assert_eq!(left, 0, "{}", sheet(&doc)["annotations"]);
 }
 
+/// The part of an SVG file of the group `A<id>`, up to its end.
+fn svg_group(svg: &str, id: u64) -> &str {
+    let open = format!(r#"id="A{id}""#);
+    let start = svg
+        .find(&open)
+        .unwrap_or_else(|| panic!("no group A{id} in {svg}"));
+    let end = svg[start..].find("</g>").map_or(svg.len(), |e| start + e);
+    &svg[start..end]
+}
+
+#[test]
+fn an_extra_thick_line_and_arc_are_drawn_0_7_mm_wide_and_kept() {
+    // mitcad#1402: ISO 128's extra wide line, twice the wide one.
+    let (mut doc, _) = drawn();
+    let line = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "sheet": 0,
+               "points": [[20, 20], [60, 20]], "pen": "extra_thick"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    let arc = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "arc",
+               "points": [[65, 110], [75, 110], [65, 120]], "pen": "extra_thick"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    // A thin line made extra thick by an edit.
+    let edited = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "sheet": 0,
+               "points": [[20, 30], [60, 30]]}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(group(&doc, edited)["items"][0]["pen"], "thin");
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": edited,
+               "pen": "extra_thick"}),
+    );
+    for id in [line, arc, edited] {
+        assert_eq!(annotation(&doc, id)["pen"], "extra_thick", "{id}");
+        assert_eq!(group(&doc, id)["items"][0]["pen"], "extra_thick", "{id}");
+    }
+    // The pens' table gives its width and no dashes.
+    let pens = sheet(&doc)["pens"].clone();
+    assert!(
+        near(pens["extra_thick"]["width"].as_f64().unwrap(), 0.7),
+        "{pens}"
+    );
+    assert_eq!(pens["extra_thick"]["dashes"], json!([]), "{pens}");
+    assert!(near(pens["thick"]["width"].as_f64().unwrap(), 0.35));
+
+    // Saved and read again: the pen is kept by its name.
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    let sheet_file = &file["drawings"][0]["sheets"][0];
+    assert_eq!(sheet_file["sketch"][0]["pen"], "extra_thick");
+    assert_eq!(sheet_file["sketch"][1]["pen"], "extra_thick");
+    assert_eq!(sheet_file["views"][0]["sketch"][0]["pen"], "extra_thick");
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+    for id in [line, arc, edited] {
+        assert_eq!(group(&loaded, id)["items"][0]["pen"], "extra_thick", "{id}");
+    }
+
+    // The writers draw it 0.7 mm wide; the DXF file on its own layer.
+    let dir = mitcad_model::testing::unique_temp_dir("extra-thick");
+    let svg = dir.join("extra.svg");
+    let pdf = dir.join("extra.pdf");
+    let dxf = dir.join("extra.dxf");
+    for path in [&svg, &pdf, &dxf] {
+        command(
+            &mut loaded,
+            json!({"cmd": "export_drawing", "drawing": "D1", "path": path.to_string_lossy()}),
+        );
+    }
+    let text = std::fs::read_to_string(&svg).unwrap();
+    for id in [line, arc, edited] {
+        let g = svg_group(&text, id);
+        assert!(g.contains(r#"stroke-width="0.7""#), "{id}: {g}");
+    }
+    let bytes = std::fs::read(&pdf).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("0.7 w [] 0 d"), "no 0.7 mm pen in the PDF");
+    let text = std::fs::read_to_string(&dxf).unwrap();
+    let entities = text
+        .find("ENTITIES")
+        .map(|at| &text[at..])
+        .expect("the DXF file's entities");
+    assert!(
+        text[..text.len() - entities.len()].contains("  2\nEXTRA_THICK\n"),
+        "no EXTRA_THICK layer"
+    );
+    let on_layer = entities.matches("  8\nEXTRA_THICK\n").count();
+    assert!(on_layer >= 3, "{on_layer} entities on EXTRA_THICK");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_centre_pattern_marks_every_hole_of_a_pattern_in_one_step() {
     let (mut doc, names) = drawn();

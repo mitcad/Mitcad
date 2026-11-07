@@ -1,4 +1,4 @@
-# A boss's foot and rim rounded together: 1340
+# A boss's foot and rim rounded together: 1340, 1470
 
 mitcad#1392: a boss rounded at its foot and at its rim in one fillet with
 half its height, where the foot's contact on the boss's cylinder lies along
@@ -91,6 +91,33 @@ before it (3804.0742 mm³ against 3804.0743 extrapolated).
 piece; there the foot's rounding alone is already invalid, and the pair
 fails as before.
 
+## 1470: a periodic contact begins at its period boundary
+
+### 1470-chfi3d-periodic-contact-endpoints-snapped-before-splitting
+
+The macOS release test of the same synthetic bars still failed after the
+array-lifetime fix of mitcad#1399. At seam pi with h 2, and seam 2.5 with
+h 2.5, a contact's first parameter was respectively about -2.74e-33 and
+-7.80e-18. Trimming its circle interpreted that tiny negative start as
+the previous period's end. Splitting the other stripe then made a torus
+wire run beyond one turn: the face was unorientable and had negative area.
+
+Before `splitSurfDataAt` copies and splits a SurfData, each of its two
+periodic 3D contact curves now snaps a first or last parameter to the
+nearest period boundary only within OCCT's existing `Precision::PConfusion()`.
+Other parameters, non-periodic curves, geometric tolerances and the input
+shape stay unchanged.
+
+On the h 2 bar at seam pi, the invalid result's volume 1303.968173 mm3
+became 1342.168078 mm3 (smaller-radius extrapolation 1342.168084 mm3).
+On the h 2.5 bar at seam 2.5, 1320.655558 mm3 became 1372.265407 mm3
+(extrapolation 1372.265412 mm3). Both are valid and closed; all seven
+original seam/height configurations pass the original volume and area
+checks. The tests of a ride in either direction and the periodic-seam
+vertex and convex/concave crossing contacts also pass against the newly
+built kernel. This is scoped native macOS validation, not a full release
+or a result on another platform.
+
 ## Tests
 
 - 1340: mitcad#1392, in `geometry/tests/test_fillet_boss_foot_rim.cpp` on
@@ -100,3 +127,10 @@ fails as before.
   continuing the smaller radii's within 2e-5 mm³ and the cylinder's area
   that of the bar's top from the rim's contact on (the fillet fails
   without 1340); the smaller radii still build.
+- 1470: the existing OCCT-only synthetic
+  `geometry/tests/test_fillet_boss_foot_rim.cpp` reproduces the two invalid
+  shapes on macOS without this patch and passes all seven configurations
+  with it. All original validity, closure, volume (2e-5 mm3) and area
+  assertions remain unchanged. The adjacent regressions are
+  `test_fillet_ride_against.cpp` and the periodic-seam vertex and
+  convex/concave crossing-contact cases in `test_fillet_results.cpp`.

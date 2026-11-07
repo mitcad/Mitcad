@@ -52,6 +52,38 @@ features*), each checked against its own history state as any other item:
   as the flange's `width` (`middle`), which may be wider than the edge
   *(verified: the partial flanges of both designs, one wider than its
   edge, give their states)*.
+- **A hem** (`.f3d`, mitcad#1364): an open or flat hem folds its wall back
+  over the panel in one bend of 180 degrees, so it is a `sheet_flange` of
+  angle 180 degrees on its edge (found and turned as an edge flange's),
+  its inside radius half the hem's gap (an expression of the gap's
+  parameter), its length the hem's length measured from the bend's outer
+  surface (`outer_tangent`), at position `side_tangent` (`read`, with a
+  note) *(verified: the bodies' volumes of the reference models' open
+  hem, gap 2 mm, and flat hem, gap 0.02 mm, both on a 2.5 mm sheet: the
+  flat hem's gap is its inside diameter too)*. The other forms
+  (mitcad#1378) fold over the panel at the same position, their lengths
+  from the same plane:
+  - a **rolled** hem is one bend of its angle (past 180 degrees) and
+    radius with no wall: a `sheet_flange` of that angle and radius, its
+    length 0 from the bend's tangent line (mode `tangent`) *(verified: the
+    reference model's rolled hem, 270 degrees, radius 3 mm)*;
+  - a **teardrop** or **rope** hem is a `sheet_flange` whose `hem` is that
+    form with the hem's gap, its radius the hem's radius, its length the
+    hem's: the teardrop's one bend passes 180 degrees and its wall comes
+    back so that the inner corner of its end lies a gap above the panel and
+    its outer corner at the length; the rope's bend passes 180 degrees by
+    as much as a second bend of the same radius turns back, its wall a gap
+    above the panel, parallel to it, ending at the length *(verified: the
+    reference models' teardrop and rope hems, radius 2 mm, gap 1 mm,
+    length 10 mm: their stored faces and volumes)*;
+  - a **double** hem is a `sheet_flange` whose `hem` is `double` with the
+    hem's gap and setback, every bend's inside radius half the gap: two
+    bends of 90 degrees with a wall of gap + thickness between them, a wall
+    over the panel to the 180-degree fold, whose outer surface lies at the
+    hem's length, and a wall back under it ending the setback short of the
+    first wall's inner surface *(verified: the reference model's double
+    hem, gap 2 mm, length 10 mm, setback 1 mm: its stored faces and
+    volume)*.
 - **A cut** (`.ipt`, mitcad#242): `sheet_cut` of mode `straight` (the
   file's cut with neither of its two sheet options set goes straight along
   the sketch's normal, through a bend too) with the file's extent and
@@ -114,12 +146,13 @@ features*), each checked against its own history state as any other item:
   replayed as an ordinary cut, rounding or chamfer instead.
 
 The stream's records ([*From the descriptions to the decoder*](f3d-undecoded.md#from-the-descriptions-to-the-decoder), cadmpeg's
-*BaseFlange* and *EdgeFlange* layouts; `core/f3d-design/src/build/sheet.rs`):
+*BaseFlange*, *EdgeFlange* and *Hem* layouts; `core/f3d-design/src/build/sheet.rs`):
 
 | Record | Fields read |
 |---|---|
 | Base flange (`7AFA0A65…`, `Face<n>`) | its profile's sketch and loops; its thickness (f64 at offset 123, the rule's) *(verified: both designs)* |
 | Edge flange (`7AFA0A65…`, `EdgeFlange<n>`) | found by the marked angle and height owners `p` (the holders of `FlangeAngle` and `FlangeHeight`): before them `u32` bend position (1 outside, 2 inside, 3 adjacent, 4 tangent to the side face), `u32` edge count, a wrapper reference per edge, the settings reference, `u32` height datum (1 inner, 2 outer, 3 tangent to the bend's outer surface *(verified, mitcad#242)*); after them a `u32`, at `p + 26` a flip byte (0, 1) *(verified: two flanges of each design, one flipped, give their states)*, at `p + 37` the inside bend radius (f64, cm); width owners `EdgeWidth`, `EdgeWidth_1`/`_2` (distances from the edge's midpoint, mitcad#242) |
+| Hem (`7AFA0A65…`, `Hem<n>`, mitcad#1364) | its parameters by their roles (`HemGap`, `HemLength`, `HemRadius`, `HemAngle`, `HemSetback`), their holders the marked owners of the fixed section at base `b`: `u32` bend position (4, tangent to the side face *(seen: every hem)*), `u32` edge count 1, the edge wrapper and settings references, the owners from `b + 41`; at `b + 66` (two owners) or `b + 76` (three) a `u32` form (1 open, 2 rolled, 3 double, 4 teardrop, 5 rope, 6 flat *(ours: one hem of each form in the reference models)*), then a byte and the rule's inside bend radius (f64, cm); its edge as an edge flange's |
 | Sheet-metal rule (`B42ED662…`) | expressions with their values in order (bend radius, relief width, relief depth, two more), five GUID texts, the corner relief size, the K-factor (f64, four bytes after the corner relief size's value), the material, the thickness text and a reference to the thickness parameter *(seen: one rule; the order of the relief fields is taken from their default expressions)* |
 
 Edge recipes of some flanges have names with a nonzero word after their
@@ -148,7 +181,6 @@ Not translated yet, with the reason in each item's note:
 - `.ipt` bends closing a loop of material, bends of other kinds, folds
   with other options or across holes (MitCad's fold needs one
   uninterrupted line), cuts with the slot-33 option;
-- `.f3d` widths other than those above (an `EdgeOffset_1`), the `.f3d`
-  hem items (`Hem…` roles), the `adjacent` position,
-  bends and folds.
+- `.f3d` widths other than those above (an `EdgeOffset_1`), the `adjacent`
+  position, bends and folds.
 

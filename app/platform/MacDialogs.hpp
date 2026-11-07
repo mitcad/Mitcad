@@ -4,6 +4,7 @@
 // Shared Qt dialog conventions. The native Mac presentation is optional;
 // button roles, explicit defaults and readable tables work on every platform.
 #include <QAbstractButton>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -15,8 +16,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QPainter>
 #include <QString>
 #include <QTableView>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
@@ -328,6 +332,37 @@ inline void styleSection(QGroupBox*) {}
 inline void stylePreview(QFrame*) {}
 #endif
 
+#ifndef MITCAD_MAC_UI
+// Qt's unchecked item indicator can disappear into a dark alternate
+// row. Keep its normal layout, hit rectangle and checked drawing, with an
+// outline derived from the cell's live text colour.
+class ListCheckOutlineDelegate final : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+  void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+    QStyledItemDelegate::paint(painter, option, index);
+    QStyleOptionViewItem cell(option);
+    initStyleOption(&cell, index);
+    if (!cell.features.testFlag(QStyleOptionViewItem::HasCheckIndicator) || cell.checkState != Qt::Unchecked) {
+      return;
+    }
+    const QWidget* widget = cell.widget;
+    QStyle* style = widget != nullptr ? widget->style() : QApplication::style();
+    const QRect rect = style->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &cell, widget);
+    const bool selected = cell.state.testFlag(QStyle::State_Selected);
+    QColor border = cell.palette.color(selected ? QPalette::HighlightedText : QPalette::Text);
+    border.setAlphaF(cell.state.testFlag(QStyle::State_Enabled) ? 0.65 : 0.30);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(QPen(border, 1));
+    painter->setBrush(Qt::NoBrush);
+    painter->drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
+    painter->restore();
+  }
+};
+#endif
+
 inline void styleListTable(QTableView* table) {
   table->setShowGrid(false);
   table->verticalHeader()->hide();
@@ -344,6 +379,8 @@ inline void styleListTable(QTableView* table) {
   header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   header->setHighlightSections(false);
   header->setMinimumHeight(28);
+#else
+  table->setItemDelegate(new ListCheckOutlineDelegate(table));
 #endif
 }
 

@@ -919,3 +919,46 @@ if(BUILD_TESTING)
   add_test(NAME geometry.fillet_end_reversed_faces COMMAND test_fillet_end_reversed_faces)
   set_tests_properties(geometry.fillet_end_reversed_faces PROPERTIES TIMEOUT 600)
 endif()
+
+if(BUILD_TESTING)
+  # A box's vertical edge rounded up through the mitre of two earlier
+  # roundings of its top edges of the same radius, the spine either way,
+  # with the port's patch 1490 (mitcad#1397).
+  add_executable(test_fillet_mitre_same_radius tests/test_fillet_mitre_same_radius.cpp)
+  target_link_libraries(test_fillet_mitre_same_radius PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_mitre_same_radius COMMAND test_fillet_mitre_same_radius)
+  set_tests_properties(geometry.fillet_mitre_same_radius PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A rounding whose contact leaves its face across a convex edge into the
+  # face at its end, short of the end: the ball rolled on that edge and the
+  # face at the end cutting it from where its contact turns back, on a case
+  # of MITCAD_GEOMETRY_CASES, with the port's patch 1430 (mitcad#1389).
+  add_executable(test_fillet_end_edge_turn tests/test_fillet_end_edge_turn.cpp)
+  target_link_libraries(test_fillet_end_edge_turn PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_end_edge_turn COMMAND test_fillet_end_edge_turn)
+  set_tests_properties(geometry.fillet_end_edge_turn PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A convex edge rounded up into the mitre of two earlier convex roundings
+  # tighter than the ball, closed by a torus, on a synthetic block and a
+  # case of MITCAD_GEOMETRY_CASES, with the port's patch 1500 (mitcad#1414).
+  add_executable(test_fillet_convex_mitre tests/test_fillet_convex_mitre.cpp)
+  target_link_libraries(test_fillet_convex_mitre PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_convex_mitre COMMAND test_fillet_convex_mitre)
+  set_tests_properties(geometry.fillet_convex_mitre PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A hub's foot rounded past the earlier roundings of the rims of holes
+  # that touch the hub, tighter than the ball: the ball rolled on over the
+  # rim's torus, cut by the face along the foot, each end a point on the
+  # foot's edge, on a case of MITCAD_GEOMETRY_CASES, with the port's patch
+  # 1530 (mitcad#1413).
+  add_executable(test_fillet_tight_tangent_end tests/test_fillet_tight_tangent_end.cpp)
+  target_link_libraries(test_fillet_tight_tangent_end PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_tight_tangent_end COMMAND test_fillet_tight_tangent_end)
+  set_tests_properties(geometry.fillet_tight_tangent_end PROPERTIES TIMEOUT 600)
+endif()

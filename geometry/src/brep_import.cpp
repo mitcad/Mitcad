@@ -47,6 +47,7 @@
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_Ellipse.hxx>
 #include <Geom_Line.hxx>
+#include <Geom_OffsetSurface.hxx>
 #include <Geom_Plane.hxx>
 #include <Geom_SphericalSurface.hxx>
 #include <Geom_SurfaceOfLinearExtrusion.hxx>
@@ -114,6 +115,7 @@ constexpr int kCurveEllipse = 1;
 constexpr int kCurveBSpline = 2;
 constexpr int kCurveInterpolated = 3;
 constexpr int kCurveOnSurface = 4;
+constexpr int kCurveUnknown = 5;
 
 constexpr int kSurfacePlane = 0;
 constexpr int kSurfaceCone = 1;
@@ -125,6 +127,8 @@ constexpr int kSurfaceRevolution = 6;
 constexpr int kSurfaceRuled = 7;
 constexpr int kSurfaceArcSweep = 8;
 constexpr int kSurfaceRollingBall = 9;
+constexpr int kSurfaceOffset = 10;
+constexpr int kSurfaceUnknown = 11;
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -577,6 +581,14 @@ Handle(Geom_Surface) make_surface(Reader& in, int kind) {
       return stored;
     }
   }
+  case kSurfaceOffset: {
+    // An offset surface stored without its approximation
+    // (mitcad_private#198): the basis moved along its normal.
+    const double distance = in.real();
+    const int basis_kind = in.integer();
+    const Handle(Geom_Surface) basis = make_surface(in, basis_kind);
+    return new Geom_OffsetSurface(basis, distance);
+  }
   default:
     throw std::runtime_error("unknown surface kind " + std::to_string(kind));
   }
@@ -836,13 +848,27 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
       }
     }
   }
+  // Curves and surfaces the reader could not decode stay null without
+  // counting as failed (the reader's issues say so; mitcad_private#198), and
+  // so do their edges and faces.
   const auto curves = build_all<Handle(Geom_Curve)>(
       body, body.curves, "curve", report.curves_failed, report,
-      [](Reader& in, int kind, std::size_t) { return make_curve(in, kind); },
+      [](Reader& in, int kind, std::size_t) {
+        return kind == kCurveUnknown ? Handle(Geom_Curve)() : make_curve(in, kind);
+      },
       preset != nullptr ? &curve_needed : nullptr);
+  const auto unknown_curve = [&body](std::uint32_t curve) {
+    return curve < body.curves.size() && body.curves[curve].kind == kCurveUnknown;
+  };
+  const auto unknown_surface = [&body](std::uint32_t surface) {
+    return surface < body.surfaces.size() && body.surfaces[surface].kind == kSurfaceUnknown;
+  };
   const auto surfaces = build_all<Handle(Geom_Surface)>(
       body, body.surfaces, "surface", report.surfaces_failed, report,
       [&report](Reader& in, int kind, std::size_t i) {
+        if (kind == kSurfaceUnknown) {
+          return Handle(Geom_Surface)();
+        }
         stored_reason.clear();
         Handle(Geom_Surface) s = make_surface(in, kind);
         if (!stored_reason.empty()) {
@@ -874,6 +900,9 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
       continue;
     }
     const Edge& e = body.edges[i];
+    if (unknown_curve(e.curve)) {
+      continue;
+    }
     if (e.curve >= curves.size() || curves[e.curve].IsNull() || e.v0 >= vertices.size() ||
         e.v1 >= vertices.size()) {
       ++report.edges_failed;
@@ -912,6 +941,9 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
       continue;
     }
     const Face& f = body.faces[i];
+    if (unknown_surface(f.surface)) {
+      continue;
+    }
     if (f.surface >= surfaces.size() || surfaces[f.surface].IsNull()) {
       ++report.faces_failed;
       continue;

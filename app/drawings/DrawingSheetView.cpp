@@ -40,6 +40,10 @@ const QColor kBroken = themeColor(ColorRole::WarningText, false);
 // Helvetica's cap height per em (core/model-drawing/src/sheet.rs).
 constexpr double kCapHeight = 0.718;
 constexpr double kPi = 3.14159265358979323846;
+// A right press and release further apart than this (widget px) is a
+// drag, not a click: the 3D view's and the sketch's rule (OcctViewer,
+// SketchController; mitcad#1085, mitcad#1404).
+constexpr double kRightClickPixels = 4.0;
 
 QPointF pointOf(const QJsonValue& value) {
   const QJsonArray a = value.toArray();
@@ -1325,6 +1329,14 @@ void DrawingSheetView::resizeEvent(QResizeEvent* event) {
 
 void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
   setFocus(Qt::MouseFocusReason);
+  if (event->button() == Qt::RightButton) {
+    // While a tool picks, a right click is its Esc on the release, as in a
+    // sketch (mitcad#1404); with no tool, contextMenuEvent opens the menu.
+    // A left drag under way keeps its state.
+    m_rightPressTool = m_pick != SheetPick::None;
+    m_rightPressAt = event->position();
+    return;
+  }
   const QPointF at = toSheet(event->position());
   m_dragMoved = false;
   m_dragSnapped = false;
@@ -1511,7 +1523,12 @@ void DrawingSheetView::mouseDoubleClickEvent(QMouseEvent* event) {
 void DrawingSheetView::contextMenuEvent(QContextMenuEvent* event) {
   event->accept();
   if (m_pick != SheetPick::None) {
-    return; // a tool's clicks
+    return; // a tool's clicks; the right one is its Esc (mouseReleaseEvent)
+  }
+  // The right click that ended a tool opens no menu (mitcad#1404): where
+  // the menu comes after the release (Windows), the tool is gone by then.
+  if (event->reason() == QContextMenuEvent::Mouse && m_rightPressTool) {
+    return;
   }
   const QPointF at = toSheet(QPointF(event->pos()));
   const int note = annotationAt(at);
@@ -1530,6 +1547,23 @@ void DrawingSheetView::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
+  if (event->button() == Qt::RightButton) {
+    // A right click while a tool picks is the tool's Esc, without a menu
+    // (mitcad#1404, as a sketch's, mitcad#1085): the picks so far (a
+    // line's first end, an annotation's picks, the placing click), else
+    // the tool. A right drag is not a click. A middle pan or a left drag
+    // under way goes on.
+    if (m_rightPressTool && m_pick != SheetPick::None) {
+      const QPointF moved = event->position() - m_rightPressAt;
+      if (std::hypot(moved.x(), moved.y()) <= kRightClickPixels) {
+        qDebug().noquote() << QStringLiteral("Drawing right-click: Esc of the tool");
+        emit toolCancelled();
+      } else {
+        qDebug().noquote() << QStringLiteral("Drawing right drag: not a click");
+      }
+    }
+    return;
+  }
   const QPointF at = toSheet(event->position());
   // Shift or Alt with the click or at the drag's end: placed freely
   // (mitcad#1173, mitcad#1362).
